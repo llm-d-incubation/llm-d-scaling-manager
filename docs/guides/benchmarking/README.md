@@ -298,11 +298,13 @@ match the image, and pin the image by tag or digest. The digest of each release
 is in its notes on the
 [Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases):
 
+No release has been cut in this repository yet; the first one follows. Until then, install from `main`. Pin the build of `main` you measured:
+
 ```bash
-git checkout v0.10.2
-export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.10.2
+git checkout main
+export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:main
 # or the exact build
-export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:08b640117764fdcc768fc66e6ad67d4410b275e3ae9a6d7023b8e6cdcfc25a76
+export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>
 ```
 
 `:main` is rebuilt on every push to `main`, so two runs against it a day apart

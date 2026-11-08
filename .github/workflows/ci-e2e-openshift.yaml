@@ -49,7 +49,9 @@ on:
   # never succeeded here that job has never started either. Without those runners
   # it queues until GitHub times it out -- a slow red instead of a fast one.
   #
-  # To bring it back: register the runners, and either set CR_USER/CR_TOKEN or
+  # To bring it back: register the runners, set the repository variable
+  # E2E_OPENSHIFT_CLUSTER to a part of their cluster's API server URL (the
+  # cluster check fails without it), and either set CR_USER/CR_TOKEN or
   # point the login at the built-in token (`username: ${{ github.actor }}`,
   # `password: ${{ secrets.GITHUB_TOKEN }}`), which needs no secret at all --
   # this workflow already declares `packages: write` and pushes to
@@ -444,8 +446,9 @@ jobs:
           GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
         run: deploy/ci-e2e-openshift/build-push-image.sh
 
-  # Run e2e tests on OpenShift self-hosted runner (vllm-d cluster).
-  # pok-prod runners are reserved for nightly E2E only.
+  # Run e2e tests on the OpenShift self-hosted runners set aside for PRs.
+  # Runners on the nightly cluster must not take this job; the cluster check
+  # below refuses them.
   e2e-openshift:
     runs-on: [self-hosted, openshift, vllm-d]
     needs: [gate, build-image]
@@ -499,7 +502,9 @@ jobs:
       - name: Verify cluster access
         run: deploy/ci-e2e-openshift/verify-cluster-access.sh
 
-      - name: Verify correct cluster (vllm-d, not pok-prod)
+      - name: Verify correct cluster
+        env:
+          EXPECTED_CLUSTER: ${{ vars.E2E_OPENSHIFT_CLUSTER }}
         run: deploy/ci-e2e-openshift/verify-correct-cluster.sh
 
       - name: Check GPU availability
