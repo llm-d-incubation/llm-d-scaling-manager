@@ -34,7 +34,7 @@ const passiveModel = "acme/chat"
 
 // ourTrigger is this controller's trigger, named so a formula can refer to it.
 func ourTrigger() kedav1alpha1.ScaleTriggers {
-	return kedav1alpha1.ScaleTriggers{Type: "external-push", Name: "scaling-manager",
+	return kedav1alpha1.ScaleTriggers{Type: "external-push", Name: "llmsm",
 		Metadata: map[string]string{registry.ModelIDKey: passiveModel}}
 }
 
@@ -280,7 +280,7 @@ var _ = Describe("Passive mode through the external scaler", func() {
 		})
 
 		It("answers 0 too where a scalingModifiers formula names our trigger (observe-unsafe)", func() {
-			h := newHandler(passiveModels{passiveModel: true}, so(nil, nil, "max(prom, scaling-manager)", ourTrigger(), promTrigger()), deployment("chat-decode-deploy", ptr(3)))
+			h := newHandler(passiveModels{passiveModel: true}, so(nil, nil, "max(prom, llmsm)", ourTrigger(), promTrigger()), deployment("chat-decode-deploy", ptr(3)))
 			store.Set(testNamespace, "chat-decode-deploy", 9)
 			Expect(getMetrics(h)).To(Equal(int64(0)))
 		})

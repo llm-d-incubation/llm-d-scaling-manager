@@ -16,7 +16,7 @@ func i32(v int32) *int32 { return &v }
 // enricher does: our trigger alone holds, beside another observes, and a
 // scalingModifiers formula that names ours is observe-unsafe.
 func TestModeFromScaledObject(t *testing.T) {
-	ours := kedav1alpha1.ScaleTriggers{Type: "external-push", Name: "scaling-manager",
+	ours := kedav1alpha1.ScaleTriggers{Type: "external-push", Name: "llmsm",
 		Metadata: map[string]string{registry.ModelIDKey: "m"}}
 	otherExternal := kedav1alpha1.ScaleTriggers{Type: "external", Name: "x",
 		Metadata: map[string]string{"scalerAddress": "elsewhere:9090"}}
@@ -33,9 +33,9 @@ func TestModeFromScaledObject(t *testing.T) {
 		{name: "alone", triggers: []kedav1alpha1.ScaleTriggers{ours}, passive: true, want: Hold},
 		{name: "beside prometheus", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, passive: true, want: Observe},
 		{name: "beside another external scaler", triggers: []kedav1alpha1.ScaleTriggers{ours, otherExternal}, passive: true, want: Observe},
-		{name: "formula names ours", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, formula: "(prom + scaling-manager) / 2", passive: true, want: ObserveUnsafe},
+		{name: "formula names ours", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, formula: "(prom + llmsm) / 2", passive: true, want: ObserveUnsafe},
 		{name: "formula names only theirs", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, formula: "prom * 2", passive: true, want: Observe},
-		{name: "a name inside another is not ours", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, formula: "smx + prom", passive: true, want: Observe},
+		{name: "a name inside another is not ours", triggers: []kedav1alpha1.ScaleTriggers{ours, prom}, formula: "llmsmx + prom", passive: true, want: Observe},
 		{name: "paused is reported, not acted on", triggers: []kedav1alpha1.ScaleTriggers{ours}, paused: true, passive: true, want: Hold},
 	}
 	for _, tc := range cases {
