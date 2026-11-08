@@ -462,12 +462,12 @@ for overlay in namespace-scoped/kubernetes namespace-scoped/openshift; do
     role="$(render_policy_ns_role "$overlay" wns '' platform-policy)" || role=''
     [ -n "$role" ] || { printf 'FATAL: no policy-namespace-reader ClusterRole rendered for %s.\n' "$overlay" >&2; exit 1; }
     check "$overlay: policy-namespace reader gets own, scaling-manager-policy and the labelled namespace" \
-        'platform-policy,wns,scaling-manager-policy' "$(printf '%s\n' "$role" | policy_ns_names)"
+        'platform-policy,scaling-manager-policy,wns' "$(printf '%s\n' "$role" | policy_ns_names)"
     # Admin-owned, managing another namespace; LLMSM_POLICY_NS repeats scaling-manager-policy.
     role="$(render_policy_ns_role "$overlay" tenant-a scaling-manager-policy '')" || role=''
     [ -n "$role" ] || { printf 'FATAL: no policy-namespace-reader ClusterRole rendered for %s.\n' "$overlay" >&2; exit 1; }
     check "$overlay: policy-namespace reader names each Namespace once, nothing unread" \
-        'tenant-a,wns,scaling-manager-policy' "$(printf '%s\n' "$role" | policy_ns_names)"
+        'scaling-manager-policy,tenant-a,wns' "$(printf '%s\n' "$role" | policy_ns_names)"
 done
 
 # ----------------------------------------------------------------------------
