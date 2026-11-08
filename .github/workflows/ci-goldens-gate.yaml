@@ -28,9 +28,15 @@ on:
       - dev
       # Patch lines (release-0.10): a fix to one is checked like a fix to main.
       - 'release-*'
+  # A merge queue needs every required check to report on the queued merge. The
+  # body was checked on the pull request and a merge group has none, so the job
+  # is skipped there, which a required check counts as passed.
+  merge_group:
 
 concurrency:
-  group: ci-goldens-gate-${{ github.event.pull_request.number }}
+  # A merge group has no pull request number: the run id keeps two queued
+  # merges from cancelling each other.
+  group: ci-goldens-gate-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -39,6 +45,7 @@ permissions:
 
 jobs:
   goldens-section:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       # A failed read fails the job here, so it cannot pass as an empty body.

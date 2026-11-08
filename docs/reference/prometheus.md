@@ -2177,7 +2177,11 @@ kubectl port-forward -n <monitoring-namespace> svc/kube-prometheus-stack-prometh
 # http://localhost:9090/alerts
 ```
 
-![scaling-manager.rules](./scaling-manager.rules.png)
+| On the `/alerts` page | What it shows |
+|---|---|
+| The group header | `scaling-manager.rules`, and the rule file it came from, named `<namespace>-controller-manager-alerts-<uid>.yaml` |
+| One row per alert | each alert in [The shipped alerts](#the-shipped-alerts), `INACTIVE` until it fires |
+| A firing alert | `FIRING (n)` beside its name; opened, its expression, `for:`, `severity`, `summary` and `description`, and one row of labels per firing series |
 
 A firing rule, through the API:
 

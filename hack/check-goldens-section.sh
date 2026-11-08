@@ -5,8 +5,9 @@
 #
 # Each case is a real two-commit git repository and a PR body. A case asserts
 # the exit code AND a line of the output, so a gate that exits 0 having looked at
-# nothing does not pass. The workflow itself runs only on a pull_request event,
-# which nothing here can raise: what this file proves is the script, and that
+# nothing does not pass. The workflow itself checks only on a pull_request event
+# (a merge group skips the job), which nothing here can raise: what this file
+# proves is the script, and that
 # the workflow reads the live body and hands it over as data. The real API is
 # not called: a stub stands in for gh.
 
@@ -356,6 +357,9 @@ refuse() {
     fi
 }
 hold "it runs on a pull request" '^  pull_request:$'
+hold "a merge queue gets a report" '^  merge_group:$'
+hold "a merge group skips the job: it has no body" "^    if: github\.event_name == 'pull_request'$"
+hold "queued merges do not cancel each other" '^  group: ci-goldens-gate-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}$'
 hold "correcting the section re-runs it" '^    types: \[.*\bedited\b.*\]'
 hold "a new commit re-runs it" '^    types: \[.*\bsynchronize\b.*\]'
 hold "the body is read live, from the API" '^ +run: gh api "repos/\$GITHUB_REPOSITORY/pulls/\$PR_NUMBER" --jq .*>"\$PR_BODY_FILE"$'

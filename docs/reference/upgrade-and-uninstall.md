@@ -104,6 +104,27 @@ only to change it. Limiters an admin published in a policy namespace
    NAMESPACE=<namespace> LLMSM_NS=llmsm-<namespace> make scaledobjects-rewire
    ```
 
+### Moving from llm-scaling-manager
+
+This project was renamed when it moved here. Nothing is upgraded across the
+rename: the object names, labels, metrics, alerts and environment variables all
+changed, and there is no compatibility path. Reinstall.
+
+1. Uninstall every install with a checkout of the **old** repository, while its
+   names still match what is on the cluster. This tree looks for the new names
+   and would leave the old objects behind:
+   ```bash
+   make undeploy-wva NAMESPACE=<namespace>
+   ```
+2. If a cluster had an even older install that was not uninstalled that way,
+   delete these two by hand:
+   ```bash
+   kubectl delete secret wva-controller-manager-token -n <namespace>
+   kubectl delete clusterrolebinding wva-prometheus-cluster-monitoring-view-<suffix>
+   ```
+3. Install from this tree and re-create what you need. Learned state, tuned
+   policy, labels on namespaces and ScaledObject addresses are not carried over.
+
 ### Upgrading from v0.10.2 to the next release
 
 An ordinary aggregated deployment (a variant with no `llm-d.ai/role` label) now reports an inter-token-latency line and the service rate it derives: `llmsm_itl_line_slope` and `llmsm_service_rate_per_replica{source="derived-report-only"}` appear for it. Once the line accounts for the request shape and has matched the replicas' generated tokens for 3 cycles, the variant is sized from it (`source="derived-aggregated"`), never above a measured rate of its own. A vLLM aggregated variant needs `vllm:num_requests_running` scraped for that; an SGLang one stays reported only. The learned-state document gains `itlLineShapes`; an older controller ignores it. An aggregated line restored from a document written before this release has no shape, so it prices nothing, reported or sized, until the variant fits it again under load.

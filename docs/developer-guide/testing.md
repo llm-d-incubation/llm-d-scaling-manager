@@ -1552,7 +1552,8 @@ restart the e2e jobs on every title change. The workflow reads the body from the
 GitHub API in the job, writes it to a file outside the checkout, and passes that
 file to `deploy/ci-pr-checks/goldens-section.sh` in `PR_BODY_FILE`. The script
 diffs the merge commit against its first parent, never evaluates the body and
-never prints it.
+never prints it. In a merge queue the job is skipped, which counts as passed: the
+body was checked on the pull request.
 
 The body is read from the API, not from the event, because a rerun replays the
 event's saved payload. If the check went red on a push, before you updated the
@@ -2288,7 +2289,7 @@ Two workflows gate a pull request. Each job maps to a make target; run it
 before you push.
 
 `ci-pr-checks.yaml` runs only on PRs whose base is `main` or `dev` (plus pushes
-to `main` and manual dispatch). A PR stacked on another branch gets no build,
+to `main`, manual dispatch, and a merge queue, where the e2e jobs skip). A PR stacked on another branch gets no build,
 test, lint or e2e, so retarget it to `main` before review.
 
 | Workflow / job | What it runs | Reproduce locally |
