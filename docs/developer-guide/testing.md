@@ -1922,7 +1922,11 @@ freeze refuses these steps unless flow control is on alone and they sit below th
 decode onset. That rules out A and B at 2+2, whose prefill onsets are past their decode
 knees, so B-onset (2+4) carries them, at 1.10x and 1.15x. In r1, B-onset reached 1.05x
 with the gate open (saturation 0.05) and no queue. The only queue r1 saw was at
-C-onset's collapse, at 1.14x.
+C-onset's collapse, at 1.14x. A further table, one per flow-control-on phase and
+measure-only steps included, gives each step's `vllm:num_requests_running` and
+`_waiting` per prefill pod (mean and max over the polls) and the max across pods: the
+engine's running cap that the prefill gate holds requests in front of, reported and
+not scored.
 
 For bursty buckets the freeze sizes each step's window for the top of the Ca2 band
 (1.25 times the Ca2 asked), because the analysis judges a step at the Ca2 it actually

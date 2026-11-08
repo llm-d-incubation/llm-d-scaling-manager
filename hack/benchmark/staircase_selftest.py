@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 149
+EXPECTED = 153
 checks = fails = 0
 
 
@@ -472,6 +472,43 @@ with tempfile.TemporaryDirectory() as run:
     analyze.queue_figures(ROWQ, analyze.read_raw_epp(run + "/epp-metrics.log"), {}, base + 180, base + 600)
     ok("the queue wait from the raw scrape", ROWQ.get("fc_wait_n") == 100 and abs(ROWQ.get("fc_waited_share", 0) - 0.5) < 1e-9
        and abs(ROWQ.get("fc_wait_mean", 0) - 0.1) < 1e-9, ROWQ)
+
+# The prefill engines' running cap from the per-pod scrape: a pod with two engines sums
+# them per poll, a poll outside the window is left out, decode stays out of prefill.
+with tempfile.TemporaryDirectory() as run:
+    base = lib.ts("2026-11-06T02:00:00Z")
+
+    def stamp(t):
+        return lib.datetime.fromtimestamp(base + t, lib.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(os.path.join(run, "vllm-metrics.log"), "w", encoding="utf8") as f:
+        f.write("%s m-prefill-a vllm:num_requests_running{engine=\"0\"} 99\n" % stamp(100))
+        f.write("%s m-prefill-a vllm:num_requests_running{engine=\"0\"} 3\n" % stamp(200))
+        f.write("%s m-prefill-a vllm:num_requests_running{engine=\"1\"} 2\n" % stamp(200))
+        f.write("%s m-prefill-a vllm:time_to_first_token_seconds_sum{engine=\"0\"} 1.5\n" % stamp(200))
+        f.write("%s m-prefill-a vllm:num_requests_running{engine=\"0\"} 7\n" % stamp(400))
+        f.write("%s m-prefill-b vllm:num_requests_running{engine=\"0\"} 4\n" % stamp(200))
+        f.write("%s m-prefill-b vllm:num_requests_waiting{engine=\"0\"} 1\n" % stamp(200))
+        f.write("%s m-prefill-b vllm:num_requests_running{engine=\"0\"} 6\n" % stamp(400))
+        f.write("%s m-prefill-b vllm:num_requests_waiting{engine=\"0\"} 0\n" % stamp(400))
+        f.write("%s m-decode-a vllm:num_requests_running{engine=\"0\"} 50\n" % stamp(200))
+    ENGINE = analyze.read_engine(run + "/vllm-metrics.log")
+    RUNNING = analyze.gauge_figures(ENGINE["prefill"], "running", base + 180, base + 600)
+    WAITING = analyze.gauge_figures(ENGINE["prefill"], "waiting", base + 180, base + 600)
+    ok("prefill running per pod: engines summed per poll, the poll before the window left out",
+       RUNNING == {"m-prefill-a": [6.0, 7.0], "m-prefill-b": [5.0, 6.0]}, RUNNING)
+    ok("prefill waiting per pod, and a pod that reported none is absent", WAITING == {"m-prefill-b": [0.5, 1.0]}, WAITING)
+    ok("the TTFT counters still read beside the gauges, and decode stays out of prefill",
+       ENGINE["prefill"]["m-prefill-a"]["sum"] == [(base + 200, 1.5)] and "m-decode-a" in ENGINE["decode"]
+       and "m-decode-a" not in ENGINE["prefill"], ENGINE["prefill"]["m-prefill-a"]["sum"])
+    SCORED = dict(level=1, rate=51.401)
+    MEASURED = dict(level=2, rate=58.534, prefill_running=RUNNING, prefill_waiting=WAITING)
+    TEXT = io.StringIO()
+    analyze.prefill_running_cap({("B-onset", "on"): {1: [SCORED]}, ("B", "off"): {1: [SCORED]}},
+                                {("B-onset", "on", 1): [MEASURED]}, {"B-onset": B_ONSET}, TEXT)
+    ok("the report's running-cap table: one per flow-control-on phase, the measure-only step with its max across pods",
+       "### B-onset on r1" in TEXT.getvalue() and "### B off" not in TEXT.getvalue()
+       and "| 2 | 58.5 | 1.10x | measure only | 6.0 / 7 5.0 / 6 | 7 | 0.5 / 1 |" in TEXT.getvalue()
+       and "| 1 | 51.4 | 0.97x | scored | unread | unread | unread |" in TEXT.getvalue(), TEXT.getvalue())
 
 print("%d checks, %d failed" % (checks, fails))
 if checks != EXPECTED:

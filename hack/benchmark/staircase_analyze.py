@@ -125,16 +125,34 @@ def replicas_seen(samples, a, b):
 
 
 def read_engine(path):
-    """{role: {pod: {sum or count: [(t, value)]}}} of the engines' TTFT counters."""
+    """{role: {pod: {...}}} of the engines: "sum" and "count" are the TTFT counters as
+    [(t, value)]; "running" and "waiting" the request gauges as {t: value}, summed over a
+    pod's engines, since a data-parallel pod reports one series per engine."""
     out = {"decode": {}, "prefill": {}}
     for line in read_lines(path):
         p = line.split()
-        if len(p) < 4 or "time_to_first_token_seconds_" not in p[2]:
+        if len(p) < 4:
             continue
         role = "decode" if "-decode-" in p[1] else "prefill" if "-prefill-" in p[1] else None
-        if role:
-            kind = "sum" if "_sum" in p[2] else "count"
-            out[role].setdefault(p[1], {"sum": [], "count": []})[kind].append((lib.ts(p[0]), float(p[-1])))
+        if not role:
+            continue
+        pod = out[role].setdefault(p[1], {"sum": [], "count": [], "running": {}, "waiting": {}})
+        if "time_to_first_token_seconds_" in p[2]:
+            pod["sum" if "_sum" in p[2] else "count"].append((lib.ts(p[0]), float(p[-1])))
+        elif p[2].startswith(("vllm:num_requests_running", "vllm:num_requests_waiting")):
+            gauge = pod["running" if "_running" in p[2] else "waiting"]
+            t = lib.ts(p[0])
+            gauge[t] = gauge.get(t, 0.0) + float(p[-1])
+    return out
+
+
+def gauge_figures(pods, key, a, b):
+    """{pod: [mean, max]} of a gauge over the polls in [a, b); pods with no poll there are left out."""
+    out = {}
+    for name, series in sorted(pods.items()):
+        seen = [v for t, v in series[key].items() if a <= t < b]
+        if seen:
+            out[name] = [sum(seen) / len(seen), max(seen)]
     return out
 
 
@@ -302,6 +320,9 @@ def analyze_steps(run, phase, discard):
         if pre is not None and dec is not None and row["client_ttft_mean"] == row["client_ttft_mean"]:
             row["engine_prefill_mean"], row["engine_decode_mean"] = pre, dec
             row["hop_mean"] = row["client_ttft_mean"] - pre - dec
+        # The prefill engines' running cap L, as each pod's poll read it: reported, not scored.
+        row["prefill_running"] = gauge_figures(engine["prefill"], "running", a, b)
+        row["prefill_waiting"] = gauge_figures(engine["prefill"], "waiting", a, b)
         row["replicas"] = replicas_seen(replicas, a, b)
         row["fc_saturation"] = series_mean(prom, "fc_saturation", a, b)
         row["fc_queue"] = series_mean(prom, "fc_queue", a, b)
@@ -464,6 +485,39 @@ def expected_phases(spec, finished, frozen, only_gate, repeats):
             for fc in b["fc"]:
                 out[b["name"], fc] = list(repeats)
     return out
+
+
+def prefill_running_cap(data, measure, frozen, out):
+    """One table a flow-control-on phase: each step's prefill engines' running and waiting
+    requests, per pod, as the poll read vllm:num_requests_running and _waiting. The running
+    cap L the router's gate stands in front of; reported, not scored."""
+    print("\n## The prefill engines' running requests, flow control on\n", file=out)
+    print("What each prefill pod ran at once, per poll, scored by nothing: its peak is the engine's "
+          "running cap L the router's prefill gate holds requests in front of. Per pod mean / max; "
+          "the max is across pods.\n", file=out)
+    shown = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        if fc != "on":
+            continue
+        onset = frozen[bucket]["onsets"].get("Prefill")
+        for n in sorted(repeats):
+            extra = measure.get((bucket, fc, n), [])
+            rows = sorted(repeats[n] + extra, key=lambda r: r["level"])
+            print("### %s on r%d\n" % (bucket, n), file=out)
+            print("| Step | Rate, r/s | Over the onset | Role | Running, per pod mean / max | Running max, all pods | Waiting, per pod mean / max |", file=out)
+            print("| --- | --- | --- | --- | --- | --- | --- |", file=out)
+            for r in rows:
+                shown += 1
+                running, waiting = r.get("prefill_running") or {}, r.get("prefill_waiting") or {}
+                print("| %d | %.1f | %s | %s | %s | %s | %s |" % (
+                    r["level"], r["rate"], "%.2fx" % (r["rate"] / onset) if onset else "no onset",
+                    "measure only" if r in extra else "scored",
+                    " ".join("%.1f / %.0f" % tuple(v) for v in running.values()) or "unread",
+                    "%.0f" % max(v[1] for v in running.values()) if running else "unread",
+                    " ".join("%.1f / %.0f" % tuple(v) for v in waiting.values()) or "unread"), file=out)
+            print(file=out)
+    if not shown:
+        print("No flow-control-on step.", file=out)
 
 
 def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False):
@@ -649,6 +703,8 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
                     "yes" if lib.held(r) else "no"), file=out)
     if not shown:
         print("| none | | | | | | | | | | | |", file=out)
+
+    prefill_running_cap(data, measure, frozen, out)
 
     print("\n## Model against client, per step\n", file=out)
     print("Report only: flow control off, the frozen curve at the step's rate.\n", file=out)
