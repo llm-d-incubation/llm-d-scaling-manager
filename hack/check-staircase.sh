@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=93
+EXPECTED_CHECKS=98
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -212,16 +212,25 @@ case "$args" in
         printf '{"items":[{"metadata":{"name":"ctl"},"status":{"phase":"Running"}}]}\n' ;;
     *" get pod -l app=loadgen -o json "*)
         if [ -n "${LOAD_ALIVE:-}" ]; then printf '{"items":[{"metadata":{"name":"lg-b-off-r1"}}]}\n'; else printf '{"items":[]}\n'; fi ;;
+    *" get pod witness "*)
+        # WITNESS_DIES: the first look finds it Failed, as a pod whose sleep ended.
+        if [ -n "${WITNESS_DIES:-}" ] && [ ! -e "$STATE/witness-died" ]; then touch "$STATE/witness-died"; echo Failed; exit 0; fi
+        echo Running ;;
+    *" wait pod witness "*) [ -z "${WITNESS_NOT_READY:-}" ] || { echo "timed out waiting for the condition" >&2; exit 1; } ;;
     *" get pods -o json "*)
         if [ -e "$STATE/tearing" ] && [ -n "${GET_FAIL:-}" ]; then exit 1; fi
         # The EPP, until the teardown: a gRPC port that serves no metrics, then 9090.
-        if [ -e "$STATE/tearing" ]; then printf '{"items":[]}\n'; exit 0; fi
+        if [ -e "$STATE/tearing" ] || [ -n "${NO_EPP_POD:-}" ]; then printf '{"items":[]}\n'; exit 0; fi
         printf '{"items":[{"metadata":{"name":"m-epp-1"},"status":{"phase":"Running","podIP":"10.0.0.9"},"spec":{"containers":[{"ports":[{"containerPort":9002}]}]}}]}\n' ;;
     *" get deploy scaling-manager-controller-manager -o json "*)
+        [ -n "${CONTROLLER_READ_FAIL:-}" ] && { echo "The connection to the server was refused" >&2; exit 1; }
         [ -n "${NO_EPP_SECRET:-}" ] && { printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'; exit 0; }
         printf '{"spec":{"template":{"spec":{"volumes":[{"name":"epp-metrics-token","secret":{"secretName":"scaling-manager-epp-metrics-token"}}]}}}}\n' ;;
     *" exec witness "*" scrape http://10.0.0.9:9090/metrics /t/token "*)
         if [ -n "${EPP_DENIED:-}" ]; then echo "scrape: http://10.0.0.9:9090/metrics answered 401: b'Unauthorized'" >&2; exit 1; fi
+        # SCRAPE_FLAKY: the standup's read works, the capture's fail.
+        if [ -n "${SCRAPE_FLAKY:-}" ] && [ -e "$STATE/scraped" ]; then echo "scrape: http://10.0.0.9:9090/metrics: timed out" >&2; exit 1; fi
+        touch "$STATE/scraped"
         printf 'llm_d_epp_request_ttft_seconds_bucket{le="0.1"} 3\nllm_d_epp_request_ttft_seconds_count 3\n'
         [ -e "$STATE/fc-off" ] || printf 'llm_d_epp_flow_control_queue_size 0\n' ;;
     *" exec witness "*" scrape "*) echo "scrape: connection refused" >&2; exit 1 ;;
@@ -279,7 +288,7 @@ env_line() {
     exec_env=("$TOOLS/env" PATH="$RUN_PATH" WORK="$WORK" BENCHMARK_NAMESPACE=stair-ns STAIRCASE_RUN="$RUN" BENCHMARK_PROMETHEUS_URL=http://p:9090
         STAIRCASE_SPEC="$WORK/spec.yaml" STAIRCASE_ROOT="$WORK" STAIRCASE_WHATIF="$STUB/whatif" FROZEN_FIXTURE="$WORK/frozen.json"
         STAIRCASE_POLL=0.2 STAIRCASE_TICK=0.1 STAIRCASE_SETTLE=0 STAIRCASE_ARM_POLL=0 STAIRCASE_TEARDOWN_POLL=0 STAIRCASE_TEARDOWN_TRIES=3
-        STAIRCASE_LEASE_EVERY=1 STAIRCASE_FREEZE_WAIT=40 STAIRCASE_READY_WAIT=2 STAIRCASE_OWNED_POLL=0)
+        STAIRCASE_LEASE_EVERY=1 STAIRCASE_FREEZE_WAIT=40 STAIRCASE_READY_WAIT=2 STAIRCASE_OWNED_POLL=0 STAIRCASE_WITNESS_RETRY=0)
 }
 
 # base_env <VAR=value...> <command...> : run it to its end under the stubs.
@@ -399,6 +408,28 @@ fresh noeppsecret
 start NO_EPP_SECRET=1; wait_run
 expect "a controller with no EPP token stops the run before the warm-up" \
     '[ "$rc" != 0 ] && grep -q "mounts no epp-metrics-token Secret" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh ctlreadfail
+start CONTROLLER_READ_FAIL=1; wait_run
+expect "a controller Deployment that cannot be read is retried and named an API error, not a missing volume" \
+    '[ "$rc" != 0 ] && [ "$(grep -c "get deploy scaling-manager-controller-manager -o json" "$LOG")" = 3 ] && grep -q "could not be read (API error)" "$RUN/timeline.txt" && ! grep -q "mounts no epp-metrics-token" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh noepppod
+start NO_EPP_POD=1; wait_run
+expect "no Running EPP pod stops the run before the warm-up, after its tries" \
+    '[ "$rc" != 0 ] && [ "$(grep -c "no Running, Ready EPP pod (try" "$RUN/timeline.txt")" = 3 ] && grep -q "no Running EPP pod: the EPP cannot be read" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh witnessnotready
+start WITNESS_NOT_READY=1; wait_run
+expect "a witness that never turns Ready stops the run before the warm-up" \
+    '[ "$rc" != 0 ] && grep -q "witness pod not Ready" "$RUN/timeline.txt" && ! grep -q "exec witness" "$LOG" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh witnessdies
+start WITNESS_DIES=1 SCRAPE_FLAKY=1
+if wait_for 'EPP scrape failed 3 polls running' "$RUN/timeline.txt"; then ok "failed EPP scrapes in a row reach the timeline, with the error"; else bad "failed EPP scrapes in a row reach the timeline, with the error"; fi
+expect "a witness found dead is re-created from its spec, which outlives the run" \
+    'grep -q "witness is Failed: re-creating it" "$RUN/timeline.txt" && grep -q "witness re-created" "$RUN/timeline.txt" && [ "$(grep -c "apply -f .*witness.yaml" "$LOG")" = 2 ] && grep -q "delete pod witness" "$LOG" && grep -q "sleep infinity" "$RUN/witness.yaml"'
+kill -TERM "$pid" 2>/dev/null; wait_run
 
 fresh armfail
 start ARM_FAIL=1 STAIRCASE_ARM_TRIES=2; wait_run
