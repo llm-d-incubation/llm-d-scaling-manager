@@ -3,7 +3,7 @@
 # broke every uncached build twice (2026-08-14, 2026-10-20). The tag fixes the
 # Go minor; Dependabot's docker updater (.github/dependabot.yml) proposes the
 # next one. The runtime stage below stays digest-pinned: gcr.io keeps old ones.
-FROM quay.io/projectquay/golang:1.26 AS builder
+FROM quay.io/projectquay/golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 

@@ -8,7 +8,7 @@
 # The builder is pinned by tag, as in the manager's Dockerfile: quay.io deletes
 # superseded golang digests, so a digest pin breaks every uncached build. The
 # runtime stage stays digest-pinned.
-FROM quay.io/projectquay/golang:1.26 AS builder
+FROM quay.io/projectquay/golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
