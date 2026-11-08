@@ -658,6 +658,7 @@ your call.
 > is [passive](../../reference/scaling-policy.md#passive), the whole group
 > plans and moves nothing, and `llmsm_utilization_share_passive_shadow` is 1.
 > Make the model active, or keep it out of the group, to share again.
+> To see what sharing would do before it acts, run it [passive](../try-in-passive-mode/#utilization-share-in-passive-mode).
 
 ### Step 14: Check the budget
 

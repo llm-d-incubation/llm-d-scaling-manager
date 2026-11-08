@@ -1,0 +1,114 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here — see hack/render-guides.py — so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: try-in-passive-mode
+
+prerequisites:
+  vars:
+    note: The namespace your model servers run in, and where the controller runs (the same one unless your admin runs it elsewhere).
+    run: |
+      export NAMESPACE=<your-namespace>
+      export CONTROLLER_NAMESPACE=${NAMESPACE}
+  check:
+    note: Read-only. Reports the namespace, its model servers and the Prometheus it found.
+    run: make check-prereqs
+
+deploy:
+  prereqs:
+    run: make setup-prereqs
+  controller:
+    note: The controller, passive for every model. It computes and publishes, and changes no replica count.
+    run: make deploy-scaling-manager LLMSM_PASSIVE=true
+  passivedefault:
+    note: Prints true when the running controller started passive.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n ${CONTROLLER_NAMESPACE} \
+        -o jsonpath='{.data.passiveDefault}{"\n"}'
+  register:
+    run: |
+      make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
+      # edit passive-plan.yaml: apply: yes for a model scaled by hand, no for one KEDA scales
+      make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
+  observevars:
+    note: The model KEDA scales today, its ScaledObject, and the model it serves.
+    run: |
+      export SCALEDOBJECT=<its ScaledObject>
+      export MODEL_ID=<the model it serves>
+  observe:
+    note: Add the scaling manager's trigger beside the ones that scale the model. Passive, it answers 0 and leaves the scaling to them.
+    run: |
+      cat > observe-trigger.yaml <<EOF
+      - op: add
+        path: /spec/triggers/-
+        value:
+          type: external-push
+          name: scaling-manager
+          metricType: AverageValue
+          metadata:
+            scalerAddress: scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc:9090
+            modelID: ${MODEL_ID}
+          authenticationRef:
+            name: scaling-manager-external-scaler-${CONTROLLER_NAMESPACE}
+            kind: ClusterTriggerAuthentication
+      EOF
+      kubectl patch scaledobject ${SCALEDOBJECT} -n ${NAMESPACE} --type json --patch-file observe-trigger.yaml
+
+verify:
+  mode:
+    note: Needs read access to the controller's logs.
+    run: |
+      kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep -E 'Passive mode (entered|left|changed)'
+  events:
+    note: What it would have done, as Events on each ScaledObject.
+    run: |
+      kubectl get events -n ${NAMESPACE} --field-selector reason=PassiveRecommendation
+
+active:
+  readiness:
+    note: Report what the model servers still need. Changes nothing.
+    run: make workload-patch NAMESPACE=${NAMESPACE}
+  model:
+    note: The model to make active.
+    run: export MODEL_ID=<the model it serves>
+  switch:
+    note: Make one model active. The rest stay passive.
+    run: |
+      cat > passive-trial.yaml <<EOF
+      data:
+        passive-trial: |
+          model_id: ${MODEL_ID}
+          namespace: ${NAMESPACE}
+          passive: false
+      EOF
+      kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --patch-file passive-trial.yaml
+  back:
+    note: Make it passive again. It inherits LLMSM_PASSIVE=true.
+    run: |
+      kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} \
+        --type json -p '[{"op":"remove","path":"/data/passive-trial"}]'
+  all:
+    note: Make every model active. The controller restarts to read it.
+    run: make deploy-scaling-manager LLMSM_PASSIVE=false
+
+share:
+  install:
+    note: The controller, passive, with a GPU quota for the models to share.
+    run: |
+      make deploy-scaling-manager LLMSM_PASSIVE=true \
+        LLMSM_LIMITER=quota LLMSM_QUOTAS='<accelerator>=<gpus>'
+  check:
+    note: Read-only. Is there a budget to share, and does the GPU product resolve.
+    run: make utilization-share-check
+  activate:
+    note: Configure the optimizer to act. While a model of a group is passive, the group only reports.
+    run: make utilization-share-activate
+  log:
+    note: What it would move, from the controller's log.
+    run: |
+      kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep 'Utilization share: would rebalance'
+
+cleanup:
+  uninstall:
+    run: make undeploy-scaling-manager

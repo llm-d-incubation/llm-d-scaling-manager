@@ -1,8 +1,10 @@
 # Passive mode
 
-**Status:** built on `feat/passive-mode`. The operator's page is
-[scaling-policy.md, passive](../reference/scaling-policy.md#passive); this note
-keeps the decisions and the reasons.
+**Status:** built and merged. The operator's page is
+[scaling-policy.md, passive](../reference/scaling-policy.md#passive), and the
+guide is [Try the scaling manager in passive
+mode](../guides/try-in-passive-mode/); this note keeps the decisions and the
+reasons.
 
 ## Summary
 

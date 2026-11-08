@@ -48,6 +48,10 @@ between namespaces. If the scaling manager may not read every namespace, use
 install](../../guides/utilization-share-namespaced/): it manages only the
 llm-d namespaces, with a Role in each, under one quota.
 
+To see what sharing would move before anything scales, install the scaling
+manager passive first: [Utilization share in passive
+mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
+
 To undo, see [Cleanup](../../guides/utilization-share/README.md#cleanup). The
 guide's two-model trial holds GPUs until you tear it down. If the controller
 is out of your reach, see [Details](#when-the-controller-is-out-of-your-reach).
