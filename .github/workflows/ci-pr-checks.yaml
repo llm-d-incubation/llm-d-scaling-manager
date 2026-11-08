@@ -29,6 +29,11 @@ on:
     branches:
       - main
       - 'release-*'
+  # A merge queue runs the cheap checks on the queued merge before it lands. The
+  # e2e jobs skip it at their own `if`, which names only pull_request, schedule
+  # and dispatch; has_code_changes is 'true' here as on any non-pull_request
+  # event, so lint-and-test runs every step.
+  merge_group:
   # Nightly, for the live-Kueue borrowing e2e (e2e-tests-kueue-borrow): it runs
   # on a PR only when the PR touches borrowing, so main is checked every night
   # whatever merged. The other e2e jobs exclude this event at their own `if`;
