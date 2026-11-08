@@ -1194,6 +1194,7 @@ restores, exact repeats and unknown ages. Two rules apply to all:
 | start time | **both** | too low under-orders a fleet that is behind (λ > mu · ready). Too high, in `internal/signals/floor/floor.go`: `DrainHorizon` under-prices the backlog whenever S exceeds 60 s, `startingCredit` credits a stuck pod for up to 2S, and a fleet with spare projects more drain and orders less. Share pacing errs the other way: too low moves GPUs for bursts that end first. PR 5 bounds both sides |
 | share need history (#14) | too low for the role, too high for its neighbours | `PeakNeed` is a max of adjacent-pair minima, low by design; trimming to the swing window ages a peak out with no new evidence |
 | share release time (#15) | too low | p90 over ≥ 3 releases is the max at n = 3 |
+| first-read mu, `RunningRequests / AvgServiceTime` on a saturated row (ev-shindin/llm-scaling-manager#520) | too high | its one-minute service-time window still holds completions from before the cap: +5 % to +15 % on the first saturated row of three recordings. Priced at 0.85 of the reading before two mu readings, and that price held until every replica ordered under it is Ready; while the backlog grows, the lower of it and the floor's mu ([as built](#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520)) |
 
 A clamp that stops k2's fit from rising would turn it into a running minimum:
 one admitted low reading would then price the fleet for good.
@@ -4016,6 +4017,559 @@ stabilization), need 18, bound 21.7:
 - **Open.** Not measured on a cluster, and the simulator cannot price a right
   minority figure released: its floor never binds above occupancy without a
   queue.
+
+#### Queued work priced by drain time before mu, design (ev-shindin/llm-scaling-manager#520 cause B)
+
+Built on `fix/queue-priced-as-drain`, behind one replay switch,
+`queue-priced-as-drain` (`SwitchQueuePricedAsDrain`, `queue_drain.go`), on
+from the constructor. The design follows as written, with the decisions taken
+on it (at the end) and what the build changed and measured
+([as built](#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520)).
+
+**What goes wrong.** Occupancy charges each queued request as if it were
+resident: queue x (input + output) tokens (`waitingQueueDemand`,
+`estimateSchedulerQueueDemand`). The floor swaps that charge for a drain price
+only when its term may order (two mu readings) and the backlog is not growing
+(`flooredDemand`, gated on `backlogGrew`). A load step hits both gates at once,
+so the whole queue is priced as resident KV. On `pd-restart` (P/D decode,
+`max_num_seqs` 16, about 4 to 14 req/s) that is 9.87 replicas at 12:28:02
+against a need of 3: 130 queued x 2000 tokens is 260k, beside 130k resident. In
+the closed-loop probe the same charge gives peaks of about 2x need at 15 s and
+90 s starts under the shortest-queue router (ev-shindin/llm-scaling-manager#529), and long overshoot at 463 s.
+
+**Already rejected.** Counting starting replicas against the queue charge. The
+engine already counts them as anticipated supply, so the credit counts them
+twice. On the 463 s probe it put restart-before-step under need for 12m0s, over
+the 11m13s bound (ev-shindin/llm-scaling-manager#520).
+
+##### The price
+
+```
+arrival  = max(lambda, sum over Ready replicas of RunningRequests / AvgServiceTime + dB/dt)
+mu       = 0.85 x mu0                                 before two mu readings
+         = min(floor's mu, mu0)                       while the backlog grows
+N        = (arrival + B / T) / mu                     replicas at 100 %
+T        = floor.DrainHorizon(60 s, start estimate)   = max(start, 60 s)
+demand   = max(resident KV, N x P, floor's tokens)    tokens; the engine divides by 0.85 x P
+```
+
+- **`mu0`** is the first-read mu. It is the median, over the role's replicas
+  that are saturated now, of `RunningRequests / AvgServiceTime` (Little's law).
+  A replica counts only when it is at its stated batch cap
+  (`ReplicaMetrics.AtBatchCap`). The design also took a row whose KV is at
+  or over k1 with a capacity queue; review measured those 1.6x to 1.9x high
+  (as built, review round), so they keep occupancy's pricing. A queue alone
+  is not enough either. On `pd-restart` at 12:28:32
+  the new decode replicas had requests waiting for their KV from prefill while
+  running far under the cap, and read 3.0 req/s against a true 6.2.
+  `AvgServiceTime` excludes queue wait (`request_inference_time_seconds`). At the
+  cap the batch is fixed, so the service time is the replica's own for this
+  shape. That is not true of the service time the retired Little's-law floor
+  priced at whatever batch the replica ran
+  ([why it was retired](../developer-guide/saturation-demand-floor.md#why-the-littles-law-floor-was-retired)).
+- **`dB/dt`** is the signed growth rate of the role's uncapped backlog: the
+  smaller of the slope over one cycle and the slope over `BacklogGrowthLookback`,
+  read on every cycle. The design said the larger, floored at zero and counted
+  only while `backlogGrew` is set; the build measured why not (as built). A
+  noisy negative slope cannot price under lambda, through the max with it.
+  `noteBacklogGrowth` already keeps the readings.
+- **The sum of `RunningRequests / AvgServiceTime`** is what the replicas
+  complete now. The one-minute completion rate and lambda both read a step a
+  minute late. Adding `dB/dt` gives the arrivals the fleet is not serving. Both
+  only raise the estimate, through the max with lambda.
+- **`B`** is the backlog `localQueueBacklog` builds: each engine queue capped at
+  what its own replica drains in `T` (`mu x T`), plus the scheduler's queue for
+  the role that owns it. The cap stays on while the queue grows. Growth is
+  priced through `dB/dt` and no longer through an uncapped queue. On a decode
+  role with `CapacityQueueKnown`, only the capacity part counts. The rest waits
+  for KV from prefill, and decode capacity does not drain it. Main already
+  reads it so: `ReplicaCapacity.QueueLength` is the decode capacity view
+  (`decodeCapacityView`), the full count at the sequence cap.
+- **No starting-replica credit.** `B` is the queue that stands now, not
+  `backlogAtLanding`. Each cycle prices the queue standing then, and the
+  engine's anticipated-supply subtraction keeps an increment from being
+  ordered twice.
+- **The floor's own tokens** stay in the max, so the price is never under the
+  term the floor would publish today.
+
+##### Where it applies
+
+Only on a role that generates output (decode or both), only with a backlog, and
+only where an `mu0` or an orderable mu exists. Anywhere else nothing changes.
+
+| region | condition | today | proposed |
+| --- | --- | --- | --- |
+| before two readings | `mayOrder` false (no reading, one reading, or `HeldWhy` single-sample) and the role has a saturated row | occupancy: resident + queue x (in + out) | the price above, mu = 0.85 x `mu0` |
+| growing | `mayOrder` true and `backlogGrew` | `max(measured, floor)`: the queue as resident | the price above, mu = min(floor's mu, `mu0`) |
+| floor | `mayOrder` true, not held, not growing | the swap, blended by `floorTrust` | unchanged |
+| stale shape | `staleShape` | hold | unchanged while the shape-change hold stands, and every haircut hold of the model is dropped: the service-time window mixes two shapes, and the error is not bounded by the haircut. The design's further 60 s wait after the hold clears is not built |
+
+##### Checked against `pd-restart`
+
+Computed per cycle from the golden's recording and replayed capacities (decode,
+start estimate 85.6 s, then 72.4 s after the landing). The decode role takes its
+second mu reading at 12:28:02. "Today" is the replayed demand in replicas at the
+scale-up target, with the role demand in brackets where it differs from the
+variant's. Need is lambda / (0.85 x 6.2). All figures are replicas at 0.85.
+
+| cycle | Ready / starting | lambda | sum of run/svc | B | dB/dt | arrival | mu priced | region | resident | proposed | today | need |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 12:26:47 | 2 / 0 | 0.46 | 7.13 | 3 | 0.20 | 7.33 | 6.06 | before two | 1.99 | 1.99 | 2.28 | 0.09 |
+| 12:27:02 | 2 / 1 | 5.98 | 12.67 | 29 | 1.73 | 14.40 | 5.38 | before two | 3.17 | 3.22 | 6.01 | 1.13 |
+| 12:27:17 | 2 / 2 | 8.68 | 12.55 | 40 | 0.73 | 13.28 | 5.33 | before two | 2.64 | 3.03 | 5.25 | 1.65 |
+| 12:27:32 | 2 / 2 | 13.96 | 12.47 | 76 | 2.40 | 14.87 | 5.30 | before two | 2.69 | 3.50 | 7.24 | 2.65 |
+| 12:27:47 | 2 / 2 | 13.62 | 12.42 | 84 | 1.35 | 13.77 | 5.28 | before two | 2.91 | 3.29 | 7.66 | 2.58 |
+| 12:28:02 | 2 / 2 | 14.18 | 12.39 | 130 | 3.07 | 15.46 | 6.19 | growing | 3.29 | 3.29 | 9.87 | 2.69 |
+| 12:28:17 | 4 / 0 | 13.08 | 12.40 | 161 | 2.07 | 14.47 | 6.20 | growing | 4.32 | 4.32 | 10.65 | 2.48 |
+| 12:28:32 | 4 / 0 | 13.39 | 11.55 | 165 | 1.48 | 13.39 | 6.21 | growing | 2.04 | 2.97 | 9.06 | 2.54 |
+| 12:28:47 | 4 / 0 | 13.56 | 13.27 | 165 | 1.35 | 14.62 | 6.21 | growing | 0.54 | 3.20 | 6.87 (4.88) | 2.57 |
+| 12:29:02 | 4 / 0 | 13.47 | 14.31 | 122 | 0 | 14.31 | 6.21 | floor | 0.89 | unchanged | 5.66 (3.44) | 2.56 |
+| 12:29:17 | 4 / 0 | 14.50 | 14.20 | 14 | 0 | 14.50 | 6.21 | floor | 2.15 | unchanged | 2.75 | 2.75 |
+
+- **It never orders under need.** The lowest margin is 12:28:02, at 3.29
+  against 2.69, and the queue's B / T adds 0.29 of it. The arrival estimate
+  leads lambda by a minute: 14.40 at 12:27:02, where lambda read 5.98 and the
+  completion rate 5.14.
+- **The first read of mu was high.** At 12:26:47, `RunningRequests /
+  AvgServiceTime` read 7.13 against the 6.2 it settled at a minute later
+  (+15 %). The haircut prices it at 6.06. The same first read was +13 % on
+  `throughput-sweep-restart` (14.29 against 12.6) and +5 % to +6 % on `e1` and
+  `e1-tuned` (6.53 to 6.58 against 6.2). Every one settled within three
+  cycles. The completion-rate mu errs the other way, at 2.84 and 3.66 on its
+  first two cycles here.
+- **The demand peak falls from 10.65 to 4.32.** The 4.32 at 12:28:17 is the
+  resident term. The two new replicas took queued work as they landed, so all
+  four held their batch. It lasts one cycle (see what this does not fix).
+  At `maxReplicas` 4 the fleet orders 4 either way, so the live run would not
+  have changed. The demand golden does change.
+- **Expected golden move:** `pd-restart/results.csv`: decode demand down on 9
+  cycles (12:26:47 to 12:28:47), by at most 67 %. No cycle goes up. With
+  `B` on the capacity queue, 12:28:02 reads 95 queued, not 130, which lowers
+  the price by about 0.07 replicas.
+
+##### Checked against the probe, analytically
+
+These are estimates for the build to measure, not measurements. The probe's need
+is ceil(0.95 lambda / (0.68 mu)), with P at k1. A saturated row reads KV 0.95,
+which is 1.40 replicas of resident at the target. The rig's rows carry neither
+`RunningRequests` nor `AvgServiceTime`, so the build adds both, consistent with
+Little's law, and a first window that mixes service times from before the
+saturation.
+
+- **load-step at 463 s** (need 9; two replicas, mu 1; 1.2 to 6 req/s; T 463 s).
+  On the first saturated cycle the arrival estimate is 6 and B is 60. At
+  mu 0.85: N = (6 + 60/463) / 0.85 = 7.21, which is 8.48 at the target, so the
+  fleet orders 9. Those land about 7m58s after the step. That is the time under
+  need, against an 11m13s bound; today it is 8m0s. **Without the haircut the
+  formula under-orders here:** at mu 1 it orders 8, and the 9th waits until the
+  queue passes 370 (93 s), so the fleet is under need for about 9m31s. That
+  margin of 1m42s is too thin for slower CI runners, and it is why the haircut
+  is in the design and not an option. The drain term peaks at (6 + 2) / 0.85 =
+  9.41, which orders 10: two queued replicas, each worth at most one.
+- **restart-before-step at 463 s** (need 17; four replicas, mu 1; 2.5 to 12
+  req/s; no mu after the restart). On the first saturated cycle: N = (12 + 120/463)
+  / 0.85 = 14.42, which is 16.97 at the target, so the fleet orders 17, at need.
+  It is under need for about 8 min. Without the haircut it orders 15 and is under
+  need for about 9m31s. The drain term peaks at (12 + 4) / 0.85 = 18.8, so it
+  orders 19, against today's 29 (even split) and 44 (shortest queue). The
+  ceiling is 26.5.
+- **What the estimate cannot settle.** Under the shortest-queue router the
+  replicas that land are filled to the queue level, and each reads KV 0.95.
+  The resident term then reads 1.40 x the fleet, and can carry the peak to
+  about 13 to 14 on load-step (ceiling 14.5) and about 24 on
+  restart-before-step (ceiling 26.5). That is occupancy's resident term, which
+  this design keeps (open question 6).
+
+##### Which side each term errs to
+
+| term | errs toward | when | guard |
+| --- | --- | --- | --- |
+| `mu0` | too high, which under-orders (the SLO side) | the one-minute service-time window still holds completions from before the cap, measured +5 % to +15 % on the first saturated row | 0.85 x `mu0` until two readings. While the backlog grows, the lower of `mu0` and the floor's mu. Under a shape change, no `mu0` until one rate window has passed. After the haircut every recorded first read lands at or under the settled figure (6.06 against 6.2; 12.15 against 12.6) |
+| `mu0` | too low, which over-orders (spend) | preemption under KV pressure, or an inference time that includes the KV load on a P/D decode | none needed. It is bounded by the floor's own figure once two readings exist |
+| haircut | spend | always, before two readings | at most 1 / 0.85 = 1.18x, for about the minute until the second reading |
+| arrival: run/svc sum | spend | the service-time window reads short just after a step | it only raises the estimate (max with lambda) |
+| arrival: `dB/dt` | spend on jitter; low if the growth sits in a queue it does not read | jitter is cut by the `backlogGrew` band (10 %, 2 requests). The scheduler's queue is in `B` | this term is what replaces `backlogGrew`'s protection |
+| `B / T`, with T too long | under-orders the backlog (the SLO side) | a start estimate that is too high | never under the arrivals. PR 5c's two estimates both price, and the larger figure wins (`pickLargerFloor`), which is the shorter T |
+| `B / T`, with T too short | spend | an unknown start: T = 60 s | none needed |
+| `B` capped per replica | under-prices a queue pinned on one replica | an even-split router | by design: added replicas cannot drain another engine's queue. The arrivals that queue grows by come in through `dB/dt` |
+| resident KV | spend | new replicas filled with queued work as they land | not changed here (open question 6) |
+| no starting-replica credit | spend, compared with the floor's `backlogAtLanding` | while replicas start | none needed. Crediting them is the rejected option |
+
+The SLO-side guards, in the order the brief asked for:
+
+1. **A first mu read high.** The haircut, the min with the floor's mu while
+   growing, and the shape-change wait. Without the haircut the 463 s probe
+   cases come within 1m42s of their bound (above).
+2. **What `backlogGrew` protects.** A step from 3 to 9 req/s on one replica of
+   mu 6 (`TestThroughputFloor_AGrowingQueueIsPricedAtTheTrueArrivals`). The
+   swap priced it at 280 704, against occupancy's 387 263. With arrival =
+   max(lambda read, 6 + 3) = 9, the proposal prices the true arrivals plus the
+   queue at T 60 s: 452 469, 485 046, 517 624 and 550 202 at 15, 30, 45 and
+   60 s. That is above the 390 933 the arrivals alone need on every cycle, and
+   above the pre-step 319 763. It is under occupancy at 45 s (-0.8 %) and 60 s
+   (-6.6 %), so the test's second assertion moves from "not under occupancy"
+   to "not under (true arrivals + B / T) x P / mu". That is a named change
+   (open question 2). The mutant that drops `dB/dt` prices 15 s at
+   (6 + 85/60) / 6 x P = 322 158, under 390 933, and the new assertion catches it.
+3. **No double credit for starting replicas.** `B` is observed, not projected,
+   and starting replicas earn nothing in the drain term.
+4. **T is the knob between spend and how long TTFT breaches.** A request queued
+   at the step waits about one start plus T. At a 463 s start, T = 463 s means
+   up to about 15 min of breached TTFT for the queue that stood at the step,
+   on the fewest extra replicas. A shorter T orders more replicas for the same
+   queue (open question 4).
+
+##### P/D roles
+
+- **Decode** is the role this design is for. Its queue is the engines' own
+  (`pd-restart` carries no scheduler queue). Only the capacity part of
+  `B` counts. `mu0` reads the decode replicas at their batch cap.
+- **Prefill** is unchanged. With no mu, the scheduler queue's prefill share is
+  already dropped (`scheduler-queue-prefill-share-dropped`), and a prefill
+  bound is held to `LowerBoundMaxGrowth`. Prefill's `RunningRequests /
+  AvgServiceTime` is a ratio of a few requests to about 10 ms, too noisy to
+  order on. The scheduler's queue stays with prefill, its owner
+  (`queueOwner`), and decode does not take it.
+- **Both** (aggregated) takes the decode treatment and the scheduler's queue
+  in `B`.
+
+##### Interactions
+
+- **The floor.** In the growing region the floor's tokens stay in the max. In
+  the floor region nothing changes. Leaving either drain region moves demand up
+  or holds it: on `pd-restart` it goes from 3.20 to today's 5.66 (role 3.44) at
+  12:29:02. Today the same edge is a fall by the whole queue charge (role demand
+  9.06 to 4.88 a cycle earlier). Under the proposal, `backlogGrew`, which
+  lingers a minute after the growth stops, moves demand only by the `dB/dt` and
+  mu differences.
+- **The start learner.** T reads PR 5c's start through `DrainHorizon`. An
+  unknown start gives T = 60 s.
+- **KEDA stabilization.** Scale-up has no window, so the first order lands as
+  priced. Scale-down holds the largest desired count for 300 s. Once the
+  haircut lifts, the price drops (17 to 16 on restart-before-step at about
+  16:15). With a start longer than the window, the lower count could take back
+  a replica that is still starting. The probe cannot show this: it removes
+  pods only when none are starting (`learnertest.Fleet`, `starting == 0`).
+  The build checks what the engine does with a desired count under the
+  current count while replicas start (open question 1).
+- **Hysteresis (3.5).** A declared row. Set: a backlog on a generating role,
+  with a saturated row, in either drain region. Clear: two readings and
+  `backlogGrew` clear. Dwell: `backlogGrew`'s minute. The safe side is the
+  floor region's figure, and the clear goes toward it. Restart: not persisted.
+  A restart without a snapshot comes back in the before-two-readings region,
+  under the haircut. A restored snapshot brings its mu readings back, and with
+  them the floor region.
+
+##### Evidence plan
+
+- **Probe.** Every ev-shindin/llm-scaling-manager#520 row in `known-failures.yaml` (load-step,
+  decode-step, restart-before-step and restored-snapshot, at 15, 90 and 463 s)
+  must clear the peak ceiling, the final bound and the under-need bound. That
+  holds on main's even split and on ev-shindin/llm-scaling-manager#529's shortest-queue router, and the
+  build removes each row that passes. The under-need margin is reported per
+  case, not just pass or fail. The rig change is that rows carry
+  `RunningRequests` and `AvgServiceTime`, with a first window that mixes
+  service times from before the saturation.
+- **`pd-restart` golden.** Decode demand down on 9 cycles, by at most 67 %,
+  none up, never under resident or need (the table above). Every other golden
+  is replayed. The expected direction is down only, and only on cycles with a
+  backlog in a drain region. A move up, or on any other cycle, is a finding.
+- **Property cases.**
+  - Never under the resident KV, and never under (true arrivals) / mu.
+  - In the growing region, never under (true arrivals + B / T) / mu while lambda
+    lags. That is the rewritten step test above.
+  - A standing queue with AR(1) noise (phi 0.9, as in 3.5) at 10 % and 15 % on
+    the queue, `RunningRequests` and `AvgServiceTime`. Count region flips and
+    the change in demand per cycle. At 15 % the noise crosses the 10 %
+    `backlogGrew` band, so the case measures flip amplitude against today's,
+    and does not assume no flips.
+  - A first read of `mu0` at +15 % on the 463 s cases stays inside the
+    under-need bound.
+  - A decode replica whose waiting requests are all deferred (KV from prefill)
+    and whose KV is low is not read as saturated.
+- **Negative controls.**
+  - Switch off: the goldens equal the parent's, and the ledgered rows fail as
+    they do today. `pd-restart` reads 9.87 at 12:28:02.
+  - Mutants, each of which must be caught:
+    - `dB/dt` dropped (the step test).
+    - The haircut dropped (the 463 s under-need margin. The build reports
+      whether the bound catches it, and if it does not, the property case on
+      the first read does).
+    - Starting replicas credited (`TestQueueDrain_StartingReplicasEarnNoCredit`:
+      the same cycle with five starting must price as with none).
+    - T fixed at 60 s (`TestQueueDrain_TheHorizonIsTheStart`: 7.53 replicas
+      over a 300 s start, 9.41 over 60 s).
+    - The per-replica cap on `B` dropped (`TestUnevenRoutingAPinnedQueueIsPricedAtWhatItsReplicaDrains`:
+      21.96 against 3.53).
+    - The run/svc sum replaced by the one-minute completion rate (12:27:02's
+      arrival estimate 5.98 against 14.40).
+    - `mu0` taken from rows with a queue alone (12:28:32: 3.0 against 6.2).
+
+##### What it does not fix
+
+- **The resident term when replicas land.** New replicas take queued work at
+  once, so the whole fleet reads full for a cycle or more: 4.32 at 12:28:17
+  on `pd-restart`, 1.47x on `e1` for one cycle, and up to 1.40 x the fleet on
+  the shortest-queue probe.
+- **Cause C**, the queue left on the original replicas under an even split.
+  That is the router, handled test-side in ev-shindin/llm-scaling-manager#529.
+- **The release path.** `pd-restart`'s fleet held 4 until 12:33:02, about
+  3.5 min after demand settled. That is scale-down stabilization, not demand.
+- **A role with no saturated row and no mu.** Without `AvgServiceTime`
+  (`AvgServiceTimeKnown` false) or a known batch cap and k1, the role keeps
+  today's residency charge.
+- **Prefill** (above), and k2 relearned during a step (23.9k to 55k on
+  `pd-restart`). The drain term divides P out; the resident term does not.
+
+##### Decisions
+
+1. **The haircut holds until every replica ordered under it is Ready**, not
+   until the second mu reading. While one is starting, demand is at least the
+   haircut price at the cycle's arrivals and queue (`noteDrainHold`).
+2. **The price may raise demand** above occupancy's.
+3. **T stays `DrainHorizon`**: max(start, 60 s).
+4. **The growing-queue test's second assertion is relaxed** to "not under
+   the drain price at the true arrival rate". The price stays above the
+   arrivals.
+5. **Decode `B` is the capacity queue.** Main already reads it that way
+   (`decodeCapacityView`).
+6. **The resident spike on landing is the next step**, out of scope here.
+
+#### Queued work priced by drain time, as built (ev-shindin/llm-scaling-manager#520)
+
+Built on main 98ac6fc22 with ev-shindin/llm-scaling-manager#529 (the queue-aware probe router) merged in,
+behind `queue-priced-as-drain` (`D/queue_drain.go`, wired in
+`applyThroughputFloor`). The formula is the design's, with five changes
+the build measured:
+
+- **`dB/dt` is signed, and the smaller of the two slopes.** The design took
+  the larger, floored at zero. The larger read growth for a minute after it
+  stopped, because `backlogGrew` and the slope over its lookback both linger.
+  On the probe's 90 s load step the first replicas landed at 3m45s with the
+  queue down from 420 to 410, yet the arrivals read 9.38 for 6. The haircut
+  price then ordered 16 for a need of 9. Floored at zero, a draining queue
+  read its drain as arrivals: the replicas complete what arrives plus the
+  backlog they drain. On `pd-restart` at 12:47:36 they completed 25.4 req/s
+  against 20.7 arriving, and the same queue was priced twice, as arrivals and
+  as B / T. Signed, completions plus `dB/dt` is the arrivals whichever way the
+  queue moves. The max with lambda keeps a noisy negative slope from pricing
+  under the router's rate.
+- **The first read needs a majority.** `mu0` is read only when at least half
+  the role's replicas are saturated. Read from a minority, the probe's slow
+  pod (one replica at 0.3 of fifteen siblings) was the fleet's first read and
+  ordered 58 replicas for a need of 18.
+- **A held haircut keeps its first read.** While the hold lasts, a cycle with
+  no majority read prices at the read the hold was taken at. Replicas that
+  land under a hold start unsaturated, and without it the 463 s load step fell
+  back to the residency charge the cycle its first order landed, peaking at 15
+  against a ceiling of 14.5.
+- **The probe rig reports `RunningRequests` and `AvgServiceTime`.** The
+  service time is one minute's mean, and runs shorter on a smaller batch (0.6
+  of the limit's at no load). The first saturated row therefore reads mu
+  13.6 % high, inside the 5 % to 15 % the recordings showed.
+- **The haircut is a field (`drainHaircut`)**, so a test can take it out.
+
+**Probe, every start case, both routers, on against off** (peak / final /
+time under need; bounds: ceiling 14.5 for need 9 and 26.5 for need 17,
+under-need 3m45s, 5m0s and 11m13s at 15, 90 and 463 s;
+`TestQueueDrain_StartProbesOnAndOff`):
+
+| case | on | off |
+| --- | --- | --- |
+| load-step 15 s | 10 / 9 / 0s | 11 / 9 / 1m15s |
+| load-step 15 s jsq | 12 / 9 / 0s | 17 / 9 / 1m15s, over |
+| load-step 90 s | 11 / 9 / 0s | 12 / 9 / 3m30s |
+| load-step 90 s jsq | 12 / 9 / 0s | 19 / 9 / 3m30s, over |
+| load-step 463 s | 11 / 10 / 30s | 16 / 11 / 8m0s, over |
+| load-step 463 s jsq | 14 / 9 / 30s | 23 / 9 / 8m0s, over |
+| decode-step 15 s | 20 / 17 / 0s | 20 / 17 / 0s |
+| decode-step 15 s jsq | 23 / 17 / 0s | 23 / 17 / 0s |
+| decode-step 90 s | 24 / 17 / 0s | 24 / 17 / 0s |
+| decode-step 90 s jsq | 24 / 17 / 0s | 25 / 17 / 0s |
+| decode-step 463 s | 22 / 21 / 0s, over | 22 / 21 / 0s, over |
+| decode-step 463 s jsq | 31 / 23 / 0s, over | 31 / 23 / 0s, over |
+| restart-before-step 15 s | 21 / 17 / 0s | 22 / 17 / 1m15s |
+| restart-before-step 15 s jsq | 23 / 17 / 0s | 34 / 17 / 1m15s, over |
+| restart-before-step 90 s | 22 / 17 / 0s | 23 / 17 / 3m30s |
+| restart-before-step 90 s jsq | 24 / 17 / 0s | 37 / 17 / 3m30s, over |
+| restart-before-step 463 s | 23 / 21 / 15s, over | 29 / 23 / 8m0s, over |
+| restart-before-step 463 s jsq | 28 / 23 / 15s, over | 44 / 23 / 8m0s, over |
+| restored-snapshot 15 s | 20 / 17 / 0s | 20 / 17 / 0s |
+| restored-snapshot 15 s jsq | 23 / 17 / 0s | 23 / 17 / 0s |
+| restored-snapshot 90 s | 24 / 17 / 0s | 24 / 17 / 0s |
+| restored-snapshot 90 s jsq | 24 / 17 / 0s | 25 / 17 / 0s |
+| restored-snapshot 463 s | 22 / 21 / 0s, over | 22 / 21 / 0s, over |
+| restored-snapshot 463 s jsq | 31 / 23 / 0s, over | 31 / 23 / 0s, over |
+
+- **Six ev-shindin/llm-scaling-manager#520 ledger rows pass and are removed:** load-step 15 s jsq, 90 s
+  jsq, 463 s and 463 s jsq; restart-before-step 15 s jsq and 90 s jsq.
+- **No case breaks a kind it did not break off, and none is under need past
+  its bound.** The longest time under need is 30 s, against 8m0s off.
+- **The six rows left fail as they did, over-priced.** decode-step and
+  restored-snapshot at 463 s are unchanged: a derived mu prices them, so the
+  floor's swap runs and the queue charge was never theirs; the excess is the
+  even split's queue (ev-shindin/llm-scaling-manager#520 cause C) and the resident term. restart-before-step
+  at 463 s falls to 23 and 28 peaks but ends at 21 and 23, over the 20.5
+  bound, for the same reason. Their `measured` fields say so.
+- **What the haircut buys** (`TestQueueDrain_TheHaircutKeepsTheSlowStartsAtNeed`):
+  at 463 s, 30 s and 15 s under need with it, 1m30s without it. With AR(1)
+  noise on the service time (sigma 15 %, phi 0.9, eight seeds) the figures are
+  2m30s and 45 s with it, 3m15s and 2m15s without. The design's analytic
+  9m31s without the haircut did not show: the rig's first read is high, and
+  the arrival term orders on its own. The bound does not catch taking the
+  haircut out on these cases; what it buys is margin.
+- **Property cases** `liveness/floor/first-read-noise-*` (12 cases: sigma
+  10 % and 15 % at phi 0.3, and 15 % at phi 0.9; load-step and
+  restart-before-step at 463 s, both routers; 100 seeds each) hold that the
+  first read under noise never puts the fleet under need past its bound. All
+  pass.
+
+**`pd-restart` golden** (decode role demand, replicas at the target):
+
+| cycle | today | as built |
+| --- | --- | --- |
+| 12:26:47 | 2.28 | 1.99 |
+| 12:27:02 | 6.01 | 3.17 |
+| 12:27:17 | 5.25 | 3.10 |
+| 12:27:32 | 7.24 | 3.30 |
+| 12:27:47 | 7.66 | 3.26 |
+| 12:28:02 | 9.87 | 3.51 (haircut held) |
+| 12:28:17 | 10.65 | 4.32 (resident) |
+| 12:28:32 | 9.06 | 4.38 |
+
+The second step (12:45:05 to 12:47:36, about 4 to 25 req/s on a fleet capped
+at 4 with up to 1366 queued) moves too: 42.87 becomes 8.96 at 12:45:20, and
+17.38 becomes 6.21 at 12:46:20. One cycle goes up, 12:47:36, from 6.55 to
+7.10. The arrivals alone need at most 4.81 there, so no cycle prices under
+them. The rows that moved: decode demand down on 17 cycles (to -79 %) and up
+on 1 (+8.5 %).
+
+**Other goldens** (role demand, cycles moved): e1 down 13 (to -30 %) and
+up 22 (to +93.6 %); e1-tuned down 7 (to -26.5 %) and up 30 (to +20.1 %);
+throughput-sweep-restart down 5 (to -25.8 %) and up 1 (+9.2 %);
+ttft-staircase-b-off down 18 (to -70.2 %); ttft-staircase-c-on down 21 (to
+-50.2 %) and up 1 (+22.2 %). acceptance, engine and mu-paths do not move: a
+minority of their replicas queues. e1's +93.6 % is one cycle, 14:05:32,
+1.48 to 2.86 replicas: a joiner landed and took 221 queued at once, which reads
+as growth (the next cycle is 2.11). The four
+start-seed and start-restored goldens fall about 99 % in tokens: their P is
+6 tokens, so occupancy priced a queue of 50 at over a thousand replicas, and
+the drain price reads about 18 at mu 0.3.
+
+On the staircase the derived mu (26) reads over what the two saturated
+replicas served (about 18 to 21 each, lambda less the queue's growth). In the
+growing region the price takes the lower of the floor's mu and the first
+read, and never goes under the floor's own figure. Its lowest moved cycle, 1.78
+at 02:11:39, has lambda 14.3, which is 0.89 replicas at the served rate.
+
+Each new test runs the switch on and off: `TestQueueDrain_*`, and
+`TestThroughputFloor_AGrowingQueueIsPricedAtTheTrueArrivals` (on: not under
+the true arrivals plus the queue over T; off: not under occupancy, which at
+15 s is 387 263, under the arrivals alone at 390 933).
+
+##### Review round (PR ev-shindin/llm-scaling-manager#533)
+
+Each change runs the switch on and off in its test.
+
+- **A lambda that is not finite prices nothing.** An +Inf `ArrivalRate`, or a
+  NaN completion rate the arrival rate falls back on, passed the builtin max
+  and published NaN or +Inf demand. The drain price now reads such a lambda
+  as none, as `floor.Estimate` refuses it, and a non-finite price falls back
+  to the figure without it (`TestQueueDrain_ANonFiniteLambdaPricesNothing`).
+- **The first read comes only from rows at their stated batch cap.** A row
+  saturated by its KV under the cap is still growing its batch. On
+  `ttft-staircase-b-off` at 02:06:23, batches of 126 and 128 under a cap of
+  256 read 31.3 req/s against the 16.7 to 19.3 the replicas served. A 1.45x
+  first read priced 7.57 replicas against a need of 9.33, and the haircut
+  does not bound that. Such rows give no read and keep occupancy's pricing:
+  property case `edges/floor/drain-first-read-kv-saturated-1.45x` prices 11.80
+  against 9.33, and its control, the same read at the cap, prices 7.57.
+- **While the backlog grows, mu is also capped at what the queued replicas
+  complete.** That is their median `RequestRate`, read only from a majority
+  of the role's replicas, and clamped at `MinMeasuredOfDerived` (0.5) of the
+  floor's mu. A queue that grows shows a replica serves no more than that.
+  The floor's derived mu on the staircase (26) is over what its replicas
+  served (17 to 19). Unclamped, a rate that had just begun to queue read a
+  step late and priced `pd-restart` at 12:45:05 at 18.9 replicas and
+  `e1-tuned` at 16:24:13 at 35. Clamped they price 4.43 and 8.19 (main: 7.47
+  and 5.49), at most 2x the spend of the floor's mu. The first round dropped
+  the cap below the bar instead. Second review measured that a floor mu read
+  2.1x to 3.0x high then priced at the full figure, 0.56 to 0.66 of need;
+  clamped, `TestQueueDrain_TheServedCapIsClampedNotDropped` reads 1.13 to
+  1.31 of need at reads of 1.4x to 3.0x.
+- **A haircut hold ends.**
+  - It prices only while a backlog stands.
+  - It counts starting replicas through one floor helper
+    (`floor.FreshStarting`): pending less stuck, and ages within two starts.
+    The floor's starting credit uses the same rule (`startingFresh`).
+  - It never lasts past two drain horizons after it was set
+    (`TestQueueDrain_AHoldEndsWithAReplicaThatNeverLands`: one replica that
+    never lands, held for 9 cycles at a 60 s horizon).
+  - A shape change drops every hold of the model.
+  - The read, the decision and the update are one locked step
+    (`drainHoldStep`).
+- **Two mutants the review found surviving now die.**
+  - T fixed at 60 s: `TestQueueDrain_TheHorizonIsTheStart`.
+  - A starting-replica credit: `TestQueueDrain_StartingReplicasEarnNoCredit`.
+- **The probe rig states a batch cap** of 1024 on every variant and runs at
+  it at its limit. With the switch off every start case is unchanged.
+
+The growing-queue test is renamed
+`TestThroughputFloor_AGrowingQueueIsPricedAtTheTrueArrivals`.
+`TestQueueDrain_AGrowingQueueIsPricedAtWhatTheReplicasServe`, adopted from
+the review, steps four replicas of true mu 1 from 4 to 8 req/s with lambda
+lagging and a one-cycle dip of the queue. With the floor's mu read 1.4, it
+prices 11.27, 12.27, 9.33, 11.60 and then 12.27 to 13.60 replicas, against a
+need of 9.67, 10.67, 10.33, 11.33 and then 12.00. The dip cycle is short,
+at 0.90: lambda still reads 7 of 8, and a shrinking queue shows no arrivals
+above it. The test holds the need from the cycle lambda reads the true rate,
+and 0.85 of it before that.
+
+**Probe after the review, both routers.** Every case is as in the table
+above except load-step 15 s, 11 / 9 / 0s, and restart-before-step 463 s,
+22 / 21 / 15s. No case fails a new kind, and none is under need past its
+bound. The ledger is unchanged; only the restart row's `measured` moves.
+
+**Goldens after the review, against main.** Role demand cycles moved:
+
+| fixture | down | up |
+| --- | --- | --- |
+| e1 | 7, to -19.6 % | 16, to +21.1 % |
+| e1-tuned | 4, to -16.4 % | 26, to +49.3 % (16:24:13, the clamp) |
+| pd-restart | 17, to -79.1 % | 1, +8.5 % |
+| start-restored | 9, to -99.1 % | none |
+| start-seed | 3, to -99.2 % | none |
+| start-seed-restart | 10, to -99.0 % | 1, +0.9 % |
+| start-seed-restart-2 | 4, to -99.5 % | none |
+| throughput-sweep-restart | 5, to -25.8 % | 1, +31.1 % |
+| ttft-staircase-b-off | 18, to -66.6 % | none |
+| ttft-staircase-c-on | 22, to -50.8 % | none |
+
+`pd-restart`'s first step is as in its table above.
+
+Against the need at each fixture's served mu, from the recorded inputs,
+three sets of cycles price under it:
+
+- **ttft-staircase-b-off** 02:06:38 to 02:07:08: 0.94 to 0.97 of the need
+  at 18 req/s a replica.
+- **ttft-staircase-c-on** 05:49:35 and 05:49:50: 0.91 and 0.92 at 18.
+- **pd-restart** 12:47:21 and 12:47:36: 0.93 and 0.97 at 6.22.
+
+On the staircase the price uses what the queued replicas served on those
+cycles, 16.8 to 19.4 req/s, so it is at need at that rate; the 18 used for
+the need is the reviewer's settled figure. At 18 those cycles sit at 0.91 to
+0.97 of need at 100 %. The fleet stays served only because the engine orders
+at the 0.85 scale-up target, which leaves 15 % of headroom; nothing in the
+drain price itself covers that gap. The second review also adds
+`TestQueueDrain_AShapeChangeDropsTheHold` and
+`TestQueueDrain_AHoldPricesNothingWithoutABacklog` (mutants 13 and 14). The
+growing test's dip cycle is pinned at its measured 0.90. On `pd-restart` the need charges
+the whole queue of 1366, while the drain price caps each replica's queue at
+what it drains in T (937 of it). A request waiting in one engine's queue is
+served by that engine only (`localQueueBacklog`). `e1`, `e1-tuned` and
+`throughput-sweep-restart` price no cycle under need.
+
+Not run on a cluster.
 
 ## 8. Risks and limits
 

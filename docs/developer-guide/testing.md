@@ -1778,6 +1778,20 @@ mu at best, so the drain takes at least as long again times
 ordered over need during the drain to come back down; a fleet that ordered
 exactly need would not need it. A case with no load step keeps its horizon.
 
+Each replica's row also reports `RunningRequests` and `AvgServiceTime`, as
+Little's law relates them to what it serves, and every probe variant states a
+batch cap of 1024 (`probeParams`): at its limit a replica runs at that cap,
+which is what lets the drain price take a first read (it reads only rows at
+their stated cap). The cap prices nothing the probe's 1024 did not before
+it was stated: every start case with the switch off is unchanged. The service time is the mean
+over the last minute (four cycles), and a replica on a smaller batch runs
+shorter (0.6 of its limit's at no load). So the first saturated row reads mu
+13.6 % high, as the recordings' first rows read 5 % to 15 % high. That is
+the read the drain price before two mu readings divides by (`queue_drain.go`,
+ev-shindin/llm-scaling-manager#520). `serviceNoise` puts AR(1) noise on it, and `drainHaircut` replaces
+the first-read haircut. `TestQueueDrain_StartProbesOnAndOff` runs every
+start case with the switch on and off and logs both fleets.
+
 `TestClosedLoopProbe_KnownFailing_*` is a case today's code fails: one slow
 replica at 0.55 of its siblings' rate passes the served bound, becomes mu,
 and keeps the fleet over-ordered for good once it stops queueing. The test

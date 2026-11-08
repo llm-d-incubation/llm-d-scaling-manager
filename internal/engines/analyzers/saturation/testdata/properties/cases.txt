@@ -23,6 +23,7 @@ edges/decode-memory/kv-threshold-nondefault
 edges/decode-memory/memory-1-min
 edges/decode-memory/queue-threshold
 edges/floor/backlog-grew
+edges/floor/drain-first-read-kv-saturated-1.45x
 edges/floor/growth-band
 edges/floor/growth-band-nondefault
 edges/floor/standing-queue-cap
@@ -162,6 +163,18 @@ liveness/floor/closed-loop-restored-snapshot-start-463s
 liveness/floor/closed-loop-restored-snapshot-start-463s-jsq
 liveness/floor/closed-loop-restored-snapshot-start-90s
 liveness/floor/closed-loop-restored-snapshot-start-90s-jsq
+liveness/floor/first-read-noise-10-phi3-load-step-start-463s
+liveness/floor/first-read-noise-10-phi3-load-step-start-463s-jsq
+liveness/floor/first-read-noise-10-phi3-restart-before-step-start-463s
+liveness/floor/first-read-noise-10-phi3-restart-before-step-start-463s-jsq
+liveness/floor/first-read-noise-15-phi3-load-step-start-463s
+liveness/floor/first-read-noise-15-phi3-load-step-start-463s-jsq
+liveness/floor/first-read-noise-15-phi3-restart-before-step-start-463s
+liveness/floor/first-read-noise-15-phi3-restart-before-step-start-463s-jsq
+liveness/floor/first-read-noise-15-phi9-load-step-start-463s
+liveness/floor/first-read-noise-15-phi9-load-step-start-463s-jsq
+liveness/floor/first-read-noise-15-phi9-restart-before-step-start-463s
+liveness/floor/first-read-noise-15-phi9-restart-before-step-start-463s-jsq
 liveness/itl/line-within-steady-for-plus-1-min
 liveness/k2/dp8-whole-node
 liveness/k2/flow-control-on
