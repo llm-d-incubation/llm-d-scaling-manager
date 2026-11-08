@@ -209,14 +209,56 @@ def achieved_tolerance(rate, window, ca2):
     return (ACHIEVED_Z * math.sqrt(max(ca2, 0.0) * n) + 1) / n
 
 
+def pct_ci(values, q, z=1.96):
+    """(low, high) of pct(values, q) by the order statistics' binomial band, z wide.
+
+    The ranks q n -/+ z sqrt(n q (1 - q)), so the band a quantile of n independent
+    readings would move in. Bursty arrivals correlate neighbours and widen it; this
+    is the narrower, Poisson band. (None, None) for no values.
+    """
+    n = len(values)
+    if not n:
+        return None, None
+    half = z * math.sqrt(n * q * (1 - q))
+    lo = max(0, int(math.floor(q * n - half)) - 1)
+    hi = min(n - 1, int(math.ceil(q * n + half)) - 1)
+    return values[lo], values[max(lo, hi)]
+
+
+# Failures a step's fleet makes: the engine's 5xx, the router's 429, a request that timed
+# out or ran past the drain. A connection the client could not make, or a 4xx, is the
+# harness's or the router's, and a step with one does not bracket a cliff.
+FLEET_ERRORS = ("cancelled", "TimeoutError", "ServerTimeoutError", "stream ended without [DONE]",
+                "error in stream", "no text in stream")
+
+
+def fleet_failure(status, error):
+    """Whether a failed request's row reads as the fleet's: status and error as the driver wrote them."""
+    code = int(status) if str(status).isdigit() else 0
+    return code >= 500 or code == 429 or (error or "") in FLEET_ERRORS
+
+
+# A step's rows may fall short of its seeded schedule by this share, plus one row for a
+# due time on the window's edge. A load process that died leaves more missing than that.
+COMPLETE_SHARE = 0.001
+
+
 def validity(row):
     """Why a step is void: a crossing on it is a bound, not a figure. Empty on a good step."""
     why = []
-    # A row with no window, made by hand, keeps the flat band.
-    band = (achieved_tolerance(row["rate"], row["window_s"], row.get("ca2_asked", 1))
-            if "window_s" in row else HOLD_TOLERANCE)
-    if abs(row["achieved"] / row["rate"] - 1) > band:
-        why.append("achieved %.2f of %.2f, past %.1f%%" % (row["achieved"], row["rate"], 100 * band))
+    if "scheduled" in row:
+        # The seeded schedule fixed the rate sent, so the reading is credited to it; what
+        # can go wrong is that rows are missing.
+        short = row["scheduled"] - row["recorded"]
+        if short > 1 + COMPLETE_SHARE * row["scheduled"]:
+            why.append("recorded %d of %d scheduled" % (row["recorded"], row["scheduled"]))
+    else:
+        # No schedule to check against: the band around the rate asked. A row with no
+        # window, made by hand, keeps the flat one.
+        band = (achieved_tolerance(row["rate"], row["window_s"], row.get("ca2_asked", 1))
+                if "window_s" in row else HOLD_TOLERANCE)
+        if abs(row["achieved"] / row["rate"] - 1) > band:
+            why.append("achieved %.2f of %.2f, past %.1f%%" % (row["achieved"], row["rate"], 100 * band))
     if row.get("noise_flag"):
         why.append("under the noise floor")
     if row.get("lag_p99", 0) > MAX_LAG_P99:
@@ -243,10 +285,13 @@ def reads_the_fleet(row):
     A window short of the noise floor reads low if anything, failed requests are the
     fleet's, and a rate a few percent off moves it little. Send lag (the client times
     from the schedule), a cut, a fleet that moved and a Ca^2 burstier than asked can all
-    raise a reading the fleet did not make, and such a step brackets no cliff.
+    raise a reading the fleet did not make, and such a step brackets no cliff. So can a
+    failure that is not the fleet's (fleet_failure), a restarted EPP (two EPP pods read
+    in the window) and an engine error in it.
     """
     return not (row.get("lag_p99", 0) > MAX_LAG_P99 or row.get("truncated") or row.get("stopped_by") == RULE_INFLIGHT
-                or row.get("replica_change") or row.get("ca2_rerun"))
+                or row.get("replica_change") or row.get("ca2_rerun") or row.get("failed_other", 0) > 0
+                or len(row.get("epp_pods") or []) > 1 or row.get("engine_errors", 0) > 0)
 
 
 def ca2_out_of_band(sent, asked):
@@ -266,20 +311,63 @@ def envelope(rows, key, bounds=True):
     median of sub-window quantiles was the other choice; it drops the slow minutes of
     a bursty step too, which are what a bursty step measures (r1's C-onset step 2,
     p95 587.3 ms whole, 571.0 by 30 s medians). Missing readings stay missing.
+
+    A valid step is lowered only when its excess is past its own sampling error (the
+    later reading under its quantile's low band, key + "_lo") or it shows a transient
+    (drift_p90 past DRIFT_TRANSIENT either way); a step with no band is lowered. Any
+    other excess is noise between two readings of one curve, and the steps are pooled
+    instead: the isotonic fit, weighted by requests, of the valid steps not lowered.
+    envelope_marks says which steps each rule moved.
     """
-    out, low = [], math.inf
-    for row in reversed(rows):
-        value = row.get(key)
-        if value is None or (isinstance(value, float) and math.isnan(value)):
-            out.append(value)
+    return envelope_marks(rows, key, bounds)[0]
+
+
+# A step whose second half reads its p90 this many times its first, or under 1 over it,
+# moved during its window.
+DRIFT_TRANSIENT = 1.5
+
+
+def transient(row):
+    """Whether a step's reading moved inside its window."""
+    d = row.get("drift_p90")
+    return isinstance(d, (int, float)) and d == d and (d > DRIFT_TRANSIENT or d < 1 / DRIFT_TRANSIENT)
+
+
+def envelope_marks(rows, key, bounds=True):
+    """(readings, marks) of envelope: a mark is "lowered", "pooled" or "" a step."""
+    raw = [row.get(key) for row in rows]
+    missing = [v is None or (isinstance(v, float) and math.isnan(v)) for v in raw]
+    vals, marks = list(raw), [""] * len(rows)
+    low = math.inf
+    for i in reversed(range(len(rows))):
+        if missing[i]:
             continue
-        out.append(min(value, low))
-        if not (bounds and invalid(row)):
-            low = min(low, value)
-    return out[::-1]
+        void = bounds and invalid(rows[i])
+        if raw[i] > low:
+            band = rows[i].get(key + "_lo")
+            if void or band is None or low < band or transient(rows[i]) or math.isinf(raw[i]):
+                vals[i], marks[i] = low, "lowered"
+        if not void:
+            low = min(low, raw[i])
+    blocks = []
+    for i, row in enumerate(rows):
+        if missing[i] or marks[i] or (bounds and invalid(row)) or math.isinf(vals[i]):
+            continue
+        w = max(row.get("due") or 1, 1)
+        blocks.append([w * vals[i], w, [i]])
+        while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] > blocks[-1][0] / blocks[-1][1]:
+            s, w2, members = blocks.pop()
+            blocks[-1][0] += s
+            blocks[-1][1] += w2
+            blocks[-1][2] += members
+    for s, w, members in blocks:
+        if len(members) > 1:
+            for i in members:
+                vals[i], marks[i] = s / w, "pooled"
+    return vals, marks
 
 
-def measured(rows, key, target, x="rate", bounds=True):
+def measured(rows, key, target, x="rate", bounds=True, used=None):
     """Where the reading meets target along the ladder: (kind, value).
 
     kind is "=" (value interpolated), "below" (the first step misses), "at least"
@@ -290,31 +378,43 @@ def measured(rows, key, target, x="rate", bounds=True):
     and any target between them crosses there), "void" (no valid step says
     where the crossing is: every step is void, or the first one is and misses) or "no
     data". The readings are the envelope's. An infinite step ends the climb at the
-    step before it.
+    step before it. used, a list, gets the envelope's marks of the steps the result
+    was read from ("lowered", "pooled"), so a verdict can say it rests on one.
     """
     if bounds and rows and all(invalid(r) for r in rows):
         return "void", None
     prev = row_before = None
     top = None
-    for row, value in zip(rows, envelope(rows, key, bounds)):
+    values, marks = envelope_marks(rows, key, bounds)
+    mark_before = top_mark = ""
+
+    def note(*ms):
+        if used is not None:
+            used.extend(m for m in ms if m)
+
+    for row, value, m in zip(rows, values, marks):
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return "no data", None
         if value > target:
+            note(m, mark_before)
             if prev is None:
                 return ("void", None) if bounds and invalid(row) else ("below", row[x])
             x0, y0 = prev
-            if not (bounds and (invalid(row_before) or not reads_the_fleet(row))) and y0 > 0 and value > CLIFF_FACTOR * y0:
+            jump = y0 > 0 and value > CLIFF_FACTOR * y0
+            if jump and not (bounds and (invalid(row_before) or not reads_the_fleet(row))):
                 return "cliff", (x0, row[x])
-            if bounds and (invalid(row) or invalid(row_before)):
+            # A jump no line spans, read on a step that is not the fleet's own, is a bound.
+            if bounds and (invalid(row) or invalid(row_before) or jump):
                 return "bound", (x0, row[x])
             if math.isinf(value):
                 return "=", x0
             return "=", x0 + (target - y0) / (value - y0) * (row[x] - x0)
-        prev, row_before = (row[x], value), row
+        prev, row_before, mark_before = (row[x], value), row, m
         if not (bounds and invalid(row)):
-            top = row[x]
+            top, top_mark = row[x], m
     if top is None:
         return "no data", None
+    note(top_mark)
     return "at least", top
 
 

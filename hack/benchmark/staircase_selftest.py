@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 153
+EXPECTED = 180
 checks = fails = 0
 
 
@@ -259,6 +259,48 @@ ok("a top step void by send lag brackets no cliff: the client times from the sch
     [step(51.401, 0.5916, 3), step(53.636, 31.5, 4, lag_p99=2.0)], "client_ttft_p90", 0.9634)[0] == "bound")
 ok("steps less than the factor apart interpolate", lib.measured(RUNG, "client_ttft_p90", 0.3) == ("=", 25.0))
 ok("the cliff never reads as a pass over repeats", analyze.judge(47.49, [GOT, GOT])[2] == lib.CLIFF_IN)
+# What else keeps a top step from bracketing a cliff: each alone makes a bound.
+BELOW = step(51.401, 0.5916, 3)
+for why, extra in (("a cut", dict(truncated=True)), ("the in-flight cap", dict(stopped_by=lib.RULE_INFLIGHT)),
+                   ("a fleet that moved", dict(replica_change=True)), ("a Ca2 to rerun", dict(ca2_rerun=True, ca2_sent=6, ca2_asked=4)),
+                   ("a failure not the fleet's", dict(failed_other=3)), ("a restarted EPP", dict(epp_pods=["epp-a", "epp-b"])),
+                   ("an engine error", dict(engine_errors=1))):
+    TOP = step(53.636, 31.5, 4, **extra)
+    ok("%s in the top step brackets no cliff" % why, lib.measured([BELOW, TOP], "client_ttft_p90", 0.9634)[0] == "bound",
+       lib.measured([BELOW, TOP], "client_ttft_p90", 0.9634))
+ok("fleet failures: a 5xx, a 429, a timeout, a run past the drain; not a refused connection or a 4xx",
+   all(lib.fleet_failure(s, e) for s, e in (("503", ""), ("429", "x"), ("0", "TimeoutError"), ("0", "cancelled")))
+   and not any(lib.fleet_failure(s, e) for s, e in (("0", "ClientConnectorError"), ("400", "bad"))))
+ok("and fleet failures alone keep the cliff", lib.measured([BELOW, step(53.636, 31.5, 4, failed=1441, due=58028, failed_other=0)],
+                                                          "client_ttft_p90", 0.9634)[0] == "cliff")
+
+# The crossing is read at the rate sent. r1's C-off step 5 asked 28.30 and its seeded
+# schedule put 29.73 into the window: its reading is 29.73's.
+SENT_RUNG = [step(26.635, 0.30, 4, achieved=26.70, scheduled=11214, recorded=11214),
+             step(28.299, 0.34, 5, achieved=29.73, scheduled=12487, recorded=12487)]
+GOT = lib.measured(SENT_RUNG, "client_ttft_p90", 0.32, x="achieved")
+ok("the crossing is interpolated on the rate sent, not the rate asked", GOT[0] == "=" and abs(GOT[1] - (26.70 + 0.5 * (29.73 - 26.70))) < 1e-9, GOT)
+COMPLETE = dict(GOOD, scheduled=12000, recorded=11990)
+ok("a step whose rows meet its schedule, to the slack, is not void", not lib.invalid(COMPLETE), lib.validity(COMPLETE))
+ok("a step short of its schedule is void, whatever its rate", lib.validity(dict(COMPLETE, recorded=11980)) == ["recorded 11980 of 12000 scheduled"],
+   lib.validity(dict(COMPLETE, recorded=11980)))
+ok("with a schedule the rate band is not read: the schedule fixed the rate", not lib.invalid(dict(COMPLETE, rate=28.299, achieved=26.0, window_s=420)))
+DYING = [step(10, 0.30, 1, due=4000), step(20, 0.12, 2, due=8000, scheduled=8000, recorded=5000)]
+ok("a dying load reads low, and lowers no earlier step", lib.envelope(DYING, "client_ttft_p90") == [0.30, 0.12])
+
+# The envelope lowers past the sampling band or on a transient, and pools inside it.
+POOL = [step(10, 0.20, 1, due=3000, client_ttft_p90_lo=0.17), step(20, 0.18, 2, due=1000)]
+VALS, MARKS = lib.envelope_marks(POOL, "client_ttft_p90")
+ok("an excess inside the step's band pools the two, weighted by requests", MARKS == ["pooled", "pooled"]
+   and abs(VALS[0] - 0.195) < 1e-9 and abs(VALS[1] - 0.195) < 1e-9, (VALS, MARKS))
+ok("past the band it is lowered", lib.envelope_marks([dict(POOL[0], client_ttft_p90_lo=0.19), POOL[1]], "client_ttft_p90")
+   == ([0.18, 0.18], ["lowered", ""]))
+ok("a step that moved in its window is lowered though inside its band",
+   lib.envelope_marks([dict(POOL[0], drift_p90=2.0), POOL[1]], "client_ttft_p90")[1] == ["lowered", ""])
+USED = []
+lib.measured([step(5, 0.1, 0)] + POOL, "client_ttft_p90", 0.15, used=USED)
+ok("a crossing read on a pooled step says so", USED == ["pooled"] and analyze.moved_note(USED) == " (read on pooled steps)", USED)
+near("the quantile band: ranks q n -/+ 1.96 sqrt(n q (1 - q)) of 100", lib.pct_ci(list(range(1, 101)), 0.9)[0], 84)
 
 
 class CancelledPost:
@@ -437,6 +479,10 @@ ok("and the freeze accepts them", not freeze.measure_refusals(dict(buckets=[B_ON
 B_22 = dict(B_ONSET, name="B", decode=2, onsets=dict(Prefill=53.21300019557984, Decode=32.30815793171443))
 ok("B at 2 + 2 has none to give: its prefill onset is past its decode onset", any("decode onset" in r for r in freeze.measure_refusals(
     dict(buckets=[B_22]), dict(MEASURE_SPEC, buckets=[dict(name="B", fc=["on"], measureAboveOnset=[1.05])]))))
+ok("measurement steps with flow control off as well are refused", any("flow control on alone" in r for r in freeze.measure_refusals(
+    dict(buckets=[B_ONSET]), dict(MEASURE_SPEC, buckets=[dict(name="B-onset", fc=["off", "on"], measureAboveOnset=[1.10])]))))
+ok("measurement steps under a scored step are refused", any("above every scored step" in r for r in freeze.measure_refusals(
+    dict(buckets=[dict(B_ONSET, curve=[dict(rate=60.0)])]), MEASURE_SPEC)))
 
 with tempfile.TemporaryDirectory() as run:
     d = os.path.join(run, "phases", "B-onset-on-r1")
@@ -507,8 +553,48 @@ with tempfile.TemporaryDirectory() as run:
                                 {("B-onset", "on", 1): [MEASURED]}, {"B-onset": B_ONSET}, TEXT)
     ok("the report's running-cap table: one per flow-control-on phase, the measure-only step with its max across pods",
        "### B-onset on r1" in TEXT.getvalue() and "### B off" not in TEXT.getvalue()
-       and "| 2 | 58.5 | 1.10x | measure only | 6.0 / 7 5.0 / 6 | 7 | 0.5 / 1 |" in TEXT.getvalue()
-       and "| 1 | 51.4 | 0.97x | scored | unread | unread | unread |" in TEXT.getvalue(), TEXT.getvalue())
+       and "| 2 | 58.5 | 1.10x | measure only | 6.0 / 7 5.0 / 6 | 7 | 0.5 / 1 | unread |" in TEXT.getvalue()
+       and "| 1 | 51.4 | 0.97x | scored | unread | unread | unread | unread |" in TEXT.getvalue(), TEXT.getvalue())
+    ok("the table calls the max a sampled lower bound, and names max_num_seqs when the run saved it",
+       "sampled lower bound" in TEXT.getvalue() and "vLLM's default applies" in TEXT.getvalue())
+    near("the poll interval, from the polls themselves", analyze.poll_interval(ENGINE["prefill"], base, base + 600), 200)
+    with open(os.path.join(run, "prefill-args.txt"), "w", encoding="utf8") as f:
+        f.write("vllm serve m --port 8000 --max-num-seqs 64 --enforce-eager\n")
+    ok("max_num_seqs read from the prefill args", analyze.read_max_num_seqs(run) == 64, analyze.read_max_num_seqs(run))
+    with open(os.path.join(run, "epp-metrics.log"), "w", encoding="utf8") as f:
+        f.write("%s epp-a %s_count 10\n%s epp-b %s_count 99\n" % (stamp(200), analyze.TTFT, stamp(200), analyze.TTFT))
+    RAW = analyze.read_raw_epp(run + "/epp-metrics.log")
+    ok("the raw scrape keeps one EPP pod a poll", RAW[analyze.TTFT + "_count"][base + 200][""] == 10.0, dict(RAW))
+
+# The seeded schedule end to end: a phase whose second level lost its load halfway.
+with tempfile.TemporaryDirectory() as run:
+    base = lib.ts("2026-11-06T02:00:00Z")
+    d = os.path.join(run, "phases", "S-off-r1")
+    os.makedirs(d)
+    SCHED = "600:2:100:10:1,600:4:100:10:1"
+    PLAN = load.arrivals(load.parse_schedule(SCHED), 7)
+
+    def stamp(t):
+        return lib.datetime.fromtimestamp(base + t, lib.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(os.path.join(d, "sweep.log"), "w", encoding="utf8") as f:
+        f.write("%s 2 levels, 1200 s, %d requests, seed 7: %s\n" % (stamp(0), len(PLAN), SCHED))
+        f.write("%s LEVEL 1 rate=2 in=100 out=10 ca2=1 hold=600s\n%s LEVEL 2 rate=4 in=100 out=10 ca2=1 hold=600s\n" % (stamp(1), stamp(601)))
+    with gzip.open(os.path.join(d, "requests.csv.gz"), "wt", encoding="utf8") as f:
+        f.write(load.HEADER)
+        for i, (due, n, _, _) in enumerate(PLAN):
+            if n == 2 and due > 900:
+                continue
+            t = base + 5 + due
+            f.write("%d,%d,%.4f,%.4f,%.4f,%.4f,200,100,10,,\n" % (i, n, t, t, t + 0.1, t + 0.5))
+    STEPS_S, _ = analyze.analyze_steps(run, "S-off-r1", 180)
+    FIRST = STEPS_S[0] if STEPS_S else {}
+    ok("the schedule is read from the driver's log: a whole step meets it, and its rate is the one it sent",
+       FIRST.get("scheduled") == FIRST.get("recorded") and FIRST.get("scheduled", 0) > 600
+       and abs(FIRST["achieved"] - FIRST["scheduled"] / FIRST["window_s"]) < 1e-9 and not lib.invalid(FIRST),
+       {k: FIRST.get(k) for k in ("scheduled", "recorded", "achieved", "window_s")})
+    SECOND = STEPS_S[1] if len(STEPS_S) > 1 else {}
+    ok("a step whose load died is void by its missing rows", any("scheduled" in w for w in lib.validity(SECOND))
+       if SECOND else False, {k: SECOND.get(k) for k in ("scheduled", "recorded")})
 
 print("%d checks, %d failed" % (checks, fails))
 if checks != EXPECTED:

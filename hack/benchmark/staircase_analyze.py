@@ -41,6 +41,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import staircase_lib as lib  # noqa: E402
+import staircase_load as load  # noqa: E402
 
 TTFT = "llm_d_epp_request_ttft_seconds"
 TPOT = "llm_d_epp_request_streaming_tpot_seconds"
@@ -83,11 +84,16 @@ def read_pod_map(path):
 
 
 def read_raw_epp(path):
-    """The raw EPP scrape: {name: {t: {le or "": value}}}, summed over label sets."""
+    """The raw EPP scrape: {name: {t: {le or "": value}}}, summed over label sets, one EPP
+    pod a poll: the first pod a poll names is the one read, so two pods' counters, which
+    reset apart, are never added."""
     raw = collections.defaultdict(lambda: collections.defaultdict(lambda: collections.defaultdict(float)))
+    pod_at = {}
     for line in read_lines(path):
         p = line.split()
         if len(p) < 4:
+            continue
+        if pod_at.setdefault(p[0], p[1]) != p[1]:
             continue
         name = p[2].split("{")[0]
         if not (name.startswith(TTFT) or name.startswith(TPOT) or name.startswith(QUEUE)):
@@ -238,7 +244,14 @@ def client_figures(win, span, pods=None):
     spread = math.sqrt(lib.scv(prompts)) if len(prompts) > 1 else math.nan
     pairs = [((len(r) > 10 and r[10]) or (pods or {}).get(r[0], ""), float(r[3])) for r in win]
     by_pod = lib.ca2_by_pod(pairs)
-    return dict(due=len(win), failed=len(win) - len(ok), completed=len(ok), achieved=len(win) / span,
+    passed = {id(r) for r in ok}
+    failed = [r for r in win if id(r) not in passed]
+    other = sum(1 for r in failed if not lib.fleet_failure(r[6], r[9] if len(r) > 9 else ""))
+    cis = {}
+    for q in (50, 90, 95):
+        cis["client_ttft_p%d_lo" % q], cis["client_ttft_p%d_hi" % q] = lib.pct_ci(ttft, q / 100)
+    return dict(cis, failed_other=other,
+                due=len(win), failed=len(win) - len(ok), completed=len(ok), achieved=len(win) / span,
                 ca2_sent=lib.arrival_ca2([float(r[3]) for r in win]), ca2_by_pod=by_pod or None,
                 lag_p99=lib.pct(lag, 0.99), prompt_mean=mean_p, prompt_cv=spread,
                 client_ttft_p50=lib.pct(ttft, .5), client_ttft_p90=lib.pct(ttft, .9),
@@ -273,10 +286,13 @@ def queue_figures(row, raw, prom, a, b):
     if not h or not h["cum"] or h["cum"][-1][1] <= 0:
         return
     total = h["cum"][-1][1]
-    under = [c for le, c in h["cum"] if le <= QUEUE_WAITED]
+    # The histogram says nothing finer than its edges: the share counted is the one past
+    # the largest edge at or under QUEUE_WAITED, and that edge is kept beside it.
+    under = [(le, c) for le, c in h["cum"] if le <= QUEUE_WAITED]
     row["fc_wait_n"], row["fc_wait_src"] = total, h["src"]
     if under:
-        row["fc_waited_share"] = max(0.0, 1 - max(under) / total)
+        edge, count = max(under)
+        row["fc_waited_share"], row["fc_waited_edge"] = max(0.0, 1 - count / total), edge
     row["fc_wait_p90_coarse"] = lib.hist_quantile(h["cum"], 0.9)[0]
     if h.get("_count"):
         row["fc_wait_mean"] = h["_sum"] / h["_count"]
@@ -284,6 +300,44 @@ def queue_figures(row, raw, prom, a, b):
         count = prom_total(prom, "fc_queue_count", a, b)
         if count:
             row["fc_wait_mean"] = prom_total(prom, "fc_queue_sum", a, b) / count
+
+
+PLAN_LINE = re.compile(r"\d+ levels, \d+ s, \d+ requests, seed (-?\d+): (\S+)")
+
+
+def read_plan(lines, rows):
+    """([(due offset, level)], t0) of the seeded schedule the driver logged, t0 the epoch its
+    offsets count from, read off a row (its scheduled time less its due offset); (None, 0)
+    when the log has no plan line or no row lines up with it."""
+    for line in lines[:5]:
+        m = PLAN_LINE.search(line)
+        if m:
+            plan = [(due, n) for due, n, _, _ in load.arrivals(load.parse_schedule(m[2]), int(m[1]))]
+            for r in rows:
+                i = int(r[0]) if r[0].isdigit() else -1
+                if 0 <= i < len(plan) and plan[i][1] == int(r[1]):
+                    return plan, float(r[2]) - plan[i][0]
+            return None, 0.0
+    return None, 0.0
+
+
+def read_epp_pods(path):
+    """[(t, pod)] of the EPP pods the raw scrape read, one a poll."""
+    seen = {}
+    for line in read_lines(path):
+        p = line.split(None, 2)
+        if len(p) >= 2:
+            seen.setdefault(p[0], p[1])
+    return [(lib.ts(t), pod) for t, pod in seen.items()]
+
+
+def poll_interval(pods, a, b):
+    """The median seconds between a prefill pod's polls in [a, b); None with under two."""
+    gaps = []
+    for series in pods.values():
+        ts_ = sorted(t for t in series["running"] if a <= t < b)
+        gaps += [y - x for x, y in zip(ts_, ts_[1:])]
+    return lib.median(gaps) if gaps else None
 
 
 def analyze_steps(run, phase, discard):
@@ -295,6 +349,9 @@ def analyze_steps(run, phase, discard):
     raw, prom = read_raw_epp(run + "/epp-metrics.log"), read_prom(d + "/prom.jsonl")
     engine = read_engine(run + "/vllm-metrics.log")
     replicas = read_replicas(run + "/replicas.log")
+    plan, t0 = read_plan(read_lines(d + "/sweep.log"), rows)
+    errors = [lib.ts(line.split()[0]) for line in read_lines(run + "/engine-errors.txt") if line.strip()]
+    epp = read_epp_pods(run + "/epp-metrics.log")
     by_level = collections.defaultdict(list)
     for r in rows:
         by_level[int(r[1])].append(r)
@@ -313,6 +370,14 @@ def analyze_steps(run, phase, discard):
                    hold_s=level["hold"], truncated=span < level["hold"] - discard,
                    stopped_by=stop["rule"] if stop and stop["level"] == level["n"] else "")
         row.update(client_figures(win, span, pods))
+        if plan is not None:
+            # The seeded schedule fixed what was sent: the rate is what it put in the window,
+            # and a step whose rows fall short of it lost requests the analysis cannot see.
+            row["scheduled"] = sum(1 for due, n in plan if n == level["n"] and a <= t0 + due < b)
+            row["recorded"] = len(win)
+            row["achieved"] = row["scheduled"] / span
+        row["engine_errors"] = sum(1 for t in errors if a <= t < b)
+        row["epp_pods"] = sorted({pod for t, pod in epp if a <= t < b})
         row["completion_rate"] = sum(1 for r in rows if r[6] == "200" and a <= float(r[5]) < b) / span
         router_figures(row, raw, prom, a, b)
         queue_figures(row, raw, prom, a, b)
@@ -323,6 +388,7 @@ def analyze_steps(run, phase, discard):
         # The prefill engines' running cap L, as each pod's poll read it: reported, not scored.
         row["prefill_running"] = gauge_figures(engine["prefill"], "running", a, b)
         row["prefill_waiting"] = gauge_figures(engine["prefill"], "waiting", a, b)
+        row["engine_poll_s"] = poll_interval(engine["prefill"], a, b)
         row["replicas"] = replicas_seen(replicas, a, b)
         row["fc_saturation"] = series_mean(prom, "fc_saturation", a, b)
         row["fc_queue"] = series_mean(prom, "fc_queue", a, b)
@@ -487,14 +553,25 @@ def expected_phases(spec, finished, frozen, only_gate, repeats):
     return out
 
 
-def prefill_running_cap(data, measure, frozen, out):
+def moved_note(used):
+    """What a verdict's text adds when its crossing was read on a step the envelope moved."""
+    if "lowered" in used:
+        return " (read on a lowered step)"
+    if "pooled" in used:
+        return " (read on pooled steps)"
+    return ""
+
+
+def prefill_running_cap(data, measure, frozen, out, max_num_seqs=None):
     """One table a flow-control-on phase: each step's prefill engines' running and waiting
     requests, per pod, as the poll read vllm:num_requests_running and _waiting. The running
     cap L the router's gate stands in front of; reported, not scored."""
     print("\n## The prefill engines' running requests, flow control on\n", file=out)
-    print("What each prefill pod ran at once, per poll, scored by nothing: its peak is the engine's "
-          "running cap L the router's prefill gate holds requests in front of. Per pod mean / max; "
-          "the max is across pods.\n", file=out)
+    print("What each prefill pod ran at once, as its polls read it, scored by nothing. Per pod mean / "
+          "max. The running max is the most any poll read: a sampled lower bound on the engine's "
+          "running cap L, at the poll interval shown, and L itself only where a pod held at the cap "
+          "with requests waiting in the engine. The prefill Deployment's args set max_num_seqs %s.\n"
+          % ("to %d" % max_num_seqs if max_num_seqs else "nowhere the run recorded (vLLM's default applies)"), file=out)
     shown = 0
     for (bucket, fc), repeats in sorted(data.items()):
         if fc != "on":
@@ -504,20 +581,31 @@ def prefill_running_cap(data, measure, frozen, out):
             extra = measure.get((bucket, fc, n), [])
             rows = sorted(repeats[n] + extra, key=lambda r: r["level"])
             print("### %s on r%d\n" % (bucket, n), file=out)
-            print("| Step | Rate, r/s | Over the onset | Role | Running, per pod mean / max | Running max, all pods | Waiting, per pod mean / max |", file=out)
-            print("| --- | --- | --- | --- | --- | --- | --- |", file=out)
+            print("| Step | Rate, r/s | Over the onset | Role | Running, per pod mean / max | Running max, all pods, a sampled lower bound | Waiting, per pod mean / max | Poll, s |", file=out)
+            print("| --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
             for r in rows:
                 shown += 1
                 running, waiting = r.get("prefill_running") or {}, r.get("prefill_waiting") or {}
-                print("| %d | %.1f | %s | %s | %s | %s | %s |" % (
+                poll = r.get("engine_poll_s")
+                print("| %d | %.1f | %s | %s | %s | %s | %s | %s |" % (
                     r["level"], r["rate"], "%.2fx" % (r["rate"] / onset) if onset else "no onset",
                     "measure only" if r in extra else "scored",
                     " ".join("%.1f / %.0f" % tuple(v) for v in running.values()) or "unread",
                     "%.0f" % max(v[1] for v in running.values()) if running else "unread",
-                    " ".join("%.1f / %.0f" % tuple(v) for v in waiting.values()) or "unread"), file=out)
+                    " ".join("%.1f / %.0f" % tuple(v) for v in waiting.values()) or "unread",
+                    "%.0f" % poll if poll else "unread"), file=out)
             print(file=out)
     if not shown:
         print("No flow-control-on step.", file=out)
+
+
+MAX_NUM_SEQS = re.compile(r"--max[-_]num[-_]seqs[= ]+(\d+)")
+
+
+def read_max_num_seqs(run):
+    """max_num_seqs from the prefill Deployment's args the run saved (prefill-args.txt); None unset."""
+    m = MAX_NUM_SEQS.search(" ".join(read_lines(os.path.join(run, "prefill-args.txt"))))
+    return int(m[1]) if m else None
 
 
 def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False):
@@ -597,26 +685,33 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         for t in b["targets"]:
             q = int(t["percentile"])
             predicted = t["predictedOff"] if fc == "off" else t["predictedOn"]
-            client = [lib.measured(rows, "client_ttft_p%d" % q, t["seconds"]) for _, rows in sorted(repeats.items())]
+            used = []
+            client = [lib.measured(rows, "client_ttft_p%d" % q, t["seconds"], x="achieved", used=used)
+                      for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(predicted, client, missing[bucket, fc])
             verdicts[bucket, fc, "ttft", q] = verdict
-            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s | %s |" % (
-                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, router_agreement(repeats)), file=out)
+            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s%s | %s |" % (
+                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, moved_note(used),
+                router_agreement(repeats)), file=out)
 
-    print("\n## Steps the envelope lowered\n", file=out)
-    print("| Phase | Step | Reading | Read, ms | Scored, ms |", file=out)
-    print("| --- | --- | --- | --- | --- |", file=out)
-    lowered = 0
+    print("\n## Steps the envelope moved\n", file=out)
+    print("Lowered: the step read above a later valid step by more than its own sampling band, or "
+          "moved inside its window. Pooled: the excess was inside the band, and the steps share their "
+          "weighted mean. A verdict read on either says so.\n", file=out)
+    print("| Phase | Step | Reading | How | Read, ms | Scored, ms |", file=out)
+    print("| --- | --- | --- | --- | --- | --- |", file=out)
+    moved = 0
     for (bucket, fc), repeats in sorted(data.items()):
         for n, rows in sorted(repeats.items()):
             for q in sorted({int(t["percentile"]) for t in frozen[bucket]["targets"]}):
                 key = "client_ttft_p%d" % q
-                for r, scored in zip(rows, lib.envelope(rows, key)):
-                    if scored is not None and r.get(key) is not None and scored < r[key]:
-                        lowered += 1
-                        print("| %s %s r%d | %d | p%d | %.1f | %.1f |" % (bucket, fc, n, r["level"], q, 1000 * r[key], 1000 * scored), file=out)
-    if not lowered:
-        print("| none | | | | |", file=out)
+                for r, scored, how in zip(rows, *lib.envelope_marks(rows, key)):
+                    if how and r.get(key) is not None:
+                        moved += 1
+                        print("| %s %s r%d | %d | p%d | %s | %.1f | %.1f |" % (
+                            bucket, fc, n, r["level"], q, how, 1000 * r[key], 1000 * scored), file=out)
+    if not moved:
+        print("| none | | | | | |", file=out)
 
     print("\n## TPOT at the operating point\n", file=out)
     print("| Bucket | Flow control | Reading | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router, cross-check |", file=out)
@@ -630,11 +725,11 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         for name, router_key, client_key, target in readings:
             if not target > 0:
                 continue
-            client = [lib.measured(rows, client_key, target) for _, rows in sorted(repeats.items())]
+            client = [lib.measured(rows, client_key, target, x="achieved") for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(b["operatingRate"], client, missing[bucket, fc])
             verdicts[bucket, fc, "tpot", name] = verdict
             if name == "mean":
-                router = [lib.measured(rows, router_key, target) for _, rows in sorted(repeats.items())]
+                router = [lib.measured(rows, router_key, target, x="achieved") for _, rows in sorted(repeats.items())]
                 rtext, rratio, _ = judge(b["operatingRate"], router, missing[bucket, fc])
                 cross = "%s, %s" % (rtext, rratio)
             else:
@@ -675,7 +770,8 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
     print("\n## Above the prefill onset: the router queue's wait\n", file=out)
     print("Every flow-control-on step above the frozen prefill onset. Measure-only steps are scored by nothing: "
           "the model flags this wait (AboveFlowControlOnset) and does not price it. Waited is the share of "
-          "requests the router queue held over %g ms; its p90 is read inside wide buckets.\n" % (1000 * QUEUE_WAITED), file=out)
+          "requests the router queue held past the largest bucket edge at or under %g ms, shown with it "
+          "(the histogram reads nothing finer); its p90 is read inside wide buckets.\n" % (1000 * QUEUE_WAITED), file=out)
     print("| Bucket | Repeat | Step, r/s | Over the onset | Role | Client TTFT p50 / p90, ms | Waited | Wait mean, ms | Wait p90, ms, coarse | Prefill gate saturation, mean / peak | Queue, peak | Held |", file=out)
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
     shown = 0
@@ -695,7 +791,8 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
                     bucket, n, r["rate"], r["rate"] / onset,
                     "measure only" if r in measure.get((bucket, fc, n), []) else "scored",
                     1000 * r["client_ttft_p50"], 1000 * r["client_ttft_p90"],
-                    "%.1f%%" % (100 * r["fc_waited_share"]) if "fc_waited_share" in r else "unread",
+                    ("%.1f%%" % (100 * r["fc_waited_share"]) + (" past %g ms" % (1000 * r["fc_waited_edge"]) if "fc_waited_edge" in r else ""))
+                    if "fc_waited_share" in r else "unread",
                     "%.1f" % (1000 * r["fc_wait_mean"]) if "fc_wait_mean" in r else "unread",
                     "%.1f" % (1000 * r["fc_wait_p90_coarse"]) if "fc_wait_p90_coarse" in r else "unread",
                     "%.2f / %.2f" % tuple(pre[0]) if pre else "unread",
@@ -704,7 +801,7 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
     if not shown:
         print("| none | | | | | | | | | | | |", file=out)
 
-    prefill_running_cap(data, measure, frozen, out)
+    prefill_running_cap(data, measure, frozen, out, read_max_num_seqs(run))
 
     print("\n## Model against client, per step\n", file=out)
     print("Report only: flow control off, the frozen curve at the step's rate.\n", file=out)
