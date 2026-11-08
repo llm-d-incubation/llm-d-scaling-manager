@@ -2311,7 +2311,10 @@ and `kustomize-build` run; the e2e jobs are PR-only.
 When they are enabled, a fork PR runs only on `/ok-to-test <sha>` or
 `/retest <sha>`, where `<sha>` is the full 40-character SHA of the head commit
 you reviewed. The run is refused if the head has moved since; review the new
-commits and approve the new SHA.
+commits and approve the new SHA. It also needs the repository variable
+`E2E_OPENSHIFT_CLUSTER`, a part of the PR cluster's API server URL:
+`deploy/ci-e2e-openshift/verify-correct-cluster.sh` fails without it, and on
+any other cluster.
 
 Every commit also needs a DCO sign-off (`git commit -s`); see
 [CONTRIBUTING.md](../../CONTRIBUTING.md#commits).
