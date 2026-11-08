@@ -1,0 +1,26 @@
+metadata:
+  labels:
+    name: decode-heavy
+    description: |
+      Stress-tests decode (token generation) with short input, long output.
+spec:
+  backend:
+    kind: openai_http
+    target: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+    model: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+    request_format: /v1/completions
+  profile:
+    kind: poisson
+    # Substituted from REQUEST_RATE (default 10, halved from the old fixed 20).
+    # See prefill_heavy.yaml.in for why this is not a REPLACE_ENV_* token.
+    rate: __REQUEST_RATE__
+  data:
+  - kind: synthetic_text
+    prompt_tokens: 1000
+    output_tokens: 4000
+  constraints:
+  - kind: max_duration
+    # Substituted from MAX_DURATION, like the rate above. The post-install
+    # smoke (hack/benchmark/smoke.sh) wants five minutes; a scenario run wants
+    # the full ten, which is the default.
+    seconds: __MAX_DURATION__

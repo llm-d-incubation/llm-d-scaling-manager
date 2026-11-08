@@ -1,0 +1,47 @@
+# promtool unit test for the scheduler flow-control queue queries
+# (hack/check-collector-queries.sh runs it). Two namespaces serve the same
+# model name through their own EPP: sg1 queues nothing, sg2 is saturated and
+# queues 52. Each must come out as its own series; grouped by model name alone
+# they collapsed into one series of 52 that sg1 read as its own demand.
+#
+# sg3 runs an EPP that exports only the deprecated family, beside sg2's llm-d
+# family, so the `or` is shown to prefer per namespace, not across them.
+#
+# The exprs are the queries the registry builds; the Go test
+# TestEPPQueueQueriesMatchPromtoolFixture fails if either side changes alone.
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'llm_d_epp_flow_control_queue_size{namespace="sg1",job="sg1-epp",pod="sg1-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '0x20'
+      - series: 'llm_d_epp_flow_control_queue_size{namespace="sg2",job="sg2-epp",pod="sg2-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '52x20'
+      - series: 'inference_extension_flow_control_queue_size{namespace="sg2",job="sg2-epp",pod="sg2-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '52x20'
+      - series: 'inference_extension_flow_control_queue_size{namespace="sg3",job="sg3-epp",pod="sg3-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '7x20'
+      - series: 'llm_d_epp_flow_control_queue_bytes{namespace="sg1",job="sg1-epp",pod="sg1-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '0x20'
+      - series: 'llm_d_epp_flow_control_queue_bytes{namespace="sg2",job="sg2-epp",pod="sg2-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '208000x20'
+      - series: 'inference_extension_flow_control_queue_bytes{namespace="sg3",job="sg3-epp",pod="sg3-epp-0",fairness_id="default",priority="0",model_name="m",target_model_name="m"}'
+        values: '28000x20'
+    promql_expr_test:
+      - expr: 'sum by (namespace, model_name, target_model_name) (llm_d_epp_flow_control_queue_size) or sum by (namespace, model_name, target_model_name) (inference_extension_flow_control_queue_size)'
+        eval_time: 4m
+        exp_samples:
+          - labels: '{namespace="sg1",model_name="m",target_model_name="m"}'
+            value: 0
+          - labels: '{namespace="sg2",model_name="m",target_model_name="m"}'
+            value: 52
+          - labels: '{namespace="sg3",model_name="m",target_model_name="m"}'
+            value: 7
+      - expr: 'sum by (namespace, model_name, target_model_name) (llm_d_epp_flow_control_queue_bytes) or sum by (namespace, model_name, target_model_name) (inference_extension_flow_control_queue_bytes)'
+        eval_time: 4m
+        exp_samples:
+          - labels: '{namespace="sg1",model_name="m",target_model_name="m"}'
+            value: 0
+          - labels: '{namespace="sg2",model_name="m",target_model_name="m"}'
+            value: 208000
+          - labels: '{namespace="sg3",model_name="m",target_model_name="m"}'
+            value: 28000

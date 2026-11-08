@@ -1,0 +1,733 @@
+# Scenario spec for `make benchmark-run` -- OUR copy, and the authoritative one.
+#
+# Why this lives here: llm-d-benchmark/ is gitignored (.gitignore:33) and
+# benchmark-install re-checks it out to a pinned tag, so a spec edited in place
+# is invisible to review and gone on the next install. benchmark-scenarios
+# copies this file into the clone before every run, the same way workload
+# profiles are copied. Edit THIS file, never the one in the clone.
+#
+# Base: upstream v0.7.8 config/scenarios/guides/workload-autoscaling.yaml.
+# Deliberate deviations, all of them:
+#
+#   images.benchmark.tag: v0.7.8
+#       Upstream defaults this to the v0.7.0 anchor. The harness image tag is
+#       resolved from the installed CLI *package version*, which is frozen at
+#       install time, so after moving BENCHMARK_REPO_REF to v0.7.8 the run still
+#       pulled the v0.7.0 image while copying v0.7.8 harness scripts into it.
+#       Those call "guidellm run", which the v0.7.0 image does not have, and
+#       every treatment died with: No such command "run". Pin explicitly.
+#
+#   vllmCommon.extraEnvVars: PYTORCH_ALLOC_CONF=expandable_segments:True
+#       Reduces allocator fragmentation on long decode runs.
+#
+#   harness.runAsUser: 0
+#       Required for the harness pod under this cluster's SCCs.
+#
+#   modelservice.decode.replicas: 1 (upstream 2)
+#       The floor that matters is hpa.minReplicas, which drives the
+#       ScaledObject; the static count only sets the pre-autoscaling state.
+#
+#   wva.hpa.behavior: scale-up stabilization 0 / period 5,
+#                     scale-down stabilization 60 / period 60
+#       Upstream uses 120/15 in both directions. Fast up, slower down is the
+#       deliberate shape: under-provisioning costs TTFT irrecoverably, while
+#       over-provisioning only costs money.
+#
+#       Scale-down was 300/120 and that was too slow to be useful here. The
+#       HPA takes the MAX recommendation over the window, so one high reading
+#       pinned the fleet for five minutes: decode was measured holding ten
+#       replicas through most of a 600 s phase while its own demand had fallen
+#       to one replica's worth. Draining ten took ~540 s against a 600 s
+#       phase. 60/60 drains them in ~240 s and still needs a dip to persist a
+#       full minute. Raise it again for batch workloads whose phases are much
+#       longer than ten minutes.
+#
+# NOT deviations -- restored to upstream when this file was created, because
+# they were leftovers from one comparison run rather than choices:
+#   wva.enabled (was false)      -> true
+#   wva.hpa.maxReplicas (was 4)  -> 10
+#
+# INFERENCE SCHEDULING + the scaling manager WELL LIT PATH for LLM-D Deployment
+#
+# Same base configuration as `inference-scheduling.yaml` (Qwen3-32B, 2 decode
+# pods, modelservice deployment) but with the llm-d-scaling-manager
+# (the scaling manager) explicitly enabled. The scaling knobs this scenario actually consumes
+# (variantAutoscaling.variantCost + the hpa.* block, which drive the KEDA
+# ScaledObject) are listed below with inline notes; the scaling manager controller's own
+# tuning lives in the upstream overlay's ConfigMaps, not here.
+#
+# Based on:
+#   https://github.com/llm-d/llm-d/blob/main/guides/workload-autoscaling/README.wva.md
+#
+# Running:
+#
+#   llmdbenchmark --spec guides/workload-autoscaling standup -p <namespace>
+#
+# The `-u/--wva` CLI flag is NOT required with this scenario because
+# `wva.enabled: true` is already hard-coded below. Pass `-u` with the
+# plain `inference-scheduling` scenario if you want to toggle the scaling manager on
+# without editing YAML.
+
+scenario:
+  # ============================================================================
+  # Inference Scheduling + the scaling manager - Qwen3-32B with 2 decode pods, autoscaled
+  # ============================================================================
+  - name: "inference-scheduling-llmsm"
+    common:
+      # =========================================================================
+      # MODEL CONFIGURATION
+      # =========================================================================
+      model:
+        name: Qwen/Qwen3-32B
+        shortName: qwen-qwen3-32b
+        path: models/Qwen/Qwen3-32B
+        huggingfaceId: Qwen/Qwen3-32B
+        size: 1Ti
+        maxModelLen: 16000
+        blockSize: 64
+        gpuMemoryUtilization: 0.95
+      # =========================================================================
+      # STORAGE
+      # =========================================================================
+      storage:
+        modelPvc:
+          size: 1Ti
+          # ReadWriteMany, explicitly. Without it the claim takes whatever the
+          # cluster default StorageClass gives, and a default of RWO block
+          # storage binds the cache to ONE NODE -- so the second decode replica
+          # cannot mount it and never schedules. That does not fail the standup;
+          # it fails the scale-up, which is the thing the run exists to measure,
+          # and it looks like the autoscaler not working.
+          #
+          # llm-d-benchmark's own cluster-config for this cluster says the same
+          # (its OpenShift example under config/cluster-configs/examples/).
+          #
+          # It does NOT fail fast, and an earlier version of this comment claimed
+          # it did. Measured: the API server accepts a ReadWriteMany request
+          # against a class that cannot provide it, returns rc 0, and the claim
+          # then sits Pending forever -- accessModes is a REQUEST, and nothing
+          # validates it against the StorageClass. What this line buys is that
+          # the failure is a Pending claim with no pods, which benchmark-standup
+          # reports as such, instead of a stack that comes up on one node and
+          # fails at the first scale-up.
+          accessModes:
+            - ReadWriteMany
+        hostPath:
+          # TODO: should we default to enabled: true for the scaling manager scenarios?
+          enabled: false
+          path: /mnt/models
+          storageClassName: hostpath
+          capacity: 1Ti
+          # Target the GPU nodes where decode pods will schedule.
+          # Replace with your cluster's actual node labels.
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
+          tolerations: []
+          daemonSetTimeout: 3600
+      # =========================================================================
+      # VLLM COMMON CONFIGURATION
+      # =========================================================================
+      vllmCommon:
+        #      priorityClassName: nightly-gpu-critical
+        kvTransfer:
+          enabled: true
+          connector: NixlConnector
+          role: kv_both
+        flags:
+          enforceEager: true
+          disableLogRequests: true
+          disableUvicornAccessLog: true
+          allowLongMaxModelLen: "1"
+          serverDevMode: "1"
+        volumes:
+          - name: shared-config
+            type: emptyDir
+            emptyDir: {}
+          - name: dshm
+            type: emptyDir
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+        volumeMounts:
+          - name: dshm
+            mountPath: /dev/shm
+          - name: shared-config
+            mountPath: /shared-config
+      images:
+        benchmark:
+          tag: v0.7.8
+        # PIN THE ROUTER, do not inherit it. Without this the endpoint picker
+        # comes from llm-d-benchmark's own anchor, so a benchmark run here
+        # silently changes router version whenever that moves -- and the
+        # router decides both how requests are spread across replicas and how
+        # the queue the scaling manager reads as demand is bounded. A
+        # benchmark whose router version is not recorded cannot be reproduced.
+        #
+        # v0.11.0 is the first version carrying `noEndpointRequestTTL`, the
+        # separate empty-pool queue-wait budget that every scale-from-zero
+        # waits in, which matters here because this scenario is what exercises
+        # scale-to-zero.
+        #
+        # This scenario is single-role and declares no P/D EndpointPickerConfig
+        # of its own, so the disaggregation plugin migration v0.11.0 required
+        # does not apply to it -- see pd-disaggregation.yaml for that, and
+        # docs/reference/router-configuration.md for the migration itself.
+        routerEndpointPicker:
+          tag: v0.11.0
+    # =========================================================================
+    # KUSTOMIZE DEPLOY METHOD   (scope: the ENTIRE stack)
+    # -------------------------------------------------------------------------
+    # When kustomize.enabled is true (or `-t kustomize` is passed) this
+    # scenario is deployed by applying the UPSTREAM llm-d guide directly
+    # (guides/<guideName> in the llm-d repo). In that mode the deployment is
+    # defined ENTIRELY by the guide's own manifests:
+    #
+    #   * EVERYTHING ELSE in this scenario is IGNORED -- model, modelservice,
+    #     standalone, decode/prefill, vllmCommon, storage, harness model, etc.
+    #   * `-m/--models` and all other CLI/scenario tuning are ignored.
+    #   * DoE `experiment` SETUP sweeps do NOT alter a kustomize deploy
+    #     (only run/workload treatments still apply).
+    #
+    # The ONLY way to modify a kustomize deployment is the kustomize.* keys
+    # below:
+    #   patches / overlayPath           -> modelserver (the workload pods)
+    #   extraHelmValues / extraHelmSets -> router / GAIE helm release
+    #   guideVariableOverrides          -> override the guide README's ${VAR}
+    # The benchmark harness owns these keys; see its own kustomize reference.
+    #
+    # NOT SUPPORTED with kustomize: multi-model / multi-stack scenarios
+    # (the deploy is keyed on guideName with no per-stack uniquification --
+    # stacks would collide). Use the modelservice method for multi-model.
+    #
+    # When kustomize.enabled is false (the DEFAULT) this whole block is
+    # inert and the scenario deploys via modelservice/standalone as
+    # configured further below.
+    # =========================================================================
+    kustomize:
+      enabled: false
+      guideName: "workload-autoscaling"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {} # override/fill the guide README's ${VAR}
+      # Inline kustomize strategic merge patches applied on top of the
+      # guide's modelserver base.  For gated models, add an HF_TOKEN
+      # env var patch (the secret is auto-created from HF_TOKEN env):
+      # Default is empty -- upstream guide already injects HF_TOKEN from
+      # the `llm-d-hf-token` Secret (auto-created by standup). Add entries
+      # here only for non-token overrides (e.g. bump replicas, pin a
+      # priorityClassName) -- see optimized-baseline.yaml for an example.
+      patches: []
+    # =========================================================================
+    # MODELSERVICE -- Only applies when modelservice.enabled: true
+    # The following sections configure the llm-d modelservice Helm chart
+    # deployment including decode pods, prefill pods, router, and gateway.
+    # =========================================================================
+    # PodMonitor (top level): NOT configurable from here, or from defaults.yaml.
+    #
+    # `make benchmark-standup` passes --monitoring (BENCHMARK_MONITORING defaults
+    # to true), and that flag FORCES the value at render time regardless of what
+    # the scenario or defaults.yaml say -- render_plans.py:
+    #
+    #     if self.cli_monitoring:
+    #         podmonitor_config["enabled"] = True
+    #
+    # Setting it here was tried and the harness rendered the duplicate PodMonitor
+    # anyway; so was setting it in defaults.yaml, with the same result.
+    #
+    # Dropping --monitoring is not the alternative: --no-monitoring also switches
+    # off router.monitoring.prometheus.enabled, and that ServiceMonitor is how the
+    # EPP is scraped -- which the throughput analyzer's arrival rate needs.
+    #
+    # It is fixed in hack/benchmark/patch_harness.sh (fix 5), which guards
+    # 18_podmonitor.yaml.j2 on whether the modelservice chart is already covering
+    # these pods. The monitor that remains is the chart's, from
+    # modelservice.decode.monitoring.podmonitor below.
+
+    modelservice:
+      enabled: true
+      gateway:
+        className: epponly
+      # =========================================================================
+      # ROUTING / GAIE CONFIGURATION
+      # =========================================================================
+      # the scaling manager autoscaling is driven by EPP queue depth, so we must enable the
+      # `flowControl` feature gate in the EPP's EndpointPickerConfig. That gate
+      # is not on by default, and toggling it requires shipping a custom
+      # EndpointPickerConfig (the default one the gaie chart ships has no
+      # `featureGates` block). We inline it here and point `pluginsConfigFile`
+      # at this filename so the chart mounts it as the active config.
+      router:
+        epp:
+          pluginsConfigFile: "scaling-manager-plugins.yaml"
+          pluginsCustomConfig:
+            scaling-manager-plugins.yaml: |
+              apiVersion: llm-d.ai/v1alpha1
+              kind: EndpointPickerConfig
+              featureGates:
+                - flowControl
+              plugins:
+                - type: queue-scorer
+                - type: kv-cache-utilization-scorer
+                - type: prefix-cache-scorer
+              schedulingProfiles:
+                - name: default
+                  plugins:
+                    - pluginRef: queue-scorer
+                      weight: 2
+                    - pluginRef: kv-cache-utilization-scorer
+                      weight: 2
+                    - pluginRef: prefix-cache-scorer
+                      weight: 3
+      # -------------------------------------------------------------------------
+      # HTTPRoute Configuration
+      # requestTimeout: end-to-end Gateway-API HTTPRoute timeout the istio
+      # gateway enforces per request. Long agentic turns that exceed it are
+      # aborted by the gateway with a 502 (surfaces as "connection reset by
+      # peer" on the decode routing-proxy loopback hop). Set "0s" to disable.
+      # -------------------------------------------------------------------------
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+      # =========================================================================
+      # PREFILL / DECODE CONFIGURATION (same as inference-scheduling.yaml)
+      # =========================================================================
+      prefill:
+        enabled: false
+        replicas: 0
+      decode:
+        replicas: 1
+        initContainers:
+          - name: preprocess
+            imageKey: benchmark
+            imagePullPolicy: Always
+            # The generator (from the benchmark image, so not patchable in the clone)
+            # starts the script it writes with two apt-get installs: iproute2 for the
+            # `ip route/rule` lines it emits on a multi-NIC RDMA node, infiniband-diags
+            # for nothing the serving container ever runs. On a single-NIC node the
+            # script has no ip commands and both installs are dead weight: 71 s of a
+            # 186 s order-to-Ready measured on a decode pod that already had the image,
+            # and the only part that varied run to run (mirror speed). The autoscaler
+            # sizes its first ramp by the queue one replica builds while the second
+            # starts, so those 71 s were six over-ordered replicas. The install of
+            # iproute2 stays whenever the script needs it.
+            command:
+              - /bin/sh
+              - -c
+              - |
+                set_llmdbench_environment.py -e /shared-config/llmdbench_env.sh -i || exit $?
+                f=/shared-config/llmdbench_env.sh
+                sed -i '/^which ibstat$/,/^fi$/d' "$f"
+                if ! grep -qE '^ip (route|rule) ' "$f"; then
+                  sed -i '/^which ip$/,/^fi$/d' "$f"
+                fi
+                grep -c apt-get "$f" | sed 's/^/preprocess: apt-get lines left in llmdbench_env.sh: /'
+                # The engine sources this script before it starts, so the guard below runs
+                # where the cache mount is. A cache dir that is not writable (a CSI
+                # publish that came back read-only after a retry, seen once on a Kubernetes cluster)
+                # must cost a compile, not the replica: vLLM fails hard on os.makedirs.
+                echo >> "$f"  # the generator leaves no trailing newline
+                cat >> "$f" <<'EOF'
+                for v in VLLM_CACHE_ROOT FLASHINFER_WORKSPACE_DIR TRITON_CACHE_DIR; do
+                  # neither a doubled dollar nor a dollar-paren in here: Kubernetes rewrites both in a container command
+                  eval "d=\${$v}"
+                  [ -n "$d" ] || continue
+                  if ! mkdir -p "$d" 2>/dev/null || ! touch "$d/.writable" 2>/dev/null; then
+                    echo "engine cache $v=$d is not writable; using the engine default instead"
+                    unset $v
+                  fi
+                done
+                EOF
+            volumeMounts:
+              - name: shared-config
+                mountPath: /shared-config
+        parallelism:
+          tensor: 1
+          data: 1
+          dataLocal: 1
+          workers: 1
+        resources:
+          limits:
+            memory: 64Gi
+            cpu: "16"
+          requests:
+            memory: 64Gi
+            cpu: "16"
+        extraEnvVars:
+          - name: PYTORCH_ALLOC_CONF
+            value: "expandable_segments:True"
+          # vLLM writes its torch.compile artefacts, the FlashInfer autotune
+          # table and Triton's JIT cache under /tmp inside the container, so
+          # every replica recompiles from nothing: 14 s of torch.compile on a
+          # 0.6B model, measured, more on a large one. /engine-cache is a subPath
+          # of the harness's workload PVC (RWX, read-write; the model claim is
+          # mounted read-only and a CSI driver publishes a claim once per pod, so
+          # a second mount of it inherits read-only) -- see additionalVolumes --
+          # so a replica after the first finds the caches warm. vLLM keys them by
+          # a hash of the engine config: a change of model, flags or version
+          # is a miss, never a stale hit.
+          # BENCHMARK_ENGINE_CACHE_HOSTPATH=<dir> at standup moves the volume to
+          # the node's disk (the claim deploy/enginecache.sh makes, no subPath): a
+          # shared claim published read-only on a node cost every start there 25 s,
+          # measured.
+          - name: VLLM_CACHE_ROOT
+            value: /engine-cache/vllm
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: /engine-cache/flashinfer
+          - name: TRITON_CACHE_DIR
+            value: /engine-cache/triton
+        extraContainerConfig:
+          ports:
+            - containerPort: 5557 # NIXL side channel port
+              protocol: TCP
+            - containerPort: 8200 # Metrics port
+              name: metrics
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add:
+                - "IPC_LOCK"
+                - "SYS_RAWIO"
+            runAsGroup: 0
+            runAsUser: 0
+          # IfNotPresent, not Always: the engine tag is pinned, and Always contacts the
+          # registry at every pod start -- a second when it answers, a failed start
+          # when it does not -- for a digest that cannot have changed. Pre-pull the
+          # image on the accelerator nodes with `make prepull` and the start never
+          # waits on the registry at all.
+          imagePullPolicy: IfNotPresent
+        additionalVolumeMounts:
+          # Read-write home for the engine caches (VLLM_CACHE_ROOT and friends
+          # above): the harness's workload PVC, which its results pod already
+          # mounts read-write. The model claim is mounted read-only.
+          - name: engine-cache
+            mountPath: /engine-cache
+            subPath: engine-cache
+        additionalVolumes:
+          - name: engine-cache
+            type: persistentVolumeClaim
+            persistentVolumeClaim:
+              claimName: workload-pvc
+        # -----------------------------------------------------------------------
+        # Probes
+        #
+        # HTTP probes aligned with llm-d's workload-autoscaling guide
+        # (llm-d/guides/workload-autoscaling/ms-workload-autoscaling/values.yaml):
+        #   - startupProbe + readinessProbe use /v1/models — only returns 200
+        #     once vLLM has finished loading weights, so "Ready" truly means
+        #     "serving inference requests".
+        #   - livenessProbe uses /health — catches vLLM crash-loops (our
+        #     previous TCP-socket probe stayed green because the routing
+        #     sidecar stayed up while vLLM died).
+        #
+        # All probes target the routing sidecar port (8000 = servicePort),
+        # which proxies to vLLM on 8200. Probing 8000 exercises the full
+        # routing path end-to-end — the right signal for "benchmarking-ready".
+        # -----------------------------------------------------------------------
+        probes:
+          startup:
+            path: /v1/models
+            # 1/5/360, not 15/30/60 (1 not 0: the API drops a zero and the
+            # harness's validator then reads None where it expects the value): a 30 s period reports an engine Ready up
+            # to 30 s after it is, and the autoscaler's first ramp charges
+            # every one of those seconds as queue. Same 30-minute budget.
+            failureThreshold: 360
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 5
+          liveness:
+            path: /health
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readiness:
+            path: /v1/models
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+        # -----------------------------------------------------------------------
+        # PodMonitor (Prometheus scraping)
+        #
+        # Required for the scaling manager: the scaling manager controller consumes vLLM metrics via
+        # prometheus-adapter; no PodMonitor → no metrics → HPA never sees a
+        # value for llmsm_desired_replicas → autoscaling silently broken.
+        # The `release: llmd` label is what user-workload-monitoring keys
+        # on for discovery, matching llm-d's workload-autoscaling guide.
+        # -----------------------------------------------------------------------
+        monitoring:
+          podmonitor:
+            enabled: true
+            portName: metrics
+            path: /metrics
+            # 10s: the scale-up signal is a queue at the engine and moves only when
+            # Prometheus holds a sample showing it, so 30s is 0-30s of jitter on
+            # the decision. Measured: lags 25/56/56/87s at 30s, 15/60/60/76s at
+            # 10s -- the jitter goes; the queue's own formation time does not.
+            interval: 10s
+            labels:
+              release: llmd
+    # =========================================================================
+    # the scaling manager CONFIGURATION
+    #
+    # Edit any field below to change the scaling manager behavior for this scenario.
+    # Remove a field to fall back to its default.
+    # =========================================================================
+    wva:
+      enabled: true # master switch — same effect as `-u/--wva` on CLI
+      # Upstream well-lit-path tag. Becomes the `llm-d.ai/guide` label on the
+      # Variant so dashboards/queries can group by guide.
+      wellLitPath: optimized-baseline
+      # Where to install the scaling manager controller.
+      # Empty = use the deploy namespace (the first slot of `-p`). Override by
+      # passing `-p deploy,harness,wva` to put the controller elsewhere.
+      # NOTE: With namespaceScoped=true (below), the controller ONLY watches
+      # this namespace. Putting it in a different ns from your decode
+      # Deployment means it won't see your Variant.
+      namespace: ""
+      # Controller container image.
+      # Pin `tag` to a release version for reproducibility, or set to "auto"
+      # to let the version-resolver pick latest at plan time.
+      # NOTE: the scaling manager controller is installed from its kustomize
+      # overlay (see wva.repoRef), not a helm chart -- there is no separate
+      # `chartVersions.wva` to keep in sync.
+      # Available version tags can be listed with:
+      #   curl -sL "https://ghcr.io/token?scope=repository:ev-shindin/llm-scaling-manager:pull" \
+      #     | jq -r .token | xargs -I{} curl -sH "Authorization: Bearer {}" \
+      #       https://ghcr.io/v2/ev-shindin/llm-scaling-manager/tags/list
+      # Pinned to the latest release, v0.10.2. `make benchmark-standup`
+      # turns this install off (wva.enabled=false) and installs the controller
+      # from deploy/ with IMG instead, so to measure the release there, check
+      # out v0.10.2 and pass IMG=ghcr.io/ev-shindin/llm-scaling-manager:v0.10.2.
+      image:
+        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        tag: v0.10.2
+      replicaCount: 1 # the scaling manager controller pod replicas (1 is the chart default)
+      # Disable to skip installing the controller but still render the VA
+      # + HPA (rare; useful when you reuse a cluster-wide controller
+      # installed elsewhere).
+      controller:
+        enabled: true
+      # Namespaced mode: controller only watches its own namespace. One scaling manager
+      # controller per unique wva.namespace across all rendered stacks.
+      # Set to false ONLY if you intend a single controller to manage
+      # multiple namespaces (cluster-scoped mode — discouraged on shared
+      # clusters because controllers from different tenants will race on
+      # the same VAs).
+      namespaceScoped: true
+      # Controller-side metrics endpoint (scraped by user-workload-monitoring).
+      # Don't change unless you have a port collision.
+      metrics:
+        enabled: true
+        port: 8443 # /metrics port on the controller
+        secure: true # HTTPS + bearer-token auth
+      # Where the controller queries to read vLLM metrics for its scaling
+      # decisions. On OpenShift this is thanos-querier; on GKE point it at
+      # your kube-prometheus-stack Service URL.
+      prometheus:
+        baseUrl: https://thanos-querier.openshift-monitoring.svc.cluster.local
+        port: 9091
+      # -----------------------------------------------------------------------
+      # Variant — per-model scaling intent
+      #
+      # Only `variantCost` is consumed by this benchmark's rendering: it becomes
+      # the `llm-d.ai/variant-cost` annotation on the KEDA ScaledObject
+      # (28_wva-scaledobject.yaml.j2). The scaling manager controller reads its own tuning
+      # (SLOs, saturation thresholds, opt interval) from the ConfigMaps shipped
+      # by the upstream overlay applied in step_03 (`manager-config` /
+      # `saturation-scaling-config`), NOT from per-model fields here — this
+      # scenario does not render the old CR. To change SLO-driven
+      # behavior on-cluster, patch those controller ConfigMaps. The replica
+      # floor/ceiling the controller actually respects is the hpa.min/maxReplicas
+      # block below (which drives the ScaledObject's min/maxReplicaCount).
+      # -----------------------------------------------------------------------
+      variantAutoscaling:
+        # Relative GPU cost weight used by the scaling manager's saturation solver to decide
+        # WHICH model to scale when several share GPU capacity. Higher =
+        # more expensive to scale up. Common tiering: H100=10, A100=8,
+        # L40S=5, MI300X=10. Tweak per stack to express your business priority.
+        variantCost: "10.0"
+      # -----------------------------------------------------------------------
+      # KEDA ScaledObject — what actually changes the replica count
+      #
+      # Despite the `hpa` name (retained for parity with defaults.yaml and the
+      # upstream guide), these knobs now drive a KEDA ScaledObject
+      # (28_wva-scaledobject.yaml.j2), not a native HPA + prometheus-adapter.
+      # KEDA queries Prometheus for `llmsm_desired_replicas` (emitted by the scaling manager
+      # controller) and scales the decode Deployment between min/max. KEDA
+      # generates an HPA under the hood, so `behavior` still applies.
+      # -----------------------------------------------------------------------
+      hpa:
+        enabled: true # gates the smoketest's autoscaling-aware
+        # replica-range check (does not affect
+        # rendering; the ScaledObject is gated on
+        # wva.enabled)
+        minReplicas: 1 # ScaledObject minReplicaCount — never scale
+        # below this; must be >= 1 (KEDA/HPA refuse
+        # to manage targets at 0)
+        maxReplicas: 10 # ScaledObject maxReplicaCount — safety
+        # ceiling regardless of what the controller
+        # computes
+        targetAvgValue: 1 # Prometheus trigger threshold for
+        # `llmsm_desired_replicas`. 1 = "match the
+        # controller's desiredReplicas exactly".
+        # Don't change unless you understand
+        # HPA/KEDA averaging math.
+
+        # Scaling behavior — how aggressively the HPA reacts. See:
+        #   https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/#configurable-scaling-behavior
+        behavior:
+          scaleUp:
+            # How long after a scale-up event before another one is allowed.
+            # Higher = smoother, less responsive. Lower = snappier but flappy.
+            stabilizationWindowSeconds: 0
+            policies:
+              - type: Percent # alternative: "Pods" (absolute pod count)
+                value: 100 # 100% = double the current replica count per period
+                periodSeconds: 5 # how often this policy is evaluated
+          scaleDown:
+            # A scale-down window has to be shorter than the workload's own
+            # timescale or the fleet never acts on a fall in demand.
+            #
+            # Measured on a P/D run at 300 s with a Percent 100 / 120 s
+            # policy -- so the window, not the policy, was the limiter. Once
+            # the controller published a lower target (tgt=3 against curr=10),
+            # the release took 420 s: 5 at +180 s, 2 at +300 s, 1 at +420 s.
+            # The HPA takes the MAX recommendation over the window, so one high
+            # reading pins the fleet for its whole length, and on a 600 s phase
+            # that is a release the phase outlives.
+            #
+            # NOT what held decode at ten before that. For the preceding 346 s
+            # it sat at curr=10 tgt=10 atMax by the controller's own decision,
+            # with the throughput floor re-pricing a 303,206-token demand as
+            # 1,338,789. That is a demand-floor question and shortening this
+            # window does not touch it -- see
+            # docs/proposals/managed-keda-behavior.md section 2.
+            #
+            # 60 s with 50%/60s still requires a dip to persist a full minute
+            # before anything shrinks. Raise it again for batch workloads where
+            # transient idle is normal and a phase lasts much longer than ten
+            # minutes.
+            stabilizationWindowSeconds: 60
+            policies:
+              - type: Percent
+                value: 50 # remove half the replicas per period
+                periodSeconds: 60
+      # vLLM *emulator* service — chart-internal feature for testing the scaling manager
+      # without real vLLM pods. We deploy real vLLM via the modelservice
+      # chart, so we always disable this. Leave as-is.
+      vllmService:
+        enabled: false
+    # =========================================================================
+    # CHART VERSIONS
+    #
+    # The scaling manager controller itself is installed from its kustomize
+    # overlay (see wva.image.tag / wva.repoRef above), not a helm chart --
+    # this block only pins helm charts still installed by step_03.
+    # =========================================================================
+    # -----------------------------------------------------------------------
+    # FMA HOT START
+    #
+    # Off by default (WARM_REPLICAS=0). Turn on with:
+    #     make benchmark-run WARM_REPLICAS=10 ...
+    # which substitutes the count below and warms the pool before the run.
+    #
+    # What this buys, measured on the shared GPU cluster: a scale-up that WAKES a sleeping
+    # vLLM is ready in 3s; one that rebuilds takes ~50-80s. Every benchmark we
+    # ran before this was the slow path, which is why FMA lost its own
+    # comparison.
+    #
+    # Why a count and not a boolean: FMA reuses a sleeping instance only on an
+    # exact instance-ID match, and that ID hashes the GPU UUIDs. A sleeper is
+    # therefore usable only by a requester that reserved the same GPU. Sleepers
+    # the launcher-populator makes are keyed to GPUs nothing will reserve and
+    # are never woken; sleepers made by scaling requesters UP then DOWN are
+    # keyed to GPUs the scheduler actually hands out, and those hit. So the
+    # warm pool is created by a scale cycle, and its size is a number of
+    # REPLICAS -- see hack/benchmark/warm_pool.sh, which owns the translation
+    # to the per-node launcherCount the populator enforces.
+    #
+    # replicas: 0 makes step_02a_fma_warmup_hotstart a no-op, so leaving this
+    # off costs nothing on a non-FMA run.
+    fma:
+      # Standing FMA up is a separate concern from warming it. This spec drives
+      # `benchmark-run` against an already-deployed FMA; flip to true only if
+      # you also want `benchmark-standup` to own the FMA install.
+      enabled: false
+
+      # PLACEMENT. Binding is node-local: a requester that lands where no
+      # sleeper lives rebuilds from scratch (~50-90s) instead of waking one
+      # (~3s). Two ways to arrange that, and both are OFF here because
+      # everything under `fma:` is inert while fma.enabled is false -- step_06
+      # skips itself when FMA is not a deployed method, so nothing is labeled
+      # and no nodeSelector or affinity is ever rendered. Flip one of these
+      # together with `enabled: true` above, never on its own;
+      # hack/benchmark/fma_placement.sh fails the standup if you do.
+      #
+      # This block previously carried `launcherNodeSelection.enabled: true`
+      # under `enabled: false`. It read as configured and did nothing, and every
+      # FMA-vs-non-FMA number taken before 2026-08-18 was measured on the cold
+      # path because of it.
+      #
+      # warmAffinity (ours, hack/benchmark/patch_harness.sh fix 3): launchers
+      # spread over every eligible GPU node and the requester PREFERS nodes that
+      # already hold a sleeper. The pool spans nodes, grows by replicas rather
+      # than by relabeling, and degrades to a cold rebuild -- not to Pending --
+      # when the warm set is exhausted. Size it with warm_pool.sh.
+      #
+      # It buys PLACEMENT, not wakes. Measured twice on the shared GPU cluster: 3/3 replicas
+      # landed beside a sleeper and all three still rebuilt (43-79s). The reuse
+      # key is the GPU UUID and a pool node has 7-8 GPUs, so landing on the
+      # right node leaves a ~1-in-7 chance of the right GPU. Reliable wakes
+      # additionally need the pooled nodes SATURATED -- one requester per free
+      # GPU -- which is exactly what makes launcherNodeSelection work and what
+      # makes it expensive. See docs/proposals/fma-post-mortem.md.
+      warmAffinity:
+        enabled: false
+
+      # launcherNodeSelection (upstream): pins launchers AND requesters to ONE
+      # node. step_06 scores GPU nodes, takes the best, strips the label from
+      # every other node, and sizes requester replicas, launcherCount and the
+      # KEDA ScaledObject ceiling to that node's free GPUs at that instant. The
+      # pool cannot then grow past one node, the ceiling is a point-in-time
+      # reading, and standup fails outright when no single node has free GPUs --
+      # the common case on a shared cluster. Right for a dedicated benchmark
+      # cluster, wrong for the shared GPU cluster.
+      launcherNodeSelection:
+        enabled: false
+        nodeLabel: fma-hotstart
+
+      # Warmed by the scenario only when fma.enabled is true. Against an FMA
+      # somebody else deployed, size the pool directly instead:
+      #   hack/benchmark/warm_pool.sh size <replicas>
+      requester:
+        replicas: __WARM_REPLICAS__
+
+      # Model load happens for every replica in parallel during warmup, then
+      # the scale-down has to settle before the gate passes.
+      warmupTimeout: 1200
+
+    # Loads all models, scales down so the surplus launchers sleep, then gates
+    # strictly: it fails unless the scaled-down surplus is sleeping AND
+    # Running+Ready. That gate is the point -- it turns "we hope it is warm"
+    # into a verified precondition, so a cold run cannot masquerade as a warm
+    # one in the results.
+    fmaWarmupStep: step_02a_fma_warmup_hotstart
+
+    chartVersions:
+      # prometheus-adapter chart (prometheus-community/prometheus-adapter).
+      # Pinned because newer releases have broken external-metric
+      # compatibility with the rule format the scaling manager chart emits.
+      prometheusAdapter: 5.2.0
+    # =========================================================================
+    # WORKLOAD / HARNESS
+    # =========================================================================
+    workDir: "~/data/inference-scheduling-llmsm"
+    harness:
+      name: inference-perf
+      experimentProfile: shared_prefix_synthetic.yaml
+      runAsUser: 0

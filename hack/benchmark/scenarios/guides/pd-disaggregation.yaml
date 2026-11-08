@@ -1,0 +1,901 @@
+# P/D DISAGGREGATION WELL LIT PATH
+# Based on https://github.com/llm-d/llm-d/tree/main/guides/pd-disaggregation/README.md
+# Migrated from bash environment variables to YAML format
+#
+# Notes:
+# - Removed pod monitoring; can be added using decode.extraContainerConfig / prefill.extraContainerConfig
+# - Removed extra volumes metrics-volume and torch-compile-volume (not needed for this model/hardware)
+# - Use decode.additionalVolumeMounts and decode.additionalVolumes to add them if needed
+# - Use prefill.additionalVolumeMounts and prefill.additionalVolumes to add them if needed
+
+scenario:
+  # ============================================================================
+  # P/D Disaggregation - Qwen3-32B with 2 prefill and 2 decode pods
+  # ============================================================================
+  - name: "pd-disaggregation"
+
+    common:
+      accelerator:
+        profile: auto
+        resource: auto
+
+      # -------------------------------------------------------------------------
+      # Affinity / Node Selection
+      # By default, affinity is disabled and pods schedule on any available node.
+      # Options:
+      #   1. Leave commented out -- no node selection constraint
+      #   2. Set nodeSelector to "auto" -- auto-detects GPU labels from the cluster
+      #   3. Set explicit labels -- pods only schedule on matching nodes
+      # -------------------------------------------------------------------------
+      # affinity:
+      #   enabled: true
+      #   nodeSelector:
+      #     nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3      # OpenShift
+      #     # gpu.nvidia.com/model: H200                        # Kubernetes
+      #     # cloud.google.com/gke-accelerator: nvidia-h100-80gb  # GKE
+
+      # -------------------------------------------------------------------------
+      # Multinode Configuration (LeaderWorkerSet)
+      # -------------------------------------------------------------------------
+      #multinode:
+      #  enabled: true
+
+      # -------------------------------------------------------------------------
+      # Scheduler Configuration
+      # (commented out in original -- uncomment to enable)
+      # -------------------------------------------------------------------------
+      # schedulerName: custom-binpack-scheduler
+
+      # -------------------------------------------------------------------------
+      # Model Configuration
+      # Alternative models (commented out in original):
+      #   - Qwen/Qwen3-0.6B
+      #   - facebook/opt-125m
+      #   - meta-llama/Llama-3.1-8B-Instruct
+      #   - meta-llama/Llama-3.1-70B-Instruct
+      #   - deepseek-ai/DeepSeek-R1-0528
+      # -------------------------------------------------------------------------
+      model:
+        name: Qwen/Qwen3-32B
+        shortName: qwen-qwen3-32b
+        path: models/Qwen/Qwen3-32B
+        huggingfaceId: Qwen/Qwen3-32B
+  #      name: openai/gpt-oss-120b
+  #      shortName: openai-gpt-oss-120b
+  #      path: models/openai/gpt-oss-120b
+  #      huggingfaceId: openai/gpt-oss-120b
+        size: 1Ti
+        maxModelLen: 16384
+        blockSize: 128
+        gpuMemoryUtilization: 0.90
+        cacheBase: /model-cache
+
+      # -------------------------------------------------------------------------
+      # Storage Configuration
+      # -------------------------------------------------------------------------
+      storage:
+        modelPvc:
+          size: 1Ti
+          # Uncomment to specify storage class:
+          # storageClassName: standard-rwx
+          # storageClassName: shared-vast
+          # storageClassName: ocs-storagecluster-cephfs
+
+      # The routing-proxy init container and the modelservice chart have to
+      # agree on the sidecar's CLI flags, and they are pinned SEPARATELY:
+      # hack/benchmark/patch_harness.sh (fix 6) pins the chart to v0.4.15,
+      # which renders --vllm-port/--connector, and the tag here decides which
+      # sidecar receives them. v0.9.0 is the sidecar that takes those flags --
+      # llm-d-benchmark's own default anchor (defaults.yaml,
+      # llm-d-routing-sidecar_version) -- and it is pinned here rather than
+      # inherited so that a benchmark can be reproduced later.
+      #
+      # This used to say `latest`, written when the chart floated to v0.4.16
+      # (which renders --model-server-port/--kv-connector). Once the chart was
+      # pinned back to v0.4.15 the floating sidecar kept moving, and a fresh
+      # standup on 2026-09-16 crash-looped every decode pod on
+      # "unknown flag: --connector" -- the same failure the old comment
+      # described, from the other side. Move both pins together or neither.
+      images:
+        routingSidecar:
+          tag: v0.9.0
+        # The router is pinned for the same reason as the sidecar above: it is
+        # otherwise inherited from llm-d-benchmark's own anchor and moves
+        # underneath a reproduction. It matters more than most images, because
+        # the router decides how requests are spread across replicas and how
+        # the queue the scaling manager reads as demand is bounded.
+        #
+        # v0.11.0 because it is the first version carrying
+        # `noEndpointRequestTTL`, the separate empty-pool queue-wait budget
+        # every scale-from-zero waits in. Before it, one budget served both
+        # regimes and no value worked: short enough for a time-to-first-token
+        # objective killed cold starts, long enough for a cold start abandoned
+        # the objective whenever the pool was merely busy.
+        #
+        # THE PD-CONFIG BELOW WAS MIGRATED FOR IT, in three steps, each one a
+        # startup failure found by deploying and reading the error:
+        #
+        #   1. `disagg-headers-handler` is gone. v0.11.0 registers only
+        #      disagg-profile-handler (now disagg.HandlerFactory) and the three
+        #      deciders, so the handler is absorbed rather than renamed and the
+        #      line is simply removed.
+        #   2. `deciderPluginName` was removed; it is `deciders.prefill` now.
+        #      v0.9.0 had warned about exactly this at every startup.
+        #   3. `metrics-data-source` has to be DECLARED. v0.9.0's framework
+        #      injected a working one; v0.11.0's auto-created producer does not
+        #      reach the engines, every endpoint then reads stale, and a stale
+        #      endpoint is scored FULLY SATURATED -- the detector fails closed.
+        #      The symptom is not a crash: a single request against an idle
+        #      fleet took 19-30 s or shed at the TTL with 429.
+        #
+        # Verified on a cluster after the migration: completions in 27-120 ms
+        # (v0.9.0 was 44-113 ms), and 12 requests incremented BOTH roles'
+        # counters by 12, so disaggregation is intact. Check that last part
+        # after any change here -- a broken P/D split does not crash, it
+        # quietly routes everything to one role and the benchmark still looks
+        # plausible. See docs/reference/router-configuration.md.
+        routerEndpointPicker:
+          tag: v0.11.0
+
+      vllmCommon:
+        # rc enables UCX's RDMA transport (RoCE GPUDirect on this cluster --
+        # confirmed rdma.capable/rdma.available on every node, rdma/roce_gdr
+        # allocatable). Without it, UCX_TLS falls back to sm/cuda_ipc (same-node
+        # only) or plain tcp for any cross-node prefill/decode pair -- measured
+        # at 11-31s per KV transfer on this cluster, ~2-3 orders of magnitude
+        # slower than a KV handoff should take, and directly responsible for
+        # the multi-minute TTFT tail seen in the flat_4k1000_2rps_12m run.
+        ucxTls: "rc,sm,cuda_ipc,cuda_copy,tcp"
+        networkResource: "auto"   # auto-detect from cluster nodes
+        networkNr: "1"            # number of network devices
+
+        volumes:
+          - name: shared-config
+            type: emptyDir
+            emptyDir: {}
+          - name: dshm
+            type: emptyDir
+            emptyDir:
+              medium: Memory
+              sizeLimit: 16Gi
+
+        volumeMounts:
+          - name: shared-config
+            mountPath: /shared-config
+          - name: dshm
+            mountPath: /dev/shm
+
+# Alternatively, --set 'annotations.prefill.pod."k8s.v1.cni.cncf.io/networks"'=multi-nic-compute,'annotations.decode..pod."k8s.v1.cni.cncf.io/networks"'=multi-nic-compute
+      # Without this Multus secondary-network attachment, the rdma/roce_gdr
+      # device-plugin resource claim (vllmCommon.networkResource: auto, above)
+      # is granted at the Kubernetes API level, but the pod's network
+      # namespace never actually gets the RDMA-capable NIC attached -- UCX can
+      # still see the host's mlx5_0 (via /sys), but opening it fails with
+      # "Address not valid" (confirmed live: NIXL's own hwInfo reports
+      # numIbDevices=0 in this exact failure). multi-nic-inference is the
+      # OpenShift SR-IOV NetworkAttachmentDefinition already present in this
+      # namespace (and cluster-wide) for exactly this purpose.
+      annotations:
+        prefill:
+          pod:
+            k8s.v1.cni.cncf.io/networks: multi-nic-inference
+        decode:
+          pod:
+            k8s.v1.cni.cncf.io/networks: multi-nic-inference
+
+      timeouts:
+        controlWait: 900000
+        harnessWait: 900000
+
+    # =========================================================================
+    # KUSTOMIZE DEPLOY METHOD   (scope: the ENTIRE stack)
+    # -------------------------------------------------------------------------
+    # When kustomize.enabled is true (or `-t kustomize` is passed) this
+    # scenario is deployed by applying the UPSTREAM llm-d guide directly
+    # (guides/<guideName> in the llm-d repo). In that mode the deployment is
+    # defined ENTIRELY by the guide's own manifests:
+    #
+    #   * EVERYTHING ELSE in this scenario is IGNORED -- model, modelservice,
+    #     standalone, decode/prefill, vllmCommon, storage, harness model, etc.
+    #   * `-m/--models` and all other CLI/scenario tuning are ignored.
+    #   * DoE `experiment` SETUP sweeps do NOT alter a kustomize deploy
+    #     (only run/workload treatments still apply).
+    #
+    # The ONLY way to modify a kustomize deployment is the kustomize.* keys
+    # below:
+    #   patches / overlayPath           -> modelserver (the workload pods)
+    #   extraHelmValues / extraHelmSets -> router / GAIE helm release
+    #   guideVariableOverrides          -> override the guide README's ${VAR}
+    # The benchmark harness owns these keys; see its own kustomize reference.
+    #
+    # NOT SUPPORTED with kustomize: multi-model / multi-stack scenarios
+    # (the deploy is keyed on guideName with no per-stack uniquification --
+    # stacks would collide). Use the modelservice method for multi-model.
+    #
+    # When kustomize.enabled is false (the DEFAULT) this whole block is
+    # inert and the scenario deploys via modelservice/standalone as
+    # configured further below.
+    # =========================================================================
+    kustomize:
+      enabled: false
+      guideName: "pd-disaggregation"
+      repoPath: ""
+      repoRef: "main"
+      gaieVersion: ""
+      acceleratorBackend: "gpu/vllm"
+# Alternative: use --set kustomize.acceleratorBackend=gpu/sglang on the CLI to switch sglang
+      monitoring: false
+      overlayPath: ""
+      extraHelmValues: []
+      extraHelmSets: {}
+      guideVariableOverrides: {}   # override/fill the guide README's ${VAR}
+
+      # Inline kustomize strategic merge patches applied on top of the
+      # guide's modelserver base.  For gated models, add an HF_TOKEN
+      # env var patch (the secret is auto-created from HF_TOKEN env):
+      # Default is empty -- upstream guide already injects HF_TOKEN from
+      # the `llm-d-hf-token` Secret (auto-created by standup) into both
+      # decode and prefill Deployments. Add entries here only for
+      # non-token overrides -- see optimized-baseline.yaml for an example.
+      patches: []
+
+    # =========================================================================
+    # MODELSERVICE -- Only applies when modelservice.enabled: true
+    # The following sections configure the llm-d modelservice Helm chart
+    # deployment including decode pods, prefill pods, router, and gateway.
+    # =========================================================================
+    modelservice:
+      enabled: true
+
+      gateway:
+        className: epponly
+
+      # -------------------------------------------------------------------------
+      # Routing Configuration
+      # -------------------------------------------------------------------------
+      routing:
+        connector: nixlv2
+
+      # -------------------------------------------------------------------------
+      # Routing / GAIE Configuration
+      # Reference: https://github.com/llm-d/llm-d/blob/main/guides/pd-disaggregation/router/pd-disaggregation.values.yaml
+      # The plugins block uses the `llm-d.ai/v1alpha1` apiVersion shipped
+      # by the llm-d-router-{standalone,gateway}-dev charts.
+      # -------------------------------------------------------------------------
+      router:
+        extraServicePorts:
+          - name: http
+            port: 80
+            protocol: TCP
+            targetPort: 8081
+        epp:
+          replicas: 1
+          flags:
+            v: 2
+          pluginsConfigFile: "pd-config.yaml"
+          pluginsCustomConfig:
+            pd-config.yaml: |
+              apiVersion: llm-d.ai/v1alpha1
+              kind: EndpointPickerConfig
+              featureGates:
+              - flowControl
+              plugins:
+              - type: always-disagg-pd-decider
+              - type: disagg-profile-handler
+                parameters:
+                  deciders:
+                    prefill: always-disagg-pd-decider
+              - type: prefill-filter
+              - type: decode-filter
+              - type: prefix-cache-scorer
+              - type: queue-scorer
+              - type: kv-cache-utilization-scorer
+              - type: active-request-scorer
+              - type: metrics-data-source
+                parameters:
+                  scheme: "http"
+                  path: "/metrics"
+                  insecureSkipVerify: true
+              - type: core-metrics-extractor
+              flowControl:
+                # Saturated regime: endpoints exist and are busy.
+                defaultRequestTTL: 30s
+                # Empty-pool regime: every scale-from-zero waits here, and the wait
+                # is a pod start -- measured 60-64 s, so this is ~3x it. The field
+                # does not exist before v0.11.0; that is why the pin moved.
+                noEndpointRequestTTL: 180s
+                priorityBands:
+                  - priority: 0
+                    maxRequests: 2000
+                    maxBytes: 1Gi
+              schedulingProfiles:
+              - name: prefill
+                plugins:
+                - pluginRef: prefill-filter
+                - pluginRef: prefix-cache-scorer
+                  weight: 3
+                - pluginRef: queue-scorer
+                  weight: 2
+                - pluginRef: kv-cache-utilization-scorer
+                  weight: 2
+              - name: decode
+                plugins:
+                - pluginRef: decode-filter
+                # LOAD DECIDES, prefix affinity only breaks ties.
+                #
+                # This was active-request 2 against prefix-cache 3 -- prefix
+                # affinity out-voting load -- from 2026-08-30 until it was
+                # measured. In the phase-1 steady window of one run, ONE decode
+                # replica held 99.3% of the running requests while 80% of them
+                # sat at zero; the ten-pod fleet delivered 11,362 output tok/s
+                # where an evenly loaded nine-pod fleet delivered 36,828. Phase 1
+                # needs 36,000, so that imbalance is the whole difference between
+                # a fleet that keeps up (TTFT 52 ms) and one whose queue grows for
+                # the entire phase (TTFT 74,661 ms).
+                #
+                # Why prefix affinity runs away on this workload: the trace
+                # replays fixed, repeated prompts, so every request scores
+                # highest on whichever pod last served one; that pod's cache gets
+                # warmer and it keeps winning. Cold caches tie and fall through to
+                # load, which is why the fault is intermittent rather than
+                # constant, and why comparing two runs could not find it.
+                #
+                # The weights are NOT a regression -- they are identical in the
+                # balanced runs and the broken ones. They are the hazard that
+                # lets one pod monopolise once its cache is warm. At 1 against
+                # 4 + 2 it cannot.
+                #
+                # Prefill already had two load-aware scorers (queue 2 +
+                # kv-utilisation 2) against prefix 3, and prefill is the role that
+                # never misbehaved. Decode now has the same shape; until
+                # 2026-10-02 it did not, because it had no queue-scorer at all.
+                #
+                # Prefix affinity is kept, not deleted: a multi-turn conversation
+                # really does hit a decode pod's cache. It just must not outrank
+                # load.
+                #
+                # WHY QUEUE OUTRANKS ACTIVE-REQUESTS HERE. active-request-scorer
+                # ranks by vllm:num_requests_running. Preemption moves a request
+                # out of running and back into waiting, so a pod thrashing on KV
+                # reports FEWER running -- it reads as the idlest pod in the fleet
+                # at the exact moment it is in the worst trouble, and the scorer
+                # sends it more. Measured over one run: preemption reached 25.9/s
+                # but on only 1-3 pods of 14, fleet-average KV utilisation never
+                # passed 0.54, and `min(num_requests_running)` was 0 at every
+                # single 2-minute sample -- some pod was always idle. The router
+                # meanwhile held up to 3427 requests with a queue wait p95 of 60s
+                # and scored its own pool saturated at 37.7, because the handful
+                # of pods it was routing to really were jammed.
+                #
+                # num_requests_waiting does not invert that way: a preempted
+                # request lands IN it. It is the only signal that stayed honest
+                # under this load, so it gets the dominant weight and
+                # active-request drops to parity with kv-utilisation.
+                - pluginRef: queue-scorer
+                  weight: 4
+                - pluginRef: active-request-scorer
+                  weight: 2
+                - pluginRef: kv-cache-utilization-scorer
+                  weight: 2
+                - pluginRef: prefix-cache-scorer
+                  weight: 1
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              memory: 16Gi
+        proxy:
+          # CLI args for the Envoy sidecar. Override the chart's defaults of
+          # `--log-level trace` (very expensive under load) and no `--concurrency`
+          # (Envoy spawns ~hardware_concurrency() worker threads, oversubscribing
+          # the cgroup's CPU slice). `--concurrency 8` matches the resources.limits
+          # equivalent below; trace-level logging would burn a meaningful share of
+          # the sidecar's CPU at high QPS.
+          args:
+            - "--service-node"
+            - "envoy-sidecar"
+            - "--log-level"
+            - "warn"
+            - "--concurrency"
+            - "8"
+            - "--drain-strategy"
+            - "immediate"
+            - "--drain-time-s"
+            - "60"
+            - "-c"
+            - "/etc/envoy/envoy.yaml"
+          # Resource requests and limits for the Envoy sidecar.
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              memory: 16Gi
+        inferencePool:
+          failureMode: "FailOpen"
+          providerConfig:
+            destinationRule:
+              trafficPolicy:
+                connectionPool:
+                  http:
+                    http1MaxPendingRequests: 256000
+                    maxRequestsPerConnection: 256000
+                    http2MaxRequests: 256000
+                    idleTimeout: "900s"
+                  tcp:
+                    maxConnections: 256000
+                    maxConnectionDuration: "1800s"
+                    connectTimeout: "900s"
+        modelServers:
+          protocol: http
+          matchLabels:
+            llm-d.ai/guide: "pd-disaggregation"
+        tracing:
+          otelExporterEndpoint: "http://localhost:4317"
+          sampling:
+            sampler: "parentbased_traceidratio"
+            samplerArg: "0.1"
+
+      # -------------------------------------------------------------------------
+      # HTTPRoute Configuration
+      # requestTimeout: end-to-end Gateway-API HTTPRoute timeout the istio
+      # gateway enforces per request. Long agentic turns that exceed it are
+      # aborted by the gateway with a 502 (surfaces as "connection reset by
+      # peer" on the decode routing-proxy loopback hop). Set "0s" to disable.
+      # -------------------------------------------------------------------------
+      httpRoute:
+        requestTimeout: "300s"
+        backendRequestTimeout: "0s"
+
+      # -------------------------------------------------------------------------
+      # Prefill Configuration
+      # -------------------------------------------------------------------------
+      prefill:
+        enabled: true
+        replicas: 1
+  #      replicas: 8
+        vllm:
+          # --max-num-batched-tokens is hardcoded here (not left as
+          # $VLLM_MAX_NUM_BATCHED_TOKENS) because that env var's own default,
+          # set by llm-d-benchmark's _macros.j2, is 256 -- a co-located-engine
+          # default that caps this whole replica's aggregate per-step prefill
+          # progress at 256 tokens regardless of demand or idle KV capacity.
+          # On a disaggregated prefill-only replica there is no concurrent
+          # decode work to protect from a big prefill chunk stealing step
+          # time (the usual reason to keep this small), so the real ceiling
+          # is GPU activation-memory headroom, not decode-latency fairness.
+          # 65536 is a first real step up, not a measured ceiling -- llm-d's
+          # own TPU reference deployment
+          # (llm-d/guides/pd-disaggregation/modelserver/tpu/v7/vllm/patch-prefill.yaml)
+          # uses 8192 for a much larger accelerator-bound workload; Qwen3-0.6B
+          # here is tiny and k1 (KV capacity) is ~521K tokens, so there's
+          # plenty of headroom to push further once this is validated.
+          customCommand: |
+            ${accelerator.runtimePreamble}
+            . /shared-config/llmdbench_env.sh
+            vllm serve /model-cache/$MODEL_PATH \
+            --host 0.0.0.0 \
+            --served-model-name $MODEL_NAME \
+            --port $VLLM_INFERENCE_PORT \
+            ${accelerator.blockSizeArgs} \
+            --max-model-len $VLLM_MAX_MODEL_LEN \
+            --max-num-seq $VLLM_MAX_NUM_SEQ \
+            --max-num-batched-tokens 65536 \
+            --tensor-parallel-size $TP_SIZE \
+            ${accelerator.memoryUtilizationArgs} \
+            --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_both"${accelerator.kvBufferDeviceJson}}' \
+            --disable-uvicorn-access-log \
+            --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+            --no-enable-prefix-caching \
+            ${accelerator.dtypeArgs} \
+            ${accelerator.executionArgs} \
+            --no-disable-hybrid-kv-cache-manager
+
+        initContainers:
+          - name: preprocess
+            imageKey: benchmark
+            imagePullPolicy: Always
+            # The generator (from the benchmark image, so not patchable in the clone)
+            # starts the script it writes with two apt-get installs: iproute2 for the
+            # `ip route/rule` lines it emits on a multi-NIC RDMA node, infiniband-diags
+            # for nothing the serving container ever runs. On a single-NIC node the
+            # script has no ip commands and both installs are dead weight: 71 s of a
+            # 186 s order-to-Ready measured on a decode pod that already had the image,
+            # and the only part that varied run to run (mirror speed). The autoscaler
+            # sizes its first ramp by the queue one replica builds while the second
+            # starts, so those 71 s were six over-ordered replicas. The install of
+            # iproute2 stays whenever the script needs it.
+            command:
+              - /bin/sh
+              - -c
+              - |
+                set_llmdbench_environment.py -e /shared-config/llmdbench_env.sh -i || exit $?
+                f=/shared-config/llmdbench_env.sh
+                sed -i '/^which ibstat$/,/^fi$/d' "$f"
+                if ! grep -qE '^ip (route|rule) ' "$f"; then
+                  sed -i '/^which ip$/,/^fi$/d' "$f"
+                fi
+                grep -c apt-get "$f" | sed 's/^/preprocess: apt-get lines left in llmdbench_env.sh: /'
+                # The engine sources this script before it starts, so the guard below runs
+                # where the cache mount is. A cache dir that is not writable (a CSI
+                # publish that came back read-only after a retry, seen once on a Kubernetes cluster)
+                # must cost a compile, not the replica: vLLM fails hard on os.makedirs.
+                echo >> "$f"  # the generator leaves no trailing newline
+                cat >> "$f" <<'EOF'
+                for v in VLLM_CACHE_ROOT FLASHINFER_WORKSPACE_DIR TRITON_CACHE_DIR; do
+                  # neither a doubled dollar nor a dollar-paren in here: Kubernetes rewrites both in a container command
+                  eval "d=\${$v}"
+                  [ -n "$d" ] || continue
+                  if ! mkdir -p "$d" 2>/dev/null || ! touch "$d/.writable" 2>/dev/null; then
+                    echo "engine cache $v=$d is not writable; using the engine default instead"
+                    unset $v
+                  fi
+                done
+                EOF
+            volumeMounts:
+              - name: shared-config
+                mountPath: /shared-config
+
+        parallelism:
+          tensor: 1
+          data: 1
+          dataLocal: 1
+          workers: 1
+
+        # Resource configuration
+        resources:
+          limits:
+            memory: 16Gi
+            cpu: "8"
+          requests:
+            memory: 16Gi
+            cpu: "8"
+
+        # -----------------------------------------------------------------------
+        # Extra Environment Variables
+        # -----------------------------------------------------------------------
+        extraEnvVars:
+          - name: NCCL_EXCLUDE_IB_HCA
+            value: "mlx5_0,mlx5_2,mlx5_4,mlx5_8,mlxl5_7,mlx5_10,mlx5_12,mlx5_14,mlx5_16"
+          - name: NVSHMEM_DEBUG
+            value: "none"
+          - name: NCCL_DEBUG
+            value: "WARN"
+          - name: NIXL_LOG_LEVEL
+            value: debug
+          - name: UCX_MAX_RMA_RAILS
+            value: "1"
+          # vLLM writes its torch.compile artefacts, the FlashInfer autotune
+          # table and Triton's JIT cache under /tmp inside the container, so
+          # every replica recompiles from nothing: 14 s of torch.compile on a
+          # 0.6B model, measured, more on a large one. /engine-cache is a subPath
+          # of the harness's workload PVC (RWX, read-write; the model claim is
+          # mounted read-only and a CSI driver publishes a claim once per pod, so
+          # a second mount of it inherits read-only) -- see additionalVolumes --
+          # so a replica after the first finds the caches warm. vLLM keys them by
+          # a hash of the engine config: a change of model, flags or version
+          # is a miss, never a stale hit. BENCHMARK_ENGINE_CACHE_HOSTPATH=<dir>
+          # at standup moves the volume to the node's disk (the claim
+          # deploy/enginecache.sh makes, no subPath): a shared claim published
+          # read-only on a node cost every start there 25 s, measured.
+          - name: VLLM_CACHE_ROOT
+            value: /engine-cache/vllm
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: /engine-cache/flashinfer
+          - name: TRITON_CACHE_DIR
+            value: /engine-cache/triton
+
+        # -----------------------------------------------------------------------
+        # Extra Container Configuration
+        # -----------------------------------------------------------------------
+        extraContainerConfig:
+          # Named ports: the PodMonitor llm-d-benchmark renders for this guide
+          # (config/templates/jinja/18_podmonitor.yaml.j2) scrapes by NAME
+          # ("metrics", by default), not by number -- with no named port here
+          # the scrape target never resolves and Prometheus carries zero
+          # vllm:* series for this pod, silently (the scaling manager then sees "no
+          # saturation metrics" regardless of real load). Unlike decode,
+          # prefill's customCommand passes a single `--port
+          # $VLLM_INFERENCE_PORT` with no separate metrics port, so 8000 (not
+          # 8200) is where /metrics actually answers here -- verified against
+          # a live pod, not assumed by analogy to decode.
+          ports:
+            - containerPort: 5557  # NIXL side channel port
+              protocol: TCP
+            - containerPort: 8000  # Metrics port (prefill has no separate one)
+              name: metrics
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add:
+                - "IPC_LOCK"
+                - "SYS_RAWIO"
+                - "NET_ADMIN"
+                - "NET_RAW"
+            runAsGroup: 0
+            runAsUser: 0
+          # IfNotPresent, not Always: the engine tag is pinned, and Always contacts the
+          # registry at every pod start -- a second when it answers, a failed start
+          # when it does not -- for a digest that cannot have changed. Pre-pull the
+          # image on the accelerator nodes with `make prepull` and the start never
+          # waits on the registry at all.
+          imagePullPolicy: IfNotPresent
+
+        # -----------------------------------------------------------------------
+        # Probes
+        #
+        # Same paths as the harness defaults; only the startup probe's timing
+        # differs. The default fires every 30 s, so an engine is marked Ready
+        # up to 30 s after it is -- 29 s on a measured decode pod -- and on the
+        # autoscaler's first ramp that is 29 s more queue charged to the fleet.
+        # 1/5/360 keeps the 30-minute budget and finds the engine within 5 s
+        # (1, not 0: the API drops a zero and the harness's validator then
+        # reads None where it expects the scenario's value).
+        # (patch_harness.sh fix 10 sets the same default for scenarios that do
+        # not spell this out.)
+        # -----------------------------------------------------------------------
+        probes:
+          startup:
+            path: /health
+            failureThreshold: 360
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 5
+          liveness:
+            failureThreshold: 3
+            periodSeconds: 5
+          readiness:
+            path: /health
+            failureThreshold: 3
+            periodSeconds: 5
+
+        # -----------------------------------------------------------------------
+        # Additional Volume Mounts
+        # -----------------------------------------------------------------------
+        additionalVolumeMounts:
+          # Read-write home for the engine caches (VLLM_CACHE_ROOT and friends
+          # above): the harness's workload PVC, which its results pod already
+          # mounts read-write. The model claim is mounted read-only.
+          - name: engine-cache
+            mountPath: /engine-cache
+            subPath: engine-cache
+
+        # -----------------------------------------------------------------------
+        # Additional Volumes
+        # -----------------------------------------------------------------------
+        additionalVolumes:
+          - name: engine-cache
+            type: persistentVolumeClaim
+            persistentVolumeClaim:
+              claimName: workload-pvc
+
+      # -------------------------------------------------------------------------
+      # Decode Configuration
+      # -------------------------------------------------------------------------
+      decode:
+        replicas: 2
+        vllm:
+          # Hardcoded for the same reason as prefill's --max-num-batched-tokens
+          # above: $VLLM_MAX_NUM_BATCHED_TOKENS defaults to 256
+          # (llm-d-benchmark's _macros.j2), well below llm-d's own reference
+          # deployment (8192, see prefill's comment). As a side effect, this
+          # also makes the scaling manager's own k2-derivation formula
+          # (estimateCapacityAtCapSpread) correct for decode for the first
+          # time in this scenario: The scaling manager's deployment parser can't read
+          # $VLLM_MAX_NUM_BATCHED_TOKENS at all (no shell-variable expansion),
+          # so it was already silently assuming EffectiveMaxBatchedTokens=8192
+          # for a V1+chunked-prefill engine -- previously wrong (real value
+          # was 256), now actually true.
+          customCommand: |
+            ${accelerator.runtimePreamble}
+            . /shared-config/llmdbench_env.sh
+            vllm serve /model-cache/$MODEL_PATH \
+            --host 0.0.0.0 \
+            --served-model-name $MODEL_NAME \
+            --port $VLLM_METRICS_PORT \
+            ${accelerator.blockSizeArgs} \
+            --max-model-len $VLLM_MAX_MODEL_LEN \
+            --max-num-seq $VLLM_MAX_NUM_SEQ \
+            --max-num-batched-tokens 8192 \
+            --tensor-parallel-size $TP_SIZE \
+            ${accelerator.memoryUtilizationArgs} \
+            --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_both"${accelerator.kvBufferDeviceJson}}' \
+            --disable-uvicorn-access-log \
+            --disable-access-log-for-endpoints=/health,/metrics,/v1/models \
+            --no-enable-prefix-caching \
+            ${accelerator.dtypeArgs} \
+            ${accelerator.executionArgs} \
+            --no-disable-hybrid-kv-cache-manager
+
+        initContainers:
+          - name: preprocess
+            imageKey: benchmark
+            imagePullPolicy: Always
+            # The generator (from the benchmark image, so not patchable in the clone)
+            # starts the script it writes with two apt-get installs: iproute2 for the
+            # `ip route/rule` lines it emits on a multi-NIC RDMA node, infiniband-diags
+            # for nothing the serving container ever runs. On a single-NIC node the
+            # script has no ip commands and both installs are dead weight: 71 s of a
+            # 186 s order-to-Ready measured on a decode pod that already had the image,
+            # and the only part that varied run to run (mirror speed). The autoscaler
+            # sizes its first ramp by the queue one replica builds while the second
+            # starts, so those 71 s were six over-ordered replicas. The install of
+            # iproute2 stays whenever the script needs it.
+            command:
+              - /bin/sh
+              - -c
+              - |
+                set_llmdbench_environment.py -e /shared-config/llmdbench_env.sh -i || exit $?
+                f=/shared-config/llmdbench_env.sh
+                sed -i '/^which ibstat$/,/^fi$/d' "$f"
+                if ! grep -qE '^ip (route|rule) ' "$f"; then
+                  sed -i '/^which ip$/,/^fi$/d' "$f"
+                fi
+                grep -c apt-get "$f" | sed 's/^/preprocess: apt-get lines left in llmdbench_env.sh: /'
+                # The engine sources this script before it starts, so the guard below runs
+                # where the cache mount is. A cache dir that is not writable (a CSI
+                # publish that came back read-only after a retry, seen once on a Kubernetes cluster)
+                # must cost a compile, not the replica: vLLM fails hard on os.makedirs.
+                echo >> "$f"  # the generator leaves no trailing newline
+                cat >> "$f" <<'EOF'
+                for v in VLLM_CACHE_ROOT FLASHINFER_WORKSPACE_DIR TRITON_CACHE_DIR; do
+                  # neither a doubled dollar nor a dollar-paren in here: Kubernetes rewrites both in a container command
+                  eval "d=\${$v}"
+                  [ -n "$d" ] || continue
+                  if ! mkdir -p "$d" 2>/dev/null || ! touch "$d/.writable" 2>/dev/null; then
+                    echo "engine cache $v=$d is not writable; using the engine default instead"
+                    unset $v
+                  fi
+                done
+                EOF
+            volumeMounts:
+              - name: shared-config
+                mountPath: /shared-config
+
+        parallelism:
+          # TP=1, not 2: this ratio was inherited from the upstream llm-d guide's
+          # reference workload (gpt-oss-120b, decode TP=4 there), where TP is
+          # doing real memory sharding for a ~120B-parameter model. Qwen3-0.6B
+          # needs ~1.4GB of weights -- nothing on an H100 needs sharding -- so
+          # TP=2 bought no compute or memory benefit, only a cross-GPU
+          # all-reduce on every decode step and, more importantly, a replica
+          # that costs 2 GPUs instead of 1. That directly compounded the GPU
+          # scarcity this cluster hit under real load (8000-token RPS=10:
+          # 14 nodes reporting "Insufficient nvidia.com/gpu"): TP=1 lets the scaling manager
+          # get 2x the decode replicas from the same GPU budget, and scale in
+          # 1-GPU increments instead of 2.
+          tensor: 1
+          data: 1
+          dataLocal: 1
+          workers: 1
+
+        # Resource configuration
+        resources:
+          limits:
+            memory: 128Gi
+            cpu: "32"
+          requests:
+            memory: 128Gi
+            cpu: "32"
+
+        # -----------------------------------------------------------------------
+        # Extra Environment Variables
+        # -----------------------------------------------------------------------
+        extraEnvVars:
+          - name: NCCL_EXCLUDE_IB_HCA
+            value: "mlx5_0,mlx5_2,mlx5_4,mlx5_8,mlxl5_7,mlx5_10,mlx5_12,mlx5_14,mlx5_16"
+          - name: NVSHMEM_DEBUG
+            value: "none"
+          - name: NCCL_DEBUG
+            value: "WARN"
+          - name: NIXL_LOG_LEVEL
+            value: debug
+          - name: UCX_MAX_RMA_RAILS
+            value: "1"
+          # vLLM writes its torch.compile artefacts, the FlashInfer autotune
+          # table and Triton's JIT cache under /tmp inside the container, so
+          # every replica recompiles from nothing: 14 s of torch.compile on a
+          # 0.6B model, measured, more on a large one. /engine-cache is a subPath
+          # of the harness's workload PVC (RWX, read-write; the model claim is
+          # mounted read-only and a CSI driver publishes a claim once per pod, so
+          # a second mount of it inherits read-only) -- see additionalVolumes --
+          # so a replica after the first finds the caches warm. vLLM keys them by
+          # a hash of the engine config: a change of model, flags or version
+          # is a miss, never a stale hit. BENCHMARK_ENGINE_CACHE_HOSTPATH=<dir>
+          # at standup moves the volume to the node's disk (the claim
+          # deploy/enginecache.sh makes, no subPath): a shared claim published
+          # read-only on a node cost every start there 25 s, measured.
+          - name: VLLM_CACHE_ROOT
+            value: /engine-cache/vllm
+          - name: FLASHINFER_WORKSPACE_DIR
+            value: /engine-cache/flashinfer
+          - name: TRITON_CACHE_DIR
+            value: /engine-cache/triton
+
+        # -----------------------------------------------------------------------
+        # Extra Container Configuration
+        # -----------------------------------------------------------------------
+        extraContainerConfig:
+          # Named ports: same fix as prefill's, same reason -- the PodMonitor
+          # scrapes by name, not number. Decode's vllm process listens
+          # directly on 8200 (VLLM_METRICS_PORT); 8000 also answers via the
+          # routing-proxy sidecar, but 8200 is vLLM's own port and matches
+          # the convention every other customCommand guide in this repo
+          # already uses (see e.g. flow-control.yaml) -- verified live on
+          # both ports, picked 8200 for consistency.
+          ports:
+            - containerPort: 5557  # NIXL side channel port
+              protocol: TCP
+            - containerPort: 8200  # Metrics port
+              name: metrics
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add:
+                - "IPC_LOCK"
+                - "SYS_RAWIO"
+                - "NET_ADMIN"
+                - "NET_RAW"
+            runAsGroup: 0
+            runAsUser: 0
+          # IfNotPresent, not Always: the engine tag is pinned, and Always contacts the
+          # registry at every pod start -- a second when it answers, a failed start
+          # when it does not -- for a digest that cannot have changed. Pre-pull the
+          # image on the accelerator nodes with `make prepull` and the start never
+          # waits on the registry at all.
+          imagePullPolicy: IfNotPresent
+
+        # -----------------------------------------------------------------------
+        # Probes
+        #
+        # Same paths as the harness defaults; only the startup probe's timing
+        # differs. The default fires every 30 s, so an engine is marked Ready
+        # up to 30 s after it is -- 29 s on a measured decode pod -- and on the
+        # autoscaler's first ramp that is 29 s more queue charged to the fleet.
+        # 1/5/360 keeps the 30-minute budget and finds the engine within 5 s
+        # (1, not 0: the API drops a zero and the harness's validator then
+        # reads None where it expects the scenario's value).
+        # (patch_harness.sh fix 10 sets the same default for scenarios that do
+        # not spell this out.)
+        # -----------------------------------------------------------------------
+        probes:
+          startup:
+            path: /health
+            failureThreshold: 360
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 5
+          liveness:
+            failureThreshold: 3
+            periodSeconds: 5
+          readiness:
+            path: /health
+            failureThreshold: 3
+            periodSeconds: 5
+
+        # -----------------------------------------------------------------------
+        # Additional Volume Mounts
+        # -----------------------------------------------------------------------
+        additionalVolumeMounts:
+          # Read-write home for the engine caches (VLLM_CACHE_ROOT and friends
+          # above): the harness's workload PVC, which its results pod already
+          # mounts read-write. The model claim is mounted read-only.
+          - name: engine-cache
+            mountPath: /engine-cache
+            subPath: engine-cache
+
+        # -----------------------------------------------------------------------
+        # Additional Volumes
+        # -----------------------------------------------------------------------
+        additionalVolumes:
+          - name: engine-cache
+            type: persistentVolumeClaim
+            persistentVolumeClaim:
+              claimName: workload-pvc
+
+    harness:
+      name: vllm-benchmark
+      experimentProfile: random_concurrent.yaml
+
+    workDir: "~/data/pd-disaggregation"

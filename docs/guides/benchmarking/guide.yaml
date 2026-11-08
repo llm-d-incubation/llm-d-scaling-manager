@@ -1,0 +1,25 @@
+name: benchmarking
+
+prerequisites:
+  target:
+    note: The namespace to benchmark in, and the controller image to measure.
+    run: |
+      export BENCHMARK_NAMESPACE=<namespace>
+      export IMG=<your build>
+  cli:
+    note: Install the llm-d-benchmark CLI.
+    run: make benchmark-install
+
+deploy:
+  standup:
+    run: make benchmark-standup BENCHMARK_NAMESPACE=${BENCHMARK_NAMESPACE} IMG=${IMG}
+
+verify:
+  run:
+    run: make benchmark-run BENCHMARK_NAMESPACE=${BENCHMARK_NAMESPACE}
+  report:
+    run: make benchmark-report
+
+cleanup:
+  teardown:
+    run: make benchmark-teardown BENCHMARK_NAMESPACE=${BENCHMARK_NAMESPACE}

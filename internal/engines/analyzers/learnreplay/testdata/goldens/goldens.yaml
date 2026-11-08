@@ -1,0 +1,465 @@
+# The learner goldens: each fixture is an exported recording and the output
+# files its replay produces (docs/developer-guide/testing.md, Learner Goldens).
+# Written by make learner-golden-add and make learner-goldens; never by hand.
+# The golden check (make test) fails when a golden no longer reproduces, or
+# when this list and the directory disagree.
+goldens:
+- name: acceptance
+  outputs:
+  - acceptance/learned-state.csv
+  - acceptance/lines.csv
+  - acceptance/results.csv
+  - acceptance/slo-published.csv
+  - acceptance/store-records.csv
+  - acceptance/variant-capacities.csv
+  recording: acceptance/recording.jsonl.gz
+  source: 'The in-process acceptance run: three models, a controller restart that
+    restores a snapshot, an ITL line published and borrowed, a forget, sweeps that
+    evict, P/D decode, slo judging with a router, throughput. It exercises little
+    learning: twelve cycles of fixed synthetic rows, so the start-time average, the
+    borrow tolerance and the measured k2 and mu paths barely move, and a change to
+    them can leave these goldens as they are.'
+- name: e1
+  notRun:
+  - slo
+  outputs:
+  - e1/learned-state.csv
+  - e1/lines.csv
+  - e1/results.csv
+  - e1/slo-published.csv
+  - e1/store-records.csv
+  - e1/variant-capacities.csv
+  recording: e1/recording.jsonl.gz
+  source: E1 benchmark scenario, recorder on, default analyzerTuning
+- name: e1-tuned
+  notRun:
+  - slo
+  outputs:
+  - e1-tuned/learned-state.csv
+  - e1-tuned/lines.csv
+  - e1-tuned/results.csv
+  - e1-tuned/slo-published.csv
+  - e1-tuned/store-records.csv
+  - e1-tuned/variant-capacities.csv
+  recording: e1-tuned/recording.jsonl.gz
+  source: E1 benchmark scenario, recorder on, analyzerTuning steadyFor 3 minutes,
+    idle rows 3, idle after ready 3 minutes
+- name: engine
+  outputs:
+  - engine/learned-state.csv
+  - engine/lines.csv
+  - engine/results.csv
+  - engine/slo-published.csv
+  - engine/store-records.csv
+  - engine/variant-capacities.csv
+  - engine/composite-holds.csv
+  - engine/composite-release.csv
+  - engine/composite-results.csv
+  - engine/composite-roles.csv
+  - engine/composite-variants.csv
+  - engine/warm-pool-pressure.csv
+  - engine/warm-pool-supply.csv
+  recording: engine/recording.jsonl.gz
+  source: 'The in-process engine run: the acceptance scenario with each composite
+    recorded, discovery metadata, a bridge lent from the warm pool, an external analyzer
+    that fails every third call, a scale target two replicas below its rows, and the
+    P/D model under a policy that lists slo alone, so the composite holds both its
+    roles. Twelve cycles of synthetic rows. It covers the composite and the warm pool
+    figures, not the optimizer.'
+- name: mu-paths
+  outputs:
+  - mu-paths/learned-state.csv
+  - mu-paths/lines.csv
+  - mu-paths/results.csv
+  - mu-paths/slo-published.csv
+  - mu-paths/store-records.csv
+  - mu-paths/variant-capacities.csv
+  recording: mu-paths/recording.jsonl.gz
+  source: 'The in-process mu paths run: one decode model of four variants whose replicas
+    saturate, so k2 and mu record readings and each of the three mu yields runs, and
+    one replica restarts under its own name. Twelve minutes of synthetic rows, recorder
+    on, default analyzerTuning.'
+- name: ols-sweep
+  notRun:
+  - slo
+  outputs:
+  - ols-sweep/learned-state.csv
+  - ols-sweep/lines.csv
+  - ols-sweep/results.csv
+  - ols-sweep/slo-published.csv
+  - ols-sweep/store-records.csv
+  - ols-sweep/variant-capacities.csv
+  - ols-sweep/composite-holds.csv
+  - ols-sweep/composite-release.csv
+  - ols-sweep/composite-results.csv
+  - ols-sweep/composite-roles.csv
+  - ols-sweep/composite-variants.csv
+  - ols-sweep/warm-pool-pressure.csv
+  - ols-sweep/warm-pool-supply.csv
+  recording: ols-sweep/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, decode KV of 1024 blocks and 64
+    sequences on one decode replica, load sweeps of concurrency and shape, default
+    analyzerTuning
+- name: ols-sweep-slo
+  outputs:
+  - ols-sweep-slo/learned-state.csv
+  - ols-sweep-slo/lines.csv
+  - ols-sweep-slo/results.csv
+  - ols-sweep-slo/slo-published.csv
+  - ols-sweep-slo/store-records.csv
+  - ols-sweep-slo/variant-capacities.csv
+  - ols-sweep-slo/composite-holds.csv
+  - ols-sweep-slo/composite-release.csv
+  - ols-sweep-slo/composite-results.csv
+  - ols-sweep-slo/composite-roles.csv
+  - ols-sweep-slo/composite-variants.csv
+  - ols-sweep-slo/warm-pool-pressure.csv
+  - ols-sweep-slo/warm-pool-supply.csv
+  recording: ols-sweep-slo/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, decode KV of 1024 blocks and 64
+    sequences on one decode replica, stream load sweeps of concurrency and shape,
+    policy tier with saturation and slo targets on tpot and ttft, default analyzerTuning;
+    up to a controller restart
+- name: ols-sweep-slo-restart
+  outputs:
+  - ols-sweep-slo-restart/learned-state.csv
+  - ols-sweep-slo-restart/lines.csv
+  - ols-sweep-slo-restart/results.csv
+  - ols-sweep-slo-restart/slo-published.csv
+  - ols-sweep-slo-restart/store-records.csv
+  - ols-sweep-slo-restart/variant-capacities.csv
+  - ols-sweep-slo-restart/composite-holds.csv
+  - ols-sweep-slo-restart/composite-release.csv
+  - ols-sweep-slo-restart/composite-results.csv
+  - ols-sweep-slo-restart/composite-roles.csv
+  - ols-sweep-slo-restart/composite-variants.csv
+  - ols-sweep-slo-restart/warm-pool-pressure.csv
+  - ols-sweep-slo-restart/warm-pool-supply.csv
+  recording: ols-sweep-slo-restart/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, decode KV of 1024 blocks and 64
+    sequences on one decode replica, stream load sweeps of concurrency and shape,
+    policy tier with saturation and slo targets on tpot and ttft, default analyzerTuning;
+    after a controller restart under load, snapshot off
+- name: pd-restart
+  notRun:
+  - slo
+  outputs:
+  - pd-restart/learned-state.csv
+  - pd-restart/lines.csv
+  - pd-restart/results.csv
+  - pd-restart/slo-published.csv
+  - pd-restart/store-records.csv
+  - pd-restart/variant-capacities.csv
+  - pd-restart/composite-holds.csv
+  - pd-restart/composite-release.csv
+  - pd-restart/composite-results.csv
+  - pd-restart/composite-roles.csv
+  - pd-restart/composite-variants.csv
+  - pd-restart/warm-pool-pressure.csv
+  - pd-restart/warm-pool-supply.csv
+  recording: pd-restart/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, saturated load, one decode engine
+    restarted in its own pod, recorder on
+- name: start-restored
+  notRun:
+  - slo
+  outputs:
+  - start-restored/learned-state.csv
+  - start-restored/lines.csv
+  - start-restored/results.csv
+  - start-restored/slo-published.csv
+  - start-restored/store-records.csv
+  - start-restored/variant-capacities.csv
+  - start-restored/composite-holds.csv
+  - start-restored/composite-release.csv
+  - start-restored/composite-results.csv
+  - start-restored/composite-roles.csv
+  - start-restored/composite-variants.csv
+  - start-restored/warm-pool-pressure.csv
+  - start-restored/warm-pool-supply.csv
+  recording: start-restored/recording.jsonl.gz
+  source: One model, two variants on a kind cluster with the simulator, recorder on,
+    snapshot on, default analyzerTuning; after a controller restart under load, snapshot
+    restored, then light load
+- name: start-seed
+  notRun:
+  - slo
+  outputs:
+  - start-seed/learned-state.csv
+  - start-seed/lines.csv
+  - start-seed/results.csv
+  - start-seed/slo-published.csv
+  - start-seed/store-records.csv
+  - start-seed/variant-capacities.csv
+  - start-seed/composite-holds.csv
+  - start-seed/composite-release.csv
+  - start-seed/composite-results.csv
+  - start-seed/composite-roles.csv
+  - start-seed/composite-variants.csv
+  - start-seed/warm-pool-pressure.csv
+  - start-seed/warm-pool-supply.csv
+  recording: start-seed/recording.jsonl.gz
+  source: One model, two variants on a kind cluster with the simulator, recorder on,
+    snapshot on, default analyzerTuning, load to 5 replicas each, one variant seeded
+    and slow to start; up to a controller restart under load
+- name: start-seed-restart
+  notRun:
+  - slo
+  outputs:
+  - start-seed-restart/learned-state.csv
+  - start-seed-restart/lines.csv
+  - start-seed-restart/results.csv
+  - start-seed-restart/slo-published.csv
+  - start-seed-restart/store-records.csv
+  - start-seed-restart/variant-capacities.csv
+  - start-seed-restart/composite-holds.csv
+  - start-seed-restart/composite-release.csv
+  - start-seed-restart/composite-results.csv
+  - start-seed-restart/composite-roles.csv
+  - start-seed-restart/composite-variants.csv
+  - start-seed-restart/warm-pool-pressure.csv
+  - start-seed-restart/warm-pool-supply.csv
+  recording: start-seed-restart/recording.jsonl.gz
+  source: One model, two variants on a kind cluster with the simulator, recorder on,
+    snapshot on, default analyzerTuning, load to 5 replicas each, one variant seeded
+    and slow to start; after a controller restart under load, snapshot restored, then
+    light load
+- name: start-seed-restart-2
+  notRun:
+  - slo
+  outputs:
+  - start-seed-restart-2/learned-state.csv
+  - start-seed-restart-2/lines.csv
+  - start-seed-restart-2/results.csv
+  - start-seed-restart-2/slo-published.csv
+  - start-seed-restart-2/store-records.csv
+  - start-seed-restart-2/variant-capacities.csv
+  - start-seed-restart-2/composite-holds.csv
+  - start-seed-restart-2/composite-release.csv
+  - start-seed-restart-2/composite-results.csv
+  - start-seed-restart-2/composite-roles.csv
+  - start-seed-restart-2/composite-variants.csv
+  - start-seed-restart-2/warm-pool-pressure.csv
+  - start-seed-restart-2/warm-pool-supply.csv
+  recording: start-seed-restart-2/recording.jsonl.gz
+  source: One model, two variants on a kind cluster with the simulator, recorder on,
+    snapshot on, default analyzerTuning, load to 5 replicas each, one variant seeded
+    and slow to start; after a second controller restart under light load, snapshot
+    restored, then one more scale up
+- name: throughput-sweep
+  notRun:
+  - slo
+  outputs:
+  - throughput-sweep/learned-state.csv
+  - throughput-sweep/lines.csv
+  - throughput-sweep/results.csv
+  - throughput-sweep/slo-published.csv
+  - throughput-sweep/store-records.csv
+  - throughput-sweep/variant-capacities.csv
+  - throughput-sweep/composite-holds.csv
+  - throughput-sweep/composite-release.csv
+  - throughput-sweep/composite-results.csv
+  - throughput-sweep/composite-roles.csv
+  - throughput-sweep/composite-variants.csv
+  - throughput-sweep/warm-pool-pressure.csv
+  - throughput-sweep/warm-pool-supply.csv
+  recording: throughput-sweep/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, decode KV of 1024 blocks and 64
+    sequences on one decode replica, one prefill replica, load sweeps of concurrency
+    and shape, then 80 in flight at the sequence cap and 35 minutes of 2 in flight,
+    saturation and throughput listed, analyzerTuning KV band 0.12 to 0.70; up to a
+    controller restart
+- name: throughput-sweep-restart
+  notRun:
+  - slo
+  outputs:
+  - throughput-sweep-restart/learned-state.csv
+  - throughput-sweep-restart/lines.csv
+  - throughput-sweep-restart/results.csv
+  - throughput-sweep-restart/slo-published.csv
+  - throughput-sweep-restart/store-records.csv
+  - throughput-sweep-restart/variant-capacities.csv
+  - throughput-sweep-restart/composite-holds.csv
+  - throughput-sweep-restart/composite-release.csv
+  - throughput-sweep-restart/composite-results.csv
+  - throughput-sweep-restart/composite-roles.csv
+  - throughput-sweep-restart/composite-variants.csv
+  - throughput-sweep-restart/warm-pool-pressure.csv
+  - throughput-sweep-restart/warm-pool-supply.csv
+  recording: throughput-sweep-restart/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, decode KV of 1024 blocks and 64
+    sequences on one decode replica, one prefill replica, load sweeps of concurrency
+    and shape, then 80 in flight at the sequence cap and 35 minutes of 2 in flight,
+    saturation and throughput listed, analyzerTuning KV band 0.12 to 0.70; after a
+    controller restart under load, snapshot off
+- name: ttft-open-loop-long
+  notRun:
+  - slo
+  outputs:
+  - ttft-open-loop-long/learned-state.csv
+  - ttft-open-loop-long/lines.csv
+  - ttft-open-loop-long/results.csv
+  - ttft-open-loop-long/slo-published.csv
+  - ttft-open-loop-long/store-records.csv
+  - ttft-open-loop-long/variant-capacities.csv
+  - ttft-open-loop-long/composite-holds.csv
+  - ttft-open-loop-long/composite-release.csv
+  - ttft-open-loop-long/composite-results.csv
+  - ttft-open-loop-long/composite-roles.csv
+  - ttft-open-loop-long/composite-variants.csv
+  - ttft-open-loop-long/warm-pool-pressure.csv
+  - ttft-open-loop-long/warm-pool-supply.csv
+  recording: ttft-open-loop-long/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, one prefill and one decode replica
+    fixed, open loop arrivals at prefill occupancy under 0.1, 8000 to 37000 tokens
+    in and 16 out, recorder on, default analyzerTuning
+- name: ttft-open-loop-short
+  notRun:
+  - slo
+  outputs:
+  - ttft-open-loop-short/learned-state.csv
+  - ttft-open-loop-short/lines.csv
+  - ttft-open-loop-short/results.csv
+  - ttft-open-loop-short/slo-published.csv
+  - ttft-open-loop-short/store-records.csv
+  - ttft-open-loop-short/variant-capacities.csv
+  - ttft-open-loop-short/composite-holds.csv
+  - ttft-open-loop-short/composite-release.csv
+  - ttft-open-loop-short/composite-results.csv
+  - ttft-open-loop-short/composite-roles.csv
+  - ttft-open-loop-short/composite-variants.csv
+  - ttft-open-loop-short/warm-pool-pressure.csv
+  - ttft-open-loop-short/warm-pool-supply.csv
+  recording: ttft-open-loop-short/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, one prefill and one decode replica
+    fixed, open loop arrivals at prefill occupancy under 0.1, 1000 to 16000 tokens
+    in and 16 out, recorder on, default analyzerTuning
+- name: ttft-saturated
+  notRun:
+  - slo
+  outputs:
+  - ttft-saturated/learned-state.csv
+  - ttft-saturated/lines.csv
+  - ttft-saturated/results.csv
+  - ttft-saturated/slo-published.csv
+  - ttft-saturated/store-records.csv
+  - ttft-saturated/variant-capacities.csv
+  - ttft-saturated/composite-holds.csv
+  - ttft-saturated/composite-release.csv
+  - ttft-saturated/composite-results.csv
+  - ttft-saturated/composite-roles.csv
+  - ttft-saturated/composite-variants.csv
+  - ttft-saturated/warm-pool-pressure.csv
+  - ttft-saturated/warm-pool-supply.csv
+  recording: ttft-saturated/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, one prefill and two decode replicas
+    fixed, closed loop to prefill saturation, 8000 to 37000 tokens in and 16 out,
+    recorder on, default analyzerTuning
+- name: ttft-staircase-a-off
+  outputs:
+  - ttft-staircase-a-off/learned-state.csv
+  - ttft-staircase-a-off/lines.csv
+  - ttft-staircase-a-off/results.csv
+  - ttft-staircase-a-off/slo-published.csv
+  - ttft-staircase-a-off/store-records.csv
+  - ttft-staircase-a-off/variant-capacities.csv
+  - ttft-staircase-a-off/composite-holds.csv
+  - ttft-staircase-a-off/composite-release.csv
+  - ttft-staircase-a-off/composite-results.csv
+  - ttft-staircase-a-off/composite-roles.csv
+  - ttft-staircase-a-off/composite-variants.csv
+  - ttft-staircase-a-off/warm-pool-pressure.csv
+  - ttft-staircase-a-off/warm-pool-supply.csv
+  recording: ttft-staircase-a-off/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, the gate and its block removed
+    from the router config and the router restarted before the recording, the run
+    before it off too, two prefill and two decode replicas fixed, staircase of Poisson
+    rate steps of 10 minutes, 1000 tokens in and 1000 out, stopped at step 3 when
+    the TTFT ran away, slo listed with a TTFT target, recorder on, default analyzerTuning
+- name: ttft-staircase-b-off
+  outputs:
+  - ttft-staircase-b-off/learned-state.csv
+  - ttft-staircase-b-off/lines.csv
+  - ttft-staircase-b-off/results.csv
+  - ttft-staircase-b-off/slo-published.csv
+  - ttft-staircase-b-off/store-records.csv
+  - ttft-staircase-b-off/variant-capacities.csv
+  - ttft-staircase-b-off/composite-holds.csv
+  - ttft-staircase-b-off/composite-release.csv
+  - ttft-staircase-b-off/composite-results.csv
+  - ttft-staircase-b-off/composite-roles.csv
+  - ttft-staircase-b-off/composite-variants.csv
+  - ttft-staircase-b-off/warm-pool-pressure.csv
+  - ttft-staircase-b-off/warm-pool-supply.csv
+  recording: ttft-staircase-b-off/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, the gate and its block removed
+    from the router config and the router restarted before the recording, the run
+    before it on, and this one holds its wait histogram for the first 4 minutes, two
+    prefill and two decode replicas fixed, staircase of Poisson rate steps of 10 minutes,
+    8000 tokens in and 200 out, stopped at step 7 when 4000 requests were in flight,
+    slo listed with a TTFT target, recorder on, default analyzerTuning
+- name: ttft-staircase-b-on
+  outputs:
+  - ttft-staircase-b-on/learned-state.csv
+  - ttft-staircase-b-on/lines.csv
+  - ttft-staircase-b-on/results.csv
+  - ttft-staircase-b-on/slo-published.csv
+  - ttft-staircase-b-on/store-records.csv
+  - ttft-staircase-b-on/variant-capacities.csv
+  - ttft-staircase-b-on/composite-holds.csv
+  - ttft-staircase-b-on/composite-release.csv
+  - ttft-staircase-b-on/composite-results.csv
+  - ttft-staircase-b-on/composite-roles.csv
+  - ttft-staircase-b-on/composite-variants.csv
+  - ttft-staircase-b-on/warm-pool-pressure.csv
+  - ttft-staircase-b-on/warm-pool-supply.csv
+  recording: ttft-staircase-b-on/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control on as the scenario renders it, one
+    priority band of 2000 requests, 30 s request TTL, detector at its defaults, the
+    router restarted before the recording, two prefill and two decode replicas fixed,
+    staircase of Poisson rate steps of 10 minutes, 8000 tokens in and 200 out, stopped
+    at step 7 when the TTFT ran away, slo listed with a TTFT target, recorder on,
+    default analyzerTuning
+- name: ttft-staircase-c-on
+  outputs:
+  - ttft-staircase-c-on/learned-state.csv
+  - ttft-staircase-c-on/lines.csv
+  - ttft-staircase-c-on/results.csv
+  - ttft-staircase-c-on/slo-published.csv
+  - ttft-staircase-c-on/store-records.csv
+  - ttft-staircase-c-on/variant-capacities.csv
+  - ttft-staircase-c-on/composite-holds.csv
+  - ttft-staircase-c-on/composite-release.csv
+  - ttft-staircase-c-on/composite-results.csv
+  - ttft-staircase-c-on/composite-roles.csv
+  - ttft-staircase-c-on/composite-variants.csv
+  - ttft-staircase-c-on/warm-pool-pressure.csv
+  - ttft-staircase-c-on/warm-pool-supply.csv
+  recording: ttft-staircase-c-on/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control on as the scenario renders it, one
+    priority band of 2000 requests, 30 s request TTL, detector at its defaults, the
+    router restarted before the recording, two prefill and two decode replicas fixed,
+    staircase of bursty rate steps of 10 minutes, gaps of squared cv 4, 8000 tokens
+    in and 200 out, stopped at step 7 when the TTFT ran away, slo listed with a TTFT
+    target, recorder on, default analyzerTuning
+- name: ttft-three-pods
+  notRun:
+  - slo
+  outputs:
+  - ttft-three-pods/learned-state.csv
+  - ttft-three-pods/lines.csv
+  - ttft-three-pods/results.csv
+  - ttft-three-pods/slo-published.csv
+  - ttft-three-pods/store-records.csv
+  - ttft-three-pods/variant-capacities.csv
+  - ttft-three-pods/composite-holds.csv
+  - ttft-three-pods/composite-release.csv
+  - ttft-three-pods/composite-results.csv
+  - ttft-three-pods/composite-roles.csv
+  - ttft-three-pods/composite-variants.csv
+  - ttft-three-pods/warm-pool-pressure.csv
+  - ttft-three-pods/warm-pool-supply.csv
+  recording: ttft-three-pods/recording.jsonl.gz
+  source: P/D benchmark scenario, flow control off, three prefill and three decode
+    replicas fixed, closed loop of 30000 tokens in and 250 out, recorder on, default
+    analyzerTuning

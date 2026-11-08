@@ -1,0 +1,144 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llmsm-warm-pool
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: warm-pool
+spec:
+  # Two of this Pod's three ports are dangerous to expose, and both were open to
+  # anything that could reach the Pod IP:
+  #
+  #   :8001  the supervisor. It spawns processes with caller-supplied argv AND
+  #          caller-supplied environment, in a container that mounts the shared
+  #          model cache read-write. That is arbitrary execution and a write
+  #          primitive over other tenants' weights, not "start an engine".
+  #   :8002  the proxy's control endpoint. Re-points where the Pod sends the
+  #          traffic it receives. Now loopback-only in the proxy itself, so the
+  #          worst case is denial of service rather than exfiltration -- but
+  #          only the scaling manager has any business calling it.
+  #
+  # This is a boundary, not authentication: anything admitted here is still
+  # trusted completely by the supervisor -- which is why the set admitted is
+  # kept as small as a NetworkPolicy can express, one named namespace. A shared secret is the other half, and
+  # is deliberately NOT built -- authenticating :8002 while :8001 sits behind the
+  # same rule and offers arbitrary execution would be theatre. Closing that gap
+  # means authentication inside FMA's launcher, which means forking it.
+  #
+  # KUBELET PROBES. A probe originates from the NODE, and no `from:` selector can
+  # name one -- there is no portable way to express it. Note that an ingress rule
+  # carrying ANY `from:` restricts its sources, so this applies to EVERY port
+  # here, :8000 included: moving a probe between these ports does not help.
+  #
+  # Both containers therefore use `exec` probes, which the kubelet runs INSIDE
+  # the container against loopback. The request never leaves the Pod's network
+  # namespace and no policy applies to it. Nothing here needs relaxing for
+  # probes, and nothing about them depends on which CNI is installed.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scaling-manager
+      app.kubernetes.io/component: warm-pool
+  policyTypes:
+    - Ingress
+  ingress:
+    # Serving traffic: the EPP dispatches to the Pod's InferencePool target port
+    # from within the model's own namespace.
+    #
+    # SCRAPING IS NOT SET UP HERE, and deliberately not. A lent Pod's engine
+    # metrics are reachable on this port -- the proxy forwards /metrics to
+    # whichever engine is awake -- so a scraper needs admitting here and a
+    # PodMonitor pointing at it. Both name the namespace Prometheus runs in,
+    # which this file cannot know, and a manifest that guessed one would ship a
+    # rule admitting somebody else's namespace: worse than no rule, because it
+    # reads as monitoring that is configured.
+    #
+    # `deploy/warmpool.sh create --monitoring-namespace <ns>` creates both, and
+    # the installer passes the namespace it already put the monitoring stack in.
+    # Applying THIS directory by hand instead gets a pool with no scraping: the
+    # pool works, the models serve, and every model reads as having LESS demand
+    # than it has for as long as the pool is lending to it.
+    - ports:
+        - protocol: TCP
+          port: 8000
+      from:
+        - podSelector: {}
+    # Control: the supervisor and the proxy's upstream endpoint, for the
+    # controller only.
+    #
+    # The namespaceSelector is REQUIRED, not belt and braces. A `from:` entry
+    # with a bare podSelector matches only pods in this policy's OWN namespace,
+    # and the controller does not run here: the pool is deployed into the
+    # namespace whose models it warms, while the scaling manager installs into
+    # scaling-manager-system by default (Makefile LLMSM_NS) and is
+    # meant to -- LLMSM_WATCH_NAMESPACE exists precisely so the controller can sit
+    # outside the namespace it manages. Without this selector every call to
+    # :8001 and :8002 is dropped and the pool cannot be driven at all: Activate
+    # fails at the re-point with the engine already awake and the pool labels
+    # already applied, the compensating Deactivate fails at the clear, and the
+    # Pod holds its GPU serving nothing until the hold expires.
+    #
+    # >>> EDIT THIS <<< The namespace below must be the one scaling manager actually runs
+    # in. It defaults to the cluster-scoped install's namespace (Makefile
+    # LLMSM_NS); a namespace-scoped install (LLMSM_SCOPE=namespace) puts the
+    # controller beside the pool, so set it to the pool's own namespace.
+    #
+    # Getting it wrong cannot fail OPEN -- the controller is denied and the pool
+    # simply never wakes anything -- but be clear about what it looks like,
+    # because it is not obvious from the outside. All three port groups share
+    # this one rule, so a wrong namespace denies :8001 first: the supervisor
+    # listing fails before any engine is asked anything, each Pod drops out of
+    # the observation, and the pool reports itself as empty. That is
+    # indistinguishable from "the pool is too small" in the metrics alone, so
+    # the controller logs the reason per Pod at default verbosity. Look for
+    # "warm pool Pod could not be read" before concluding the reserve is
+    # undersized.
+    #
+    # An earlier version carried a SECOND `from:` entry with a bare podSelector,
+    # to make a namespace-scoped install work without editing anything. That was
+    # a mistake, and it is worth saying why rather than just deleting it. A bare
+    # podSelector matches this policy's OWN namespace -- the tenant's, the one
+    # holding the models -- so it admitted anyone who could create a Pod there
+    # and set two well-known labels. That is `kubectl run` away from arbitrary
+    # execution on :8001, in a container that mounts the shared model cache
+    # read-write, i.e. a write primitive over every tenant's weights. Worse, it
+    # applied on CLUSTER-scoped installs too, where it grants nothing that is
+    # needed and only widens what can reach the pool.
+    #
+    # Requiring the namespace to be named costs one edit and removes that class.
+    # It does not make a namespace-scoped install safe against its own
+    # namespace's occupants -- nothing expressible in a NetworkPolicy can, since
+    # the controller and the tenant genuinely share a namespace there -- but it
+    # confines the exposure to installs that have actually chosen co-tenancy,
+    # rather than handing it to every install by default.
+    #
+    # Deliberately NOT `namespaceSelector: {}` either, for the same reason at
+    # cluster scale.
+    - ports:
+        - protocol: TCP
+          port: 8001
+        - protocol: TCP
+          port: 8002
+        # The ENGINES, too. Sleeping and waking are vLLM's own API, not the
+        # supervisor's, and the controller calls them directly on the instance
+        # -- at the Pod IP and the instance's port, from outside the Pod. Without
+        # this range every /is_sleeping fails, so ListWarm reads every instance
+        # as Loading, no Pod is ever counted as reserve, and no wake can happen:
+        # the pool is inert. Found by the e2e suite on a policy-enforcing
+        # cluster, having been missed by hand-testing that ran inside the Pod
+        # over loopback.
+        #
+        # The range is pool.BasePort through pool.MaxInstancesPerPod, which is
+        # what the adapter assigns from and therefore all an engine can bind.
+        - protocol: TCP
+          port: 9001
+          endPort: 9016
+      from:
+        # The kubernetes.io/metadata.name label is applied automatically by the
+        # API server, so naming a namespace here needs no labelling step.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scaling-manager-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scaling-manager
+              control-plane: controller-manager

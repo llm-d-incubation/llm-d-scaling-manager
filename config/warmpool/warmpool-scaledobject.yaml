@@ -1,0 +1,110 @@
+# Makes the warm pool elastic, the same way every other workload here is: The scaling manager
+# computes a size, KEDA writes it.
+#
+# This is deliberate rather than convenient. The scaling manager's own ClusterRole is read-only,
+# and internal/controller/rbac.go says why -- a cluster-wide licence to resize
+# workloads is the single permission a cluster admin is most right to refuse.
+# Scaling the pool through KEDA means the scaling manager needs no write permission at all, not
+# even a narrow one, and the pool is bounded by the same object an operator
+# already reads to understand any other autoscaled workload.
+#
+# It also means the pool inherits HPA's stabilization for free, which is the
+# behaviour a warm pool most needs: growing promptly when spikes are being
+# missed, and shrinking slowly, because throwing away a loaded model to save
+# money and then paying a full load to get it back is the worst of both.
+#
+# REQUIRED. This is what declares the pool to the scaling manager; without it the Deployment is
+# just Pods holding GPUs that nothing will ever use. For a FIXED-size pool set
+# minReplicaCount and maxReplicaCount to the same number -- do not delete this
+# file.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: llmsm-warm-pool
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: warm-pool
+spec:
+  scaleTargetRef:
+    name: llmsm-warm-pool
+  # The floor MUST exceed the pool's reserve (warmPoolSleepMinSize in the
+  # trigger metadata below), or the pool spends its quiet periods in the one state
+  # where it can never warm anything: every Pod is reserve, so the admission
+  # budget is zero. The scaling manager reports that if it happens.
+  minReplicaCount: 2
+  maxReplicaCount: 6
+  # Never to zero. A pool at zero holds nothing warm, so the first spike after a
+  # quiet period pays a full cold start -- and then the pool grows, loads a
+  # model, and is ready exactly in time for the spike that is already over.
+  idleReplicaCount: null
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # Prompt: every pass spent short of the reserve is a spike that may go
+          # unbridged.
+          stabilizationWindowSeconds: 60
+        scaleDown:
+          # Slow, and asymmetric on purpose. A pool that is too small costs
+          # latency on every spike it cannot cover; one that is too large costs
+          # money. Shrinking eagerly turns a cost problem into a latency one.
+          stabilizationWindowSeconds: 900
+  triggers:
+    - type: external-push
+      metadata:
+        # The scaling manager's external scaler. Same address the model ScaledObjects use: this
+        # one, with the authenticationRef at the end of the trigger, on a TLS
+        # install (the default). On a plaintext install use
+        # scaling-manager-external-scaler.<namespace>.svc.cluster.local:9090 and delete the
+        # authenticationRef.
+        scalerAddress: scaling-manager-external-scaler.>>> EDIT THIS <<<.svc:9090
+
+        # THIS TRIGGER IS THE POOL'S DECLARATION. A warm pool is a scaling manager concept
+        # that happens to have Pods, not a workload scaling manager happens to manage --
+        # nothing outside the scaling manager reads one or creates one -- so it is declared the
+        # same way every other thing the scaling manager knows about is, by a KEDA trigger.
+        #
+        # Deleting this ScaledObject therefore deletes the POOL, not just its
+        # elasticity. The Deployment below goes on holding accelerators, and the scaling manager
+        # reports it as undeclared rather than using it.
+        #
+        # Must match the Deployment's llm-d.ai/warm-pool label, which is what
+        # groups its Pods.
+        warmPoolName: default
+
+        # The reserve: Pods kept FREE for the next spike. Admission draws on
+        # free-minus-reserve, so this must stay BELOW maxReplicaCount above --
+        # at or beyond it the admission budget is zero forever and the pool
+        # holds accelerators while warming nothing. The scaling manager says so if it happens.
+        warmPoolSleepMinSize: "1"
+
+        # How long a borrowed Pod may serve before it is returned regardless, so
+        # a scale-up that never arrives cannot turn the reserve into permanent
+        # capacity for one variant. `deploy/warmpool.sh create --max-hold` writes
+        # this; hand-editing it here is the other way. Omit it and the
+        # controller's own default applies, which is what create does when
+        # --max-hold is not given.
+        # warmPoolMaxHold: "2m"
+
+        # Whether this pool is a BRIDGE or is RETAINED, and it is the most
+        # consequential line in this file. A bridge takes a lent Pod back after
+        # warmPoolMaxHold whether or not the shortfall closed; retained switches
+        # that timeout off and the pool keeps the Pod until the variant stops
+        # wanting it. `create --type bridge|retained` writes it. Commented out
+        # because omitting it leaves the controller's default in force rather
+        # than a second copy of it here, free to drift.
+        # warmPoolRetained: "true"
+
+        # Warm this many of the busiest variants without waiting for each to
+        # miss first.
+        warmPoolPreloadTop: "2"
+
+        # Overrides --gpu-memory-utilization for warm copies, trading KV cache
+        # for warm-set size. A workload's own value is sized for a Pod running
+        # ONE engine and typically claims ~95% of the card, leaving room for no
+        # sleepers beside an awake one.
+        warmPoolGPUMemoryUtilization: "0.90"
+      # KEDA's client certificate (TLS installs). Same namespace as above.
+      authenticationRef:
+        name: scaling-manager-external-scaler->>> EDIT THIS <<<
+        kind: ClusterTriggerAuthentication

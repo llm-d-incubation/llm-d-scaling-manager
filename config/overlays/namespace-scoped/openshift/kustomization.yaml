@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace scope on OpenShift: the controller manages ONE namespace.
+#
+# `namespace:` is a placeholder — deploy/install.sh rewrites it to $LLMSM_NS.
+namespace: scaling-manager-system
+
+namePrefix: scaling-manager-
+
+resources:
+- ../../../base/
+
+# components/openshift is NOT optional here. It carries the platform's own
+# monitoring wiring — the Thanos Querier URL, the service-ca certificate, the
+# user-workload-monitoring label — and without it the controller keeps the
+# Kubernetes default Prometheus URL, cannot reach anything at it, and exits at
+# startup. It is listed FIRST so the tenant components below can still subtract
+# from what it adds.
+#
+# What tenant-installable subtracts is the manager ClusterRole/Binding and the
+# Namespace — NOT the monitoring bindings, which are the whole reason this
+# component exists. So THIS OVERLAY IS NOT TENANT-INSTALLABLE: it renders 5
+# ClusterRoles and 6 ClusterRoleBindings, including cluster-monitoring-view, and
+# needs a cluster admin. Namespace scope here is blast-radius reduction, not
+# self-service. `deploy/install.sh --check` renders this overlay and says so.
+components:
+# Admits the external scaler port only from KEDA's namespace. Listed first so
+# a later component (openshift) can repoint it. See the component.
+- ../../../components/external-scaler-networkpolicy/
+- ../../../components/namespace-scoped/
+- ../../../components/openshift/
+- ../../../components/tenant-installable/
+# See the Kubernetes overlay: nodes are cluster-scoped, so the gpu-inventory
+# limiter needs this and the prereqs phase applies it.
+- ../../../components/node-reader/
+# Likewise for the Kueue objects a kueue-enabled quota entry reads.
+- ../../../components/kueue-reader/
+# And for the Namespace reads that find the cluster policy namespace. Today
+# cluster-monitoring-view happens to grant them here; this does not rely on that.
+- ../../../components/policy-namespace-reader/

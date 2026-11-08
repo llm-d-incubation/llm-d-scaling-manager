@@ -1,0 +1,28 @@
+name: Prow Remove LGTM
+on: pull_request
+
+# The repository default workflow permission is `read`, so a job that asks for
+# nothing gets a read-only token and the action fails on every SAME-REPO PR with
+#   could not add labels: HttpError: Resource not accessible by integration
+# The comment below already knew a fork token is read-only whatever this asks
+# for; what it missed is that the default applies to same-repo PRs too, which is
+# the half that was failing.
+#
+# Declared per workflow rather than by raising the repository default, which
+# would hand write access to every workflow in the repo. Labels are the issues
+# API, hence both scopes -- the same pair prow-github.yml already declares for
+# the same action.
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  remove-lgtm:
+    # Same-repo branches only. The reusable workflow removes a label, and on the
+    # `pull_request` event a fork's GITHUB_TOKEN is read-only no matter what
+    # `permissions:` asks for, so the write fails with 403 "Resource not
+    # accessible by integration". Skipping is honest: the job cannot do its work
+    # on a fork PR, and a red check that reports who opened the PR rather than
+    # what it changes trains reviewers to ignore red checks.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: llm-d/llm-d-infra/.github/workflows/reusable-prow-remove-lgtm.yaml@49a41ad0160a60f8838f541173ecc4ff87bc2632 # main as of 2026-10-12

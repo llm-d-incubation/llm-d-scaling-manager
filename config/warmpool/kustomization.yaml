@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The warm pool is NOT part of a scaling manager install. It is deployed deliberately, into
+# the namespace whose models it should keep warm, because it holds GPUs
+# continuously and that is a cost decision rather than a default.
+resources:
+  - warmpool-deployment.yaml
+  - warmpool-networkpolicy.yaml
+  - warmpool-scaledobject.yaml

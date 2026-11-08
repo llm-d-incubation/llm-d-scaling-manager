@@ -1,0 +1,42 @@
+# promtool unit tests for the learned-state snapshot alert. hack/check-alert-rules.sh
+# copies the shipped PrometheusRule groups, annotations stripped, to rules.yaml
+# beside this file and runs promtool test rules on it.
+#
+# The counter is the controller's own: namespace is the controller's namespace
+# as scraped, pod the controller pod.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. A store that cannot be written -- the learned-state Role missing --
+  #    counts a write error every minute and logs it once. The alert fires
+  #    after its for:, per namespace and operation; reads that work raise
+  #    nothing.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_learned_state_snapshot_errors_total{namespace="scaling-manager",pod="scaling-manager-a",operation="write"}'
+        values: '0+1x40'
+      - series: 'llmsm_learned_state_snapshot_errors_total{namespace="scaling-manager",pod="scaling-manager-a",operation="read"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLMSMLearnedStateSnapshotFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LLMSMLearnedStateSnapshotFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: scaling-manager, operation: write}
+
+  # 2. A store that recovers stops the alert once its errors leave the window.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_learned_state_snapshot_errors_total{namespace="scaling-manager",pod="scaling-manager-a",operation="write"}'
+        values: '0+1x20 20x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LLMSMLearnedStateSnapshotFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: scaling-manager, operation: write}
+      - eval_time: 50m
+        alertname: LLMSMLearnedStateSnapshotFailing
+        exp_alerts: []

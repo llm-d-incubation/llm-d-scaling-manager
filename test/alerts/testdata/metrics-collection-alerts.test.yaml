@@ -1,0 +1,47 @@
+# promtool unit tests for LLMSMMetricsCollectionFailing. hack/check-alert-rules.sh
+# copies the shipped PrometheusRule groups, annotations stripped, to rules.yaml
+# beside this file and runs promtool test rules on it.
+#
+# The alert says scaling decisions run on stale data, so it counts only the
+# queries decisions read. A learner_recording query feeds only a learner
+# recording (docs/proposals/analyzer-learner.md, 2.9), and a ttft_inputs query
+# only the shadow TTFT pricing: their failures show on the counter and do not
+# raise the alert.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. A failing router query (10/min, above the 5/min threshold) fires
+  #    after its for:, per query_type and reason. The same rate under
+  #    learner_recording, alone in its own series, raises nothing.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="router_latency",reason="timeout"}'
+        values: '0+10x30'
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="learner_recording",reason="timeout"}'
+        values: '0+10x30'
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="ttft_inputs",reason="timeout"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LLMSMMetricsCollectionFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LLMSMMetricsCollectionFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, query_type: router_latency, reason: timeout}
+
+  # 2. A recording whose every query fails, with the scaling queries
+  #    healthy, never fires. Nor do the TTFT pricing's.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="learner_recording",reason="timeout"}'
+        values: '0+60x30'
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="ttft_inputs",reason="timeout"}'
+        values: '0+60x30'
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="kv_cache",reason="timeout"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMMetricsCollectionFailing
+        exp_alerts: []

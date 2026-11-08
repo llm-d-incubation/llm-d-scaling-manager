@@ -1,0 +1,8 @@
+knee            13.31 r/s   decode, batch cap binds at fill 0.732
+operating rate  11.32 r/s   0.85 x knee (scaleUpThreshold)
+mean TPOT       3.66 ms     [3.65 .. 3.70]   line ols, observed fill up to 0.50
+TPOT p90        refused: NoTPOTHistogram (the recording carries no TPOT histogram; pass --assume-tpot-ratio for a flagged answer)
+shape           IL 1000 OL 1000 (assumed)
+line check      ok at another shape (rows at KV 6502 a request, priced at 1500): median 3.0% off the rate read, line low; 0 of 10 rows past 15%, worst 4.4%, fill 0.52-0.55, cycles 122-131; left out 20 on a ramp, 0 above the band, 10 older than 30m0s
+flags: AssumedShape (IL 1000, OL 1000); OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); ExtrapolatedFill (fill 0.732, 0.231 above the readings)
+estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json)

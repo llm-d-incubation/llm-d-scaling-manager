@@ -1,0 +1,7 @@
+knee            30.88 r/s   decode, batch cap binds at fill 0.680
+operating rate  26.25 r/s   0.85 x knee (scaleUpThreshold)
+mean TPOT       3.09 ms     [3.09 .. 3.10]   line pinned-B, observed fill up to 0.28
+shape           IL 1000 OL 602 (measured, cycles 64-83), output spread D 1.304 (measured)
+line check      ok at another shape (rows at KV 2992 a request, priced at 1393): median 14.3% off the rate read, line high; 3 of 10 rows past 15%, worst 15.9%, fill 0.48-0.58, cycles 33-42; left out 17 on a ramp, 0 above the band, 0 older than 30m0s
+flags: ExtrapolatedFill (fill 0.680, 0.396 above the readings)
+estimate from 14 readings (cycles 64-77) of a 83-cycle recording, not a guarantee; see basis (-o json)

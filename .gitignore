@@ -1,0 +1,66 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main
+bin/
+.vscode/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Kind config file
+kind-config.yaml
+
+# Kubernetes manifests
+gpu.cluster
+
+# Miscellaneous
+.DS_Store
+~*
+
+# llm-d and llm-d-infra directories
+llm-d/
+llm-d-infra/
+llm-d-benchmark/
+# llmdbenchmark workspace directories (created by benchmark runs)
+*-*-*-*-*-*/
+biran-*/
+llmd/
+llmd-infra/
+
+*.tgz
+actionlint
+
+# Generated TLS certificates (auto-created by e2e test setup)
+hack/tls-certs/
+
+# AI
+.claude/worktrees/
+
+# ScaledObject plan written by `make benchmark-deploy-scaling-manager`
+benchmark-scaledobject-plan.yaml
+scaling-manager-plan.yaml
+
+# Workload patch written by `make workload-patch`. It is generated from a live
+# cluster and names that cluster's namespaces, so it is a local artifact rather
+# than something to commit.
+scaling-manager-workload-patch.yaml
+
+# Python bytecode from the hack/benchmark scripts
+__pycache__/
+*.pyc
+
+# llm-d-benchmark run artifacts. BENCHMARK_WORKSPACE defaults to $(CURDIR), so
+# every standup or run drops a <user>-<date>-<time>-<pid>/ directory and a
+# 'latest' symlink into the repo root. They are run output, not source.
+/latest
+/*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*/

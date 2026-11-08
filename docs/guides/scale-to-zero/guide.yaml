@@ -1,0 +1,58 @@
+name: scale-to-zero
+
+prerequisites:
+  flowcontrol:
+    note: Confirm the running EPP parsed the flowControl gate. Wanted output contains featureGates:["flowControl"].
+    run: |
+      kubectl logs -n <llmd-namespace> deploy/<epp-deployment> --all-containers | grep -m1 -i featuregates
+      # Missing? Restart the EPP so it re-reads its config:
+      #   kubectl rollout restart -n <llmd-namespace> deploy/<epp-deployment>
+  engine:
+    note: List each model server and its image. Each model must run one engine, vLLM or SGLang.
+    run: kubectl get deploy -n <llmd-namespace> -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}'
+
+deploy:
+  policy:
+    note: "Half one: allow the model to park."
+    run: |
+      kubectl edit configmap scaling-manager-scaling-policy-config -n <scaling-manager-namespace>
+      # Under `default`, or under the model's own entry, add:
+      #   scaleToZero:
+      #     enabled: true
+      #     retentionPeriod: 10m   # idle time before parking
+  bounds:
+    note: "Half two: let every variant reach zero. Every MIN must be 0."
+    run: |
+      kubectl get scaledobject -n <llmd-namespace> -o custom-columns=NAME:.metadata.name,MIN:.spec.minReplicaCount,MAX:.spec.maxReplicaCount
+      # Any MIN above 0: re-run the plan, set minReplicas: 0 on the model's entries, apply it
+      make scaledobjects-plan
+      make scaledobjects-apply
+      # or patch one ScaledObject directly:
+      #   kubectl patch scaledobject <name> -n <llmd-namespace> --type=merge -p '{"spec":{"minReplicaCount":0}}'
+  hpa:
+    note: Read the ScaledObject's MIN, not the HPA's. The HPA always reads 1.
+    run: |
+      kubectl get scaledobject -n <llmd-namespace> -o custom-columns=NAME:.metadata.name,MIN:.spec.minReplicaCount
+      # minReplicas: 1 on the derived HPA is expected:
+      kubectl get hpa -n <llmd-namespace> -o custom-columns=NAME:.metadata.name,MIN:.spec.minReplicas
+
+verify:
+  blocked:
+    note: Ask the controller what stops this model parking. No output is healthy.
+    run: |
+      TOKEN=$(kubectl get secret scaling-manager-epp-metrics-token -n <scaling-manager-namespace> -o jsonpath='{.data.token}' | base64 -d)
+      kubectl port-forward -n <scaling-manager-namespace> svc/scaling-manager-controller-manager-metrics-service 8443:8443 &
+      curl -sSfk -H "Authorization: Bearer $TOKEN" https://localhost:8443/metrics | grep llmsm_model_scaling_blocked
+  park:
+    note: Stop sending traffic and wait out retentionPeriod. llmsm_model_replicas 0 means parked.
+    run: |
+      kubectl get deploy -n <llmd-namespace> -w
+      curl -sSfk -H "Authorization: Bearer $TOKEN" https://localhost:8443/metrics | grep llmsm_model_replicas
+  wake:
+    note: Park the model, send a request, and check every link of the wake. Restores what it changed.
+    run: ./hack/verify_scale_from_zero.sh <llmd-namespace> <deployment> <modelID>
+
+cleanup:
+  disable:
+    note: Set scaleToZero.enabled to false. Raise minReplicaCount back too, or it reports policy-forbids-zero.
+    run: kubectl edit configmap scaling-manager-scaling-policy-config -n <scaling-manager-namespace>

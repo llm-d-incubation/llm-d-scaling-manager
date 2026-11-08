@@ -1,0 +1,726 @@
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	promoperator "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	infextv1alpha2 "sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
+	lwsv1 "sigs.k8s.io/lws/api/leaderworkerset/v1"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/test/e2e/fixtures"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/test/utils"
+	// +kubebuilder:scaffold:imports
+)
+
+const (
+	envKindEmulator = "kind-emulator"
+	envKind         = "kind"
+	boolTrue        = "true"
+)
+
+var (
+	cfg           E2EConfig
+	k8sClient     *kubernetes.Clientset
+	crClient      client.Client
+	dynamicClient dynamic.Interface
+	restConfig    *rest.Config
+	ctx           context.Context
+	cancel        context.CancelFunc
+)
+
+// suiteModelID gives one suite a model of its own, derived from the configured
+// base so a run still honours MODEL_ID.
+//
+// Suites share a namespace, a controller and -- unless they ask otherwise -- a
+// model ID, and the engine keys REAL STATE on that ID: which workloads serve the
+// model, and what it has learned about their capacity. Two suites under one ID
+// are therefore not isolated from each other, and what follows lands on whichever
+// of them ran second. See sfzModelID and the policy-tier suite for the two cases
+// that have forced this so far; a suite whose assertions depend on the engine
+// knowing nothing about its model yet wants one of these.
+func suiteModelID(suffix string) string {
+	return cfg.ModelID + "-" + suffix
+}
+
+func TestE2E(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "E2E Test Suite")
+}
+
+var _ = BeforeSuite(func() {
+	// Initialize controller-runtime logger to avoid warnings when using log.FromContext
+	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
+
+	By("Loading configuration from environment")
+	cfg = LoadConfigFromEnv()
+
+	// Point every ScaledObject fixture at the scaling manager's external scaler. That call is what
+	// registers a workload with the scaling manager — a `prometheus` trigger never contacts the scaling manager at
+	// all, so a fixture using one is never discovered and simply never scales.
+	fixtures.SetExternalScalerAddress(externalScalerAddress())
+
+	SetDefaultEventuallyTimeout(time.Duration(cfg.EventuallyStandardSec) * time.Second)
+	SetDefaultEventuallyPollingInterval(time.Duration(cfg.PollIntervalSec) * time.Second)
+
+	// KEDA is supported on all environments — pre-installed on OCP (Custom Metrics
+	// Autoscaler operator, namespace: openshift-keda) and CKS (helm, namespace: keda),
+	// installed at runtime on kind-emulator via install.sh (namespace: keda-system).
+	// Set KEDA_NAMESPACE accordingly when running on OCP or CKS.
+
+	GinkgoWriter.Printf("=== E2E Test Configuration ===\n")
+	GinkgoWriter.Printf("Environment: %s\n", cfg.Environment)
+	GinkgoWriter.Printf("The scaling manager Namespace: %s\n", cfg.LLMSMNamespace)
+	GinkgoWriter.Printf("LLMD Namespace: %s\n", cfg.LLMDNamespace)
+	GinkgoWriter.Printf("Use Simulator: %v\n", cfg.UseSimulator)
+	GinkgoWriter.Printf("Scale-to-Zero Enabled: %v\n", cfg.ScaleToZeroEnabled)
+	GinkgoWriter.Printf("Scaler Backend: %s\n", cfg.ScalerBackend)
+	GinkgoWriter.Printf("Model ID: %s\n", cfg.ModelID)
+	GinkgoWriter.Printf("Eventually defaults: timeout=%ds poll=%ds (SHORT=%ds EXTENDED=%ds SCALE_UP=%ds)\n",
+		cfg.EventuallyStandardSec, cfg.PollIntervalSec,
+		cfg.EventuallyShortSec, cfg.EventuallyExtendedSec, cfg.ScaleUpTimeout)
+	GinkgoWriter.Printf("==============================\n\n")
+
+	By("Initializing Kubernetes client")
+	var err error
+	if _, statErr := os.Stat(cfg.Kubeconfig); statErr == nil {
+		restConfig, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
+		Expect(err).NotTo(HaveOccurred(), "Failed to load kubeconfig")
+	} else {
+		GinkgoWriter.Printf("Kubeconfig not found at %s, falling back to in-cluster config\n", cfg.Kubeconfig)
+		restConfig, err = rest.InClusterConfig()
+		Expect(err).NotTo(HaveOccurred(), "Failed to load in-cluster config (no kubeconfig file and not running in-cluster)")
+	}
+
+	k8sClient, err = kubernetes.NewForConfig(restConfig)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create Kubernetes clientset")
+
+	s := runtime.NewScheme()
+	err = clientgoscheme.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add client-go scheme")
+	// Add prometheus-operator scheme for ServiceMonitor support
+	err = promoperator.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add prometheus-operator scheme")
+	// Add LeaderWorkerSet scheme for LWS support
+	err = lwsv1.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add LWS scheme")
+	err = kedav1alpha1.AddToScheme(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add KEDA scheme")
+	err = infextv1alpha2.Install(s)
+	Expect(err).NotTo(HaveOccurred(), "Failed to add Inference Extension v1alpha2 scheme")
+
+	crClient, err = client.New(restConfig, client.Options{Scheme: s})
+	Expect(err).NotTo(HaveOccurred(), "Failed to create controller-runtime client")
+
+	dynamicClient, err = dynamic.NewForConfig(restConfig)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create dynamic client")
+
+	ctx, cancel = context.WithCancel(context.Background()) //nolint:fatcontext // shared across BeforeSuite/AfterSuite
+
+	By("Reading how the controller serves the external scaler")
+	configureScalerTLS()
+
+	By("Verifying the scaling manager controller is running")
+	Eventually(func(g Gomega) {
+		pods, err := utils.ControllerPods(ctx, k8sClient, cfg.LLMSMNamespace, utils.ControllerDeploymentName)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(pods).NotTo(BeEmpty(), "The scaling manager controller pod not found")
+
+		// Check at least one pod is running
+		runningPods := 0
+		for _, pod := range pods {
+			if pod.Status.Phase == corev1.PodRunning {
+				runningPods++
+			}
+		}
+		g.Expect(runningPods).To(BeNumerically(">", 0), "No running the scaling manager controller pods")
+	}).Should(Succeed(), "The scaling manager controller should be running")
+
+	By("Verifying llm-d infrastructure")
+	// Verify Gateway CRDs exist
+	Eventually(func(g Gomega) {
+		_, err := k8sClient.Discovery().ServerResourcesForGroupVersion("inference.networking.k8s.io/v1")
+		g.Expect(err).NotTo(HaveOccurred(), "llm-d CRDs should be installed")
+	}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed())
+
+	By("Verifying Prometheus is available")
+	Eventually(func(g Gomega) {
+		pods, err := k8sClient.CoreV1().Pods(cfg.MonitoringNS).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/name=prometheus",
+		})
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(pods.Items).NotTo(BeEmpty(), "Prometheus pod not found")
+	}).Should(Succeed(), "Prometheus should be running")
+
+	By("Verifying KEDA is available (ScaledObject CRD)")
+	Eventually(func(g Gomega) {
+		gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+		_, err := dynamicClient.Resource(gvr).Namespace(cfg.LLMDNamespace).List(ctx, metav1.ListOptions{Limit: 1})
+		g.Expect(err).NotTo(HaveOccurred(), "KEDA ScaledObject CRD should be installed")
+	}, time.Duration(cfg.EventuallyShortSec)*time.Second, time.Duration(cfg.PollIntervalSec)*time.Second).Should(Succeed(), "KEDA should be available")
+
+	By("Restarting the scaling manager controller so the suite starts from a clean analyzer state")
+	// The capacity knowledge store is in-memory and accumulates learned per-replica
+	// capacities for the lifetime of the process. It is keyed by (namespace, model,
+	// variant) and every suite here reuses the same model ID, so a value learned by
+	// an earlier suite — or an earlier run against this cluster — survives into the
+	// next one and is preferred over live observation (the P2-hist capacity source).
+	//
+	// That makes results depend on run history rather than on the code. A degenerate
+	// learned capacity has been seen to pin utilization at 1.0, at which point the
+	// engine correctly refuses to scale down and a scale-down spec fails against
+	// code that is fine. Restarting once per suite run drops the store, so each run
+	// re-learns from the fixtures' own metrics.
+	//
+	// Best-effort: a restricted environment may not permit patching the Deployment.
+	// Warn rather than fail, since the suite can still run — just not reproducibly.
+	if err := restartScalingManagerController(ctx); err != nil {
+		GinkgoWriter.Printf("WARNING: could not restart the scaling manager controller (%v).\n"+
+			"The in-memory capacity store carries over, so results may depend on run history.\n", err)
+	}
+
+	By("Sweeping workloads an earlier run may have left behind")
+	// Symmetric with the AfterSuite sweep, and for the same reason the restart above
+	// exists: a run must not depend on the history of the cluster it lands on.
+	//
+	// AfterSuite alone is not enough, because the runs that leave the most behind are
+	// the ones that never reach it — an interrupted run, a panic, a cancelled CI job.
+	// What survives is a model server still carrying the guide label the single
+	// InferencePool selects, which gives the EPP a ready endpoint to dispatch to and
+	// so stops requests from ever queueing. Every scale-from-zero spec in the next
+	// run then waits five minutes for demand that cannot appear. A three-hour-old
+	// pod from a previous run was doing exactly that.
+	if k8sClient != nil && crClient != nil {
+		cleanupTestResources(ctx, k8sClient, crClient, cfg.LLMDNamespace)
+	}
+	// The same holds for a quota a spec declared: left in the policy, it names
+	// a namespace that is gone and bounds every other namespace at zero.
+	if k8sClient != nil {
+		cleared, err := fixtures.ClearLeftoverQuota(ctx, k8sClient, cfg.LLMSMNamespace, scalingPolicyConfigMapName())
+		Expect(err).NotTo(HaveOccurred(), "could not clear a quota an earlier run left in the scaling policy")
+		if cleared {
+			GinkgoWriter.Println("Cleared a quota an earlier run left in the scaling policy ConfigMap")
+		}
+	}
+
+	// The warm-pool specs lend Pods in the workload namespace, which is a pod
+	// patch. The controller's ClusterRole only reads pods; an operator gets the
+	// write from deploy/warmpool.sh, and the suite grants it the same way.
+	if k8sClient != nil {
+		Expect(fixtures.GrantPodWrites(ctx, k8sClient, cfg.LLMDNamespace, cfg.LLMSMNamespace)).To(Succeed(),
+			"could not grant the controller patch on pods in %s", cfg.LLMDNamespace)
+	}
+
+	GinkgoWriter.Println("BeforeSuite completed successfully - infrastructure ready")
+})
+
+// dumpFailureDiagnostics records the cluster state a failed spec was about.
+//
+// The controller log shows the scaling manager's view of the LAST link in the demand chain, and
+// "no pending requests" there is equally consistent with every earlier link
+// having broken. The other three dumps record the earlier links.
+func dumpFailureDiagnostics(specText string) {
+	GinkgoWriter.Printf("\n=== Failure diagnostics: %s ===\n", specText)
+	utils.DumpControllerLogs(context.Background(), k8sClient, cfg.LLMSMNamespace, GinkgoWriter)
+	utils.DumpManagedScalers(context.Background(), k8sClient, dynamicClient, GinkgoWriter)
+	utils.DumpScaledObjects(context.Background(), dynamicClient, GinkgoWriter)
+	// KEDA's own log, because the scaling manager's cannot explain a KEDA failure. An HPA on
+	// the Kubernetes CPU default is a dead end from this side -- The scaling manager publishes
+	// the right number, the ScaledObject says Ready=True -- and the operator is
+	// the only component that says why it built the HPA that way.
+	utils.DumpKEDAOperatorLogs(context.Background(), k8sClient, cfg.KEDANamespace, GinkgoWriter)
+	utils.DumpDemandEvidence(context.Background(), k8sClient, cfg.LLMDNamespace, GinkgoWriter)
+}
+
+// diagnosticsDumpedFor names the spec the snapshot below already ran for, so the
+// ReportAfterEach fallback does not dump the same failure twice.
+var diagnosticsDumpedFor string
+
+// JustAfterEach, NOT ReportAfterEach: Ginkgo runs ReportAfterEach AFTER the
+// spec's AfterEach and DeferCleanup callbacks, so this dump used to read a
+// cluster that had already been torn down. It reported "(none in any
+// namespace)" for ScaledObjects seconds after the controller log proved one was
+// being served, and "No trigger Job found" for a Job cleanup had just swept --
+// then pointed the reader at "the ScaledObject conditions below", which were not
+// there. Three separate investigations were sent after that phantom before the
+// hook itself became the suspect.
+//
+// JustAfterEach runs immediately after the It body and before any cleanup, so
+// what it prints is the state the assertion actually failed against.
+var _ = JustAfterEach(func() {
+	if !CurrentSpecReport().Failed() {
+		return
+	}
+	if k8sClient == nil || crClient == nil {
+		return
+	}
+	dumpFailureDiagnostics(CurrentSpecReport().FullText())
+	diagnosticsDumpedFor = CurrentSpecReport().FullText()
+})
+
+// ReportAfterEach is the fallback for a failure the snapshot above cannot see:
+// one raised by AfterEach or DeferCleanup, which both run after it. The cluster
+// is partly torn down by then and the dump says less, but a teardown failure
+// with no diagnostics at all is worse.
+var _ = ReportAfterEach(func(report SpecReport) {
+	if !report.Failed() {
+		return
+	}
+	if k8sClient == nil || crClient == nil {
+		return
+	}
+	if report.FullText() == diagnosticsDumpedFor {
+		return
+	}
+	GinkgoWriter.Printf("\n(failure surfaced during cleanup; the cluster is already partly torn down)\n")
+	dumpFailureDiagnostics(report.FullText())
+})
+
+var _ = AfterSuite(func() {
+	By("Cleaning up any leftover test resources")
+	if k8sClient != nil && crClient != nil {
+		// Clean up any resources with test labels that might have been left behind
+		cleanupTestResources(ctx, k8sClient, crClient, cfg.LLMDNamespace)
+	}
+
+	if cancel != nil {
+		cancel()
+	}
+
+	// Optionally delete Kind cluster (opt-in via DELETE_CLUSTER=true)
+	// Default: keep cluster for debugging (safer for developers)
+	// Also supports INFRA_TEARDOWN_SKIP for backward compatibility
+	deleteCluster := os.Getenv("DELETE_CLUSTER") == boolTrue
+	skipTeardown := os.Getenv("INFRA_TEARDOWN_SKIP") == boolTrue
+
+	// Only delete cluster if explicitly requested and not skipped
+	if deleteCluster && !skipTeardown && cfg.Environment == envKindEmulator {
+		By("Deleting Kind cluster")
+		clusterName := os.Getenv("CLUSTER_NAME")
+		if clusterName == "" {
+			clusterName = "kind-scaling-manager-gpu-cluster"
+		}
+		GinkgoWriter.Printf("Deleting Kind cluster: %s\n", clusterName)
+
+		// Use the teardown script if it exists, otherwise use kind directly
+		teardownScript := filepath.Join("deploy", "kind-emulator", "teardown.sh")
+		if _, err := os.Stat(teardownScript); err == nil {
+			cmd := exec.Command("bash", teardownScript)
+			cmd.Env = append(os.Environ(), "KIND_NAME="+clusterName)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				GinkgoWriter.Printf("Warning: Failed to delete cluster via teardown script: %v\nOutput: %s\n", err, string(output))
+				// Fallback to direct kind delete
+				deleteKindClusterDirectly(clusterName)
+			} else {
+				GinkgoWriter.Printf("Cluster deleted successfully\n")
+			}
+		} else {
+			// Fallback to direct kind delete if script doesn't exist
+			deleteKindClusterDirectly(clusterName)
+		}
+	} else if deleteCluster && skipTeardown {
+		GinkgoWriter.Printf("Skipping cluster deletion (INFRA_TEARDOWN_SKIP=true overrides DELETE_CLUSTER=true)\n")
+	} else if cfg.Environment == envKindEmulator {
+		GinkgoWriter.Printf("Keeping Kind cluster for debugging (set DELETE_CLUSTER=true to delete)\n")
+	}
+})
+
+// deleteKindClusterDirectly deletes the Kind cluster using kind command directly
+func deleteKindClusterDirectly(clusterName string) {
+	cmd := exec.Command("kind", "delete", "cluster", "--name", clusterName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("Warning: Failed to delete cluster '%s': %v\nOutput: %s\n", clusterName, err, string(output))
+	} else {
+		GinkgoWriter.Printf("Cluster '%s' deleted successfully\n", clusterName)
+	}
+}
+
+// cleanupTestResources removes any test resources that might have leaked
+func cleanupTestResources(ctx context.Context, k8sClient *kubernetes.Clientset, crClient client.Client, namespace string) {
+	GinkgoWriter.Println("Cleaning up test resources...")
+
+	// Helper function to check if resource name matches test patterns
+	// A prefix missing here is not a tidiness problem. Anything left running keeps
+	// the guide label the cluster's single InferencePool selects, so the EPP still
+	// has a ready endpoint and dispatches requests to it instead of queueing them —
+	// which disables scale-from-zero for every spec in the NEXT run too, since this
+	// sweep is the only thing that removes what an interrupted run left behind. A
+	// three-hour-old throughput-* pod did exactly that. Keep this in step with the
+	// names the fixtures generate.
+	isTestResource := func(name string) bool {
+		prefixes := []string{
+			"test-", "smoke-", "saturation-", "error-test-", "target-condition-",
+			"scale-from-zero-", "sfz-", "throughput-", "multi-analyzer-", "passive-",
+		}
+		for _, p := range prefixes {
+			if strings.HasPrefix(name, p) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Clean up test HPAs
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, hpa := range hpaList.Items {
+			if isTestResource(hpa.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover HPA: %s\n", hpa.Name)
+				deleteResourceWithVerification(ctx, func() error {
+					return k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Delete(ctx, hpa.Name, metav1.DeleteOptions{})
+				}, func() bool {
+					_, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).Get(ctx, hpa.Name, metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				}, "HPA", hpa.Name)
+			}
+		}
+	}
+
+	// Clean up test ScaledObjects (KEDA backend)
+	if dynamicClient != nil {
+		soGVR := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+		soList, err := dynamicClient.Resource(soGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+		if err == nil {
+			for _, so := range soList.Items {
+				labels := so.GetLabels()
+				if labels != nil && labels["test-resource"] == boolTrue {
+					soName := so.GetName()
+					GinkgoWriter.Printf("Cleaning up leftover ScaledObject: %s\n", soName)
+					deleteResourceWithVerification(ctx, func() error {
+						return dynamicClient.Resource(soGVR).Namespace(namespace).Delete(ctx, soName, metav1.DeleteOptions{})
+					}, func() bool {
+						_, getErr := dynamicClient.Resource(soGVR).Namespace(namespace).Get(ctx, soName, metav1.GetOptions{})
+						return errors.IsNotFound(getErr)
+					}, "ScaledObject", soName)
+				}
+			}
+		}
+	}
+
+	// Clean up test deployments
+	deployList, err := k8sClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, deploy := range deployList.Items {
+			if isTestResource(deploy.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover Deployment: %s\n", deploy.Name)
+				deleteResourceWithVerification(ctx, func() error {
+					return k8sClient.AppsV1().Deployments(namespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
+				}, func() bool {
+					_, err := k8sClient.AppsV1().Deployments(namespace).Get(ctx, deploy.Name, metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				}, "Deployment", deploy.Name)
+			}
+		}
+	}
+
+	// Clean up test LeaderWorkerSets
+	lwsList := &lwsv1.LeaderWorkerSetList{}
+	if err := crClient.List(ctx, lwsList, client.InNamespace(namespace)); err == nil {
+		for _, lws := range lwsList.Items {
+			if isTestResource(lws.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover LeaderWorkerSet: %s\n", lws.Name)
+				deleteResourceWithVerification(ctx, func() error {
+					return crClient.Delete(ctx, &lws)
+				}, func() bool {
+					err := crClient.Get(ctx, client.ObjectKey{Name: lws.Name, Namespace: namespace}, &lws)
+					return errors.IsNotFound(err)
+				}, "LeaderWorkerSet", lws.Name)
+			}
+		}
+	}
+
+	// Clean up test jobs
+	jobList, err := k8sClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, job := range jobList.Items {
+			if isTestResource(job.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover Job: %s\n", job.Name)
+				propagation := metav1.DeletePropagationBackground
+				deleteResourceWithVerification(ctx, func() error {
+					return k8sClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
+						PropagationPolicy: &propagation,
+					})
+				}, func() bool {
+					_, err := k8sClient.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				}, "Job", job.Name)
+			}
+		}
+	}
+
+	// Clean up test services
+	svcList, err := k8sClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, svc := range svcList.Items {
+			if isTestResource(svc.Name) {
+				GinkgoWriter.Printf("Cleaning up leftover Service: %s\n", svc.Name)
+				deleteResourceWithVerification(ctx, func() error {
+					return k8sClient.CoreV1().Services(namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
+				}, func() bool {
+					_, err := k8sClient.CoreV1().Services(namespace).Get(ctx, svc.Name, metav1.GetOptions{})
+					return errors.IsNotFound(err)
+				}, "Service", svc.Name)
+			}
+		}
+	}
+
+	// Clean up test ServiceMonitors in monitoring namespace
+	monitoringNS := cfg.MonitoringNS
+	if monitoringNS != "" {
+		smList := &promoperator.ServiceMonitorList{}
+		if err := crClient.List(ctx, smList, client.InNamespace(monitoringNS)); err == nil {
+			for _, sm := range smList.Items {
+				smName := sm.Name
+				if isTestResource(smName) {
+					GinkgoWriter.Printf("Cleaning up leftover ServiceMonitor: %s\n", smName)
+					deleteResourceWithVerification(ctx, func() error {
+						return crClient.Delete(ctx, &promoperator.ServiceMonitor{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:      smName,
+								Namespace: monitoringNS,
+							},
+						})
+					}, func() bool {
+						err := crClient.Get(ctx, client.ObjectKey{Name: smName, Namespace: monitoringNS}, &promoperator.ServiceMonitor{})
+						return errors.IsNotFound(err)
+					}, "ServiceMonitor", smName)
+				}
+			}
+		}
+	}
+}
+
+// deleteResourceWithVerification deletes a resource and verifies it's actually deleted
+// deleteFunc: function that performs the deletion
+// verifyFunc: function that returns true when resource is confirmed deleted
+// resourceType: human-readable resource type for logging
+// resourceName: name of the resource for logging
+func deleteResourceWithVerification(ctx context.Context, deleteFunc func() error, verifyFunc func() bool, resourceType, resourceName string) {
+	// Attempt deletion
+	if err := deleteFunc(); err != nil {
+		if !errors.IsNotFound(err) {
+			GinkgoWriter.Printf("Warning: Failed to delete %s %s: %v\n", resourceType, resourceName, err)
+		}
+		return
+	}
+
+	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 2*time.Minute, true, func(context.Context) (bool, error) {
+		if verifyFunc() {
+			GinkgoWriter.Printf("Successfully deleted %s %s\n", resourceType, resourceName)
+			return true, nil
+		}
+		return false, nil
+	})
+	if err != nil {
+		GinkgoWriter.Printf("Warning: %s %s may not have been fully deleted after 2m: %v\n", resourceType, resourceName, err)
+	}
+}
+
+// cleanupResource deletes a resource and waits for deletion to complete
+// This is a convenience wrapper for common cleanup patterns
+func cleanupResource(ctx context.Context, resourceType, _ /* namespace */, name string, deleteFunc func() error, verifyFunc func() bool) {
+	deleteResourceWithVerification(ctx, deleteFunc, verifyFunc, resourceType, name)
+}
+
+// expectScalingManagerDesiredReplicasConsumed asserts that scaling manager emitted llmsm_desired_replicas
+// for scaleTargetDeployment and that KEDA consumed it, by checking that the
+// KEDA-managed HPA for that deployment has a non-empty external CurrentMetrics
+// entry. KEDA only populates CurrentMetrics after successfully reading the metric
+// from Prometheus, so this proves the engine's decision was emitted and consumed.
+//
+// Note: this does NOT assert the numeric magnitude of the recommendation. The
+// KEDA HPA surface exposes the consumed value but not reliably enough to gate a
+// ">= N" assertion here; callers that need magnitude must query Prometheus
+// directly. The caller wraps this in Eventually.
+// expectKEDAExternalMetricWired asserts KEDA has replaced the HPA's default
+// metric with its own external one.
+//
+// A KEDA-created HPA does not start out carrying that metric. KEDA creates the
+// HPA with an empty spec.metrics, Kubernetes DEFAULTS the empty list to
+// Resource/cpu at 80% utilization, and KEDA patches the external metric in
+// afterwards -- measured at 20 to 35 seconds on a kind cluster, not instantly.
+//
+// Until that patch lands the HPA is scaling on CPU, and on a cluster with no
+// metrics-server it cannot scale at all:
+//
+//	ScalingActive=False FailedGetResourceMetric ... (get pods.metrics.k8s.io)
+//	FailedComputeMetricsReplicas: invalid metrics (1 invalid out of 1)
+//
+// A spec that waits on Deployment replicas without checking this spends its
+// entire timeout blaming the Deployment for a metric KEDA never wired. That is
+// exactly how a 600-second smoke failure read: The scaling manager publishing a fresh target
+// every cycle, the HPA parked at DesiredReplicas 0, and nothing in the failure
+// naming the cause.
+//
+// Reads spec.Metrics, NOT status.CurrentMetrics. The spec says KEDA WIRED the
+// metric; the status says a value was READ from it.
+// expectScalingManagerDesiredReplicasConsumed covers the second. Keeping them apart is the
+// point: "never wired" and "wired but unreadable" look identical from the
+// Deployment and need opposite fixes.
+func expectKEDAExternalMetricWired(g Gomega, namespace, scaleTargetDeployment string) {
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+	var found bool
+	var carried []string
+	for i := range hpaList.Items {
+		hpa := &hpaList.Items[i]
+		if hpa.Spec.ScaleTargetRef.Name != scaleTargetDeployment {
+			continue
+		}
+		for _, m := range hpa.Spec.Metrics {
+			carried = append(carried, string(m.Type))
+			if m.Type == autoscalingv2.ExternalMetricSourceType {
+				found = true
+			}
+		}
+	}
+	g.Expect(found).To(BeTrue(),
+		"KEDA has not wired its external metric onto the HPA for %s; spec.metrics carries %v. "+
+			"While that is so the HPA scales on the Kubernetes-defaulted CPU metric, which needs a "+
+			"metrics-server this cluster may not have -- so the target cannot move whatever the scaling manager recommends",
+		scaleTargetDeployment, carried)
+}
+
+// waitForKEDAExternalMetricWired waits for expectKEDAExternalMetricWired, and
+// recreates the ScaledObject once when KEDA wired nothing.
+//
+// KEDA asks the external scaler for the metric spec when it reconciles the
+// ScaledObject, and only then. A ScaledObject created while KEDA's connection
+// to the scaler is still broken -- seconds after a controller restart, before
+// KEDA's gRPC client has reconnected -- gets "got empty metric spec", an HPA
+// on the CPU default, and no second attempt: KEDA reconciles again only on a
+// spec change. Measured twice on kind: the spec registered its ScaledObject at
+// 18:09:03, KEDA's dial timed out at 18:09:03, and its first successful call to
+// the new controller came at 18:09:08 -- after which the HPA stayed unwired for
+// the whole timeout while the scaling manager published desired=2 every cycle.
+//
+// That is KEDA's wiring, not the scaling manager's decision, so it is recovered rather than
+// failed, once and loudly: the ScaledObject is recreated after waitBefore and
+// must then wire within the rest of the budget. A second failure is reported
+// with the guard's own diagnosis.
+func waitForKEDAExternalMetricWired(namespace, scaleTargetDeployment, scaledObjectName string) {
+	const waitBefore = 45 * time.Second
+	poll := time.Duration(cfg.PollIntervalSec) * time.Second
+	wired := func(g Gomega) {
+		reportIfHPAOnCPUDefault(namespace, scaleTargetDeployment)
+		expectKEDAExternalMetricWired(g, namespace, scaleTargetDeployment)
+	}
+	if InterceptGomegaFailure(func() { Eventually(wired, waitBefore, poll).Should(Succeed()) }) == nil {
+		return
+	}
+	GinkgoWriter.Printf("KEDA did not wire its external metric onto the HPA for %s within %s; "+
+		"recreating ScaledObject %s once so KEDA asks the scaler for the metric spec again\n",
+		scaleTargetDeployment, waitBefore, scaledObjectName)
+	Expect(fixtures.RecreateScaledObject(ctx, crClient, namespace, scaledObjectName)).To(Succeed())
+	Eventually(wired, 120*time.Second, poll).Should(Succeed())
+}
+
+// hpaOnCPUDefault reports whether the HPA for a deployment carries NO external
+// metric: KEDA built the HPA while the scaling manager's external scaler was unreachable, got
+// no metric spec back ("got empty metric spec" in the KEDA operator log),
+// created the HPA with an empty metrics list, and Kubernetes defaulted that to
+// Resource/cpu.
+//
+// It also returns what the HPA does carry and why it is not scaling, so the
+// caller can say which of the two it saw. The ScaledObject's own conditions do
+// NOT distinguish them -- it reports Ready=True in both -- which is why a run
+// that hit this spent 120 s polling a condition that could not change, and why
+// the diagnosis has to come from the HPA.
+func hpaOnCPUDefault(namespace, scaleTargetDeployment string) (latched bool, carried []string, why string) {
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, nil, fmt.Sprintf("listing HPAs failed: %v", err)
+	}
+	var seen bool
+	for i := range hpaList.Items {
+		hpa := &hpaList.Items[i]
+		if hpa.Spec.ScaleTargetRef.Name != scaleTargetDeployment {
+			continue
+		}
+		seen = true
+		for _, m := range hpa.Spec.Metrics {
+			carried = append(carried, string(m.Type))
+			if m.Type == autoscalingv2.ExternalMetricSourceType {
+				return false, carried, ""
+			}
+		}
+		for _, c := range hpa.Status.Conditions {
+			if c.Type == autoscalingv2.ScalingActive && c.Status == corev1.ConditionFalse {
+				why = fmt.Sprintf("%s: %s", c.Reason, c.Message)
+			}
+		}
+	}
+	// No HPA yet is KEDA not having reconciled at all, which a wait DOES fix.
+	return seen, carried, why
+}
+
+// reportIfHPAOnCPUDefault prints the diagnosis when the HPA carries no external
+// metric, so a spec that is going to fail says WHY on its first poll instead of
+// at the end of the whole budget.
+//
+// It does NOT try to repair the state, and that is a deliberate retreat.
+// Annotating the ScaledObject was tried first, on the documented grounds that
+// KEDA re-derives an HPA when its ScaledObject changes: in a local run the
+// object was nudged 35 times over 210 s and the HPA never left [Resource]. An
+// annotation does not bump .spec, so it may not be a change KEDA acts on at
+// all. A recovery that does not recover would have turned a legible failure
+// into a retry loop that hides the defect, which is worse than failing.
+func reportIfHPAOnCPUDefault(namespace, scaleTargetDeployment string) {
+	latched, carried, why := hpaOnCPUDefault(namespace, scaleTargetDeployment)
+	if !latched {
+		return
+	}
+	GinkgoWriter.Printf(
+		"\nThe HPA for %s carries %v and NO external metric, so it is scaling on the "+
+			"Kubernetes CPU default and cannot move whatever the scaling manager recommends (%s). KEDA built "+
+			"it that way because it got no metric spec from the scaling manager's external scaler when it "+
+			"reconciled -- look for \"got empty metric spec\" in the KEDA operator log. The "+
+			"ScaledObject reports Ready=True throughout, which is why this has to be said "+
+			"here rather than read off its conditions. See internal/scaler/server.go's "+
+			"NeedLeaderElection for the mitigations in place and what they do not cover.\n",
+		scaleTargetDeployment, carried, why)
+}
+
+func expectScalingManagerDesiredReplicasConsumed(g Gomega, namespace, scaleTargetDeployment string) {
+	hpaList, err := k8sClient.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(ctx, metav1.ListOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+	var consumed bool
+	for i := range hpaList.Items {
+		if hpaList.Items[i].Spec.ScaleTargetRef.Name != scaleTargetDeployment {
+			continue
+		}
+		for _, m := range hpaList.Items[i].Status.CurrentMetrics {
+			if m.External != nil {
+				consumed = true
+			}
+		}
+	}
+	g.Expect(consumed).To(BeTrue(),
+		"KEDA HPA for %s should have an external CurrentMetrics entry, proving llmsm_desired_replicas was emitted and consumed", scaleTargetDeployment)
+}

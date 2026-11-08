@@ -1,0 +1,130 @@
+apiVersion: v1
+kind: ConfigMap
+# A REFERENCE, not something to `kubectl apply` over an install. It has no
+# `limiters:`, so applying it replaces the `default` entry the installer wrote
+# and removes the GPU limit with it. Edit the installed ConfigMap instead
+# (kubectl edit configmap scaling-manager-scaling-policy-config -n <controller-namespace>),
+# or re-run the install with LLMSM_LIMITER. See docs/reference/scaling-policy.md.
+#
+# This ConfigMap defines saturation-based scaling thresholds for model variants.
+# Saturation scaling is enabled by default and uses KV cache utilization and queue length
+# metrics to determine when replicas are saturated and when to scale up.
+#
+# Configuration structure:
+# - 'default' entry: Global default thresholds applied to all variants
+# - Override entries: Per-model/namespace custom thresholds (must include model_id and namespace)
+#
+# Threshold definitions:
+# - kvCacheThreshold: Replica saturated if KV cache utilization >= threshold (0.0-1.0)
+# - queueLengthThreshold: Replica saturated if queue length >= threshold (integer)
+#
+metadata:
+  name: scaling-manager-scaling-policy-config
+  namespace: scaling-manager-system
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/managed-by: kustomize
+data:
+  # Global defaults applied to all variants unless overridden.
+  #
+  # The `analyzers` section selects the token/capacity-based saturation analyzer,
+  # which is also what an empty `analyzerName` gets. It is the only one there is:
+  # the percentage-based analyzer this used to choose between was removed, so
+  # deleting the section opts out of nothing and only drops your thresholds.
+  # See docs/reference/scaling-policy.md.
+  #
+  # Each analyzer accepts the ScalingPolicy plugin envelope (proposal #1245):
+  #   analyzers:
+  #     - type: saturation            # plugin type; `name:` still works as an alias
+  #       parameters: { scaleUpThreshold: 0.90 }
+  default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    # V2-only thresholds:
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    # Size each replica's capacity: usable KV is the physical budget scaled by
+    # kvCacheThreshold, and queueLengthThreshold gates the compute-bound estimate.
+    kvCacheThreshold: 0.80
+    queueLengthThreshold: 5
+    # What bounds scaling. Declaring a limiter is what turns limiting on, and
+    # declaring none — as shipped — means nothing is limited. There is no separate
+    # enable flag and no implicit default limiter.
+    #
+    # Ships empty deliberately: a GPU-aware optimizer can only allocate to a
+    # variant whose accelerator it can resolve, so enabling it by default would
+    # silently freeze every workload that has no GPU nodeSelector. Declare
+    # `limiters: [{type: gpu-inventory}]` once the fleet's accelerators resolve.
+    # Enable priority-weighted rescale: under GPU contention the V2 optimizer
+    # redistributes the whole budget by priority x demand, reclaiming from
+    # lower-priority models so higher-priority work can run. Off by default.
+    # Budget-scope flag (read only from this `default` entry): the value here
+    # governs the cluster budget; a namespace-local config's `default` governs
+    # that namespace's quota budget. Has no effect without a same-scope GPU budget.
+    enableRescale: false
+
+  # Per-model overrides inherit the default entry via field-level merge, so they
+  # only need the fields they change (kvCacheThreshold, queueLengthThreshold,
+  # scaleUpThreshold, scaleDownBoundary, priority).
+
+  # An override entry is identified by its BODY: set model_id and namespace inside
+  # it. Its ConfigMap data key is yours to choose — pick something readable.
+  #
+  # The key cannot contain the model ID: a ConfigMap data key admits only
+  # [-._a-zA-Z0-9], which excludes both the "/" in a namespaced model ID and "#".
+
+  # Example per-model override for granite model in lab namespace
+  # Uncomment and customize as needed
+  # granite-13b-lab: |
+  #   model_id: ibm/granite-13b
+  #   namespace: lab-namespace
+  #   kvCacheThreshold: 0.75
+  #   queueLengthThreshold: 10
+
+  # Example per-model override for llama model in production namespace
+  # Shows partial override (only some fields specified, rest inherit from default)
+  # Uses the plugin envelope for the analyzer and an inline scale-to-zero setting
+  # (scaleToZero is the only per-model surface: enabled + retentionPeriod). Time
+  # to zero is retentionPeriod + KEDA's cooldownPeriod on the ScaledObject, in
+  # sequence.
+  # llama-70b-prod: |
+  #   model_id: meta/llama-70b
+  #   namespace: production
+  #   priority: 2.0
+  #   scaleToZero: { enabled: false }
+  #   analyzers:
+  #     - type: saturation
+  #       parameters: { scaleUpThreshold: 0.90 }
+
+  # Cluster GPU limiter — the sole source that selects the limiter, applied live
+  # (no restart) and honored ONLY on the `default` entry above (a cluster-budget
+  # scope, like enableRescale). A limiters list selects a SINGLE mode: a quota
+  # entry wins over any gpu-inventory entry, so add ONE of the forms below to the
+  # `default` entry. With no limiters: declared — as shipped — nothing is limited.
+  #
+  #   # (a) physical-capacity limiter:
+  #   limiters:
+  #     - type: gpu-inventory
+  #
+  #   # (b) operator-declared quota limiter:
+  #   limiters:
+  #     - type: quota
+  #       name: cluster-h100
+  #       scope: cluster
+  #       quotas: { H100: 32 }
+  #
+  #   # (c) quota limiter bounded by Kueue: per namespace and accelerator type
+  #   #     the SMALLER of the Kueue grant and the static cap applies. At
+  #   #     namespace scope the grant counts cohort borrowing where it is safe
+  #   #     (default on; countBorrowable: false under kueue: keeps nominal).
+  #   #     Kueue flavors without a product label (the usual install) grant no
+  #   #     named type, so name the types here and -1 lets Kueue set the figure.
+  #   limiters:
+  #     - type: quota
+  #       name: namespace-quota
+  #       scope: namespace
+  #       kueue: { enabled: true }
+  #       namespaceQuotas:
+  #         team-a: { H100: 8 }
+  #         default: { H100: -1 }

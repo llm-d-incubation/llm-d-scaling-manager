@@ -1,0 +1,19 @@
+# Known failures of the throughput analyzer's ITL line property tests
+# (docs/proposals/analyzer-learner.md, 2.6; PR 4b, "Tests").
+#
+# Each row is a property case that fails on today's code, and the violation
+# kind it fails with (expect). TestThroughputLineProperties requires a listed
+# case to fail with that kind: failing with another kind is a new failure,
+# and passing on every seed breaks the build until the row is removed. A row
+# naming no case is an error. A PR that fixes a row removes it; one that
+# changes a case or its generator restates measured. Nothing here is skipped,
+# and no tolerance is widened to pass a defect.
+#
+# id is class/learner/case, as the test names it; rows are sorted by id.
+# measured is the fail rate over the case's seeds and the first failure, when
+# the row was written. owner is what clears the row: an issue ("#394"), or
+# "open". CheckLedger holds that form only, so a closed issue passes.
+#
+# Empty since learner PR 4b-3 removed its last row,
+# edges/throughput-itl/sequence-cap (the cap admission).
+[]

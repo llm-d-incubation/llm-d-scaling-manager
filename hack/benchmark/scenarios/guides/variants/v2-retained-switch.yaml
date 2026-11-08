@@ -1,0 +1,21 @@
+# Secondary variant for the RETAINED-POOL SWITCH test.
+#
+# Both variants share one InferencePool and one EPP (Topology B), so the
+# scheduler spreads the same traffic across both. That is what makes the
+# asymmetry below the whole point: with identical variants the two land on
+# identical utilization, and the switch rule is correct to do nothing --
+# a candidate must be under STRICTLY more pressure than the model awake.
+#
+# So this variant is given twice the GPUs and TP=2, which roughly doubles its
+# per-replica capacity. Under shared traffic it therefore sits COMFORTABLE
+# while the TP=1 primary runs tight, and the pool should hold the primary.
+# Scaling the primary out then reverses which of the two is tighter, which is
+# what drives the switch the test is here to observe.
+suffix: v2
+variantCost: "10.0"
+minReplicas: 1
+maxReplicas: 4
+parallelism:
+  tensor: 2
+resources:
+  nvidia.com/gpu: 2

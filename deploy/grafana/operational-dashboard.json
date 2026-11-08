@@ -1,0 +1,3138 @@
+{
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource_uid",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "exported_namespace",
+          "value": "exported_namespace"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "namespace_label",
+        "options": [
+          {
+            "selected": true,
+            "text": "exported_namespace",
+            "value": "exported_namespace"
+          },
+          {
+            "selected": false,
+            "text": "namespace",
+            "value": "namespace"
+          }
+        ],
+        "query": "exported_namespace,namespace",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource_uid"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Namespace",
+        "multi": true,
+        "name": "namespace",
+        "query": {
+          "query": "label_values(llmsm_metrics_pods_discovered, $namespace_label)",
+          "refId": "ns"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource_uid"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Variant",
+        "multi": true,
+        "name": "variant",
+        "query": {
+          "query": "label_values(llmsm_current_replicas{$namespace_label=~\"$namespace\"}, variant_name)",
+          "refId": "var"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource_uid"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "SLO model",
+        "multi": true,
+        "name": "slo_model",
+        "query": {
+          "query": "label_values(llmsm_slo_target_seconds{$namespace_label=~\"$namespace\"}, model_name)",
+          "refId": "slo_model"
+        },
+        "refresh": 2,
+        "skipUrlSync": false,
+        "type": "query",
+        "definition": "label_values(llmsm_slo_target_seconds{$namespace_label=~\"$namespace\"}, model_name)",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "description": "Models the SLO row shows: those whose policy sets slo targets.",
+        "allValue": ".*"
+      },
+      {
+        "name": "controller_instance",
+        "label": "Controller",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource_uid}"
+        },
+        "query": {
+          "query": "label_values(llmsm_desired_replicas, controller_instance)",
+          "refId": "controller-variable-query"
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1,
+        "description": "Which the scaling manager controller emitted the series. A cluster runs one per namespace-scoped install; this is how an admin tells them apart."
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Fleet health \u2014 all namespaces",
+      "description": "Controller and cluster health. These panels do NOT follow the Namespace variable: they answer \"is the scaling manager working\", across every namespace it manages.",
+      "collapsed": false,
+      "id": 74,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 55,
+      "type": "stat",
+      "title": "The scaling manager installs present",
+      "description": "The scaling manager controller Deployments on the cluster, from kube-state-metrics. Compare with the next panel: a gap means an install exists but is not being scraped.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "count(kube_deployment_status_replicas_available{deployment=~\"scaling-manager-controller-manager\"})",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 56,
+      "type": "stat",
+      "title": "Controllers reporting metrics",
+      "description": "Distinct controllers whose metrics reach Prometheus. Lower than 'installs present' means some install is not scraped -- a broken ServiceMonitor looks exactly like a controller that is not scaling.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "count(count by (controller_instance) (llmsm_desired_replicas))",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 57,
+      "type": "stat",
+      "title": "The scaling manager scrape targets DOWN",
+      "description": "Scrape targets Prometheus cannot reach. Anything above zero is an install whose panels below will be silently empty.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "count(up{service=~\".*scaling-manager.*metrics.*\"} == 0) or vector(0)",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 58,
+      "type": "stat",
+      "title": "Namespaces being optimized",
+      "description": "Namespaces with at least one scaling-manager-managed variant reporting.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "count(count by ($namespace_label) (llmsm_desired_replicas))",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Optimization interval",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "id": 47,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max(llmsm_config_optimization_interval_seconds)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Optimization Interval (Secs)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Indicates whether GPU discovery is on or off. The scaling manager only discovers GPUs when a gpu-inventory limiter is declared in the saturation config's \"limiters\" list. Related metric is llmsm_available_gpus. Metric is llmsm_gpu_discovery_up.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "id": 54,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max(llmsm_gpu_discovery_up)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "GPU Discovery Status",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of available GPUs by accelerator type. When llmsm_gpu_discovery_up metric is 1, shows number of currently available GPUs. When llmsm_gpu_discovery_up is 0, shows the number of GPUs that were available at the last successful discovery. Only available in clusters such as OpenShift where the scaling manager can iterate over node objects. There is no exclusions such as tainted nodes or GPUs operating in different modes such as MIG. Metric is llmsm_available_gpus.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "id": 50,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by (accelerator_type) (llmsm_available_gpus)",
+          "instant": false,
+          "legendFormat": "{{accelerator_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Available GPUs",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of models processed in the last optimization cycle. A variant is found when KEDA calls the scaling manager's external scaler for its ScaledObject, whose trigger metadata carries the modelID. Metric is llmsm_models_processed.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "id": 10,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max(llmsm_models_processed)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Models Processed",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of new errors by component in the last hour. Shows how many errors occurred in the past 60 minutes. Resets to 0 once errors age beyond the 1-hour window. Metric is llmsm_errors_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 9
+      },
+      "id": 49,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "floor(sum by (component) (increase(llmsm_errors_total[1h])))",
+          "instant": false,
+          "legendFormat": "{{component}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "The scaling manager Errors",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Freshness status of metrics for each variant. \"fresh\": metric collected < 1 minute ago, \"stale\": metric collected < 5 minutes ago, \"unavailable\": metric collected >= 5 minutes ago, \"missing\": metric doesn't exist. llmsm_metrics_freshness_status.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "gray",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fresh"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stale"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "semi-dark-green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "missing"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unavailable"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 9
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "sum(llmsm_metrics_freshness_status{variant_name=~\"$variant\"}) by (variant_name, status)",
+          "instant": false,
+          "legendFormat": "{{status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Metrics Freshness",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of metrics collection errors during the last hour. Metric is llmsm_metrics_collection_errors_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 9
+      },
+      "id": 26,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "floor(sum by (query_type) (increase(llmsm_metrics_collection_errors_total[1h])))",
+          "instant": false,
+          "legendFormat": "{{query_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Metric Collection Errors",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Duration of metrics collection operations by query type in seconds. Metric is llmsm_metrics_collection_duration_seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(llmsm_metrics_collection_duration_seconds_bucket[5m])) by (le, query_type))",
+          "instant": false,
+          "legendFormat": "{{query_type}} - p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(llmsm_metrics_collection_duration_seconds_bucket[5m])) by (le, query_type))",
+          "instant": false,
+          "legendFormat": "{{query_type}} - p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(llmsm_metrics_collection_duration_seconds_bucket[5m])) by (le, query_type))",
+          "instant": false,
+          "legendFormat": "{{query_type}} - p99",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(llmsm_metrics_collection_duration_seconds_sum[5m])) by (query_type) / sum(rate(llmsm_metrics_collection_duration_seconds_count[5m])) by (query_type)",
+          "instant": false,
+          "legendFormat": "{{query_type}} - average",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Metrics Collection Duration - Percentiles and Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Duration of optimization loop cycles in seconds. Metric is llmsm_optimization_duration_seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "average"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 30,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(llmsm_optimization_duration_seconds_bucket[5m])) by (le))",
+          "instant": false,
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(llmsm_optimization_duration_seconds_bucket[5m])) by (le))",
+          "instant": false,
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(llmsm_optimization_duration_seconds_bucket[5m])) by (le))",
+          "instant": false,
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "rate(llmsm_optimization_duration_seconds_sum[5m]) / rate(llmsm_optimization_duration_seconds_count[5m])",
+          "instant": false,
+          "legendFormat": "average",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Optimization Duration - Percentiles and Average",
+      "type": "timeseries"
+    },
+    {
+      "type": "row",
+      "title": "Selected namespace: $namespace",
+      "description": "What the scaling manager did to the workloads in the selected namespace. Every panel here follows the Namespace variable.",
+      "collapsed": false,
+      "id": 75,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "id": 59,
+      "type": "stat",
+      "title": "Queued but unmeasured",
+      "description": "Requests queued at engines the collector could not measure, in the selected namespace. Broken down per model in the chart of the same name below.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "sum(llmsm_unmeasured_queue{$namespace_label=~\"$namespace\"}) or vector(0)",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 61,
+      "type": "stat",
+      "title": "Models blocked from scaling",
+      "description": "Models the optimizer decided not to scale, in the selected namespace, each counted once. The utilization-share optimizer's passing states (awaiting-release, reversal-hold, swinging, transfer-limit, burst-ending, fast-swing-capped) and floor-pinned are not counted: they are expected while it works. Every reason is in the 'Models that will not scale, by reason' chart below.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "count(count by (model_name, $namespace_label) (llmsm_model_scaling_blocked{$namespace_label=~\"$namespace\", reason!~\"awaiting-release|reversal-hold|swinging|transfer-limit|burst-ending|fast-swing-capped|floor-pinned\"} == 1)) or vector(0)",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Pod-to-variant mapping misses in the selected namespace over the last hour.\n\nAbsence of the series means no miss ever happened, so this reads 0 rather than 'No data' -- which on a counter is the same fact told twice as ambiguously. Not applied to the two error gauges beside it: they group by component and query_type, and `or vector(0)` appends an unlabelled zero series next to the real ones (measured on Thanos).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 30
+      },
+      "id": 53,
+      "options": {
+        "barShape": "flat",
+        "barWidthFactor": 0.3,
+        "effects": {
+          "barGlow": false,
+          "centerGlow": false,
+          "gradient": true
+        },
+        "endpointMarker": "point",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "segmentCount": 1,
+        "segmentSpacing": 0.3,
+        "shape": "gauge",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": false,
+        "sizing": "auto",
+        "sparkline": true,
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "floor(sum(increase(llmsm_pod_mapping_miss_total{$namespace_label=~\"$namespace\"}[1h]))) or vector(0)",
+          "instant": false,
+          "legendFormat": "total",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Pod Mapping Misses",
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of pods with metrics discovered for a namespace. Metric is llmsm_metrics_pods_discovered.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 30
+      },
+      "id": 24,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "sum(llmsm_metrics_pods_discovered{$namespace_label=~\"$namespace\"}) by ($namespace_label)",
+          "instant": false,
+          "legendFormat": "{{$namespace_label}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Pods with Metrics",
+      "type": "stat"
+    },
+    {
+      "id": 60,
+      "type": "timeseries",
+      "title": "Queued but unmeasured, by model",
+      "description": "Which model is queueing without a measurable replica, and for how long. A flat non-zero line is an autoscaler that will never react: the demand is real and no variant carries it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "llmsm_unmeasured_queue{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "{{$namespace_label}}/{{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 62,
+      "type": "timeseries",
+      "title": "Models that will not scale, by reason",
+      "description": "One line per (model, reason) for as long as the reason holds; the series disappears when it is resolved, so a flat line is a standing condition nobody has acted on. variant-floor: scale-to-zero is enabled but a variant declares minReplicas > 0, so the model never reaches zero and the setting is inert. policy-forbids-zero: every variant permits zero but the model's policy disables scale-to-zero, so the bounds are inert - most misleading with a single variant. engine-unsupported: the model runs both vLLM and SGLang, so no single request counter measures its idleness (either alone is supported). activation-retention: just woken from zero and held for the retention period so the wake is not undone -- transient, and clears itself. no-wake-signal: EPP is exporting no flow-control queue at all, so nothing can wake a parked model - usually an EPP pod older than the ConfigMap that enabled flowControl.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "llmsm_model_scaling_blocked{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "{{$namespace_label}}/{{model_name}} - {{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "short",
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 63,
+      "type": "timeseries",
+      "title": "Models at zero replicas",
+      "description": "Total replicas serving each model, summed across its variants. Zero is normal for an idle model that scaled to zero, and a fault only when demand exists - which is what the LLMSMModelParkedWhileRequestsRefused alert joins against, using this series as the key. EPP's request metrics carry model_name and the router's namespace (added at scrape time), and the per-variant llmsm_current_replicas carries no model_name, so this is the only series the two sides can be joined on. A line sitting flat at zero while traffic arrives is a stranded model.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "llmsm_model_replicas{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "{{$namespace_label}}/{{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "KV cache token usage vs capacity. llmsm_kv_cache_tokens_used: Total KV cache tokens currently in use across all replicas of a variant (sum of vLLM TokensInUse). llmsm_kv_cache_tokens_capacity: Total KV cache token capacity across all replicas of a variant (sum of vLLM TotalKvCapacityTokens).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*capacity.*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "id": 42,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name) (llmsm_kv_cache_tokens_used{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - used",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name) (llmsm_kv_cache_tokens_capacity{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - capacity",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Capacity Breakdown",
+      "type": "timeseries"
+    },
+    {
+      "id": 64,
+      "type": "timeseries",
+      "title": "Variants pinned at their ceiling",
+      "description": "1 while a variant's target sits on its own maxReplicas. On its own this is unremarkable - a correctly sized variant sits at its ceiling under load. It matters together with utilization above the scale-up threshold, which is demand going unserved: the remedy there is to raise maxReplicas, NOT to add accelerators (that is llmsm_decisions_limited_total, which means GPUs ran out). Also read it when interpreting a benchmark - a run pinned at its ceiling measures the ceiling, not the autoscaler.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "llmsm_variant_at_max_replicas{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}",
+          "legendFormat": "{{$namespace_label}}/{{variant_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Per-variant utilization ratio from saturation analysis: TotalDemand / TotalCapacity from the analyzer result. Capacity-weighted and unbounded above \u2014 a value > 1.0 means demand exceeds supply. llmsm_saturation_utilization.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name, accelerator_type) (llmsm_saturation_utilization{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - {{accelerator_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Saturation Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Replica count comparison. llmsm_current_replicas: Current number of replicas for each variant. llmsm_desired_replicas: Desired number of replicas for each variant.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*desired.*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      },
+      "id": 43,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name) (llmsm_current_replicas{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - current",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "max by ($namespace_label, variant_name) (llmsm_desired_replicas{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"})",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - desired",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Replica Overview",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Number of scaling operations per second over the last 5 minutes, grouped by decision reason. Metric is llmsm_replica_scaling_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 89
+      },
+      "id": 52,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason, direction) (rate(llmsm_replica_scaling_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[5m]))",
+          "instant": false,
+          "legendFormat": "{{reason}}: {{direction}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Scaling Decision Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource_uid"
+      },
+      "description": "Average number of scaling decisions limited by constraints per optimization cycle (averaged over 1 hour). Shows how often limiters prevent scaling due to insufficient capacity. For example, there were 36 limited decisions total in the last hour for 30 seconds optimization interval, and there are 120 optimization cycles per hour (3600 seconds \u00f7 30 seconds), then the average is 36 \u00f7 120 = 0.3 decisions per cycle. The metric is llmsm_decisions_limited_total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 97
+      },
+      "id": 51,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "13.0.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource_uid"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(llmsm_decisions_limited_total{$namespace_label=~\"$namespace\", variant_name=~\"$variant\"}[1h])) by ($namespace_label, variant_name, limiter_name) * scalar(max(llmsm_config_optimization_interval_seconds))",
+          "instant": false,
+          "legendFormat": "{{variant_name}} - {{limiter_name}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Limiter Impact",
+      "type": "timeseries"
+    },
+    {
+      "id": 65,
+      "type": "heatmap",
+      "title": "How long a wake from zero took",
+      "description": "Distribution of llmsm_scale_from_zero_wake_seconds: from the first activation the scaling manager published to the model being observed serving. Read the SHAPE, not the average. On FMA the same code path takes seconds when it binds a reusable sleeping instance and tens of seconds when it has to build one, so two bands is what a working warm pool looks like and the fast band thinning is how its regression appears - the wake still succeeds, just slowly, which is why nothing else reports it. A single slow band on a non-FMA model is simply the model load time and is expected.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 105
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "sum by (le) (increase(llmsm_scale_from_zero_wake_seconds_bucket{$namespace_label=~\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{le}}",
+          "refId": "A",
+          "format": "heatmap"
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges",
+          "steps": 32
+        },
+        "yAxis": {
+          "unit": "s"
+        },
+        "legend": {
+          "show": true
+        },
+        "tooltip": {
+          "show": true
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 66,
+      "type": "timeseries",
+      "title": "Wake from zero, p95 by model",
+      "description": "95th percentile of llmsm_scale_from_zero_wake_seconds per model. The heatmap above shows whether the distribution is bimodal; this shows which model moved. A step change here with no config change is the warm pool having stopped being reusable - the case measured on a shared cluster, where a bind to a two-day-old sleeper took 59s against a 68s cold build because the sleeper was destroyed and rebuilt rather than reused.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource_uid}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 114
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, $namespace_label, model_name) (rate(llmsm_scale_from_zero_wake_seconds_bucket{$namespace_label=~\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "{{$namespace_label}}/{{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 67,
+      "type": "row",
+      "title": "Serving: latency, queues and per-replica load (EPP + engine)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 122
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 68,
+          "title": "TTFT p95 (EPP)",
+          "type": "timeseries",
+          "description": "Time to first token as the EPP measures it, per model.\n\nmodel_name!=\"\" is not decoration: the EPP records this histogram twice, once per model and once per flow-control flow (fairness_id, priority, streaming) with no model_name at all. Without the matcher the flow series forms its own group, and the panel draws a permanent NaN line legended as a nameless 'p95' and 'p50'.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 93
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, model_name) (rate(llm_d_epp_request_ttft_seconds_bucket{namespace=~\"$namespace\", model_name!=\"\"}[5m])))",
+              "legendFormat": "{{model_name}} p95",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, model_name) (rate(llm_d_epp_request_ttft_seconds_bucket{namespace=~\"$namespace\", model_name!=\"\"}[5m])))",
+              "legendFormat": "{{model_name}} p50",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 69,
+          "title": "Inter-token latency p95 (EPP, normalized per output token)",
+          "type": "timeseries",
+          "description": "Normalized time per output token -- the EPP's inter-token latency.\n\nThe `or` covers both builds: llm-d's EPP publishes llm_d_epp_request_ntpot_seconds, upstream publishes inference_objective_normalized_time_per_output_token_seconds. PromQL `or` takes the left where it has series and the right only where it does not.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 93
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, model_name) (rate(llm_d_epp_request_ntpot_seconds_bucket{namespace=~\"$namespace\"}[5m]))) or histogram_quantile(0.95, sum by (le, model_name) (rate(inference_objective_normalized_time_per_output_token_seconds_bucket{namespace=~\"$namespace\"}[5m])))",
+              "legendFormat": "{{model_name}} p95",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 70,
+          "title": "EPP flow-control queue (requests queued at the router)",
+          "type": "timeseries",
+          "description": "Requests held by flow control before they reach any engine.\n\nThis is where a backlog appears when the flowControl gate is on: the EPP admits only what an engine can absorb, so vllm:num_requests_waiting can read 0 while hundreds queue here. At zero replicas it is the ONLY evidence of demand, and it is what scale-from-zero wakes on.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 101
+          },
+          "targets": [
+            {
+              "expr": "sum by (model_name) (llm_d_epp_flow_control_queue_size{namespace=~\"$namespace\"}) or sum by (model_name) (inference_extension_flow_control_queue_size{namespace=~\"$namespace\"})",
+              "legendFormat": "{{model_name}} queued",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 71,
+          "title": "Waiting per replica (EPP per-endpoint queue)",
+          "type": "timeseries",
+          "description": "Queue depth broken down per model-server replica, as the EPP sees it.\n\nEngine-agnostic and per-replica at once, which no single engine metric gives: llm-d publishes llm_d_epp_per_endpoint_queue_size (keyed by model_server_endpoint), upstream publishes inference_pool_per_pod_queue_size (keyed by model_server_pod). Both are plotted; only one will have series on a given cluster.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 101
+          },
+          "targets": [
+            {
+              "expr": "llm_d_epp_per_endpoint_queue_size{namespace=~\"$namespace\"}",
+              "legendFormat": "{{model_server_endpoint}}",
+              "refId": "A"
+            },
+            {
+              "expr": "inference_pool_per_pod_queue_size{namespace=~\"$namespace\"}",
+              "legendFormat": "{{model_server_pod}}",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 72,
+          "title": "Running per replica (engine)",
+          "type": "timeseries",
+          "description": "The one quantity the EPP does NOT break down per replica: it publishes llm_d_epp_request_running as a model-level total and inference_pool_average_running_requests as a pool average, but nothing per pod. So the per-replica series has to come from the engine, with vLLM and SGLang spelled differently and joined by `or`.\n\nAggregated max by (pod) so a replica scraped by two PodMonitors still draws one line.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 109
+          },
+          "targets": [
+            {
+              "expr": "max by (pod) (vllm:num_requests_running{namespace=~\"$namespace\"}) or max by (pod) (sglang:num_running_reqs{namespace=~\"$namespace\"})",
+              "legendFormat": "{{pod}} running",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (model_name) (llm_d_epp_request_running{namespace=~\"$namespace\"})",
+              "legendFormat": "{{model_name}} total (EPP)",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 73,
+          "title": "Pool KV-cache utilization (EPP)",
+          "type": "timeseries",
+          "description": "Pool-average KV utilization as the EPP computes it, with the per-replica engine values alongside.\n\nThe average is what the scheduler routes on; the spread between it and the individual replicas is what tells you whether load is balanced.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 109
+          },
+          "targets": [
+            {
+              "expr": "llm_d_epp_average_kv_cache_utilization{namespace=~\"$namespace\"} or inference_pool_average_kv_cache_utilization{namespace=~\"$namespace\"}",
+              "legendFormat": "{{name}} pool avg",
+              "refId": "A"
+            },
+            {
+              "expr": "max by (pod) (vllm:kv_cache_usage_perc{namespace=~\"$namespace\"}) or max by (pod) (sglang:token_usage{namespace=~\"$namespace\"})",
+              "legendFormat": "{{pod}}",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 87,
+          "title": "Load spread across replicas, by role (scaling manager)",
+          "type": "timeseries",
+          "description": "How evenly the router spreads each role's load over its ready replicas, as the scaling manager reads it every cycle.\n\nmax/mean is 1 when even and approaches the replica count when one replica holds everything. 'idle while saturated' counts ready replicas under 30% KV with nothing waiting while another is at kvCacheThreshold KV (80% by default) or queued. 'imbalanced' is 1 once that has held for two cycles; LLMSMLoadImbalanced fires after 10 minutes of it. A routing finding, not a capacity one: see the troubleshooting entry 'One replica is saturated while others idle'.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 117
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, role) (llmsm_load_kv_max_to_mean_ratio{$namespace_label=~\"$namespace\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{role}} KV max/mean",
+              "refId": "A"
+            },
+            {
+              "expr": "max by ($namespace_label, model_name, role) (llmsm_load_queue_max_to_mean_ratio{$namespace_label=~\"$namespace\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{role}} queue max/mean",
+              "refId": "B"
+            },
+            {
+              "expr": "max by ($namespace_label, model_name, role) (llmsm_load_idle_replicas_while_saturated{$namespace_label=~\"$namespace\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{role}} idle while saturated",
+              "refId": "C"
+            },
+            {
+              "expr": "max by ($namespace_label, model_name, role) (llmsm_load_imbalanced{$namespace_label=~\"$namespace\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{role}} imbalanced",
+              "refId": "D"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              }
+            },
+            "overrides": []
+          }
+        }
+      ]
+    },
+    {
+      "id": 76,
+      "type": "row",
+      "title": "SLO: latency targets as the slo analyzer observes them (observe only)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 123
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 77,
+          "title": "TTFT: observed vs target, by model",
+          "type": "timeseries",
+          "description": "What the router measured over 5 minutes against what the policy declares: the TTFT percentile named in the legend. A gap is a window not judged: too few requests, or excluded for a wake, a starting replica or a restart (the panel at the bottom of the row). A percentile past the router's largest bucket is +Inf, which Grafana also draws as a gap: read the TTFT attainment panel below.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 124
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_observed_seconds{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", objective=\"ttft\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}} {{statistic}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            },
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_target_seconds{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", objective=\"ttft\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}} target",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer (scaling-policy.md, the slo section)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 86,
+          "title": "TPOT: observed mean vs target, by model",
+          "type": "timeseries",
+          "description": "What the router measured over 5 minutes against what the policy declares: the mean time per output token. Apart from TTFT because the two differ by orders of magnitude. A gap is a window not judged (see the panel at the bottom of the row); no TPOT at all while TTFT shows usually means clients do not send stream_options.include_usage.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 124
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_observed_seconds{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", objective=\"tpot\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}} {{statistic}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            },
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_target_seconds{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", objective=\"tpot\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}} target",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer (scaling-policy.md, the slo section)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 78,
+          "title": "Requests per window, by objective",
+          "type": "timeseries",
+          "description": "Completed requests the router recorded per objective over the window, judged or not. Present with no observed point: too few to judge, or the window is excluded (panel below).",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 132
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_window_requests{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}} requests",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer (scaling-policy.md, the slo section)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 79,
+          "title": "TTFT attainment",
+          "type": "timeseries",
+          "description": "Share of completed streaming requests within the TTFT target. Compare with the percentile in the statistic label (0.90 for p90). Counts completed requests only, so under overload the real share is lower.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 132
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, objective, statistic) (llmsm_slo_attainment_ratio{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{statistic}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer (scaling-policy.md, the slo section)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 80,
+          "title": "Fill the TPOT target allows, per variant",
+          "type": "timeseries",
+          "description": "The KV fill, as a fraction of physical KV, at which the variant's mean inter-token latency meets the TPOT target. Before any scale-up headroom, so compare it with the tier's kvCacheThreshold (0.80 by default), the fill saturation prices a replica at: below it, the target needs more replicas than the tier gives. Clamped to [0.15, 0.80] and capped by max_num_seqs, so at the clamp or the cap the line's ITL is below the target. An estimate, not checked against a live fleet yet: known to be off under speculative decoding, a high prefix-cache hit rate, and a pod running several data-parallel ranks behind one API server.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 140
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, variant_name) (llmsm_slo_fill{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}}/{{variant_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer, or no variant here is priced for this (a TTFT-only policy, a variant with no line yet)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 81,
+          "title": "Predicted inter-token latency at the realised fill, per variant",
+          "type": "timeseries",
+          "description": "The mean ITL the variant's line predicts once the scale-up headroom is applied: the latency margin an SLO tier would really have. An estimate, not checked against a live fleet yet: known to be off under speculative decoding, a high prefix-cache hit rate, and a pod running several data-parallel ranks behind one API server.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 140
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, variant_name) (llmsm_slo_predicted_itl_seconds{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\"})",
+              "legendFormat": "{{$namespace_label}}/{{model_name}}/{{variant_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 8
+              },
+              "noValue": "No data: no model here lists the slo analyzer, or no variant here is priced for this (a TTFT-only policy, a variant with no line yet)"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 82,
+          "title": "Where each variant's SLO pricing came from",
+          "type": "state-timeline",
+          "description": "The source of each variant's TPOT pricing over time, one row per variant: own (a full fit), pinned (intercept from an earlier fit), pinned-default (not a measurement), no-line (too few readings), declined (the fit refused them), no-output-length, infeasible, input-invalid. A change of colour is the variant moving from one to another.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 148
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, variant_name) ((llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"own\"} == 1) * 1 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"pinned\"} == 1) * 2 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"pinned-default\"} == 1) * 3 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"no-line\"} == 1) * 4 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"declined\"} == 1) * 5 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"no-output-length\"} == 1) * 6 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"infeasible\"} == 1) * 7 or (llmsm_slo_source{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\", variant_name=~\"$variant\", source=\"input-invalid\"} == 1) * 8)",
+              "legendFormat": "{{$namespace_label}}/{{model_name}}/{{variant_name}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "No data: no model here lists the slo analyzer, or no variant here is priced for this (a TTFT-only policy, a variant with no line yet)",
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "1": {
+                      "text": "own",
+                      "color": "green",
+                      "index": 0
+                    },
+                    "2": {
+                      "text": "pinned",
+                      "color": "blue",
+                      "index": 1
+                    },
+                    "3": {
+                      "text": "pinned-default",
+                      "color": "yellow",
+                      "index": 2
+                    },
+                    "4": {
+                      "text": "no-line",
+                      "color": "purple",
+                      "index": 3
+                    },
+                    "5": {
+                      "text": "declined",
+                      "color": "light-purple",
+                      "index": 4
+                    },
+                    "6": {
+                      "text": "no-output-length",
+                      "color": "orange",
+                      "index": 5
+                    },
+                    "7": {
+                      "text": "infeasible",
+                      "color": "red",
+                      "index": 6
+                    },
+                    "8": {
+                      "text": "input-invalid",
+                      "color": "dark-red",
+                      "index": 7
+                    }
+                  }
+                }
+              ],
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        },
+        {
+          "id": 85,
+          "title": "Why a window was not judged",
+          "type": "state-timeline",
+          "description": "Per model and objective, the reason its window is excluded this cycle: zero-replicas (waking), starting (a replica starting, a scale-up in progress), or unobserved (just after a controller restart, or after cycles the engine skipped the model). Capacity that cannot be scheduled is not excluded: at once for a Deployment, after 30 minutes pending for a LeaderWorkerSet group. Empty while judged.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 148
+          },
+          "targets": [
+            {
+              "expr": "max by ($namespace_label, model_name, objective, reason) (llmsm_slo_excluded{$namespace_label=~\"$namespace\", model_name=~\"$slo_model\"}) == 1",
+              "legendFormat": "{{$namespace_label}}/{{model_name}} {{objective}}: {{reason}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource_uid}"
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "noValue": "Nothing excluded, or no model here lists the slo analyzer"
+            },
+            "overrides": []
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource_uid}"
+          }
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "scaling-manager",
+    "operational"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Scaling Manager Operational Dashboard",
+  "uid": "scaling-manager-op-dash-v2",
+  "version": 1,
+  "weekStart": ""
+}

@@ -1,0 +1,15 @@
+# Loads deploy/grafana/benchmark-dashboard.json, mounted by docker-compose.
+# The file is the repo's own dashboard: rendering it here is what makes the
+# images the dashboard rather than a copy of it.
+apiVersion: 1
+
+providers:
+  - name: scaling-manager-benchmark
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

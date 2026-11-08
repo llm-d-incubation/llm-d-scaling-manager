@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: manager-config
+data:
+  config.yaml: |
+    # Prometheus Configuration (OpenShift)
+    # Point the scaling manager at the in-cluster Thanos Querier exposed by OpenShift's
+    # user-workload-monitoring stack.
+    PROMETHEUS_BASE_URL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
+    # Use the Service CA mounted into the controller pod for server verification.
+    PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "false"
+
+    # Optimization
+    #
+    # 15s, matching the base. This overlay carried 60s with no stated reason,
+    # and the obvious one -- protecting OpenShift's shared Thanos -- is not what
+    # this setting does: the optimize loop reads the metrics cache, and only
+    # PROMETHEUS_METRICS_CACHE_FETCH_INTERVAL below (still 30s) queries
+    # Prometheus. Deciding more often costs API-server reads and CPU, not
+    # queries against shared monitoring.
+    #
+    # It matters most with Fast Model Actuation. Measured on a real cluster, an
+    # FMA requester goes Ready in 3s against 90s for a cold decode pod, because
+    # it binds a launcher that is already warm. At 60s the control loop was 20x
+    # slower than the thing it drives and the warm pool bought nothing: a
+    # benchmark held an FMA variant at 1-2 replicas through a burst while 14
+    # launchers sat unbound. 60s is proportionate to a 90s pod start; it is not
+    # proportionate to a 3s one.
+    GLOBAL_OPT_INTERVAL: "15s"
+
+    # Feature Flags
+    LLMSM_SCALE_TO_ZERO: "false"
+    LLMSM_PASSIVE: "false"
+
+    # Prometheus Metrics Cache
+    PROMETHEUS_METRICS_CACHE_TTL: "30s"
+    PROMETHEUS_METRICS_CACHE_CLEANUP_INTERVAL: "1m"
+    PROMETHEUS_METRICS_CACHE_FETCH_INTERVAL: "30s"
+    PROMETHEUS_METRICS_CACHE_FRESH_THRESHOLD: "1m"
+    PROMETHEUS_METRICS_CACHE_STALE_THRESHOLD: "2m"
+    PROMETHEUS_METRICS_CACHE_UNAVAILABLE_THRESHOLD: "5m"

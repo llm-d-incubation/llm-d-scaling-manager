@@ -1,0 +1,334 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Deployment Replicas",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "llmsm_desired_replicas{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "desired {{variant_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "llmsm_current_replicas{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "current {{variant_name}}",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "KV Cache Usage",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": true
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (pod) (vllm:kv_cache_usage_perc{namespace=~\"$namespace\"}) or max by (pod) (sglang:token_usage{namespace=~\"$namespace\"})",
+          "legendFormat": "{{pod}}",
+          "refId": "A"
+        },
+        {
+          "expr": "avg(max by (pod) (vllm:kv_cache_usage_perc{namespace=~\"$namespace\"}) or max by (pod) (sglang:token_usage{namespace=~\"$namespace\"}))",
+          "legendFormat": "avg",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "KV-cache occupancy per model server, from the engine. vLLM reports it as kv_cache_usage_perc and SGLang as token_usage, so the query takes whichever the namespace runs -- and plots both, per pod, where it runs both.\n\nMatched on `namespace`, not $namespace_label: engine series carry a plain `namespace` only, so the variable would empty this panel for a reader who picks exported_namespace. Only the llmsm_* panels follow the variable.\n\nAggregated with max by (pod) so a pod scraped by two PodMonitors still draws one line per replica."
+    },
+    {
+      "id": 4,
+      "title": "Engine Queue and Running Requests (per pod)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "max by (pod) (vllm:num_requests_waiting{namespace=~\"$namespace\"}) or max by (pod) (sglang:num_queue_reqs{namespace=~\"$namespace\"})",
+          "legendFormat": "{{pod}} waiting",
+          "refId": "A"
+        },
+        {
+          "expr": "max by (pod) (vllm:num_requests_running{namespace=~\"$namespace\"}) or max by (pod) (sglang:num_running_reqs{namespace=~\"$namespace\"})",
+          "legendFormat": "{{pod}} running",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "description": "Per-pod engine state, for either engine: 'waiting' is vllm:num_requests_waiting or sglang:num_queue_reqs, 'running' is vllm:num_requests_running or sglang:num_running_reqs. 'waiting' -- the queue INSIDE the engine. With EPP flow control enabled this normally reads 0 even under heavy load, because flow control holds the backlog at the router instead; see the EPP Flow-Control Queue panel.\n\nMatched on `namespace`, not $namespace_label, for the reason the KV Cache Usage panel gives.\n\nAggregated with max by (pod) so a pod scraped by two PodMonitors still draws one line per replica."
+    },
+    {
+      "id": 5,
+      "title": "Scaling Activity",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "spanNulls": true
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "llmsm_desired_replicas{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "desired {{variant_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "llmsm_current_replicas{$namespace_label=~\"$namespace\"}",
+          "legendFormat": "current {{variant_name}}",
+          "refId": "B"
+        },
+        {
+          "expr": "rate(llmsm_replica_scaling_total{$namespace_label=~\"$namespace\"}[2m])",
+          "legendFormat": "scaling rate {{variant_name}} {{direction}}",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "EPP Flow-Control Queue (Requests Queued at the Router)",
+      "type": "timeseries",
+      "description": "Requests held by the EPP's flow-control layer, before they reach an engine.\n\nThis is where a backlog appears when flow control is enabled: it admits only what the engine can absorb, so vllm:num_requests_waiting can sit at 0 while hundreds of requests are queued here. A rising queue with a flat engine queue means demand exceeds decode throughput, not KV capacity.\n\nMatched on `namespace`, not $namespace_label: that variable exists because llmsm_* series carry the workload namespace as exported_namespace, while EPP series carry a plain namespace. Without the filter this panel plots every tenant on the cluster -- it was drawing three models for a namespace that has one.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum by (model_name) (llm_d_epp_flow_control_queue_size{namespace=~\"$namespace\"}) or sum by (model_name) (inference_extension_flow_control_queue_size{namespace=~\"$namespace\"})",
+          "legendFormat": "{{model_name}} queued",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "benchmark",
+    "scaling-manager",
+    "autoscaling"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "namespace_label",
+        "label": "Namespace label",
+        "type": "custom",
+        "query": "namespace,exported_namespace",
+        "current": {
+          "text": "namespace",
+          "value": "namespace"
+        },
+        "options": [
+          {
+            "text": "namespace",
+            "value": "namespace",
+            "selected": true
+          },
+          {
+            "text": "exported_namespace",
+            "value": "exported_namespace",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false,
+        "description": "Which label carries the namespace, for the llmsm_* panels. llmsm_* series carry both: `exported_namespace` is the WORKLOAD's namespace and `namespace` the controller's -- the same value for a namespace-scoped install, different for a cluster-scoped one. Engine and EPP panels do not follow this variable; those series carry a plain `namespace` and nothing else, so they always match on it."
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus"
+        },
+        "query": {
+          "query": "label_values(llmsm_current_replicas, $namespace_label)",
+          "refId": "namespace-variable-query"
+        },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "sort": 1,
+        "description": "The namespace whose model servers to chart. Enumerated from llmsm_current_replicas rather than an engine series, so the list follows whichever label the Namespace label variable selects."
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "The scaling manager Benchmark: Scale-Up Latency",
+  "uid": "scaling-manager-benchmark-scaleup",
+  "version": 1
+}

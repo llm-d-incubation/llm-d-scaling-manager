@@ -1,0 +1,59 @@
+name: admin-gpu-bounding
+
+prerequisites:
+  accelerators:
+    note: List workloads whose accelerator could not be resolved. Empty is good.
+    # AcceleratorNotResolved is an event REASON, never log text: it goes through the
+    # recorder, so grepping the log for it finds nothing on a healthy cluster and
+    # nothing on a broken one. The events do land -- variant.EventTarget hangs them
+    # on the ScaledObject rather than on the synthesized Variant, whose
+    # kind is deliberately absent from the scheme -- and a synthesized variant takes
+    # the ScaledObject's namespace (utils.variant), which is where the model servers
+    # are, NOT where the scaling manager runs. `kubectl describe scaledobject` shows them too.
+    # The prose in the grep is what reportUnresolvedAccelerator actually logs;
+    # docs/reference/gpu-limiter.md greps the same form.
+    run: |
+      kubectl get events -A --field-selector reason=AcceleratorNotResolved
+      # The same, from the controller log (logged once per change, so it may have rotated)
+      kubectl logs -n <scaling-manager-namespace> deploy/scaling-manager-controller-manager --tail=-1 | grep -i "Accelerator not resolved"
+
+deploy:
+  enable:
+    note: Grant every controller the node read, then publish the limiter. Read the list it prints first.
+    run: make enable-physical-limiter
+
+verify:
+  controllers:
+    note: Every controller should be Ready.
+    run: kubectl get pods -A -l app.kubernetes.io/name=scaling-manager
+  source:
+    note: Print each controller's policy namespace, limiter and whether it accepted the policy.
+    run: |
+      for ns in $(kubectl get deploy -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager \
+          -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{end}'); do
+        echo "== $ns"
+        kubectl get cm scaling-manager-controller-status -n "$ns" \
+          -o jsonpath='{.data.policyNamespace} {.data.limiter} {.data.policyAccepted}{"\n"}' 2>/dev/null \
+          || kubectl logs -n "$ns" deploy/scaling-manager-controller-manager --tail=-1 \
+          | grep -E 'Cluster policy comes from|Could not read the managed Namespace|Cannot tell whether' \
+          || echo "   (no status and no startup line: restart the controller to print it)"
+      done
+  budget:
+    note: Show the published limiter, then what the controller built from it.
+    run: |
+      POLICY_NS=$(kubectl get cm scaling-manager-controller-status -n <scaling-manager-namespace> \
+        -o jsonpath='{.data.policyNamespace}' 2>/dev/null)
+      kubectl get configmap scaling-manager-scaling-policy-config -n "${POLICY_NS:-scaling-manager-policy}" \
+        -o jsonpath='{.data.default}' | grep -A12 limiters
+      kubectl logs -n <scaling-manager-namespace> deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep -E 'GPU limiter constructed|Invalid saturation scaling'
+
+cleanup:
+  disable:
+    note: Remove the physical limiter. A quota in the same policy stays.
+    run: |
+      make disable-limiter
+      # a quota instead:
+      # make disable-limiter LLMSM_LIMITER_TYPE=quota
+      # every limiter:
+      # make disable-limiter LLMSM_LIMITER_TYPE=all

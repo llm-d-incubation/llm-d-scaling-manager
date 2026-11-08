@@ -1,0 +1,168 @@
+# promtool unit tests for the utilization-share alerts, and for the wake
+# alerts paging once per cause. hack/check-alert-rules.sh copies the shipped
+# PrometheusRule groups, annotations stripped, to rules.yaml beside this file
+# and runs promtool test rules on it.
+#
+# The series carry the labels they have once scraped: the model namespace as
+# exported_namespace, the controller namespace as namespace, and pod for the
+# controller pod.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. marks-unreadable freezes a group until someone fixes it: one alert per
+  #    model after 10 minutes, the same model seen from two controller pods
+  #    included. A passing reason (quiet-period) never fires it.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m1",reason="marks-unreadable",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m1",reason="marks-unreadable",pod="scaling-manager-b"}'
+        values: '1x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m2",reason="quiet-period",pod="scaling-manager-a"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LLMSMUtilizationShareMarksUnreadable
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LLMSMUtilizationShareMarksUnreadable
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: team-a, model_name: m1}
+
+  # 2. Floors that exceed the quota fire after 15 minutes, per model; a
+  #    reason that cleared after 5 minutes does not.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m1",reason="floors-exceed-quota",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m2",reason="floors-exceed-quota",pod="scaling-manager-a"}'
+        values: '1x5 stale'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LLMSMUtilizationShareFloorsExceedQuota
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: LLMSMUtilizationShareFloorsExceedQuota
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: team-a, model_name: m1}
+
+  # 3. An optimizer block that does not validate falls back to today's
+  #    optimizer: mode invalid fires after 10 minutes; a controller in shadow
+  #    mode (invalid at 0) does not. The series carry controller_instance, as
+  #    scraped ones do: two controllers in one namespace are told apart (east
+  #    is invalid, west is active), and two pods of one controller page once.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_utilization_share_mode{namespace="scaling-manager",controller_instance="east",mode="invalid",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_utilization_share_mode{namespace="scaling-manager",controller_instance="east",mode="invalid",pod="scaling-manager-b"}'
+        values: '1x20'
+      - series: 'llmsm_utilization_share_mode{namespace="scaling-manager",controller_instance="east",mode="active",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_utilization_share_mode{namespace="scaling-manager",controller_instance="west",mode="invalid",pod="scaling-manager-w"}'
+        values: '0x20'
+      - series: 'llmsm_utilization_share_mode{namespace="scaling-manager",controller_instance="west",mode="active",pod="scaling-manager-w"}'
+        values: '1x20'
+      - series: 'llmsm_utilization_share_mode{namespace="other",controller_instance="east",mode="invalid",pod="scaling-manager-c"}'
+        values: '0x20'
+      - series: 'llmsm_utilization_share_mode{namespace="other",controller_instance="east",mode="shadow",pod="scaling-manager-c"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LLMSMUtilizationShareModeInvalid
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LLMSMUtilizationShareModeInvalid
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: scaling-manager, controller_instance: east}
+
+  # 4. A parked model refusing requests pages critical whatever the cause,
+  #    no wake signal included. LLMSMModelHasNoWakeSignal stays quiet while the
+  #    critical alert's condition holds, so one cause pages once, at critical:
+  #    before 5m nothing fires; from 5m to 10m and after, only the critical
+  #    alert does. m-quota is refused for another cause. m-idle has no wake
+  #    signal and no refused requests, so the warning pages for it at 10m.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_model_replicas{exported_namespace="team-a",model_name="m-silent",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_model_replicas{exported_namespace="team-a",model_name="m-quota",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_model_replicas{exported_namespace="team-a",model_name="m-idle",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m-idle",reason="no-wake-signal",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llm_d_epp_request_error_total{model_name="m-silent",error_code="ServiceUnavailable"}'
+        values: '0+10x20'
+      - series: 'llm_d_epp_request_error_total{model_name="m-quota",error_code="ServiceUnavailable"}'
+        values: '0+10x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m-silent",reason="no-wake-signal",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_model_scaling_blocked{exported_namespace="team-a",model_name="m-quota",reason="wake-no-capacity",pod="scaling-manager-a"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LLMSMModelParkedWhileRequestsRefused
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LLMSMModelParkedWhileRequestsRefused
+        exp_alerts:
+          - exp_labels: {severity: critical, exported_namespace: team-a, model_name: m-silent}
+          - exp_labels: {severity: critical, exported_namespace: team-a, model_name: m-quota}
+      - eval_time: 7m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: team-a, model_name: m-idle, reason: no-wake-signal, pod: scaling-manager-a}
+      - eval_time: 15m
+        alertname: LLMSMModelParkedWhileRequestsRefused
+        exp_alerts:
+          - exp_labels: {severity: critical, exported_namespace: team-a, model_name: m-silent}
+          - exp_labels: {severity: critical, exported_namespace: team-a, model_name: m-quota}
+      - eval_time: 15m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: team-a, model_name: m-idle, reason: no-wake-signal, pod: scaling-manager-a}
+
+  # 5. Two namespaces serve the same model name, each through its own router.
+  #    The router series carry the router's namespace as plain namespace (the
+  #    router exports none of its own, so nothing is renamed); the controller's
+  #    series carry the model's as exported_namespace. team-b is serving and its
+  #    router refuses some requests (overload). team-a is parked with no wake
+  #    signal and nothing refused: joined on model_name alone it paged critical
+  #    for team-b's refusals and its own warning stayed quiet. team-c is parked
+  #    and its own router refuses: that pages, and only for team-c.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_model_replicas{namespace="scaling-manager",exported_namespace="team-a",model_name="m-twin",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_model_replicas{namespace="scaling-manager",exported_namespace="team-b",model_name="m-twin",pod="scaling-manager-a"}'
+        values: '2x20'
+      - series: 'llmsm_model_replicas{namespace="scaling-manager",exported_namespace="team-c",model_name="m-twin",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_model_scaling_blocked{namespace="scaling-manager",exported_namespace="team-a",model_name="m-twin",reason="no-wake-signal",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llm_d_epp_request_error_total{namespace="team-a",pod="team-a-epp-0",model_name="m-twin",error_code="ServiceUnavailable"}'
+        values: '0x20'
+      - series: 'llm_d_epp_request_error_total{namespace="team-b",pod="team-b-epp-0",model_name="m-twin",error_code="ServiceUnavailable"}'
+        values: '0+10x20'
+      - series: 'llm_d_epp_request_error_total{namespace="team-c",pod="team-c-epp-0",model_name="m-twin",error_code="ServiceUnavailable"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LLMSMModelParkedWhileRequestsRefused
+        exp_alerts:
+          - exp_labels: {severity: critical, exported_namespace: team-c, model_name: m-twin}
+      - eval_time: 11m
+        alertname: LLMSMModelHasNoWakeSignal
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: scaling-manager, exported_namespace: team-a, model_name: m-twin, reason: no-wake-signal, pod: scaling-manager-a}

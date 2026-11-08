@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 2,
+  "question": "slo-to-rate",
+  "source": {
+    "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
+    "namespace": "ns-01",
+    "model": "model-02",
+    "firstCycle": 1,
+    "lastCycle": 226,
+    "totalCycles": 226,
+    "firstAt": "2026-11-01T21:54:30.377845609Z",
+    "lastAt": "2026-11-01T22:50:53.616794067Z"
+  },
+  "bands": {
+    "method": "block bootstrap",
+    "blockCycles": 4,
+    "resamples": 200,
+    "seed": 1,
+    "loPercent": 10,
+    "hiPercent": 90
+  },
+  "roles": [
+    {
+      "role": "decode",
+      "variant": "variant-01",
+      "inputs": {
+        "line": {
+          "a": 0.004437632383842851,
+          "b": 0.0015568837184686396,
+          "tier": "ols",
+          "readings": 15,
+          "observedFill": {
+            "lo": 0.17953730856956665,
+            "hi": 0.501466275659824
+          },
+          "fromCycle": 197,
+          "toCycle": 220,
+          "resamples": 200,
+          "tierChanges": 10,
+          "check": {
+            "status": "ok-at-another-shape",
+            "compared": 10,
+            "onRamp": 20,
+            "aboveBand": 0,
+            "tooOld": 10,
+            "past": 0,
+            "medianErrorPct": 3.0095802156512965,
+            "worstErrorPct": 4.353289520922821,
+            "signedErrorPct": -3.0095802156512965,
+            "fromCycle": 122,
+            "toCycle": 131,
+            "rowKVPerRequest": 6501.878012338539,
+            "otherShape": true
+          }
+        },
+        "fillBand": {
+          "lo": 0.15,
+          "hi": 0.8
+        },
+        "capacityTokens": 131072,
+        "kvPerRequest": 1500,
+        "shape": {
+          "inputTokens": 1000,
+          "inputSource": "assumed",
+          "outputTokens": 1000,
+          "outputSource": "assumed",
+          "prefixHitRate": 0,
+          "fromCycle": 204,
+          "toCycle": 223,
+          "cycles": 20
+        },
+        "batchCap": 64,
+        "batchCapSource": "flags",
+        "ranks": 1,
+        "replicas": 1,
+        "replicasFrom": "recording",
+        "headroom": 0.85,
+        "tpot": {
+          "targetSeconds": 0.004,
+          "windows": 0
+        }
+      },
+      "results": {
+        "rate": {
+          "answer": {
+            "value": 11.316587731453538,
+            "unit": "r/s",
+            "band": {
+              "lo": 11.207013286686124,
+              "hi": 11.373692515251156
+            },
+            "basis": {
+              "fill": 0.4740967917873882,
+              "kneeRate": 13.313632625239457,
+              "floor": 0.002222528576045067,
+              "uncapped": 12.026838846873805,
+              "boundBy": [
+                "operating-point cap"
+              ],
+              "tier": "ols"
+            },
+            "flags": [
+              "AssumedShape",
+              "OutputSpreadUnread"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "exitCode": 0,
+  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json)"
+}

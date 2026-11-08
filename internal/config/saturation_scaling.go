@@ -1,0 +1,1227 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+	"strconv"
+	"time"
+	"unicode/utf8"
+)
+
+// DefaultPriority is the default model priority multiplier.
+// Higher priority → preferential GPU allocation in fair-share.
+const DefaultPriority = 1.0
+
+// ScalingPolicy holds saturation-based scaling thresholds for a model variant.
+// Saturation scaling is enabled by default and uses these thresholds to determine when
+// replicas are saturated and when to scale up.
+type ScalingPolicy struct {
+	// ModelID is the model identifier (only used in override entries)
+	ModelID string `yaml:"model_id,omitempty"`
+
+	// Namespace is the namespace for this override (only used in override entries)
+	Namespace string `yaml:"namespace,omitempty"`
+
+	// KvCacheThreshold is the ceiling on usable KV cache (0.0-1.0): a replica's
+	// capacity is its physical KV budget scaled by this value, so utilization
+	// reaches 1.0 exactly when observed KV occupancy reaches the ceiling. At the
+	// default 0.80, "100% utilized" means 80% of KV is resident — the headroom
+	// notion EPP saturation uses.
+	//
+	// NOTE: this is a capacity multiplier, NOT the V1 boolean test it used to be
+	// ("saturated if KV utilization >= threshold"). The tuning direction is
+	// therefore inverted from V1: a LOWER value shrinks each replica's capacity
+	// and scales out sooner, where under V1 a lower value was the aggressive
+	// setting for the opposite reason. Configs carried over from V1 need review.
+	//
+	// It compounds with ScaleUpThreshold — the effective scale-out point is
+	// KvCacheThreshold × ScaleUpThreshold of physical KV. Retiring this field in
+	// favour of ScaleUpThreshold alone is proposed in
+	// docs/plans/analyzers/kvcachethreshold-retirement.md.
+	KvCacheThreshold float64 `yaml:"kvCacheThreshold"`
+
+	// QueueLengthThreshold: Replica is saturated if queue length >= this threshold
+	QueueLengthThreshold float64 `yaml:"queueLengthThreshold"`
+
+	// EnableRescale: When true, the V2 GPU-constrained optimizer may run the
+	// priority-weighted rescale pass — under contention it redistributes the whole
+	// budget by priority x demand, reclaiming from lower-priority models so
+	// higher-priority work can run. Default is false (additive fair-share only).
+	//
+	// This is a BUDGET-SCOPE flag, read only from the "default" entry: the value in
+	// the global config governs the cluster budget, and a namespace-local config's
+	// "default" governs that namespace's quota budget. It is ignored on per-model
+	// override entries and has no effect unless a same-scope GPU budget exists
+	// (see docs/plans/engine/rescale-alpha.md).
+	EnableRescale bool `yaml:"enableRescale,omitempty"`
+
+	// DisableShapeChangeHold turns off the fleet-shape-change hold: the
+	// analyzer still tracks the workload's shape, and still keys its
+	// throughput windows by it, but a change no longer withholds release or
+	// stops the demand floor ordering on an existing reading.
+	//
+	// The hold is on by default because releasing a fleet on figures a shape
+	// change has invalidated is the failure it exists to prevent. It is a
+	// switch because it is the one mechanism here that can hold capacity for
+	// minutes on its own judgement, and an operator who sees it misbehave
+	// needs a way to stop it that does not involve a new image.
+	DisableShapeChangeHold bool `yaml:"disableShapeChangeHold,omitempty"`
+
+	// EnableLearnedStateReuse lets a sibling's measurement BECOME a variant's
+	// answer: an ITL line fitted on one variant is shared with another, and a
+	// variant with no record of its own can take a capacity figure from a
+	// sibling. It does not control learning itself, and it clears nothing
+	// already stored.
+	//
+	// It does not govern the k2 borrow (P2-borrow, saturation/k2_borrow.go),
+	// which uses a compatible sibling's measured k2 only where that is LOWER
+	// than the variant's own capacity, and relaxes back to it over 6.5 hours
+	// of serving. That runs whatever this says, by the rule below: a figure
+	// that can only lower a capacity orders more replicas, never fewer. Its
+	// cost is in the other direction -- a false match, such as two
+	// configurations whose unread flags both fell back to defaults, holds
+	// extra replicas for up to the 6.5 hours -- and DisableK2Borrow is its
+	// switch.
+	//
+	// OFF BY DEFAULT, and that is the whole of this setting's story. Reuse is
+	// decided by an equality over a digest of 14 parsed engine flags, and that
+	// equality is not sound. Five adversarial review rounds found seven
+	// measured ways to produce a false match or to destroy a true one, and two
+	// attempts to close them inside the parser were reverted for costing more
+	// than they bought -- one denied sharing to ordinary deployments because a
+	// shell preamble contained `grep -q`, while `-qfp8` still hashed as no flag
+	// at all. A configuration the parser reads WRONG rather than not at all
+	// still yields a confident key: SGLang flags parsed as vLLM read as a
+	// complete set of vLLM defaults and would match every other default
+	// configuration of that model.
+	//
+	// So everything that merely DESCRIBES the configuration ships on by
+	// default -- the digest, llmsm_engine_config, the drift checks. Only the act
+	// of letting one variant's reading become another's answer -- which can
+	// price it HIGHER -- waits for an operator to ask. The replacement is graded sharing by similarity rather
+	// than by proven identity, where an unreadable flag is a distance penalty
+	// instead of a false equality; see
+	// docs/proposals/learned-state-sharing-by-similarity.md.
+	//
+	// Turning it ON enables both paths, because an operator asking for this
+	// wants one thing and either path alone leaves it half-done:
+	//
+	//   - the fingerprint-keyed ITL line (analyzer.go, itlPhysicsKey). Off,
+	//     the key falls back to the per-variant form, which is the same
+	//     degradation an unreadable engine configuration already produces.
+	//   - the cross-variant capacity estimate for a variant with no record
+	//     of its own (replica_capacity.go, lookupCompatibleCapacity), where a
+	//     sibling's record IS this variant's answer.
+	//
+	// AND IT DELIBERATELY DOES NOT TOUCH THE CLAMPS. estimateStoredCapacity
+	// also consults a compatible sibling, but as a MAX clamp -- it only ever
+	// lowers the estimate. Withholding a clamp RAISES capacity, and an
+	// over-stated capacity orders fewer replicas, which this project has on
+	// record as breaking TTFT irrecoverably (store.go measured 5,000 becoming
+	// 153,600 when that record was withheld for a different reason).
+	//
+	// A first version of the switch gated that clamp too, which would have
+	// made an operator asking "stop pricing this variant from a sibling"
+	// silently also lose their capacity ceiling. A ceiling is conservatism,
+	// not a borrow. The rule is: gate where a sibling's figure BECOMES this
+	// variant's answer, never where it only bounds it.
+	//
+	// It is spelled as an ENABLE rather than a DISABLE because Merge is
+	// one-way for a plain bool. As a disable defaulting to true, nothing could
+	// ever have switched reuse back on; as an enable defaulting to false, the
+	// same idiom turns it on exactly where someone asks.
+	EnableLearnedStateReuse bool `yaml:"enableLearnedStateReuse,omitempty"`
+
+	// DisableK2Borrow stops the k2 borrow (P2-borrow) for the model: a
+	// variant with no saturated reading of its own prices from its own
+	// derived figure or k1, never from a sibling's measurement. A clock
+	// already running is left where it stands, and resumes if the borrow is
+	// switched back on.
+	//
+	// ON BY DEFAULT, because the borrow is lower-only: it can order more
+	// replicas, never fewer. This is the switch for its cost -- an incident
+	// where a false match holds a fleet on a sibling's figure, which before
+	// this needed a new image or a flush of every model's learned state.
+	//
+	// A DISABLE, unlike EnableLearnedStateReuse, because the default is on
+	// and Merge is one-way for a plain bool: a true in a per-model override
+	// turns the borrow off for that model, which is the scope it is for. The
+	// limitation is the mirror of reuse's: a model cannot turn the borrow back
+	// on where a `default:` entry turned it off.
+	DisableK2Borrow bool `yaml:"disableK2Borrow,omitempty"`
+
+	// EnablePrefillThroughputBound lets the throughput floor price prefill
+	// on a lower bound: the computed-token rate a prefill replica showed
+	// with its queue saturated while its own window could not record it,
+	// usually because decode was saturated. Without the bound a P/D fleet's
+	// prefill has no floor term until it saturates on its own, and scales
+	// only once its queue builds.
+	//
+	// OFF BY DEFAULT. The bound can only order more prefill, never less, and
+	// the extra is the ratio of prefill's true rate to the bound. A prefill
+	// held that large rarely saturates on its own, so the extra lasts until
+	// the variant's learned state is reset. Off, no bound is recorded or
+	// read, and prefill is sized exactly as before the bound existed.
+	//
+	// An ENABLE for the reason EnableLearnedStateReuse gives: Merge is
+	// one-way for a plain bool, so a true in the `default:` entry turns it on
+	// for every model, and a true in a per-model entry for that model.
+	EnablePrefillThroughputBound bool `yaml:"enablePrefillThroughputBound,omitempty"`
+
+	// EnableBatchCapLearning lets the analyzer learn a variant's batch cap
+	// (max_num_seqs) where the engine's flags state none and no
+	// llm-d.ai/max-num-seqs annotation declares it: the highest running
+	// count one of its pods held flat for three cycles with requests waiting
+	// on it, its KV under kvCacheThreshold and no preemption. The derived
+	// capacity (P3) is then priced at no more than that cap.
+	//
+	// OFF BY DEFAULT. The learned cap can only lower capacity -- a running
+	// count is never above the true cap, and the cap is taken only where it
+	// is lower than the default it replaces -- so its cost is replicas, not
+	// latency: a cap learned below the truth (a fleet that waits for its
+	// token budget rather than its batch, or never fills its batch) orders
+	// more replicas until a higher plateau is seen. The annotation is the
+	// exact source and wins over it.
+	//
+	// An ENABLE for the reason EnableLearnedStateReuse gives: Merge is
+	// one-way for a plain bool.
+	EnableBatchCapLearning bool `yaml:"enableBatchCapLearning,omitempty"`
+
+	// Passive makes the model observe instead of scale: the controller computes,
+	// logs and publishes everything for it and changes none of its replica
+	// counts (docs/reference/scaling-policy.md, "passive"). Nil inherits from
+	// the layer below -- the tier, then the default entry, then the
+	// LLMSM_PASSIVE controller flag -- so a pointer, not a bool: Merge copies
+	// only what an entry sets, and a plain false could never turn a passive
+	// default back to active for one model.
+	Passive *bool `yaml:"passive,omitempty"`
+
+	// ShapeChangeHoldSeconds overrides how long the fleet is withheld from
+	// release after its shape changes, when nothing settles the hold sooner.
+	// Zero takes the default.
+	//
+	// The default is calibrated on a benchmark whose longest generation is
+	// 6000 tokens: long enough for one of those plus the rate window that
+	// would record it. A deployment serving materially longer generations --
+	// long-context or long chain-of-thought -- has a longer "one generation
+	// plus a window" than the default allows for, and should raise this
+	// rather than inherit a figure measured somewhere else.
+	ShapeChangeHoldSeconds int `yaml:"shapeChangeHoldSeconds,omitempty"`
+
+	// AnalyzerTuning is the saturation analyzer's advanced tuning: the
+	// figures behind its admission and pricing judgements. Unset fields take
+	// the calibrated defaults. Merged field by field.
+	AnalyzerTuning AnalyzerTuning `yaml:"analyzerTuning,omitempty"`
+
+	// LoadImbalance tunes the load-imbalance diagnostic. Its idleKvUsage is
+	// also the saturation analyzer's idle test. Merged field by field.
+	LoadImbalance LoadImbalance `yaml:"loadImbalance,omitempty"`
+
+	// DefaultOutputTokens is the seeded generation length used to price a queued
+	// request while no replica has measured one. RESOLVED, not configured: it is
+	// folded in from the model's trigger metadata
+	// (registry.DefaultOutputTokensKey), which is why it carries no yaml tag --
+	// a `defaultOutputTokens` key in this ConfigMap is ignored, deliberately, so
+	// there is exactly one place an operator sets it. It is the one key
+	// UnknownScalingPolicyKeys does not report.
+	//
+	// ExpectedOutputTokens states where it sits in the precedence.
+	DefaultOutputTokens int `yaml:"-"`
+
+	// AnalyzerName names the saturation analyzer. "saturation" is the only
+	// built-in value and selects the token-based analyzer, which is also what an
+	// empty value gets — the V1 percentage-based analyzer it used to select was
+	// removed, so this no longer chooses between engines. It is retained because
+	// it still marks an entry as V2-shaped (see IsV2) and appears on the
+	// llmsm_config_info metric.
+	AnalyzerName string `yaml:"analyzerName,omitempty"`
+
+	// ScaleUpThreshold is the utilization threshold above which scale-up is triggered.
+	// Applied by the engine post-step universally to every analyzer's result:
+	//   requiredCapacity = max(0, totalDemand / ScaleUpThreshold − anticipatedSupply)
+	// Default: 0.85 (85% utilization triggers scale-up)
+	ScaleUpThreshold float64 `yaml:"scaleUpThreshold,omitempty"`
+
+	// ScaleDownBoundary is the utilization boundary below which scale-down is safe.
+	// Applied by the engine post-step universally to every analyzer's result:
+	//   spareCapacity = max(0, totalSupply − totalDemand / ScaleDownBoundary)
+	// Default: 0.70 (70% utilization allows scale-down)
+	ScaleDownBoundary float64 `yaml:"scaleDownBoundary,omitempty"`
+
+	// Priority is a multiplier for this model's scaling urgency.
+	// Higher priority → preferential GPU allocation in fair-share.
+	// Default: 1.0 (neutral).
+	Priority float64 `yaml:"priority,omitempty"`
+
+	// Analyzers configures the set of analyzers and their weights.
+	// When empty and AnalyzerName is "saturation", defaults to
+	// [{Name: "saturation", Score: 1.0, Enabled: true}].
+	//
+	// An entry with neither an analyzers section nor analyzerName is not
+	// V2-shaped (see IsV2), which now only means the scaling band is left to be
+	// resolved post-merge — it no longer routes to a different engine.
+	Analyzers []AnalyzerScoreConfig `yaml:"analyzers,omitempty"`
+
+	// SLO is the latency targets the slo analyzer prices this policy's models
+	// against: a mean TPOT and a TTFT percentile. Read only when the policy also
+	// lists the slo analyzer under Analyzers. Replaced whole by an override, never
+	// merged objective by objective, so a per-model entry that sets one objective
+	// cannot silently keep the other. See docs/proposals/slo-tiers.md.
+	SLO *SLOPolicy `yaml:"slo,omitempty"`
+
+	// ScaleToZero optionally enables/disables scaling to zero replicas for this
+	// entry. When set, it overrides the separate scaling-manager-model-scale-to-zero-config
+	// ConfigMap for the matching model/namespace; when nil, that ConfigMap (and
+	// the LLMSM_SCALE_TO_ZERO env fallback) governs — see ResolveScaleToZeroEnabled.
+	ScaleToZero *ScaleToZeroEnvelope `yaml:"scaleToZero,omitempty"`
+
+	// ScaleFromZero optionally tunes how this entry is woken from zero replicas.
+	// When nil, the defaults documented on ScaleFromZeroEnvelope apply.
+	ScaleFromZero *ScaleFromZeroEnvelope `yaml:"scaleFromZero,omitempty"`
+
+	// AnalyzerDefinitions declares EXTERNAL analyzers — a name, and the PromQL that
+	// computes its demand and per-replica target. Honored only on a `default`
+	// entry: definitions are a tier-level concern, never a policy one.
+	//
+	// "Policies select/weight; they don't define"
+	// (docs/reference/scaling-policy.md, External analyzers). A named policy references
+	// an analyzer by name and sets `enabled`, `score` and a threshold; it cannot
+	// invent the query behind it. Two reasons, and both are about the query rather
+	// than about trust: an expensive or high-cardinality one runs against the
+	// SHARED Prometheus every cycle, and a wrongly-shaped one (count/avg where a
+	// sum is required — see ExternalAnalyzerBody) mis-scales without erroring.
+	// Keeping every query in one reviewable place is what makes "what does the scaling manager run
+	// against Prometheus?" an answerable question.
+	//
+	// Internal analyzers are compiled-in Go and are not declared here; a policy
+	// references them by name exactly the same way.
+	AnalyzerDefinitions ExternalAnalyzerCatalog `yaml:"analyzerDefinitions,omitempty"`
+
+	// DefaultPolicy names the policy tier a variant scales under when its scaler's
+	// trigger metadata names none. Honored only on the cluster "default" entry —
+	// it is a fleet-wide fallback, so a policy or a per-model entry declaring one
+	// would be choosing a default for everyone but itself.
+	//
+	// Empty means no fallback tier: such a variant scales under the "default" entry
+	// alone.
+	DefaultPolicy string `yaml:"defaultPolicy,omitempty"`
+
+	// Limiters is the sole source that selects the GPU limiter for the scaling
+	// pipeline; it is applied live (no restart) and is honored only on the cluster
+	// "default" entry (a budget-scope setting, like EnableRescale). Every entry
+	// is built, and a decision must fit all of them. Each entry is either
+	//   - {type: gpu-inventory}  — physical GPU limiter, no quota fields; at most
+	//     one (the "inventory" alias counts too); or
+	//   - {type: quota, ...}     — an inline quota entry (see QuotaLimiterConfig).
+	// With no limiters declared, nothing limits.
+	// See Config.EffectiveLimiterTypes / Config.EffectiveQuotaEntries.
+	Limiters []QuotaLimiterConfig `yaml:"limiters,omitempty"`
+
+	// Optimizer selects and configures the fleet's optimizer. Like Limiters it is
+	// honored only on the cluster "default" entry, read by Config.UtilizationShare,
+	// and never merged. It is not checked by Validate: an invalid block disables
+	// the optimizer instead of dropping the entry, and with it the limiters.
+	Optimizer *OptimizerConfig `yaml:"optimizer,omitempty"`
+
+	// WeightClass names this model's weight class for the utilization-share
+	// optimizer (see UtilizationShareConfig.WeightClasses). Mutually exclusive
+	// with Weight; neither takes the default class.
+	WeightClass string `yaml:"weightClass,omitempty"`
+
+	// Weight is this model's numeric weight for the utilization-share optimizer,
+	// clamped into the range the weight classes span. It decodes leniently and
+	// is checked when resolved, never by Validate (see ModelWeight).
+	Weight ModelWeight `yaml:"weight,omitempty"`
+}
+
+// ScaleToZeroEnvelope is the scale-to-zero policy for a scaling entry, and the
+// only per-model surface for it.
+//
+// It replaced a separate scaling-manager-model-scale-to-zero-config ConfigMap that carried
+// the same two settings. Having both meant scale-to-zero was configurable in
+// three places — here, there, and the LLMSM_SCALE_TO_ZERO env — with a precedence
+// rule to remember and no single answer to "is it on for this model?". Living on
+// the scaling entry also gives retention the namespace tiering and per-model
+// overrides it never had: the entry is resolved namespace-local → global and
+// merged with any per-model override before either field is read. An override is
+// identified by the modelID/namespace in its BODY, not by its key: the old
+// {modelID}#{namespace} key form is not writable as a ConfigMap key at all (see
+// PolicyEntryKey).
+type ScaleToZeroEnvelope struct {
+	// Enabled turns scale-to-zero on for the entry. A pointer so an absent field
+	// (nil) means "inherit": from the merged default entry, and finally from the
+	// LLMSM_SCALE_TO_ZERO deployment flag. Distinguishing that from an explicit
+	// false is what lets an override disable scale-to-zero for one model without
+	// the default entry's value winning.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// RetentionPeriod is how long a model must be idle before it is scaled to
+	// zero, and how long a model just woken from zero is held up (the request
+	// that woke it is still queued while the pod loads, so the idle signal reads
+	// zero for exactly that model). A duration string, e.g. "5m". Empty inherits,
+	// ending at DefaultScaleToZeroRetentionPeriod.
+	RetentionPeriod string `yaml:"retentionPeriod,omitempty"`
+}
+
+// ScaleFromZeroEnvelope is the inline scale-from-zero setting on a scaling entry.
+type ScaleFromZeroEnvelope struct {
+	// RequirePrefill refuses to wake a P/D-disaggregated model from zero unless a
+	// prefill variant can be placed alongside decode.
+	//
+	// The default (nil / false) wakes decode alone when prefill will not fit,
+	// because that still serves: the llm-d router sends the request to a decode
+	// endpoint and, with no prefill endpoint selected, the decode worker runs
+	// both stages locally. Disaggregation is a TTFT/throughput optimization that
+	// the router already skips on its own for short prompts and high cache hits,
+	// so refusing to wake would trade a slower model for no model at all.
+	//
+	// Set true when degraded prefill performance is worse than unavailability
+	// for this model — for example when a TTFT SLO matters more than serving at
+	// all, or when decode nodes must not absorb prefill load.
+	//
+	// Pointer so an absent field means "inherit the default" rather than "false",
+	// matching ScaleToZeroEnvelope.Enabled.
+	RequirePrefill *bool `yaml:"requirePrefill,omitempty"`
+}
+
+// RequirePrefillOnScaleFromZero reports whether the entry refuses to wake from
+// zero without prefill. Absent config means false — see ScaleFromZeroEnvelope.
+func (c ScalingPolicy) RequirePrefillOnScaleFromZero() bool {
+	if c.ScaleFromZero == nil || c.ScaleFromZero.RequirePrefill == nil {
+		return false
+	}
+	return *c.ScaleFromZero.RequirePrefill
+}
+
+// limiterTypeGPUInventory is the inline Limiters type that selects the physical
+// GPU limiter. The other accepted types reuse the canonical LimiterType* values
+// ("inventory" alias, "quota"); analyzer types are not restricted to a closed set
+// so that externally-registered analyzers (see Engine.RegisterAnalyzer) work.
+const limiterTypeGPUInventory = "gpu-inventory"
+
+// AnalyzerScoreConfig configures an individual analyzer's weight in the
+// composite scoring function. Per-analyzer threshold overrides are optional;
+// when nil, the global top-level thresholds are used.
+//
+// Type and Parameters implement the ScalingPolicy plugin envelope (Phase 1 of
+// the proposal in llm-d/llm-d-workload-variant-autoscaler#1245):
+//
+//	analyzers:
+//	  - type: saturation
+//	    parameters: { scaleUpThreshold: 0.95 }
+//
+// Well-known parameter keys (scaleUpThreshold, scaleDownBoundary, score,
+// enabled) are folded into the typed fields below by Normalize(), so downstream
+// consumers keep reading the typed fields. Type falls back to Name when unset,
+// keeping the legacy `- name: saturation` form working unchanged.
+type AnalyzerScoreConfig struct {
+	Type              string         `yaml:"type,omitempty"`              // plugin type; falls back to Name
+	Name              string         `yaml:"name"`                        //
+	Enabled           *bool          `yaml:"enabled,omitempty"`           // default true
+	Score             float64        `yaml:"score,omitempty"`             // default 1.0
+	ScaleUpThreshold  *float64       `yaml:"scaleUpThreshold,omitempty"`  // overrides global
+	ScaleDownBoundary *float64       `yaml:"scaleDownBoundary,omitempty"` // overrides global
+	Parameters        map[string]any `yaml:"parameters,omitempty"`        // plugin params; folded by Normalize
+}
+
+// EffectiveType returns the analyzer plugin type: the explicit Type when set,
+// otherwise the Name. Existing configs use `name:` as both identifier and type,
+// so this keeps them working while allowing the new `type:` form.
+func (a *AnalyzerScoreConfig) EffectiveType() string {
+	if a.Type != "" {
+		return a.Type
+	}
+	return a.Name
+}
+
+// Normalize folds well-known keys out of Parameters into the typed fields, so
+// downstream consumers keep reading Score/Enabled/ScaleUpThreshold/
+// ScaleDownBoundary. A typed field already set (from an explicit top-level key)
+// wins over the same key in Parameters. Unknown parameter keys are tolerated.
+// Returns an error if a known parameter has the wrong type.
+func (a *AnalyzerScoreConfig) Normalize() error {
+	if a.Parameters == nil {
+		return nil
+	}
+	if v, ok := a.Parameters["scaleUpThreshold"]; ok && a.ScaleUpThreshold == nil {
+		f, err := paramFloat("scaleUpThreshold", v)
+		if err != nil {
+			return err
+		}
+		a.ScaleUpThreshold = &f
+	}
+	if v, ok := a.Parameters["scaleDownBoundary"]; ok && a.ScaleDownBoundary == nil {
+		f, err := paramFloat("scaleDownBoundary", v)
+		if err != nil {
+			return err
+		}
+		a.ScaleDownBoundary = &f
+	}
+	if v, ok := a.Parameters["score"]; ok && a.Score == 0 {
+		f, err := paramFloat("score", v)
+		if err != nil {
+			return err
+		}
+		a.Score = f
+	}
+	if v, ok := a.Parameters["enabled"]; ok && a.Enabled == nil {
+		b, ok := v.(bool)
+		if !ok {
+			return fmt.Errorf("analyzer %q: parameter \"enabled\" must be a boolean, got %T", a.EffectiveType(), v)
+		}
+		a.Enabled = &b
+	}
+	return nil
+}
+
+// paramFloat coerces a YAML-decoded plugin parameter to float64. yaml.v3 decodes
+// integers as int and decimals as float64 when the target is interface{}, so both
+// are accepted.
+func paramFloat(key string, v any) (float64, error) {
+	switch n := v.(type) {
+	case float64:
+		return n, nil
+	case int:
+		return float64(n), nil
+	case int64:
+		return float64(n), nil
+	default:
+		return 0, fmt.Errorf("parameter %q must be a number, got %T", key, v)
+	}
+}
+
+// EffectiveScaleUpThreshold returns the per-analyzer threshold if set,
+// otherwise falls back to the global value.
+func (a *AnalyzerScoreConfig) EffectiveScaleUpThreshold(global float64) float64 {
+	if a.ScaleUpThreshold != nil {
+		return *a.ScaleUpThreshold
+	}
+	return global
+}
+
+// EffectiveScaleDownBoundary returns the per-analyzer boundary if set,
+// otherwise falls back to the global value.
+func (a *AnalyzerScoreConfig) EffectiveScaleDownBoundary(global float64) float64 {
+	if a.ScaleDownBoundary != nil {
+		return *a.ScaleDownBoundary
+	}
+	return global
+}
+
+// GetAnalyzerName implements the AnalyzerConfig interface.
+// Returns "saturation" if Analyzers list is populated (new-style config),
+// otherwise returns the raw AnalyzerName field (backward compat).
+func (c *ScalingPolicy) GetAnalyzerName() string {
+	if len(c.Analyzers) > 0 {
+		return "saturation"
+	}
+	return c.AnalyzerName
+}
+
+// IsV2 reports whether the entry is V2-shaped: it populates the Analyzers list
+// (new-style) or sets AnalyzerName to "saturation" (old-style). Since the V1
+// analyzer was removed this no longer selects an engine — the token-based
+// analyzer runs either way. It survives only as the gate on defaulting the
+// scaling band in ApplyDefaults, so a partial entry does not clobber a tuned
+// global value during Merge.
+func (c *ScalingPolicy) IsV2() bool {
+	return len(c.Analyzers) > 0 || c.AnalyzerName == "saturation"
+}
+
+// Capacity-sizing default thresholds, applied when fields are omitted from YAML config.
+const (
+	DefaultKvCacheThreshold     = 0.80
+	DefaultQueueLengthThreshold = 5.0
+)
+
+// V2 analyzer default thresholds, applied when fields are omitted from YAML config.
+const (
+	DefaultScaleUpThreshold  = 0.85
+	DefaultScaleDownBoundary = 0.70
+)
+
+// Normalize folds each analyzer's Parameters into its typed fields. Call it at
+// parse time, before ApplyDefaults() and Validate(), so defaulting and validation
+// see the folded values.
+func (c *ScalingPolicy) Normalize() error {
+	for i := range c.Analyzers {
+		if err := c.Analyzers[i].Normalize(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ApplyDefaults fills in zero-valued fields of a RESOLVED policy with their
+// defaults. Priority and the capacity thresholds (KvCacheThreshold,
+// QueueLengthThreshold) are always defaulted when zero — the analyzer needs them
+// to size per-replica capacity. The scaling band (ScaleUpThreshold,
+// ScaleDownBoundary) and the Analyzers list are defaulted only for V2-shaped
+// configs (see ApplyEntryDefaults). A stored ConfigMap entry is never
+// defaulted (it is validated as a defaulted copy, ValidateEntry), so the
+// fields it leaves out stay zero and Merge() inherits them; the final resolved
+// config is defaulted here and calibrated post-merge via
+// ApplyV2ThresholdDefaults().
+func (c *ScalingPolicy) ApplyDefaults() {
+	if c.Priority == 0 {
+		c.Priority = DefaultPriority
+	}
+	// Capacity thresholds — always defaulted; the analyzer needs them to size capacity.
+	if c.KvCacheThreshold == 0 {
+		c.KvCacheThreshold = DefaultKvCacheThreshold
+	}
+	if c.QueueLengthThreshold == 0 {
+		c.QueueLengthThreshold = DefaultQueueLengthThreshold
+	}
+	c.AnalyzerTuning = c.AnalyzerTuning.WithDefaults()
+	c.LoadImbalance = c.LoadImbalance.WithDefaults()
+	c.ApplyEntryDefaults()
+}
+
+// ApplyEntryDefaults fills what a V2-shaped policy needs to validate and run:
+// its band and its analyzer list. ApplyDefaults calls it on the resolved
+// policy; ValidateEntry calls it on a copy of one stored entry.
+//
+// It is never applied to a stored entry itself. Zero and empty are "unset" to
+// Merge, so a defaulted band or analyzer list on a tier that only said
+// `analyzerName: saturation` replaced the default entry's tuned band and
+// analyzer list during the merge.
+func (c *ScalingPolicy) ApplyEntryDefaults() {
+	if c.IsV2() {
+		if c.ScaleUpThreshold == 0 {
+			c.ScaleUpThreshold = DefaultScaleUpThreshold
+		}
+		if c.ScaleDownBoundary == 0 {
+			c.ScaleDownBoundary = DefaultScaleDownBoundary
+		}
+		// Default analyzers list when empty (backward compat for analyzerName: "saturation")
+		if len(c.Analyzers) == 0 {
+			enabled := true
+			c.Analyzers = []AnalyzerScoreConfig{
+				{Name: "saturation", Score: 1.0, Enabled: &enabled},
+			}
+		}
+		// The list may be shared with a stored entry (Merge and struct copies
+		// do not copy slices). Defaulting it in place would write to the
+		// stored entry, from many goroutines at once.
+		c.Analyzers = slices.Clone(c.Analyzers)
+		// Apply per-entry defaults
+		for i := range c.Analyzers {
+			if c.Analyzers[i].Score == 0 {
+				c.Analyzers[i].Score = 1.0
+			}
+			if c.Analyzers[i].Enabled == nil {
+				enabled := true
+				c.Analyzers[i].Enabled = &enabled
+			}
+		}
+	}
+}
+
+// ValidateEntry validates one stored ConfigMap entry as it would run: a copy
+// gets the entry defaults (ApplyEntryDefaults) and is validated. The entry
+// itself is left as written, so the fields it does not set stay unset and a
+// tier or per-model override inherits them from the layer below in Merge.
+func (c ScalingPolicy) ValidateEntry() error {
+	c.ApplyEntryDefaults()
+	return c.Validate()
+}
+
+// ApplyV2ThresholdDefaults fills zero-valued V2 thresholds (ScaleUpThreshold,
+// ScaleDownBoundary) with their defaults regardless of IsV2(). Call this only on a
+// FINAL resolved config (after base + override Merge), never on an individual stored
+// entry: a partial per-model/namespace entry that omits the band must still be
+// calibrated once merged — but defaulting these fields on the stored entry would
+// clobber a tuned global threshold during Merge().
+func (c *ScalingPolicy) ApplyV2ThresholdDefaults() {
+	if c.ScaleUpThreshold == 0 {
+		c.ScaleUpThreshold = DefaultScaleUpThreshold
+	}
+	if c.ScaleDownBoundary == 0 {
+		c.ScaleDownBoundary = DefaultScaleDownBoundary
+	}
+}
+
+// Merge overlays non-zero fields from override onto c.
+// This allows per-model overrides to specify only the fields they want to change,
+// inheriting all other values from the base (typically the "default" config).
+func (c *ScalingPolicy) Merge(override ScalingPolicy) {
+	if override.KvCacheThreshold != 0 {
+		c.KvCacheThreshold = override.KvCacheThreshold
+	}
+	if override.QueueLengthThreshold != 0 {
+		c.QueueLengthThreshold = override.QueueLengthThreshold
+	}
+	if override.AnalyzerName != "" {
+		c.AnalyzerName = override.AnalyzerName
+	}
+	if override.ScaleUpThreshold != 0 {
+		c.ScaleUpThreshold = override.ScaleUpThreshold
+	}
+	if override.ScaleDownBoundary != 0 {
+		c.ScaleDownBoundary = override.ScaleDownBoundary
+	}
+	if override.Priority != 0 {
+		c.Priority = override.Priority
+	}
+	if len(override.Analyzers) > 0 {
+		c.Analyzers = override.Analyzers
+	}
+	// Whole, like Analyzers: both objectives come from the most specific entry
+	// that sets the block.
+	if override.SLO != nil {
+		c.SLO = override.SLO
+	}
+	// MERGED, so the key works where an operator would actually reach for it.
+	//
+	// A review caught it missing: without this it is silently dropped from a
+	// named tier and from a per-model override, and happens to work only from
+	// a `default:` entry because that one is taken wholesale as the base.
+	//
+	// ONE-WAY, like every other override here: a true turns reuse on for the
+	// model, and a false is indistinguishable from "not set" so it cannot turn
+	// it back OFF where a default entry enabled it. That is the `omitempty`
+	// bool idiom this struct uses throughout, and the field is spelled as an
+	// ENABLE so the one direction it offers is the one that is wanted. Spelled
+	// as a disable with a default of true -- which is how this was first asked
+	// for -- the single direction would have pointed at "off, permanently, for
+	// everyone", which is not a switch.
+	//
+	// DisableShapeChangeHold and ShapeChangeHoldSeconds had the same gap and are
+	// merged too, below: a tier or a per-model override can set the hold.
+	if override.EnableLearnedStateReuse {
+		c.EnableLearnedStateReuse = true
+	}
+	// One-way like the rest: a true turns the borrow off for the model.
+	if override.DisableK2Borrow {
+		c.DisableK2Borrow = true
+	}
+	// One-way like reuse: a true turns the prefill bound on, in the
+	// `default:` entry for every model or in a model's own entry for it.
+	if override.EnablePrefillThroughputBound {
+		c.EnablePrefillThroughputBound = true
+	}
+	// One-way like reuse: a true turns batch-cap learning on.
+	if override.EnableBatchCapLearning {
+		c.EnableBatchCapLearning = true
+	}
+	// Both ways, because it is a pointer: a set false wins over a true below.
+	if override.Passive != nil {
+		v := *override.Passive
+		c.Passive = &v
+	}
+	// The weight is one choice expressed one of two ways, so an override that
+	// states either replaces both: a model that names a class must not inherit a
+	// number from the default entry, which would read as both set.
+	if override.WeightClass != "" || !override.Weight.IsZero() {
+		c.WeightClass = override.WeightClass
+		c.Weight = override.Weight
+	}
+	// Merged FIELD BY FIELD, not wholesale. The envelope carries two independent
+	// settings, so replacing it would make an override that sets only
+	// retentionPeriod silently discard an inherited enabled (and vice versa) —
+	// which is the partial-override case both fields document.
+	if override.ScaleToZero != nil {
+		merged := ScaleToZeroEnvelope{}
+		if c.ScaleToZero != nil {
+			merged = *c.ScaleToZero
+		}
+		if override.ScaleToZero.Enabled != nil {
+			merged.Enabled = override.ScaleToZero.Enabled
+		}
+		if override.ScaleToZero.RetentionPeriod != "" {
+			merged.RetentionPeriod = override.ScaleToZero.RetentionPeriod
+		}
+		c.ScaleToZero = &merged
+	}
+	if override.ScaleFromZero != nil {
+		c.ScaleFromZero = override.ScaleFromZero
+	}
+	// The shape-change hold is per-workload tuning: a long-context tier is the
+	// natural place to raise the hold, and a single misbehaving model the natural
+	// place to switch it off. The flag is a plain bool, so an entry can turn the
+	// hold off but cannot turn back on a hold the default disabled.
+	if override.DisableShapeChangeHold {
+		c.DisableShapeChangeHold = true
+	}
+	if override.ShapeChangeHoldSeconds != 0 {
+		c.ShapeChangeHoldSeconds = override.ShapeChangeHoldSeconds
+	}
+	// Field by field, like ScaleToZero: an entry that tunes one figure
+	// inherits every other from the layer below.
+	c.AnalyzerTuning.merge(override.AnalyzerTuning)
+	c.LoadImbalance.merge(override.LoadImbalance)
+	// Not merged, each on purpose:
+	//   EnableRescale, AnalyzerDefinitions, DefaultPolicy -- read from the
+	//     "default" entry only (budget scope / fleet-wide fallback), never from a
+	//     resolved policy.
+	//   DefaultOutputTokens -- not a ConfigMap field; folded in from the model's
+	//     trigger metadata after resolution.
+	// Limiters is intentionally NOT merged: it is a cluster-"default"-scope setting
+	// read only from the global default entry (see Config.EffectiveLimiterTypes), so
+	// a per-model override's limiters would never be consumed. Optimizer is not
+	// merged for the same reason (see Config.UtilizationShare).
+	if override.ModelID != "" {
+		c.ModelID = override.ModelID
+	}
+	if override.Namespace != "" {
+		c.Namespace = override.Namespace
+	}
+}
+
+// Validate checks for invalid threshold values.
+// Returns error with descriptive message if validation fails.
+// Call ApplyDefaults() before Validate() to handle zero-valued omitempty fields.
+func (c *ScalingPolicy) Validate() error {
+	if c.KvCacheThreshold < 0 || c.KvCacheThreshold > 1 {
+		return fmt.Errorf("kvCacheThreshold must be between 0 and 1, got %.2f", c.KvCacheThreshold)
+	}
+	if c.QueueLengthThreshold < 0 {
+		return fmt.Errorf("queueLengthThreshold must be >= 0, got %.1f", c.QueueLengthThreshold)
+	}
+	if c.Priority < 0 {
+		return fmt.Errorf("priority must be >= 0, got %.2f", c.Priority)
+	}
+
+	// V2 threshold range/consistency checks apply whenever the fields are set,
+	// regardless of IsV2(): a partial per-model or namespace entry's explicit
+	// scaleUpThreshold/scaleDownBoundary can still be merged onto the default and
+	// consumed by the analyzer. Zero means "unset"
+	// (defaulted elsewhere), so it is skipped here.
+	if c.ScaleUpThreshold != 0 && (c.ScaleUpThreshold < 0 || c.ScaleUpThreshold > 1) {
+		return fmt.Errorf("scaleUpThreshold must be in (0, 1], got %.2f", c.ScaleUpThreshold)
+	}
+	if c.ScaleDownBoundary != 0 && (c.ScaleDownBoundary < 0 || c.ScaleDownBoundary > 1) {
+		return fmt.Errorf("scaleDownBoundary must be in (0, 1], got %.2f", c.ScaleDownBoundary)
+	}
+	if c.ScaleUpThreshold != 0 && c.ScaleDownBoundary != 0 && c.ScaleUpThreshold <= c.ScaleDownBoundary {
+		return fmt.Errorf("scaleUpThreshold (%.2f) must be > scaleDownBoundary (%.2f)", c.ScaleUpThreshold, c.ScaleDownBoundary)
+	}
+
+	// V2 analyzer per-analyzer overrides (only meaningful for a V2 config).
+	if c.IsV2() {
+		// A V2 config must have its thresholds set — ApplyDefaults fills them, so a
+		// zero here means the caller skipped ApplyDefaults, which is invalid. (The
+		// upper-bound and relational checks are handled by the non-zero global checks
+		// above; partial entries are only range-checked there when non-zero.)
+		if c.ScaleUpThreshold <= 0 {
+			return fmt.Errorf("scaleUpThreshold must be in (0, 1], got %.2f", c.ScaleUpThreshold)
+		}
+		if c.ScaleDownBoundary <= 0 {
+			return fmt.Errorf("scaleDownBoundary must be in (0, 1], got %.2f", c.ScaleDownBoundary)
+		}
+
+		// Per-analyzer threshold overrides. Analyzer types are intentionally NOT
+		// restricted to a closed set: an unrecognized type is ignored at runtime
+		// (no registered analyzer matches it), and rejecting it here would drop the
+		// whole entry — breaking the Engine.RegisterAnalyzer extension path and
+		// forward-compat with analyzers added in a newer release.
+		for _, a := range c.Analyzers {
+			if a.ScaleUpThreshold != nil {
+				if *a.ScaleUpThreshold <= 0 || *a.ScaleUpThreshold > 1 {
+					return fmt.Errorf("analyzer %q: scaleUpThreshold must be in (0, 1], got %.2f", a.EffectiveType(), *a.ScaleUpThreshold)
+				}
+			}
+			if a.ScaleDownBoundary != nil {
+				if *a.ScaleDownBoundary <= 0 || *a.ScaleDownBoundary > 1 {
+					return fmt.Errorf("analyzer %q: scaleDownBoundary must be in (0, 1], got %.2f", a.EffectiveType(), *a.ScaleDownBoundary)
+				}
+			}
+			up := a.EffectiveScaleUpThreshold(c.ScaleUpThreshold)
+			down := a.EffectiveScaleDownBoundary(c.ScaleDownBoundary)
+			if up <= down {
+				return fmt.Errorf("analyzer %q: scaleUpThreshold (%.2f) must be > scaleDownBoundary (%.2f)", a.EffectiveType(), up, down)
+			}
+		}
+	}
+
+	if err := c.validateLimiters(); err != nil {
+		return err
+	}
+
+	if err := c.AnalyzerTuning.validate(); err != nil {
+		return err
+	}
+	if err := c.LoadImbalance.validate(c.KvCacheThreshold); err != nil {
+		return err
+	}
+
+	if err := c.SLO.Validate(); err != nil {
+		return fmt.Errorf("slo: %w", err)
+	}
+
+	return nil
+}
+
+// MaxIgnoredValueLen is the most bytes of a value an IgnoredField keeps.
+const MaxIgnoredValueLen = 64
+
+// TruncateIgnoredValue cuts a value written in a ConfigMap to
+// MaxIgnoredValueLen bytes, on a character boundary, and says how much was cut.
+// The value is reported in the log, an Event and the controller status on every
+// read of the ConfigMap; written by a tenant it may be any length.
+func TruncateIgnoredValue(v string) string {
+	if len(v) <= MaxIgnoredValueLen {
+		return v
+	}
+	cut := MaxIgnoredValueLen
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s...(%d more bytes)", v[:cut], len(v)-cut)
+}
+
+// errNotFinite is the reason ResetUnusableFields gives for a NaN or infinite
+// number.
+var errNotFinite = errors.New("must be a finite number")
+
+// MaxPrecedence is the largest priority or analyzer score a policy may set.
+// Both multiply a model's weight in the fair share (priority x score x
+// demand), and a weight a million times another's already takes the whole
+// contended budget, so the bound loses nothing; it keeps the product finite: a
+// priority of 1e308 overflowed it to +Inf, and with rescale on the NaN share
+// that followed corrupted the GPU target of every model in the budget.
+const MaxPrecedence = 1e6
+
+// errAboveMaxPrecedence is the reason ResetUnusableFields gives for a priority
+// or score above MaxPrecedence.
+var errAboveMaxPrecedence = fmt.Errorf("must be at most %g", float64(MaxPrecedence))
+
+// isNonFinite reports whether v is NaN or infinite.
+func isNonFinite(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
+
+// IgnoredField is one setting ResetUnusableFields cleared.
+type IgnoredField struct {
+	// Field is the YAML path of the setting, e.g. "scaleToZero.retentionPeriod".
+	Field string
+	// Value is the value as the operator wrote it, truncated
+	// (TruncateIgnoredValue). Reason never repeats it.
+	Value string
+	// Reason says why the value cannot be used.
+	Reason error
+}
+
+// String formats the field as `<field>="<value>": <reason>`, the form the
+// controller-status ConfigMap reports it in.
+func (f IgnoredField) String() string {
+	return fmt.Sprintf("%s=%q: %v", f.Field, f.Value, f.Reason)
+}
+
+// ResetUnusableFields clears each setting whose value cannot be used, so the
+// entry behaves as if that one field were unset, and returns what it cleared.
+// The caller warns with the result on every read of the ConfigMap, counts each
+// field as an error, and reports the "default" entry's in the controller
+// status.
+//
+// These are reset instead of failing Validate because a failing entry is
+// dropped whole. For the "default" entry that drops its limiters too, so a typo
+// in a retention period would quietly switch off GPU quota enforcement.
+//
+// Cleared:
+//   - scaleToZero.retentionPeriod that does not parse or is shorter than
+//     MinScaleToZeroRetentionPeriod. Left
+//     in place it passed load and was reported on every cycle for every model
+//     resolving to it, then fell back to the default anyway.
+//   - shapeChangeHoldSeconds below zero. Merge copies any non-zero value, so a
+//     negative one replaced the default entry's hold, and the getters then
+//     honour only positive values: the operator's hold was silently lost.
+//   - A number that is not finite (YAML .nan, .inf), in priority, the
+//     capacity thresholds, the scaling band, the ITL band and preemption
+//     rate, each analyzer's score and band, and the analyzerTuning and
+//     loadImbalance figures. NaN passes every range check in Validate, since each comparison
+//     is false, and an infinite priority or score put the model last in the
+//     greedy-by-score fair share, not first, and with rescale on drew
+//     replicas away from other models (#171).
+//   - An analyzer score below zero, which AnalyzerScore read as 1 without a
+//     word.
+//   - A priority or analyzer score above MaxPrecedence.
+func (c *ScalingPolicy) ResetUnusableFields() []IgnoredField {
+	var ignored []IgnoredField
+	notFinite := func(field string, v float64) {
+		ignored = append(ignored, IgnoredField{
+			Field: field, Value: strconv.FormatFloat(v, 'g', -1, 64), Reason: errNotFinite,
+		})
+	}
+	nonFinite := func(field string, v *float64) {
+		if isNonFinite(*v) {
+			notFinite(field, *v)
+			*v = 0
+		}
+	}
+	nonFinitePtr := func(field string, v **float64) {
+		if *v != nil && isNonFinite(**v) {
+			notFinite(field, **v)
+			*v = nil
+		}
+	}
+	nonFinite("priority", &c.Priority)
+	aboveMax := func(field string, v *float64) {
+		if *v > MaxPrecedence {
+			ignored = append(ignored, IgnoredField{
+				Field: field, Value: strconv.FormatFloat(*v, 'g', -1, 64), Reason: errAboveMaxPrecedence,
+			})
+			*v = 0
+		}
+	}
+	aboveMax("priority", &c.Priority)
+	nonFinite("kvCacheThreshold", &c.KvCacheThreshold)
+	nonFinite("queueLengthThreshold", &c.QueueLengthThreshold)
+	nonFinite("scaleUpThreshold", &c.ScaleUpThreshold)
+	nonFinite("scaleDownBoundary", &c.ScaleDownBoundary)
+	for i := range c.Analyzers {
+		a := &c.Analyzers[i]
+		at := fmt.Sprintf("analyzers[%d].", i)
+		nonFinite(at+"score", &a.Score)
+		if a.Score < 0 {
+			ignored = append(ignored, IgnoredField{
+				Field: at + "score", Value: strconv.FormatFloat(a.Score, 'g', -1, 64), Reason: errors.New("must be >= 0"),
+			})
+			a.Score = 0
+		}
+		aboveMax(at+"score", &a.Score)
+		nonFinitePtr(at+"scaleUpThreshold", &a.ScaleUpThreshold)
+		nonFinitePtr(at+"scaleDownBoundary", &a.ScaleDownBoundary)
+	}
+	c.AnalyzerTuning.resetNonFinite(nonFinite, nonFinitePtr)
+	nonFinite("loadImbalance.idleKvUsage", &c.LoadImbalance.IdleKvUsage)
+	if c.ScaleToZero != nil && c.ScaleToZero.RetentionPeriod != "" {
+		if _, err := ValidateRetentionPeriod(c.ScaleToZero.RetentionPeriod); err != nil {
+			ignored = append(ignored, IgnoredField{
+				Field: "scaleToZero.retentionPeriod", Value: TruncateIgnoredValue(c.ScaleToZero.RetentionPeriod), Reason: err,
+			})
+			c.ScaleToZero.RetentionPeriod = ""
+		}
+	}
+	if c.ShapeChangeHoldSeconds < 0 {
+		ignored = append(ignored, IgnoredField{
+			Field:  "shapeChangeHoldSeconds",
+			Value:  strconv.Itoa(c.ShapeChangeHoldSeconds),
+			Reason: errors.New("must be >= 0"),
+		})
+		c.ShapeChangeHoldSeconds = 0
+	}
+	return ignored
+}
+
+// validateLimiters checks the inline Limiters list. gpu-inventory/inventory
+// entries must carry no quota fields. A second physical entry is NOT an error:
+// there is one physical cluster and one physical limiter is built, so the
+// duplicate is ignored and reported (IgnoredPhysicalLimiters). Rejecting it
+// would discard the whole default policy, and that list installed before the
+// limiters composed. Quota entries are validated end-to-end by the
+// existing QuotaLimiterEntries.Validate() (name uniqueness, scope, per-type
+// ranges), so the inline and file-based quota schemas stay identical.
+func (c *ScalingPolicy) validateLimiters() error {
+	if len(c.Limiters) == 0 {
+		return nil
+	}
+	var quotaOnes []QuotaLimiterConfig
+	for i, l := range c.Limiters {
+		switch l.Type {
+		case limiterTypeGPUInventory, string(LimiterTypeInventory):
+			if l.Scope != "" || len(l.ClusterQuotas) > 0 || len(l.NamespaceQuotas) > 0 || len(l.Exclude) > 0 || l.Kueue != nil {
+				return fmt.Errorf("limiters[%d] (type %q): must not set quota fields (scope/quotas/namespaceQuotas/exclude/kueue)", i, l.Type)
+			}
+		case string(LimiterTypeQuota):
+			quotaOnes = append(quotaOnes, l)
+		default:
+			return fmt.Errorf("limiters[%d]: unknown limiter type %q (valid: %q, %q, %q)",
+				i, l.Type, limiterTypeGPUInventory, LimiterTypeInventory, LimiterTypeQuota)
+		}
+	}
+	if len(quotaOnes) > 0 {
+		entries := QuotaLimiterEntries{Limiters: quotaOnes}
+		if _, err := entries.Validate(); err != nil {
+			return fmt.Errorf("limiters: %w", err)
+		}
+	}
+	return nil
+}
+
+// LimiterWarnings returns the non-fatal findings about this policy's quota
+// limiters (see QuotaLimiterEntries.Validate), and the namespaces a namespace
+// quota excludes that have no GPU limit on some accelerator type (see
+// unboundedExcludeWarnings). A physical limiter bounds every type a workload
+// names, so with one declared only a workload that names none can be reported.
+// Empty when there are none, or when the quota entries do not validate: the
+// error is reported elsewhere.
+func (c ScalingPolicy) LimiterWarnings() []string {
+	var quotaOnes []QuotaLimiterConfig
+	for _, l := range c.Limiters {
+		if l.Type == string(LimiterTypeQuota) {
+			quotaOnes = append(quotaOnes, l)
+		}
+	}
+	if len(quotaOnes) == 0 {
+		return nil
+	}
+	entries := QuotaLimiterEntries{Limiters: quotaOnes}
+	warnings, err := entries.Validate()
+	if err != nil {
+		return nil
+	}
+	physical := slices.ContainsFunc(c.Limiters, func(l QuotaLimiterConfig) bool { return isPhysicalLimiterType(l.Type) })
+	return append(warnings, entries.unboundedExcludeWarnings(physical)...)
+}
+
+// IgnoredPhysicalLimitersMessage is the one log message for physical entries
+// after the first, shared by the startup check (cmd/main.go) and the ConfigMap
+// reconciler, which logs it only for the ConfigMap the limiters are read from
+// (warnAboutLimiters), so an operator searching for one finds both.
+const IgnoredPhysicalLimitersMessage = "Ignoring physical (gpu-inventory) limiters entries after the first: " +
+	"one physical limiter is built, from the first"
+
+// IgnoredPhysicalLimiters returns the indexes of the physical (gpu-inventory
+// or inventory) entries after the first. One physical limiter is built from
+// the first; these are ignored, and callers log IgnoredPhysicalLimitersMessage.
+func (c ScalingPolicy) IgnoredPhysicalLimiters() []int {
+	var dups []int
+	seen := false
+	for i, l := range c.Limiters {
+		if !isPhysicalLimiterType(l.Type) {
+			continue
+		}
+		if seen {
+			dups = append(dups, i)
+		}
+		seen = true
+	}
+	return dups
+}
+
+// AnalyzerScore returns the AnalyzerScoreConfig.Score for the named analyzer,
+// defaulting to 1.0 when the analyzer has no explicit entry in c.Analyzers.
+// This value is the per-analyzer weight used by GreedyByScoreOptimizer for
+// fair-share priority ordering across models.
+func (c ScalingPolicy) AnalyzerScore(analyzerName string) float64 {
+	for _, aw := range c.Analyzers {
+		if aw.EffectiveType() == analyzerName {
+			if aw.Score > 0 && !math.IsInf(aw.Score, 0) {
+				return aw.Score
+			}
+			return 1.0
+		}
+	}
+	return 1.0
+}
+
+// AnalyzerThresholds returns the scale-up/scale-down band the named analyzer
+// votes against: its own per-analyzer override where it declares one, and the
+// policy's band otherwise.
+func (c ScalingPolicy) AnalyzerThresholds(analyzerName string) (scaleUp, scaleDown float64) {
+	for _, aw := range c.Analyzers {
+		if aw.EffectiveType() == analyzerName {
+			return aw.EffectiveScaleUpThreshold(c.ScaleUpThreshold),
+				aw.EffectiveScaleDownBoundary(c.ScaleDownBoundary)
+		}
+	}
+	return c.ScaleUpThreshold, c.ScaleDownBoundary
+}
+
+// AnalyzerEnabled reports whether the named analyzer should participate in this
+// cycle's scaling decision. An analyzer is opt-in: it participates only when it has
+// an explicit entry in c.Analyzers whose Enabled is true (or nil, i.e. present but
+// not yet defaulted). An analyzer registered in code but ABSENT from c.Analyzers
+// does NOT participate — this prevents a registered-but-unconfigured analyzer (e.g.
+// throughput) from returning SpareCapacity=0 and silently vetoing scale-down.
+// Saturation is exempt: it is guarded by the SaturationAnalyzerName check upstream
+// (engine_v2.go ~L136) before AnalyzerEnabled is ever called.
+func (c ScalingPolicy) AnalyzerEnabled(analyzerName string) bool {
+	for _, aw := range c.Analyzers {
+		if aw.EffectiveType() == analyzerName {
+			if aw.Enabled != nil {
+				return *aw.Enabled
+			}
+			return true // present, not yet defaulted → participates
+		}
+	}
+	return false // absent → opt-in: does not participate
+}
+
+// SaturationListed reports whether saturation sizes the model: its entry in
+// c.Analyzers is enabled, or c.Analyzers is empty. A policy with no analyzers
+// section runs saturation alone; ApplyEntryDefaults writes that entry for a
+// V2-shaped policy, and an entry that is not V2-shaped keeps the empty list.
+// A list that names other analyzers and leaves saturation out, or disables
+// it, does not.
+func (c ScalingPolicy) SaturationListed() bool {
+	return len(c.Analyzers) == 0 || c.AnalyzerEnabled("saturation")
+}
+
+// ShapeChangeHold returns how long a fleet-shape change withholds release
+// before the backstop expires it, and whether the hold is enabled at all.
+//
+// The duration is ShapeChangeHoldSeconds when set and the caller's default
+// otherwise, so the default lives beside the analyzer that justifies it rather
+// than here.
+func (p ScalingPolicy) ShapeChangeHold(defaultHold time.Duration) (time.Duration, bool) {
+	if p.DisableShapeChangeHold {
+		return 0, false
+	}
+	if p.ShapeChangeHoldSeconds > 0 {
+		return time.Duration(p.ShapeChangeHoldSeconds) * time.Second, true
+	}
+	return defaultHold, true
+}
+
+// ExpectedOutputTokens resolves the generation length a request is priced at,
+// and is the one place the precedence is stated:
+//
+//	measured  -- what the fleet's own replicas report this cycle
+//	recalled  -- what this fleet last knew, carried across an idle period
+//	seeded    -- defaultOutputTokens on this model's ScaledObject triggers
+//	global    -- the caller's constant, a weak net and nothing more
+//
+// A measurement always wins, so this cannot drag a working fleet off its own
+// figures; it only answers where there is otherwise a zero.
+//
+// The global default deserves its name and no more confidence than that. A
+// generic figure for chat completion is a few hundred tokens, which is an order
+// of magnitude below a long chain-of-thought workload, and pricing a queue at
+// 12x too little under-orders. What makes this mechanism work is the per-model
+// value and the recall; the global constant only keeps the arithmetic from
+// being zero.
+//
+// Each candidate is tested with `> 0`, which rejects a NaN where `!= 0` would
+// admit one and make every figure downstream a NaN.
+func (p ScalingPolicy) ExpectedOutputTokens(measured, recalled, globalDefault float64) float64 {
+	if measured > 0 {
+		return measured
+	}
+	if recalled > 0 {
+		return recalled
+	}
+	if p.DefaultOutputTokens > 0 {
+		return float64(p.DefaultOutputTokens)
+	}
+	if globalDefault > 0 {
+		return globalDefault
+	}
+	return 0
+}
+
+// ShapeChangeWindow is how long after a shape change the SHORT-window output
+// mean is still the right divisor for the derived mu.
+//
+// It honours ShapeChangeHoldSeconds, because that figure is already calibrated
+// as "one generation plus the rate window that would record it" and the
+// straggler contamination this covers lasts exactly that long. It deliberately
+// IGNORES DisableShapeChangeHold.
+//
+// That asymmetry is the point. DisableShapeChangeHold turns off withholding the
+// FLEET -- it is documented as an operator's way to stop the hold misbehaving
+// without a new image. Which output length to divide mu by is a different
+// question, and answering it from the hold's state meant that flag silently
+// reverted the divisor to the [5m] mean for the whole post-switch window: a
+// count-weighted five-minute mean carries the previous shape's long outputs for
+// minutes after they stop arriving, and the divisor is where that error reaches
+// mu undamped and under-orders replicas. Measured at 9x the client-side phase-1
+// TTFT when the divisor was wrong in the other direction.
+func (p ScalingPolicy) ShapeChangeWindow(defaultWindow time.Duration) time.Duration {
+	if p.ShapeChangeHoldSeconds > 0 {
+		return time.Duration(p.ShapeChangeHoldSeconds) * time.Second
+	}
+	return defaultWindow
+}

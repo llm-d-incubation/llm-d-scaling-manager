@@ -1,0 +1,335 @@
+package fixtures
+
+import (
+	"context"
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/yaml"
+)
+
+// defaultEntryKey is the ConfigMap key holding cluster-scope settings. It
+// mirrors config.GlobalDefaultsKey, restated here so the fixtures package does
+// not depend on the controller's internal packages.
+const defaultEntryKey = "default"
+
+// The label a multi-namespace controller selects ConfigMaps by. It mirrors the
+// selector built in cmd/main.go, restated here for the same reason as
+// defaultEntryKey above: the fixtures package does not depend on the
+// controller's internal packages.
+const (
+	scalingManagerConfigMapLabelKey   = "app.kubernetes.io/name"
+	scalingManagerConfigMapLabelValue = "scaling-manager"
+)
+
+// quotaLimiterName names the limiter SetNamespaceQuota writes, so a sweep can
+// tell the suite's own entry from one an operator declared.
+const quotaLimiterName = "e2e-warm-pool-quota"
+
+// physicalLimiterName names the physical limiter WithPhysicalLimiter declares
+// beside the quota entry, so ClearLeftoverQuota can remove it too.
+const physicalLimiterName = quotaLimiterName + "-physical"
+
+// leadingLimitersKey carries, through the policy document the options edit,
+// the limiters an option declares ahead of the quota entry. SetNamespaceQuota
+// removes it before the document is written.
+const leadingLimitersKey = "__e2eLeadingLimiters"
+
+// QuotaOption adjusts the quota entry SetNamespaceQuota writes, and the default
+// policy document it is written into.
+type QuotaOption func(entry, doc map[string]any)
+
+// WithKueue bounds the entry by Kueue, re-read every refreshInterval. A short
+// interval keeps a spec that flips Kueue objects from waiting on the default.
+func WithKueue(refreshInterval string) QuotaOption {
+	return func(entry, _ map[string]any) {
+		entry["kueue"] = map[string]any{"enabled": true, "refreshInterval": refreshInterval}
+	}
+}
+
+// WithKueueTimings sets the Kueue block's borrowing timings: placementTimeout,
+// borrowCooldown and lenderDebounce, as Go durations. An empty value leaves
+// that timing at its default. Apply it after WithKueue.
+func WithKueueTimings(placementTimeout, borrowCooldown, lenderDebounce string) QuotaOption {
+	return func(entry, _ map[string]any) {
+		block, _ := entry["kueue"].(map[string]any)
+		if block == nil {
+			return
+		}
+		for k, v := range map[string]string{
+			"placementTimeout": placementTimeout,
+			"borrowCooldown":   borrowCooldown,
+			"lenderDebounce":   lenderDebounce,
+		} {
+			if v != "" {
+				block[k] = v
+			}
+		}
+	}
+}
+
+// SetKueueQuotaOption sets one field of the kueue block of the quota entry
+// SetNamespaceQuota wrote (say releaseToNonReclaimingLenders), in place,
+// keeping everything else. The restore SetNamespaceQuota returned still puts
+// the original document back.
+func SetKueueQuotaOption(ctx context.Context, clientset kubernetes.Interface, configNamespace, configName, field string, value any) error {
+	cms := clientset.CoreV1().ConfigMaps(configNamespace)
+	cm, err := cms.Get(ctx, configName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read %s: %w", configName, err)
+	}
+	doc := map[string]any{}
+	if err := yaml.Unmarshal([]byte(cm.Data[defaultEntryKey]), &doc); err != nil {
+		return fmt.Errorf("parse %s entry: %w", defaultEntryKey, err)
+	}
+	limiters, _ := doc["limiters"].([]any)
+	found := false
+	for _, l := range limiters {
+		entry, _ := l.(map[string]any)
+		if entry == nil || entry["name"] != quotaLimiterName {
+			continue
+		}
+		block, _ := entry["kueue"].(map[string]any)
+		if block == nil {
+			return fmt.Errorf("the quota entry %s has no kueue block", quotaLimiterName)
+		}
+		block[field] = value
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("no quota entry %s in %s", quotaLimiterName, configName)
+	}
+	merged, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshal %s entry: %w", defaultEntryKey, err)
+	}
+	cm.Data[defaultEntryKey] = string(merged)
+	if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update %s: %w", configName, err)
+	}
+	return nil
+}
+
+// WithPhysicalLimiter declares the physical GPU limiter (gpu-inventory) beside
+// the quota entry, so a decision must fit the GPUs the nodes have as well. A
+// Kueue quota entry counts cohort borrowing only where such a GPU bound exists.
+func WithPhysicalLimiter() QuotaOption {
+	return func(_, doc map[string]any) {
+		doc[leadingLimitersKey] = []any{map[string]any{"name": physicalLimiterName, "type": "gpu-inventory"}}
+	}
+}
+
+// WithOptimizer sets the default entry's optimizer block. The optimizer is
+// configured beside the limiters and only there
+// (docs/proposals/utilization-share-optimizer.md, section 8.1), so it is
+// written by the same call that writes the quota.
+func WithOptimizer(block map[string]any) QuotaOption {
+	return func(_, doc map[string]any) {
+		doc["optimizer"] = block
+	}
+}
+
+// WithoutOptimizer removes the default entry's optimizer block, so today's
+// optimizer runs. SetNamespaceQuota merges into the policy it finds, so an
+// optimizer an earlier call wrote stays unless an option removes it.
+func WithoutOptimizer() QuotaOption {
+	return func(_, doc map[string]any) {
+		delete(doc, "optimizer")
+	}
+}
+
+// SetNamespaceQuota declares a namespace-scoped GPU quota and returns a restore
+// func.
+//
+// configName is the ConfigMap the CONTROLLER is actually reading, and the caller
+// resolves it rather than this fixture assuming it. There are two names in play
+// -- the current one and a pre-rename one the controller ignores whenever the
+// current one exists -- and writing a quota into the ignored document produces a
+// spec that sets a limit nobody enforces, then fails claiming the limiter is
+// broken. That is not hypothetical: it is how this fixture failed the first time
+// it ran.
+//
+// The quota is what bounds the scaling manager's own consumption, and a warm pool is part of
+// that consumption -- so this is how a spec creates the condition where a pool
+// wants to grow and the namespace cannot pay for it.
+//
+// Merges into whatever the ConfigMap already holds rather than replacing it: the
+// suite shares one controller and one ConfigMap, and a spec that overwrote the
+// whole document would silently disable everything else configured in it.
+func SetNamespaceQuota(
+	ctx context.Context,
+	clientset *kubernetes.Clientset,
+	configNamespace, configName, targetNamespace, accelerator string,
+	gpus int,
+	opts ...QuotaOption,
+) (func(context.Context) error, error) {
+	cms := clientset.CoreV1().ConfigMaps(configNamespace)
+
+	existing, err := cms.Get(ctx, configName, metav1.GetOptions{})
+	existed := err == nil
+	if err != nil && !errors.IsNotFound(err) {
+		return nil, fmt.Errorf("read %s: %w", configName, err)
+	}
+
+	var original *corev1.ConfigMap
+	data := map[string]string{}
+	if existed {
+		original = existing.DeepCopy()
+		for k, v := range existing.Data {
+			data[k] = v
+		}
+	}
+
+	// The "default" ENTRY, not "config.yaml". A limiter is a cluster-scope
+	// setting the controller reads only from the global default entry: declared
+	// anywhere else it is ignored with a log line and nothing else -- the quota
+	// applies to no one, the pool grows past it, and the spec fails claiming
+	// enforcement is broken. That is exactly how this fixture failed twice.
+	doc := map[string]any{}
+	if raw, ok := data[defaultEntryKey]; ok && raw != "" {
+		if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+			return nil, fmt.Errorf("parse existing %s entry: %w", defaultEntryKey, err)
+		}
+	}
+	entry := map[string]any{
+		"name":  quotaLimiterName,
+		"type":  "quota",
+		"scope": "namespace",
+		"namespaceQuotas": map[string]any{
+			targetNamespace: map[string]any{accelerator: gpus},
+		},
+	}
+	delete(doc, leadingLimitersKey)
+	for _, opt := range opts {
+		opt(entry, doc)
+	}
+	leading, _ := doc[leadingLimitersKey].([]any)
+	delete(doc, leadingLimitersKey)
+	doc["limiters"] = append(leading, entry)
+	merged, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s entry: %w", defaultEntryKey, err)
+	}
+	data[defaultEntryKey] = string(merged)
+
+	// Carry the WHOLE ObjectMeta forward rather than rebuilding it from name and
+	// namespace. A multi-namespace controller caches ConfigMaps behind a label
+	// selector, so an Update whose ObjectMeta omits that label strips it and
+	// drops the object out of the controller's cache: the reconciler never sees
+	// the quota, the limiter stays "none", and the pool grows past an allowance
+	// nobody is enforcing while the spec waits for a refusal that can no longer
+	// be logged.
+	//
+	// The tell is in the failing run's own log -- no "Updated global scaling
+	// policy from ConfigMap" line between this write and cleanup, and one the
+	// instant the restore below puts the original back, labels and all.
+	if existed {
+		desired := existing.DeepCopy()
+		desired.Data = data
+		// SET the label, do not merely preserve it. Preserving is not enough:
+		// the controller's cache only LISTS labelled ConfigMaps at startup, and
+		// this write can land before that initial list. If the label is missing
+		// at that moment -- because an earlier run stripped it, or because this
+		// write raced the controller coming up -- the object is not in the list
+		// at all, so no event ever follows and the quota is never read.
+		if desired.Labels == nil {
+			desired.Labels = map[string]string{}
+		}
+		desired.Labels[scalingManagerConfigMapLabelKey] = scalingManagerConfigMapLabelValue
+		if _, err := cms.Update(ctx, desired, metav1.UpdateOptions{}); err != nil {
+			return nil, fmt.Errorf("update %s: %w", configName, err)
+		}
+	} else {
+		desired := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      configName,
+				Namespace: configNamespace,
+				// Same reason: a ConfigMap created without this label is
+				// invisible to the controller in multi-namespace mode.
+				Labels: map[string]string{
+					scalingManagerConfigMapLabelKey: scalingManagerConfigMapLabelValue,
+				},
+			},
+			Data: data,
+		}
+		if _, err := cms.Create(ctx, desired, metav1.CreateOptions{}); err != nil {
+			return nil, fmt.Errorf("create %s: %w", configName, err)
+		}
+	}
+
+	return func(ctx context.Context) error {
+		if !existed {
+			// It was not there before; leaving a quota behind would bound every
+			// later spec in the suite by an allowance none of them declared.
+			if err := cms.Delete(ctx, configName, metav1.DeleteOptions{}); err != nil &&
+				!errors.IsNotFound(err) {
+				return err
+			}
+			return nil
+		}
+		current, err := cms.Get(ctx, configName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		restored := original.DeepCopy()
+		restored.ResourceVersion = current.ResourceVersion
+		_, err = cms.Update(ctx, restored, metav1.UpdateOptions{})
+		return err
+	}, nil
+}
+
+// ClearLeftoverQuota removes what SetNamespaceQuota wrote and a run never
+// restored -- it was interrupted, or a restore failed: the suite's limiter, and
+// the optimizer block written with it. It reports whether anything was removed.
+//
+// A leftover quota names a namespace that no longer exists, and a namespace
+// quota bounds every namespace it does not list at zero: each later
+// scale-from-zero spec is then refused with no-capacity and waits five minutes
+// for an activation that cannot come.
+func ClearLeftoverQuota(ctx context.Context, clientset kubernetes.Interface, configNamespace, configName string) (bool, error) {
+	cms := clientset.CoreV1().ConfigMaps(configNamespace)
+	cm, err := cms.Get(ctx, configName, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", configName, err)
+	}
+	raw := cm.Data[defaultEntryKey]
+	if raw == "" {
+		return false, nil
+	}
+	doc := map[string]any{}
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return false, fmt.Errorf("parse %s entry: %w", defaultEntryKey, err)
+	}
+	limiters, _ := doc["limiters"].([]any)
+	kept := make([]any, 0, len(limiters))
+	for _, l := range limiters {
+		if m, ok := l.(map[string]any); ok && (m["name"] == quotaLimiterName || m["name"] == physicalLimiterName) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if len(kept) == len(limiters) {
+		return false, nil
+	}
+	if len(kept) == 0 {
+		delete(doc, "limiters")
+	} else {
+		doc["limiters"] = kept
+	}
+	delete(doc, "optimizer")
+	merged, err := yaml.Marshal(doc)
+	if err != nil {
+		return false, fmt.Errorf("marshal %s entry: %w", defaultEntryKey, err)
+	}
+	cm.Data[defaultEntryKey] = string(merged)
+	if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		return false, fmt.Errorf("update %s: %w", configName, err)
+	}
+	return true, nil
+}

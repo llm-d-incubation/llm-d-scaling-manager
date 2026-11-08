@@ -1,0 +1,212 @@
+package registration
+
+import (
+	"context"
+	"strings"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/collector/source"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/collector/source/prometheus"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
+)
+
+var _ = Describe("the queries the demand floor and the throughput analyzer share", func() {
+	var (
+		ctx       context.Context
+		registry  *source.SourceRegistry
+		mockAPI   *mockPrometheusAPI
+		queryList *source.QueryList
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		registry = source.NewSourceRegistry()
+		mockAPI = &mockPrometheusAPI{}
+	})
+
+	Context("when prometheus source is registered", func() {
+		BeforeEach(func() {
+			metricsSource := prometheus.NewPrometheusSource(ctx, mockAPI, prometheus.DefaultPrometheusSourceConfig())
+			err := registry.Register("prometheus", metricsSource)
+			Expect(err).NotTo(HaveOccurred())
+			// One registration, as cmd/main does -- unconditionally.
+			RegisterAlwaysOnQueries(registry)
+			queryList = registry.Get("prometheus").QueryList()
+		})
+
+		It("panics if registered twice on the same registry", func() {
+			Expect(func() {
+				RegisterAlwaysOnQueries(registry)
+			}).To(Panic())
+		})
+
+		It("registers every figure the demand floor reads, with no analyzer gate", func() {
+			// All four were once behind RegisterThroughputAnalyzerQueries, which
+			// cmd/main called only when that opt-in analyzer was enabled. The
+			// shipped config does not enable it, so the floor silently had no
+			// arrival rate, then no generation-token rate, then -- measured on
+			// 2026-09-24, 1,064 capacity decisions and not one derived -- no k*
+			// to fit ITL(k) from. Three outages, one cause. This spec is the
+			// guard: every one of them registers unconditionally.
+			expectedQueries := []string{
+				QueryRequestRate,
+				QueryModelArrivalRate,
+				QueryGenerationTokenRate,
+				QueryKvUsageInstant,
+				QueryKvUsageMean,
+			}
+			for _, name := range expectedQueries {
+				q := queryList.Get(name)
+				Expect(q).NotTo(BeNil(), "expected query %q to be registered", name)
+				Expect(q.Name).To(Equal(name))
+				Expect(q.Type).To(Equal(source.QueryTypePromQL))
+			}
+		})
+
+		It("builds the SGLang generation-token rate from the counter, falling back to the histogram", func() {
+			// The counter has not been read off a live SGLang engine, and a
+			// query naming a series that does not exist fails silently to zero
+			// and takes the demand floor with it. PromQL's `or` yields the
+			// left vector plus any right-hand series with no match on the
+			// left, so an engine with the counter is priced from it and one
+			// without keeps the behaviour it has today.
+			rendered, err := queryList.Build(EngineQuery(inferenceengine.EngineSGLang, QueryGenerationTokenRate),
+				map[string]string{source.ParamNamespace: "test-ns"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rendered).To(ContainSubstring(`sglang:generation_tokens_total`),
+				"the counter is preferred")
+			Expect(rendered).To(ContainSubstring(` or `),
+				"and the histogram remains as a fallback rather than a replacement")
+			Expect(rendered).To(ContainSubstring(`sglang:generation_tokens_histogram_sum`))
+			Expect(strings.Index(rendered, "generation_tokens_total")).To(BeNumerically("<",
+				strings.Index(rendered, "generation_tokens_histogram_sum")),
+				"the counter is the left-hand side, which is the one `or` prefers")
+		})
+
+		It("should build QueryGenerationTokenRate scoped to the namespace, grouped by model", func() {
+			rendered, err := queryList.Build(QueryGenerationTokenRate, map[string]string{
+				source.ParamNamespace: "test-ns",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rendered).To(ContainSubstring(`namespace="test-ns"`))
+			Expect(rendered).To(ContainSubstring(`sum by (model_name,`))
+			Expect(rendered).NotTo(ContainSubstring(`model_name="`), "the model is partitioned in the collector, not matched in PromQL")
+			Expect(rendered).To(ContainSubstring(`[1m]`))
+
+			// From the COUNTER, not the histogram sum. The two carry the same
+			// running total and picking the wrong one is invisible until a fleet
+			// is under load: vllm:request_generation_tokens is a histogram observed
+			// when a request FINISHES, so its _sum rate is zero while a long
+			// generation runs and jumps by the whole request at completion. The
+			// saturation analyzer prices mu from this rate and keeps a max, so one
+			// drain burst becomes the fleet's throughput for the rest of the phase
+			// -- measured 2026-09-22 as a ratchet from 0.92 to 3.60 req/s under a
+			// workload whose shape never changed, leaving the floor asking for 1.6
+			// replicas where about 8 were needed.
+			Expect(rendered).To(ContainSubstring(`vllm:generation_tokens_total`),
+				"tokens must be counted as they are produced")
+			Expect(rendered).NotTo(ContainSubstring(`request_generation_tokens_sum`),
+				"the histogram sum reports a request's tokens only once it has finished")
+		})
+
+		It("should build QueryKvUsageInstant without max_over_time", func() {
+			rendered, err := queryList.Build(QueryKvUsageInstant, map[string]string{
+				source.ParamNamespace: "test-ns",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rendered).To(ContainSubstring(`vllm:kv_cache_usage_perc`))
+			Expect(rendered).NotTo(ContainSubstring(`max_over_time`))
+			Expect(rendered).To(ContainSubstring(`namespace="test-ns"`))
+			Expect(rendered).To(ContainSubstring(`avg by (model_name,`),
+				"the mean over a pod's engine ranks, not the busiest rank (issue #150)")
+			Expect(rendered).NotTo(ContainSubstring(`model_name="`), "the model is partitioned in the collector, not matched in PromQL")
+		})
+
+		It("builds QueryKvUsageMean over the ITL window, so k and ITL cover the same minute", func() {
+			rendered, err := queryList.Build(QueryKvUsageMean, map[string]string{
+				source.ParamNamespace: "test-ns",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rendered).To(ContainSubstring(`avg_over_time(vllm:kv_cache_usage_perc{namespace="test-ns"}[`+ITLWindow+`])`),
+				"the minute AvgITL's rate covers (issue #393)")
+			Expect(rendered).NotTo(ContainSubstring(`max_over_time`))
+			Expect(rendered).To(ContainSubstring(`avg by (model_name,`),
+				"the mean over a pod's engine ranks, as QueryKvUsageInstant (issue #150)")
+		})
+
+		It("should build QueryRequestRate with 1m window over token count, once registered", func() {
+			rendered, err := queryList.Build(QueryRequestRate, map[string]string{
+				source.ParamNamespace: "test-ns",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rendered).To(ContainSubstring(`vllm:request_generation_tokens_count`))
+			Expect(rendered).To(ContainSubstring(`[1m]`))
+			Expect(rendered).To(ContainSubstring(`namespace="test-ns"`))
+			Expect(rendered).To(ContainSubstring(`sum by (model_name,`))
+			Expect(rendered).NotTo(ContainSubstring(`model_name="`), "the model is partitioned in the collector, not matched in PromQL")
+		})
+	})
+
+	Context("when prometheus source is not registered", func() {
+		It("should not panic", func() {
+			Expect(func() {
+				RegisterAlwaysOnQueries(registry)
+			}).NotTo(Panic())
+		})
+	})
+})
+
+// The arrival-rate queries must be registered whether or not the throughput
+// analyzer is enabled.
+//
+// They used to live inside RegisterThroughputAnalyzerQueries, which cmd/main
+// calls only when that analyzer is on — and it is opt-in, so by default neither
+// query was registered. The saturation analyzer's demand floor also reads λ, so
+// with the default configuration both of its sources were structurally zero and
+// the floor could never compute anything at all. It reported "no arrival rate"
+// every cycle on a fleet visibly serving 14 QPS, and no unit test noticed
+// because every one of them builds AnalyzerInput in Go with the field already
+// populated. Only a live run surfaced it.
+var _ = Describe("arrival-rate query registration", func() {
+	It("registers the floor's rate sources without the throughput analyzer", func() {
+		reg := source.NewSourceRegistry()
+		Expect(reg.Register("prometheus", prometheus.NewPrometheusSource(
+			context.Background(), &mockPrometheusAPI{}, prometheus.DefaultPrometheusSourceConfig()))).To(Succeed())
+
+		// Deliberately NOT calling RegisterThroughputAnalyzerQueries.
+		RegisterAlwaysOnQueries(reg)
+
+		ql := reg.Get("prometheus").QueryList()
+		Expect(ql.Get(QueryModelArrivalRate)).NotTo(BeNil(),
+			"the EPP-sourced arrival rate must not depend on the throughput analyzer")
+		Expect(ql.Get(QueryRequestRate)).NotTo(BeNil(),
+			"nor the completion-rate fallback it degrades to")
+		Expect(ql.Get(EngineQuery(inferenceengine.EngineSGLang, QueryRequestRate))).NotTo(BeNil(),
+			"including on SGLang")
+
+		// The saturation analyzer's floor prices mu from generated tokens over
+		// the shape's output length, so this is as load-bearing for it as
+		// lambda is, and as invisible when it is missing: left registered only
+		// with the opt-in throughput analyzer, the field was structurally zero
+		// and the floor recorded nothing for a whole benchmark run -- 21
+		// saturated cycles, no window, no floor, measured 2026-09-22.
+		Expect(ql.Get(QueryGenerationTokenRate)).NotTo(BeNil(),
+			"mu's source must not depend on the throughput analyzer either")
+		Expect(ql.Get(EngineQuery(inferenceengine.EngineSGLang, QueryGenerationTokenRate))).NotTo(BeNil(),
+			"including on SGLang")
+	})
+
+	It("does not double-register when the throughput analyzer is also enabled", func() {
+		// MustRegister panics on a duplicate name, so this is the failure mode of
+		// splitting the registration carelessly: fine by default, dead on startup
+		// for anyone who turns the throughput analyzer on.
+		reg := source.NewSourceRegistry()
+		Expect(reg.Register("prometheus", prometheus.NewPrometheusSource(
+			context.Background(), &mockPrometheusAPI{}, prometheus.DefaultPrometheusSourceConfig()))).To(Succeed())
+		Expect(func() {
+			RegisterAlwaysOnQueries(reg)
+		}).NotTo(Panic())
+	})
+})

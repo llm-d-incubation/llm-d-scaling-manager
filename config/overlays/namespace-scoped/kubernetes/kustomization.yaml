@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace scope: the controller manages ONE namespace.
+#
+# It still carries cluster-scoped RBAC — the metrics authn/authz filter issues
+# TokenReviews, EPP metrics need nonResourceURLs, and the gpu-inventory limiter
+# reads Nodes, none of which a Role can express. That is not a contradiction: a
+# CLUSTER ADMIN creates those once, in the prereqs phase
+# (`make setup-prereqs-namespace-on-k8s`), and the namespace's owner then installs
+# and upgrades the controller with no cluster-scoped rights at all.
+#
+# For a cluster where no admin will ever run that phase, add
+# components/unauthenticated-metrics here: it trades authenticated metrics and EPP
+# metrics for an overlay with no cluster-scoped object in it.
+#
+# `namespace:` is a placeholder — deploy/install.sh rewrites it to $LLMSM_NS.
+namespace: scaling-manager-system
+
+namePrefix: scaling-manager-
+
+resources:
+- ../../../base/
+
+components:
+# Admits the external scaler port only from KEDA's namespace. Listed first so
+# a later component (openshift) can repoint it. See the component.
+- ../../../components/external-scaler-networkpolicy/
+- ../../../components/namespace-scoped/
+- ../../../components/tenant-installable/
+# Nodes are cluster-scoped, so no Role can reach them and a namespace-scoped
+# controller cannot resolve accelerators without this. Applied by the prereqs
+# phase along with the rest of the cluster-scoped RBAC.
+- ../../../components/node-reader/
+# Kueue ClusterQueues and ResourceFlavors are cluster-scoped too; a quota entry
+# with kueue.enabled reads them. Inert on a cluster without Kueue.
+- ../../../components/kueue-reader/
+# Namespaces too: the controller reads them to find the cluster policy namespace
+# (scaling-manager-policy, or a scaling-manager.llmd.ai/policy-namespace label). Without it a published
+# cluster policy is invisible to this controller.
+- ../../../components/policy-namespace-reader/

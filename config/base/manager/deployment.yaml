@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: scaling-manager
+spec:
+  # DO NOT rename these values with the brand. A Deployment's spec.selector
+  # is IMMUTABLE: changing it makes every upgrade of an existing install
+  # fail with "field is immutable", and the only way through is to delete
+  # the Deployment first -- which takes the controller down. They are
+  # identifiers here, not branding, and the template labels below plus the
+  # Service selectors must keep matching them.
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: scaling-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        control-plane: controller-manager
+        app.kubernetes.io/name: scaling-manager
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - command:
+        - /manager
+        args:
+          - --leader-elect=true
+          - --health-probe-bind-address=:8081
+          - --config-file=/etc/scaling-manager/config.yaml
+          - --metrics-bind-address=:8443
+          - --metrics-secure=true
+          - --external-scaler-bind-address=:9090
+        image: controller:latest
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: LOG_LEVEL
+            value: "info"
+          - name: PROMETHEUS_TOKEN_PATH
+            value: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          - name: POOL_GROUP
+            value: "inference.networking.k8s.io"
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          # The leader key of the scaling-manager-controller-status ConfigMap: which pod
+          # wrote it. The controller falls back to the hostname without it.
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          # Which namespace a namespace-scoped controller MANAGES, as distinct from
+          # the one it RUNS IN. It defaults to the latter, which is what the flag
+          # used to hardcode — and that forced the controller to live inside the
+          # namespace it manages. For a tenant namespace that hands the tenant
+          # ownership of this very Deployment, so they could edit or remove any
+          # bound placed on them. Kubernetes expands $(POD_NAMESPACE) here from the
+          # env var above, so the default is unchanged.
+          - name: LLMSM_WATCH_NAMESPACE
+            value: "$(POD_NAMESPACE)"
+        name: manager
+        ports:
+          - name: healthz
+            containerPort: 8081
+            protocol: TCP
+          - name: https
+            containerPort: 8443
+            protocol: TCP
+          - name: ext-scaler
+            containerPort: 9090
+            protocol: TCP
+        securityContext:
+          allowPrivilegeEscalation: false
+          # The controller writes nothing to its filesystem: its metrics
+          # certificate is generated in memory (no --metrics-cert-path), it
+          # registers no webhooks, logs go to stderr, and every file it reads --
+          # config, tokens, CA -- is a read-only mount. /tmp is an emptyDir
+          # below anyway, for a library that reaches for os.TempDir().
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        # A startup probe, so a slow start is not read as a failed one.
+        # While it is pending, liveness and readiness do not run at all; once it
+        # succeeds they take over and the container is never restarted for
+        # taking too long to come up.
+        #
+        # Without it, an install on a real cluster restarted a controller that
+        # was starting perfectly well: it had initialized Prometheus and its
+        # managers, but the probes' timeout is 1s by default and that expired
+        # while it did so. The installer's 60s rollout wait then reported the
+        # controller not ready, and the next check found it Ready -- an install
+        # that looks broken, is not, and costs a restart to find out.
+        #
+        # 30 x 2s allows a minute to start; the failure it still catches is a
+        # process that never becomes healthy at all.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          periodSeconds: 2
+          failureThreshold: 30
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          # initialDelaySeconds is not set: the startup probe already gates this
+          # one, and a delay on top of it only slows down detecting a real hang.
+          periodSeconds: 20
+          # Explicit, because the default is 1s and that is what fired above.
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          periodSeconds: 10
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts:
+        - name: scaling-manager-config
+          mountPath: /etc/scaling-manager/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: epp-metrics-token
+          mountPath: /var/run/secrets/epp-metrics
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: scaling-manager-config
+        configMap:
+          name: manager-config
+      - name: epp-metrics-token
+        secret:
+          secretName: epp-metrics-token
+          defaultMode: 420
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
+      serviceAccountName: controller-manager
+      # Above the manager's GracefulShutdownTimeout (25s, cmd/main.go), so the
+      # engines finish their cycle and the lease is released before SIGKILL.
+      # At 10s a slow shutdown was killed first and the successor waited out
+      # the 60s LeaseDuration. cmd/shutdown_test.go keeps the two in step.
+      terminationGracePeriodSeconds: 40

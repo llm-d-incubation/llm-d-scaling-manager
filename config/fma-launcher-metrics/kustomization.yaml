@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Scrapes Fast Model Actuation LAUNCHER pods, which nothing else does.
+#
+# FMA splits a model server in two: a requester Deployment that carries the
+# llm-d identity and is what a scaler moves, and launcher pods — owned by a
+# LauncherConfig — that hold the GPU and run vLLM. The launchers serve, and they
+# report the full vLLM metric surface, but they declare no container ports. Since
+# llm-d's PodMonitor selects its endpoint by port NAME, the operator resolves
+# nothing and generates no scrape target for them at all. `up{}` in an FMA
+# namespace lists the decode pod, EPP and the scaling manager, and no launcher.
+#
+# Measured on a real benchmark: EPP dispatched 27.4 req/s across nine launchers
+# against 5.9 req/s to the decode pod, with a launcher at 143 requests running
+# and KV cache 99.9% full. None of it reached Prometheus.
+#
+# This is a plain Kustomization, not a kustomize Component, on purpose. It must
+# be applicable on its own, into a namespace that holds launcher pods, whether or
+# not the scaling manager is installed there — a launcher nobody scrapes is invisible to every
+# Prometheus consumer, not just to the scaling manager:
+#
+#     kubectl apply -k config/fma-launcher-metrics -n <namespace-with-launchers>
+#
+# It is NOT part of any overlay, and deliberately so. The scaling manager overlays render
+# into the CONTROLLER's namespace, while launcher pods live in the workload
+# namespace — the same one for a simple namespace-scoped install, a different one
+# whenever LLMSM_WATCH_NS is set, and many of them for a cluster-scoped install. A
+# PodMonitor placed in the controller's namespace would select nothing and report
+# no error. So the installer applies this per workload namespace instead; see
+# deploy_fma_launcher_podmonitor in deploy/lib/infra_monitoring.sh.
+#
+# Opt in with LLMSM_FMA_LAUNCHER_METRICS=true, and note the installer refuses to
+# apply it alongside another PodMonitor that already scrapes launchers: two
+# scrape configs on one pod give it two targets at the same (instance, pod) key,
+# and the scaling manager's additive `sum by` queries would double-count throughput while the
+# `max by` ones still looked correct.
+#
+# See docs/reference/operations.md, "FMA launcher pods".
+resources:
+- fma-launcher-podmonitor.yaml

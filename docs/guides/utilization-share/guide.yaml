@@ -1,0 +1,52 @@
+name: utilization-share
+
+prerequisites:
+  vars:
+    note: The models' namespace. Also export CONTROLLER_NAMESPACE if the controller runs elsewhere.
+    run: |
+      export NAMESPACE=<namespace>
+  check:
+    note: Check there is a limiter and every variant's accelerator resolves. Fails with the reason if not.
+    run: |
+      make utilization-share-check
+
+trial:
+  setup:
+    note: Build a trial setup, two 8B models under one namespace quota of 4 GPUs.
+    run: |
+      export BENCHMARK_NAMESPACE=<namespace>
+      LLMSM_QUOTAS='<accelerator>=4' make benchmark-two-model-preflight
+      LLMSM_LIMITER=quota LLMSM_QUOTAS='<accelerator>=4' make benchmark-two-model-standup
+      make benchmark-two-model-verify
+
+deploy:
+  shadow:
+    note: Turn the optimizer on in shadow mode. It reports what it would move, and moves nothing.
+    run: |
+      make utilization-share-shadow
+  active:
+    note: Let it act. Only after reading what shadow would do.
+    run: |
+      make utilization-share-activate
+
+verify:
+  status:
+    note: Show the mode, recent decisions, transfer events, warnings and marked pods.
+    run: |
+      make utilization-share-status
+  endpoint:
+    note: Read the optimizer metrics from the controller. Needs Secrets read in the controller's namespace.
+    run: |
+      CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE:-$NAMESPACE}
+      TOKEN=$(kubectl get secret scaling-manager-epp-metrics-token -n $CONTROLLER_NAMESPACE -o jsonpath='{.data.token}' | base64 -d)
+      kubectl port-forward -n $CONTROLLER_NAMESPACE svc/scaling-manager-controller-manager-metrics-service 8443:8443 >/dev/null & PF=$!
+      sleep 2
+      curl -sSfk -H "Authorization: Bearer $TOKEN" https://localhost:8443/metrics \
+        | grep -E '^llmsm_(utilization_share_(mode|actionable|replicas_to_move|headroom|spare_gpus|transfers_total)|model_scaling_blocked)'
+      kill $PF
+
+cleanup:
+  disable:
+    note: Turn the optimizer off. Returns to today's optimizer; the limiter is untouched.
+    run: |
+      make utilization-share-off
