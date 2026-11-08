@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/decision"
 )
 
-// Issue #372: today's optimizer node view held utilization-share promises on
+// Issue ev-shindin/llm-scaling-manager#372: today's optimizer node view held utilization-share promises on
 // the freest nodes, not on the nodes the promised holes are on. Whole 8-GPU
 // units throughout. The node view and the package's default stores are
 // shared state: no t.Parallel.

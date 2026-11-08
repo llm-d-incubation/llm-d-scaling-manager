@@ -936,7 +936,7 @@ fi
 # ---------------------------------------------------------------------------
 # Fix 13 -- the harness scrapes the engines every 30 s by default; make it 10.
 #
-# PR #64 moved every PodMonitor this repo ships to 10 s (deploy/warmpool.sh,
+# PR ev-shindin/llm-scaling-manager#64 moved every PodMonitor this repo ships to 10 s (deploy/warmpool.sh,
 # config/modelserver-metrics/, the two-variant-scaling-manager and workload-autoscaling
 # scenarios via the chart's podmonitor, two-model-warm-pool via
 # monitoring.scrapeInterval) and said why: the scale-up signal is a queue at

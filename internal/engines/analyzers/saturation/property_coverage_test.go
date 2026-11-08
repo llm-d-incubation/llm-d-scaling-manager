@@ -41,14 +41,14 @@ var propCoverage = []coverage{
 	{learner: "borrowed-k2", classes: []propClass{classMissing, classRedistribution, classKnownTruth, classLiveness, classMonotonicity, classEdges},
 		gap: "row 4. Not covered: the bound across a controller restart (the snapshot's tests hold it)"},
 	{learner: "shape-hold", classes: []propClass{classTransient, classFirstSample, classStale, classMissing, classEdges},
-		gap: "row 8. The arriving-prompt axis (the scheduler queue) has no case; the backstop's cooldown is an edge, a ledger row of #391"},
+		gap: "row 8. The arriving-prompt axis (the scheduler queue) has no case; the backstop's cooldown is an edge, a ledger row of ev-shindin/llm-scaling-manager#391"},
 	{learner: "decode-memory", classes: []propClass{classTransient, classMissing, classRedistribution, classEdges},
 		gap: "row 9"},
 	{learner: "batch-cap", classes: []propClass{classTransient, classMissing, classHeterogeneity, classKnownTruth},
-		gap: "batch_cap.go, issue #399. Not covered: first-sample (a plateau is three readings by construction), stale value and redistribution (the cap is a max with no decay but the bucket retention), N-dependence, scale (DP ranks are in the known-truth case), liveness beyond the known-truth case, monotonicity, edges; a cap across a controller restart (not persisted)"},
+		gap: "batch_cap.go, issue ev-shindin/llm-scaling-manager#399. Not covered: first-sample (a plateau is three readings by construction), stale value and redistribution (the cap is a max with no decay but the bucket retention), N-dependence, scale (DP ranks are in the known-truth case), liveness beyond the known-truth case, monotonicity, edges; a cap across a controller restart (not persisted)"},
 	{learner: "settle", classes: []propClass{classTransient},
 		gap: "a lend alone, held at the tracker: no learner reads a bridge. The tracker's other events run through the learners' cases"},
-	{learner: "throughput-itl", gap: "row 16 (throughput/analyzer.go resolveITLModel) lives in another package and has none of #273's fixes; its cases come with PR 4b"},
+	{learner: "throughput-itl", gap: "row 16 (throughput/analyzer.go resolveITLModel) lives in another package and has none of ev-shindin/llm-scaling-manager#273's fixes; its cases come with PR 4b"},
 	{learner: "share", gap: "rows 14 and 15 (the share ledger): out of scope for PR 0"},
 }
 

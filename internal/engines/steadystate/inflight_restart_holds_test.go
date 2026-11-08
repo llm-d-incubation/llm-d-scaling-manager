@@ -27,7 +27,7 @@ func restoreHolds(t *testing.T, now time.Time, want, placed int, keys ...string)
 	allocation.DefaultInFlight.RestoreInFlight(p, now, allocation.InFlightTTL)
 }
 
-// Issue #215: the first fitted cycle after a restart ended every restored
+// Issue ev-shindin/llm-scaling-manager#215: the first fitted cycle after a restart ended every restored
 // hold it did not admit, so a model that cycle skipped -- its metrics
 // missing -- lost its Unschedulable replica's hold. A restored hold of a
 // variant the cycle enumerated and did not decide is kept, cycle after

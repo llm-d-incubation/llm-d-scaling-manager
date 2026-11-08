@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/allocation"
 )
 
-// TestWarmPoolSupplyIsInThePressuresFrame (#221): warm-pool supply and
+// TestWarmPoolSupplyIsInThePressuresFrame (ev-shindin/llm-scaling-manager#221): warm-pool supply and
 // pressure come from one result, the composite. Saturation rates a and b
 // alike, at 200; spy asks for 20 of a and 10 of b, so the role is priced in
 // spy's frame, where b is worth 400. Published from saturation's entry, b's

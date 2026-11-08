@@ -80,7 +80,7 @@ func TestBuildAnalyzerInput_ForgetsOneVariantOnRequest(t *testing.T) {
 	assert.False(t, isLive(), "a new token did not ask again")
 }
 
-// The forget reaches the slo analyzer too (issue #431), on the token the
+// The forget reaches the slo analyzer too (issue ev-shindin/llm-scaling-manager#431), on the token the
 // saturation analyzer acts on: once per token, and again for a new one.
 // Before, the slo analyzer's ITL line kept pricing from the readings taken
 // before the forget.

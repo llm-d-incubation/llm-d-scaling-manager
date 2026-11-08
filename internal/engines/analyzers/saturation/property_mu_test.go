@@ -235,7 +235,7 @@ func checkMuChoiceTruth(choose muChooser) func(uint64) error {
 // checkMuSiblingYield: a fleet with one genuinely slow pod, queued, its
 // reading the one on record, beside three full siblings at 1 serving
 // unqueued. The yield never prices above the measurement (yieldCapped), so
-// mu is at most the slow reading, under the fleet's mean. Before #495 it
+// mu is at most the slow reading, under the fleet's mean. Before ev-shindin/llm-scaling-manager#495 it
 // yielded to the siblings' lower median, 12 % over {1, 1, 1, 0.569}: the
 // risky side (checkMuSiblingYieldWith, with SwitchMuYieldCappedAtMeasurement
 // off).
@@ -263,7 +263,7 @@ func checkMuSiblingYieldWith(switches map[string]bool) func(uint64) error {
 
 // checkMuHalfServed: a fleet of four queued replicas, one genuinely slow
 // under half the others' rate, through Analyze. The slow reading counts by
-// its weight, so mu is the fleet's mean. Before #495 it was refused (half
+// its weight, so mu is the fleet's mean. Before ev-shindin/llm-scaling-manager#495 it was refused (half
 // the served max), and mu was the others' mean, 20 % over {1, 1, 1, 0.341}
 // (checkMuHalfServedWith, with SwitchMuWeighsFleet off).
 func checkMuHalfServed(seed uint64) error { return checkMuHalfServedWith(nil)(seed) }

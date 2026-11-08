@@ -36,7 +36,7 @@ func TestExplicitMaxNumSeqs(t *testing.T) {
 }
 
 // BatchCap prices a replica, so it takes max_num_seqs stated or defaulted,
-// lowered by --max-num-active-seqs when that is set (issue #335).
+// lowered by --max-num-active-seqs when that is set (issue ev-shindin/llm-scaling-manager#335).
 func TestBatchCap(t *testing.T) {
 	for name, tc := range map[string]struct {
 		params EngineParams
@@ -66,7 +66,7 @@ func TestBatchCap(t *testing.T) {
 }
 
 // --max-num-active-seqs (vLLM v0.31+) stops the running batch below
-// max_num_seqs, so the batch cap is the lower of the two (issue #308). Read in
+// max_num_seqs, so the batch cap is the lower of the two (issue ev-shindin/llm-scaling-manager#308). Read in
 // every form max_num_seqs is.
 func TestMaxNumActiveSeqsIsTheBatchCap(t *testing.T) {
 	parse := func(args ...string) EngineParams {
@@ -131,7 +131,7 @@ func TestMaxNumActiveSeqsIsTheBatchCap(t *testing.T) {
 		}
 	}
 
-	// A read cap is hashed (issue #334): a rollout that changes only it is a
+	// A read cap is hashed (issue ev-shindin/llm-scaling-manager#334): a rollout that changes only it is a
 	// change of arguments, as IsCapacityCompatible already says.
 	read := parse("--max-num-seqs=256", "--max-num-active-seqs=64")
 	if !read.Complete() {

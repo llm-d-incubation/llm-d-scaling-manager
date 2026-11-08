@@ -139,7 +139,7 @@ func zzLeakAt(t *testing.T, rec []byte, where string, secret string) {
 
 // A recorded name that is all digits, or q and digits, is refused in a count
 // or a queue slot, where a figure would pass: the verification probes P05 and
-// P07 of #390. A small figure that is also a name (maxFigureDigits) still
+// P07 of ev-shindin/llm-scaling-manager#390. A small figure that is also a name (maxFigureDigits) still
 // exports, since the controller writes those there.
 func TestExportLeak_ANumericNameInAFigureSlot(t *testing.T) {
 	for _, tc := range []struct{ name, ns, key string }{
@@ -161,7 +161,7 @@ func TestExportLeak_ANumericNameInAFigureSlot(t *testing.T) {
 }
 
 // An aggregated variant's line key (model|accelerator|GPUs|fingerprint|both,
-// issue #432) exports with its model renamed and its role kept, and is not
+// issue ev-shindin/llm-scaling-manager#432) exports with its model renamed and its role kept, and is not
 // read as a variant key, whose fifth part is a GPU count: read so, "both"
 // failed the count part and the export refused every recording with an
 // aggregated line. A name in its role slot is still refused.

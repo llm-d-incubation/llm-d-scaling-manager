@@ -496,15 +496,15 @@ scenario:
       # overlay (see wva.repoRef), not a helm chart -- there is no separate
       # `chartVersions.wva` to keep in sync.
       # Available version tags can be listed with:
-      #   curl -sL "https://ghcr.io/token?scope=repository:ev-shindin/llm-scaling-manager:pull" \
+      #   curl -sL "https://ghcr.io/token?scope=repository:llm-d-incubation/llm-d-scaling-manager:pull" \
       #     | jq -r .token | xargs -I{} curl -sH "Authorization: Bearer {}" \
-      #       https://ghcr.io/v2/ev-shindin/llm-scaling-manager/tags/list
+      #       https://ghcr.io/v2/llm-d-incubation/llm-d-scaling-manager/tags/list
       # Pinned to the latest release, v0.10.2. `make benchmark-standup`
       # turns this install off (wva.enabled=false) and installs the controller
       # from deploy/ with IMG instead, so to measure the release there, check
-      # out v0.10.2 and pass IMG=ghcr.io/ev-shindin/llm-scaling-manager:v0.10.2.
+      # out v0.10.2 and pass IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.10.2.
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: v0.10.2
       replicaCount: 1 # the scaling manager controller pod replicas (1 is the chart default)
       # Disable to skip installing the controller but still render the VA

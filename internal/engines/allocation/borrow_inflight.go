@@ -12,7 +12,7 @@ import (
 
 // BorrowInFlight is borrowed growth the greedy optimizer ordered that Kueue
 // has not reserved yet, kept by the steady-state engine across cycles
-// (the Kueue borrowing proposal, PR #161, B4). The Kueue
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B4). The Kueue
 // reader cannot see it: until the pods exist and are admitted, the cohort's
 // free pool still counts those GPUs, and a second cycle -- or another
 // namespace -- would borrow them again.

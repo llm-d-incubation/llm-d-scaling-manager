@@ -2,7 +2,7 @@ package saturation
 
 import "time"
 
-// One slow pod and mu (docs/proposals/analyzer-learner.md, 2.6; #495). Mu's
+// One slow pod and mu (docs/proposals/analyzer-learner.md, 2.6; ev-shindin/llm-scaling-manager#495). Mu's
 // estimand is the fleet's mean, since a fleet serves the sum of its replicas'
 // rates. A sample reads the queued replicas alone, so what it means depends on
 // who queued. Refuse a slow pod beside three at 1 and it read 1.000 against a
@@ -348,7 +348,7 @@ type minorityRelease struct {
 	// bound is the rate it gives way to (servedRates.fleetBound).
 	bound float64
 	// first is set on the first released cycle of the key's run of them,
-	// the one that logs (the #303 rule: no line per replica per cycle).
+	// the one that logs (the ev-shindin/llm-scaling-manager#303 rule: no line per replica per cycle).
 	first bool
 }
 

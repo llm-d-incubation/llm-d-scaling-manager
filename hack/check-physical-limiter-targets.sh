@@ -204,7 +204,7 @@ put_ns() {
     printf '%s\n' "$@" | jq -s '{apiVersion: "v1", kind: "List", items: .}' > "$DEPLOYS/$ns.json"
 }
 
-IMG="ghcr.io/ev-shindin/llm-scaling-manager:main"
+IMG="ghcr.io/llm-d-incubation/llm-d-scaling-manager:main"
 put_ns tenant-a "$(deploy_json scaling-manager-controller-manager scaling-manager-controller-manager "$IMG")"
 # The attack: the label, the real image, the namespace default account.
 put_ns tenant-b "$(deploy_json impostor default "$IMG")"
@@ -217,7 +217,7 @@ put_ns tenant-d "$(deploy_json sidecar scaling-manager-controller-manager "$IMG"
 put_ns tenant-e "$(deploy_json aaa-impostor tenant-admin "$IMG")" \
                 "$(deploy_json scaling-manager-controller-manager scaling-manager-controller-manager "$IMG")"
 # A pinned digest and a registry port must still be recognised as the repo.
-put_ns tenant-f "$(deploy_json scaling-manager-controller-manager scaling-manager-controller-manager "ghcr.io/ev-shindin/llm-scaling-manager:v1.2@sha256:abc")"
+put_ns tenant-f "$(deploy_json scaling-manager-controller-manager scaling-manager-controller-manager "ghcr.io/llm-d-incubation/llm-d-scaling-manager:v1.2@sha256:abc")"
 # A self-managed controller (the base manifest: --watch-namespace from
 # LLMSM_WATCH_NAMESPACE, which is $(POD_NAMESPACE)) with a sidecar listed FIRST.
 # Read from containers[0], it has no flag, looks cluster-scoped, and is never
@@ -432,8 +432,8 @@ fi
 # pl_image_repo, directly.
 case_begin
 for pair in \
-    "ghcr.io/ev-shindin/llm-scaling-manager:main=ghcr.io/ev-shindin/llm-scaling-manager" \
-    "ghcr.io/ev-shindin/llm-scaling-manager@sha256:abc=ghcr.io/ev-shindin/llm-scaling-manager" \
+    "ghcr.io/llm-d-incubation/llm-d-scaling-manager:main=ghcr.io/llm-d-incubation/llm-d-scaling-manager" \
+    "ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:abc=ghcr.io/llm-d-incubation/llm-d-scaling-manager" \
     "registry.local:5000/scaling-manager=registry.local:5000/scaling-manager" \
     "registry.local:5000/scaling-manager:dev=registry.local:5000/scaling-manager"; do
     in="${pair%=*}"; want="${pair##*=}"
@@ -446,7 +446,7 @@ ok "pl_image_repo strips tags and digests, and keeps a registry port"
 # no explicit list is given, so a controller built from a custom IMG is known.
 case_begin
 got="$(LLMSM_IMAGE_REPO=registry.local:5000/me/scaling-manager:dev pl_image_repos)"
-if [ "$got" = "ghcr.io/ev-shindin/llm-scaling-manager registry.local:5000/me/scaling-manager" ]; then
+if [ "$got" = "ghcr.io/llm-d-incubation/llm-d-scaling-manager registry.local:5000/me/scaling-manager" ]; then
     ok "pl_image_repos adds the installer image repository to the published one"
 else
     fail "pl_image_repos with LLMSM_IMAGE_REPO=registry.local:5000/me/scaling-manager:dev gave '$got'"

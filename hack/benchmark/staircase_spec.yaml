@@ -58,6 +58,6 @@ falsifiers:
   # The router hop, ms per 1000 prompt tokens, from the buckets' means. M2: about 1.
   hopPerKiloToken: [0.5, 1.5]
   # Client p90 of C over B, median over the steps. M2: 1.33 off and on, each step 1.14
-  # to 1.80, against 2.40 priced then and 2.09 now at the operating rate (#501). The top
+  # to 1.80, against 2.40 priced then and 2.09 now at the operating rate (ev-shindin/llm-scaling-manager#501). The top
   # is M2's highest step, so a ratio at the model's price is out of band.
   burstRatio: [1.0, 1.8]

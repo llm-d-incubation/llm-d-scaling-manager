@@ -95,7 +95,7 @@ func TestEveryLearnedStateMapIsTrimmable(t *testing.T) {
 	}
 }
 
-// A line's unit mark left with no line (#274) is spare: the size bound drops
+// A line's unit mark left with no line (ev-shindin/llm-scaling-manager#274) is spare: the size bound drops
 // it before any entry that prices something, and a line keeps its own mark.
 func TestTheTrimDropsAnOrphanedLineUnitMarkFirst(t *testing.T) {
 	now := time.Now()
@@ -127,7 +127,7 @@ func TestTheTrimDropsAnOrphanedLineUnitMarkFirst(t *testing.T) {
 	}
 }
 
-// A line's shape left with no line (#275) is spare, as its unit mark is: the
+// A line's shape left with no line (ev-shindin/llm-scaling-manager#275) is spare, as its unit mark is: the
 // size bound drops it before any entry that prices something, and a line
 // keeps its own shape.
 func TestTheTrimDropsAnOrphanedLineShapeFirst(t *testing.T) {

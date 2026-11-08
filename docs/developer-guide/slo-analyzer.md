@@ -100,7 +100,7 @@ The engine holds the analyzer as `sloAnalyzer`, an interface
   (`logging.ForgottenKeyMessage`). The replay applies the recorded
   `slo.ForgetVariant` (`TestReplay_TheSLOForgetIsApplied`). The token is the saturation analyzer's;
   this analyzer keeps none. It walks `learn.Learners` and forgets `learn.ITL`,
-  its own instance of the line (`forget.go`, issue #431, which also names
+  its own instance of the line (`forget.go`, issue ev-shindin/llm-scaling-manager#431, which also names
   the maps a forget keeps). Replay switch `slo-itl-forget-reaches-the-line`;
   off, nothing is forgotten here;
 - `notePresentVariants`: `NoteVariantsPresent` stamps a parked variant's line,
@@ -112,10 +112,10 @@ The engine holds the analyzer as `sloAnalyzer`, an interface
   tracker does not wait for it: `observeOwnSettle` reads a model last analyzed
   more than `StateTimeout` ago as first-seen, backdated, with its line keys'
   replica traces dropped, whether `EvictStale` ran first, between two models,
-  or not at all (issue #459). Backdated means one observation, at the cycle,
+  or not at all (issue ev-shindin/llm-scaling-manager#459). Backdated means one observation, at the cycle,
   of replicas `settle.Joined` `itl.DefaultSteadyFor` earlier, but never
   before a Pod's own Ready time, or a bridge's lend time
-  (`settlerow.ObserveOwnSince`, issue #511); two observations that far apart
+  (`settlerow.ObserveOwnSince`, issue ev-shindin/llm-scaling-manager#511); two observations that far apart
   would read the gap as an absence (`settle.Rejoined` at the cycle). The
   sighting holds only the row read at the cycle: its trace is one sample and
   an idle run starts at one row. The throughput analyzer's own tracker does
@@ -160,7 +160,7 @@ instance and its own keys.
   `max_num_seqs` times its ranks, with `max_num_seqs` read from the
   engine's flag, `QueueLength` above zero, and a known `PreemptionRate`
   at most `analyzerTuning.itlBand.capMaxPreemptionRate`. Its reading above the band is kept and
-  counted in `Capped` (issue #287). `Observe` takes an `itl.Admission`:
+  counted in `Capped` (issue ev-shindin/llm-scaling-manager#287). `Observe` takes an `itl.Admission`:
   the policy's band (`analyzerTuning.itlBand.minObservableK`, `analyzerTuning.itlBand.maxObservableK`), the cap and
   the allowance. The zero value is the default band with no cap.
 - **The window** (`Window`) holds at most 20 readings for at most 30 minutes.

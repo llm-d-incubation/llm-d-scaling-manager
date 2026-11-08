@@ -17,7 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// The ITL line of an aggregated variant, by request shape (issue #275,
+// The ITL line of an aggregated variant, by request shape (issue ev-shindin/llm-scaling-manager#275,
 // docs/proposals/aggregated-itl-shape.md).
 //
 // An aggregated pod runs the prompts it admits as chunks inside its decode
@@ -50,13 +50,13 @@ import (
 // cycles, never to order this one's steps.
 
 // SwitchITLAggregatedShapeTerm is the replay switch for the shape term of an
-// aggregated variant's line (issue #275): the shape tags, the window dropped
+// aggregated variant's line (issue ev-shindin/llm-scaling-manager#275): the shape tags, the window dropped
 // on a shape change, the shape points and c, and the corrected figure. Off,
-// the figure is #432's. The figure stays reported only: sizing from it is
+// the figure is ev-shindin/llm-scaling-manager#432's. The figure stays reported only: sizing from it is
 // SwitchITLAggregatedSizes.
 const SwitchITLAggregatedShapeTerm = "itl-aggregated-shape-term"
 
-// SwitchITLAggregatedSizes is the replay switch for the lift (issue #275):
+// SwitchITLAggregatedSizes is the replay switch for the lift (issue ev-shindin/llm-scaling-manager#275):
 // an aggregated variant's figure prices its replicas once the GPS check has
 // agreed with it. It needs the shape term, so with
 // SwitchITLAggregatedShapeTerm off it lifts nothing.

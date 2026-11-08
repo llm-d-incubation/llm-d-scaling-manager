@@ -5,7 +5,7 @@ import (
 )
 
 // How the spread of output lengths enters the KV a resident request holds
-// (issue #276).
+// (issue ev-shindin/llm-scaling-manager#276).
 //
 // A request that generates O tokens is resident for O decode steps and holds
 // IL + a tokens at age a. Averaged over the time requests are resident, which

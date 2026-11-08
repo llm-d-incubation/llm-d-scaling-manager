@@ -16,7 +16,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils/scaletarget"
 )
 
-// Carrying learned state across a controller restart (issue #137): a restart,
+// Carrying learned state across a controller restart (issue ev-shindin/llm-scaling-manager#137): a restart,
 // a changed engine configuration and an aged entry. A leader hand-off is the
 // same transfer between two processes, and is pinned at the engine, which
 // owns the store.

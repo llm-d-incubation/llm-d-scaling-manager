@@ -66,7 +66,7 @@ PROMETHEUS_SECRET_NS=${PROMETHEUS_SECRET_NS:-$MONITORING_NAMESPACE}
 # :main, not :latest -- built by ci-main-image on every push to main, so it
 # cannot silently go stale. Both tags select the Always pull policy in
 # infra_scaling_manager.sh, so this changes what is pulled, not how.
-LLMSM_DEFAULT_IMAGE_REPO="ghcr.io/ev-shindin/llm-scaling-manager"
+LLMSM_DEFAULT_IMAGE_REPO="ghcr.io/llm-d-incubation/llm-d-scaling-manager"
 #
 # The tag is the one config/base/manager/kustomization.yaml names: `main` on the
 # main branch, the release tag on a release commit (release-process.md pins it

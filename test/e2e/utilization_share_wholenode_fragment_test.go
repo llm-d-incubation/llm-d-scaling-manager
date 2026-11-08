@@ -78,7 +78,7 @@ var _ = Describe("Utilization share with a whole-node model: a fragmented cluste
 	// hold its replica, so nothing is returned: the returned GPUs would only
 	// sit unassigned. S1 and S2 keep their five replicas. The cause does not
 	// change, so neither does the reason: once reported, no-node-fits is in
-	// every reading (issue #236).
+	// every reading (issue ev-shindin/llm-scaling-manager#236).
 	It("starts no transfer for G, reports why, and returns no spare for it", func() {
 		start := time.Now()
 		wholeNodeProm()
@@ -134,7 +134,7 @@ var _ = Describe("Utilization share with a whole-node model: a fragmented cluste
 })
 
 // A node released for the large model, with a pod outside the scaling manager waiting for a
-// GPU on it, and the large model at a higher PriorityClass (issue #234).
+// GPU on it, and the large model at a higher PriorityClass (issue ev-shindin/llm-scaling-manager#234).
 //
 //   - The packed layout: G on node 1; four replicas each of S1 and S2 on node
 //     2, their fifth on node 3. Quota 18, spent. G runs at a PriorityClass

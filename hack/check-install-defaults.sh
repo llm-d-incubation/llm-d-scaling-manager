@@ -223,12 +223,12 @@ check 'Makefile: the e2e IMG split is the tested helper (digest)' "ghcr.io/o/w||
 check 'Makefile: deploy-e2e-infra splits IMG with the helper and passes the digest' '2' \
     "$(sed -n '/^deploy-e2e-infra:/,/^[^[:space:]#].*:/p' "$ROOT/Makefile" | tr -d '\r' \
         | grep -c -e 'IMG_FIELDS="\$\$(\$(LLMSM_IMAGE_REF_FIELDS)' -e 'LLMSM_IMAGE_DIGEST=\$\$IMAGE_DIGEST')"
-check 'Makefile: controller repos, default IMG' 'ghcr.io/ev-shindin/llm-scaling-manager' \
+check 'Makefile: controller repos, default IMG' 'ghcr.io/llm-d-incubation/llm-d-scaling-manager' \
     "$(make_eval '$(LLMSM_CONTROLLER_IMAGE_REPOS)')"
-check 'Makefile: controller repos, a custom IMG is appended' 'ghcr.io/ev-shindin/llm-scaling-manager localhost:5000/w' \
+check 'Makefile: controller repos, a custom IMG is appended' 'ghcr.io/llm-d-incubation/llm-d-scaling-manager localhost:5000/w' \
     "$(make_eval '$(LLMSM_CONTROLLER_IMAGE_REPOS)' IMG=localhost:5000/w:dev)"
-check 'Makefile: controller repos, a digest of the published repo adds nothing' 'ghcr.io/ev-shindin/llm-scaling-manager' \
-    "$(make_eval '$(LLMSM_CONTROLLER_IMAGE_REPOS)' "IMG=ghcr.io/ev-shindin/llm-scaling-manager@$DIGEST")"
+check 'Makefile: controller repos, a digest of the published repo adds nothing' 'ghcr.io/llm-d-incubation/llm-d-scaling-manager' \
+    "$(make_eval '$(LLMSM_CONTROLLER_IMAGE_REPOS)' "IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@$DIGEST")"
 check 'Makefile: controller repos stay overridable' 'registry.local/scaling-manager' \
     "$(make_eval '$(LLMSM_CONTROLLER_IMAGE_REPOS)' IMG=localhost:5000/w:dev LLMSM_CONTROLLER_IMAGE_REPOS=registry.local/scaling-manager)"
 

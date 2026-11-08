@@ -55,7 +55,7 @@ func rawRecording(t *testing.T) string {
 // and analysed by the saturation analyzer. A test that adds a recording uses
 // it rather than the committed one, whose Fidelity replay at a later commit
 // writes the input fields added since and so no longer matches it byte for
-// byte (#400).
+// byte (ev-shindin/llm-scaling-manager#400).
 func headRecording(t *testing.T) string {
 	t.Helper()
 	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)

@@ -291,7 +291,7 @@ func TestGatedReplicaOutsideBorrowingIsChargedAndReleased(t *testing.T) {
 	}
 }
 
-// Review #199 (1): a gated pod whose Workload Kueue already reserved quota
+// Review ev-shindin/llm-scaling-manager#199 (1): a gated pod whose Workload Kueue already reserved quota
 // for -- waiting on an admission check, a ProvisioningRequest asking for a
 // node -- is in Kueue's reservation. Queue of 16 in no cohort, serving holds
 // 8 admitted and 8 reserved waiting for a node: Kueue reserved serving's 16
@@ -309,7 +309,7 @@ func TestReservedGatedReplicaIsNotChargedAsAnothers(t *testing.T) {
 	}
 }
 
-// Review #199 (2): an entry that counts borrowing, with the namespace
+// Review ev-shindin/llm-scaling-manager#199 (2): an entry that counts borrowing, with the namespace
 // withheld for a while (here its ResourceQuotas cannot be read), is not
 // governed as one that counts none: Kueue may still admit the gated replica
 // by borrowing, and the borrowing release state (HoldReleases) is kept.
@@ -330,7 +330,7 @@ func TestWithheldNamespaceOfACountingEntryIsNotReleasedAtTheGate(t *testing.T) {
 	}
 }
 
-// Review #199 (3): a cycle that counts no borrowing reads no Events for the
+// Review ev-shindin/llm-scaling-manager#199 (3): a cycle that counts no borrowing reads no Events for the
 // gated release. The cluster autoscaler does not act on a gated pod, so no
 // scale-up stretches its timeout; before, the cycle listed the
 // cluster-autoscaler Events of every unplaced pod past the timeout, in every

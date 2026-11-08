@@ -94,7 +94,7 @@ jobs:
           exit 1
 
       # The image goes to the repository owner's namespace, as ci-main-image.yaml
-      # does: ghcr.io/ev-shindin/llm-scaling-manager here, which is what
+      # does: ghcr.io/llm-d-incubation/llm-d-scaling-manager here, which is what
       # config/base/manager/kustomization.yaml and the Makefile's IMG name. It
       # used to be hardcoded to ghcr.io/llm-d/..., an org this repository cannot
       # write to.

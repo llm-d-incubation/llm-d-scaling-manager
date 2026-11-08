@@ -8,7 +8,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/allocation"
 )
 
-// Issue #215: a wake decided in the instant before the steady-state engine
+// Issue ev-shindin/llm-scaling-manager#215: a wake decided in the instant before the steady-state engine
 // had read the persisted in-flight ledger back did not see the holds it
 // carries, and took the node an Unschedulable replica ordered before the
 // restart was held for. Until the ledger is read back, a wake fitted to nodes

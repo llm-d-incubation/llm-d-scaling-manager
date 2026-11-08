@@ -2,7 +2,7 @@
 # Every scrape this repo sets up runs at 10 s -- and the harness's own default
 # is patched to say so.
 #
-# PR #64 moved the pool PodMonitor, the shipped model-server PodMonitor and two
+# PR ev-shindin/llm-scaling-manager#64 moved the pool PodMonitor, the shipped model-server PodMonitor and two
 # benchmark scenarios to 10 s and measured why (decision lag 25/56/56/87 s at
 # 30 s, 15/60/60/76 s at 10 s). The P/D scenario was missed: it sets no
 # interval and took llm-d-benchmark's own default, 30 s, and two cold passes on

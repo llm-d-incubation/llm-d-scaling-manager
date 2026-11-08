@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// The k2 key's output bucket, held across a boundary (#396).
+// The k2 key's output bucket, held across a boundary (ev-shindin/llm-scaling-manager#396).
 //
 // k2's window was keyed by the fleet's tracked output length. That length
 // moves only when the shape tracker declares a change, a move of
@@ -52,7 +52,7 @@ import (
 // 30 min, relaxed over 6 h, and set aside by the new bucket's first
 // measurement.
 //
-// The throughput (mu) key reads the same band (#415). It read the tracked
+// The throughput (mu) key reads the same band (ev-shindin/llm-scaling-manager#415). It read the tracked
 // length, which moved on one reading 20 % off its anchor, so on the same
 // property case (edges/mu/key-near-output-boundary) it left "long" for
 // "medium" on 13 of 50 seeds: measured mu was read from, and written to,
@@ -95,12 +95,12 @@ const K2KeyBucketSwap = 0.20
 const K2KeyBucketDwell = 2 * ThroughputSampleSpacing
 
 // SwitchK2KeyBucketHeld is the replay switch for the k2 key's bucket band
-// (#396, analyzer-learner.md 2.5). On, the key's output bucket is held as
+// (ev-shindin/llm-scaling-manager#396, analyzer-learner.md 2.5). On, the key's output bucket is held as
 // keyLengths says. Off, as before, the key reads the tracked length.
 const SwitchK2KeyBucketHeld = "k2-key-bucket-held"
 
 // SwitchMuKeyBucketHeld is the replay switch for the throughput (mu) key's
-// output bucket (#415, analyzer-learner.md 2.5). On, the key reads the k2
+// output bucket (ev-shindin/llm-scaling-manager#415, analyzer-learner.md 2.5). On, the key reads the k2
 // key's band (keyLengths), so the two keys sit in one bucket, and a key
 // that moves to a bucket with no window is priced from the bucket it left
 // where that is lower (carriedThroughput). Off, as before, the key reads the
@@ -271,7 +271,7 @@ func (a *SaturationAnalyzer) keyLengths(namespace, modelID string, fleetOut, sta
 }
 
 // SwitchMuSwapFreeze is the replay switch for the throughput window's freeze
-// while a swap is pending (#415). On, as muSwapFrozen says. Off, the key's
+// while a swap is pending (ev-shindin/llm-scaling-manager#415). On, as muSwapFrozen says. Off, the key's
 // window takes writes and prices at full authority through the swap dwell.
 const SwitchMuSwapFreeze = "mu-swap-freeze"
 
@@ -313,7 +313,7 @@ const SwitchMuSwapFreeze = "mu-swap-freeze"
 // Nor is k2's settle test: k2Unsettled reads the frozen window as its
 // throughput reference (serviceRateOnRecordLocked) at full weight, as it did
 // before, so on a swap to shorter outputs a reading's rate is compared with
-// the bucket being left. That is the k2 window's own hold (#396).
+// the bucket being left. That is the k2 window's own hold (ev-shindin/llm-scaling-manager#396).
 func muSwapFrozen(r throughputReading, pending bool) throughputReading {
 	if pending && r.rate > 0 {
 		r.borrowed = true
@@ -322,7 +322,7 @@ func muSwapFrozen(r throughputReading, pending bool) throughputReading {
 }
 
 // SwitchMuMarginClamp is the replay switch for the clamp on readings written
-// past the margin toward shorter outputs (#415). On, as marginClamp says.
+// past the margin toward shorter outputs (ev-shindin/llm-scaling-manager#415). On, as marginClamp says.
 // Off, those readings are written as read.
 const SwitchMuMarginClamp = "mu-margin-clamp"
 

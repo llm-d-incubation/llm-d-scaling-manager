@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The final check of PR #388 at db054bd31: a hyphenated recorded name was
+// The final check of PR ev-shindin/llm-scaling-manager#388 at db054bd31: a hyphenated recorded name was
 // accepted as a fixture name, a name split by a character no token rule
 // splits at ('@') or glued to letters inside a pod suffix survived, and the
 // source refusal repeated the word it refused. The backstop (holdsName) now

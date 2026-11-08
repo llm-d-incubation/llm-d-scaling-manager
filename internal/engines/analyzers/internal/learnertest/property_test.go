@@ -39,16 +39,18 @@ func TestPropertyJudgementNegativeControls(t *testing.T) {
 		"a row with no expect":     {{ID: c.ID(), Class: "edges", Learner: "x", Finding: "f", Measured: "m", Owner: "open"}},
 		"a row with no owner":      {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m"}},
 		"a row a plan's PR owns":   {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "PR 3"}},
-		"an owner with a tail":     {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "#495 soon"}},
+		"an owner with a tail":     {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "ev-shindin/llm-scaling-manager#495 soon"}},
 		"a row on another learner": {{ID: c.ID(), Class: "edges", Learner: "z", Expect: "k", Finding: "f", Measured: "m", Owner: "open"}},
 		"a row listed twice":       {*row, *row},
 		"rows out of order":        {{ID: "z", Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "open"}, *row},
+		"an owner with no number":  {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "llm-d-incubation/llm-d-scaling-manager#"}},
+		"an owner that is a path":  {{ID: c.ID(), Class: "edges", Learner: "x", Expect: "k", Finding: "f", Measured: "m", Owner: "a/b/c#495"}},
 	} {
 		if len(CheckLedger(rows, cases)) == 0 {
 			t.Errorf("%s: the ledger check passed", name)
 		}
 	}
-	for _, owner := range []string{"open", "#495"} {
+	for _, owner := range []string{"open", "#600", "ev-shindin/llm-scaling-manager#495"} {
 		ok := *row
 		ok.Owner = owner
 		if errs := CheckLedger([]LedgerRow{ok}, cases); len(errs) != 0 {

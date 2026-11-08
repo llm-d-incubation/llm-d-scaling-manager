@@ -57,7 +57,7 @@ type Refit struct {
 	// MinSettled is the steady gate's MinSettledSamples, 0 for the default.
 	MinSettled int
 	// OneSided, with OneSidedAboveKSat set, prices a resample's pinned fit
-	// one-sided as the tracker priced the line (issue #467): set for a line
+	// one-sided as the tracker priced the line (issue ev-shindin/llm-scaling-manager#467): set for a line
 	// the tracker priced with no learned B under that admission, Baseline
 	// then itl.DefaultBaselineSec. Such a line is through Baseline already
 	// (itl.Reading.PinnedAtBPrior), so a resample on which the tracker

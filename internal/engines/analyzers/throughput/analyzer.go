@@ -68,7 +68,7 @@ type ThroughputAnalyzer struct {
 	itlReadsSettle, itlWaitsAfterRestart, itlKeepsSettle  bool
 	itlRestartUnderName, itlIdleOnEvidence, itlFiniteOnly bool
 	// itlOwnBackdate is SwitchITLOwnSettleBackdates (issue
-	// #511, settle.go). On by the constructor.
+	// ev-shindin/llm-scaling-manager#511, settle.go). On by the constructor.
 	itlOwnBackdate bool
 	// itlAdmitsAtCap is the replay switch of learner PR 4b-3 (admission.go):
 	// SwitchITLAdmitsAtSequenceCap. On by the constructor.
@@ -90,10 +90,10 @@ type ThroughputAnalyzer struct {
 	// itlForgetReachesLine is the replay switch of the forget (forget.go):
 	// SwitchITLForgetReachesTheLine. On by the constructor.
 	itlForgetReachesLine bool
-	// itlTierHysteresis is SwitchITLTierHysteresis (issue #495,
+	// itlTierHysteresis is SwitchITLTierHysteresis (issue ev-shindin/llm-scaling-manager#495,
 	// itl_line.go): on, the line's tier is latched.
 	itlTierHysteresis bool
-	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue #433,
+	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#433,
 	// kv_output_dispersion.go): on, KVreq prices the spread of output
 	// lengths. On by the constructor.
 	kvOutputDispersion bool
@@ -375,7 +375,7 @@ func (a *ThroughputAnalyzer) observe(
 		for _, m := range healthyMetrics {
 			// The k paired with the replica's ITL: the KV fill averaged over
 			// the minute its rate covers when the collector read that, the
-			// instant fill otherwise (issue #403, as #393 for itl.Tracker).
+			// instant fill otherwise (issue ev-shindin/llm-scaling-manager#403, as ev-shindin/llm-scaling-manager#393 for itl.Tracker).
 			// The band and the reading judge that one figure.
 			k := m.KvUsageForITL()
 			// The window spans the whole cache; the band is applied here.
@@ -556,7 +556,7 @@ func (a *ThroughputAnalyzer) analyze(
 			continue
 		}
 
-		// TODO(#1261): skip variant when state.lastSanityReport is not OK — stale/invalid
+		// TODO(llm-d/llm-d-workload-variant-autoscaler#1261): skip variant when state.lastSanityReport is not OK — stale/invalid
 		// metrics from observe do not currently block demand computation here.
 		// Gating demand on the sanity report is deferred to the per-analyzer status-return
 		// PR; it requires the engine contract to accept an AnalyzerStatus opt-out signal.
@@ -744,7 +744,7 @@ func (a *ThroughputAnalyzer) analyze(
 	// it, a missing SchedulerQueue (nil) causes TotalDemand to be under-estimated and the
 	// engine may compute SC > 0 when queued requests exist — a scale-down risk.
 	// Restoring the gate (conditioned on SchedulerQueue == nil || anyGPSMismatch) is
-	// tracked in issue #1261 and requires a per-analyzer status-return signal in the
+	// tracked in issue llm-d/llm-d-workload-variant-autoscaler#1261 and requires a per-analyzer status-return signal in the
 	// engine contract. anyEPP and anyGPSMismatch are retained as placeholders for that PR.
 	_ = anyEPP
 	_ = anyGPSMismatch

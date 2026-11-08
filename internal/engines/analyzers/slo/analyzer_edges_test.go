@@ -148,7 +148,7 @@ var _ = Describe("Analyzer state and inputs", func() {
 			return s
 		}
 
-		// Issue #287: the line takes a replica at its sequence cap above the
+		// Issue ev-shindin/llm-scaling-manager#287: the line takes a replica at its sequence cap above the
 		// band, so priceVariant must hand fitLine the engine's cap -- only
 		// when its flag stated it -- and the policy's band.
 		It("hands the line the policy's band and the cap the engine's flag stated", func() {
@@ -175,7 +175,7 @@ var _ = Describe("Analyzer state and inputs", func() {
 			Expect(banded.Offered).To(Equal(1))
 		})
 
-		// Issue #284: once the window's readings age out, the line is the key's
+		// Issue ev-shindin/llm-scaling-manager#284: once the window's readings age out, the line is the key's
 		// last slope, held -- and only under the engine arguments it was
 		// fitted under, and within the slope hold.
 		Describe("a line whose readings have aged out", func() {
@@ -256,7 +256,7 @@ var _ = Describe("Analyzer state and inputs", func() {
 			Expect(res.VariantCapacities[0].PerReplicaCapacity).To(BeNumerically("~", 64/testLine.ITLAt(0.32), 1e-6))
 		})
 
-		// Issue #150: max_num_seqs bounds one engine. A replica of eight
+		// Issue ev-shindin/llm-scaling-manager#150: max_num_seqs bounds one engine. A replica of eight
 		// data-parallel ranks admits eight times it, against KV that is
 		// already the whole replica's.
 		It("caps a data-parallel replica at max_num_seqs per rank, not per replica", func() {
@@ -269,7 +269,7 @@ var _ = Describe("Analyzer state and inputs", func() {
 			Expect(res.VariantCapacities[0].PerReplicaCapacity).To(BeNumerically("~", 120/0.044, 1e-6))
 		})
 
-		// Issue #335: vLLM runs at most --max-num-active-seqs at once, so the
+		// Issue ev-shindin/llm-scaling-manager#335: vLLM runs at most --max-num-active-seqs at once, so the
 		// fill is capped at the lower of it and max_num_seqs, per rank. k = 0.6
 		// implies 120 sequences, so 64 binds and 120 is the target's.
 		Describe("the active-sequence cap", func() {

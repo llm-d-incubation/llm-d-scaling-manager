@@ -69,7 +69,7 @@ func TestRestartSuite_AControllerRestartWaitsAWindowOnce(t *testing.T) {
 
 // A pod restarts under its own name: the engine's container restarts, the
 // Pod leaves the rotation for two cycles and comes back with a new Ready
-// time. It waits a window from the first sight of that Ready time, as #288
+// time. It waits a window from the first sight of that Ready time, as ev-shindin/llm-scaling-manager#288
 // made it, and is admitted after.
 func TestRestartSuite_ARestartUnderTheSameNameWaitsAgain(t *testing.T) {
 	r := newRestartRig(t, restartT0)
@@ -87,7 +87,7 @@ func TestRestartSuite_ARestartUnderTheSameNameWaitsAgain(t *testing.T) {
 	}, decodeVariants("v")), "back under the same name with a new Ready time")
 }
 
-// An LWS group restart (#361: the workload patch recreates the leader and its
+// An LWS group restart (ev-shindin/llm-scaling-manager#361: the workload patch recreates the leader and its
 // workers, names kept). The collector reports one row per group, the
 // leader's, with the latest Ready time over the leader and its Ready workers
 // (attribute.go drops a worker's row; TestLWSGroupReadyTimeIsTheLatestOfItsPods
@@ -166,7 +166,7 @@ func TestRestartSuite_ABridgeLendWritesNothing(t *testing.T) {
 
 // A node clock 90 s behind the controller's dates a replica that has just
 // become Ready 90 s into the controller's past. It still waits a window,
-// from the controller's first sight of that Ready time (#288).
+// from the controller's first sight of that Ready time (ev-shindin/llm-scaling-manager#288).
 func TestRestartSuite_ANodeClockBehindStillWaitsAWindow(t *testing.T) {
 	r := newRestartRig(t, restartT0)
 	old := restartT0.Add(-time.Hour)

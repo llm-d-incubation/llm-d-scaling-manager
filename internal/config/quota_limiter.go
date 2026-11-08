@@ -132,7 +132,7 @@ type QuotaLimiterConfig struct {
 // default), a namespace-scope entry also counts what its queues can borrow from
 // their cohorts, where that is safe: the namespace's cap becomes its guaranteed
 // figure and the greedy optimizer may draw past it from the cohort's free pool
-// (the Kueue borrowing proposal, PR #161, Part B).
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part B).
 //
 // A ClusterQueue shared by several namespaces is a per-namespace CEILING here,
 // not a partition: each namespace with a LocalQueue on it is bounded at the
@@ -236,7 +236,7 @@ func (q QuotaLimiterConfig) HasUnlimitedCap() bool {
 	return false
 }
 
-// Defaults of the borrowing timings (the Kueue borrowing proposal, PR #161,
+// Defaults of the borrowing timings (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161,
 // B5). The placement timeout and the cooldown are first guesses, to be
 // replaced by figures the live-Kueue e2e measures.
 const (
@@ -859,7 +859,7 @@ type QuotaLimiterEntries struct {
 // Error messages name the failing entry by index and field so the bad row
 // is easy to locate.
 //
-// Validation rules (all from issue #1002):
+// Validation rules (all from issue llm-d/llm-d-workload-variant-autoscaler#1002):
 //   - Name is non-empty, unique across entries, and not one of
 //     ReservedLimiterNames.
 //   - Type == "quota" (other limiter types may be added later).

@@ -33,9 +33,9 @@ export REPO_ROOT
 #
 # To get the same build a week apart, run the guides from a release checkout,
 # or pin the digest from the release notes:
-#     export IMG=ghcr.io/ev-shindin/llm-scaling-manager@sha256:<digest>
+#     export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>
 LLMSM_GUIDE_IMAGE_TAG=$(awk '$1 == "newTag:" {gsub(/["\r]/, "", $2); print $2; exit}' "$REPO_ROOT/config/base/manager/kustomization.yaml" 2>/dev/null)
-export IMG="${IMG:-ghcr.io/ev-shindin/llm-scaling-manager:${LLMSM_GUIDE_IMAGE_TAG:-main}}"
+export IMG="${IMG:-ghcr.io/llm-d-incubation/llm-d-scaling-manager:${LLMSM_GUIDE_IMAGE_TAG:-main}}"
 unset LLMSM_GUIDE_IMAGE_TAG
 
 # The namespace the scaling manager installs into.

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Issue #511: a first sighting backdated past the absence tolerance. Two
+// Issue ev-shindin/llm-scaling-manager#511: a first sighting backdated past the absence tolerance. Two
 // observations, at since and at now, read the gap as an absence: every
 // replica settles again at now (Rejoined). ObserveSince observes once, at
 // now, and takes each replica first seen as seen since since: Joined (Lent

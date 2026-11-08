@@ -16,7 +16,7 @@ import (
 // (quota-limiter.md, "exclude"). The default optimizer and the scale-from-zero
 // check still bounded it by the quota's per-type pools, which are the other
 // tenants' free quota: it took a capped tenant's own free GPUs, and its wakes
-// were refused once the tenants had spent theirs (#169).
+// were refused once the tenants had spent theirs (ev-shindin/llm-scaling-manager#169).
 var _ = Describe("a namespace a namespace quota excludes", func() {
 	tenants := config.QuotaLimiterConfig{
 		Name: "tenants", Type: "quota", Scope: config.QuotaScopeNamespace,
@@ -385,7 +385,7 @@ var _ = Describe("a namespace a namespace quota excludes", func() {
 	})
 
 	Describe("configs without exclude", func() {
-		// The same targets as before #169: nothing is uncapped, so nothing may
+		// The same targets as before ev-shindin/llm-scaling-manager#169: nothing is uncapped, so nothing may
 		// grow. A model the budget stops is named by the limiter that held it
 		// (the fair share marks the models still asking when no budget is left).
 		cluster := config.QuotaLimiterConfig{

@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/floor"
 )
 
-// Issue #495: the throughput floor raised a role and not its variants, so a
+// Issue ev-shindin/llm-scaling-manager#495: the throughput floor raised a role and not its variants, so a
 // variant kept its occupancy figure and the warm pool's pressure
 // (steadystate.variantPressure, SpareFraction = 1 - Utilization) read it as
 // sparer than the role it serves. With SwitchThroughputFloorRaisesVariants on,

@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// Issue #150. --max-num-seqs and --max-num-batched-tokens bound ONE engine. A
+// Issue ev-shindin/llm-scaling-manager#150. --max-num-seqs and --max-num-batched-tokens bound ONE engine. A
 // replica of eight data-parallel ranks (a pod of eight ranks behind one API
 // server, or eight API servers merged into one row) runs eight engines, and its
 // KV capacity is already all eight ranks'. Every per-engine setting priced

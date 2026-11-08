@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Issue #284: below the ITL band's lower edge a replica offers the window no
+// Issue ev-shindin/llm-scaling-manager#284: below the ITL band's lower edge a replica offers the window no
 // reading, so a decode variant serving light load has no line of its own.
 // A variant that learned its line at load must keep it through a light
 // stretch longer than the window keeps readings, and one that never learned
@@ -85,7 +85,7 @@ func TestLightLoadKeepsLearnedLineAndNamesMissingOne(t *testing.T) {
 	for key, n := range lens {
 		assert.Zero(t, n, "%s: the window holds nothing, the premise of the case", key)
 	}
-	assert.True(t, derivedOK(logs), "a learned line outlives a light stretch (issue #284)")
+	assert.True(t, derivedOK(logs), "a learned line outlives a light stretch (issue ev-shindin/llm-scaling-manager#284)")
 	assert.Empty(t, logs.FilterMessage("itl-line-none").All())
 	held := logs.FilterMessage("derived-mu").All()
 	assert.Equal(t, true, held[len(held)-1].ContextMap()["lineHeld"], "derived-mu says the line is held")

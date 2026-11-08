@@ -222,7 +222,7 @@ func (f rigFill) reading(tokens int64, queue int) error {
 }
 func (f rigFill) figure() float64 { return f.rig.k2("") }
 
-// toyF1Settle is #282 F1's settle: a saturated reading whose queue is deeper
+// toyF1Settle is ev-shindin/llm-scaling-manager#282 F1's settle: a saturated reading whose queue is deeper
 // than its resident batch (queue x footprint over the tokens held) is a fill
 // suspect, and is refused once; the next is admitted whatever it reads. The
 // figure is the admitted readings' mean.
@@ -646,7 +646,7 @@ func (r *propRig) muKey() string {
 	return ""
 }
 
-// checkMuKeyEdgeOn is checkK2KeyEdgeOn for the throughput (mu) key (#415):
+// checkMuKeyEdgeOn is checkK2KeyEdgeOn for the throughput (mu) key (ev-shindin/llm-scaling-manager#415):
 // the same fleet, its output length 6 % above the 500-token boundary with 6 %
 // autocorrelated noise, and the same verdict on the key mu is read and
 // written under. A key that moves to "medium" and back reads, and writes,
@@ -702,7 +702,7 @@ func keyChanges(keys []string) (int, error) {
 // noise-free length never crosses, so the k2 key the analyzer selects --
 // counted once it has selected one for two minutes -- ends in "long", never
 // leaves it, and changes at most once (into it). A key that moves to
-// "medium" and back is the flap (#396); one that stays in "medium" has taken
+// "medium" and back is the flap (ev-shindin/llm-scaling-manager#396); one that stays in "medium" has taken
 // its bucket from noise. The case is close to its noise: run over 300 seeds
 // the key fails 3 (116, 251, 282, each into "medium" and back), none of them
 // in the 50 it runs, so a change to arNoise or propRand's draw order can turn

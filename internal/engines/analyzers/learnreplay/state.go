@@ -108,7 +108,7 @@ type VariantState struct {
 	Baseline   float64
 	MinSettled int
 	// OneSided is how the line was priced one-sided
-	// (itl.Admission.OneSidedAboveKSat, issue #467), the zero Admission for
+	// (itl.Admission.OneSidedAboveKSat, issue ev-shindin/llm-scaling-manager#467), the zero Admission for
 	// a line that was not: priced at the prior on B, B unlearned and
 	// Baseline itl.DefaultBaselineSec. A refit takes it (whatif.Refit.OneSided)
 	// to price the line the controller priced. analyzerOneSided is the
@@ -530,7 +530,7 @@ func sameLine(a, b itl.Model) bool {
 // marks the line TierAboveBand. A held or borrowed line was fitted from no
 // readings of the variant's own here.
 //
-// A pinned line the analyzer priced at the prior on B (issue #467; the
+// A pinned line the analyzer priced at the prior on B (issue ev-shindin/llm-scaling-manager#467; the
 // recorded itl.Reading.PinnedAtBPrior) is refit with the analyzer's
 // one-sided admission, which the state keeps for the bands (OneSided), so a
 // resample prices as the controller did.

@@ -12,7 +12,7 @@ import (
 //
 // The mean alone prices every request at the same length, and the KV a
 // resident request holds depends on the spread too: a long request stays
-// resident longer (issue #276). The collector reduces the buckets and the
+// resident longer (issue ev-shindin/llm-scaling-manager#276). The collector reduces the buckets and the
 // mean to a lower bound on E[O^2]
 // (domain.ReplicaMetrics.AvgOutputTokensSquared).
 //

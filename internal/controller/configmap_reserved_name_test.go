@@ -16,7 +16,7 @@ const reservedNameDefault = `limiters:
     quotas: { H100: 8 }
 `
 
-// #216: the release that reserved the names only warned, so an upgrade would
+// ev-shindin/llm-scaling-manager#216: the release that reserved the names only warned, so an upgrade would
 // not stall. From v0.10.0 a quota entry with a reserved name is a validation
 // error: the "default" entry holding it is rejected, and a controller starting
 // on it refuses to start rather than start unbounded -- from the controller's

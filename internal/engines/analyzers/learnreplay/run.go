@@ -54,7 +54,7 @@ type Report struct {
 	// Analyzes counts the Analyze calls replayed, per kind.
 	Analyzes map[string]int
 	// Ignored counts, per kind, the events of owners this replay does not
-	// drive (the engine-level layer #345 adds to the same recording, say):
+	// drive (the engine-level layer ev-shindin/llm-scaling-manager#345 adds to the same recording, say):
 	// skipped, and left out of the line comparison.
 	Ignored map[string]int
 	// TrimmedChecks is how many check events at the recording's end were

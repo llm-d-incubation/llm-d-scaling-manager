@@ -210,7 +210,7 @@ func (r *propRig) weighSample() (sample, read float64, ok bool) {
 // key keeps counting its unread replicas while a noisy reader reads over h,
 // where the weighed sample sits under the reader.
 //
-// Ledger rows (#495): the band (mu-weighing-band) holds the crossing to one
+// Ledger rows (ev-shindin/llm-scaling-manager#495): the band (mu-weighing-band) holds the crossing to one
 // change at 10 % and 15 %; a key's first set is on its first reading, so a
 // first reading in a noise trough sets it at the start, the provisional set
 // clears on its own set-window mean, and the crossing sets it again: 3 and 14
@@ -457,7 +457,7 @@ func arHolds(t *testing.T, what string, check func(uint64) error, n int) {
 }
 
 // The latch cases hold at the measured rate noise since the latch reads a
-// smoothed ratio (#526, SwitchMuLatchReadsSmoothedRatio); with the switch
+// smoothed ratio (ev-shindin/llm-scaling-manager#526, SwitchMuLatchReadsSmoothedRatio); with the switch
 // off they fail on the 1.6-2.0 band's width (TestMuLatchBand_*). With noise
 // inside the band the same case holds, and with returnRatio at maxRatio (an
 // operator setting validation admits) it fails: the case sees the band.

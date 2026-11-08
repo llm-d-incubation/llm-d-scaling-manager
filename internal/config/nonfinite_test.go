@@ -8,7 +8,7 @@ import (
 
 // A NaN or infinite number is cleared at load and reported, and the entry
 // still validates. NaN passed every range check, and an infinite priority or
-// score ordered the greedy-by-score fair share backwards (#171).
+// score ordered the greedy-by-score fair share backwards (ev-shindin/llm-scaling-manager#171).
 func TestResetUnusableFieldsClearsNonFiniteNumbers(t *testing.T) {
 	want := []string{
 		"priority", "kvCacheThreshold", "queueLengthThreshold", "scaleUpThreshold", "scaleDownBoundary",

@@ -24,7 +24,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 )
 
-// Property cases for the learners #389 left without one: the shared and
+// Property cases for the learners ev-shindin/llm-scaling-manager#389 left without one: the shared and
 // borrowed ITL line (inventory row 2), the borrowed k2 lower bound (row 4),
 // the fleet shape and its hold (row 8), the decode-saturation memory (row 9),
 // and the SLO analyzer's line through slo.Analyzer (row 13), so its

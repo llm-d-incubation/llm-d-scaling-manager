@@ -98,7 +98,7 @@ func TestBusiestRankWithoutAReading(t *testing.T) {
 
 // ITLPerToken reads a speculating replica's step time per token, withholds
 // it when the counter is missing under speculative flags, and leaves every
-// other reading alone (#274).
+// other reading alone (ev-shindin/llm-scaling-manager#274).
 func TestITLPerToken(t *testing.T) {
 	finite := ReplicaMetrics{AvgITL: 0.03, AvgITLKnown: true}
 	withCounter := finite

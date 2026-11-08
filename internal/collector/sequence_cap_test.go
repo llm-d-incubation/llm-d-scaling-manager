@@ -21,7 +21,7 @@ import (
 
 // The running batch and the preemption rate, from the query result to
 // domain.ReplicaMetrics: the ITL fit reads them to take a capped replica's
-// reading above its band (issue #287), and a dropped block would leave the
+// reading above its band (issue ev-shindin/llm-scaling-manager#287), and a dropped block would leave the
 // band closed without a word.
 func TestCollectReplicaMetrics_SequenceCap(t *testing.T) {
 	podLabels := map[string]string{

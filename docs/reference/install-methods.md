@@ -61,7 +61,7 @@ The script takes command-line flags and environment variables.
 bash install.sh [OPTIONS]
 
 Options:
-  -i, --scaling-manager-image IMAGE    the scaling manager container image (default: ghcr.io/ev-shindin/llm-scaling-manager:main)
+  -i, --scaling-manager-image IMAGE    the scaling manager container image (default: ghcr.io/llm-d-incubation/llm-d-scaling-manager:main)
   -c, --check              Run the prerequisite and permission checks, then exit
   -p, --phase PHASE        prereqs | scaling-manager | all (default: all) — see deploy/README.md
   -u, --undeploy           Undeploy the scaling manager, monitoring, and scaler (not llm-d)
@@ -153,8 +153,8 @@ git checkout v0.10.2
 
 # Set the controller image: the release tag, or its digest from the release notes
 cd config/base/manager
-kustomize edit set image controller=ghcr.io/ev-shindin/llm-scaling-manager:v0.10.2
-# kustomize edit set image controller=ghcr.io/ev-shindin/llm-scaling-manager@sha256:<digest>
+kustomize edit set image controller=ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.10.2
+# kustomize edit set image controller=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>
 
 # Apply the overlay for your scope and platform
 kubectl apply -k ../../overlays/cluster-scoped/kubernetes

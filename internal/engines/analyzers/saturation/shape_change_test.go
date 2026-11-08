@@ -257,7 +257,7 @@ var _ = Describe("the fleet-shape change, through Analyze", func() {
 
 		// Two saturated cycles a window apart under the new shape, after the
 		// two the throughput key's band waits out before it moves: while the
-		// swap is pending its window takes no writes (muSwapFrozen, #415).
+		// swap is pending its window takes no writes (muSwapFrozen, ev-shindin/llm-scaling-manager#415).
 		for _, rate := range []float64{5.3, 5.3, 5.3, 5.4} {
 			rms := makeReplicaMetrics("d0", decodeV, 1_100_000, kvCap, 10, 8000, 1000)
 			rms.RequestRate = rate
@@ -440,10 +440,10 @@ var _ = Describe("the fleet-shape change, through Analyze", func() {
 
 	It("keeps one throughput window when the shape sits on a bucket boundary", func() {
 		// Measured on the rerun of 2026-09-22 (biran-pd, the build carrying
-		// #85): phase 1 generates exactly 6000-token outputs, which is the
+		// ev-shindin/llm-scaling-manager#85): phase 1 generates exactly 6000-token outputs, which is the
 		// xxlong/huge boundary, so the fleet's rate-weighted average wobbled
 		// either side of it. Every replica shares one throughput key since
-		// #85, so the wobble moved all of them together -- the bucket read
+		// ev-shindin/llm-scaling-manager#85, so the wobble moved all of them together -- the bucket read
 		// `huge` at 2.36 req/s on one cycle and `xxlong` at 0.82 on the next,
 		// and the decode target went 10 -> 4 -> 10 -> 4 every 30-45 s under a
 		// shape that never actually changed.
@@ -704,7 +704,7 @@ var _ = Describe("the fleet-shape change, through Analyze", func() {
 
 		// The throughput key's band waits out K2KeyBucketDwell of the swap
 		// before it moves, and writes nothing while it waits (muSwapFrozen,
-		// #415): the cycle a window on is still pending, and the one after
+		// ev-shindin/llm-scaling-manager#415): the cycle a window on is still pending, and the one after
 		// it lands the swap and writes the new bucket's first sample. Neither
 		// settles the hold.
 		for range 2 {

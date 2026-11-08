@@ -13,7 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Issue #276: the KV a resident request holds is ILeff + D*OL/2, D =
+// Issue ev-shindin/llm-scaling-manager#276: the KV a resident request holds is ILeff + D*OL/2, D =
 // E[O^2]/E[O]^2 the spread of output lengths, not ILeff + OL/2. Each reader
 // is driven through Analyze.
 
@@ -183,7 +183,7 @@ func TestKVOutputDispersion_AZeroReplicaVariantIsPricedWithTheSpread(t *testing.
 	assert.InDelta(t, 2, f["modelOutputFactor"], 1e-12)
 }
 
-// Off, every reader prices ILeff + OL/2 as before #276, whatever spread was
+// Off, every reader prices ILeff + OL/2 as before ev-shindin/llm-scaling-manager#276, whatever spread was
 // read.
 func TestKVOutputDispersion_TheSwitchPicksTheKVPerRequest(t *testing.T) {
 	assert.EqualValues(t, 320_000, derivedK2(t, 2, switchOff)["k2"])
@@ -345,7 +345,7 @@ func TestKVOutputDispersion_TheShortWindowTakesNoSpread(t *testing.T) {
 // Neither does the k2 path while the change is outstanding. Priced with the
 // mixed window's D 1.67 a resident request held 2000 + 1.67 x 275 = 2459
 // against the 2050 the arriving requests hold, k2 20% high; without the
-// spread it is 2275, as before #276.
+// spread it is 2275, as before ev-shindin/llm-scaling-manager#276.
 func TestKVOutputDispersion_AShapeChangeHoldsTheK2Spread(t *testing.T) {
 	_, k2 := shapeSwap(t, nil)
 	assert.InDelta(t, 1, k2["outputDispersion"], 1e-12)
@@ -412,7 +412,7 @@ func TestKVOutputDispersion_TheReplayHookSetsTheSwitch(t *testing.T) {
 // A factor under 1 is priced as 1. One replica serves 99 requests a second
 // of 100 tokens and one serves 1 of 1000: E[O] 109, E[O^2] 19,900, a plain
 // mean of 550, so the factor is 19,900 / (109 x 550) = 0.33. The estimate
-// keeps 256 x (1000 + 550/2) = 326,400, the price before #276, rather than
+// keeps 256 x (1000 + 550/2) = 326,400, the price before ev-shindin/llm-scaling-manager#276, rather than
 // moving below it to the 1000 + 91 the requests hold; the log carries the
 // factor as computed.
 func TestKVOutputDispersion_AZeroReplicaFactorUnderOneIsPricedAsOne(t *testing.T) {

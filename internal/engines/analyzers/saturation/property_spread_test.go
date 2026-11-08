@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Variable output lengths (#276): a long request stays resident longer, so
+// Variable output lengths (ev-shindin/llm-scaling-manager#276): a long request stays resident longer, so
 // the KV a resident request holds is IL + E[O^2]/(2 E[O]), not IL + E[O]/2.
 // The k2 the batch cap admits and the sequences the derived mu fits at
 // kPrice are priced from it.

@@ -16,7 +16,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #316 against the frozen documents: the restore-then-run 5a left to
+// Issue ev-shindin/llm-scaling-manager#316 against the frozen documents: the restore-then-run 5a left to
 // 5d. A v0.10.1 document restored under light load keeps the ITL line on its
 // held slope; a v0.10.0 one, which has no slope, restores and has no line to
 // hold, as that release did. The back-compat row of "Shipped behaviour each

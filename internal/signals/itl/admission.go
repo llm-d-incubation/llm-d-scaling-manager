@@ -102,7 +102,7 @@ type Admission struct {
 	// it: the pinned fit then pins that. Without it, as before, the fit
 	// through DefaultBaselineSec is the line. The throughput analyzer sets
 	// it with its cap admission, the saturation and slo analyzers under
-	// their own switches (issue #467).
+	// their own switches (issue ev-shindin/llm-scaling-manager#467).
 	OneSidedAboveKSat bool
 	// OneSidedAt is the fill the one-sided rule compares the two lines at,
 	// and the held A prices the chosen line's ITL at: the k the analyzer
@@ -124,7 +124,7 @@ type Admission struct {
 	// chosen line's fill. OneSidedAt is not read.
 	OneSidedTarget float64
 	// BPrior, above zero, is the stated upper prior on B the one-sided rule
-	// pins instead of the least ITL (issue #467). The analyzers set BPrior's
+	// pins instead of the least ITL (issue ev-shindin/llm-scaling-manager#467). The analyzers set BPrior's
 	// value: DefaultBPrior, raised, never lowered, by B learned on the
 	// variant's physics key. The line set against the fit through
 	// DefaultBaselineSec has as intercept BPrior capped at the least ITL of
@@ -330,7 +330,7 @@ func (a Admission) band() (lo, hi float64) {
 
 // atSequenceCap reports whether the replica's batch is at its sequence cap,
 // with no more preemption over the ITL's window than CapMaxPreemptionRate, so
-// its reading above the band is a point on its line (issue #287).
+// its reading above the band is a point on its line (issue ev-shindin/llm-scaling-manager#287).
 //
 // The band stops at 0.80 to keep an engine thrashing out of the fit: the
 // readings above it steepen A and push B below zero, and preemption tracks

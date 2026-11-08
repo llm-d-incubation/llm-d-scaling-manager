@@ -79,7 +79,7 @@ func TestShareLedgerHoldChangingIsRoutine(t *testing.T) {
 
 // A changing donor is released once its workload reads stable for the confirm
 // cycles in a row, not at the release timeout: a pod that became Ready four
-// minutes in held the donor for ten (issue #290). A changing reading in between
+// minutes in held the donor for ten (issue ev-shindin/llm-scaling-manager#290). A changing reading in between
 // starts the count again, and a donor that never settles is still released at
 // the release timeout.
 func TestShareLedgerChangingHoldEndsWhenStable(t *testing.T) {

@@ -170,7 +170,7 @@ var _ = Describe("Reader reads a lender as waiting from its pending Workloads", 
 		Expect(l.PendingGPUs).To(BeZero(), "StrictFIFO: the older 6-GPU head does not fit and blocks the 4")
 	})
 
-	// PR #203 re-check follow-up: a Workload Kueue preempted keeps its quota
+	// PR ev-shindin/llm-scaling-manager#203 re-check follow-up: a Workload Kueue preempted keeps its quota
 	// reserved while its pods stop; the pool says how much.
 	It("counts what preempted Workloads still hold reserved", func() {
 		victim := workload("team-a", "victim", 10, gpus("2"), "team-a-cq")
@@ -183,7 +183,7 @@ var _ = Describe("Reader reads a lender as waiting from its pending Workloads", 
 		Expect(snap.SharedPools[0].EvictingGPUs).To(Equal(2), "the victim's 2, not the running Workload's 8")
 	})
 
-	// PR #203 final check: a Workload re-admitted after its eviction is no
+	// PR ev-shindin/llm-scaling-manager#203 final check: a Workload re-admitted after its eviction is no
 	// victim, whatever its Evicted condition still says.
 	It("does not count a Workload re-admitted after its eviction", func() {
 		evictedAt := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)

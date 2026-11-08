@@ -13,7 +13,7 @@ import (
 )
 
 // NamespaceBorrow is one namespace's borrowing figures for one accelerator type
-// (the Kueue borrowing proposal, PR #161, B3 and B4). The
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B3 and B4). The
 // namespace's pool Limit is its guaranteed figure; these say what lies past it.
 type NamespaceBorrow struct {
 	// Cap is how many GPUs past the guaranteed Limit the namespace may reach,

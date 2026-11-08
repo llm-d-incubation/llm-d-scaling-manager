@@ -77,7 +77,7 @@ its generation grows from nothing to its length.
 When every request generates `OL` tokens, the generation contributes its mean,
 `OL/2`, and `D` is 1. When lengths vary, a long request stays resident longer,
 so a snapshot of the batch finds it in proportion to how long it stays, and the
-average resident request holds `ILeff + E[O^2]/(2 OL)` (issue #276). With `D`
+average resident request holds `ILeff + E[O^2]/(2 OL)` (issue ev-shindin/llm-scaling-manager#276). With `D`
 taken as 1, the resident requests were over-counted by 7% for uniform lengths,
 20% for exponential ones and 44% for a lognormal with cv 1.5, at `IL = 2 OL`.
 
@@ -129,14 +129,14 @@ carries the factor as computed. `derived-mu` logs `D` as `outputDispersion`, `k2
 likewise, and `zero-replica-capacity-estimate` the factor as
 `modelOutputFactor`. The slo analyzer prices `D` too, behind
 `slo-kv-per-request-output-dispersion`, and the throughput analyzer, behind
-`throughput-kv-per-request-output-dispersion` (#433). The slo analyzer has no
+`throughput-kv-per-request-output-dispersion` (ev-shindin/llm-scaling-manager#433). The slo analyzer has no
 shape-change hold; the throughput analyzer holds `D` at 1 for the same window after its
 variant's shape changes. All three read `D` through `fleet.OutputDispersion`, which
 refuses a bound of +Inf or NaN.
 
 ### Prefix-cache hits stay resident
 
-`ILeff` is right for compute and wrong for memory (issue #277). A hit saves KV
+`ILeff` is right for compute and wrong for memory (issue ev-shindin/llm-scaling-manager#277). A hit saves KV
 only when the block it hits is held by another running request too. A hit on a
 block that a finished request left behind makes that block the new request's
 own, so it stays resident as if it had been computed. With multi-turn reuse
@@ -311,7 +311,7 @@ and the `k2-decision` line names its source (`batchCapSource`):
 | `learned` | `batchCaps[namespace\|variant\|model\|].perRank` | the flags state none, none is declared, the policy sets `enableBatchCapLearning`, and it is lower than the default (`SwitchBatchCapLearned`) |
 | `default` | `EngineParams.MaxNumSeqs`, the parser's 256 | otherwise |
 
-The cap's other readers (issue #420) each sit behind their own replay
+The cap's other readers (issue ev-shindin/llm-scaling-manager#420) each sit behind their own replay
 switch. The ones that price read the declared cap, and saturation's also
 the learned one, except the zero-replica estimate. The ones that ask
 whether a replica is AT its cap read the declared cap and never the learned
@@ -322,7 +322,7 @@ one (`atCapBatchCap`):
 | ITL admission at the cap (`itl.Admission.MaxNumSeqs`, `fitLines`) | `atCapBatchCap`: flags, else declared (only while `SwitchBatchCapDeclared` is on too), else 0; `itl-window` logs `batchCap` and `batchCapSource` (`none` for 0) | `SwitchBatchCapITLAdmission` |
 | P/D decode view's at-cap exception (`decodeCapacityViews`, `atCapBatchCaps`) | `atCapBatchCap`, as above | `SwitchBatchCapDecodeView` |
 | derived mu's sequence cap (`whatif.DeriveMuAtCap`) | `pricingBatchCap`: flags, declared, learned, default; `derived-mu` logs `batchCap` and `batchCapSource` | `SwitchBatchCapDerivedMu` |
-| zero-replica estimate (`estimateStoredCapacity`, issue #427) | `zeroReplicaBatchCap`, per engine rank: flags, else declared (only while `SwitchBatchCapDeclared` is on too), else default; never learned. A prefill variant keeps flags, else default: P3 never prices prefill. The estimate is one rank's figure, also for a data-parallel variant (#438). `zero-replica-capacity-estimate` logs `batchCap` and `batchCapSource` on its `deployment-derived` line | `SwitchBatchCapZeroReplica` |
+| zero-replica estimate (`estimateStoredCapacity`, issue ev-shindin/llm-scaling-manager#427) | `zeroReplicaBatchCap`, per engine rank: flags, else declared (only while `SwitchBatchCapDeclared` is on too), else default; never learned. A prefill variant keeps flags, else default: P3 never prices prefill. The estimate is one rank's figure, also for a data-parallel variant (ev-shindin/llm-scaling-manager#438). `zero-replica-capacity-estimate` logs `batchCap` and `batchCapSource` on its `deployment-derived` line | `SwitchBatchCapZeroReplica` |
 | `slo` analyzer's admission (`slo.admission`) | `EngineParams.StatedBatchCap`: flags, else declared (not gated by `SwitchBatchCapDeclared`, a saturation switch); `slo-variant` logs `lineBatchCap` and `lineBatchCapSource` | `slo.SwitchBatchCapAdmission` |
 | `slo` analyzer's per-rank cap (`priceVariant`) | `StatedBatchCap`, else `BatchCap`; `slo-variant` logs `batchCap` and `batchCapSource` | `slo.SwitchBatchCapPerRank` |
 
@@ -345,7 +345,7 @@ With no `EngineParams` at all (the scale target was never read), a learned cap
 still prices P3, with `B` taken as not binding (`estimateCapacityAtCapSpread`);
 `min(k1, k2)` keeps that at or under the k1 it replaces.
 
-The learned cap (`observeBatchCap`, issue #399) is the max, per engine rank,
+The learned cap (`observeBatchCap`, issue ev-shindin/llm-scaling-manager#399) is the max, per engine rank,
 of the running counts a pod held for `BatchCapPlateauCycles` (3) cycles in a
 row, every cycle passing `batchCapRules`: serving (`admission.serving`), not
 joined under `JoinedReplicaWindow`, a queue on the busiest rank of at least 1,
@@ -423,7 +423,7 @@ The two changes from the analyzer's own memo of Ready times are replay
 switches (`SwitchK2ReadsSettle`, `SwitchK2WaitsAfterRestart`).
 
 The joined clock also starts when a replica is first routed to
-(`joined_served.go`, #392, `SwitchJoinedFromFirstServed`). A replica Ready for
+(`joined_served.go`, ev-shindin/llm-scaling-manager#392, `SwitchJoinedFromFirstServed`). A replica Ready for
 longer than a minute but idle until a burst reaches it has a rate[1m] that
 covers only the part of the minute it served, and that reading read as a low
 mu. What the replica did is read from the settle tracker, by role
@@ -441,7 +441,7 @@ Only the first return of a settle holds, so a replica is protected once per
 settle. It is the replica first routed to after it became Ready, or after the
 controller first saw it idle: the case of the issue. A replica that idles every
 night and takes a morning burst is held on its first morning only; on later
-mornings its first partial rate[1m] is admitted, as before #392.
+mornings its first partial rate[1m] is admitted, as before ev-shindin/llm-scaling-manager#392.
 
 The narrower-sounding rule, hold any return whose idle run left idle seconds in
 the reading's window, is the same as holding every return: a return is the
@@ -554,7 +554,7 @@ beside `hotRankHeld`. A refusal can only keep k2 where it was; nothing here
 raises a recorded k2.
 
 A reading that passes and would be the first in an empty window is held, not
-written (`k2_confirm.go`, #392): it logs `P1-obs-unconfirmed` and waits in
+written (`k2_confirm.go`, ev-shindin/llm-scaling-manager#392): it logs `P1-obs-unconfirmed` and waits in
 `k2Pending` under its key with the engine arguments it was read under. The
 next cycle's admitted reading (a later `Analyze`, counted by `analyzeSeq`; a
 sibling in the same cycle does not count) writes the held readings, at the
@@ -598,7 +598,7 @@ ITL(k) = A x k + B
 
 where `k` is KV usage (0–1) averaged over the same minute as the ITL rate
 (`rm.KvUsageForITL()`: `KvUsageMean`, from `avg_over_time[1m]`, or
-`KvUsageInstant` when that was not read; issue #393). Fitted by ordinary least
+`KvUsageInstant` when that was not read; issue ev-shindin/llm-scaling-manager#393). Fitted by ordinary least
 squares over a rolling window of `(k, ITL)` observations:
 
 ```
@@ -614,8 +614,8 @@ A fit is refused unless it is usable (`ValidModel`): `A` and `B` finite,
 
 `itlLineRole` (`itl_aggregated.go`) decides which variants fit a line:
 decode always, an aggregated variant (`RoleBoth`, or no role label) with
-`SwitchITLFitsAggregated` (`itl-line-fits-aggregated`, issue #432) on, and
-prefill never. Before #432 only decode fitted, so an ordinary unlabeled
+`SwitchITLFitsAggregated` (`itl-line-fits-aggregated`, issue ev-shindin/llm-scaling-manager#432) on, and
+prefill never. Before ev-shindin/llm-scaling-manager#432 only decode fitted, so an ordinary unlabeled
 deployment had no line at all. The same rule gates the derived mu
 (`priceReplicas`), the service-rate signal (`attachServiceRates`, which reads
 `itlModels`), the GPS check (`noteLineMismatch`) and the learner report's
@@ -626,13 +626,13 @@ settled-idle count that relaxes prefill's hold (`idle_room.go`) and decode's
 saturation flag.
 
 An aggregated line is **reported** until it has earned sizing
-(`itlLineReportOnly`; #432 reported it only). `priceReplicas` derives its mu
+(`itlLineReportOnly`; ev-shindin/llm-scaling-manager#432 reported it only). `priceReplicas` derives its mu
 and logs it (`derived-mu` with `reportOnly=true`), then prices the replica
 with no derived figure (`derivedWhyReportOnly`): no order, no settled shape
 change and no borrow record rests on it. The figure reaches
 `llmsm_service_rate_per_replica` as `source=derived-report-only` when the
 variant has no other rate. Three things stood in the way of sizing, and
-`itl_aggregated_shape.go` handles each (issue #275,
+`itl_aggregated_shape.go` handles each (issue ev-shindin/llm-scaling-manager#275,
 [the proposal](../proposals/aggregated-itl-shape.md)):
 
 - Shape dependence. An aggregated pod's ITL carries the chunked prefill it
@@ -685,7 +685,7 @@ vLLM observes `inter_token_latency` once per request per engine step, however
 many tokens the step emitted. With speculative decoding or MTP a step emits
 `1 + E` tokens, `E` the accepted draft tokens, so `AvgITL` is the step time and
 a line fitted from it prices the token rate `1 + E` times low (1.5-3x on
-typical acceptance; issue #274). SGLang divides each step's interval by the
+typical acceptance; issue ev-shindin/llm-scaling-manager#274). SGLang divides each step's interval by the
 tokens it emitted, so its ITL is already per token.
 
 The collector reads `E` over the ITL's own window, per pod
@@ -727,7 +727,7 @@ over-bound line carries the count read and `num_speculative_tokens`), and
 (`itlWithheldLogged`, per window key, aged with the variant). A cycle with no
 evidence either way -- idle, scaled to zero, or its rows not read during a
 rollout -- changes nothing, so a load that comes and goes logs nothing new.
-Once per change, within the default-verbosity budget (#303).
+Once per change, within the default-verbosity budget (ev-shindin/llm-scaling-manager#303).
 
 A bound a rounding error under the count read (1e-6 relative) is not a count
 over it. An idle data-parallel rank (empty ITL, 0/0 count) does not make its
@@ -795,12 +795,12 @@ so across a step in load the two describe different moments; in a balanced
 fleet that step is the only spread a window ever holds. Before this gate, two
 identical models in two namespaces remembered `B` = 4.5 ms and 14.8 ms from
 whichever transient each window caught, and priced the same replica at 5.3 and
-7.7 requests/s (issue #270). `itl-window` reports `unsteady` and `steadyHeld`.
+7.7 requests/s (issue ev-shindin/llm-scaling-manager#270). `itl-window` reports `unsteady` and `steadyHeld`.
 
 The pinned fit, which prices a balanced fleet, takes the steady readings too
 whenever there are at least `DefaultMinSamples` of them, and every reading only
 below that, so a fleet that has not settled still gets a line. Taking every
-reading, it took each load step whole: on the issue #270 rerun `A` went from
+reading, it took each load step whole: on the issue ev-shindin/llm-scaling-manager#270 rerun `A` went from
 0.077 to 0.207 on the cycle the load stepped, and the derived mu fell from 6.4
 to 2.65 requests/s for two and a half minutes.
 
@@ -857,7 +857,7 @@ against 38 to 44 with the bare gate. The test bound is 16 on flat paths at sprea
 0.26 to 0.30, 4 at 0.32 and 6 on a two-crossing ramp. Those changes are the resting
 rule leaving for the safe side and the spread setting again. Dropping the rule
 would give one change, and more cycles under the truth
-([3.5](../proposals/analyzer-learner.md#the-itl-tier-as-built-495)). A load step
+([3.5](../proposals/analyzer-learner.md#the-itl-tier-as-built-ev-shindinllm-scaling-manager495)). A load step
 collapses the spread past any clear value, so the dwell does that work. The 3 % and
 the 10 min have not been checked on a large fleet.
 
@@ -894,7 +894,7 @@ at 10 % to 15 % a key whose first reading falls in a noise trough sets and
 clears once at its start. `SwitchMuWeighingBand` turns the band off for a
 replay.
 
-#### One-sided at the cap (issue #467)
+#### One-sided at the cap (issue ev-shindin/llm-scaling-manager#467)
 
 A replica at its stated cap reads above `itl.DefaultKSat`. While the key has
 no learned B the pinned fit pins `DefaultBaselineSec`, and through such
@@ -1039,7 +1039,7 @@ below `analyzerTuning.itlBand.minObservableK` offers no reading, so a fleet that
 load and then served light load for half an hour used to lose the line, the
 derived mu and the throughput floor with it, and was sized by KV occupancy
 alone. At light load that reads far below the throughput share served: one H200
-replica read 0.064 while serving 25% of its saturated rate (issue #284). The same
+replica read 0.064 while serving 25% of its saturated rate (issue ev-shindin/llm-scaling-manager#284). The same
 applies above the band, for a replica not at its sequence cap.
 
 The hold is bounded. `itl.Admission.SlopeHoldFor` is the analyzer's
@@ -1096,7 +1096,7 @@ one `itl.Admission`, built alike by both analyzers. `pricingK`, and the slo
 analyzer's fill, clamp to the same band. Such a replica is not short of memory, so the reason for the band does
 not apply to it. On one run a decode replica held 256 running and 768 waiting
 at `k` 0.85-0.89 for 20 minutes while three siblings sat below 0.15, and no line
-was ever fitted (issue #287). `itl-window` counts these readings as `capped`,
+was ever fitted (issue ev-shindin/llm-scaling-manager#287). `itl-window` counts these readings as `capped`,
 a part of `offered`, and logs the `batchCap` it judged them by (`--max-num-seqs`,
 lowered by `--max-num-active-seqs`). An unknown
 cap or preemption rate (SGLang publishes no preemption counter) keeps the band
@@ -1109,7 +1109,7 @@ readings: every replica is held out for `DefaultSteadyFor`, so N replicas add
 8N of them at 15 s cycles. When the steady readings were trimmed to the main
 window, the old level's were gone before the new level's were steady, and no
 fleet of two or more replicas ever had the spread for a full fit: on the issue
-#270 rerun, `itl-window` was `ready` on 0 of 294 multi-replica cycles, and `B`
+ev-shindin/llm-scaling-manager#270 rerun, `itl-window` was `ready` on 0 of 294 multi-replica cycles, and `B`
 stayed at the 6 ms default. Carried, the old level is still there when the new
 one settles: on a step from `k` 0.35 to 0.70 (`steady_test.go`), every fleet of
 1 to 16 replicas learns the true `B`. The carry is the full fit's only: the
@@ -1226,7 +1226,7 @@ replay switch (`mu_switches.go`):
   the derived figure, and under it holds for `MeasuredLowHoldFor` from its
   own last write (`lowHeldOut`, `TestMuUnknownAge_*`).
 - **The latch reads a smoothed ratio** (`SwitchMuLatchReadsSmoothedRatio`,
-  #526). The stale rule sets and releases on the ratio of measured to derived
+  ev-shindin/llm-scaling-manager#526). The stale rule sets and releases on the ratio of measured to derived
   mu smoothed exponentially over `MuLatchRatioSmoothing` (3 min), not on the
   cycle's own ratio (`muChoice.smoothRatio`). The per-pod rate noise measured
   on E1 is 7.5-18.9 % at lag-one 0.1-0.4, as wide as the 1.6-2.0 band, so on
@@ -1459,7 +1459,7 @@ only raise prefill's order. Idle is `pricedIdle`: `replicaIdle` (Ready,
 busiest-rank KV under `idleKvUsage` = 0.30 of the cache, nothing waiting) AND
 busiest-rank tokens under 0.30 x `EffectiveCapacity` (min(k1, k2)), on every
 cycle for `IdleSettledFor`, no two readings over `IdleMaxGap` (1m) apart, own
-replicas only. The line is a band (#396): a run starts under `idleKvUsage` and,
+replicas only. The line is a band (ev-shindin/llm-scaling-manager#396): a run starts under `idleKvUsage` and,
 once started, goes on under `idleBandLevel`, `IdleLeaveRatio` (1.4) times it
 and never more than halfway to a full replica, on both figures. With one line,
 a replica whose peak sat on 0.30 settled idle and cleared again on noise
@@ -1602,14 +1602,14 @@ decode writes its computed-token rate to a window of its own
 (`prefill_bound.go`, the key's role field `prefill-bound`), and the floor
 prices prefill on it when prefill has no window of its own. Each such reading
 is at most what the replica sustains, so the bound is a lower bound. Within a
-minute the pods' readings fold at their mean, as mu's do (#395).
+minute the pods' readings fold at their mean, as mu's do (ev-shindin/llm-scaling-manager#395).
 
 Across minutes the bound was the running max: each sample raised to the
 window's max when it started (`RaiseLastAt`), carried past a new window after
 `EpisodeGap`. That holds for a noise-free reading. Under the rate gauge's
 noise (7.5-18.9 % per pod on E1) the max picks the noise: at one pod it read
 the true rate 15 % high after ten minutes at 10 % noise and 50 % high after a
-day at 15 % (#397). High is the side that breaks the SLO: the floor orders
+day at 15 % (ev-shindin/llm-scaling-manager#397). High is the side that breaks the SLO: the floor orders
 fewer prefill replicas than the load needs.
 
 With `SwitchPrefillBoundHeldConfidence` on, the constructor's default
@@ -1713,7 +1713,7 @@ stored windows are still found.
 The fleet's length is not enough on its own either. The key used to read the
 tracked length, which the shape tracker moves on one reading 20 % off its
 anchor; with the length 6 % above 500 and 6 % noise it moved either side of
-500, so the key went to `medium` and back (#396; property case
+500, so the key went to `medium` and back (ev-shindin/llm-scaling-manager#396; property case
 `edges/k2/key-near-output-boundary`, 13 of 50 seeds). The key now holds its
 bucket by a band of its own (`keyLengths`, `k2_key_bucket.go`):
 
@@ -1753,7 +1753,7 @@ bucket again from its first readings, as the shape tracker does. The band is
 the replay switch `SwitchK2KeyBucketHeld`; off, the k2 key reads the tracked
 length as before.
 
-The throughput (mu) key reads the same band (#415). It used to read the tracked
+The throughput (mu) key reads the same band (ev-shindin/llm-scaling-manager#415). It used to read the tracked
 length, and on the same boundary case (`edges/mu/key-near-output-boundary`)
 it left `long` for `medium` on 13 of 50 seeds: measured mu was read from,
 and written to, another bucket's window at constant load, and k2's settle test
@@ -2090,7 +2090,7 @@ the per-variant `replica-capacity-summary` stands in for them.
   read); `residentKVPerSeq` is the KV the running requests were measured to
   hold, over `residentRunning` requests, and `residentKVBound` which bound
   `kvReqPerSeq` held it to (`none`, `lower`, `upper`, `no-hit`,
-  `no-reading`, `off`; issue #277), and `residentKVBoundFleet` the same for
+  `no-reading`, `off`; issue ev-shindin/llm-scaling-manager#277), and `residentKVBoundFleet` the same for
   `kvReqFleet`;
   `muShortWindow` says whether the pair moved to the short window.
   It, and every ITL line (`itl-window`, `itl-fit`, `itl-fit-declined`,

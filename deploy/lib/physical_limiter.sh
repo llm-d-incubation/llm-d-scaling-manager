@@ -121,7 +121,7 @@ pl_image_repos() {
         echo "$LLMSM_CONTROLLER_IMAGE_REPOS"
         return 0
     fi
-    local repos="ghcr.io/ev-shindin/llm-scaling-manager" extra
+    local repos="ghcr.io/llm-d-incubation/llm-d-scaling-manager" extra
     if [ -n "${LLMSM_IMAGE_REPO:-}" ]; then
         extra="$(pl_image_repo "$LLMSM_IMAGE_REPO")"
         [ "$extra" = "$repos" ] || repos="$repos $extra"

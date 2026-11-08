@@ -159,7 +159,7 @@ create_kind_cluster() {
 # Loads the scaling manager image into the Kind cluster.
 # When pulling from a registry, we pull a single platform (KIND_IMAGE_PLATFORM) to avoid
 # "content digest ... not found" errors from kind load (multi-platform manifests reference
-# blobs not included in the export stream; see kubernetes-sigs/kind#3795, #3845).
+# blobs not included in the export stream; see kubernetes-sigs/kind#3795, kubernetes-sigs/kind#3845).
 load_image() {
     log_info "Loading the scaling manager image '$LLMSM_IMAGE_REPO:$LLMSM_IMAGE_TAG' into KIND cluster..."
     

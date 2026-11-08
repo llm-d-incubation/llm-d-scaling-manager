@@ -1179,7 +1179,7 @@ func (e *Engine) holdFillTimeout(tm allocation.ShareTimings) time.Duration {
 // short role below its reading for as long as it lasts -- when a swing took
 // two changes of direction (stabilization.swingReversals 2, the default before
 // three), two models sat at 2:2 for eleven minutes after a single swap back,
-// the busy one past its threshold (issue #269) -- and only a gauge and a
+// the busy one past its threshold (issue ev-shindin/llm-scaling-manager#269) -- and only a gauge and a
 // blocked reason said why. The line names the need each way, so the hold can
 // be told from a stall.
 func (st *utilizationShareState) reportSwinging(logger logr.Logger, key string, plan allocation.SharePlan, tm allocation.ShareTimings) {

@@ -173,7 +173,7 @@ func sharedTargetCycle(t *testing.T, e *Engine, vaNames []string, results []allo
 	e.recordAnalyzerMetrics("ns", "m", results)
 }
 
-// Issue #172: the config series was evicted per (analyzer, variant), so a
+// Issue ev-shindin/llm-scaling-manager#172: the config series was evicted per (analyzer, variant), so a
 // second analyzer dropping v2 for one cycle unpublished v2's configuration
 // while saturation, and its Variant, still kept it.
 func TestEngineConfig_SurvivesOneAnalyzerDroppingAVariant(t *testing.T) {

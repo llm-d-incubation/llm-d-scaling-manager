@@ -3,7 +3,7 @@ package itl
 import "strings"
 
 // PriorScope is the physics a one-sided prior on B is read within (issue
-// #467; BPrior): a learned B counts toward a variant's prior only when its
+// ev-shindin/llm-scaling-manager#467; BPrior): a learned B counts toward a variant's prior only when its
 // key is the same model on the same accelerator and GPU count, under the
 // same engine arguments (capacity.EngineParams.ArgsTag), in the same
 // canonical role. Keys are the analyzers' window keys,

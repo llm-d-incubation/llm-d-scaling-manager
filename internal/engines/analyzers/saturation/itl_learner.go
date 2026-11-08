@@ -115,7 +115,7 @@ func (a *SaturationAnalyzer) noteITLLearner(namespace, modelID, variant, role, k
 // which fitted nothing this cycle still files one, to say so.
 //
 // rolesByVariant names each variant's role; a forgotten variant it does not
-// name is reported as decode, as before the aggregated line (#432).
+// name is reported as decode, as before the aggregated line (ev-shindin/llm-scaling-manager#432).
 func (a *SaturationAnalyzer) closeITLCycle(namespace, modelID string, rolesByVariant map[string]string) {
 	model := namespace + "|" + modelID
 	a.mu.Lock()

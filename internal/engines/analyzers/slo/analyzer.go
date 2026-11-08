@@ -101,7 +101,7 @@ type Analyzer struct {
 	rec *learnrec.Recorder
 
 	// batchCapAdmission is SwitchBatchCapAdmission and batchCapPerRank
-	// SwitchBatchCapPerRank (issue #420): on from the constructor; a replay
+	// SwitchBatchCapPerRank (issue ev-shindin/llm-scaling-manager#420): on from the constructor; a replay
 	// turns them off (SetSwitchesForReplay).
 	batchCapAdmission bool
 	batchCapPerRank   bool
@@ -123,21 +123,21 @@ type Analyzer struct {
 	itlFiniteOnly        bool
 	itlRestartUnderName  bool
 	itlIdleOnEvidence    bool
-	// itlLongGapFirstSeen is SwitchITLLongGapFirstSeen (issue #459,
+	// itlLongGapFirstSeen is SwitchITLLongGapFirstSeen (issue ev-shindin/llm-scaling-manager#459,
 	// settle.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	itlLongGapFirstSeen bool
-	// itlOwnBackdate is SwitchITLOwnSettleBackdates (issue #511,
+	// itlOwnBackdate is SwitchITLOwnSettleBackdates (issue ev-shindin/llm-scaling-manager#511,
 	// settle.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	itlOwnBackdate bool
 	// itlForgetReachesLine is SwitchITLForgetReachesTheLine (forget.go): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).
 	itlForgetReachesLine bool
-	// itlOneSidedAtCap is SwitchITLOneSidedAtCap (issue #467, one_sided.go):
+	// itlOneSidedAtCap is SwitchITLOneSidedAtCap (issue ev-shindin/llm-scaling-manager#467, one_sided.go):
 	// on from the constructor; a replay turns it off (SetSwitchesForReplay).
 	itlOneSidedAtCap bool
-	// itlTierHysteresis is SwitchITLTierHysteresis (issue #495,
+	// itlTierHysteresis is SwitchITLTierHysteresis (issue ev-shindin/llm-scaling-manager#495,
 	// tier_hysteresis.go): on, the line's tier is latched.
 	itlTierHysteresis bool
 	// settleInterval is the controller's optimize interval
@@ -175,7 +175,7 @@ type Analyzer struct {
 	// ttftDecodeTerm is SwitchTTFTDecodeTerm (ttft.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftDecodeTerm bool
-	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue #276,
+	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#276,
 	// output_dispersion.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	kvOutputDispersion bool
@@ -191,7 +191,7 @@ type Analyzer struct {
 	prompts map[string]*promptSpreadWindow
 }
 
-// The batch cap's readers in this analyzer (issue #420). Each took the cap
+// The batch cap's readers in this analyzer (issue ev-shindin/llm-scaling-manager#420). Each took the cap
 // from the engine's flags alone, so where the flags are unread the
 // llm-d.ai/max-num-seqs annotation reached the saturation analyzer's P3 and
 // not this one. Each now reads capacity.EngineParams.StatedBatchCap, behind
@@ -199,13 +199,13 @@ type Analyzer struct {
 // it is that analyzer's memory, which this one cannot see.
 
 // SwitchBatchCapAdmission is the replay switch for the line's sequence-cap
-// admission (issue #420). On, a replica is at its cap (itl.Admission) at the
+// admission (issue ev-shindin/llm-scaling-manager#420). On, a replica is at its cap (itl.Admission) at the
 // cap the flags or the annotation state (StatedBatchCap). Off, as before, at
 // the flags' cap alone.
 const SwitchBatchCapAdmission = "slo-batch-cap-admission"
 
 // SwitchBatchCapPerRank is the replay switch for the batch cap a replica is
-// priced at (issue #420). On, at the cap the flags or the annotation state,
+// priced at (issue ev-shindin/llm-scaling-manager#420). On, at the cap the flags or the annotation state,
 // and the parser's default where neither does. Off, as before, at the
 // flags' cap or the default (capacity.EngineParams.BatchCap).
 const SwitchBatchCapPerRank = "slo-batch-cap-per-rank"
@@ -486,7 +486,7 @@ type pricingDetail struct {
 	// parser's, the flags unread), or batchCapNone with no params at all.
 	// maxSeqs is max_num_seqs alone, the default where the flags are
 	// unread, so it is not what priced a replica whose cap is declared
-	// (issue #420).
+	// (issue ev-shindin/llm-scaling-manager#420).
 	batchCap       int64
 	batchCapSource string
 	// lineBatchCap is the cap per rank the line admits a replica at above
@@ -589,9 +589,9 @@ func (a *Analyzer) priceVariant(input domain.AnalyzerInput, vs domain.VariantRep
 		return vc, reading, d
 	}
 	// The batch cap bounds one engine: max_num_seqs, lowered by
-	// max_num_active_seqs when set (issue #335). A replica of several
+	// max_num_active_seqs when set (issue ev-shindin/llm-scaling-manager#335). A replica of several
 	// data-parallel ranks admits that many times it, against capacity tokens
-	// that are already the whole replica's (issue #150).
+	// that are already the whole replica's (issue ev-shindin/llm-scaling-manager#150).
 	d.ranks = fleet.engineRanks(vs.VariantName)
 	if params != nil {
 		d.maxSeqs = params.MaxNumSeqs * d.ranks
@@ -779,7 +779,7 @@ func (a *Analyzer) judge(ctx context.Context, input domain.AnalyzerInput, slo *c
 // it the window kept the old engine's readings for up to
 // itl.DefaultObservationMaxAge, the pinned fit refitted A from them each cycle
 // and stamped it with the new arguments, and the old engine's slope was then
-// held as the new one's for the whole slope hold (issue #284). Unknown
+// held as the new one's for the whole slope hold (issue ev-shindin/llm-scaling-manager#284). Unknown
 // arguments change nothing. There is no stash: a rollback relearns its line.
 func (a *Analyzer) linesUnderArgs(key, args, namespace, modelID, variant string, now time.Time) {
 	if args == "" {

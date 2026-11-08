@@ -11,7 +11,7 @@ import (
 )
 
 // The output-length histogram is read per bucket bound, over the window the
-// mean output length is read over, so the two are one reading (issue #276).
+// mean output length is read over, so the two are one reading (issue ev-shindin/llm-scaling-manager#276).
 func TestOutputLengthQueries(t *testing.T) {
 	registry := source.NewSourceRegistry()
 	src := prometheus.NewPrometheusSource(context.Background(), &mockPrometheusAPI{}, prometheus.DefaultPrometheusSourceConfig())

@@ -202,7 +202,7 @@ B stayed under a second in every arm, and every request was served.
   scale-down window.
 - Fixed now, not yet measured: a cancelled transfer removes exactly its own
   recorded moves, so it holds neither model and counts toward no swing as a
-  move (since issue #269 it counts as the move it would have made, a change
+  move (since issue ev-shindin/llm-scaling-manager#269 it counts as the move it would have made, a change
   of direction toward the three a swing takes only when it reverses the one
   before), and
   it holds only that donor -> receiver pair from starting again

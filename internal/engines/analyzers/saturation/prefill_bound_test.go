@@ -27,7 +27,7 @@ var _ = Describe("prefillBoundKey", func() {
 	})
 })
 
-// Issue #144, re-scoped to the capacity side. The fleet: the P/D benchmark's
+// Issue ev-shindin/llm-scaling-manager#144, re-scoped to the capacity side. The fleet: the P/D benchmark's
 // two decode replicas and one prefill replica (downstream_saturation_test.go),
 // 6000-token prompts. In phase A decode is the saturated role, and prefill
 // queues 30 deep on decode's back-pressure while computing 24,000 prompt
@@ -417,7 +417,7 @@ var _ = Describe("a prefill lower bound across prompt lengths in one input bucke
 	})
 })
 
-// Issue #395. The bound wrote every prefill pod's reading under one name, so
+// Issue ev-shindin/llm-scaling-manager#395. The bound wrote every prefill pod's reading under one name, so
 // mu's fold kept the fastest pod's within a minute: one pod read at twice its
 // rate -- a series doubled inside PromQL -- set the bound for the whole
 // fleet, and the floor ordered half the prefill the load needed. Within a
@@ -468,7 +468,7 @@ var _ = Describe("notePrefillBound across the pods of one minute", func() {
 		})
 	}
 
-	// Off, as #395 shipped: the bound is the max over minutes, and a
+	// Off, as ev-shindin/llm-scaling-manager#395 shipped: the bound is the max over minutes, and a
 	// sample may not fall below the max when it started.
 	Context("with "+SwitchPrefillBoundHeldConfidence+" off", func() {
 		BeforeEach(func() { confident(false) })
@@ -501,7 +501,7 @@ var _ = Describe("notePrefillBound across the pods of one minute", func() {
 		})
 	})
 
-	// On (issue #397): the bound is the larger of the window's mean and the
+	// On (issue ev-shindin/llm-scaling-manager#397): the bound is the larger of the window's mean and the
 	// held figure, the max of the lower confidence bounds of its complete
 	// samples, taken at three and six complete samples and then once per
 	// full window. Noise-free, three equal minutes hold their level exactly.

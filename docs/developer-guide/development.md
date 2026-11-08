@@ -18,8 +18,8 @@ How to set up, build, run and change the scaling manager.
 ### Initial Setup
 
 ```bash
-git clone https://github.com/ev-shindin/llm-scaling-manager.git
-cd llm-scaling-manager
+git clone https://github.com/llm-d-incubation/llm-d-scaling-manager.git
+cd llm-d-scaling-manager
 go mod download
 make setup-envtest controller-gen kustomize
 ```
@@ -264,7 +264,7 @@ make destroy-kind-cluster create-kind-cluster   # reset the Kind cluster
 ```
 
 For help, read [CONTRIBUTING.md](../../CONTRIBUTING.md) or search
-[GitHub Issues](https://github.com/ev-shindin/llm-scaling-manager/issues).
+[GitHub Issues](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues).
 
 ## Known Setup Issues
 

@@ -1,7 +1,7 @@
 package steadystate
 
 // Cohort borrowing on the engine side
-// (the Kueue borrowing proposal, PR #161, B4 and B5): what
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B4 and B5): what
 // the Kueue reader cannot see -- growth ordered on borrowed capacity that Kueue
 // has not reserved yet, and managed pods held at its admission gate -- is taken
 // out of the shared pools before the optimizer runs. Borrowed replicas are

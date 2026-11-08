@@ -255,7 +255,7 @@ func (r *ownRig) run(n, gapAt int, order func(i int) []string,
 
 func ownFleet(string, int) []domain.ReplicaMetrics { return settleFleet() }
 
-// Issue #511: the analyzer alone takes a model's replicas on its first
+// Issue ev-shindin/llm-scaling-manager#511: the analyzer alone takes a model's replicas on its first
 // Analyze, and on its first after a gap past ownSettleTimeout, as long
 // joined: its own tracker holds each settle.Joined itl.DefaultSteadyFor
 // before the cycle, its Ready time first seen then too. Observed at the
@@ -619,7 +619,7 @@ func TestITLSettle_TheParentsWindowReadsNoSettle(t *testing.T) {
 }
 
 // At an optimize interval of 48 s or more the own tracker's tolerance covers
-// the backdate, so before issue #511 both observations stood: a first
+// the backdate, so before issue ev-shindin/llm-scaling-manager#511 both observations stood: a first
 // sighting's trace held an invented row at the backdate as well as the row
 // read. With SwitchITLOwnSettleBackdates on it holds only the row read; off,
 // as before, both. The settle begins at the backdate either way.

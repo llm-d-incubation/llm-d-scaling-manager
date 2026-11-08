@@ -41,7 +41,7 @@ kind: ConfigMap
 # for up to three cycles the roles it covers (every role, when it reports none)
 # do not scale down. A query that returns NO SERIES reads as zero demand, a
 # real reading: listed alone, the analyzer then lets the model scale down.
-# Treating an empty result as missing is planned (issue #344).
+# Treating an empty result as missing is planned (issue ev-shindin/llm-scaling-manager#344).
 metadata:
   name: scaling-policy-config
   # Definitions are cluster-scope: they must live in the controller's namespace.

@@ -466,7 +466,7 @@ Recommendation, given the inputs:
   re-init, B is dead and the "build both tiers" commitment in the current design
   should be withdrawn.
 - **D is adopt-later, not build-now** — even with patched vLLM permitted. Its
-  foundation (vLLM RFC #34303) is an unmerged draft, its CRD surface is unsettled
+  foundation (vLLM RFC vllm-project/vllm#34303) is an unmerged draft, its CRD surface is unsettled
   (`SnapshotReplica`/`SnapshotFleet`, not the documented `SnapshotCheckpoint`), and
   it needs a privileged DaemonSet. Permission to patch vLLM does not make an
   unmerged upstream draft a foundation.

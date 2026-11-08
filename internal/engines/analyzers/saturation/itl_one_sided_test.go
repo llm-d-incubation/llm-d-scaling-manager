@@ -17,7 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/settle/settlerow"
 )
 
-// Issue #467: the ITL line priced one-sided at the sequence cap while B is
+// Issue ev-shindin/llm-scaling-manager#467: the ITL line priced one-sided at the sequence cap while B is
 // unlearned (SwitchITLOneSidedAtCap), through Analyze, on the engine's rig.
 
 // oneSidedK is the line's pricing k under makeAnalyzerInput's policy
@@ -34,7 +34,7 @@ func (l capTruth) String() string {
 	return fmt.Sprintf("A %.2f B %.0f ms k_cap %.2f", l.a, 1000*l.b, l.kCap)
 }
 
-// capTruths is issue #467's bias grid, where the default B prices under the
+// capTruths is issue ev-shindin/llm-scaling-manager#467's bias grid, where the default B prices under the
 // truth.
 var capTruths = []capTruth{{0.05, 0.010, 0.97}, {0.05, 0.030, 0.97}, {0.01, 0.020, 0.97}, {0.01, 0.030, 0.97}}
 
@@ -533,7 +533,7 @@ func TestITLOneSided_TheHeldSlopeKeepsThePriceAndEndsWithTheHold(t *testing.T) {
 	require.Less(t, off.held.ITLAt(oneSidedK), truth, "negative control: off, the held line was not under the truth")
 }
 
-// Off, the switch is the line before #467: the capped replicas price
+// Off, the switch is the line before ev-shindin/llm-scaling-manager#467: the capped replicas price
 // through the default B, under the truth, and the analyzer says it accepts
 // the name.
 func TestITLOneSided_TheSwitchPicksTheLine(t *testing.T) {
@@ -589,7 +589,7 @@ func TestITLOneSided_TheRecordIsEvictedWithItsVariant(t *testing.T) {
 }
 
 // A line priced at the prior is not published for siblings to borrow (issue
-// #467): it carries the donor's at-cap readings and pricing k. With line
+// ev-shindin/llm-scaling-manager#467): it carries the donor's at-cap readings and pricing k. With line
 // sharing on, a sibling of the same engine and no readings of its own
 // borrows no line while the donor is one-sided, so never the raised A; with
 // the switch off, the donor publishes its plain line and the sibling borrows

@@ -7,7 +7,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// The prefill bound under measurement noise (issue #397).
+// The prefill bound under measurement noise (issue ev-shindin/llm-scaling-manager#397).
 //
 // The bound's argument is that each saturated reading is a lower bound on
 // prefill's rate, so the max of them is the tightest one. That holds for a
@@ -59,10 +59,10 @@ import (
 //
 // The confidence holds only if each minute's sample is an unbiased,
 // roughly independent reading of the rate. In production it is not yet:
-// the within-minute fold keeps a max over one pod's re-reads (#531), so each
+// the within-minute fold keeps a max over one pod's re-reads (ev-shindin/llm-scaling-manager#531), so each
 // sample is biased high, and with four reads a minute at AR(1) noise
 // (phi 0.3) the held figure stood above the true rate on 47 of 50 seeds after
-// an hour and 50 of 50 after a day, at 10 % and at 15 % noise. Until #531
+// an hour and 50 of 50 after a day, at 10 % and at 15 % noise. Until ev-shindin/llm-scaling-manager#531
 // lands, the bound is still high by about that fold's bias (8.8 % at 10 %
 // noise, 13 % at 15 %), though no longer by the running max over minutes.
 //
@@ -77,11 +77,11 @@ import (
 // that build priced.
 
 // SwitchPrefillBoundHeldConfidence is the replay switch for the prefill
-// bound's estimand under noise (issue #397). On, the bound's window holds the
+// bound's estimand under noise (issue ev-shindin/llm-scaling-manager#397). On, the bound's window holds the
 // minutes' samples as read, and the bound priced is the larger of the
 // window's mean and the max of its lower confidence bounds over the bound's
 // life (prefillHeldBound). Off, each sample is raised to the window's max
-// when it started, and the bound priced is that max, as #395 shipped.
+// when it started, and the bound priced is that max, as ev-shindin/llm-scaling-manager#395 shipped.
 const SwitchPrefillBoundHeldConfidence = "prefill-bound-held-confidence"
 
 // prefillBoundAlpha is the chance, over the bound's whole life, that the held

@@ -17,7 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The review's leak probes (PR #388), kept as regression tests. Each puts a
+// The review's leak probes (PR ev-shindin/llm-scaling-manager#388), kept as regression tests. Each puts a
 // name where the first export missed it, and holds the export to not
 // committing it: the export either renames it, or refuses. Each failed on
 // the commit the review read (67fb4e80f): the name survived.

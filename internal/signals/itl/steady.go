@@ -10,7 +10,7 @@ import (
 //
 // The two halves of a pair are not taken at the same moment. ITL is a
 // histogram mean over rate[1m] (collector/registration/queueing_model.go); k
-// is the KV fill averaged over the same minute (issue #393), or the instant
+// is the KV fill averaged over the same minute (issue ev-shindin/llm-scaling-manager#393), or the instant
 // fill where that was not read. On a replica whose load just changed, the
 // minute holds both levels, and a line through such pairs is not ITL(k) at all.
 // Two minutes covers the rate window and a couple of scrapes after it.
@@ -37,7 +37,7 @@ const DefaultMaxKDrift = 0.10
 // old level's readings before any reading of the new level was steady, the two
 // levels were never in it together, and no fleet of two or more replicas ever
 // had the spread a full fit needs: B stayed DefaultBaselineSec on every
-// multi-replica cycle of the issue #270 rerun (0 of 294 Ready), while one
+// multi-replica cycle of the issue ev-shindin/llm-scaling-manager#270 rerun (0 of 294 Ready), while one
 // replica learned it from the same step.
 //
 // Five minutes is DefaultSteadyFor for the new level to settle, up to two more

@@ -107,7 +107,7 @@ func PriceTPOT(band FillBand, line itl.Model, targetSeconds float64) Pricing {
 // replicaCap is the REPLICA's cap: one engine's max_num_seqs times the
 // data-parallel ranks the replica runs, since capacityTokens is the whole
 // replica's KV. Capping a pod of eight ranks at one rank's 256 priced it at
-// an eighth of what it serves (issue #150).
+// an eighth of what it serves (issue ev-shindin/llm-scaling-manager#150).
 func CappedSequences(k, capacityTokens, kvPerRequest, replicaCap float64) float64 {
 	seqs := itl.Sequences(k, capacityTokens, kvPerRequest)
 	if replicaCap > 0 {

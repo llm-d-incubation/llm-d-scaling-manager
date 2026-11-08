@@ -22,9 +22,9 @@ import (
 
 // engineRunEventCounts is the committed count of each event kind per cycle
 // of the engine fixture's run (recordEngineRun), recorded on the commit
-// before the input builder existed (#345 step 1's parent). Counts, not
+// before the input builder existed (ev-shindin/llm-scaling-manager#345 step 1's parent). Counts, not
 // order: the builder ranges a map of variants, so the order of its events
-// within a cycle is not stable between two runs (#400).
+// within a cycle is not stable between two runs (ev-shindin/llm-scaling-manager#400).
 var engineRunEventCounts = filepath.Join("testdata", "engine-run-event-counts.txt")
 
 // The input builder's side effects all land before the model's saturation

@@ -11,7 +11,7 @@
 #
 # id is class/learner/case, as the test names it; rows are sorted by id.
 # measured is the fail rate over the case's seeds and the first failure, when
-# the row was written. owner is what clears the row: an issue ("#394"), or
+# the row was written. owner is what clears the row: an issue ("ev-shindin/llm-scaling-manager#394"), or
 # "open". CheckLedger holds that form only, so a closed issue passes.
 #
 # Empty since learner PR 4b-3 removed its last row,

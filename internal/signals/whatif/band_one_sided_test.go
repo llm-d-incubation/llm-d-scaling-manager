@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Issue #467: a band on a line the controller priced one-sided at the
+// Issue ev-shindin/llm-scaling-manager#467: a band on a line the controller priced one-sided at the
 // sequence cap. The tracker, with no learned B, prices the variant from the
 // line through the least ITL of its readings at the cap with intercept the
 // prior on B (itl.Admission.BPrior; returned through the default B, at its

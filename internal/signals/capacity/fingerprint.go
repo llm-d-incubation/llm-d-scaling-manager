@@ -51,7 +51,7 @@ import (
 // (IsCapacityCompatible) but not hashed, a rollout that changed only
 // --max-num-active-seqs kept the same arguments, so the variant went on
 // reading the k2, throughput and ITL windows it measured under the old cap
-// (issue #334). It is the first bump to cross a release: on the first
+// (issue ev-shindin/llm-scaling-manager#334). It is the first bump to cross a release: on the first
 // restart after the upgrade every variant's restored k2 is a lower-only
 // previous figure, as after any change of arguments.
 const FingerprintVersion = 4

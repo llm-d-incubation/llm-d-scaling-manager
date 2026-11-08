@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Issue #467: the one-sided price at the cap with a stated prior on B
+// Issue ev-shindin/llm-scaling-manager#467: the one-sided price at the cap with a stated prior on B
 // (Admission.BPrior), judged where the line is priced: at a fill
 // (Admission.OneSidedAt, the saturation line's pricing k) and at a target
 // ITL (Admission.OneSidedTarget, the slo line's TPOT target).
@@ -34,7 +34,7 @@ func capWindow(tr *Tracker, adm Admission, a, b, kCap float64, noise func(c, i i
 	return r
 }
 
-// priorGrid is issue #467's bias grid, B at or under DefaultBPrior.
+// priorGrid is issue ev-shindin/llm-scaling-manager#467's bias grid, B at or under DefaultBPrior.
 var priorGrid = []struct{ a, b, kCap float64 }{
 	{0.05, 0.010, 0.97}, {0.05, 0.030, 0.97}, {0.01, 0.020, 0.97}, {0.01, 0.030, 0.97},
 	{0.05, 0.010, 0.92}, {0.01, 0.030, 0.92},

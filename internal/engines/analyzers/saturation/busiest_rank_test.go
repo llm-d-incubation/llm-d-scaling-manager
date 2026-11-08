@@ -13,7 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #150, the saturation guards. A pod of eight data-parallel ranks is
+// Issue ev-shindin/llm-scaling-manager#150, the saturation guards. A pod of eight data-parallel ranks is
 // priced on what the pod holds -- its ranks' queues summed, their utilization
 // averaged -- but queueLengthThreshold and kvCacheThreshold describe ONE
 // engine. So whether a replica is saturated is judged on its busiest rank,

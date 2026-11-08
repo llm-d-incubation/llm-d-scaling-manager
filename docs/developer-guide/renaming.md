@@ -63,7 +63,11 @@ that.
 - `--code-moved` turns on the held rows: repository links, image references and
   clone commands, which resolve only once the code and images are in the new home.
   Pull request and issue links stay on the old repository, because their numbers
-  do not carry over.
+  do not carry over. For the same reason a bare `#N` becomes
+  `ev-shindin/llm-scaling-manager#N` up to the old repository's last number, and
+  `owner/repo#N` for the upstream numbers listed in `upstreamIssues`. Section
+  anchors, link text with its target, colours, review finding numbers, the
+  learner inventory's rows and the pull request bodies a check parses stay bare.
 
 ## What stays
 

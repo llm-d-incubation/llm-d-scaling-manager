@@ -152,9 +152,9 @@ already pulls a single platform first; to choose it yourself set
 install with `LLMSM_IMAGE_PULL_POLICY=IfNotPresent`:
 
 ```bash
-make docker-build IMG=ghcr.io/ev-shindin/llm-scaling-manager:main
+make docker-build IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:main
 CREATE_CLUSTER=true LLMSM_IMAGE_PULL_POLICY=IfNotPresent \
-  make deploy-e2e-infra IMG=ghcr.io/ev-shindin/llm-scaling-manager:main
+  make deploy-e2e-infra IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:main
 ```
 
 ## More

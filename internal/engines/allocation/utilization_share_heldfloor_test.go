@@ -8,7 +8,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 )
 
-// heldPrefillGroup is issue #222's contended P/D quota of 16 1-GPU A100s, all
+// heldPrefillGroup is issue ev-shindin/llm-scaling-manager#222's contended P/D quota of 16 1-GPU A100s, all
 // in use. Model pd runs 10 prefill replicas and 4 decode; decode needs its 4.
 // Prefill's demand before the hold is 2800, a need of 3.5 GPUs; with held set,
 // saturation holds it at the bottom of the band (0.70 x 10 x 1000 = 7000).
@@ -92,7 +92,7 @@ func unreachable(g ShareGroup, targets map[string]int) int {
 	return max(promised-supply, 0)
 }
 
-// Issue #222: a role saturation holds gives nothing, so the share must not
+// Issue ev-shindin/llm-scaling-manager#222: a role saturation holds gives nothing, so the share must not
 // plan its GPUs for another model. Prefill holds 10 GPUs and needs 3.5; sized
 // on that need with a floor of one replica, its target was 3 and B was
 // promised the 7 GPUs above it, which no transfer could take. Its floor is

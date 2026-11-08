@@ -43,7 +43,7 @@ const (
 	// load went to the other model and raised again when it came back has
 	// changed direction twice, and both models were held halfway, on their
 	// means, until the busy one's need had outlasted the earlier halves. The
-	// swap back of issue #269 sat at 2:2 for eleven minutes and reached its
+	// swap back of issue ev-shindin/llm-scaling-manager#269 sat at 2:2 for eleven minutes and reached its
 	// split after 28, against 9 with the rule off. A load that really
 	// oscillates reverses a third time within the window, and is held from
 	// then.

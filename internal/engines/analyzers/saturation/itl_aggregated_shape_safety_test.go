@@ -17,7 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// The safety rules of the aggregated line by shape (issue #275), each pinned
+// The safety rules of the aggregated line by shape (issue ev-shindin/llm-scaling-manager#275), each pinned
 // through Analyze where it can be.
 
 // A scale-up whose cold replicas move the hit rate is not a shape change.
@@ -125,7 +125,7 @@ func TestAggregatedShape_AnArgsChangeDropsTheLiftAndTheShapeState(t *testing.T) 
 }
 
 // M5: a line's shape survives an export and a restore, through the
-// document's JSON, c included; and a document from #432, with no line
+// document's JSON, c included; and a document from ev-shindin/llm-scaling-manager#432, with no line
 // shapes, restores without error, its line with no shape.
 func TestAggregatedShape_TheLineShapeSurvivesARestore(t *testing.T) {
 	r := newAggShapeRig(t, nil)
@@ -161,13 +161,13 @@ func TestAggregatedShape_TheLineShapeSurvivesARestore(t *testing.T) {
 	old.ITLLineShapes = nil
 	raw, err := json.Marshal(old)
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "itlLineShapes", "precondition: a #432 document")
+	assert.NotContains(t, string(raw), "itlLineShapes", "precondition: a ev-shindin/llm-scaling-manager#432 document")
 	var oldDoc LearnedState
 	require.NoError(t, json.Unmarshal(raw, &oldDoc))
 	legacy := newAggShapeRig(t, nil)
 	legacy.clock = r.clock
 	require.Equal(t, 1, legacy.a.RestoreLearnedState(oldDoc).ITLLines)
-	assert.Zero(t, legacy.shapeOf(t).g, "a #432 line restored with a shape")
+	assert.Zero(t, legacy.shapeOf(t).g, "a ev-shindin/llm-scaling-manager#432 line restored with a shape")
 }
 
 // The forget-learned-state annotation drops the variant's shape state, its

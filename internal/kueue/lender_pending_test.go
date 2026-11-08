@@ -88,7 +88,7 @@ var _ = Describe("Lender waiting from its pending Workloads", func() {
 		Expect(r.admits(29)).To(BeFalse())
 	})
 
-	// PR #203 re-check (KC4): Kueue reclaims for a LowerPriority lender from
+	// PR ev-shindin/llm-scaling-manager#203 re-check (KC4): Kueue reclaims for a LowerPriority lender from
 	// any borrower below its head, this controller's or not.
 	It("carries the lowest priority a borrower holds the pool at, unknown when one is not read", func() {
 		a := member("a", QueueResource{Nominal: 0, Reserved: 4, Borrowed: 4})
@@ -102,7 +102,7 @@ var _ = Describe("Lender waiting from its pending Workloads", func() {
 		Expect(pool.BorrowerLowest).To(BeNil())
 	})
 
-	// PR #203 final check: what preemption victims hold is waited for on the
+	// PR ev-shindin/llm-scaling-manager#203 final check: what preemption victims hold is waited for on the
 	// lender's flavor alone, and for EvictionBound at most.
 	It("counts a victim's quota on its own flavor, and not once it is stuck past the bound", func() {
 		victimOf := func(flavor string, age time.Duration) QueueState {

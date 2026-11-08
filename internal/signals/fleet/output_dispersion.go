@@ -9,7 +9,7 @@ import (
 )
 
 // The spread of output lengths behind the KV a resident request holds
-// (issues #276, #433), read one way for every analyzer: the saturation
+// (issues ev-shindin/llm-scaling-manager#276, ev-shindin/llm-scaling-manager#433), read one way for every analyzer: the saturation
 // analyzer's fleet, the slo analyzer's fleet and the throughput analyzer's
 // variant each pass the rows they price as include, and their own weights
 // as opts.

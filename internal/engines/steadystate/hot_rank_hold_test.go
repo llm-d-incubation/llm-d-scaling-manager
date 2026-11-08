@@ -17,7 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #150, the hot-rank hold, through the engine: the saturation analyzer
+// Issue ev-shindin/llm-scaling-manager#150, the hot-rank hold, through the engine: the saturation analyzer
 // prices the pods, and buildNamedResult turns its demand into the required
 // and spare capacity the optimizer acts on. A replica whose busiest engine
 // rank is full keeps its capacity; the other replicas' spare is still

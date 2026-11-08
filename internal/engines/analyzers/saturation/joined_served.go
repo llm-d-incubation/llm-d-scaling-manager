@@ -9,7 +9,7 @@ import (
 )
 
 // SwitchJoinedFromFirstServed is the replay switch for the clock that also
-// starts at a replica's first return of load (#392); on from the constructor.
+// starts at a replica's first return of load (ev-shindin/llm-scaling-manager#392); on from the constructor.
 // A replay turns it off (SetSwitchesForReplay), and the joined test ages a
 // replica from its Ready time and first sight alone, as before.
 //

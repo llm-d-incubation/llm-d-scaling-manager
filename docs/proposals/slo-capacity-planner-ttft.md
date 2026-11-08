@@ -733,7 +733,7 @@ and 4 pooled (its 7.95 ms intercept plus run 4's least overhead 2.91 ms,
 `TestQuadratic_Runs3And4PooledGiveA`): no golden replays the two runs
 together, so the figure is taken from that test.
 
-Before #475 (the curved `a`) merged, run 4's `a` was the line's 3.74 ms and
+Before ev-shindin/llm-scaling-manager#475 (the curved `a`) merged, run 4's `a` was the line's 3.74 ms and
 run 3's refusal `NonPositiveIntercept`. The rows priced at run 4's `a` moved
 with it, by its 7.84 ms: 12 of 14 light-load points were under, 7 beyond the
 bucket; now 11, 4 beyond the bucket. No other row moved.
@@ -853,15 +853,15 @@ true quantile lies.
   where it matters. A closed loop does not test it.
 - **The decode side and the union bound** need a run that fits a decode ITL
   line (decode KV above 0.1).
-- **PR #477** (per-pod-count `f`) changes nothing here: every compared level
+- **PR ev-shindin/llm-scaling-manager#477** (per-pod-count `f`) changes nothing here: every compared level
   is one pod. P1 still refuses `a` on runs 3 and 2 alone, so their levels
   rest on the pooled figure.
 
 ## As built (P3 after P2)
 
-[P2](#as-built-p2) (PR #482) priced P3 on the four prefill-stress goldens
+[P2](#as-built-p2) (PR ev-shindin/llm-scaling-manager#482) priced P3 on the four prefill-stress goldens
 and found it under the router's TTFT at 11 of 14 light-load points (12
-before #475 raised run 4's `a`), and at a tenth of it at run 2's 37k
+before ev-shindin/llm-scaling-manager#475 raised run 4's `a`), and at a tenth of it at run 2's 37k
 level. This change makes three model changes. Each errs toward
 more replicas, and none is fitted to those recordings.
 `UnvalidatedTTFT` stays on every figure.
@@ -968,12 +968,12 @@ is 9.1% short at `ρ` 0.5, 10% at 0.55, 14% at 0.7 and 25% at 0.85.
 ### The validation table after the change
 
 `TestTTFTValidation_AgainstTheRouter`, priced as [P2](#how-it-is-priced) prices it
-(`V_P` from run 2, `a` from run 4 or #475, flow control off, no decode
+(`V_P` from run 2, `a` from run 4 or ev-shindin/llm-scaling-manager#475, flow control off, no decode
 line), plus three inputs:
 
 - the decode engine's mean `AvgTTFT` over the level, at the level's prompt;
 - the curve: run 4's own fit (main's P1 fits a quadratic on run 4), and
-  #475's pooled `b` 7.1815e-7, `c` 2.0280e-10 for runs 3 and 2, where main
+  ev-shindin/llm-scaling-manager#475's pooled `b` 7.1815e-7, `c` 2.0280e-10 for runs 3 and 2, where main
   fits none;
 - `V_P`'s prompt: run 2's `VPPromptTokens`, 31,816.
 
@@ -995,7 +995,7 @@ The mark is S1's: more than 10% under fails (UNDER), more than 25% over fails
 
 At the sent spread (cv 0.058), the light-load points under the mark fall
 from 11 of 14 in [P2's table](#the-result-table) (12 at 602054e98, before
-#475 raised run 4's `a` from 3.74 to 11.58 ms) to 9, and those beyond the
+ev-shindin/llm-scaling-manager#475 raised run 4's `a` from 3.74 to 11.58 ms) to 9, and those beyond the
 bucket from 4 (7) to 2. The ratios of the points still under rise from
 0.51–0.81 (0.35–0.75) to 0.66–0.79, and the three
 that now pass read 0.94 to 1.11. Run 2's 37k level, priced at 2.6 s
@@ -1140,15 +1140,15 @@ The CLI has no switch, and its goldens carry the fall-back: their recordings rea
 no decode TTFT, so `DecodeTermOmitted`, `RouterHopAssumed` and 20 ms. A refusal, or
 a move of 25%, that an assumed term alone decides is named on the `assumed` row.
 
-### What #482 took from this change
+### What ev-shindin/llm-scaling-manager#482 took from this change
 
-#482 merged main with this change and updated `ttft_validation_test.go`
+ev-shindin/llm-scaling-manager#482 merged main with this change and updated `ttft_validation_test.go`
 (its frozen table is this section's) and the [P2](#as-built-p2) text:
 
 1. `p1Line` gains `vpPromptTokens`, `aModel`, `aSlope` and `aCurve`, and
    `estimate()` maps them to `VPPromptTokens`, `AModel`, `ASlope` and
    `ACurve`.
-2. Constants `pr475B = 7.1815e-07` and `pr475C = 2.0280e-10` (#475's pooled
+2. Constants `pr475B = 7.1815e-07` and `pr475C = 2.0280e-10` (ev-shindin/llm-scaling-manager#475's pooled
    curve, `TestQuadratic_Runs3And4PooledGiveA`). `ttftPrefill` takes the
    fixture's own curve where its P1 fits a quadratic (run 4), else these.
 3. `ttftFleetAt` takes the level's decode-engine TTFT and passes
@@ -1161,8 +1161,8 @@ a move of 25%, that an assumed term alone decides is named on the `assumed` row.
    0.01 to 0.02. The 37k level reads 0.0186 with the decode term in the
    fleet (it was 0.0082). The direction check is unchanged.
 6. Independently of this change, `P1OnTheGoldens` already fails on main
-   since #475 merged: run 3's `a` refusal is `NoShortPrompts`, not
-   `NonPositiveIntercept`, and run 4's `a` is 11.58 ms, not 3.74 ms. #482
+   since ev-shindin/llm-scaling-manager#475 merged: run 3's `a` refusal is `NoShortPrompts`, not
+   `NonPositiveIntercept`, and run 4's `a` is 11.58 ms, not 3.74 ms. ev-shindin/llm-scaling-manager#482
    must take these whatever happens to this change. Run 4's levels are then
    priced at 11.58 ms.
 
@@ -1559,7 +1559,7 @@ empty queue, so one quiet pod beside busy ones says nothing. What S1 does at eac
 | --- | --- | --- |
 | Quiet this cycle | The mean of the quiet cycles of the last 5 minutes | |
 | Busy, or no reading, for up to 5 minutes (`HeldDecodeAge`) | The same, held | `TransferHeld` |
-| Busy past 5 minutes | Every row's mean: the #494 floor rises again | |
+| Busy past 5 minutes | Every row's mean: the ev-shindin/llm-scaling-manager#494 floor rises again | |
 | No reading past 5 minutes | None | `TransferOmitted` |
 | Accelerator or engine arguments changed | The window starts over | |
 

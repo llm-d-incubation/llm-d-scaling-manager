@@ -37,7 +37,7 @@ func TestARolloutWithNoFigurePricesASaturatedReadingForItsCycle(t *testing.T) {
 
 // A bound the export disarms to carry a new previous figure takes its legacy
 // borrow clock with it. A build that reads only K2BorrowedSince and PriorK2
-// (main, #151) ran the new figure on the old borrow's clock, five hours into
+// (main, ev-shindin/llm-scaling-manager#151) ran the new figure on the old borrow's clock, five hours into
 // its relaxation, and relaxed it early.
 func TestAnExportedPreviousFigureLeavesNoLegacyClock(t *testing.T) {
 	a, own, _, clock := lbProcess(t, 4000)

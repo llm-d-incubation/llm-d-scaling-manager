@@ -269,7 +269,7 @@ func TestLenderReleaseUnits(t *testing.T) {
 	})
 }
 
-// PR #203 review: a release is sized to what unblocks the lender, net of
+// PR ev-shindin/llm-scaling-manager#203 review: a release is sized to what unblocks the lender, net of
 // everything already covering it, and handed back only when it can be.
 func TestLenderReleaseSizing(t *testing.T) {
 	t0 := time.Unix(50000, 0)
@@ -482,7 +482,7 @@ func TestLenderReleaseSizing(t *testing.T) {
 	})
 }
 
-// PR #203 review KC2, KC3, WP3, WP7 and the ledger minors: when a release
+// PR ev-shindin/llm-scaling-manager#203 review KC2, KC3, WP3, WP7 and the ledger minors: when a release
 // in flight clears, and what a restored one may pin.
 func TestLenderReleaseLanding(t *testing.T) {
 	t0 := time.Unix(50000, 0)
@@ -541,7 +541,7 @@ func TestLenderReleaseLanding(t *testing.T) {
 		}
 	})
 
-	// PR #203 re-check (minor 1): a taken release, restored across restarts
+	// PR ev-shindin/llm-scaling-manager#203 re-check (minor 1): a taken release, restored across restarts
 	// as it may be, must not starve the lender for good.
 	t.Run("a taken release ends after twice the timeout, and one new release may follow", func(t *testing.T) {
 		gov := NewBorrowGovernor(settings)
@@ -579,7 +579,7 @@ func TestLenderReleaseLanding(t *testing.T) {
 		if _, ds := cycleOf(gov, gone, w, pd(1, 4)); lowered(ds)["d"] != 0 {
 			t.Errorf("lowered %v past twice the timeout, want the pins gone", lowered(ds))
 		}
-		// PR #203 re-check (minor 2): the pair is left half lowered; say so.
+		// PR ev-shindin/llm-scaling-manager#203 re-check (minor 2): the pair is left half lowered; say so.
 		if got := gov.LenderReport().HalfLowered; len(got) != 1 || got[0] != "b/pd" {
 			t.Errorf("half lowered %v, want b/pd reported", got)
 		}
@@ -639,7 +639,7 @@ func TestLenderReleaseLanding(t *testing.T) {
 	})
 }
 
-// PR #203 re-check: what Kueue may still do for the lender itself, and what
+// PR ev-shindin/llm-scaling-manager#203 re-check: what Kueue may still do for the lender itself, and what
 // the cycle frees that never reaches it.
 func TestLenderReleaseRecheck(t *testing.T) {
 	t0 := time.Unix(50000, 0)

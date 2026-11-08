@@ -46,7 +46,7 @@ var _ = Describe("saturatedCompletionRate for prefill", func() {
 
 	It("falls back to the request rate when no token rate is published", func() {
 		// SGLang has no per-stage prefill counter at all
-		// (sgl-project/sglang issue #14303), and neither does an older vLLM.
+		// (sgl-project/sglang#14303), and neither does an older vLLM.
 		// The request rate is what this always used and is better than no
 		// window, which leaves the role with no floor.
 		mu, ok := saturatedCompletionRate(prefillReplica(0, 4.5), domain.RolePrefill, 6000, 30000)

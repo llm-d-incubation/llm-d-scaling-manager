@@ -59,7 +59,7 @@ func (v spyView) Replica(model string, key settle.Key) (settle.Replica, bool) {
 // builder touches the capacity store; and all of it comes before saturation
 // analyzes. The builder kept the order of the code it replaced, which keeps
 // the log lines where they were; learner PR 1 put the settle tracker ahead of
-// both (#345).
+// both (ev-shindin/llm-scaling-manager#345).
 func TestInputBuilder_RunsAfterTheSettleAndTheLoadBalanceAndBeforeAnalyze(t *testing.T) {
 	e, _ := engineConfigEngine(t)
 	var calls []string

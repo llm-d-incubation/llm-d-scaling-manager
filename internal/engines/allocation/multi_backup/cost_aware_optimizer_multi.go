@@ -139,7 +139,7 @@ func scaleDownVariantSet(
 			n = removable
 		}
 		// cheapest-at-1: the last (cheapest) variant is protected at 1 only when no
-		// more-expensive variant still holds replicas (#1237's positional rule).
+		// more-expensive variant still holds replicas (llm-d/llm-d-workload-variant-autoscaler#1237's positional rule).
 		if i == len(sortedVariants)-1 && current-n < 1 && !anyHasReplicas(sortedVariants[:i], targets) {
 			n = current - 1
 		}
@@ -159,7 +159,7 @@ func scaleDownVariantSet(
 //  3. Tie: variant name ascending — full determinism.
 //
 // With a single analyzer (Score=1) this reduces to Cost-desc then PRC-asc, i.e.
-// #1237's existing tie-break.
+// llm-d/llm-d-workload-variant-autoscaler#1237's existing tie-break.
 func sortVariantsForScaleDown(s []NamedAnalyzerResult, roleVCs []variantRecord) []variantRecord {
 	weighted := func(name string) float64 {
 		sum := 0.0

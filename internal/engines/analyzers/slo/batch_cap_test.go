@@ -13,7 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Issue #420: the analyzer reads the cap the llm-d.ai/max-num-seqs
+// Issue ev-shindin/llm-scaling-manager#420: the analyzer reads the cap the llm-d.ai/max-num-seqs
 // annotation declares where the engine's flags state none, for the line's
 // admission at the cap and for the cap a replica is priced at.
 
@@ -54,15 +54,15 @@ func cappedLine(t *testing.T, params capacity.EngineParams, edit func(*Analyzer)
 }
 
 // A replica at the cap its scale target declares teaches the line from
-// above the band, as one at the cap its flags state does (#287). Before
-// #420 the reading counted as above the band.
+// above the band, as one at the cap its flags state does (ev-shindin/llm-scaling-manager#287). Before
+// ev-shindin/llm-scaling-manager#420 the reading counted as above the band.
 func TestBatchCap_TheLineTakesAReplicaAtItsDeclaredCap(t *testing.T) {
 	got := cappedLine(t, declared(), nil)
 	assert.Equal(t, 1, got.Capped)
 	assert.Zero(t, got.AboveBand)
 }
 
-// The switch off reads the flags' cap alone, as before #420.
+// The switch off reads the flags' cap alone, as before ev-shindin/llm-scaling-manager#420.
 func TestBatchCap_TheAdmissionSwitchPicksTheSource(t *testing.T) {
 	got := cappedLine(t, declared(), func(a *Analyzer) { a.batchCapAdmission = false })
 	assert.Zero(t, got.Capped)
@@ -92,13 +92,13 @@ func pricedAt(t *testing.T, params capacity.EngineParams, edit func(*Analyzer)) 
 // A replica is priced at the cap its scale target declares. k = 0.6 implies
 // 120 sequences; the engine admits 64, so the cache never fills past
 // 64 * 500 / 100000 = 0.32, and 64 sequences advance at ITL(0.32). Before
-// #420 the default of 256 bounded it, and the target alone priced it at
+// ev-shindin/llm-scaling-manager#420 the default of 256 bounded it, and the target alone priced it at
 // 120 sequences: 1.6x what the engine runs.
 func TestBatchCap_AReplicaIsPricedAtItsDeclaredCap(t *testing.T) {
 	assert.InDelta(t, 64/testLine.ITLAt(0.32), pricedAt(t, declared(), nil), 1e-6)
 }
 
-// The switch off prices at the flags' cap or the default, as before #420.
+// The switch off prices at the flags' cap or the default, as before ev-shindin/llm-scaling-manager#420.
 func TestBatchCap_ThePerRankSwitchPicksTheSource(t *testing.T) {
 	off := func(a *Analyzer) { a.batchCapPerRank = false }
 	assert.InDelta(t, 120/0.044, pricedAt(t, declared(), off), 1e-6)

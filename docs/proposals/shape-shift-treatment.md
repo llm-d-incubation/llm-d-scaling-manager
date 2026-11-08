@@ -27,9 +27,9 @@ dilution). Under a backlog the two definitions differ by the queue's depth.
 
 | pass | image | what the floor did at the switch | client p95 / p99, whole pass | client p95, requests arriving 20-25 min | engine (decode) p95, 20-25 min | engine (decode) p95, 36-38 min |
 |---|---|---|---|---|---|---|
-| 1 | #77-#80 | fresh replicas *borrowed* the 1000-token shape's mu (4.38 vs 1.4 live); target 10 → 4 under a growing backlog, flapping for ten minutes | 85 / 181 s | 190 s | 37.9 s | 0.09 s |
-| 2 | + #84 (own readings outvote borrowed) | fresh replicas' *own* readings sat in another bucket (`long` 3.08 vs `xxlong` 1.42); median 2.94; released 10 → 3 where 4-5 was needed | 77 / 164 s | 171 s | 31.3 s | 36.1 s |
-| 3 | + #85 (one bucket per role) | the **drain burst** -- the batch admitted at the switch finishing together at 2.7-3.5 req/s against 1.3-1.5 sustained -- was recorded as mu (in an empty bucket and, when the fleet's bucket flapped back, on top of an established one), and the floor alternated between the two; released 10 → 3 | 56 / 107 s | 114 s | 21.9 s | 35.5 s |
+| 1 | ev-shindin/llm-scaling-manager#77 to ev-shindin/llm-scaling-manager#80 | fresh replicas *borrowed* the 1000-token shape's mu (4.38 vs 1.4 live); target 10 → 4 under a growing backlog, flapping for ten minutes | 85 / 181 s | 190 s | 37.9 s | 0.09 s |
+| 2 | + ev-shindin/llm-scaling-manager#84 (own readings outvote borrowed) | fresh replicas' *own* readings sat in another bucket (`long` 3.08 vs `xxlong` 1.42); median 2.94; released 10 → 3 where 4-5 was needed | 77 / 164 s | 171 s | 31.3 s | 36.1 s |
+| 3 | + ev-shindin/llm-scaling-manager#85 (one bucket per role) | the **drain burst** -- the batch admitted at the switch finishing together at 2.7-3.5 req/s against 1.3-1.5 sustained -- was recorded as mu (in an empty bucket and, when the fleet's bucket flapped back, on top of an established one), and the floor alternated between the two; released 10 → 3 | 56 / 107 s | 114 s | 21.9 s | 35.5 s |
 
 Each fix removed the mechanism it targeted and left the next one standing;
 what users saw at the switch improved by 1.7x across the three, and what
@@ -199,10 +199,10 @@ yet on `main`; the 1000/4000 pair is):
   release it. Tokens generated since the running count last rose, over the
   running count, is a lower bound on the `O` of what is in flight;
   `tokens completed / requests completed` over the last window is the `O`
-  of what just finished, weighted by rate as #85 does.
+  of what just finished, weighted by rate as ev-shindin/llm-scaling-manager#85 does.
 
 With those, the analyzer carries a fleet shape `(I, O)` per role per cycle
-(#85's `fleetOutputLength` is the `O` half; the throughput analyzer's
+(ev-shindin/llm-scaling-manager#85's `fleetOutputLength` is the `O` half; the throughput analyzer's
 `ShapeTracker` is the tolerance-based change detector, per variant today,
 per role in the target), and can raise a **shape-change event** when either
 moves past the tolerance: from that cycle, (a) the previous shape's
@@ -231,7 +231,7 @@ what the model predicts and no run has tested.
 | **`I` down** (8000 → 1000) | prefill relaxes; decode can batch more | fine | measured only as the confounded half of the first row |
 
 The queue-at-the-gateway attribution is worth its own line: on a P/D fleet
-the EPP queue is charged to decode (its KV) and dropped from prefill (#76,
+the EPP queue is charged to decode (its KV) and dropped from prefill (ev-shindin/llm-scaling-manager#76,
 the right call for a decode-bound queue), but under an `I`-up shift the
 queue *is* prefill's. The arriving input length above is the discriminator:
 a queue whose prompts are long while decode has free KV is prefill's
@@ -249,7 +249,7 @@ note, and item 2 below is built for decode first.
 The throughput analyzer already has the `ShapeTracker`, the ITL model with
 its two-tier fit and the GPS verification; the saturation analyzer has the
 capacity learning, the role attribution and the hold discipline. Items 1
-and 2 are a merge of those halves, not new code, and PR #87 says how the
+and 2 are a merge of those halves, not new code, and PR ev-shindin/llm-scaling-manager#87 says how the
 code has to be arranged for that merge to be small.
 
 1. **The floor's mu from the ITL line.** Record `(k, ITL)` per saturated
@@ -275,11 +275,11 @@ code has to be arranged for that merge to be small.
    `(I, O, rate)` trace and produced the 1000/6000 one; what is missing is
    the scorecard as a repo tool (the per-window scripts used for this
    document live outside the repo today) and the colleague's
-   `report.py`/results bundle as its base (PR #87).
+   `report.py`/results bundle as its base (PR ev-shindin/llm-scaling-manager#87).
 
 Items 1 and 2 are each one PR against the analyzer packages; item 3 is
 benchmark tooling and can proceed in parallel. None of them changes the
-actuation path or the ScaledObject; the HPA policy question (#55) is
+actuation path or the ScaledObject; the HPA policy question (ev-shindin/llm-scaling-manager#55) is
 orthogonal and stays a backstop.
 
 ## What this does not cover
@@ -289,5 +289,5 @@ orthogonal and stays a backstop.
   cost, not a shape problem; pass B (warm) of the same trace is its
   measurement, and it has not been run on this trace.
 - Replica start time is out of scope here and no longer the lever: every
-  start on passes 2 and 3 was 55-69 s with the seeded node-local cache (#83).
+  start on passes 2 and 3 was 55-69 s with the seeded node-local cache (ev-shindin/llm-scaling-manager#83).
 - Prefill's throughput model, per the section above.

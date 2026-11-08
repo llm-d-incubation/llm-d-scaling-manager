@@ -1038,7 +1038,7 @@ else
 fi
 
 # The printed commands must run as printed. Without LLMSM_NS, apply looks for the
-# scaler in the default controller namespace, finds none and exits 2 (#358).
+# scaler in the default controller namespace, finds none and exits 2 (ev-shindin/llm-scaling-manager#358).
 out="$(SO_NONE=1 so_report cluster)"
 if printf '%s' "$out" | grep -q 'make scaledobjects-plan SCOPE=cluster LLMSM_NS=scaling-manager-system LLMSM_DEFAULT_SO_PLAN=' \
     && printf '%s' "$out" | grep -q 'make scaledobjects-apply SCOPE=cluster LLMSM_NS=scaling-manager-system LLMSM_DEFAULT_SO_PLAN='; then

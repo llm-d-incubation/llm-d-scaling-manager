@@ -12,7 +12,7 @@ assignees:
 - Enhancement Proposal: <!-- link to the full proposal file (in docs/proposals); if none yet, link to PR - The proposal answers the 'why' and 'what' of the enhancement -->
 - PRs by stage and milestone:
   - [ ] Alpha - v0.xx
-    - [ ] Code (`ev-shindin/llm-scaling-manager`) update PR(s):
+    - [ ] Code (`llm-d-incubation/llm-d-scaling-manager`) update PR(s):
     - [ ] Docs (`docs/`) update PR(s):
     - [ ] Guides (`docs/guides/`) update PR(s):
 
@@ -23,11 +23,11 @@ assignees:
 
 <!-- Uncomment these as you prepare the enhancement for the next stage
 - [ ] Beta - v0.xx
-  - [ ] Code (`ev-shindin/llm-scaling-manager`) update PR(s):
+  - [ ] Code (`llm-d-incubation/llm-d-scaling-manager`) update PR(s):
   - [ ] Docs (`docs/`) update PR(s):
   - [ ] Guides (`docs/guides/`) update PR(s):
 - [ ] Stable - v0.xx
-  - [ ] Code (`ev-shindin/llm-scaling-manager`) update PR(s):
+  - [ ] Code (`llm-d-incubation/llm-d-scaling-manager`) update PR(s):
   - [ ] Docs (`docs/`) update PR(s):
   - [ ] Guides (`docs/guides/`) update PR(s):
 -->

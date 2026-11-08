@@ -147,7 +147,7 @@ type EngineParams struct {
 	// unknown. It is read only where the flags state no cap
 	// (ExplicitMaxNumSeqs is 0): what the flags state is what the engine
 	// runs. ExplicitMaxNumSeqs and BatchCap do not read it; StatedBatchCap
-	// does, and the analyzers read the cap through that (issue #420).
+	// does, and the analyzers read the cap through that (issue ev-shindin/llm-scaling-manager#420).
 	//
 	// Compared for capacity (IsCapacityCompatible) where it is read, so two
 	// variants that declare different caps never price each other. Not hashed into the
@@ -381,7 +381,7 @@ func (p *EngineParams) Complete() bool {
 // the ITL fit admits a reading above its band only for a replica at its cap
 // (itl.Admission), and a P/D decode at its cap keeps its full queue
 // (ReplicaMetrics.AtBatchCap). The same callers read this alone with their
-// replay switch off (issue #420).
+// replay switch off (issue ev-shindin/llm-scaling-manager#420).
 //
 // --max-num-active-seqs alone is enough: vLLM refuses one above
 // max_num_seqs, so it is the cap whatever max_num_seqs is, stated or not.
@@ -448,7 +448,7 @@ func (p *EngineParams) BatchCap() int64 {
 
 // SpeculatesPerStep reports whether the flags configure speculative decoding
 // (or MTP) on vLLM, whose inter-token latency is then the engine step time
-// rather than the time per token (issue #274). SGLang's latency is already
+// rather than the time per token (issue ev-shindin/llm-scaling-manager#274). SGLang's latency is already
 // per token, so its speculative flags do not count.
 func (p *EngineParams) SpeculatesPerStep() bool {
 	return p != nil && p.Engine == inferenceengine.EngineVLLM && p.SpeculativeConfig != ""

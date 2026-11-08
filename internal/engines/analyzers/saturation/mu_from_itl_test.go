@@ -206,7 +206,7 @@ var _ = Describe("deriveMu", func() {
 			"and that is a number the engine will not admit")
 	})
 
-	// Issue #335: vLLM runs at most --max-num-active-seqs at once, so the
+	// Issue ev-shindin/llm-scaling-manager#335: vLLM runs at most --max-num-active-seqs at once, so the
 	// resident sequences are capped at the lower of it and max_num_seqs, per
 	// rank. The short shape's cache implies thousands of sequences; the long
 	// one's implies fewer than 64.

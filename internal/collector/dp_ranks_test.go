@@ -21,7 +21,7 @@ import (
 	llmdvariant "github.com/llm-d-incubation/llm-d-scaling-manager/internal/variant"
 )
 
-// One pod of eight data-parallel ranks, the layout of issue #150, measured two
+// One pod of eight data-parallel ranks, the layout of issue ev-shindin/llm-scaling-manager#150, measured two
 // ways. These are the per-rank figures of dp8-0 in the promtool fixture
 // registration/testdata/per-pod-queries.test.yaml: rank 7 is hot, rank 5 idle.
 type dpRank struct {
@@ -65,7 +65,7 @@ var dp8Folded = map[string]float64{
 	registration.QueryAvgITL:                0.04242754888268156,
 	registration.QueryAvgTTFT:               0.4375,
 	registration.QueryAvgServiceTime:        14,
-	// Already per-pod sums before issue #150, unchanged by it.
+	// Already per-pod sums before issue ev-shindin/llm-scaling-manager#150, unchanged by it.
 	registration.QueryRequestRate:         8,
 	registration.QueryGenerationTokenRate: 7168,
 }

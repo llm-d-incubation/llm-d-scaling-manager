@@ -587,7 +587,7 @@ func createUnownedReplica(namespace, deploymentName, podName string) {
 	// in the full suite the two schedulable kind nodes are carrying everything
 	// else the run has left behind. The pod then sits Pending until the spec
 	// times out at 300s and reports "Pending to equal Running" -- a scheduling
-	// shortage wearing a scaling bug's clothes. Seen on PR #39, where 90 of 91
+	// shortage wearing a scaling bug's clothes. Seen on PR ev-shindin/llm-scaling-manager#39, where 90 of 91
 	// specs passed and this was the only failure.
 	//
 	// A GPU request, if the template carries one, is deliberately NOT reduced:

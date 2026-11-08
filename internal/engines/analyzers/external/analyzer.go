@@ -1,6 +1,6 @@
 // Package external implements a built-in analyzer that turns a config-driven
 // PromQL definition into a domain.Analyzer, so the scaling manager can be extended with new
-// scaling signals without writing Go (issue #1455).
+// scaling signals without writing Go (issue llm-d/llm-d-workload-variant-autoscaler#1455).
 //
 // An external analyzer mirrors KEDA scaler vocabulary: a demand query (the total
 // signal D) and a per-replica target (threshold P), such that desired replicas =

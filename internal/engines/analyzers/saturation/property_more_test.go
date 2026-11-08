@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// The cases #389 listed as gaps on the classes it had: liveness for 8-GPU
+// The cases ev-shindin/llm-scaling-manager#389 listed as gaps on the classes it had: liveness for 8-GPU
 // data-parallel ranks, a prefill role and the ITL line; scale over GPUs per
 // replica and output length; the time-base family for the classes it
 // exempted; and the prefill bound through a P/D Analyze.
@@ -94,7 +94,7 @@ func checkK2Ranks(ranks, gpus int) func(uint64) error {
 }
 
 // checkK2Prefill: on a P/D model whose decode is not saturated, a prefill
-// replica full and queued learns k2 within 3 min (#144: prefill never
+// replica full and queued learns k2 within 3 min (ev-shindin/llm-scaling-manager#144: prefill never
 // learns).
 func checkK2Prefill(seed uint64) error {
 	r := propRand(seed)
@@ -592,7 +592,7 @@ func checkBoundAnalyze(factor float64) func(uint64) error {
 // checkBoundAnalyzeOn is checkBoundAnalyze with decode full and queued when
 // decodeFull is set -- the fleet whose prefill readings computeK2 discards as
 // decode's back-pressure, and which learned no prefill mu at all before the
-// bound (#144) -- under pol's enablePrefillThroughputBound.
+// bound (ev-shindin/llm-scaling-manager#144) -- under pol's enablePrefillThroughputBound.
 func checkBoundAnalyzeOn(factor float64, decodeFull bool, pol *config.ScalingPolicy) func(uint64) error {
 	return func(seed uint64) error {
 		r := propRand(seed)

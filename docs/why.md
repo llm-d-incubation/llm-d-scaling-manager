@@ -203,4 +203,4 @@ then uninstall ([upgrade and uninstall](reference/upgrade-and-uninstall.md)).
 Started in 2026 from the code of
 [llm-d's workload-variant-autoscaler](https://github.com/llm-d/llm-d-workload-variant-autoscaler)
 and since redesigned; not affiliated with or endorsed by llm-d. Apache 2.0. Questions and
-bugs: [GitHub issues](https://github.com/ev-shindin/llm-scaling-manager/issues).
+bugs: [GitHub issues](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues).

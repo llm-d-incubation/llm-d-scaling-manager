@@ -19,7 +19,7 @@ const perPodQueryFixture = "testdata/per-pod-queries.test.yaml"
 
 // perPodVLLMQueries are the vLLM per-pod queries that read a series vLLM
 // exports once per data-parallel rank, and so must fold the ranks of a pod
-// (issue #150). Each is evaluated by the promtool fixture.
+// (issue ev-shindin/llm-scaling-manager#150). Each is evaluated by the promtool fixture.
 //
 // The three rates summed per pod (request rate, generation token rate,
 // prefill computed-token rate) are listed too: a sum folds the ranks, but
@@ -125,7 +125,7 @@ func TestPerPodQueriesMatchPromtoolFixture(t *testing.T) {
 
 // The structural rule for each query, stated where a reader of the registry
 // finds it. The fixture proves the numbers; this names the mistake: a max over
-// a pod's ranks priced the busiest rank as the whole pod (issue #150). The two
+// a pod's ranks priced the busiest rank as the whole pod (issue ev-shindin/llm-scaling-manager#150). The two
 // busiest-rank queries are the exception by name, and the only ones.
 func TestPerPodQueriesFoldDataParallelRanks(t *testing.T) {
 	built := builtPerPodQueries(t, "llm")

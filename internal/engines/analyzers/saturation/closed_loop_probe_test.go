@@ -283,7 +283,7 @@ func TestClosedLoopProbe_ALoadStepOnEqualReplicasSettlesAtNeed(t *testing.T) {
 	require.Equal(t, learn.Source(domain.ServiceRateSourceMeasured), r.muSource, "premise: the floor priced the measured mu")
 }
 
-// #282 review round 3 (H1): one replica degraded to 0.3 of its siblings'
+// ev-shindin/llm-scaling-manager#282 review round 3 (H1): one replica degraded to 0.3 of its siblings'
 // rate, queued, while they serve unqueued; then it recovers. Its low rate
 // counts by its weight, with the unread siblings at what they serve over the
 // target (mu_slow_pod.go), so the fleet grows while it is slow, to 24 at its
@@ -294,7 +294,7 @@ func TestClosedLoopProbe_ALoadStepOnEqualReplicasSettlesAtNeed(t *testing.T) {
 //
 // Measured (60 min): need 18 (bound 21.7), peak 24, at 20 from 21.5 min to
 // the end. The weighing's hold is what keeps the peak at 24: read fresh
-// (h := mean in weighUnreadReplicas) it peaked at 28. Before #495, when the
+// (h := mean in weighUnreadReplicas) it peaked at 28. Before ev-shindin/llm-scaling-manager#495, when the
 // served bound refused the reading, peak 19 and 18 from 27 min.
 func TestClosedLoopProbe_OneSlowReplicaUnderHalfItsSiblingsDoesNotSealTheFleet(t *testing.T) {
 	r := runProbe(t, slowReplicaCase(0.3))
@@ -306,7 +306,7 @@ func TestClosedLoopProbe_OneSlowReplicaUnderHalfItsSiblingsDoesNotSealTheFleet(t
 }
 
 // The self-sealing low mu of analyzer-learner.md 3.4 (cost side), fixed on
-// #495. The same slow replica at 0.55 of its siblings' rate, with no line:
+// ev-shindin/llm-scaling-manager#495. The same slow replica at 0.55 of its siblings' rate, with no line:
 // before, its rate alone became mu (12.8 / 0.55 / 0.85 = 27.4), the fleet
 // went to 29 and 28, nothing queued at 28, and nothing rewrote the figure --
 // over-ordered for good. Now the sample counts the fifteen unread siblings
@@ -318,7 +318,7 @@ func TestClosedLoopProbe_OneSlowReplicaUnderHalfItsSiblingsDoesNotSealTheFleet(t
 // Measured (60 min): need 18 (bound 21.7), 21 from 1.75 min, 20 from 16.25
 // min to the end; peak 21. The margin to the bound is zero replicas: 22
 // would be over it. Negative control: with SwitchMuUnreadAtTarget off the
-// peak is 29 and the fleet stays at 28 for good, as before #495.
+// peak is 29 and the fleet stays at 28 for good, as before ev-shindin/llm-scaling-manager#495.
 func TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound(t *testing.T) {
 	r := runProbe(t, slowReplicaCase(0.55))
 	t.Logf("need %d, final %d, peak %d; fleet by cycle %v", r.need, r.final, r.peak, r.trace)
@@ -344,7 +344,7 @@ func TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound(t *t
 // the shortest-queue limit the four's queue is held to a couple of requests
 // and the case's premise is gone: measured there, the fleet peaks at 45 for
 // a need of 17 at the return and sits 3m30s under need, occupancy reading
-// every replica full while the return's queue drains (cause B, #520).
+// every replica full while the return's queue drains (cause B, ev-shindin/llm-scaling-manager#520).
 // Then a lull at 2 req/s from 10 to 45 min, which queues nothing for longer
 // than lowHoldFor, and the load returns at 12. The figure is not under what
 // the fleet serves in the lull (a fleet at a fraction of its limit serves a
@@ -394,7 +394,7 @@ func TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure(t *testing.T) 
 // queue-blind router: 0.8 each, so the slow one queues and the rest serve
 // unqueued at KV 0.76, under the 0.8 line. The shortest-queue limit would
 // send the slow one's excess to its siblings and hold its queue to a few
-// requests, too short to be read; the real router lies between, and #282 H1
+// requests, too short to be read; the real router lies between, and ev-shindin/llm-scaling-manager#282 H1
 // saw a slow replica queue behind it. The horizon is 60 min, past lowHoldFor
 // (30 min) after the slow replica's last saturated reading and the 5 min
 // scale-down stabilization, so the run covers the minority rule's decision.
@@ -471,7 +471,7 @@ func TestClosedLoopProbe_ARestoredSnapshotCarriesTheFleetThroughARestart(t *test
 	require.Equal(t, control.underFor, r.underFor, "the snapshot restores what the floor prices from")
 }
 
-// Issue #520: the probe showed the analyzer only its Ready replicas, so the
+// Issue ev-shindin/llm-scaling-manager#520: the probe showed the analyzer only its Ready replicas, so the
 // floor's landing projection (floor.backlogAtLanding) credited none of the
 // replicas it had already ordered. Every cycle of a start re-priced the
 // whole queue as if nothing were coming, and the order grew with the queue
@@ -487,7 +487,7 @@ func TestClosedLoopProbe_ARestoredSnapshotCarriesTheFleetThroughARestart(t *test
 // floor's projection alone: at the shortest-queue limit the replicas that
 // join fill to the first four's queue at once, and occupancy orders past the
 // ceiling whether the starting replicas are shown or not (the
-// decode-step-start-463s-jsq ledger row, #520).
+// decode-step-start-463s-jsq ledger row, ev-shindin/llm-scaling-manager#520).
 func TestClosedLoopProbe_StartingReplicasAreCreditedNotReordered(t *testing.T) {
 	for _, c := range []struct {
 		start      time.Duration

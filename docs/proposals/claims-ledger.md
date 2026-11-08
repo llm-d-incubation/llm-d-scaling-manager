@@ -3,7 +3,7 @@
 - **Status:** proposed, revised after review (see [Review](#review)).
 - **Problem:** "this capacity is already spoken for" is kept in six places,
   each with its own keys, clocks and settle rules. Every limiter defect fixed
-  in #183, #184, #186 and #187 was one of those places missing a fact another
+  in ev-shindin/llm-scaling-manager#183, ev-shindin/llm-scaling-manager#184, ev-shindin/llm-scaling-manager#186 and ev-shindin/llm-scaling-manager#187 was one of those places missing a fact another
   one had.
 - **Decision:** one ledger of replica claims, written by every producer, and
   one view function both engines read capacity through. Claims stay separate
@@ -73,15 +73,15 @@ Each was fixed with a targeted change; the point is how many places each fix
 had to touch.
 
 1. **A wake ignored the borrowing cooldown** (AR1): it preempted a peer's 8
-   GPUs, timed out and did it again. #187 made it read `DefaultBorrowCooldowns`.
-2. **The no-hole safety net did not survive a restart** (AR2). #187 added
+   GPUs, timed out and did it again. ev-shindin/llm-scaling-manager#187 made it read `DefaultBorrowCooldowns`.
+2. **The no-hole safety net did not survive a restart** (AR2). ev-shindin/llm-scaling-manager#187 added
    `NoHole` to `BorrowLedger`.
 3. **A node was promised twice in one cycle** (WN5): a wake took the node the
-   steady pass had chosen but not yet recorded. #187 added `Provisional` and
+   steady pass had chosen but not yet recorded. ev-shindin/llm-scaling-manager#187 added `Provisional` and
    `Commit`.
 4. **A half-placed gang lost its hole** (WN2): nothing was held for a 16-GPU
-   group's worker once its leader landed. #187 added `partialSeen`.
-5. **A gated replica cancelled another workload's Kueue charge** (KU1): #186
+   group's worker once its leader landed. ev-shindin/llm-scaling-manager#187 added `partialSeen`.
+5. **A gated replica cancelled another workload's Kueue charge** (KU1): ev-shindin/llm-scaling-manager#186
    taught the quota inventory to read the gated pods (`SetGatedSource`), a
    seventh consumer of the same fact.
 
@@ -390,7 +390,7 @@ order](#landing-order).
   a wake whose view predates the claim gets `ErrStale`.
 - Observations without claims: a rollout surge and an evicted pod still
   gated are deducted with no claim covering them.
-- Every regression test added in #183, #184, #186 and #187 stays and passes
+- Every regression test added in ev-shindin/llm-scaling-manager#183, ev-shindin/llm-scaling-manager#184, ev-shindin/llm-scaling-manager#186 and ev-shindin/llm-scaling-manager#187 stays and passes
   unchanged; their names are the list of cases the ledger must cover.
 - The kind e2e suites for borrowing and scale-from-zero run on stages 3 and 4,
   with each flag on and off.

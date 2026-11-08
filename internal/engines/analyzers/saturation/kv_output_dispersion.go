@@ -1,6 +1,6 @@
 package saturation
 
-// The KV a resident request holds, with output lengths that vary (issue #276).
+// The KV a resident request holds, with output lengths that vary (issue ev-shindin/llm-scaling-manager#276).
 //
 // KVreq = ILeff + OL/2 is right when every request generates the same number
 // of tokens. When lengths vary, a long request stays resident longer, so a KV
@@ -30,7 +30,7 @@ package saturation
 // fleet shape, so it moves with mu.
 
 // SwitchKVPerRequestOutputDispersion is the replay switch for the spread of
-// output lengths in the KV per request (issue #276). On, the derived k2 and
+// output lengths in the KV per request (issue ev-shindin/llm-scaling-manager#276). On, the derived k2 and
 // the derived mu price a resident request at ILeff + D*OL/2, D the spread
 // read from the output-length histogram. Off, as before, at ILeff + OL/2.
 const SwitchKVPerRequestOutputDispersion = "kv-per-request-output-dispersion"

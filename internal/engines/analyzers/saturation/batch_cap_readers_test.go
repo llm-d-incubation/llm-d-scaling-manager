@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// Issue #420: the batch cap's readers besides P3 read the caps #399 added
+// Issue ev-shindin/llm-scaling-manager#420: the batch cap's readers besides P3 read the caps ev-shindin/llm-scaling-manager#399 added
 // where the engine's flags state none. Every reader reads the
 // llm-d.ai/max-num-seqs annotation; the learned cap reaches the derived mu
 // only, never a reader that asks whether a replica is AT its cap. Each
@@ -60,8 +60,8 @@ func cappedITLWindow(t *testing.T, params *capacity.EngineParams, running int, l
 }
 
 // A replica at the cap its scale target declares teaches the line from
-// above the band, as one at the cap its flags state does (issue #287).
-// Before #420 only the flags' cap reached the window: the declared cap was
+// above the band, as one at the cap its flags state does (issue ev-shindin/llm-scaling-manager#287).
+// Before ev-shindin/llm-scaling-manager#420 only the flags' cap reached the window: the declared cap was
 // read by P3 alone, and the reading counted as above the band.
 func TestBatchCapReaders_TheITLWindowTakesAReplicaAtItsDeclaredCap(t *testing.T) {
 	fields := cappedITLWindow(t, declaredParams(128), 128, false, nil)
@@ -117,7 +117,7 @@ func TestBatchCapReaders_ALearnedCapIsNotAnITLCap(t *testing.T) {
 	assert.Equal(t, confirmed, lc.at, "the reading confirms nothing")
 }
 
-// The switch off reads the flags' cap alone, as before #420.
+// The switch off reads the flags' cap alone, as before ev-shindin/llm-scaling-manager#420.
 func TestBatchCapReaders_TheITLAdmissionSwitchPicksTheSource(t *testing.T) {
 	off := func(a *SaturationAnalyzer) { a.batchCapITLAdmission = false }
 	fields := cappedITLWindow(t, declaredParams(128), 128, false, off)
@@ -132,7 +132,7 @@ func TestBatchCapReaders_TheITLAdmissionSwitchPicksTheSource(t *testing.T) {
 }
 
 // pdDecodeAtCap runs four cycles of a P/D decode replica holding running
-// sequences with every waiting request deferred (#287's shape), under
+// sequences with every waiting request deferred (ev-shindin/llm-scaling-manager#287's shape), under
 // params, with edit applied to the analyzer.
 func pdDecodeAtCap(t *testing.T, params *capacity.EngineParams, running int,
 	edit func(*SaturationAnalyzer)) (*SaturationAnalyzer, *domain.AnalyzerResult) {
@@ -176,7 +176,7 @@ func pdDecodeAtCapLearning(t *testing.T, params *capacity.EngineParams, running 
 
 // A P/D decode at the cap its scale target declares keeps its full queue,
 // as one at the cap its flags state does: at the cap every waiting request
-// reads deferred, and waits for a batch slot here (#287). Before #420 the
+// reads deferred, and waits for a batch slot here (ev-shindin/llm-scaling-manager#287). Before ev-shindin/llm-scaling-manager#420 the
 // view read the flags' cap alone, so an annotated decode at its cap dropped
 // the queue: no k2, and no queue demand.
 func TestBatchCapReaders_APDDecodeAtItsDeclaredCapKeepsTheFullQueue(t *testing.T) {
@@ -209,7 +209,7 @@ func TestBatchCapReaders_ALearnedCapIsNotADecodeViewCap(t *testing.T) {
 	assert.Equal(t, confirmed, learnedCapEntry(t, an, decodeVariant).at, "the in-flight queue confirms nothing")
 }
 
-// The switch off reads the flags' cap alone, as before #420.
+// The switch off reads the flags' cap alone, as before ev-shindin/llm-scaling-manager#420.
 func TestBatchCapReaders_TheDecodeViewSwitchPicksTheSource(t *testing.T) {
 	off := func(a *SaturationAnalyzer) { a.batchCapDecodeView = false }
 	a, res := pdDecodeAtCap(t, declaredParams(128), 128, off)
@@ -261,7 +261,7 @@ func derivedMuSeqsLearning(t *testing.T, params *capacity.EngineParams, learning
 }
 
 // The derived mu caps the resident sequences at the cap the scale target
-// declares, as P3 does. Before #420 it capped them at the parser's default
+// declares, as P3 does. Before ev-shindin/llm-scaling-manager#420 it capped them at the parser's default
 // of 256, so a sequence-bound engine read a mu above what it serves and the
 // throughput floor ordered too few replicas.
 func TestBatchCapReaders_TheDerivedMuIsCappedAtTheDeclaredCap(t *testing.T) {
@@ -274,7 +274,7 @@ func TestBatchCapReaders_TheDerivedMuIsCappedAtTheDeclaredCap(t *testing.T) {
 	assert.InDelta(t, 256, fields["seqs"], 1e-9)
 }
 
-// The switch off caps at the flags' cap or the default, as before #420.
+// The switch off caps at the flags' cap or the default, as before ev-shindin/llm-scaling-manager#420.
 func TestBatchCapReaders_TheDerivedMuSwitchPicksTheSource(t *testing.T) {
 	on := derivedMuSeqs(t, declaredParams(32), nil)
 	assert.Equal(t, batchCapDeclared, on["batchCapSource"])

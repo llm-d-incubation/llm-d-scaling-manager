@@ -1,7 +1,7 @@
 package steadystate
 
 // What on-call sees of the GPU budget and of cohort borrowing
-// (the Kueue borrowing proposal, PR #161, Part C): the
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part C): the
 // figures the cycle used (metrics and the controller-status limiterBudgets
 // key), the borrowing reasons on llmsm_model_scaling_blocked, unplaced pods,
 // waiting lenders, and an Event per release. Everything here reports what the

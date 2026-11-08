@@ -10,7 +10,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #397: the prefill bound under the gauges' noise
+// Issue ev-shindin/llm-scaling-manager#397: the prefill bound under the gauges' noise
 // (prefill_bound_held.go).
 
 // boundAt is the prefill bound end to end with SwitchPrefillBoundHeldConfidence
@@ -36,7 +36,7 @@ var boundNoises = []struct {
 }
 
 // The four n-dependence cases of the bound pass on every seed with the switch
-// on, and fail on every seed with it off: off is the running max #397 ledgered
+// on, and fail on every seed with it off: off is the running max ev-shindin/llm-scaling-manager#397 ledgered
 // (10/10 seeds, E 1.160 at N=1 on seed 1).
 func TestPrefillBoundHeld_TheClearedLedgerCasesFailWithTheSwitchOff(t *testing.T) {
 	for _, c := range boundNoises {

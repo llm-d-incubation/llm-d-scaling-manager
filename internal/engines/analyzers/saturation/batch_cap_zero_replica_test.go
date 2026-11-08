@@ -10,7 +10,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #427: the estimate for a variant at zero replicas reads the cap the
+// Issue ev-shindin/llm-scaling-manager#427: the estimate for a variant at zero replicas reads the cap the
 // scale target states -- the flags, else the llm-d.ai/max-num-seqs
 // annotation -- as the derived k2 does once a decode or aggregated pod runs
 // (P3 never prices prefill). The variants here are decode. The model runs 1000
@@ -20,7 +20,7 @@ import (
 // derivedAtDefaultCap is a test helper: estimateCapacityAtCapSpread with
 // equal output lengths at the cap the flags state, else the parser's default
 // (EngineParams.BatchCap), the figure the zero-replica estimate priced before
-// #427. 0 for nil params or no budget, which production never passes here.
+// ev-shindin/llm-scaling-manager#427. 0 for nil params or no budget, which production never passes here.
 func derivedAtDefaultCap(params *capacity.EngineParams, avgInput, avgOutput float64) int64 {
 	if params == nil || params.EffectiveMaxBatchedTokens <= 0 {
 		return 0
@@ -75,7 +75,7 @@ func TestBatchCapZeroReplica_TheFlagsWinAndTheDefaultIsNamed(t *testing.T) {
 }
 
 // Off, the estimate prices at the flags' cap or the parser's default, as
-// before #427, whatever is declared; and the declared cap's own switch
+// before ev-shindin/llm-scaling-manager#427, whatever is declared; and the declared cap's own switch
 // (SwitchBatchCapDeclared) turns it off here too, as it does for P3.
 func TestBatchCapZeroReplica_TheSwitchPicksTheSource(t *testing.T) {
 	f := zeroReplicaEstimateOf(t, declaredParams(64), 1, zeroReplicaCapOff)
@@ -131,7 +131,7 @@ func TestBatchCapZeroReplica_ALearnedCapIsNeverRead(t *testing.T) {
 
 // The declared cap is per engine rank. With SwitchZeroReplicaDataParallel
 // off, an 8-GPU pod of 8 ranks that declares 64 is priced at one rank's
-// figure, 64 x 1250 = 80,000, as before #438; on, at all eight
+// figure, 64 x 1250 = 80,000, as before ev-shindin/llm-scaling-manager#438; on, at all eight
 // (zero_replica_data_parallel_test.go).
 func TestBatchCapZeroReplica_ADataParallelVariantIsPricedAtOneRank(t *testing.T) {
 	params := declaredParams(64)

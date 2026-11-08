@@ -2,7 +2,7 @@ package saturation
 
 import "github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 
-// The ITL line of an aggregated variant (issue #432).
+// The ITL line of an aggregated variant (issue ev-shindin/llm-scaling-manager#432).
 //
 // A variant with no role label serves prefill and decode on the same pods
 // (domain.RoleBoth, which domain.CanonicalRole reads "" as). Its replicas
@@ -19,16 +19,16 @@ import "github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 //
 // An aggregated pod's ITL also carries the prefill it interleaves with its
 // decode steps (chunked prefill), so its line is a property of the workload's
-// shape as well as of the engine (issue #275). It is not a decode pod's
+// shape as well as of the engine (issue ev-shindin/llm-scaling-manager#275). It is not a decode pod's
 // line, and the two are never shared: a line fitted on an aggregated variant
 // is published and borrowed under a key of its own (itlLineKeyForRole), so a
 // decode variant of the same model and engine configuration neither lends to
 // it nor borrows from it. The line is priced by shape and sizes only once
-// it has been checked (itl_aggregated_shape.go, issue #275); until then it is
+// it has been checked (itl_aggregated_shape.go, issue ev-shindin/llm-scaling-manager#275); until then it is
 // reported (itlLineReportOnly).
 
 // SwitchITLFitsAggregated is the replay switch for the line of an aggregated
-// variant (issue #432). On, a variant whose role is RoleBoth (or unlabeled)
+// variant (issue ev-shindin/llm-scaling-manager#432). On, a variant whose role is RoleBoth (or unlabeled)
 // fits, publishes and borrows an ITL line, and its derived mu is reported
 // (the derived-mu log line, the service-rate signal, the GPS check, the
 // learner report) but not priced (itlLineReportOnly). Off, as before, only
@@ -53,7 +53,7 @@ func (a *SaturationAnalyzer) itlLineRole(role string) bool {
 // role publishes and borrows under. A decode variant's is the physics key as
 // it is, so its lines and the learned-state snapshots that hold them keep
 // their keys. An aggregated variant's carries its role: its ITL includes the
-// prefill it interleaves (issue #275), so the same model on the same engine
+// prefill it interleaves (issue ev-shindin/llm-scaling-manager#275), so the same model on the same engine
 // configuration fits a different line on aggregated pods than on decode pods,
 // and the two must not be lent to each other.
 //
@@ -70,13 +70,13 @@ func itlLineKeyForRole(physicsKey, role, fingerprint string) string {
 
 // itlLineReportOnly reports whether the mu derived from a line of this role
 // is reported and not priced: an aggregated variant's is, until its lift
-// (noteAggregatedLift, issue #275), which priceReplicas checks beside it.
+// (noteAggregatedLift, issue ev-shindin/llm-scaling-manager#275), which priceReplicas checks beside it.
 //
 // An aggregated pod's ITL carries the chunked prefill it runs between decode
 // steps, about n*IL/OL prompt tokens a step, so its line is a property of
 // the request shape as well as of the engine. A line fitted under one shape
 // mis-prices another, and nothing bounds how long it does: a pinned fit
-// takes several cycles to move, a held slope (issue #284), a restored line
+// takes several cycles to move, a held slope (issue ev-shindin/llm-scaling-manager#284), a restored line
 // and a borrowed one carry an old shape for as long as they are kept. The
 // derived mu also over-states the rate by about TTFT/(OL*ITL): a sequence
 // being prefilled holds KV and emits no token. And the line is fitted at

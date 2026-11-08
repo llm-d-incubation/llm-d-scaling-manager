@@ -187,7 +187,7 @@ func TestWeighingBand_ANewWindowStartsNotWeighing(t *testing.T) {
 // weighNoise is one noise level of the excursion.
 type weighNoise struct{ sigma, phi float64 }
 
-// weighNoises are the levels the band is held at: the #524 case's (4 %, phi
+// weighNoises are the levels the band is held at: the ev-shindin/llm-scaling-manager#524 case's (4 %, phi
 // 0.9), and the per-replica rate noise measured on E1, 9 % to 19 % with a
 // lag-one correlation of 0.1 to 0.4 (10 % and 15 % at phi 0.3, and at 0.75).
 var weighNoises = []weighNoise{{0.04, 0.9}, {0.10, 0.3}, {0.10, 0.75}, {0.15, 0.3}, {0.15, 0.75}}

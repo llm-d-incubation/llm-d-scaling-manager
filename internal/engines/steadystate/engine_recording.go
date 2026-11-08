@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The engine-level layer of the learner recording (issue #345, step 0):
+// The engine-level layer of the learner recording (issue ev-shindin/llm-scaling-manager#345, step 0):
 // each composite's inputs, at the composite's boundary, and what it built,
 // with the warm pool's figures published from it. The analyzer events
 // (docs/proposals/analyzer-learner.md, 2.4) stop at each Analyze; this layer

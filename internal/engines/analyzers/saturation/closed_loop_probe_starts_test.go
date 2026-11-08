@@ -60,7 +60,7 @@ type probeRouter struct {
 }
 
 // probeRouters are the even split (queue-blind, the probe's router before
-// #520) and the shortest-queue limit (learnertest's route).
+// ev-shindin/llm-scaling-manager#520) and the shortest-queue limit (learnertest's route).
 var probeRouters = []probeRouter{{suffix: "", queueBlind: true}, {suffix: "-jsq", queueBlind: false}}
 
 // underBound is how long a fleet whose replicas take start to become Ready
@@ -86,7 +86,7 @@ func overBound(need int) float64 { return float64(need)*(1+learnertest.OverToler
 
 // backlogClears is when the verdict on a fleet hit by a load step at step,
 // whose replicas take start to become Ready, begins: the allowance it makes
-// for the backlog a slow start leaves (#520).
+// for the backlog a slow start leaves (ev-shindin/llm-scaling-manager#520).
 //
 // Until the first order lands, start plus the cycle that orders it, the
 // fleet's first replicas take the new rate lambda1 over their capacity C (the

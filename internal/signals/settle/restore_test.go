@@ -148,7 +148,7 @@ func TestRestore_TheFirstRowClaimsTheSighting(t *testing.T) {
 
 // A bridge is never kept: a lend keeps the Pod's Ready time, and a Pod lent
 // again to the same variant keeps its key, so the three times cannot tell a
-// new lend from the old one (#283). Lent again across a restart, it starts
+// new lend from the old one (ev-shindin/llm-scaling-manager#283). Lent again across a restart, it starts
 // its grace: the row with the stored Ready time is a bridge first seen.
 func TestRestore_ABridgeIsNotKeptSoANewLendStartsAgain(t *testing.T) {
 	lent := busy("pool-0")

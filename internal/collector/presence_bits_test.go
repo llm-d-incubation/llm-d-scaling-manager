@@ -523,7 +523,7 @@ func TestITLStateTwoRanksFullPath(t *testing.T) {
 
 // An Empty rank that generated tokens (max_tokens=1) measured no interval, so
 // it stays out of the pod's ITL mean and does not block Finite: the mean is
-// the Finite ranks' alone. Before #341 4a it weighed in at an ITL of 0 and
+// the Finite ranks' alone. Before ev-shindin/llm-scaling-manager#341 4a it weighed in at an ITL of 0 and
 // made the pod Absent: {Finite 20ms at 100 tok/s, Empty at 50} read 13.3ms. An
 // Absent rank still makes the pod Absent, and a pod of Empty ranks one of
 // which generated tokens is still Absent.

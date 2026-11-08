@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// The engine paths of the ITL unit (#274): what Analyze and a restore do,
+// The engine paths of the ITL unit (ev-shindin/llm-scaling-manager#274): what Analyze and a restore do,
 // not the helpers they call.
 
 // A speculating variant restored from a document in the other unit, and

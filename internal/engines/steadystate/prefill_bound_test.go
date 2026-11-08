@@ -16,7 +16,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #144 through the engine: a prefill fleet whose own window is never
+// Issue ev-shindin/llm-scaling-manager#144 through the engine: a prefill fleet whose own window is never
 // written -- its queue only ever builds on decode's back-pressure -- is ordered
 // by the throughput floor on the router's arrival rate before its queue forms,
 // priced on the lower bound it learned while decode metered it.

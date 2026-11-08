@@ -14,7 +14,7 @@ func acParams(active int64) *capacity.EngineParams {
 	return p
 }
 
-// Issue #334: a rollout that changes only --max-num-active-seqs changes how
+// Issue ev-shindin/llm-scaling-manager#334: a rollout that changes only --max-num-active-seqs changes how
 // far a replica's batch runs, and so the k2 it saturates at. The k2 measured
 // under the old cap is not the variant's own figure under the new one: it
 // becomes a lower-only previous figure, as for any change of arguments.

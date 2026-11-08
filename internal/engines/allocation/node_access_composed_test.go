@@ -26,7 +26,7 @@ func nodeReadDeniedClient() client.Client {
 	}).Build()
 }
 
-// Review of PR #164: llmsm_node_access_denied pages the critical
+// Review of PR ev-shindin/llm-scaling-manager#164: llmsm_node_access_denied pages the critical
 // LLMSMNodeAccessDenied alert, "no variant scales up". That is true of a physical
 // limiter declared alone. Beside a quota the physical provider is only skipped
 // and the quota still bounds, yet the inventory raised the same signal, so a

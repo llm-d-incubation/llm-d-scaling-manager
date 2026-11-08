@@ -141,7 +141,7 @@ max by (model_name, instance, pod) (vllm:kv_cache_usage_perc{namespace="..."})
 **TA notation:** k* — the replica's current operating point. Local demand, the sanity check
 and the GPS check read it. The observation window, its band check and both fits read
 `k = KvUsageForITL()` instead: the minute's mean (`QueryKvUsageMean`) when the collector read
-it, else k* (issue #403).
+it, else k* (issue ev-shindin/llm-scaling-manager#403).
 
 **ReplicaMetrics field:** `KvUsageInstant`
 
@@ -161,7 +161,7 @@ pod, while the mean of the ranks' fractions is the pod's used tokens over its ca
 [Data-parallel pods](signal-dataflow.md#data-parallel-pods).
 
 **There is no `llm_d_ai_variant` in the grouping.** The label was dropped from every
-per-pod query (issue #1263) and is read by no code; no constant for it is defined any
+per-pod query (issue llm-d/llm-d-workload-variant-autoscaler#1263) and is read by no code; no constant for it is defined any
 more. vLLM and SGLang never emitted it — it
 existed only where an operator configured a `ServiceMonitor`/`PodMonitor` relabel to copy
 the pod label `llm-d.ai/variant` onto the scraped series.
@@ -185,7 +185,7 @@ the window the ITL rate is taken over (`ITLWindow`).
 
 **Used by:** `itl.Tracker`, the ITL line the saturation and SLO analyzers fit, and this
 analyzer's own observation window, its band check and its tier-2 fit. Each `(k, ITL)` reading
-pairs the minute's mean `k` with the minute's ITL (issues #393, #403). Without the mean, `k` is
+pairs the minute's mean `k` with the minute's ITL (issues ev-shindin/llm-scaling-manager#393, ev-shindin/llm-scaling-manager#403). Without the mean, `k` is
 `KvUsageInstant`. Local demand and the sanity check read `KvUsageInstant` because they want the
 fill now. The GPS check also still reads `KvUsageInstant`, although it compares it with 1-minute
 rates (`GenerationTokenRate`, and `AvgITL` near saturation): the same mismatch, left to the
@@ -510,7 +510,7 @@ utilization k. It is calibrated independently per variant (different hardware �
 `AvgITL` is a `rate[1m]` mean, so the `k` paired with it is `ReplicaMetrics.KvUsageForITL()`:
 the KV fill averaged over the same minute (`KvUsageMean`) when the collector read it, otherwise
 the instant fill. The band check, the window and the tier-2 fit below all use that one `k`
-(issue #403).
+(issue ev-shindin/llm-scaling-manager#403).
 
 ### Tier 1 — OLS Fit
 
@@ -558,8 +558,8 @@ N_dec_sat = DefaultKSat × KV_max / KVreq      # in-flight requests at k_sat
 μ_dec_sat = N_dec_sat / ITL(k_sat)            # decode tokens/sec at saturation operating point
 ```
 
-`D = E[O²] / E[O]²` is the spread of output lengths (issue #433, as the saturation and slo
-analyzers price it since #276): a long request stays resident longer, so the average
+`D = E[O²] / E[O]²` is the spread of output lengths (issue ev-shindin/llm-scaling-manager#433, as the saturation and slo
+analyzers price it since ev-shindin/llm-scaling-manager#276): a long request stays resident longer, so the average
 resident request holds more than `OL/2` of generated KV. `E[O²]` is each replica's lower
 bound from `vllm:request_generation_tokens_bucket`
 (`domain.ReplicaMetrics.AvgOutputTokensSquared`), request-weighted over the rows the

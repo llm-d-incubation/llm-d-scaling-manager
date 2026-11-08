@@ -13,7 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The line's reports (issue #495, analyzer-learner.md 6.2 and 6.3).
+// The line's reports (issue ev-shindin/llm-scaling-manager#495, analyzer-learner.md 6.2 and 6.3).
 
 // A variant with a line files one report a cycle, of its own name, saying
 // which key priced it and when its newest reading was admitted; and taking

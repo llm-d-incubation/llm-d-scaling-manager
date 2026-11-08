@@ -1,7 +1,7 @@
 # Engine structure: scope, layering, and what to do before the next feature
 
 **Status:** partly built: stages 1, 2 and 5 done, stage 3 partial (one
-registry and the input builder landed with #345 step 1), stage 4 merged in
+registry and the input builder landed with ev-shindin/llm-scaling-manager#345 step 1), stage 4 merged in
 another place and shape (see [Status by stage](#status-by-stage)).
 Proposed 2026-09-21, revised after review. Decisions in this
 document are the repository owner's; each one is marked **Decision** where
@@ -20,10 +20,10 @@ proposal as written; this table is what happened to each stage.
 
 | stage | status | today |
 |---|---|---|
-| 1 — `signals` | done (#89, #91) | `internal/signals/{balance,capacity,fleet,floor,itl,shape}`. `engines/aggregation` has not moved under `signals` yet. |
-| 2 — import direction | done (#88) | `hack/check-import-direction.sh`, run by `make test`. |
-| 3 — split the engine, one registry, input builder first | partial | `internal/scalingpolicy` holds sticky scale-down, the inventory gate, blocked reasons and the policy report. #345 step 1: one registry (`steadystate/analyzer_registry.go`), with saturation's capabilities as typed interfaces resolved at registration; one `AnalyzerInput` per model, built before any `Analyze` (`buildAnalyzerInput`), which carries `VariantMetadata` and does the forget, `LoadFromScaleTarget` and `publishEngineConfig`; zero golden change. It departs from the stage 3 Decision below, each point a later decision: it keeps "register before Start" (#345), it lives in `steadystate` rather than `analyze/registry`, and an external analyzer named like a built-in is stored and skipped rather than refused. Not done: `engine.go` and `engine_v2.go` are still two files; the overlay (the role join and the clamp to the scale target) still runs after `Analyze`, in `buildCapacities`, and moves in a later step that is allowed to change the goldens, since saturation's recorded result carries the unclamped replica count; `AnalyzerInput` has no `Capacity` (below). |
-| 4 — merge the composite, move it to `analyze/combine` | merged, not moved | The composite landed as #167 and #197 in `steadystate/composite.go` and `allocation/composite_*.go`, not `analyze/combine`. `plan/optimize` and `plan/limit` were not split out of `allocation`. |
+| 1 — `signals` | done (ev-shindin/llm-scaling-manager#89, ev-shindin/llm-scaling-manager#91) | `internal/signals/{balance,capacity,fleet,floor,itl,shape}`. `engines/aggregation` has not moved under `signals` yet. |
+| 2 — import direction | done (ev-shindin/llm-scaling-manager#88) | `hack/check-import-direction.sh`, run by `make test`. |
+| 3 — split the engine, one registry, input builder first | partial | `internal/scalingpolicy` holds sticky scale-down, the inventory gate, blocked reasons and the policy report. ev-shindin/llm-scaling-manager#345 step 1: one registry (`steadystate/analyzer_registry.go`), with saturation's capabilities as typed interfaces resolved at registration; one `AnalyzerInput` per model, built before any `Analyze` (`buildAnalyzerInput`), which carries `VariantMetadata` and does the forget, `LoadFromScaleTarget` and `publishEngineConfig`; zero golden change. It departs from the stage 3 Decision below, each point a later decision: it keeps "register before Start" (ev-shindin/llm-scaling-manager#345), it lives in `steadystate` rather than `analyze/registry`, and an external analyzer named like a built-in is stored and skipped rather than refused. Not done: `engine.go` and `engine_v2.go` are still two files; the overlay (the role join and the clamp to the scale target) still runs after `Analyze`, in `buildCapacities`, and moves in a later step that is allowed to change the goldens, since saturation's recorded result carries the unclamped replica count; `AnalyzerInput` has no `Capacity` (below). |
+| 4 — merge the composite, move it to `analyze/combine` | merged, not moved | The composite landed as ev-shindin/llm-scaling-manager#167 and ev-shindin/llm-scaling-manager#197 in `steadystate/composite.go` and `allocation/composite_*.go`, not `analyze/combine`. `plan/optimize` and `plan/limit` were not split out of `allocation`. |
 | 5 — collector by concern | done | `query.go`, `extract.go`, `attribute.go`, `freshness.go`. |
 | 6 — comment policy | not tracked | `docs/developer-guide/analyzer-evidence.md` exists; no file-by-file record. |
 
@@ -32,7 +32,7 @@ analyzer reads engine parameters from the store today, so it is the natural
 one. That PR moves the record into `domain` (the first option of the note
 under stage 1 below) if `capacity.EngineParams` and its fingerprint methods
 can move without an upward import. Otherwise it adds a read-only interface in
-`domain` that returns a domain projection of the record. Checked at #345
+`domain` that returns a domain projection of the record. Checked at ev-shindin/llm-scaling-manager#345
 step 1: `EngineParams`, every method on it (`deployment_parser.go`,
 `fingerprint.go`) and the helpers those methods call import only the standard
 library, `internal/constants` and `internal/inferenceengine`. The latter
@@ -47,7 +47,7 @@ Two outcomes differ from what the text below expects:
 - **D1 was kept, not retired.** Saturation is still the composite's identity
   source, and is now also its unit: every analyzer's need is converted into
   saturation's units. Retiring it now waits on stage 3 and on the replay
-  harness from #341; it is tracked as
+  harness from ev-shindin/llm-scaling-manager#341; it is tracked as
   [#345](https://github.com/ev-shindin/llm-scaling-manager/issues/345). Its
   step 0, the engine-level golden, records and replays the composite and the
   warm pool's figures; the optimizer's decisions get their own PR, before
@@ -59,7 +59,7 @@ Two outcomes differ from what the text below expects:
 
 ## What the code looked like when proposed
 
-Measured on `main` at `2a4270e7` (after #85; `internal/`, non-test lines of
+Measured on `main` at `2a4270e7` (after ev-shindin/llm-scaling-manager#85; `internal/`, non-test lines of
 the package's own directory):
 
 | package | src lines | files | what it holds |
@@ -89,7 +89,7 @@ Four structural problems, each with a cost that has already been paid:
 2. **Two analyzers, one problem, two vocabularies.** `saturation` and
    `throughput` each implement a workload shape, a per-variant state, a
    rolling window, a throughput model and a queue pricing. The three
-   shape-switch defects of 2026-09-20 (#84, #85, the drain burst) are all in
+   shape-switch defects of 2026-09-20 (ev-shindin/llm-scaling-manager#84, ev-shindin/llm-scaling-manager#85, the drain burst) are all in
    `saturation`'s throughput model -- a max-window of requests per
    second under output-length buckets -- while `throughput` next to it
    carries a model that has none of those failure modes (below). Nobody
@@ -163,7 +163,7 @@ Rules that make it stay this way:
 
 - **Imports point down the dependency order.** The check
   (`hack/check-import-direction.sh`, over each package's direct imports from
-  `go list`; landed in PR #88, run by `make test`) enforces the relative
+  `go list`; landed in PR ev-shindin/llm-scaling-manager#88, run by `make test`) enforces the relative
   order among the named pipeline packages -- `engine`, `policy`, `plan/*`,
   `analyze`, `signals`, `collect`/`actuate`, `decision`, `domain` -- and
   lets any of them import the infrastructure leaves. It does not claim
@@ -171,8 +171,8 @@ Rules that make it stay this way:
   legitimately reads `config`, `kueue`, `gpunodes`, `accelerator` and
   `metrics`, and will keep doing so. What it forbids is the one upward edge
   that existed on `main` (`saturation` → `allocation`, reported by the
-  check there and gone in #88) and any new one. The collector's read of
-  the decision store is downward by this order and was removed in #88 for
+  check there and gone in ev-shindin/llm-scaling-manager#88) and any new one. The collector's read of
+  the decision store is downward by this order and was removed in ev-shindin/llm-scaling-manager#88 for
   the other reason: collecting must not read a decision output directly.
 - **A file is one concern and under ~500 lines.** `engine.go` at 2,158 and
   `analyzer.go` at 1,663 are the symptoms; the rule is what stops them
@@ -197,11 +197,11 @@ shape-shift proposal asks for:
 
 | concept | `throughput` (TA) | `saturation` (V2) | keep |
 |---|---|---|---|
-| workload shape | `ShapeTracker`: `(IL, OL, hit rate)` per variant, a change declared when either moves past a tolerance; the observation window is cleared on a change, the hardware baseline is kept | six output-length buckets, per replica (per role since #85), no `IL` | **TA's**, made per role and fed the early signals (arriving `IL` from EPP queue bytes) |
+| workload shape | `ShapeTracker`: `(IL, OL, hit rate)` per variant, a change declared when either moves past a tolerance; the observation window is cleared on a change, the hardware baseline is kept | six output-length buckets, per replica (per role since ev-shindin/llm-scaling-manager#85), no `IL` | **TA's**, made per role and fed the early signals (arriving `IL` from EPP queue bytes) |
 | throughput model | `ITL(k) = A·k + B`, `k` = KV utilization: Tier-1 OLS over the window, Tier-2 pins `B` (hardware) when the fit cannot be trusted; `μ_dec(k*)` in tokens/s; verified against the observed generation-token rate (GPS mismatch clears the window) | max-window of saturated **requests/s** per bucket; borrow the nearest bucket when empty | **TA's**: continuous in load, no buckets, no borrowing, and a drain does not burst tokens/s |
 | demand | `λ × OL` in tokens/s against `μ_dec` supply | resident KV + queue residency, then a floor of `(λ + B/T)/μ` in requests | **both**: occupancy (V2) is the right measure while the fleet holds; the token-rate demand (TA) is the right one while it does not. V2's floor becomes TA's demand expressed through the shared model |
-| scheduler queue | `QueueSize / (drainFactor × ITL(k_sat))`: work to drain, in tokens | `B / T` in requests, since #70; residency before it | one function in `signals/backlog`, token-denominated |
-| P/D roles | splits queue demand across non-prefill roles | prefill holds under decode saturation (#76), gateway queue attributed to decode | **V2's** role logic, generalised by the arriving-`IL` discriminator |
+| scheduler queue | `QueueSize / (drainFactor × ITL(k_sat))`: work to drain, in tokens | `B / T` in requests, since ev-shindin/llm-scaling-manager#70; residency before it | one function in `signals/backlog`, token-denominated |
+| P/D roles | splits queue demand across non-prefill roles | prefill holds under decode saturation (ev-shindin/llm-scaling-manager#76), gateway queue attributed to decode | **V2's** role logic, generalised by the arriving-`IL` discriminator |
 | capacity | -- | k1 (memory) / k2 (compute) learning, history, eviction | **V2's** |
 | trust rules | sanity report, GPS mismatch counter | borrowed / single-sample holds, `MinThroughputSamplesToOrder`, fold-and-spacing on samples | both, as `analyze`'s hold reasons on one shape-change event |
 
@@ -295,7 +295,7 @@ identity, since upstream squash-merges).
 
 | branch | what it is | in ours? |
 |---|---|---|
-| `ta-anchor-dynamic-refresh` (33 commits over our merge-base, 2026-08-06..08; includes `ta-anchor-refactor-v2` = upstream PR #1516) | the multi-vote pipeline in `internal/engines/pipeline` (our `engines/allocation`): **one combine core** `combineVotes(votes, up) → (count, binder)` -- max for scale-up, min for scale-down, rounding once at the caller, the *binding analyzer* returned with the count; **abstain ≠ zero** -- a role an analyzer has no model for is tagged `ReasonRoleUnmodeled` and casts no vote; **score as a dominance correction** (`v* = e − Σ(e − v_i)(s_i − s_e)⁺ / Σs_j`); the **live-only veto gate** (`roleSpareVetoed`); **coverage per GPU freed** (`max_i PRC_i[v] / GPUsPerReplica[v]`) as the scale-down tie-break; a per-iteration anchor refresh; goldens and invariant specs | **no**: none of `combineVotes`, `ReasonRoleUnmodeled`, `bindingAnchor`, `roleSpareVetoed`, the coverage tie-break. We have the liveness half only (#1481, `f5261c8e`) |
+| `ta-anchor-dynamic-refresh` (33 commits over our merge-base, 2026-08-06..08; includes `ta-anchor-refactor-v2` = upstream PR llm-d/llm-d-workload-variant-autoscaler#1516) | the multi-vote pipeline in `internal/engines/pipeline` (our `engines/allocation`): **one combine core** `combineVotes(votes, up) → (count, binder)` -- max for scale-up, min for scale-down, rounding once at the caller, the *binding analyzer* returned with the count; **abstain ≠ zero** -- a role an analyzer has no model for is tagged `ReasonRoleUnmodeled` and casts no vote; **score as a dominance correction** (`v* = e − Σ(e − v_i)(s_i − s_e)⁺ / Σs_j`); the **live-only veto gate** (`roleSpareVetoed`); **coverage per GPU freed** (`max_i PRC_i[v] / GPUsPerReplica[v]`) as the scale-down tie-break; a per-iteration anchor refresh; goldens and invariant specs | **no**: none of `combineVotes`, `ReasonRoleUnmodeled`, `bindingAnchor`, `roleSpareVetoed`, the coverage tie-break. We have the liveness half only (llm-d/llm-d-workload-variant-autoscaler#1481, `f5261c8e`) |
 | the same branch's `docs/developer-guide/multi-analyzer-pipeline.md` | our `main` already has this guide (562 lines); the branch's is +579/−58 against its own merge-base (a 475-line version) and +618/−184 against ours: the three ballot collectors, the veto gate, the abstention rule, liveness's three no-data cases | partly: the guide, yes; his update to it, no |
 | `analyzer-metric-proposal` | the analyzer contract collapsed to `D` and `P` per finest-grain item; results as Prometheus metrics; external analyzers as PromQL with `match` per ScaledObject/role | **yes** (`docs/proposals/analyzer-metric-interface.md`, three lines behind his) |
 | `ta3-e2e`, `ta-correctness-guards`, `ta-veto-liveness`, `ta-model-level-demand` | TA fixes | yes, through the upstream merges we adopted |
@@ -303,26 +303,26 @@ identity, since upstream squash-merges).
 
 ### `deanlorenz/llm-scaler` -- his fork of this repository (remote `deanscaler`)
 
-Thirty branches; twelve are the install/preflight/dashboard PRs #15-#26
-(merged, August) and #34 (the single `CompositeSignal` at the
+Thirty branches; twelve are the install/preflight/dashboard PRs ev-shindin/llm-scaling-manager#15 to ev-shindin/llm-scaling-manager#26
+(merged, August) and ev-shindin/llm-scaling-manager#34 (the single `CompositeSignal` at the
 engine→optimizer boundary, merged 2026-09-02). The rest is not PRed:
 
 | branch | base | what it is | state |
 |---|---|---|---|
-| **`composite-analyzer`** (83 commits, authored 2026-09-08..16, rebased 09-16) | our `main` at `67229a01` (2026-09-11) | **the successor to #34** (its spec says so: "spinoff of `single-analyzer`, keeps PR #34's single-entry shape"), and the design the plugin section above is groping toward, with the owner's decisions marked in a mission spec (v8) and a redesign record. Every analyzer's contract is **two numbers per ScaledObject, `Demand` and `PRC`**; the composite is **`N(SO)`, replicas needed**, the max over *eligible* contributors of `ceil(Demand/PRC)`; **eligibility** = non-nil ∧ informative ∧ live, one rule in both directions; **saturation is not privileged** -- identity carrier (D1, see the decision above) and *fallback* contributor only when nothing else has a signal; a **decision path on the composite** (`C0-agree`, `C1-single`, `C2-sat-fallback`, `C3-default-prc` (unbuilt), `C4-no-signal`) mirroring the analyzers' own `Reason`; **no signal → do not autoscale** as an explicit gate; **coverage** = supply/demand per role, **undefined at zero** and carried as `(value, ok)` (`maxOfDefined`/`minOfDefined`); the cross-role rule above; a query API with **one rounding rule per concept**; score deferred -- pure max. ~3,000 lines of code and tests | implemented and verified on the branch; reviewed here on 2026-09-21 (below); no PR |
-| `single-analyzer`, `single-analyzer-normalize` (Sep 6-7) | Aug/Sep `main` | the steps between #34 and `composite-analyzer` | superseded |
+| **`composite-analyzer`** (83 commits, authored 2026-09-08..16, rebased 09-16) | our `main` at `67229a01` (2026-09-11) | **the successor to ev-shindin/llm-scaling-manager#34** (its spec says so: "spinoff of `single-analyzer`, keeps PR ev-shindin/llm-scaling-manager#34's single-entry shape"), and the design the plugin section above is groping toward, with the owner's decisions marked in a mission spec (v8) and a redesign record. Every analyzer's contract is **two numbers per ScaledObject, `Demand` and `PRC`**; the composite is **`N(SO)`, replicas needed**, the max over *eligible* contributors of `ceil(Demand/PRC)`; **eligibility** = non-nil ∧ informative ∧ live, one rule in both directions; **saturation is not privileged** -- identity carrier (D1, see the decision above) and *fallback* contributor only when nothing else has a signal; a **decision path on the composite** (`C0-agree`, `C1-single`, `C2-sat-fallback`, `C3-default-prc` (unbuilt), `C4-no-signal`) mirroring the analyzers' own `Reason`; **no signal → do not autoscale** as an explicit gate; **coverage** = supply/demand per role, **undefined at zero** and carried as `(value, ok)` (`maxOfDefined`/`minOfDefined`); the cross-role rule above; a query API with **one rounding rule per concept**; score deferred -- pure max. ~3,000 lines of code and tests | implemented and verified on the branch; reviewed here on 2026-09-21 (below); no PR |
+| `single-analyzer`, `single-analyzer-normalize` (Sep 6-7) | Aug/Sep `main` | the steps between ev-shindin/llm-scaling-manager#34 and `composite-analyzer` | superseded |
 | `benchmark-runtools` (63), `benchmark-viz` (19), `benchmark-{init,plan,extract}`, `worktree-*` (Aug 21 - Sep 6) | Aug `main` | `hack/benchmark/`: `report.py`, `render_real_trace.py`, `extract_real_trace.py`, `dump_scaling_manager_decision_table.py`, `capture_scaling_manager_controller_log.sh`, `env_wizard.py`/`env_guard.py`, a GPU-reservation coupler, results bundles with a generated report per run, drafted observability-gap issues | working tooling with committed run bundles (large); no PR |
 | `policy-writer`, `session-tracking`, `agentbus` | unrelated history | agent-workflow conventions, not product code | -- |
 
 **The review of `composite-analyzer` against `main` (2026-09-21, test-merge
 only).** The design is sound and it is one review short of mergeable. What
 must change before it merges, in the order found: (1) **a regression of
-#82** -- `computeCurrentGPUUsage[ByNamespace]` now charges a model's GPUs to
+ev-shindin/llm-scaling-manager#82** -- `computeCurrentGPUUsage[ByNamespace]` now charges a model's GPUs to
 the quota only when `CompositeHasSignal`, so a running replica with no
 per-variant decision path this cycle (startup, a scrape gap, every SO at
 `C4-no-signal`) is not charged and the warm pool is told a GPU is free that
 a model holds; `TestASteadyFleetStillPublishesHeadroom` passes on
-`main` before #85 (`fe8340ca`) and fails on the branch merged onto today's
+`main` before ev-shindin/llm-scaling-manager#85 (`fe8340ca`) and fails on the branch merged onto today's
 `main`. The quota charge is a fact about
 `VariantStates.CurrentReplicas`, not about signal; (2) the saturation
 fallback checks `Eligible(sat)` (whole result) and PRC > 0 but not the
@@ -332,9 +332,9 @@ contradicting the branch's own regression guard §2.9; (3) the eligibility
 guard on that fallback has no test on the real `buildComposite` (the
 decision-path specs run against a hand copy, `resolveSOForTest`); dropping
 the guard is green. Plus the branch's own open items (eight spec fixes,
-one a code change; a comparison of the pre-#34 aggregations for the
+one a code change; a comparison of the pre-ev-shindin/llm-scaling-manager#34 aggregations for the
 multi-analyzer case). The rebase is not small: `engine_v2.go` and
-`cost_aware_optimizer.go` overlap #76/#82, with one content conflict.
+`cost_aware_optimizer.go` overlap ev-shindin/llm-scaling-manager#76/#82, with one content conflict.
 
 This is what `analyze/combine` is. The upstream anchor branch keeps the
 two things the composite spec deliberately deferred -- the score dominance
@@ -352,7 +352,7 @@ by the benchmark scorecard on the two shape-swap traces (runs 16 and 18 of
 2026-09-20 are the fixed references: any stage that moves their windowed
 p95 or target path has changed behaviour and stops).
 
-1. **`signals`** -- done in PR #89, finished in #91. Move `ShapeTracker`,
+1. **`signals`** -- done in PR ev-shindin/llm-scaling-manager#89, finished in ev-shindin/llm-scaling-manager#91. Move `ShapeTracker`,
    `ObservationWindow` and `ITLModel` out of `throughput`, and
    `rollingAverage`, the capacity store (k1/k2, history, eviction) and the
    floor's arithmetic (`estimateThroughputDemand`, `medianFloat`,
@@ -372,7 +372,7 @@ p95 or target path has changed behaviour and stops).
    engine-arg parsers, `ReplicaCapacity` and `K2Source`) and
    `signals/floor` (`estimateThroughputDemand` is `floor.Estimate`,
    `throughputFloor` and its terms are `floor.Floor` and `floor.Term`).
-   #91 removed the transitional aliases, `steadystate/engine.go`
+   ev-shindin/llm-scaling-manager#91 removed the transitional aliases, `steadystate/engine.go`
    included: nothing aliases a `signals` type any more. (Stage 2's two
    reason strings keep their `allocation` names, below.)
 
@@ -387,7 +387,7 @@ p95 or target path has changed behaviour and stops).
    the analyzer would remove `floor`'s dependency on `capacity`
    altogether.
 2. **Cut the upward edge, and make the direction a rule** -- done in
-   PR #88. `ReasonError` and `ReasonNoData` are `domain` constants,
+   PR ev-shindin/llm-scaling-manager#88. `ReasonError` and `ReasonNoData` are `domain` constants,
    aliased under their old names in `allocation` (`ResultIsInformative`
    stays there: it takes the optimizer's `NamedAnalyzerResult`); the
    collector's `decision.BridgeVariant` call is replaced by an injected

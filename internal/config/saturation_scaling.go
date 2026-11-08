@@ -933,7 +933,7 @@ func (f IgnoredField) String() string {
 //     loadImbalance figures. NaN passes every range check in Validate, since each comparison
 //     is false, and an infinite priority or score put the model last in the
 //     greedy-by-score fair share, not first, and with rescale on drew
-//     replicas away from other models (#171).
+//     replicas away from other models (ev-shindin/llm-scaling-manager#171).
 //   - An analyzer score below zero, which AnalyzerScore read as 1 without a
 //     word.
 //   - A priority or analyzer score above MaxPrecedence.
