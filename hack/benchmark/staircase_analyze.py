@@ -15,8 +15,10 @@ integrated over it. Every row carries stopped_by, the rule that ended the phase
 on that step, "" on a step no rule ended.
 
 report writes report.md into the run directory. The client is the witness: the
-mark is read from it, at the operating point only. The router is a cross-check
-and never decides a mark. The knee is reported apart, with no mark. A rate is
+mark is read from it, at the operating point only, on the envelope of its steps
+(staircase_lib.envelope). The router is a cross-check by its mean, and never decides
+a mark: its quantiles are coarse, and are kept in the rows but not scored. The knee
+is reported apart, with no mark. A rate is
 compared over the median of a bucket's repeats, and a verdict stands for the
 bucket only if every repeat agrees. A phase with no `done` file crashed: it is
 excluded and named, and a bucket with a repeat missing has no pass.
@@ -42,6 +44,11 @@ import staircase_lib as lib  # noqa: E402
 
 TTFT = "llm_d_epp_request_ttft_seconds"
 TPOT = "llm_d_epp_request_streaming_tpot_seconds"
+# The time a request waits in the router's flow-control queue, which fills once the
+# prefill gate closes: what the steps above the prefill onset are there to read.
+QUEUE = "llm_d_epp_flow_control_request_queue_duration_seconds"
+# A wait the report counts as one: over 10 ms, against a TTFT of hundreds.
+QUEUE_WAITED = 0.01
 PROM_STEP = 15
 PHASE = re.compile(r"^(.+)-(on|off)(?:-r(\d+))?$")
 INF = float("inf")
@@ -83,7 +90,7 @@ def read_raw_epp(path):
         if len(p) < 4:
             continue
         name = p[2].split("{")[0]
-        if not (name.startswith(TTFT) or name.startswith(TPOT)):
+        if not (name.startswith(TTFT) or name.startswith(TPOT) or name.startswith(QUEUE)):
             continue
         m = re.search(r'le="([^"]*)"', p[2])
         raw[name][lib.ts(p[0])][m[1] if m else ""] += float(p[-1])
@@ -241,6 +248,26 @@ def router_figures(row, raw, prom, a, b):
             row[key + "_mean"] = prom_total(prom, prom_key.replace("_bucket", "_sum"), a, b) / count
 
 
+def queue_figures(row, raw, prom, a, b):
+    """The router queue's wait into row: how many waited, the share over QUEUE_WAITED, the
+    mean, and a coarse p90. Raw scrape first, Prometheus else; nothing with neither."""
+    h = raw_delta(raw, QUEUE, a, b) or prom_delta(prom, "fc_queue_bucket", a, b)
+    if not h or not h["cum"] or h["cum"][-1][1] <= 0:
+        return
+    total = h["cum"][-1][1]
+    under = [c for le, c in h["cum"] if le <= QUEUE_WAITED]
+    row["fc_wait_n"], row["fc_wait_src"] = total, h["src"]
+    if under:
+        row["fc_waited_share"] = max(0.0, 1 - max(under) / total)
+    row["fc_wait_p90_coarse"] = lib.hist_quantile(h["cum"], 0.9)[0]
+    if h.get("_count"):
+        row["fc_wait_mean"] = h["_sum"] / h["_count"]
+    else:
+        count = prom_total(prom, "fc_queue_count", a, b)
+        if count:
+            row["fc_wait_mean"] = prom_total(prom, "fc_queue_sum", a, b) / count
+
+
 def analyze_steps(run, phase, discard):
     """One row a judged step, stop rule on each."""
     d = os.path.join(run, "phases", phase)
@@ -270,6 +297,7 @@ def analyze_steps(run, phase, discard):
         row.update(client_figures(win, span, pods))
         row["completion_rate"] = sum(1 for r in rows if r[6] == "200" and a <= float(r[5]) < b) / span
         router_figures(row, raw, prom, a, b)
+        queue_figures(row, raw, prom, a, b)
         pre, dec = engine_mean(engine["prefill"], a, b), engine_mean(engine["decode"], a, b)
         if pre is not None and dec is not None and row["client_ttft_mean"] == row["client_ttft_mean"]:
             row["engine_prefill_mean"], row["engine_decode_mean"] = pre, dec
@@ -335,6 +363,21 @@ def fail(verdict):
     return verdict.startswith("FAIL")
 
 
+def router_agreement(repeats):
+    """The router's mean TTFT less the client's over a bucket's steps, in ms, as text.
+
+    The cross-check the router can give: its mean comes from _sum and _count and is
+    exact, where its quantiles are read inside wide buckets. Steps with a failure are
+    left out: the client counts a failure as infinitely slow, the router not at all.
+    """
+    diffs = [1000 * (r["router_ttft_mean"] - r["client_ttft_mean"]) for rows in repeats.values() for r in rows
+             if r.get("router_ttft_mean") is not None and math.isfinite(r["router_ttft_mean"])
+             and math.isfinite(r.get("client_ttft_mean", math.nan)) and r.get("failed", 0) == 0]
+    if not diffs:
+        return "no router mean"
+    return "%+.1f to %+.1f over %d steps" % (min(diffs), max(diffs), len(diffs))
+
+
 def judge(predicted, per_repeat, missing=()):
     """(median measured text, ratio, verdict) over the repeats' measured() results.
 
@@ -347,17 +390,19 @@ def judge(predicted, per_repeat, missing=()):
     if missing and not any(fail(v) for v in verdicts):
         text = lib.show(*per_repeat[0]) if per_repeat else "none finished"
         return text, "n/a", "no mark, repeat %s missing" % ",".join(str(n) for n in missing)
-    values = [(v[0] + v[1]) / 2 if k == "bound" else v for k, v in per_repeat if v is not None]
+    values = [(v[0] + v[1]) / 2 if k in ("bound", "cliff") else v for k, v in per_repeat if v is not None]
     centre = lib.median(values) if values else None
     bound = any("a bound" in v for v in verdicts)
+    cliff = any("on the cliff" in v for v in verdicts)
     if any(fail(v) for v in verdicts):
-        verdict = "FAIL, a bound" if bound else "FAIL"
+        verdict = "FAIL, a bound" if bound else "FAIL, on the cliff" if cliff else "FAIL"
     elif lib.NO_VALID_CROSSING in verdicts:
         verdict = lib.NO_VALID_CROSSING
-    elif all(v.startswith("in the mark") for v in verdicts):
-        verdict = "in the mark, a bound" if bound else "in the mark"
+    elif all(v.startswith("in the mark") or v == lib.CLIFF_IN for v in verdicts):
+        # A bound outranks the cliff: the gate stops on a bound, and not on the cliff.
+        verdict = "in the mark, a bound" if bound else lib.CLIFF_IN if cliff else "in the mark"
     else:
-        verdict = "no mark, a bound" if bound else "no mark"
+        verdict = "no mark, a bound" if bound else "no mark, on the cliff" if cliff else "no mark"
     if len(per_repeat) == 1:
         kind, value = per_repeat[0]
         return lib.show(kind, value), lib.mark(predicted, kind, value)[0], lib.mark(predicted, kind, value)[1]
@@ -428,13 +473,19 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
     ratio_q = {r["percentile"]: r.get("value") for r in frozen_file.get("tpotRatio", [])}
     finished, crashed = phases_of(run)
     expected = expected_phases(spec, finished, frozen, only_gate, repeats or range(1, spec.get("repeats", 1) + 1))
-    data, missing = {}, {}
+    data, missing, measure = {}, {}, {}
     for key, wanted in sorted(expected.items()):
         found = finished.get(key, {})
         data[key] = {n: load_steps(run, found[n]) for n in wanted if n in found}
         missing[key] = [n for n in wanted if n not in found]
         for rows in data[key].values():
             flag_steps(rows, frozen[key[0]], spec["promptCV"])
+        # The measurement-only steps leave the scored rows here: no crossing, knee or
+        # falsifier reads them.
+        rates = lib.measure_rates(frozen[key[0]], spec)
+        for n, rows in data[key].items():
+            measure[key + (n,)] = [r for r in rows if lib.is_measure(r["rate"], rates)]
+            data[key][n] = [r for r in rows if not lib.is_measure(r["rate"], rates)]
 
     print("# Staircase report\n", file=out)
     if crashed:
@@ -479,7 +530,12 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         print("| none | | |", file=out)
 
     print("\n## TTFT at the operating point\n", file=out)
-    print("| Bucket | Flow control | q | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router, cross-check |", file=out)
+    print("A step reading above a later valid step reads that step's figure: TTFT does not fall as the rate "
+          "rises (lowered steps are listed below). A crossing between steps over %g times apart is on the "
+          "cliff: its bracket is the reading, the gate stops on it unless the whole bracket is in the mark, "
+          "and it never counts as a pass. The router's quantiles are read from wide buckets and are not "
+          "scored; its mean, which is exact, is set against the client's.\n" % lib.CLIFF_FACTOR, file=out)
+    print("| Bucket | Flow control | q | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router mean less client mean, ms |", file=out)
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
     verdicts = {}
     for (bucket, fc), repeats in sorted(data.items()):
@@ -488,12 +544,25 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             q = int(t["percentile"])
             predicted = t["predictedOff"] if fc == "off" else t["predictedOn"]
             client = [lib.measured(rows, "client_ttft_p%d" % q, t["seconds"]) for _, rows in sorted(repeats.items())]
-            router = [lib.measured(rows, "router_ttft_p%d" % q, t["seconds"]) for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(predicted, client, missing[bucket, fc])
-            rtext, rratio, _ = judge(predicted, router, missing[bucket, fc])
             verdicts[bucket, fc, "ttft", q] = verdict
-            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s | %s, %s |" % (
-                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, rtext, rratio), file=out)
+            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s | %s |" % (
+                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, router_agreement(repeats)), file=out)
+
+    print("\n## Steps the envelope lowered\n", file=out)
+    print("| Phase | Step | Reading | Read, ms | Scored, ms |", file=out)
+    print("| --- | --- | --- | --- | --- |", file=out)
+    lowered = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        for n, rows in sorted(repeats.items()):
+            for q in sorted({int(t["percentile"]) for t in frozen[bucket]["targets"]}):
+                key = "client_ttft_p%d" % q
+                for r, scored in zip(rows, lib.envelope(rows, key)):
+                    if scored is not None and r.get(key) is not None and scored < r[key]:
+                        lowered += 1
+                        print("| %s %s r%d | %d | p%d | %.1f | %.1f |" % (bucket, fc, n, r["level"], q, 1000 * r[key], 1000 * scored), file=out)
+    if not lowered:
+        print("| none | | | | |", file=out)
 
     print("\n## TPOT at the operating point\n", file=out)
     print("| Bucket | Flow control | Reading | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router, cross-check |", file=out)
@@ -508,12 +577,16 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             if not target > 0:
                 continue
             client = [lib.measured(rows, client_key, target) for _, rows in sorted(repeats.items())]
-            router = [lib.measured(rows, router_key, target) for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(b["operatingRate"], client, missing[bucket, fc])
-            rtext, rratio, _ = judge(b["operatingRate"], router, missing[bucket, fc])
             verdicts[bucket, fc, "tpot", name] = verdict
-            print("| %s | %s | %s | %.1f ms | %.1f | %s | %s | %s | %s, %s |" % (
-                bucket, fc, name, target * 1000, b["operatingRate"], text, ratio, verdict, rtext, rratio), file=out)
+            if name == "mean":
+                router = [lib.measured(rows, router_key, target) for _, rows in sorted(repeats.items())]
+                rtext, rratio, _ = judge(b["operatingRate"], router, missing[bucket, fc])
+                cross = "%s, %s" % (rtext, rratio)
+            else:
+                cross = "not scored: coarse buckets"
+            print("| %s | %s | %s | %.1f ms | %.1f | %s | %s | %s | %s |" % (
+                bucket, fc, name, target * 1000, b["operatingRate"], text, ratio, verdict, cross), file=out)
 
     print("\n## The knee, reported apart\n", file=out)
     print("A step held if completions in its window came within 3% of what was sent and nothing failed. No mark applies.\n", file=out)
@@ -544,6 +617,38 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             print("| %s | %d | %.1f | %.1f | %.2f | %.0f | %.2f | %s |" % (
                 bucket, n, onset, r["rate"], saturation, queue, r["window_s"] / r["need_s"],
                 "no: under the noise floor" if r["noise_flag"] else "yes"), file=out)
+
+    print("\n## Above the prefill onset: the router queue's wait\n", file=out)
+    print("Every flow-control-on step above the frozen prefill onset. Measure-only steps are scored by nothing: "
+          "the model flags this wait (AboveFlowControlOnset) and does not price it. Waited is the share of "
+          "requests the router queue held over %g ms; its p90 is read inside wide buckets.\n" % (1000 * QUEUE_WAITED), file=out)
+    print("| Bucket | Repeat | Step, r/s | Over the onset | Role | Client TTFT p50 / p90, ms | Waited | Wait mean, ms | Wait p90, ms, coarse | Prefill gate saturation, mean / peak | Queue, peak | Held |", file=out)
+    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
+    shown = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        onset = frozen[bucket]["onsets"]["Prefill"]
+        if fc != "on" or not onset:
+            continue
+        for n in sorted(repeats):
+            rows = sorted(repeats[n] + measure.get((bucket, fc, n), []), key=lambda r: r["level"])
+            for r in rows:
+                if r["rate"] <= onset:
+                    continue
+                shown += 1
+                gate = r.get("fc_saturation", {})
+                pre = [v for k, v in gate.items() if "prefill" in k.split()]
+                print("| %s | %d | %.1f | %.2fx | %s | %.1f / %.1f | %s | %s | %s | %s | %s | %s |" % (
+                    bucket, n, r["rate"], r["rate"] / onset,
+                    "measure only" if r in measure.get((bucket, fc, n), []) else "scored",
+                    1000 * r["client_ttft_p50"], 1000 * r["client_ttft_p90"],
+                    "%.1f%%" % (100 * r["fc_waited_share"]) if "fc_waited_share" in r else "unread",
+                    "%.1f" % (1000 * r["fc_wait_mean"]) if "fc_wait_mean" in r else "unread",
+                    "%.1f" % (1000 * r["fc_wait_p90_coarse"]) if "fc_wait_p90_coarse" in r else "unread",
+                    "%.2f / %.2f" % tuple(pre[0]) if pre else "unread",
+                    "%.0f" % max((v[1] for v in r.get("fc_queue", {}).values()), default=math.nan) if r.get("fc_queue") else "unread",
+                    "yes" if lib.held(r) else "no"), file=out)
+    if not shown:
+        print("| none | | | | | | | | | | | |", file=out)
 
     print("\n## Model against client, per step\n", file=out)
     print("Report only: flow control off, the frozen curve at the step's rate.\n", file=out)
@@ -592,14 +697,18 @@ def gate(run, frozen, spec, repeat, out):
     """Score one repeat of the gate buckets: 0 to go on, 1 to stop. Written beside the report."""
     with open(os.path.join(run, "gate-r%d.md" % repeat), "w", encoding="utf8") as f:
         verdicts = report(run, frozen, spec, None, f, repeats=[repeat], only_gate=True)
-    # A void step can pass no gate: a crossing on one is a bound, not a reading.
-    bad = {k: v if fail(v) or "missing" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
-           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING)}
+    # A void step can pass no gate: a crossing on one is a bound, not a reading. A crossing
+    # on the cliff stops it unless its whole bracket is in the mark, and passes nothing.
+    bad = {k: v if fail(v) or "missing" in v or "on the cliff" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
+           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
+                                  or v == "no mark, on the cliff")}
     if not verdicts:
         print("gate repeat %d: no gate bucket to score" % repeat, file=out)
         return 1
-    print("gate repeat %d: %d readings, %d stop the run%s" % (
+    cliff = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == lib.CLIFF_IN)
+    print("gate repeat %d: %d readings, %d stop the run%s%s" % (
         repeat, sum(1 for k in verdicts if k[2] == "ttft"), len(bad),
+        ", %d on the cliff and in the mark, not scored" % cliff if cliff else "",
         ": " + "; ".join("%s %s p%s %s" % (k[0], k[1], k[3], v) for k, v in sorted(bad.items())) if bad else ""), file=out)
     return 1 if bad else 0
 

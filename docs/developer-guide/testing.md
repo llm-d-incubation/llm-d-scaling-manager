@@ -1877,10 +1877,60 @@ Job loses the API, 30 minutes of failed reads count as a lapse, and it keeps try
 delete for 6 hours. A run does not start without a Job that has read its lease. The
 check is `kubectl get deploy -n $BENCHMARK_NAMESPACE`.
 
+**The EPP's metrics are a precondition.** The run reads the router's histograms and its
+flow-control series straight from the EPP, from the `witness` pod, with the token the
+controller scrapes with (the Secret it mounts as `epp-metrics-token`). The EPP answers
+401 to a read with no token, and a read through the API server's pod proxy carries none:
+the API server strips the caller's credentials before it proxies. If the EPP cannot be
+read, the run stops before the warm-up and says why in `timeline.txt`.
+
 **Reading the report.** The client's rate decides the mark, at the operating point.
-The router's column is a cross-check, because its buckets are wide where the targets
-sit. "How each phase ended" names the rule that stopped each phase: `client-p90` is
-the frozen rule, and `max-inflight` is the safety cap, whose step reads as a bound.
+How a reading becomes a crossing:
+
+- **The envelope.** A step that reads above a later valid step is scored at that
+  step's reading: on one fleet TTFT does not fall as the rate rises, so the excess was
+  a transient. "Steps the envelope lowered" lists each one. In r1, one bad minute in
+  bucket A's step 2 (p50 from 38 to 70.5 ms) had set the crossing at 16.8 r/s instead
+  of 25.0.
+- **The cliff.** When the steps around a crossing read more than 4 times apart, a line
+  between them means nothing, and any target in that range crosses between them. The
+  bracket is the reading, marked "on the cliff". The step below must be valid, and the
+  step above must not be void for a reason that inflates its reading (send lag, a cut,
+  a fleet that moved, a burstier Ca2 than asked). The gate does not stop on a cliff
+  whose whole bracket is in the mark, but it does not count it as a pass either. A
+  cliff whose bracket crosses or misses the mark stops the gate.
+- **A void step.** A crossing on one is a bound, and the gate stops on it. A step is
+  void when its rate is off the rate it asked for by more than 3 standard deviations of
+  its count of arrivals: `sqrt(Ca2 / (rate x window))`, so 5.5% for a Ca2-4 step at
+  28 r/s over 420 s, and 1.4% for a Poisson step at 33 r/s over 1320 s. A flat 3% band
+  had voided about one bursty step in ten by chance.
+- **The router.** Its quantiles are read by linear interpolation inside wide buckets
+  (183.4 ms against the client's 130.1 at 13.3 r/s in r1), so they are not scored. Its
+  mean comes from `_sum` and `_count` and is exact. The report shows the router's mean
+  less the client's, which r1 put within 4 ms.
+
+**Above the prefill flow-control onset.** Once the router's prefill gate closes,
+requests wait in its queue. The model flags that wait (`AboveFlowControlOnset`) but
+does not price it yet. A bucket's `measureAboveOnset` in the spec adds steps at those
+multiples of its frozen prefill onset, after its scored steps and held the same way.
+They are never scored: no crossing, knee or falsifier reads them. The report's "Above
+the prefill onset" table lists every flow-control-on step past the onset, with the
+client's TTFT and the router queue's wait from the EPP's
+`llm_d_epp_flow_control_request_queue_duration_seconds`: the share that waited over
+10 ms, the mean, a coarse p90, the prefill gate's saturation and the queue's peak. The
+freeze refuses these steps unless flow control is on alone and they sit below the
+decode onset. That rules out A and B at 2+2, whose prefill onsets are past their decode
+knees, so B-onset (2+4) carries them, at 1.10x and 1.15x. In r1, B-onset reached 1.05x
+with the gate open (saturation 0.05) and no queue. The only queue r1 saw was at
+C-onset's collapse, at 1.14x.
+
+For bursty buckets the freeze sizes each step's window for the top of the Ca2 band
+(1.25 times the Ca2 asked), because the analysis judges a step at the Ca2 it actually
+sent. Bucket C has extra steps between 0.80 and 0.925 of the knee. At 2+2, no window up
+to `maxHoldSeconds` holds 0.95 of the knee, so those are the steps a crossing can land on.
+
+"How each phase ended" names the rule that stopped each phase: `client-p90` is the
+frozen rule, and `max-inflight` is the safety cap, whose step reads as a bound.
 
 `make lint-deploy-scripts` runs `hack/check-staircase.sh`, which takes the exit paths it
 lists against a stub kubectl and checks the arithmetic against hand-worked figures. It

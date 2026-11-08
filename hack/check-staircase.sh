@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=90
+EXPECTED_CHECKS=93
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -214,7 +214,17 @@ case "$args" in
         if [ -n "${LOAD_ALIVE:-}" ]; then printf '{"items":[{"metadata":{"name":"lg-b-off-r1"}}]}\n'; else printf '{"items":[]}\n'; fi ;;
     *" get pods -o json "*)
         if [ -e "$STATE/tearing" ] && [ -n "${GET_FAIL:-}" ]; then exit 1; fi
-        printf '{"items":[]}\n' ;;
+        # The EPP, until the teardown: a gRPC port that serves no metrics, then 9090.
+        if [ -e "$STATE/tearing" ]; then printf '{"items":[]}\n'; exit 0; fi
+        printf '{"items":[{"metadata":{"name":"m-epp-1"},"status":{"phase":"Running","podIP":"10.0.0.9"},"spec":{"containers":[{"ports":[{"containerPort":9002}]}]}}]}\n' ;;
+    *" get deploy scaling-manager-controller-manager -o json "*)
+        [ -n "${NO_EPP_SECRET:-}" ] && { printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'; exit 0; }
+        printf '{"spec":{"template":{"spec":{"volumes":[{"name":"epp-metrics-token","secret":{"secretName":"scaling-manager-epp-metrics-token"}}]}}}}\n' ;;
+    *" exec witness "*" scrape http://10.0.0.9:9090/metrics /t/token "*)
+        if [ -n "${EPP_DENIED:-}" ]; then echo "scrape: http://10.0.0.9:9090/metrics answered 401: b'Unauthorized'" >&2; exit 1; fi
+        printf 'llm_d_epp_request_ttft_seconds_bucket{le="0.1"} 3\nllm_d_epp_request_ttft_seconds_count 3\n'
+        [ -e "$STATE/fc-off" ] || printf 'llm_d_epp_flow_control_queue_size 0\n' ;;
+    *" exec witness "*" scrape "*) echo "scrape: connection refused" >&2; exit 1 ;;
     *" get deploy -o json "*)
         # The lapse case: workloads until the Job has freed them, which the check says.
         if [ -n "${LAPSE_HOLD:-}" ] && [ ! -e "$STATE/freed" ] && [ ! -e "$STATE/tearing" ]; then
@@ -328,6 +338,8 @@ expect "the lease was renewed" '[ "$(leases)" -gt 0 ]'
 expect "the fleet was pinned" 'grep -q "\"minReplicaCount\":2,\"maxReplicaCount\":2" "$LOG"'
 expect "teardown on success, the Job after the workloads" 'tore_down && [ "$(grep -n "delete deploy --all" "$LOG" | cut -d: -f1 | head -1)" -lt "$(grep -n "delete job staircase-deadline" "$LOG" | cut -d: -f1 | head -1)" ]'
 expect "the private copy ran" '[ -s "$RUN/bin/staircase.sh" ] && grep -q "run start" "$RUN/timeline.txt"'
+expect "the EPP is read from the witness with the controller token, never through the API proxy" \
+    'grep -q "EPP metrics readable at port 9090 of m-epp-1" "$RUN/timeline.txt" && grep -q "secretName: scaling-manager-epp-metrics-token" "$RUN/witness.yaml" && grep -q "exec witness -- python3 /w/staircase_promq.py scrape http://10.0.0.9:9090/metrics /t/token" "$LOG" && grep -q "llm_d_epp_request_ttft_seconds_bucket" "$RUN/epp-metrics.log" && ! grep -q "pods/m-epp-1:[0-9]*/proxy" "$LOG"'
 if base_env bash "$B/staircase.sh" freeze > /dev/null 2>&1; then bad "a second freeze must refuse"; else ok "a second freeze refuses"; fi
 if base_env bash "$B/staircase.sh" run img > /dev/null 2>&1; then bad "a used directory must refuse"; else ok "a used directory refuses"; fi
 if base_env bash "$B/staircase.sh" analyze > "$WORK/analyze.out" 2>&1 && [ -s "$RUN/report.md" ]; then ok "analyze reads the run"; else bad "analyze reads the run"; cat "$WORK/analyze.out"; fi
@@ -377,6 +389,16 @@ echo "exit paths..."
 fresh standupfail
 start MAKE_FAIL=1; wait_run
 expect "a failed standup fails and tears down, no recorder" '[ "$rc" != 0 ] && tore_down && ! grep -q "patch deployment scaling-manager-controller-manager" "$LOG"'
+
+fresh eppdenied
+start EPP_DENIED=1; wait_run
+expect "an EPP that refuses the token stops the run before the warm-up, says why, and tears down" \
+    '[ "$rc" != 0 ] && grep -q "EPP metrics not readable with the controller.s token: stopping" "$RUN/timeline.txt" && grep -q "answered 401" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh noeppsecret
+start NO_EPP_SECRET=1; wait_run
+expect "a controller with no EPP token stops the run before the warm-up" \
+    '[ "$rc" != 0 ] && grep -q "mounts no epp-metrics-token Secret" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
 
 fresh armfail
 start ARM_FAIL=1 STAIRCASE_ARM_TRIES=2; wait_run

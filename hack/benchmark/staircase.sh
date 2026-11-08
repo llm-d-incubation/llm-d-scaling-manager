@@ -348,33 +348,65 @@ copy_recordings() {
 }
 
 # --- witnesses -------------------------------------------------------------------------
-# witness : a pod that reaches Prometheus, and how to read the EPP's metrics directly.
-# Neither failing stops the run: the client is the mark's witness.
+# witness : a pod that reaches Prometheus and reads the EPP's /metrics with the token the
+# controller scrapes it with. The EPP's metrics are what the run reads the router's
+# histograms and its flow control from, so a standup that cannot read them stops here.
+# Through the API server's pod proxy they never could: the API server strips the
+# caller's credentials before it proxies, and the EPP answers 401 to a request with
+# none. r1 ran its whole warm-up and gate that way, on Prometheus alone.
 witness() {
+    local secret target epod ip port out
     names
-    kube create configmap staircase-witness --from-file=staircase_promq.py="$HERE/staircase_promq.py" >/dev/null || t "witness configmap failed"
-    pod_yaml witness witness staircase-witness /w "sleep 86400" 100m 128Mi 512Mi > "$R/witness.yaml"
-    kube apply -f "$R/witness.yaml" >> "$R/timeline.txt" 2>&1
-    gstream 200 wait pod witness --for=condition=Ready --timeout=180s >> "$R/timeline.txt" 2>&1 || t "witness pod not Ready"
-    local epod port
-    epod=$(running_pods "^$EPPD-" | head -1)
-    [ -n "$epod" ] || { t "no EPP pod"; return 0; }
-    for port in $(kube get pod "$epod" -o json | jq -r '.spec.containers[].ports[]?.containerPort') 9090; do
-        if kube get --raw "/api/v1/namespaces/$NS/pods/$epod:$port/proxy/metrics" 2>/dev/null | grep -q '^llm_d_epp_\|^# HELP llm_d_epp_'; then
-            echo "$port" > "$R/epp-scrape.txt"; t "EPP metrics readable at port $port"; return 0
+    # The Secret the controller mounts at /var/run/secrets/epp-metrics: its token is the
+    # one the EPP is known to accept.
+    secret=$(kube get deploy scaling-manager-controller-manager -o json 2>/dev/null \
+        | jq -r '.spec.template.spec.volumes[]? | select(.name == "epp-metrics-token") | .secret.secretName // empty')
+    [ -n "$secret" ] || { t "the controller mounts no epp-metrics-token Secret: the EPP cannot be read"; return 1; }
+    kube create configmap staircase-witness --from-file=staircase_promq.py="$HERE/staircase_promq.py" >/dev/null \
+        || { t "witness configmap failed"; return 1; }
+    pod_yaml witness witness staircase-witness /w "sleep 86400" 100m 128Mi 512Mi "$secret" > "$R/witness.yaml"
+    kube apply -f "$R/witness.yaml" >> "$R/timeline.txt" 2>&1 || { t "witness apply failed"; return 1; }
+    gstream 200 wait pod witness --for=condition=Ready --timeout=180s >> "$R/timeline.txt" 2>&1 || { t "witness pod not Ready"; return 1; }
+    target=$(epp_pod)
+    [ -n "$target" ] || { t "no Running EPP pod: the EPP cannot be read"; return 1; }
+    read -r epod ip _ <<< "$target"
+    for port in ${target#"$epod $ip"} 9090; do
+        if out=$(epp_scrape "$ip" "$port" 2>&1) && echo "$out" | grep -q '^llm_d_epp_\|^# HELP llm_d_epp_'; then
+            echo "$port" > "$R/epp-scrape.txt"; t "EPP metrics readable at port $port of $epod"; return 0
         fi
+        t "EPP $epod port $port: $(echo "$out" | tail -1 | cut -c1-200)"
     done
-    t "EPP metrics not readable through the API proxy: Prometheus and the client only"
+    t "EPP metrics not readable with the controller's token: stopping"
+    return 1
 }
 
-# pod_yaml <name> <label> <configmap> <mount> <command> <cpu> <mem request> <mem limit>
+# epp_pod : "<pod> <pod IP> <container ports...>" of a Running EPP pod; empty with none. Read
+# again on every use: flow control restarts the EPP each phase, and its IP moves.
+epp_pod() {
+    kube get pods -o json 2>/dev/null | jq -r --arg p "$EPPD-" '[.items[] | select(.metadata.deletionTimestamp == null)
+        | select(.status.phase == "Running") | select(.metadata.name | startswith($p))] | first // empty
+        | "\(.metadata.name) \(.status.podIP) \([.spec.containers[].ports[]?.containerPort | tostring] | join(" "))"'
+}
+
+# epp_scrape <pod IP> <port> : the EPP's /metrics, read from the witness with the token.
+epp_scrape() {
+    local host=$1
+    case $host in *:*) host="[$host]" ;; esac
+    kube exec witness -- python3 /w/staircase_promq.py scrape "http://$host:$2/metrics" /t/token
+}
+
+# pod_yaml <name> <label> <configmap> <mount> <command> <cpu> <mem request> <mem limit> [secret]
+# A secret, when named, is mounted read-only at /t.
 pod_yaml() {
     printf '%s\n' "apiVersion: v1" "kind: Pod" "metadata:" "  name: $1" "  namespace: $NS" "  labels: {app: $2}" \
         "spec:" "  restartPolicy: Never" "  containers:" "  - name: main" "    image: $LOAD_IMAGE" \
         "    command: [sh, -c, '$5']" "    resources:" "      requests: {cpu: \"$6\", memory: $7}" \
         "      limits: {memory: $8}" "    volumeMounts:" "    - {mountPath: $4, name: code, readOnly: true}" \
-        "    - {mountPath: /out, name: out}" "  volumes:" "  - name: out" "    emptyDir: {}" "  - name: code" \
-        "    configMap: {name: $3}"
+        "    - {mountPath: /out, name: out}"
+    [ -n "${9:-}" ] && printf '%s\n' "    - {mountPath: /t, name: token, readOnly: true}"
+    printf '%s\n' "  volumes:" "  - name: out" "    emptyDir: {}" "  - name: code" "    configMap: {name: $3}"
+    [ -n "${9:-}" ] && printf '%s\n' "  - name: token" "    secret: {secretName: $9}"
+    return 0
 }
 
 # job_check : the deadline Job is what frees the GPUs if this dies. If it has stopped,
@@ -396,7 +428,7 @@ job_check() {
 # copy. The lease is renewed only while the main shell beats, and the loop ends with the
 # main shell: a helper that outlives its run must not keep the GPUs.
 capture_loop() {
-    local main=$1 ts p port epod now leased=0 age
+    local main=$1 ts p port epod ip now leased=0 age
     JOB_MISSES=0
     names
     while [ ! -e "$R/STOP" ]; do
@@ -419,8 +451,8 @@ capture_loop() {
             kube logs "$p" -c vllm --since=70s 2>/dev/null | grep -E "$ENGERR" | head -3 | sed "s#^#$ts $p #" >> "$R/engine-errors.txt"
         done
         if [ -s "$R/epp-scrape.txt" ]; then
-            epod=$(running_pods "^$EPPD-" | head -1)
-            [ -n "$epod" ] && kube get --raw "/api/v1/namespaces/$NS/pods/$epod:$(cat "$R/epp-scrape.txt")/proxy/metrics" 2>/dev/null \
+            read -r epod ip _ <<< "$(epp_pod)"
+            [ -n "$epod" ] && epp_scrape "$ip" "$(cat "$R/epp-scrape.txt")" 2>/dev/null \
                 | grep -E '^llm_d_epp_(request_ttft_seconds|request_streaming_tpot_seconds|flow_control_)' \
                 | sed "s#^#$ts $epod #" >> "$R/epp-metrics.log"
         fi
@@ -648,7 +680,7 @@ smoke_read() {
 }
 
 smoke_body() {
-    local id until after kind verb landed hold=$((2 * ${STAIRCASE_SMOKE_STEP:-90}))
+    local id until after kind verb landed epod ip hold=$((2 * ${STAIRCASE_SMOKE_STEP:-90}))
     id=$(cat "$R/run-id")
     smoke_read "lease holds the run id" "$id" "$(kube get configmap staircase-lease -o json 2>/dev/null | jq -r '.data.run // empty')"
     smoke_read "namespace label holds the run id" "$id" "$(timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" -o json 2>/dev/null | jq -r --arg l "$RUN_LABEL" '.metadata.labels[$l] // empty')"
@@ -672,6 +704,13 @@ smoke_body() {
     [ -s "$R/smoke/first/requests.csv.gz" ] && smoke_check ok "requests saved: $(wc -c < "$R/smoke/first/requests.csv.gz") bytes" \
         || smoke_check FAIL "no requests saved"
     if flow_control on; then smoke_check ok "flow control on"; else smoke_check FAIL "flow control on"; return 1; fi
+    # The restart moved the EPP: the capture must find it again, flow control now among its series.
+    read -r epod ip _ <<< "$(epp_pod)"
+    if [ -n "$epod" ] && epp_scrape "$ip" "$(cat "$R/epp-scrape.txt")" 2>/dev/null | grep -q '^llm_d_epp_flow_control_'; then
+        smoke_check ok "the restarted EPP reads, flow control among its series"
+    else
+        smoke_check FAIL "the restarted EPP does not read, or shows no flow control"
+    fi
     if pin_fleet 1 2; then smoke_check ok "the fleet moved to 1+2"; else smoke_check FAIL "the fleet did not move to 1+2"; return 1; fi
 
     # The deliberate abort, inside a load, as it would come.
@@ -722,7 +761,7 @@ cmd_run() {
     kube create configmap staircase-loadgen --from-file=staircase_load.py="$HERE/staircase_load.py" \
         --from-file=closed_loop_sweep.py="$HERE/closed_loop_sweep.py" >/dev/null || { t "loadgen configmap failed"; exit 1; }
     recorder_on || exit 1
-    witness
+    witness || exit 1
     capture_loop "$$" > "$R/capture.out" 2>&1 &
     CAP=$!
     [ -n "${STAIRCASE_SMOKE:-}" ] && { smoke_body; exit 1; }
