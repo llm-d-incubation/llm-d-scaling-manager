@@ -140,7 +140,9 @@ without TLS (`kubectl get clustertriggerauthentication
 scaling-manager-external-scaler-${CONTROLLER_NAMESPACE}` answers NotFound), use
 `scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc.cluster.local:9090`
 and leave out `authenticationRef`. If the ScaledObject has a
-`scalingModifiers` formula, do not name this trigger in it.
+`scalingModifiers` formula, do not name this trigger in it. From now on a new
+plan writes `apply: adopt` for this workload, which would drop your triggers:
+set it to `no` until you hand the model over.
 
 **Scaled by an HPA you wrote.** KEDA cannot share a workload with another
 HPA: two HPAs on one workload fight over its replica count. Move that HPA's
