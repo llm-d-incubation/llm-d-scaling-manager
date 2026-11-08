@@ -26,9 +26,9 @@
 # Lowercase, alphanumerics only. A maintainer keeps the names themselves in an
 # untracked local note; re-derive the list from it rather than from grep hits.
 #
-# Two files are exempt because a deployment depends on the name: the PR e2e
-# workflow selects its runners by label, and verify-correct-cluster.sh refuses
-# a run whose API server is the nightly-only cluster.
+# One file is exempt because a deployment depends on the name: the PR e2e
+# workflow selects its runners by label. verify-correct-cluster.sh reads the
+# expected cluster from EXPECTED_CLUSTER, so it names none and is scanned.
 #
 # The check first runs against fixtures holding a synthetic word, in each form
 # above, whose digest is in the list, so a scan that matches nothing cannot
@@ -40,7 +40,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
 
 DIGESTS="7:550139a3a4338ebe 7:556c7df75b76c6cc 6:a3d92ef00ea150eb 5:7700a7306a4966d9 x5:523959063745fcda 7:cb13384f3ea6eb0a x5:8bca72418b5ee480"
-EXEMPT=".github/workflows/ci-e2e-openshift.yaml deploy/ci-e2e-openshift/verify-correct-cluster.sh"
+EXEMPT=".github/workflows/ci-e2e-openshift.yaml"
 
 # scan <git-dir> prints "<path>:<line>" for every hit and exits 1 if any.
 scan() {

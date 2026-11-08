@@ -2477,9 +2477,11 @@ a restart, and the PR pastes both.
 #### Persistence and back-compat
 
 > **Since the move to llm-d-scaling-manager:** the v0.10.0 and v0.10.1 fixtures,
-> `TestLearnedStateFixtures_*` and `TestFrozenDocuments_*` are gone. The renamed
-> controller reads its snapshot from a ConfigMap with a new name, so no document
-> an older release wrote reaches it. The frozen v0.10.1 decoder test stays.
+> `TestLearnedStateFixtures_*`, `TestFrozenDocuments_*` and the frozen v0.10.1
+> decoder (`learned_state_v0101_test.go`, `TestV0101Decoder_*`) are gone. The
+> renamed controller reads its snapshot from a ConfigMap with a new name, so no
+> document an older release wrote reaches it, and a rollback to one reads a
+> different ConfigMap. What follows records how they were built.
 
 The document stays v1. New fields, all `omitempty`:
 

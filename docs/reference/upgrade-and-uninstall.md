@@ -19,20 +19,21 @@ production on it.
 Pin a release tag or a digest, and deploy with the manifests from the **same**
 release. An image older than the manifests crash-loops on flags it does not
 know. Releases are listed on the
-[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases);
-the first full release is `v0.10.0`, after release candidates `-rc1` to
-`-rc4`, and the latest is `v0.10.2`. A checked-out release deploys its own tag,
-so `IMG_TAG` below only makes that explicit. Each release's notes list its image
-digest; a digest names one build, and a tag could in principle be re-pushed.
+[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases).
+No release has been cut in this repository yet; the first one follows. Until then, install from `main`. To pin before then, use the digest of the `:main` build
+you tested, from a checkout of the commit it was built from. A checked-out
+release deploys its own tag, so `IMG_TAG` below only makes that explicit. Each
+release's notes list its image digest; a digest names one build, and a tag
+could in principle be re-pushed.
 
 ```bash
-git checkout v0.10.2
-make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=v0.10.2
-# or by digest (v0.10.2's, from its release notes)
+git checkout main
+make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=main
+# or by digest: the build of main you tested
 make deploy-scaling-manager NAMESPACE=<namespace> \
-  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:08b640117764fdcc768fc66e6ad67d4410b275e3ae9a6d7023b8e6cdcfc25a76
+  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>
 # out-of-reach shape (the cluster admin runs it): the controller runs in llmsm-<namespace>
-NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=v0.10.2
+NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=main
 ```
 
 `IMG_TAG` sets the tag of the default `IMG`; `IMG` replaces the whole reference.
