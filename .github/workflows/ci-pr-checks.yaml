@@ -84,7 +84,7 @@ jobs:
       has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Check for code changes
         if: github.event_name == 'pull_request'
@@ -127,7 +127,7 @@ jobs:
     steps:
       - name: Checkout source
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Sanity check repo contents
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
@@ -184,7 +184,7 @@ jobs:
     steps:
       - name: Checkout source
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The deploy libraries are ~5k lines of shell that no Go test covers, and
       # `make lint-deploy-scripts` -- their entire safety net -- ran in no
@@ -233,7 +233,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # docs/guides/README.md tells contributors this runs in CI. It did not,
       # so a guide could drift from the guide.yaml it is generated from, and a
@@ -270,7 +270,7 @@ jobs:
     steps:
       - name: Checkout source
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install kustomize
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
@@ -316,7 +316,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Two PRs failed e2e setup on a nearly full disk (43 MB and 89 MB free)
       # with only "grafana not ready" in the log. Free the toolchains no e2e
@@ -418,7 +418,7 @@ jobs:
       # fetch-depth: 0, because the step below diffs against the base. The
       # default shallow checkout has no merge base to diff from.
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -568,7 +568,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -690,7 +690,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
