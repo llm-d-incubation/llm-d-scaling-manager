@@ -143,7 +143,7 @@ func TestK2Learner_LearnerStartIsOneLinePerModelAtTheDefaultLevel(t *testing.T) 
 	assert.Equal(t, map[string]int{learn.K2: 1, learn.Mu: 1}, starts[0]["coldVariants"])
 }
 
-// The #303 budget, the first-write burst included (6.1: the first PR that
+// The ev-shindin/llm-scaling-manager#303 budget, the first-write burst included (6.1: the first PR that
 // adds learner-write checks the budget test catches it): on the cycle every
 // replica writes its first k2 and mu, the shipped verbosity writes the same
 // lines at 8 replicas as at 64, learner-write is not among them, and at V(3)

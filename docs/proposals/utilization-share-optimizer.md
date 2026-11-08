@@ -1885,7 +1885,7 @@ replicas. Every figure is a mean of five seeds.
    single dip is no step toward a swing.
    (Two, as first written, took a single swap
    back for a swing -- counting the move that first raised the model -- and
-   held both models halfway: issue #269. Moves alone never reached three for
+   held both models halfway: issue ev-shindin/llm-scaling-manager#269. Moves alone never reached three for
    a load swapping faster than the release window, where every transfer is
    cancelled before it moves, hence the cancels. The results below were
    measured under two.) For the next such window it is planned on its
@@ -2295,7 +2295,7 @@ The user-facing outcome is headroom, in the words of §3. New conditions become 
 | `llmsm_model_scaling_blocked` | `reason="floors-exceed-quota"` | `Σ F > B_net`, over the configured floors only (`ShareRole.MinFloor`) |
 | `llmsm_model_scaling_blocked` | `reason="donors-at-floor"` | out of band, no donor can give |
 | `llmsm_model_scaling_blocked` | `reason="no-compatible-donor"` | out of band, and no donor set opens a fitting hole for every pod of a receiver replica — without node information, no single donor pod is large enough (§6.5) |
-| `llmsm_model_scaling_blocked` | `reason="no-node-fits"` | below need, and with node information no node holds a receiver replica even if every pod the group's other giving roles run on it went (`allocation.ShareNoNodeFits`). Counted from the pods, marked and terminating ones included, so returns do not change it: set every cycle while the role is short and receives nothing, and it replaces `donors-at-floor`, `no-compatible-donor`, `reversal-hold`, `transfer-limit` and `burst-ending` on that role (issue #236) |
+| `llmsm_model_scaling_blocked` | `reason="no-node-fits"` | below need, and with node information no node holds a receiver replica even if every pod the group's other giving roles run on it went (`allocation.ShareNoNodeFits`). Counted from the pods, marked and terminating ones included, so returns do not change it: set every cycle while the role is short and receives nothing, and it replaces `donors-at-floor`, `no-compatible-donor`, `reversal-hold`, `transfer-limit` and `burst-ending` on that role (issue ev-shindin/llm-scaling-manager#236) |
 | `llmsm_utilization_share_claims_total` | `accelerator_type`, `scope`, `outcome` | wake claims on Releasing transfers: `redirected` / `refused-score` / `refused-fit` / `refused-held` / `none-releasing` |
 | `llmsm_utilization_share_donors_per_transfer` | `accelerator_type`, `scope` | histogram: donor replicas funding one receiver replica |
 | `llmsm_model_scaling_blocked` | `reason="release-shape-mismatch"` | GPUs released but the receiver's replica does not fit them (§6.5) |
@@ -2713,7 +2713,7 @@ optimizer every cycle (§6.6).
        confirm cycles (`ShareLedger.ObserveChanging`), or one release
        timeout at the latest. Each held cycle logs the cause at Info and
        sets `donor-changing` on the donor and on the receivers it
-       refused (`ShareLedger.ChangingBlocks`) (issue #290: a fixed hold kept a donor ten minutes after
+       refused (`ShareLedger.ChangingBlocks`) (issue ev-shindin/llm-scaling-manager#290: a fixed hold kept a donor ten minutes after
        its idle-fill pod was Ready, silently). Changing is: a Deployment mid-rollout by its status
        (`scaletarget.RollingOut`: updated replicas below replicas, or a
        spec not yet observed) or by pods of two ReplicaSets, with fewer
@@ -3222,7 +3222,7 @@ Decided, not built here:
   after giving. Not fixed; a demand signal that discounts a draining backlog
   is the fix. Until then, an owner who cannot accept starting a burst short
   keeps a floor (`minReplicaCount`) sized for the burst.
-- **A freed whole node is held only by priority (issue #234).** The receiver
+- **A freed whole node is held only by priority (issue ev-shindin/llm-scaling-manager#234).** The receiver
   is raised when the donors' pods are gone, and any Pending GPU pod in the
   cluster can take a GPU of the freed node first (the transfer ends
   `release-taken`). Raising the receiver earlier, at the donor pod's

@@ -48,7 +48,7 @@ func horizonErrors(lines []string, key string) []string {
 	return out
 }
 
-// Issue #319 removed the startup error for an UNSET horizon. A value that was
+// Issue ev-shindin/llm-scaling-manager#319 removed the startup error for an UNSET horizon. A value that was
 // set and that viper reads as 0 -- one it cannot parse, or a deliberate 0 --
 // must still be reported: past the loader it is indistinguishable from unset,
 // and the startup line then prints the default exactly as an unconfigured

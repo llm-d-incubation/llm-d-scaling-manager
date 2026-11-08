@@ -131,7 +131,7 @@ func TestShareUnplannedDonorDoesNotCallItsMoveOff(t *testing.T) {
 }
 
 // A real swap right after a dip called off waits out the reversal hold, and
-// no longer. This is the accepted price of calling the move off (issue #285,
+// no longer. This is the accepted price of calling the move off (issue ev-shindin/llm-scaling-manager#285,
 // option b): the cancel holds the donor -> receiver pair for ReversalHold, so
 // that fast swaps stay planned on the mean, and a swap in that same direction
 // one minute after the dip's return lands after 17m30s, against 7m30s with no
@@ -182,7 +182,7 @@ func TestShareSwapRightAfterACalledOffDipWaitsOnlyTheReversalHold(t *testing.T) 
 }
 
 // A single wobble called off on its donor does not hold the swap back after
-// it on the mean. The swap and swap back of issue #269
+// it on the mean. The swap and swap back of issue ev-shindin/llm-scaling-manager#269
 // (TestShareSingleSwapBackIsNotHeldOnTheMean), with the first swap's load
 // going back to the busy model for w minutes, o minutes into it: a move
 // toward it starts, and is called off when the load returns. A cancel for the

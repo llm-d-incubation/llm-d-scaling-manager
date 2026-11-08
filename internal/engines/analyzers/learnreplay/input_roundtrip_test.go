@@ -70,7 +70,7 @@ func fillNonZero(t *testing.T, v reflect.Value, path string, n *int) {
 // field InputOf or decodeInput drops, or reads as another type, fails.
 //
 // VariantMetadata is the one field not recorded: no analyzer reads it yet.
-// The exemption is revisited at #345 step 2, which takes the composite's
+// The exemption is revisited at ev-shindin/llm-scaling-manager#345 step 2, which takes the composite's
 // variants from it; the step that first has an analyzer read it must record
 // it and end the exemption, or that analyzer cannot be replayed.
 func TestInput_EveryAnalyzerInputFieldSurvivesTheRecording(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// The stale latch's band at the measured rate noise (#526,
+// The stale latch's band at the measured rate noise (ev-shindin/llm-scaling-manager#526,
 // SwitchMuLatchReadsSmoothedRatio). The 1.6-2.0 band is narrower than the
 // per-pod rate noise measured on E1 (7.5-18.9 %, lag-one 0.1-0.4), so on
 // the cycle's own ratio one excursion set and released the latch several
@@ -74,7 +74,7 @@ func checkLatchBand(tb testing.TB, tn config.AnalyzerTuning, ns arNoiseSpec, on 
 
 // On, every seed of the latch-return-excursion cases holds at both measured
 // noise levels, at the default return ratio and at 1.3. Off, the same cases
-// fail as #524 measured them before this switch (default: 100 of 100 at
+// fail as ev-shindin/llm-scaling-manager#524 measured them before this switch (default: 100 of 100 at
 // either level; 1.3: 11 and 97 of 100): the switch is what the cases see.
 func TestMuLatchBand_OneChangePerExcursionAtTheMeasuredNoise(t *testing.T) {
 	ret13 := tuningWith(func(t *config.AnalyzerTuning) { t.MuChoice.ReturnRatio = 1.3 })
@@ -82,7 +82,7 @@ func TestMuLatchBand_OneChangePerExcursionAtTheMeasuredNoise(t *testing.T) {
 		name string
 		tn   config.AnalyzerTuning
 		// offFailsAtLeast is the fewest seeds of 100 the switch off fails at
-		// each noise level, below what #524 measured.
+		// each noise level, below what ev-shindin/llm-scaling-manager#524 measured.
 		offFailsAtLeast [2]int
 	}{
 		{"returnRatio 1.6", tuningDefault, [2]int{90, 90}},

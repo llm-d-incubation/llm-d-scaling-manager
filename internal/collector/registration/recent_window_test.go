@@ -187,7 +187,7 @@ var _ = Describe("the prefill pricing queries", func() {
 	})
 
 	// Deliberately NOT an engine-specific pair: SGLang publishes no per-stage
-	// prefill figure at all (sgl-project/sglang issue #14303), so the query is
+	// prefill figure at all (sgl-project/sglang#14303), so the query is
 	// registered once under its bare name and simply returns no series there,
 	// leaving the field at zero and prefill priced the way it always was.
 	// Pinned because the obvious "fix" -- adding it to EngineSpecificQueries --

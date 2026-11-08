@@ -40,7 +40,7 @@ import (
 // persistent mismatch away from a ramp is real evidence that the shape, and so
 // KVreq, does not describe the fleet. The collector now has a k averaged over
 // the same window as the rate (KvUsageMean, which the ITL line is fitted
-// from: issue #393), so this can become a gate again. Until it does, the check
+// from: issue ev-shindin/llm-scaling-manager#393), so this can become a gate again. Until it does, the check
 // still pairs the instant k with the rate[1m] figures, and only logs.
 //
 // Warm-pool replicas and roles priced from no line (itlLineRole: prefill,
@@ -256,7 +256,7 @@ func (a *SaturationAnalyzer) noteITL(key string, replicas []domain.ReplicaMetric
 		// DefaultMinObservableK and is priced from the readings the window
 		// already holds from when it was working -- and, once those have aged
 		// out, from the key's last slope (slopeHeld), so the line outlives a
-		// long light stretch (issue #284).
+		// long light stretch (issue ev-shindin/llm-scaling-manager#284).
 		//
 		// pinnedAtBPrior says the line was priced one-sided at the cap
 		// (SwitchITLOneSidedAtCap): no learned B, and the prior's line (its

@@ -103,8 +103,8 @@ All other configuration is passed directly to the deploy/test commands in later 
 Clone the repository and enter the directory:
 
 ```bash
-git clone https://github.com/ev-shindin/llm-scaling-manager.git
-cd llm-scaling-manager
+git clone https://github.com/llm-d-incubation/llm-d-scaling-manager.git
+cd llm-d-scaling-manager
 ```
 
 Make sure you're on the correct branch:

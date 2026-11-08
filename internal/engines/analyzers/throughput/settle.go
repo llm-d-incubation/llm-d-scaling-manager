@@ -94,7 +94,7 @@ const SwitchITLIdleOnEvidence = "throughput-itl-idle-needs-evidence"
 const SwitchITLReadsFinitePodMean = "throughput-itl-reads-the-finite-pod-mean"
 
 // SwitchITLOwnSettleBackdates is the replay switch for the backdate on the
-// analyzer's own tracker (issue #511). On, a model's first observation is
+// analyzer's own tracker (issue ev-shindin/llm-scaling-manager#511). On, a model's first observation is
 // one, at the cycle, of replicas Joined ownSettleBackdate earlier
 // (settlerow.ObserveOwnSince). Off, as before, the rows are observed at the
 // backdate and again at the cycle (settlerow.ObserveOwn), and below a 48 s
@@ -110,7 +110,7 @@ const SwitchITLOwnSettleBackdates = "throughput-itl-own-settle-backdates-the-fir
 // analyzer's own tracker takes the model's replicas as seen, Joined that
 // long ago (settlerow.ObserveOwnSince: one observation, since the backdate
 // is longer than the tracker's absence tolerance below a 48 s interval,
-// issue #511), as the slo analyzer's. For the ITL line it does not matter:
+// issue ev-shindin/llm-scaling-manager#511), as the slo analyzer's. For the ITL line it does not matter:
 // a line with no engine view never waits after a restart.
 const ownSettleBackdate = itl.DefaultSteadyFor
 

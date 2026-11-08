@@ -463,7 +463,7 @@ func bucketOf(key string) string {
 
 // SwitchThroughputFloorRaisesVariants is the replay switch for the variants
 // following a role the throughput floor or the fleet-shape hold raises (issue
-// #495). On, the raised role's demand is water-filled over its variants by
+// ev-shindin/llm-scaling-manager#495). On, the raised role's demand is water-filled over its variants by
 // supply (raiseVariantsToRoles): a variant above its share keeps its own
 // figure, the rest share what is left, so the variants sum to the role and
 // each lifted one reads the role's spare -- what the warm pool's pressure

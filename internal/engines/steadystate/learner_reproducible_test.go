@@ -23,7 +23,7 @@ import (
 // and FileScaleTarget events by variant (namespace/variant key). The
 // generators analyse models in sorted order themselves. So two recordings
 // made at one commit have no diff, and a diff between two means an input
-// changed (#400).
+// changed (ev-shindin/llm-scaling-manager#400).
 //
 // The variant names inside one NoteVariantsPresent come from a slice in the
 // generators, so this test cannot see their sort; the test after it does.

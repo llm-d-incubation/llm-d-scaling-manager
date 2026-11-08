@@ -90,7 +90,7 @@ func linesWith(log, msg string) int {
 
 // At the shipped verbosity a cycle used to write about 1.9 KB per replica:
 // replica-capacity-decision, k2-decision and derived-mu, each once per replica
-// (issue #279). They are at perReplicaLogLevel now, and the default carries one
+// (issue ev-shindin/llm-scaling-manager#279). They are at perReplicaLogLevel now, and the default carries one
 // replica-capacity-summary line per variant, so the number of lines a cycle
 // writes no longer grows with the fleet, and each replica adds only its
 // summary entry.

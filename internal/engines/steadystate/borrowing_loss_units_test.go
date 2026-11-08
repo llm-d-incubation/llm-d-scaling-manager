@@ -108,7 +108,7 @@ var _ = Describe("the units of the borrowing loss counters", func() {
 		Expect(counter(constants.LLMSMKueuePreemptedPodsTotal)).To(Equal(map[string]float64{"a,m": 0}))
 	})
 
-	// Review #199 (5): a model whose replicas may be released at Kueue's gate
+	// Review ev-shindin/llm-scaling-manager#199 (5): a model whose replicas may be released at Kueue's gate
 	// in a cycle that counts no borrowing has its kueue-gate release counter
 	// at 0 from that cycle, so its first release is an increase. No
 	// preemption counter: nothing is borrowed. Before, the counters were

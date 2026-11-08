@@ -8,7 +8,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// A prefill lower bound in the floor (issue #144). The figures: prefill P of
+// A prefill lower bound in the floor (issue ev-shindin/llm-scaling-manager#144). The figures: prefill P of
 // 919,449 tokens, a bound of 2 req/s per replica, 6 req/s arriving, scale-up
 // 0.85. lambda / mu is 3 replicas' worth of demand against a ready fleet of
 // one, which the engine turns into RC = 3 / 0.85 - 1 = 2.53 replicas.

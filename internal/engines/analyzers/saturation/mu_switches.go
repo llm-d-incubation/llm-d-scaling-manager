@@ -86,7 +86,7 @@ const SwitchMuMinorityFigureExpires = "mu-minority-figure-expires"
 const SwitchMuWeighingBand = "mu-weighing-band"
 
 // SwitchMuLatchReadsSmoothedRatio is the replay switch for the band of mu's
-// stale latch (#526; analyzer-learner.md, 3.5). On, a stale measurement is
+// stale latch (ev-shindin/llm-scaling-manager#526; analyzer-learner.md, 3.5). On, a stale measurement is
 // set and released on its ratio to the derived figure smoothed over
 // MuLatchRatioSmoothing (muChoice.smoothRatio), so one excursion of the
 // ratio changes the choice at most once at the rate noise measured on the

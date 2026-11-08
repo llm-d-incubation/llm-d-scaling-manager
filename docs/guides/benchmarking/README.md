@@ -296,13 +296,13 @@ your own build whenever you change controller code.
 To benchmark a release of this project, check out its tag so the manifests
 match the image, and pin the image by tag or digest. The digest of each release
 is in its notes on the
-[Releases page](https://github.com/ev-shindin/llm-scaling-manager/releases):
+[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases):
 
 ```bash
 git checkout v0.10.2
-export IMG=ghcr.io/ev-shindin/llm-scaling-manager:v0.10.2
+export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.10.2
 # or the exact build
-export IMG=ghcr.io/ev-shindin/llm-scaling-manager@sha256:08b640117764fdcc768fc66e6ad67d4410b275e3ae9a6d7023b8e6cdcfc25a76
+export IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:08b640117764fdcc768fc66e6ad67d4410b275e3ae9a6d7023b8e6cdcfc25a76
 ```
 
 `:main` is rebuilt on every push to `main`, so two runs against it a day apart

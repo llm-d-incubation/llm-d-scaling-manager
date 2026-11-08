@@ -1,7 +1,7 @@
 # SLO tiers: size to a TTFT/TPOT target, not only to a fill threshold
 
 **Status:** proposal, 2026-10-15. **Phase 0 (the analyzer, observing) is
-built** in `internal/engines/analyzers/slo` (PR #148); nothing that changes a
+built** in `internal/engines/analyzers/slo` (PR ev-shindin/llm-scaling-manager#148); nothing that changes a
 replica count is. Step 2a (the TTFT curve's inputs) is not built. The main
 review results are under [Review findings](#review-findings). Tracks
 [#141](https://github.com/ev-shindin/llm-scaling-manager/issues/141).
@@ -162,7 +162,7 @@ queueing**; only the proxy hop is missing. The catches:
 | `vllm:request_prefill_time_seconds`, `vllm:request_queue_time_seconds` | per pod | Not read today. The raw inputs to look at until step 2a is re-built. Coarse buckets |
 | `vllm:time_to_first_token_seconds` | per pod | Diagnostic only, as today |
 
-The router's request metrics have **no pool or namespace label** (#2309). The
+The router's request metrics have **no pool or namespace label** (kubernetes-sigs/gateway-api-inference-extension#2309). The
 analyzer scopes by the scrape target's `namespace`, as llm-d's keda-epp does.
 That assumes the EPP runs in the model's namespace, which nothing enforces.
 
@@ -177,7 +177,7 @@ From `main` at `fee45eb52`, where this work started, with what this branch chang
 | --- | --- | --- |
 | A tier resolves per **model** | `modelPolicy` in `steadystate/engine.go`; variants that disagree get the lexicographically smallest tier | The target is per model, and the fill is per variant |
 | `analyzers:` is replaced whole by an overlay, and an absent name is disabled | `ScalingPolicy.Merge`; `ScalingPolicy.AnalyzerEnabled` returns false for an unlisted name | Dangerous for mode selection; see [Configuration](#configuration) |
-| ~~An entry that lists `analyzers:` resets the scaling band~~ **Fixed in #154** | At `fee45eb52`, `ApplyDefaults` filled `0.85 / 0.70` into each stored V2-shaped entry and `Merge` copied it over `default`'s band. Since #154 a stored entry is validated as a defaulted copy (`ValidateEntry`) and left unset, so a tier inherits the band | A tier listing `slo` restates only saturation's analyzer entry, because the list is replaced whole |
+| ~~An entry that lists `analyzers:` resets the scaling band~~ **Fixed in ev-shindin/llm-scaling-manager#154** | At `fee45eb52`, `ApplyDefaults` filled `0.85 / 0.70` into each stored V2-shaped entry and `Merge` copied it over `default`'s band. Since ev-shindin/llm-scaling-manager#154 a stored entry is validated as a defaulted copy (`ValidateEntry`) and left unset, so a tier inherits the band | A tier listing `slo` restates only saturation's analyzer entry, because the list is replaced whole |
 | A `Validate` error drops the **whole tier entry** | `parseScalingPolicyConfigRejects` in `controller/configmap_helpers.go` | A bad `slo` block drops the tier, not one key |
 | Every enabled analyzer runs; **only saturation's result is used** | `runAnalyzersAndScore`; `collectV2ModelRequest` sets `CompositeSignal: namedResults[0]` | The rest reach only `recordAnalyzerMetrics` (`llmsm_analyzer_*`), liveness and the cycle log. Observe mode is free |
 | `AvgTTFT` is diagnostic by decision | `domain.ReplicaMetrics.AvgTTFT` | A `TTFT(T) = A·T + B` fit was built and removed: queue wait landed in the intercept (82 s) |
@@ -265,18 +265,18 @@ saturation's, not shared. `O` scales both `D` and `P`, so it largely cancels in
 ### What the composite needs before phase 1
 
 1. **The branch landed**, with the three fixes the engine-structure review
-   found (the #82 quota-charge regression; the saturation fallback skipping
+   found (the ev-shindin/llm-scaling-manager#82 quota-charge regression; the saturation fallback skipping
    the per-SO `Reason` filter; that guard tested on the real
-   `buildComposite`). `HeldRoleDemand` is handled per role (built, #167): kept
+   `buildComposite`). `HeldRoleDemand` is handled per role (built, ev-shindin/llm-scaling-manager#167): kept
    in saturation's frame, raised to the most demanding other analyzer's need,
    and dropped where another analyzer's frame decides the role.
 2. **Saturation disabled only by an explicit `enabled: false`** (above).
 3. **`shadow: true`** (above), also left out of `maxScore`, or a shadowed
    `score` still moves cross-model priority.
-4. **Warm-pool pressure from the composite** (built, #167), not from
+4. **Warm-pool pressure from the composite** (built, ev-shindin/llm-scaling-manager#167), not from
    saturation's result. The composite keeps saturation's PRC, so supply is the
    same in both; only demand differs.
-5. **Size a role saturation sees as idle** (built, #167). The composite
+5. **Size a role saturation sees as idle** (built, ev-shindin/llm-scaling-manager#167). The composite
    expresses a need as demand at saturation's PRC, `N_com × P_sat`, which is
    defined when `D_sat[role] = 0`.
 6. **Hysteresis on the deciding source** (bound 6): per-SO memory of the last
@@ -355,7 +355,7 @@ separate collector fix.
    add prefill tok/s as a second regressor.
 7. **The batch cap is per engine instance**, so a pod collapsed from several
    data-parallel ranks needs the cap times the ranks. Collector-wide. Done in
-   issue #150: rows carry `EngineRanks`, and ranks behind one API server are
+   issue ev-shindin/llm-scaling-manager#150: rows carry `EngineRanks`, and ranks behind one API server are
    folded in the per-pod queries.
 8. **`max_num_batched_tokens` can bind first**: with speculative decoding the
    cap is `min(max_num_seqs, max_num_batched_tokens ÷ (1 + n_spec))`.
@@ -544,7 +544,7 @@ Two PRs, under [the learner rules](analyzer-learner.md):
 
 | PR | What | Goldens | Depends on |
 | --- | --- | --- | --- |
-| S1 (2b) | Price each prefill variant of a P/D model against the TTFT target in shadow: the TTFT predicted at the current rate, and the rate per replica at which the bounded TTFT meets it. Aggregated variants wait for the what-if M1. Published as `llmsm_slo_*` series and in the cycle log; no replica count changes. Switch `slo-ttft-price`. Inputs and outputs: [S1 decisions](#s1-decisions) | `slo-published.csv` moves with the switch on | the what-if P3 (PR #471); a golden with router TTFT and the [recorder fields](analyzer-learner.md#29-recorder-fields-for-ttft-and-capture), which the prefill-stress recording provides |
+| S1 (2b) | Price each prefill variant of a P/D model against the TTFT target in shadow: the TTFT predicted at the current rate, and the rate per replica at which the bounded TTFT meets it. Aggregated variants wait for the what-if M1. Published as `llmsm_slo_*` series and in the cycle log; no replica count changes. Switch `slo-ttft-price`. Inputs and outputs: [S1 decisions](#s1-decisions) | `slo-published.csv` moves with the switch on | the what-if P3 (PR ev-shindin/llm-scaling-manager#471); a golden with router TTFT and the [recorder fields](analyzer-learner.md#29-recorder-fields-for-ttft-and-capture), which the prefill-stress recording provides |
 | S2 (2c) | Enforce, once S1's shadow predictions pass their gate | moves | S1; Q1 (the measured `V_P` and prompt spread); M2, the what-if staircase run itself with its bursty bucket, not the per-bucket PR that precedes it in that plan |
 
 **What S1 calls.** P3 is built, and is UNVALIDATED until P2
@@ -575,7 +575,7 @@ queue), the router queue (flow control off) or a tail (no histograms).
 
 Settled 2026-11-04, revised 2026-11-05 after two review rounds, before S1 is
 built. The model is P3's ([end-to-end TTFT](slo-capacity-planner-ttft.md), and
-its "As built (P3)" section on PR #471); this section says only what S1 feeds
+its "As built (P3)" section on PR ev-shindin/llm-scaling-manager#471); this section says only what S1 feeds
 it and what S1 does with the answer. One rule runs through it: **only err
 toward more replicas.** Where an input is unknown, S1 assumes the value that
 asks for more replicas and flags it; where a flag means the answer may
@@ -712,19 +712,19 @@ replicas.
 ##### 2. `V_P` in production
 
 When S1 was built, busy minutes fired only while a learner recording was on,
-because the queue-minimum query was record-only (#470). Q1 changed that
+because the queue-minimum query was record-only (ev-shindin/llm-scaling-manager#470). Q1 changed that
 ([as built](#as-built-q1)). **Decision:** S1 takes P1's
 estimate as it is: busy minutes when it has them, else the peak under a
 queue, else the back-pressure bound, else `no-prefill-capacity`. S1 makes no
 collector change. The collector change is its own PR, **Q1** in the
-[what-if PR plan](slo-capacity-planner.md#pr-plan), after #470 merges and
+[what-if PR plan](slo-capacity-planner.md#pr-plan), after ev-shindin/llm-scaling-manager#470 merges and
 before S2.
 
 Why:
 
 - **Every source reads at or below `V_P`** on the prompts it was learned on.
   Busy minutes read at it when the pod ran flat out and under it otherwise
-  (#470: data-parallel pods and stalls under-read); the other two are lower
+  (ev-shindin/llm-scaling-manager#470: data-parallel pods and stalls under-read); the other two are lower
   bounds, flagged `VPLowerBound`. A low `V_P` asks for more replicas, so S1
   need not refuse the lower bounds. The one exception is the noise of the
   peak under a queue, a max of one-minute rates, which P1 states as a limit.
@@ -951,8 +951,8 @@ prompts (a few long documents among short chat turns) sit above it, and a
 own prefill tail, so it over-promises TTFT and asks for too few replicas.
 
 **Checked before relying on it:** does a larger `cv` always price a longer
-TTFT at p90 and above? No test on #471 asserts it (its property cases vary
-the rate and the replicas, not `cv`), so it was scanned on #471's round-1 tip
+TTFT at p90 and above? No test on ev-shindin/llm-scaling-manager#471 asserts it (its property cases vary
+the rate and the replicas, not `cv`), so it was scanned on ev-shindin/llm-scaling-manager#471's round-1 tip
 (`f12de0dcf`, `engineWait`): `TTFTAt` on the prefill side, mean prompt 1000
 and 8000 tokens, `a` 5 and 30 ms, 1 and 4 pods, at 0.05, 0.3, 0.6 and 0.85 of
 the knee, p90, p95 and p99, `cv` 0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 7 and 10:
@@ -1322,7 +1322,7 @@ exists) and passes on the PR; each switch is also held by the golden runs.
    so a per-variant prediction cannot be scored one to one. *Recommend:*
    score the request-weighted mixture of the variants' predicted tails.
 7. **The `VPShapeMoved` threshold: closed, 1.2x** ([decision 2](#2-v_p-in-production)),
-   and now P3's own fallback. With P1's curve (#475), P3 rescales `V_P`
+   and now P3's own fallback. With P1's curve (ev-shindin/llm-scaling-manager#475), P3 rescales `V_P`
    along it in place of flagging
    ([P3 after P2](slo-capacity-planner-ttft.md#as-built-p3-after-p2)); the
    flag stands only where there is no curve.
@@ -1644,7 +1644,7 @@ until this is built. Deferred until a user asks for it.
 
 ## Tests
 
-Unit and promtool tests for phase 0 are in PR #148. Phase 1 needs composite
+Unit and promtool tests for phase 0 are in PR ev-shindin/llm-scaling-manager#148. Phase 1 needs composite
 tests: guard is `max(N_sat, N_slo)` per SO, the two edges, the rise-slowly
 rule, and the closed loop of bound 1 (a loose SLO in guard mode never exceeds
 saturation's `N`). An e2e spec where the SLO decides needs latency that rises
@@ -1775,7 +1775,7 @@ accelerator, in its own run.
 
 ## Review findings
 
-The full discussion is on PR #147 and PR #148. The design above already
+The full discussion is on PR ev-shindin/llm-scaling-manager#147 and PR ev-shindin/llm-scaling-manager#148. The design above already
 reflects each of these: a fill bound on the observed maximum ratcheted the
 fleet (to about 0.28 at `scaleUp = 0.85`), so it is a fixed clamp; holding an
 infeasible variant froze single-variant P/D models, so it abstains; a TTFT

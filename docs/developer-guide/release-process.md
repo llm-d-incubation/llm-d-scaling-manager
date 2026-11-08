@@ -25,7 +25,7 @@ instead.
 1. **A version tag** in this repository, `vMAJOR.MINOR.PATCH` or
    `vMAJOR.MINOR.PATCH-PRERELEASE` (e.g. `v0.6.0`, `v0.6.0-rc1`).
 2. **A container image** at `ghcr.io/<repository owner>/llm-d-scaling-manager:<tag>`,
-   i.e. `ghcr.io/ev-shindin/llm-scaling-manager:<tag>` for this repository.
+   i.e. `ghcr.io/llm-d-incubation/llm-d-scaling-manager:<tag>` for this repository.
 3. **Release notes**, in the GitHub Release. They are not kept as a file in
    this repository.
 
@@ -73,11 +73,11 @@ Tag the merge commit of the release PR, not the tip of `main` (another PR may
 have merged since) and not your local branch. The command checks that the tagged
 commit pins the release and is on `main`, and pushes only then.
 
-`REMOTE` is the name of your remote for `ev-shindin/llm-scaling-manager`
+`REMOTE` is the name of your remote for `llm-d-incubation/llm-d-scaling-manager`
 (`git remote -v` lists them). It is not always `origin`.
 
 ```bash
-REMOTE=<remote for ev-shindin/llm-scaling-manager>
+REMOTE=<remote for llm-d-incubation/llm-d-scaling-manager>
 git fetch "$REMOTE"
 git tag -m "llm-d-scaling-manager vX.Y.Z" vX.Y.Z <merge commit of the release PR>
 git show vX.Y.Z:config/base/manager/kustomization.yaml | grep -x '  newTag: vX.Y.Z' \
@@ -155,7 +155,7 @@ release and add the release-branch CI change, which a tag runs from the tagged
 commit:
 
 ```bash
-REMOTE=<remote for ev-shindin/llm-scaling-manager>
+REMOTE=<remote for llm-d-incubation/llm-d-scaling-manager>
 git fetch --tags "$REMOTE"
 git push "$REMOTE" 'v0.10.1^{commit}:refs/heads/release-0.10'
 ```
@@ -181,7 +181,7 @@ branch's tags are refused.
 3. **Tag its merge commit**, as in [step 1](#1-push-the-tag), with the release
    branch in place of `main`:
    ```bash
-   REMOTE=<remote for ev-shindin/llm-scaling-manager>
+   REMOTE=<remote for llm-d-incubation/llm-d-scaling-manager>
    git fetch "$REMOTE"
    git tag -m "llm-d-scaling-manager v0.10.2" v0.10.2 <merge commit>
    git show v0.10.2:config/base/manager/kustomization.yaml | grep -x '  newTag: v0.10.2' \
@@ -234,7 +234,7 @@ release run end to end without moving `latest`.
 
 ## Verifying a release
 
-Replace the owner `ev-shindin` with yours if you release from a fork. The
+Replace the owner `llm-d-incubation` with yours if you release from a fork. The
 workflow signs with cosign v3; verify with cosign v3 or later, because cosign v2
 reports `no signatures found` for these images. With no cosign installed, run
 its image: `docker run --rm ghcr.io/sigstore/cosign/cosign:v3.0.6 verify ...`.
@@ -243,10 +243,10 @@ Record the index digest in the release notes, so users can deploy by digest:
 `docker buildx imagetools inspect "$IMAGE:vX.Y.Z"` prints it as `Digest:`.
 
 ```bash
-IMAGE=ghcr.io/ev-shindin/llm-scaling-manager
+IMAGE=ghcr.io/llm-d-incubation/llm-d-scaling-manager
 cosign verify "$IMAGE:vX.Y.Z" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/ev-shindin/llm-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/vX.Y.Z"
+  --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/vX.Y.Z"
 
 # SBOM and provenance attached to the index
 docker buildx imagetools inspect "$IMAGE:vX.Y.Z" --format '{{ json .SBOM }}'

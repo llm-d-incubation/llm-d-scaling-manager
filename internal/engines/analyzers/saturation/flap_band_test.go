@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The idle band and the k2 key's bucket band (#396), each with its replay
+// The idle band and the k2 key's bucket band (ev-shindin/llm-scaling-manager#396), each with its replay
 // switch off as the behaviour before it.
 
 // idleBandRig notes one decode replica's readings, one cycle apart, and
@@ -239,7 +239,7 @@ func TestK2KeyBucket_TheSwitchPicksTheLength(t *testing.T) {
 	assert.Equal(t, 530.0, length("m", 480), "off: the tracked length")
 }
 
-// The throughput key's switch (#415), the same way: on, the band's length,
+// The throughput key's switch (ev-shindin/llm-scaling-manager#415), the same way: on, the band's length,
 // the one the k2 key reads; off, the tracked length, and no move or carry.
 // Each key reads the band by its own switch, and the band runs while either
 // is on.
@@ -262,7 +262,7 @@ func TestMuKeyBucket_TheSwitchPicksTheLength(t *testing.T) {
 	assert.Equal(t, 530.0, got.k2, "the k2 switch off: the tracked length")
 }
 
-// The two keys sit in one bucket on every cycle (#415): k2's settle test
+// The two keys sit in one bucket on every cycle (ev-shindin/llm-scaling-manager#415): k2's settle test
 // (k2Unsettled) compares a throughput reference with a k2 reference, read
 // under the two keys, and from different buckets they are figures of
 // different shapes. On the property case's fleet, its output length 6 %

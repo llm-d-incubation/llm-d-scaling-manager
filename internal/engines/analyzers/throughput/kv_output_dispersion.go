@@ -7,8 +7,8 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 )
 
-// The KV a resident request holds, with output lengths that vary (issue #433,
-// split from #276; the same correction as saturation's, kv_output_dispersion.go
+// The KV a resident request holds, with output lengths that vary (issue ev-shindin/llm-scaling-manager#433,
+// split from ev-shindin/llm-scaling-manager#276; the same correction as saturation's, kv_output_dispersion.go
 // there, and the slo analyzer's, output_dispersion.go there).
 //
 // A long request stays resident longer, so a KV snapshot finds it in
@@ -37,7 +37,7 @@ import (
 
 // SwitchKVPerRequestOutputDispersion is the replay switch for the spread of
 // output lengths in the KV per request on the throughput analyzer (issue
-// #433). On, a resident request is priced at ILeff + D*OL/2, D the spread
+// ev-shindin/llm-scaling-manager#433). On, a resident request is priced at ILeff + D*OL/2, D the spread
 // read from the output-length histogram. Off, as before, at ILeff + OL/2.
 const SwitchKVPerRequestOutputDispersion = "throughput-kv-per-request-output-dispersion"
 

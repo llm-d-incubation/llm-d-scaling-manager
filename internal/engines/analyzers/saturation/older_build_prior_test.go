@@ -40,7 +40,7 @@ func TestTheOldServiceRateClockRunsOnlyOnServingRows(t *testing.T) {
 	}
 }
 
-// A previous figure from a PR #151 document is last used when it was
+// A previous figure from a PR ev-shindin/llm-scaling-manager#151 document is last used when it was
 // installed there, not at the restore: dated from the restore, a figure days
 // old was handed a fresh bucket retention.
 func TestAnOlderBuildsPriorAgesFromItsInstall(t *testing.T) {
@@ -61,7 +61,7 @@ func TestAnOlderBuildsPriorAgesFromItsInstall(t *testing.T) {
 	}
 }
 
-// A previous figure from a PR #151 document is not installed where the
+// A previous figure from a PR ev-shindin/llm-scaling-manager#151 document is not installed where the
 // document holds a window for the key: that build priced such a key from the
 // window, never the figure, and installed it priced the next rollout from a
 // figure the variant had since replaced.

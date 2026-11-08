@@ -16,7 +16,7 @@ import (
 )
 
 // Giving borrowed capacity back
-// (the Kueue borrowing proposal, PR #161, B5), and stopping new borrowing
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B5), and stopping new borrowing
 // while a lender waits or after a preemption.
 //
 // The steady-state engine owns one BorrowGovernor. Each cycle it Observes the

@@ -286,7 +286,7 @@ const outputSpreadRun = "../../internal/engines/analyzers/learnreplay/testdata/g
 
 // A wider spread only ever lowers a rate and raises a TPOT, at every D and
 // wherever the batch cap or the band binds: the planner errs toward more
-// replicas, never fewer. D 1 is the shape as it was priced before #276. A
+// replicas, never fewer. D 1 is the shape as it was priced before ev-shindin/llm-scaling-manager#276. A
 // refusal promises nothing: a rate of 0, a TPOT with no bound.
 func TestOutputSpread_OnlyAsksForMoreReplicas(t *testing.T) {
 	price := func(d, outputTokens float64, cap int64) (knee, tpotRate, tpot float64) {

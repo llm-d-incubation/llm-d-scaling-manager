@@ -149,7 +149,7 @@ func (f *fragFleet) run(cycles int) ([][]string, bool) {
 	return seq, funded
 }
 
-// The issue #236 layout: S1 and S2 hold four pods each on n2 and n3 beside
+// The issue ev-shindin/llm-scaling-manager#236 layout: S1 and S2 hold four pods each on n2 and n3 beside
 // four GPUs of other pods, and one each on n4 beside six. No node can be
 // emptied for G. S1 and S2 are idle, but G is the only role short and no node
 // can hold its replica, so none of their spare is returned: they stay at 5.

@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
 )
 
-// The ITL baseline's last-admitted stamp (issue #495) is one entry with its
+// The ITL baseline's last-admitted stamp (issue ev-shindin/llm-scaling-manager#495) is one entry with its
 // baseline: the size bound drops it with the baseline's variant, a stamp
 // left with no baseline goes first, and the digest leaves it out, as it does
 // a slope's fit time.

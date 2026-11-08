@@ -26,7 +26,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils"
 )
 
-// Issue #467: the slo line priced one-sided at the sequence cap while B is
+// Issue ev-shindin/llm-scaling-manager#467: the slo line priced one-sided at the sequence cap while B is
 // unlearned (SwitchITLOneSidedAtCap), through the line's pricing
 // (priceVariant), on the engine's rig. The slo line is priced at the fill
 // where it meets the TPOT target: a lower fill is more replicas, so a line
@@ -48,7 +48,7 @@ const sloTruthFill = 0.5
 // target is the TPOT target the true line meets at sloTruthFill.
 func (l sloCapTruth) target() float64 { return l.itl(sloTruthFill) }
 
-// sloCapTruths is issue #467's bias grid.
+// sloCapTruths is issue ev-shindin/llm-scaling-manager#467's bias grid.
 var sloCapTruths = []sloCapTruth{{0.05, 0.010, 0.97}, {0.05, 0.030, 0.97}, {0.01, 0.020, 0.97}, {0.01, 0.030, 0.97}}
 
 // capRig is the settle rig over a store stating a cap of 64 for agg.
@@ -488,7 +488,7 @@ func TestOneSided_TheHeldSlopeKeepsThePriceAndEndsWithTheHold(t *testing.T) {
 }
 
 // The switch is a replay switch the analyzer accepts, and off is the line
-// before #467.
+// before ev-shindin/llm-scaling-manager#467.
 func TestOneSided_TheSwitchPicksTheLine(t *testing.T) {
 	require.Contains(t, ReplaySwitchNames(), SwitchITLOneSidedAtCap)
 	l := sloCapTruth{0.05, 0.030, 0.97}

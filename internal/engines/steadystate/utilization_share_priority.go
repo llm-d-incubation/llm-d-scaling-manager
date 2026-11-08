@@ -1,6 +1,6 @@
 package steadystate
 
-// Whole-node receivers and pod priority (issue #234). A node the optimizer
+// Whole-node receivers and pod priority (issue ev-shindin/llm-scaling-manager#234). A node the optimizer
 // frees for a whole-node model opens one GPU at a time as the donors' pods go,
 // and the receiver's pod fits only once all of them are free. The scheduler
 // holds nothing for a pending pod of equal priority, so any pending pod that

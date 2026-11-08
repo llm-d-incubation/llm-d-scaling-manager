@@ -473,7 +473,7 @@ For a policy declaring both kinds, `reportQuotaAloneAllocation`
 (`internal/engines/steadystate/quota_alone_report.go`) runs the optimizer a
 second time over the quota constraints alone, once every 10 eligible cycles, and
 logs `Upgrade note (transitional)` when the set of differing variants changes.
-It is marked `TODO(#164)`: remove it, `quotaAloneReportEvery`, the two
+It is marked `TODO(ev-shindin/llm-scaling-manager#164)`: remove it, `quotaAloneReportEvery`, the two
 `quotaAlone*` engine fields and `GreedyByScoreOptimizer.ShadowOptimize` one
 release after the first release that composes limiters.
 

@@ -3,7 +3,7 @@ package slo
 import "github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 
 // SwitchITLRolloutGuard is the replay switch for the line's rollout guard
-// (issue #481, itl.Tracker.RolloutRows). On, while the variant's scale target
+// (issue ev-shindin/llm-scaling-manager#481, itl.Tracker.RolloutRows). On, while the variant's scale target
 // rolls out (capacity.Record.InRollout) or its replicas report more than one
 // revision (domain.RevisionsMixed), the line is offered the newest revision's
 // rows alone: an old pod's reading would be judged against the new engine's

@@ -12,7 +12,7 @@ import (
 )
 
 // A lower bound on prefill's service rate, for the fleet whose prefill never
-// saturates on its own account (issue #144).
+// saturates on its own account (issue ev-shindin/llm-scaling-manager#144).
 //
 // The throughput floor sizes every role at (lambda + backlog/drain) / mu, with
 // lambda the router's arrival rate. That is already "prompt tokens arriving
@@ -39,7 +39,7 @@ import (
 //
 // That argument holds for a noise-free reading. Under the rate gauge's noise
 // the max over minutes picks the noise and reads high, the side that breaks
-// the SLO (issue #397). With SwitchPrefillBoundHeldConfidence on, the
+// the SLO (issue ev-shindin/llm-scaling-manager#397). With SwitchPrefillBoundHeldConfidence on, the
 // constructor's default, the window keeps its samples as read, and the bound
 // is the larger of their mean and the max of lower CONFIDENCE bounds on it,
 // which is a lower bound under noise (prefill_bound_held.go). The max
@@ -168,7 +168,7 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 		// (recordSaturatedThroughputFrom). Under one name for every pod, the
 		// fold kept the fastest pod's reading, and one pod read at twice its
 		// rate -- a doubled series -- or one fast pod set the whole fleet's
-		// bound (#395).
+		// bound (ev-shindin/llm-scaling-manager#395).
 		a.recordSaturatedThroughputFrom(key, rm.PodName, tokens)
 		a.mu.Lock()
 		if ra, ok := a.saturatedThroughput[key]; ok {

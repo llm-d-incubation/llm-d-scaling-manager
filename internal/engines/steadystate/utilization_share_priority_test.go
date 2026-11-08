@@ -38,7 +38,7 @@ func gpuDeployment(name string, gpus int64, pc string) scaletarget.ScaleTargetAc
 }
 
 // A whole-node receiver with no PriorityClass is named: a node freed for it is
-// anyone's while it opens GPU by GPU (issue #234). One with a class, or one
+// anyone's while it opens GPU by GPU (issue ev-shindin/llm-scaling-manager#234). One with a class, or one
 // whose pod fits beside others, is not.
 func TestShareWholeNodeUnprioritized(t *testing.T) {
 	g := allocation.ShareGroup{

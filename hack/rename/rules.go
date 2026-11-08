@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -41,7 +42,65 @@ const (
 	// residual pattern it also finds a capital inside a word, so nothing is
 	// left out before a person has seen why.
 	sweepPattern = `(?i)wva|workload-variant-autoscaler|workload_variant|variant-autoscaler|variantautoscaler`
+
+	// oldRepoSlug is the repository the issue and pull request numbers up to
+	// lastOldNumber belong to. In the new repository a bare #N would name the
+	// new repository's own issue, so --code-moved writes them as oldRepoSlug#N.
+	oldRepoSlug   = "ev-shindin/llm-scaling-manager"
+	lastOldNumber = 533
+
+	// issueRefPattern is what the cheap file test looks for once the code has
+	// moved: a bare issue or pull request number.
+	issueRefPattern = `#[1-9][0-9]*\b`
+	// bareRef is a #N with nothing before it that makes it part of something
+	// else: a word, a path, an entity, a shell length or another #.
+	bareRef = `(?:^|[^\w&/#${])`
 )
+
+// upstreamIssues are the numbers above lastOldNumber that the tree cites bare,
+// each with the repository it belongs to, as read from the text around it. A
+// number above lastOldNumber that is not listed stays as it is.
+var upstreamIssues = map[int]string{
+	550:   "llm-d-incubation/llm-d-fast-model-actuation", // the launcher's own comment, copied with it
+	696:   "llm-d-incubation/llm-d-fast-model-actuation",
+	1002:  "llm-d/llm-d-workload-variant-autoscaler",
+	1003:  "llm-d/llm-d-workload-variant-autoscaler",
+	1129:  "llm-d/llm-d-workload-variant-autoscaler",
+	1162:  "llm-d/llm-d-workload-variant-autoscaler",
+	1237:  "llm-d/llm-d-workload-variant-autoscaler",
+	1238:  "llm-d/llm-d-workload-variant-autoscaler",
+	1245:  "llm-d/llm-d-workload-variant-autoscaler",
+	1250:  "llm-d/llm-d-workload-variant-autoscaler",
+	1260:  "llm-d/llm-d-workload-variant-autoscaler",
+	1261:  "llm-d/llm-d-workload-variant-autoscaler",
+	1263:  "llm-d/llm-d-workload-variant-autoscaler",
+	1444:  "llm-d/llm-d-workload-variant-autoscaler",
+	1455:  "llm-d/llm-d-workload-variant-autoscaler",
+	1481:  "llm-d/llm-d-workload-variant-autoscaler",
+	1516:  "llm-d/llm-d-workload-variant-autoscaler",
+	1544:  "llm-d/llm-d-autoscaling",
+	1981:  "llm-d/llm-d",
+	2309:  "kubernetes-sigs/gateway-api-inference-extension",
+	3845:  "kubernetes-sigs/kind",
+	6450:  "kedacore/keda",
+	9178:  "ai-dynamo/dynamo",
+	12780: "sgl-project/sglang",
+	13098: "sgl-project/sglang",
+	14303: "sgl-project/sglang",
+	21703: "sgl-project/sglang",
+	16234: "vllm-project/vllm",
+	17103: "vllm-project/vllm",
+	34303: "vllm-project/vllm",
+	59971: "vllm-project/vllm",
+}
+
+// learnerInventory is the page whose #1 to #16 are rows of its own table of
+// learners, not issues.
+var learnerInventory = []string{"docs/proposals/analyzer-learner.md"}
+
+// prBodyFixtures hold a bare #N because a check of this repository parses it
+// out of a pull request body, its own or one it is shown.
+var prBodyFixtures = []string{"hack/check-goldens-section.sh", ".github/workflows/assign-docs-pr.yml"}
 
 // Path classes for the report.
 const (
@@ -182,6 +241,31 @@ func RulesFor(t Targets, metrics []string) []Rule {
 		// not have these numbers.
 		kept("keep-numbered-links", "repo-link", `github\.com/ev-shindin/llm-scaling-manager/(?:pull|issues)/[0-9]+[^\s)\]"'`+"`"+`>]*|github\.com/ev-shindin/llm-scaling-manager/commit/[0-9a-f]+|github\.com/ev-shindin/llm-scaling-manager/releases/tag/v[0-9][^\s)\]"'`+"`"+`>]*`,
 			"pull requests, issues, commits and tags stay on the old repository: their numbers do not carry over"),
+
+		kept("keep-old-branch-link", "repo-link", `github\.com/ev-shindin/llm-scaling-manager/(?:blob|tree)/bench/[^\s)\]"'`+"`"+`>]*`,
+			"a branch that only the old repository has"),
+
+		// Bare issue and pull request numbers. In the new repository #N names
+		// the new repository's issue, so once the code has moved each one is
+		// written with the repository it belongs to. Before that they stay.
+		kept("keep-issue-cross-repo", "issue-ref", `ev-shindin/llm-scaling-manager#[0-9]+`, "a cross-repository reference to the old repository's issue or pull request"),
+		kept("keep-issue-heading-anchor", "issue-ref", `ev-shindinllm-scaling-manager[0-9]+`, "the anchor of a heading that holds such a reference"),
+		{Name: "keep-issue-message-word", Class: "issue-ref", Pattern: `(?m)^(?P<m>ev-shindin/llm-scaling-manager)\r?$`, Action: Keep,
+			Paths: []string{"internal/engines/analyzers/learnreplay/message_words.txt"}, Why: "a word of a message that holds such a reference, as the word list is generated"},
+		{Name: "keep-issue-anchor", Class: "issue-ref", Pattern: `\]\((?P<m>#[0-9][^)\s]*)`, Action: Keep, Why: "a link to a section of the same page"},
+		{Name: "keep-issue-link-text", Class: "issue-ref", Pattern: `(?P<m>#[0-9]+)\]\(`, Action: Keep, Why: "the text of a link whose target is spelled out"},
+		{Name: "keep-issue-colour", Class: "issue-ref", Pattern: `(?i)(?:fill|stroke|color)\s*=\s*['"](?P<m>#[0-9a-f]{3,8})['"]`, Action: Keep, Why: "a colour"},
+		{Name: "keep-issue-learner-row", Class: "issue-ref", Pattern: bareRef + `(?P<m>#(?:1[0-6]|[1-9]))\b`, Action: Keep,
+			Paths: learnerInventory, Why: "a row of the page's own learner inventory"},
+		{Name: "keep-issue-finding", Class: "issue-ref", Pattern: `(?:security|-r[0-9]+) (?P<m>#[0-9]+)\b`, Action: Keep, Why: "a finding's number inside a review"},
+		{Name: "keep-issue-pr-body", Class: "issue-ref", Pattern: `#[0-9]+`, Action: Keep, Paths: prBodyFixtures,
+			Why: "a pull request body that a check of this repository parses"},
+		{Name: "issue-ref-range", Class: "issue-ref", Pattern: bareRef + `(?P<m>#[1-9][0-9]*-#[1-9][0-9]*)\b`, Fn: issueRange, Action: HoldUntilMoved,
+			Why: "a range of the old repository's numbers"},
+		{Name: "issue-ref-named-repo", Class: "issue-ref", Pattern: `(?P<m>(?:sgl-project/sglang issue|gateway-api-inference-extension|llm-d/llm-d-autoscaling\s+PR) #[1-9][0-9]*)\b`,
+			Fn: issueNamed, Action: HoldUntilMoved, Why: "an upstream number after its repository's name: the name moves into the reference"},
+		{Name: "issue-ref", Class: "issue-ref", Pattern: bareRef + `(?P<m>#[1-9][0-9]*)\b`, Fn: issueRef, Action: HoldUntilMoved,
+			Why: "a bare number names the new repository's issue once the code is there"},
 
 		// Held until the code, the issues and the images are in the new home.
 		held("hold-image", `ghcr\.io/ev-shindin/llm-scaling-manager`, newImage, "the image does not exist under the new name until CI publishes it there"),
@@ -342,6 +426,33 @@ func metricPattern(metrics []string) string {
 		return `\bwva_(?P<s>\A\z)` // a pattern that cannot match
 	}
 	return `\bwva_(?P<s>(?:` + strings.Join(alts, "|") + `)\w*)`
+}
+
+// issueRef writes a bare #N with its repository: the old repository's up to
+// lastOldNumber, the listed upstream one above it. Any other number stays.
+func issueRef(claimed string, _ FnContext) string {
+	n, err := strconv.Atoi(strings.TrimPrefix(claimed, "#"))
+	switch {
+	case err != nil:
+		return claimed
+	case n <= lastOldNumber:
+		return oldRepoSlug + claimed
+	case upstreamIssues[n] != "":
+		return upstreamIssues[n] + claimed
+	}
+	return claimed
+}
+
+// issueRange is #A-#B as two references, so neither end is left bare.
+func issueRange(claimed string, c FnContext) string {
+	from, to, _ := strings.Cut(claimed, "-")
+	return issueRef(from, c) + " to " + issueRef(to, c)
+}
+
+// issueNamed drops the repository's name in front of an upstream number, which
+// the reference now carries.
+func issueNamed(claimed string, c FnContext) string {
+	return issueRef(claimed[strings.LastIndexByte(claimed, '#'):], c)
 }
 
 // renameFileWord is the new form of an old word inside a file name.

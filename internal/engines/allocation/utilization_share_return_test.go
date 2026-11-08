@@ -596,7 +596,7 @@ func curvedQ(qNeed float64) (SharePlanInput, *ShareLedger) {
 	return in, l
 }
 
-// A return is judged calm on what the GPUs serve, not on their count (#233).
+// A return is judged calm on what the GPUs serve, not on their count (ev-shindin/llm-scaling-manager#233).
 // Q needs 1.639 and keeps 2 GPUs of headroom. Kept at 6, the 4 below its
 // headroom serve 2.624: a load of 0.625, above the 0.6 return load, though
 // 1.639 / 4 reads 0.41 in GPUs. Kept at 8 they serve 3.248, a load of 0.50.
@@ -622,7 +622,7 @@ func TestShareReturnJudgesLoadOnWhatTheGPUsServe(t *testing.T) {
 	}
 }
 
-// A return is called off on what the GPUs serve too (#233): Q returned three
+// A return is called off on what the GPUs serve too (ev-shindin/llm-scaling-manager#233): Q returned three
 // replicas, keeping 8, and its need rose to 3.5. One replica above the bar
 // the return went under, 8 GPUs, serve 3.872; 3.5 serves 2.468, above 0.6 of
 // it, though 3.5 is below 0.6 x 8 in GPUs.
@@ -643,7 +643,7 @@ func TestShareCancelsAReturnOnWhatTheGPUsServe(t *testing.T) {
 }
 
 // A transfer is not called off as a reversal while its receiver is still
-// below its whole-replica target, whatever the continuous split says (#233):
+// below its whole-replica target, whatever the continuous split says (ev-shindin/llm-scaling-manager#233):
 // that split shares the spare by need in GPUs, the whole-replica targets and
 // admission by what the GPUs serve, and judged on the first a move the second
 // just started was cancelled the next cycle, and started again. R's sparse
@@ -701,7 +701,7 @@ func TestShareFillCreditIsNotSpare(t *testing.T) {
 	}
 }
 
-// fragmented is the whole-node e2e's fragmented cluster (#235): G holds one
+// fragmented is the whole-node e2e's fragmented cluster (ev-shindin/llm-scaling-manager#235): G holds one
 // 8-GPU replica and needs two; S1 and S2, idle, hold five 1-GPU replicas each,
 // spread over nodes n2, n3 and n4 beside GPUs no model holds, so no node can
 // be emptied for G. The quota of 18 is spent. nodes says whether the planner
@@ -737,7 +737,7 @@ func fragmented(nodes bool) SharePlanInput {
 }
 
 // While the only role short of its target is one no node can hold a replica
-// of, nothing is returned for it (#235): the GPUs would sit unassigned, and
+// of, nothing is returned for it (ev-shindin/llm-scaling-manager#235): the GPUs would sit unassigned, and
 // the small models would lose their headroom for nothing. Without node
 // information the idle fill places blind and a return may still serve G, so
 // returns go on as before. Re-judged every cycle: once a node can be emptied

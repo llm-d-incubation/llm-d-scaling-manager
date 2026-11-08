@@ -142,6 +142,7 @@ func TestCodeMovedTurnsHeldRowsOn(t *testing.T) {
 		{"$(IMAGE_TAG_BASE)/llm-scaling-manager:x", "$(IMAGE_TAG_BASE)/llm-d-scaling-manager:x"},
 		{"  cd llm-scaling-manager\n", "  cd llm-d-scaling-manager\n"},
 		{"github.com/ev-shindin/llm-scaling-manager/pull/95", "github.com/ev-shindin/llm-scaling-manager/pull/95"},
+		{"github.com/ev-shindin/llm-scaling-manager/blob/bench/x/a.md", "github.com/ev-shindin/llm-scaling-manager/blob/bench/x/a.md"},
 		{"ghcr.io/ev-shindin/llm-scaler/warmpool-proxy:v11", "ghcr.io/ev-shindin/llm-scaler/warmpool-proxy:v11"},
 	}
 	targets := DefaultTargets
@@ -158,6 +159,68 @@ func TestCodeMovedTurnsHeldRowsOn(t *testing.T) {
 		if got := string(e.RewriteText(p, ClassDocs, CtxText, []byte(c.in), 0)); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestIssueReferencesMoveWithTheCode(t *testing.T) {
+	learner := docsDir + "proposals/analyzer-learner.md"
+	cases := []struct{ name, path, in, want string }{
+		{"an old number", docsDir + "a.md", "fixed in #273 and (#34).", "fixed in ev-shindin/llm-scaling-manager#273 and (ev-shindin/llm-scaling-manager#34)."},
+		{"the last old number", docsDir + "a.md", "issue #533", "issue ev-shindin/llm-scaling-manager#533"},
+		{"a listed upstream number", docsDir + "a.md", "upstream PR #1516", "upstream PR llm-d/llm-d-workload-variant-autoscaler#1516"},
+		{"an unlisted number above the old range stays", docsDir + "a.md", "issue #534", "issue #534"},
+		{"a range", docsDir + "a.md", "PRs #15-#26", "PRs ev-shindin/llm-scaling-manager#15 to ev-shindin/llm-scaling-manager#26"},
+		{"a named repository moves into the reference", "internal/a/a.go", "(sgl-project/sglang issue #14303)", "(sgl-project/sglang#14303)"},
+		{"a qualified reference stays", docsDir + "a.md", "kubernetes-sigs/kind#3795 and llm-d/llm-d-workload-variant-autoscaler#1245", "kubernetes-sigs/kind#3795 and llm-d/llm-d-workload-variant-autoscaler#1245"},
+		{"a section anchor stays", docsDir + "a.md", "[step 1](#1-push-the-tag)", "[step 1](#1-push-the-tag)"},
+		{"link text with its target stays", docsDir + "a.md", "[#343](https://example.com/343) and [pieces #4](#4-x)", "[#343](https://example.com/343) and [pieces #4](#4-x)"},
+		{"a colour stays", "hack/a.py", `fill="#555" and fill='#222'`, `fill="#555" and fill='#222'`},
+		{"a learner row stays", learner, "same rules as #1, and #16; #273 moves", "same rules as #1, and #16; ev-shindin/llm-scaling-manager#273 moves"},
+		{"a row number elsewhere is a number", docsDir + "a.md", "as #1", "as ev-shindin/llm-scaling-manager#1"},
+		{"a finding number stays", "internal/a/a_test.go", "(security #3) and 273-r3 #2", "(security #3) and 273-r3 #2"},
+		{"a parsed pull request body stays", "hack/check-goldens-section.sh", "printf 'Fixes #1'", "printf 'Fixes #1'"},
+		{"shell, entities and leading zeros stay", "hack/a.sh", "${#a} $#1 &#123; x#1 a/#2 #0", "${#a} $#1 &#123; x#1 a/#2 #0"},
+		{"the anchor of a moved heading stays", docsDir + "a.md", "[x](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)", "[x](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)"},
+		{"a ledger owner", "internal/a/testdata/k.yaml", `owner: "#520"`, `owner: "ev-shindin/llm-scaling-manager#520"`},
+	}
+	moved := DefaultTargets
+	moved.CodeMoved = true
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e, err := NewEngine(moved, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(e.RewriteText(c.path, classify(c.path), CtxText, []byte(c.in), 0))
+			if got != c.want {
+				t.Errorf("got  %q\nwant %q", got, c.want)
+			}
+			if again := string(e.RewriteText(c.path, classify(c.path), CtxText, []byte(got), 0)); again != got {
+				t.Errorf("not idempotent: %q then %q", got, again)
+			}
+			before := newEngine(t)
+			if held := string(before.RewriteText(c.path, classify(c.path), CtxText, []byte(c.in), 0)); held != c.in {
+				t.Errorf("changed before the move: %q", held)
+			}
+		})
+	}
+}
+
+func TestIssueReferenceAloneReachesAGoFile(t *testing.T) {
+	const src = "package a\n\n// F is fixed by #42.\nfunc F() string { return \"see #7\" }\n"
+	moved := DefaultTargets
+	moved.CodeMoved = true
+	e, err := NewEngine(moved, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := e.rewriteFile("internal/a/a.go", ClassGo, []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "package a\n\n// F is fixed by ev-shindin/llm-scaling-manager#42.\nfunc F() string { return \"see ev-shindin/llm-scaling-manager#7\" }\n"
+	if string(out) != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
 	}
 }
 

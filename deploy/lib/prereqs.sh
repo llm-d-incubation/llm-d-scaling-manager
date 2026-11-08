@@ -530,7 +530,7 @@ llmsm_report_namespace() {
         # sequence and owns its own ordering. SKIP_CHECKS=true is the bypass for
         # anyone who means it -- and it has to be TESTED here, not just named in
         # the message below. It was not, so the escape hatch this text advertises
-        # did nothing and the install died anyway (issue #27).
+        # did nothing and the install died anyway (issue ev-shindin/llm-scaling-manager#27).
         if [ "${ENVIRONMENT:-}" != "kind-emulator" ] && [ "${SKIP_CHECKS:-false}" != "true" ]; then
             log_error "  Refusing to continue: namespace $managed does not exist.
 
@@ -565,7 +565,7 @@ almost certainly wrong: a typo, a stale NAMESPACE export, or the wrong cluster.
         # the only one -- a per-check LLMSM_ALLOW_* flag was tried and removed, because
         # the scenario is already selected by LLMSM_SCOPE and a second knob for the
         # same decision is a second thing to get wrong. It is tested here as well as
-        # named in the message: it used not to be (issue #27).
+        # named in the message: it used not to be (issue ev-shindin/llm-scaling-manager#27).
         #
         # Cluster scope never reaches here: it returns above, because a
         # cluster-scoped controller manages namespaces that need not exist yet.

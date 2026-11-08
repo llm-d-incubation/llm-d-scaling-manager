@@ -37,7 +37,7 @@ func bucketSamples(modelName string, rates map[float64]float64) model.Vector {
 
 // The histogram and the mean output length, from the query results to
 // AvgOutputTokensSquared: the bound on E[O^2] the KV per request is priced
-// from (issue #276). Four requests a second at or under 100 tokens and six
+// from (issue ev-shindin/llm-scaling-manager#276). Four requests a second at or under 100 tokens and six
 // above, at a mean of 250: the least E[O^2] puts the four at 100 and the six
 // at 350.
 func TestCollectReplicaMetrics_OutputTokensSquared(t *testing.T) {

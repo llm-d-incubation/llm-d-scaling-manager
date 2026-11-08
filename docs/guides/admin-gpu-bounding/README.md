@@ -158,7 +158,7 @@ when uninstalling, since it exits 0 even where nothing is declared.
 | `KUEUE_NAMESPACE` | the entry's `kueue.controllerNamespace`, else `kueue-system` | `kueue` |
 | `LLMSM_LIMITER_TARGETS` | every labelled controller that passes the checks below | `team-a team-b` |
 | `LLMSM_CONTROLLER_SA` | `scaling-manager-controller-manager` | `my-scaling-manager-sa` |
-| `LLMSM_CONTROLLER_IMAGE_REPOS` | `ghcr.io/ev-shindin/llm-scaling-manager`, plus the repository of `IMG` when it differs | `'registry.local/scaling-manager ghcr.io/ev-shindin/llm-scaling-manager'` |
+| `LLMSM_CONTROLLER_IMAGE_REPOS` | `ghcr.io/llm-d-incubation/llm-d-scaling-manager`, plus the repository of `IMG` when it differs | `'registry.local/scaling-manager ghcr.io/llm-d-incubation/llm-d-scaling-manager'` |
 
 A quota limiter:
 

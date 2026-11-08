@@ -31,7 +31,7 @@ Every option `deploy/install.sh` reads. Each entry is read by something, and eve
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LLMSM_IMAGE_REPO` | controller image repository | `ghcr.io/ev-shindin/llm-scaling-manager` |
+| `LLMSM_IMAGE_REPO` | controller image repository | `ghcr.io/llm-d-incubation/llm-d-scaling-manager` |
 | `LLMSM_IMAGE_TAG` | controller image tag | `newTag` in `config/base/manager/kustomization.yaml`: `main`, or the release tag on a release commit |
 | `LLMSM_IMAGE_DIGEST` | pin one exact build; set by `IMG=<repo>@sha256:<digest>` and used instead of the tag | unset |
 | `LLMSM_IMAGE_PULL_POLICY` | Image pull policy | by reference: `IfNotPresent` for a digest or a `vX.Y.Z` tag, `Always` for anything else |

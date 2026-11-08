@@ -288,7 +288,7 @@ func (q *QuotaInventory) UsageBasis() UsageBasis {
 
 // Name returns the limiter identifier (e.g., "cluster-quota"). Used in logs
 // and DecisionStep traces (the trace format is `limited by quota[scope=...]`,
-// per issue #1002).
+// per issue llm-d/llm-d-workload-variant-autoscaler#1002).
 func (q *QuotaInventory) Name() string {
 	return q.name
 }
@@ -1448,7 +1448,7 @@ func (q *QuotaInventory) GetResourcePools() map[string]ResourcePool {
 // NamespaceResourcePools implements NamespaceAwareInventory. For the cluster
 // scope it returns nil (no namespace dimension). For the namespace scope it
 // exposes each active namespace as a CLOSED allowlist, applying the namespace
-// lookup rules from issue #1002 (exact match → cap; fall-through to `default`
+// lookup rules from issue llm-d/llm-d-workload-variant-autoscaler#1002 (exact match → cap; fall-through to `default`
 // → cap; excluded → open; otherwise deny):
 //
 //   - An excluded namespace is OMITTED from the result entirely. Its absence

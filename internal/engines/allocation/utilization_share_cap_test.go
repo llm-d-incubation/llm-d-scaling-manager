@@ -297,7 +297,7 @@ func TestShareRetainForgetsWhenANeedWasFirstSeen(t *testing.T) {
 }
 
 // A role's need history is kept in what its GPUs serve, and read back on the
-// curve it has now (#233): the same demand reads 12 GPUs on sparse replicas
+// curve it has now (ev-shindin/llm-scaling-manager#233): the same demand reads 12 GPUs on sparse replicas
 // and 8 once a dense replica serves part of it. Kept in GPUs, its peak would
 // still read 12 after the change, on GPUs it no longer has.
 func TestSharePeakIsReadOnTodaysCurve(t *testing.T) {

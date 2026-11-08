@@ -114,7 +114,7 @@ func (in AnalyzerInput) FlowControlSeries() bool {
 // before routing them to a specific backend pod.
 //
 // They are scoped to one namespace as well as one model: the EPP exports no
-// namespace itself (gateway-api-inference-extension #2309), and the collector
+// namespace itself (kubernetes-sigs/gateway-api-inference-extension#2309), and the collector
 // selects by the namespace Prometheus stamps on the scraped series, so two
 // namespaces serving the same model name each read their own router's queue.
 type SchedulerQueueMetrics struct {

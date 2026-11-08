@@ -67,7 +67,7 @@ jobs:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
         run: |
           # Owner-derived: the image goes to the namespace of whoever owns this
-          # repository (ghcr.io/ev-shindin/llm-scaling-manager here), the only
+          # repository (ghcr.io/llm-d-incubation/llm-d-scaling-manager here), the only
           # one its token may write to.
           IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${GITHUB_REPOSITORY##*/}
           if [ "${{ github.event_name }}" = "push" ]; then

@@ -15,7 +15,7 @@ import (
 // reportQuotaAloneAllocation is the transitional upgrade log for policies that
 // declare both a physical limiter and quota entries.
 //
-// TODO(#164): TRANSITIONAL -- remove this file, quotaAloneReportEvery, the
+// TODO(ev-shindin/llm-scaling-manager#164): TRANSITIONAL -- remove this file, quotaAloneReportEvery, the
 // two quotaAlone* Engine fields, its call in optimize and
 // GreedyByScoreOptimizer.ShadowOptimize one release after the first release
 // that composes limiters (the release after v1.0.0). The upgrade notes promise

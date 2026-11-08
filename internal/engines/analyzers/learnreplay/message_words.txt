@@ -71,6 +71,7 @@
 :coverage
 :demand
 A
+A-Za-z0-9_.-
 AMD
 AUncertain
 AboveDecodeOnset
@@ -1008,6 +1009,7 @@ estimate
 estimateAt
 estimateSeconds
 estimatedTokens
+ev-shindin/llm-scaling-manager
 evaluate
 evaluation
 even

@@ -1,7 +1,7 @@
 // Package enginerec holds the engine-level events of a learner recording
 // (internal/signals/learnrec): what the engine hands the composite that it
 // did not compute from the cycle's policy and results, and what the
-// composite and the warm pool's figures came out as. Issue #345 step 0 adds
+// composite and the warm pool's figures came out as. Issue ev-shindin/llm-scaling-manager#345 step 0 adds
 // them beside the analyzer events of docs/proposals/analyzer-learner.md,
 // 2.4, so a replay can hold the composite to a golden as it holds the
 // analyzers.

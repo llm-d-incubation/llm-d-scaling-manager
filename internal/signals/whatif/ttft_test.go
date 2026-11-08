@@ -364,7 +364,7 @@ var lindleyRef = []struct {
 var lindleyQuantiles = [3]float64{0.9, 0.99, 0.999}
 
 // The model's prefill sojourn is never below the simulation's at p90, p99 or
-// p999. Before round 1 of #471, at cv above 1, Kingman's exponential decay
+// p999. Before round 1 of ev-shindin/llm-scaling-manager#471, at cv above 1, Kingman's exponential decay
 // alone read the p99 at 0.94/0.94 (cv 2, rho 0.3/0.6) and 0.89/0.91 (cv 3) of
 // the simulation, too few replicas by up to 10%.
 func TestTailNotBelowLindleySimulation(t *testing.T) {

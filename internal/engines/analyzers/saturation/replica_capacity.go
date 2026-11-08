@@ -203,7 +203,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	// Whether a reading written to the key's window is clamped to its median
 	// (marginClamp), for the same reason never prefill's.
 	clamped := keys.muShorterPastMargin && domain.CanonicalRole(role) != domain.RolePrefill
-	// The key's window before the band last moved it, where it moved (#415).
+	// The key's window before the band last moved it, where it moved (ev-shindin/llm-scaling-manager#415).
 	leftKey := ""
 	if keys.muLeft > 0 {
 		leftKey = a.throughputKey(modelID, namespace, rm.VariantName, accelerator, gpuCount, role,
@@ -239,7 +239,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		tune: tune,
 	})
 	// The batch cap the derived k2 is priced at where the flags state none
-	// (batch_cap.go, issue #399): this row may raise the learned one first.
+	// (batch_cap.go, issue ev-shindin/llm-scaling-manager#399): this row may raise the learned one first.
 	a.observeBatchCap(namespace, modelID, role, rm, adm, k1, engineParams, config.EnableBatchCapLearning, logger)
 	batchCap := a.pricingBatchCap(namespace, modelID, rm.VariantName, engineParams, config.EnableBatchCapLearning)
 	d := a.computeK2(
@@ -710,7 +710,7 @@ func useDerived(derivedOK bool, reading throughputReading) bool {
 // pricedDerivedRate is the rate a derived figure prices a replica at: the
 // figure, and for one that may not price above a measured rate of the
 // variant's own (whatif.DerivedMu.CapAtMeasured, an aggregated variant's lifted
-// figure, issue #275) the lower of the two where the variant has one,
+// figure, issue ev-shindin/llm-scaling-manager#275) the lower of the two where the variant has one,
 // however thin. The figure rests on a shape term and a prefill correction
 // that are estimates, so the lower prices it, as a stale pair that
 // disagrees does (measuredYieldsToDerived). A reading borrowed from another
@@ -1219,7 +1219,7 @@ func (a *SaturationAnalyzer) k2Chain(
 		// data-parallel ranks runs that many engines side by side, and k1
 		// beside it is already the whole replica's KV, so the derived figure
 		// is scaled to the replica. Left per rank, min(k1, k2) priced a pod of
-		// eight ranks at about one (issue #150).
+		// eight ranks at about one (issue ev-shindin/llm-scaling-manager#150).
 		//
 		// S is batchCap: the flags' cap, or where they state none the declared
 		// or learned one (batch_cap.go). With no engine params at all a
@@ -1227,7 +1227,7 @@ func (a *SaturationAnalyzer) k2Chain(
 		// min(k1, k2) keeps that at or under the k1 it replaces.
 		//
 		// The KV a resident request holds is priced with the spread of
-		// output lengths (outputDispersion, issue #276): a long request
+		// output lengths (outputDispersion, issue ev-shindin/llm-scaling-manager#276): a long request
 		// stays resident longer, so the sequences the batch cap admits hold
 		// more KV than I + O/2 each, and k2 is that much higher.
 		if k2Derived := estimateCapacityAtCapSpread(engineParams, batchCap.perRank, avgInput, avgOutput, outputDispersion) * int64(max(ranks, 1)); k2Derived > 0 {
@@ -1287,7 +1287,7 @@ func (a *SaturationAnalyzer) lookupCompatibleCapacity(namespace, modelID, varian
 }
 
 // SwitchZeroReplicaDataParallel is the replay switch for the data-parallel
-// ranks of a vLLM variant at zero replicas (issue #438). On, the estimate
+// ranks of a vLLM variant at zero replicas (issue ev-shindin/llm-scaling-manager#438). On, the estimate
 // for a decode or aggregated variant is one engine rank's figure times the
 // ranks its leader pod runs (zeroReplicaRanks): the derived figure, and the
 // budget it falls back to with no workload averages. Off, as before, one
@@ -1410,14 +1410,14 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(
 	}
 
 	// The formula, and the budget it falls back to, price one engine rank;
-	// the leader pod runs ranks of them (zeroReplicaRanks, issue #438).
+	// the leader pod runs ranks of them (zeroReplicaRanks, issue ev-shindin/llm-scaling-manager#438).
 	ranks := a.zeroReplicaRanks(role, rec.EngineParams, podsPerReplica, gpuCount)
 
 	// For deployment-derived records, try k2 derivation with workload data
 	if rec.EngineParams != nil && modelAvgOutput > 0 {
 		// S is the cap the scale target states, flags else declared, else
 		// the default, and never the learned cap (zeroReplicaBatchCap,
-		// issue #427).
+		// issue ev-shindin/llm-scaling-manager#427).
 		batchCap := a.zeroReplicaBatchCap(namespace, modelID, variantName, role, rec.EngineParams)
 		if derived := estimateCapacityAtCapSpread(rec.EngineParams, batchCap.perRank, modelAvgInput, modelAvgOutput, modelFactor) * ranks; derived > 0 {
 			bounded := derived
@@ -1503,7 +1503,7 @@ func (a *SaturationAnalyzer) estimateStoredCapacity(
 // estimateCapacityAtCapSpread is the derived k2 at batch cap S, one engine
 // rank's: N_steady = min(B * O / (I + O), S), capacity = N_steady *
 // (I + D*O/2), with the spread of output lengths priced into the KV a
-// resident request holds, D = E[O^2]/E[O]^2 (issue #276). computeK2
+// resident request holds, D = E[O^2]/E[O]^2 (issue ev-shindin/llm-scaling-manager#276). computeK2
 // (Priority 3) prices a live replica through it at its pricing batch cap,
 // and estimateStoredCapacity a variant at zero replicas at
 // zeroReplicaBatchCap, with D the model's factor (modelOutputFactor). With

@@ -111,7 +111,7 @@ var _ = Describe("TestLenderReleaseSignals: what on-call sees of a release to a 
 			ContainSubstring("to ClusterQueue lender"), ContainSubstring("cause lender-waiting"))))
 	})
 
-	// PR #203 review SF1: a lender this controller cannot serve is handed
+	// PR ev-shindin/llm-scaling-manager#203 review SF1: a lender this controller cannot serve is handed
 	// nothing, and on-call is told, on a gauge and as a Warning Event.
 	It("reports a lender it cannot serve on a gauge and as a Warning Event, and hands nothing back", func() {
 		rec := record.NewFakeRecorder(10)
@@ -141,7 +141,7 @@ var _ = Describe("TestLenderReleaseSignals: what on-call sees of a release to a 
 		Expect(rec.Events).To(BeEmpty())
 	})
 
-	// PR #203 review (GT minor): the release is per entry, so are its series.
+	// PR ev-shindin/llm-scaling-manager#203 review (GT minor): the release is per entry, so are its series.
 	It("counts no lender-waiting series and publishes no latency where the pool does not opt in, whatever another entry says", func() {
 		e := &Engine{Config: releaseCfg(true), Recorder: record.NewFakeRecorder(10)}
 		cs, reqs := lenderReleaseWorld(now)
@@ -157,7 +157,7 @@ var _ = Describe("TestLenderReleaseSignals: what on-call sees of a release to a 
 		Expect(gather(constants.LLMSMKueueBorrowReleaseLatencySeconds)).To(BeEmpty())
 	})
 
-	// PR #203 review (GT minor): a ledger that cannot be read turns the
+	// PR ev-shindin/llm-scaling-manager#203 review (GT minor): a ledger that cannot be read turns the
 	// release off until it can; on-call sees why.
 	It("says why no release is decided while the ledger cannot be read", func() {
 		scheme := runtime.NewScheme()

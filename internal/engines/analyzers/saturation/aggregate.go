@@ -34,7 +34,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 	reuseDisabled bool,
 	// modelFactor is the factor a zero-replica variant's derived estimate
 	// multiplies the model's mean output length by in its KV per request
-	// (modelOutputFactor, issue #276); 1 prices it as before.
+	// (modelOutputFactor, issue ev-shindin/llm-scaling-manager#276); 1 prices it as before.
 	modelFactor float64,
 	logger logr.Logger,
 ) []domain.VariantCapacity {

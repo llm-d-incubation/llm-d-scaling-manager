@@ -83,7 +83,7 @@ var _ = Describe("Engine metric names in query templates", func() {
 		Expect(len(seen)).To(BeNumerically(">=", 20), "scanned names: %v", seen)
 	})
 
-	It("reads vLLM's prefix-cache counters with the _total suffix (issue #232)", func() {
+	It("reads vLLM's prefix-cache counters with the _total suffix (issue ev-shindin/llm-scaling-manager#232)", func() {
 		tmpl := queries.Get(QueryPrefixCacheHitRate).Template
 		Expect(tmpl).To(ContainSubstring("vllm:prefix_cache_hits_total{"))
 		Expect(tmpl).To(ContainSubstring("vllm:prefix_cache_queries_total{"))

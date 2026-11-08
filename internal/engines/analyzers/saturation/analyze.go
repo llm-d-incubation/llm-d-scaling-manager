@@ -216,7 +216,7 @@ type cycle struct {
 	// off.
 	fleetDispersion float64
 	// resident is the KV the fleet's running requests hold, and how many
-	// they are (fleetResidentKVPerRequest, issue #277).
+	// they are (fleetResidentKVPerRequest, issue ev-shindin/llm-scaling-manager#277).
 	resident residentReading
 	// shapeChanging is a shape change outstanding (resolvePricing): the mu
 	// moves to the short window if it can, and no path prices a spread.
@@ -256,7 +256,7 @@ type cycle struct {
 	// service-rate signal. Written by priceReplicas.
 	reportedMu map[string][]float64
 	// agg is, per aggregated variant priced by shape (aggShapeOn, issue
-	// #275), its shape now and the price its line gives. Written by
+	// ev-shindin/llm-scaling-manager#275), its shape now and the price its line gives. Written by
 	// fitLines; priceReplicas adds the GPS check's errors.
 	agg map[string]*aggCycle
 	// itlSamples is how many readings each decode variant's OWN ITL window
@@ -361,13 +361,13 @@ func (c *cycle) observeFleetShape() {
 	// the fleet's shape and not the replica's).
 	c.fleetOutput = fleetOutputLength(c.input.ReplicaMetrics, c.rolesByVariant)
 	// The spread of those lengths, which the KV a resident request holds
-	// depends on as much as on their mean (issue #276).
+	// depends on as much as on their mean (issue ev-shindin/llm-scaling-manager#276).
 	c.fleetDispersion = 1
 	if c.a.kvOutputDispersion {
 		c.fleetDispersion = fleetOutputDispersion(c.input.ReplicaMetrics, c.rolesByVariant)
 	}
 	// The KV the running requests hold, which says how much of the hit
-	// discount is real (issue #277), read from replicas inside the ITL band.
+	// discount is real (issue ev-shindin/llm-scaling-manager#277), read from replicas inside the ITL band.
 	minK, _ := c.cfg.ITLBand()
 	c.resident = fleetResidentKVPerRequest(c.input.ReplicaMetrics, c.rolesByVariant, minK)
 	// The prefill side's hit rate, once for the role, for the same reason:
@@ -444,7 +444,7 @@ func (c *cycle) resolvePricing() {
 	// On a.now: noteFleetShape stamps lastChangedAt with it.
 	c.shapeChanging = c.a.shapeChangedWithin(c.input.Namespace, c.input.ModelID,
 		c.cfg.ShapeChangeWindow(ShapeChangeHoldMax), c.a.now())
-	// No spread while the shape changes, on any path (issue #276): the [5m]
+	// No spread while the shape changes, on any path (issue ev-shindin/llm-scaling-manager#276): the [5m]
 	// histogram then holds both shapes, and their difference would read as a
 	// spread of one workload's lengths. The k2 path reads the same gate
 	// (replicaOutputDispersion), and so does the zero-replica estimate.
@@ -495,7 +495,7 @@ func (c *cycle) fitLines() {
 	sort.Strings(variants)
 	mixed := domain.RevisionsMixed(c.input.ReplicaMetrics)
 	for _, variant := range variants {
-		// Decode, and an aggregated variant (itlLineRole, issue #432); never
+		// Decode, and an aggregated variant (itlLineRole, issue ev-shindin/llm-scaling-manager#432); never
 		// prefill. ITL is the latency between GENERATED tokens, and
 		// whatif.DeriveMuAtCap divides a token rate by an output length; prefill emits
 		// about one token per request -- its work is the prompt -- so the
@@ -525,7 +525,7 @@ func (c *cycle) fitLines() {
 		// by what ITL(k) is a property of: the accelerator and how many of
 		// them a replica has. Pooling two GPU products under one key is the
 		// bug stableAccelerator exists to prevent for k2 (the k1<->k2
-		// oscillation of PR #40 on a heterogeneous cluster), and a blended
+		// oscillation of PR ev-shindin/llm-scaling-manager#40 on a heterogeneous cluster), and a blended
 		// ITL line is meaningless for either product.
 		// Under the arguments the variant runs, and, mid-rollout, fitted from
 		// the window it holds with no new readings: a reading may be an old
@@ -546,7 +546,7 @@ func (c *cycle) fitLines() {
 		// The namespace rides on every ITL line because the variant name alone
 		// does not identify one: the same Deployment applied to two namespaces
 		// logs two identical "variant" values, and their fits could not be
-		// told apart in the log (issue #271).
+		// told apart in the log (issue ev-shindin/llm-scaling-manager#271).
 		itlLogger := c.logger.WithValues("namespace", c.input.Namespace)
 		if rows != nil {
 			c.a.noteITLWithheld(variantKey, variant, withheld, itlLogger)
@@ -559,7 +559,7 @@ func (c *cycle) fitLines() {
 		atCap := c.a.atCapBatchCap(params, c.a.batchCapITLAdmission)
 		// A held slope is bounded by the horizon a finished fit is kept on
 		// (BucketRetention, which ages the shared lines too) and by the
-		// arguments it was fitted under (issue #284).
+		// arguments it was fitted under (issue ev-shindin/llm-scaling-manager#284).
 		adm := itl.Admission{MinK: lo, MaxK: hi, MaxNumSeqs: atCap.perRank, MaxNumSeqsSource: atCap.source,
 			CapMaxPreemptionRate: c.cfg.ITLCapPreemptionRate(), Steady: c.tune.steadiness(),
 			SlopeHoldFor: c.a.Horizons().BucketRetention, Args: windowArgs(params),
@@ -575,7 +575,7 @@ func (c *cycle) fitLines() {
 			c.a.itlPriorScope(variantKey, windowArgs(params), c.rolesByVariant),
 			itlLineKeyForRole(c.a.itlPhysicsKey(c.input.Namespace, c.input.ModelID, variant,
 				c.accelByVariant[variant], c.gpusByVariant[variant], c.fpByVariant[variant]), role, c.fpByVariant[variant]))
-		// An aggregated variant priced by shape (issue #275,
+		// An aggregated variant priced by shape (issue ev-shindin/llm-scaling-manager#275,
 		// itl_aggregated_shape.go): the shape now against the window's,
 		// before the window takes this cycle's readings, and the steps a
 		// request spends in prefill, read while the shape holds still.
@@ -627,7 +627,7 @@ func (c *cycle) fitLines() {
 			// published, and ages from then.
 			//
 			// A line priced at the prior on B is not published either (issue
-			// #467): it carries this variant's at-cap readings and pricing k,
+			// ev-shindin/llm-scaling-manager#467): it carries this variant's at-cap readings and pricing k,
 			// and a sibling borrowing it would be priced on another variant's
 			// evidence. While it is one-sided, nothing is published.
 			//
@@ -664,7 +664,7 @@ func (c *cycle) fitLines() {
 			// saturated reading is on record the throughput floor does not
 			// apply and the variant is sized by KV occupancy alone, which at
 			// light load reads far below the share of its throughput it is
-			// serving (issue #284). Said in so many words, because the
+			// serving (issue ev-shindin/llm-scaling-manager#284). Said in so many words, because the
 			// itl-window line alone reads as a window that is broken.
 			itlLogger.V(logging.DEFAULT).Info("itl-line-none",
 				"variant", variant, "key", variantKey, "physicsKey", physicsKey,
@@ -759,10 +759,10 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 		//
 		// The roles priced from it are the roles fitLines fits a line for,
 		// by the same rule (itlLineRole): decode, and an aggregated variant
-		// (issue #432), whose pods generate as decode's do. Stated here as
+		// (issue ev-shindin/llm-scaling-manager#432), whose pods generate as decode's do. Stated here as
 		// well as there, so a prefill replica is never priced from a line
 		// even if one were in itlModels.
-		// An aggregated variant priced by shape (issue #275): the slope its
+		// An aggregated variant priced by shape (issue ev-shindin/llm-scaling-manager#275): the slope its
 		// case gives, and the occupancy correction (itl_aggregated_shape.go).
 		ac := c.agg[rm.VariantName]
 		price := aggPrice{model: itlModel, occupancy: 1.0, reportOnly: itlLineReportOnly(role)}
@@ -770,7 +770,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 			kPrice := pricingK(c.cfg)
 			// The cap the derived k2 is priced at (pricingBatchCap), so a
 			// declared or learned cap reaches mu as it reaches P3
-			// (SwitchBatchCapDerivedMu, issue #420).
+			// (SwitchBatchCapDerivedMu, issue ev-shindin/llm-scaling-manager#420).
 			batchCap := flagsOrDefaultBatchCap(engineParams)
 			if c.a.batchCapDerivedMu {
 				batchCap = c.a.pricingBatchCap(c.input.Namespace, c.input.ModelID, rm.VariantName, engineParams,
@@ -800,7 +800,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 		c.a.noteLineMismatch(itlModel, engineParams, rm, role, fleetShape.KVreq,
 			c.itlBorrowedFrom[rm.VariantName], c.logger)
 		// An aggregated line's derived mu is reported, never priced
-		// (itlLineReportOnly), until it is lifted (issue #275): the replica
+		// (itlLineReportOnly), until it is lifted (issue ev-shindin/llm-scaling-manager#275): the replica
 		// is priced as if it had none, and the figure goes to the
 		// service-rate signal only.
 		priced := derived
@@ -850,7 +850,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 // running request is measured to hold and which bound held it there.
 func (c *cycle) pricingShapes(hitRate float64) (fleetShape, muShape shape.Shape, residentBoundFleet, residentBound string) {
 	// The spread of output lengths is priced into the KV a resident
-	// request holds (KVreq = ILeff + D*OL/2, issue #276): with lengths
+	// request holds (KVreq = ILeff + D*OL/2, issue ev-shindin/llm-scaling-manager#276): with lengths
 	// that vary, a long request stays resident longer, so fewer
 	// requests fit the same KV. D is 1 with no reading.
 	fleetShape = shape.New(c.fleetInput, c.fleetOutput, hitRate).WithOutputDispersion(c.fleetDispersion)
@@ -860,7 +860,7 @@ func (c *cycle) pricingShapes(hitRate float64) (fleetShape, muShape shape.Shape,
 	// [5m] lengths, because that is the shape noteLineMismatch compares
 	// an observed token rate against; below, its KVreq, like muShape's,
 	// takes the measured KV per running request within its own bounds
-	// (issue #277).
+	// (issue ev-shindin/llm-scaling-manager#277).
 	//
 	// The short-window shape takes no spread. That is not a guard of its
 	// own: the short window opens only while a shape change is
@@ -874,7 +874,7 @@ func (c *cycle) pricingShapes(hitRate float64) (fleetShape, muShape shape.Shape,
 		muShape = shape.New(c.muInput, c.muDivisor, hitRate)
 	}
 	// A prefix-cache hit saves KV only when another running request
-	// holds the block too (issue #277): where there is a reading, both
+	// holds the block too (issue ev-shindin/llm-scaling-manager#277): where there is a reading, both
 	// shapes price a resident request at the KV the running requests are
 	// measured to hold, each bounded by its own discount and by none
 	// (prefix_cache_kv.go). With none, as before.
@@ -923,7 +923,7 @@ func (c *cycle) logDerivedMu(l derivedMuLog) {
 	if engineParams != nil {
 		maxSeqs, activeSeqs = engineParams.MaxNumSeqs, engineParams.MaxNumActiveSeqs
 	}
-	// An aggregated line priced by shape (issue #275): the shape now and
+	// An aggregated line priced by shape (issue ev-shindin/llm-scaling-manager#275): the shape now and
 	// the line's, the case, c, and the share of steps that emit a token
 	// (occupancyFactor). Zero for any other line.
 	agg := l.agg
@@ -933,8 +933,8 @@ func (c *cycle) logDerivedMu(l derivedMuLog) {
 	c.logger.V(perReplicaLogLevel).Info("derived-mu",
 		"namespace", c.input.Namespace, "variant", rm.VariantName, "pod", rm.PodName,
 		"ok", derived.OK,
-		// An aggregated line's figure is reported, not priced (#432), until
-		// it is lifted (#275).
+		// An aggregated line's figure is reported, not priced (ev-shindin/llm-scaling-manager#432), until
+		// it is lifted (ev-shindin/llm-scaling-manager#275).
 		"reportOnly", l.price.reportOnly,
 		"rate", derived.Rate, "seqs", derived.Seqs, "tokenSec", derived.TokenSec,
 		"kPrice", kPrice, "itlAtKPrice", priceModel.ITLAt(kPrice),
@@ -963,7 +963,7 @@ func (c *cycle) logDerivedMu(l derivedMuLog) {
 		// The KV the running requests hold each, measured over
 		// residentRunning of them, and which bound kvReqPerSeq
 		// held it to: none, lower (the hit rate's discount), upper
-		// (no discount), no-hit, no-reading or off (issue #277);
+		// (no discount), no-hit, no-reading or off (issue ev-shindin/llm-scaling-manager#277);
 		// residentKVBoundFleet the same for kvReqFleet.
 		"residentKVPerSeq", c.resident.perSeq(), "residentRunning", c.resident.running,
 		"residentKVBound", l.residentBound, "residentKVBoundFleet", l.residentBoundFleet,
@@ -1022,7 +1022,7 @@ func variantsPricedFromBorrowedLine(caps []capacity.ReplicaCapacity) map[string]
 // and adds what the router is holding and no pod has started.
 func (c *cycle) priceDemand(caps []capacity.ReplicaCapacity) demandParts {
 	// The zero-replica estimate's factor on the model's mean output length
-	// (modelOutputFactor, issue #276): 1 while the shape changes, as on every
+	// (modelOutputFactor, issue ev-shindin/llm-scaling-manager#276): 1 while the shape changes, as on every
 	// path, and with the switch off.
 	modelFactor := 1.0
 	if c.a.kvOutputDispersion && !c.shapeChanging {

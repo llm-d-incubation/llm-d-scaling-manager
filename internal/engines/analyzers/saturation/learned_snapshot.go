@@ -112,7 +112,7 @@ type LearnedState struct {
 	// load hold keeps a line on (itl.Tracker.Observe). Keyed like the ITL
 	// baseline and restored with it. Without it a restart under light load
 	// had a baseline and no slope, so no line, and the variant was sized by
-	// KV occupancy alone (issue #316).
+	// KV occupancy alone (issue ev-shindin/llm-scaling-manager#316).
 	ITLSlopes map[string]SlopeSnapshot `json:"itlSlopes,omitempty"`
 	// ITLPerToken names, keyed namespace/variant like Config, each variant
 	// running vLLM with speculative decoding whose ITL baseline, put-aside
@@ -150,7 +150,7 @@ type LearnedState struct {
 	// step time, or on an engine where one step is one token.
 	ITLLinesPerToken map[string]bool `json:"itlLinesPerToken,omitempty"`
 	// ITLLineShapes is, keyed like ITLLines, the shape an aggregated line
-	// was fitted at and the shape term's points (lineShape, issue #275). A
+	// was fitted at and the shape term's points (lineShape, issue ev-shindin/llm-scaling-manager#275). A
 	// line it does not name has no shape: an aggregated one prices nothing
 	// until it is fitted again, and a decode line never has one.
 	ITLLineShapes map[string]LineShapeSnapshot `json:"itlLineShapes,omitempty"`
@@ -183,7 +183,7 @@ type LearnedState struct {
 	// (EngineParams.ArgsFingerprint), keyed alike.
 	Args map[string]string `json:"args,omitempty"`
 	// PriorK2 is each previous figure in the form a build with restore
-	// priors but before LowerBounds (PR #151) reads, keyed by the variant's
+	// priors but before LowerBounds (PR ev-shindin/llm-scaling-manager#151) reads, keyed by the variant's
 	// own k2 key, dated from its last use. Written for a rollback to such a
 	// build: it reads neither LowerBounds nor the stash, so without it every
 	// variant whose arguments had changed fell to derived or k1 there. Read
@@ -192,7 +192,7 @@ type LearnedState struct {
 	PriorK2 map[string]PriorK2Snapshot `json:"priorK2,omitempty"`
 }
 
-// PriorK2Snapshot is one previous figure as a PR #151 build exported it.
+// PriorK2Snapshot is one previous figure as a PR ev-shindin/llm-scaling-manager#151 build exported it.
 type PriorK2Snapshot struct {
 	K2          int64     `json:"k2"`
 	InstalledAt time.Time `json:"installedAt"`
@@ -365,7 +365,7 @@ type RestoreReport struct {
 }
 
 // SwitchITLBaselineStamped is the replay switch for the ITL baseline's
-// last-admitted stamp (issue #495; analyzer-learner.md, Deferred): the
+// last-admitted stamp (issue ev-shindin/llm-scaling-manager#495; analyzer-learner.md, Deferred): the
 // snapshot carries when each baseline was last admitted
 // (LearnedState.ITLBaselineAdmittedAt), and a restore installs it with the
 // baseline, so the ITL learner's report of a key holding a restored baseline
@@ -577,7 +577,7 @@ func (p *pendingVariant) size() int {
 //
 //	namespace|variant|model|...                  k2, throughput and a borrowed k2's clock
 //	namespace|model|variant|accelerator|gpus     ITL baseline, start estimate, liveness (itlWindowKey)
-//	namespace|variant                            a borrowed k2's clock, as #132 first keyed it
+//	namespace|variant                            a borrowed k2's clock, as ev-shindin/llm-scaling-manager#132 first keyed it
 //
 // The shape is told apart by field count, which no field can fake: no
 // Kubernetes name and no model ID contains "|".
@@ -887,7 +887,7 @@ func (a *SaturationAnalyzer) exportLearnedState() LearnedState {
 		}
 		lb.FigureWritten = w.LastWritten
 		// The legacy clock goes with it: a build that reads only
-		// K2BorrowedSince and PriorK2 (main, #151) would otherwise run the new
+		// K2BorrowedSince and PriorK2 (main, ev-shindin/llm-scaling-manager#151) would otherwise run the new
 		// previous figure on the old borrow's clock and relax it early.
 		delete(s.K2BorrowedSince, k)
 		if lb.Seen.Before(lb.PriorUsed) {
@@ -1188,11 +1188,11 @@ func (a *SaturationAnalyzer) restoreLearnedState(s LearnedState) RestoreReport {
 		}
 		count(a.installLowerBoundLocked(k, lb, now))
 	}
-	// A previous figure from a PR #151 document, where LowerBounds has none
+	// A previous figure from a PR ev-shindin/llm-scaling-manager#151 document, where LowerBounds has none
 	// for the key: a bound holding only that figure, aged from when it was
 	// installed, a bucket retention at most, and last used then -- not at
 	// the restore, which handed a figure days old a fresh retention. None
-	// where the document holds a window for the key: a #151 build priced a
+	// where the document holds a window for the key: a ev-shindin/llm-scaling-manager#151 build priced a
 	// key with a window of its own from the window, never from the prior,
 	// so installed here it priced the next rollout from a figure the
 	// variant had since replaced.
@@ -1212,7 +1212,7 @@ func (a *SaturationAnalyzer) restoreLearnedState(s LearnedState) RestoreReport {
 		case now.Sub(since) > bucketRetention:
 			rep.Aged++
 		default:
-			// The clock the #151 document kept under the same key ran the
+			// The clock the ev-shindin/llm-scaling-manager#151 document kept under the same key ran the
 			// prior's hold and relaxation; started afresh, it re-armed the
 			// figure at full strength on every restart.
 			lb := LowerBoundSnapshot{Prior: p.K2, PriorSince: since, PriorUsed: since, Seen: now}

@@ -280,7 +280,7 @@ ClusterQueue, with borrowing limits still open; and capacity-model gaps for
 speculative decoding, mixed prefill and decode pods, variable output length
 and prefix-cache residency.
 The full list is in the
-[release notes](https://github.com/ev-shindin/llm-scaling-manager/releases).
+[release notes](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases).
 
 ### Analyzer experiments, October 2026
 

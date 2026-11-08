@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The fourth verification of PR #388: at 3961e5c91 a recorded name was
+// The fourth verification of PR ev-shindin/llm-scaling-manager#388: at 3961e5c91 a recorded name was
 // renamed only at the start of a token, a token starting with ':' or '/'
 // was not renamed, any vowel-free or hex segment passed after a pseudonym,
 // and a fixture's name was checked only for whole names. Each case below

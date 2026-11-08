@@ -34,7 +34,7 @@ func setA4Ready(t *testing.T, c client.Client, ready bool) {
 // A donor refused because one of its pods is not Ready is held only until the
 // pod is Ready and its workload has read stable for the confirm cycles -- not
 // for the whole release timeout, which held a donor whose idle-fill pod was
-// Ready in four minutes for ten (issue #290). Every held cycle names the hold:
+// Ready in four minutes for ten (issue ev-shindin/llm-scaling-manager#290). Every held cycle names the hold:
 // donor-changing on the donor and on the short receiver, and a log line at the
 // default level. With whole 8-GPU replicas as with 1-GPU ones.
 func TestUtilizationShareChangingDonorIsReleasedOnceStable(t *testing.T) {

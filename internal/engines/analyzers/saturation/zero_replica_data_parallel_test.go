@@ -12,7 +12,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #438: the estimate for a variant at zero replicas is one engine
+// Issue ev-shindin/llm-scaling-manager#438: the estimate for a variant at zero replicas is one engine
 // rank's figure, and a vLLM pod of several data-parallel ranks runs that many
 // engines. With SwitchZeroReplicaDataParallel on it is multiplied by the
 // ranks the leader pod runs (zeroReplicaRanks), as computeK2 multiplies a
@@ -220,7 +220,7 @@ func TestZeroReplicaDataParallel_TheColdStartBudgetIsEveryRanks(t *testing.T) {
 	assert.EqualValues(t, 1, f["engineRanks"])
 }
 
-// Off, every rank count prices as one rank, as before #438.
+// Off, every rank count prices as one rank, as before ev-shindin/llm-scaling-manager#438.
 func TestZeroReplicaDataParallel_TheSwitchPicksTheRanks(t *testing.T) {
 	f, perReplica := dpRun{params: dpParams(8, 1, 64), gpus: 8, edit: zeroReplicaDPOff}.derived(t)
 	assert.EqualValues(t, 80_000, f["derivedCapacity"])

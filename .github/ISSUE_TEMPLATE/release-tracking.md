@@ -31,12 +31,12 @@ This document defines the process for releasing llm-d-scaling-manager.
 1. If needed, clone the llm-d-scaling-manager [repo].
 
    ```shell
-   git clone -o origin git@github.com:ev-shindin/llm-scaling-manager.git
+   git clone -o origin git@github.com:llm-d-incubation/llm-d-scaling-manager.git
    ```
 
 ## Release Process
 
-Follow [the release process](https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/developer-guide/release-process.md).
+Follow [the release process](https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/developer-guide/release-process.md).
 There is no release branch: only `main` can be released, and the
 [CI release workflow] refuses a tag that is not on `main` or whose commit does
 not pin `newTag: ${VERSION}`.
@@ -44,19 +44,19 @@ not pin `newTag: ${VERSION}`.
 - [ ] 1. Release PR to `main`: `newTag: ${VERSION}` in
       `config/base/manager/kustomization.yaml`; merge it.
 - [ ] 2. Tag the merge commit of the release PR, check it, push the tag
-      ([step 1](https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/developer-guide/release-process.md#1-push-the-tag)).
+      ([step 1](https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/developer-guide/release-process.md#1-push-the-tag)).
 - [ ] 3. Wait for the [CI release workflow] to succeed.
 - [ ] 4. Reset PR to `main`: `newTag: main` again, only after the run succeeded.
 - [ ] 5. Publish the GitHub Release with the release notes ([new release]);
       mark a release candidate as a pre-release. Verify the signature.
 - [ ] 6. Docs PR to `main`: point the install, upgrade and benchmark docs at
       `${VERSION}` and its digest
-      ([step 5](https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/developer-guide/release-process.md#5-point-the-docs-at-the-release)).
-- [ ] 7. Run the [install guide](https://github.com/ev-shindin/llm-scaling-manager/tree/main/docs/guides/install-in-namespace)
+      ([step 5](https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/developer-guide/release-process.md#5-point-the-docs-at-the-release)).
+- [ ] 7. Run the [install guide](https://github.com/llm-d-incubation/llm-d-scaling-manager/tree/main/docs/guides/install-in-namespace)
       against the released image.
 
 If the run fails, see
-[If the release fails](https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/developer-guide/release-process.md#if-the-release-fails).
+[If the release fails](https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/developer-guide/release-process.md#if-the-release-fails).
 If you find a bug in this process, create an [issue].
 
 ## After the Release
@@ -79,10 +79,10 @@ Use the following steps to announce the release.
    We are pleased to announce the release of llm-d-scaling-manager ${VERSION}!
 
    ### Container Images
-   * Controller: ghcr.io/ev-shindin/llm-scaling-manager:${VERSION}
+   * Controller: ghcr.io/llm-d-incubation/llm-d-scaling-manager:${VERSION}
 
    ### Release Notes
-   For more details, please see the GitHub release notes: https://github.com/ev-shindin/llm-scaling-manager/releases/tag/${VERSION}
+   For more details, please see the GitHub release notes: https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/tag/${VERSION}
    EOF
    ```
 
@@ -93,8 +93,8 @@ Use the following steps to announce the release.
 
 1. Close this issue.
 
-[repo]: https://github.com/ev-shindin/llm-scaling-manager
-[ghcr registry]: https://github.com/users/ev-shindin/packages?repo_name=llm-scaling-manager
-[new release]: https://github.com/ev-shindin/llm-scaling-manager/releases/new
-[issue]: https://github.com/ev-shindin/llm-scaling-manager/issues/new/choose
-[CI release workflow]: https://github.com/ev-shindin/llm-scaling-manager/actions/workflows/ci-release.yaml
+[repo]: https://github.com/llm-d-incubation/llm-d-scaling-manager
+[ghcr registry]: https://github.com/orgs/llm-d-incubation/packages?repo_name=llm-d-scaling-manager
+[new release]: https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/new
+[issue]: https://github.com/llm-d-incubation/llm-d-scaling-manager/issues/new/choose
+[CI release workflow]: https://github.com/llm-d-incubation/llm-d-scaling-manager/actions/workflows/ci-release.yaml

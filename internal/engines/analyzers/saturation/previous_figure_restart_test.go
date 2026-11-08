@@ -115,7 +115,7 @@ func TestALegacySpentClockReArmsOnALowerFigure(t *testing.T) {
 	}
 }
 
-// A previous figure from a PR #151 build's document keeps the clock that
+// A previous figure from a PR ev-shindin/llm-scaling-manager#151 build's document keeps the clock that
 // document kept under the same key: started afresh, it was re-armed at full
 // strength on every restart.
 func TestAnOlderBuildsPriorKeepsItsClock(t *testing.T) {

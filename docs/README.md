@@ -195,4 +195,4 @@ stack](guides/testing-with-llm-d/) · [benchmark the scaling manager](guides/ben
 ## Need help?
 
 - [Troubleshooting](reference/troubleshooting.md) first, then [after the install](reference/operations.md)
-- [Open an issue](https://github.com/ev-shindin/llm-scaling-manager/issues)
+- [Open an issue](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues)

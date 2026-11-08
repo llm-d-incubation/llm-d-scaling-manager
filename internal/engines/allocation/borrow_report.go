@@ -1,7 +1,7 @@
 package allocation
 
 // What on-call sees of cohort borrowing
-// (the Kueue borrowing proposal, PR #161, Part C): the
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part C): the
 // figures one cycle used, and what the governor holds against each variant.
 // Everything here reads; nothing decides.
 

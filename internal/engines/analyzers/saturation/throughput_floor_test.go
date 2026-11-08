@@ -372,7 +372,7 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 		}
 		// phase 2: `xxlong` learns 1.40 over two spaced samples, with three
 		// fresh replicas beside the saturated pair. The throughput key reads
-		// the k2 key's band (#415), which waits out K2KeyBucketDwell of a swap
+		// the k2 key's band (ev-shindin/llm-scaling-manager#415), which waits out K2KeyBucketDwell of a swap
 		// before it moves, and the window is frozen while it waits
 		// (muSwapFrozen): the first two cycles, a rate window apart, write
 		// nothing, and the swap lands on the third. So phase 2 runs four

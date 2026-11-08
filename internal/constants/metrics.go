@@ -66,7 +66,7 @@ const (
 	// truly computed, with no hit-rate discount to apply afterwards.
 	//
 	// SGLang has no equivalent. It publishes TTFT and inter-token latency but
-	// no per-stage prefill figure (sgl-project/sglang issue #14303), so a
+	// no per-stage prefill figure (sgl-project/sglang#14303), so a
 	// SGLang prefill variant keeps the request-rate reading.
 	VLLMRequestPrefillKVComputedTokensSum = "vllm:request_prefill_kv_computed_tokens_sum"
 
@@ -187,7 +187,7 @@ const (
 // flow control layer, not from vLLM pods. They are model-scoped (not per-pod).
 //
 // The EPP does not export a namespace label on these (gateway-api-inference-
-// extension issue #2309). The namespace label they carry in Prometheus is added
+// extension issue kubernetes-sigs/gateway-api-inference-extension#2309). The namespace label they carry in Prometheus is added
 // at scrape time from the EPP pod's namespace, and the controller's readers of
 // them group by or match on it: grouped by model name alone, two namespaces
 // serving the same model name would read the sum of both routers' queues.
@@ -950,7 +950,7 @@ const (
 
 // Kueue cohort borrowing reasons (values for the `reason` label of
 // LLMSMModelScalingBlocked), decided by the steady-state engine each cycle
-// (the Kueue borrowing proposal, PR #161, Part C). They
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part C). They
 // answer "why did my model drop": Kueue preempted a replica, or a replica did
 // not place and the scaling manager released it. A model that dropped with
 // none of them present dropped because its demand fell.
@@ -1026,7 +1026,7 @@ var ScalingBlockedReasonOwners = map[string][]string{
 }
 
 // Kueue cohort borrowing metrics
-// (the Kueue borrowing proposal, PR #161, Part C). Every
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part C). Every
 // other borrowing condition is a reason on LLMSMModelScalingBlocked.
 const (
 	// LLMSMQuotaLimitGPUs is a gauge: a namespace-scope quota entry's cap for one

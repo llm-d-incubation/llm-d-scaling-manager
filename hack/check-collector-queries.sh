@@ -8,7 +8,7 @@
 # evaluates the queries on synthetic per-rank series: one pod of eight ranks
 # behind one API server, one ordinary pod scraped twice, a pod of two ranks
 # scraped twice, and a pod of two ranks whose gauges carry one copy per API
-# server process (issue #150).
+# server process (issue ev-shindin/llm-scaling-manager#150).
 #
 # The fixture's exprs are the queries the registry builds; the Go test
 # TestPerPodQueriesMatchPromtoolFixture fails if either side changes alone.

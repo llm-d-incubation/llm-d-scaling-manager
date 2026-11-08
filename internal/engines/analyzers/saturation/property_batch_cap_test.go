@@ -11,7 +11,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// The batch cap's property cases (batch_cap.go, issue #399): a
+// The batch cap's property cases (batch_cap.go, issue ev-shindin/llm-scaling-manager#399): a
 // sequence-bound engine whose flags state no cap, under flow control.
 //
 // Every row holds its batch at the true cap S per engine rank, with S x 1250
@@ -43,7 +43,7 @@ func defaultedParams() *capacity.EngineParams {
 	return &capacity.EngineParams{EffectiveMaxBatchedTokens: 8192, MaxNumSeqs: 256}
 }
 
-// batchCapTopology is one fleet shape of #399's measurement.
+// batchCapTopology is one fleet shape of ev-shindin/llm-scaling-manager#399's measurement.
 type batchCapTopology struct {
 	name  string
 	n     int  // replicas of variant v
@@ -67,7 +67,7 @@ var learnableTopologies = []batchCapTopology{batchCapTopologies[0], batchCapTopo
 //
 // pd is a decode of a P/D model on vLLM v0.20.0 or later, at its cap: vLLM
 // reports every waiting request deferred, none waiting for capacity
-// (pd_decode_queue.go, as #287 measured), so the capacity queue reads 0.
+// (pd_decode_queue.go, as ev-shindin/llm-scaling-manager#287 measured), so the capacity queue reads 0.
 func capRow(pod string, perRank, ranks, queue int, pd bool) domain.ReplicaMetrics {
 	running := perRank * ranks
 	rm := makeReplicaMetrics(pod, "v", int64(running*batchCapPerSeq), propKv*int64(ranks), queue, 1000, 500)
@@ -159,7 +159,7 @@ func pricedNear(what string, got, truth float64) error {
 	return nil
 }
 
-// checkBatchCapSeqBound is #399's case: on each learnable topology, with the engine's
+// checkBatchCapSeqBound is ev-shindin/llm-scaling-manager#399's case: on each learnable topology, with the engine's
 // args unread (defaulted, or none filed at all) and its own queue at 1-4,
 // the learned cap prices the replica at its truth once its pods have held
 // their batch for a plateau.
@@ -342,7 +342,7 @@ func batchCapRefusalChecks(mut func(*SaturationAnalyzer)) map[string]func(uint64
 			return []domain.ReplicaMetrics{rm}, aggOne(rm), float64(s * batchCapPerSeq)
 		}),
 		// One pod loaded past k1, one held by the router with nothing
-		// waiting on it: #399's 1.68x over-order.
+		// waiting on it: ev-shindin/llm-scaling-manager#399's 1.68x over-order.
 		"no-waiting": checkBatchCapNeverUnder("router-held idle pod", mut, func(int, int) ([]domain.ReplicaMetrics, []domain.VariantReplicaState, float64) {
 			loaded := capRow("r0", 0, 1, 0, false)
 			loaded.TokensInUse = int64(0.9 * float64(propKv))

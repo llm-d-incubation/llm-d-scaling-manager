@@ -346,7 +346,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(g[0].Frozen).To(ConsistOf(ContainSubstring("no measured capacity")))
 	})
 
-	// Issue #193: variant a is 8-GPU replicas serving 800 (100 per GPU),
+	// Issue ev-shindin/llm-scaling-manager#193: variant a is 8-GPU replicas serving 800 (100 per GPU),
 	// variant b 16-GPU replicas serving 3200 (200 per GPU). b is the most
 	// cost-efficient, so it is the one the role grows. Demand is 8800.
 	issue193 := func(a, b int) ModelScalingRequest {
@@ -358,21 +358,21 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		return req
 	}
 
-	It("counts the need of a role that runs a less dense variant in the GPUs it runs (#193)", func() {
+	It("counts the need of a role that runs a less dense variant in the GPUs it runs (ev-shindin/llm-scaling-manager#193)", func() {
 		// 16 replicas of a hold 128 GPUs and serve 12800. Demand 8800 at 0.85
 		// needs 10353, which is 103.5 GPUs of a. Priced on b it was 51.8.
 		r := only(issue193(16, 0))
 		Expect(r.Need).To(BeNumerically("~", 8800/0.85/100, 1e-9))
 	})
 
-	It("counts a role's growth in GPUs of the variant it grows (#193)", func() {
+	It("counts a role's growth in GPUs of the variant it grows (ev-shindin/llm-scaling-manager#193)", func() {
 		// One replica of a (8 GPUs, 800) is held; the rest is grown as b,
 		// at 200 per GPU.
 		r := only(issue193(1, 0))
 		Expect(r.Need).To(BeNumerically("~", 8+(8800/0.85-800)/200, 1e-9))
 	})
 
-	It("grows past the best variant's ceiling in GPUs of the next one (#193)", func() {
+	It("grows past the best variant's ceiling in GPUs of the next one (ev-shindin/llm-scaling-manager#193)", func() {
 		// b has room for two replicas (32 GPUs, 6400); the rest is grown as
 		// a, at 100 per GPU.
 		req := shareReqVariants(8800,
@@ -383,7 +383,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(only(req).Need).To(BeNumerically("~", 8+32+(8800/0.85-800-6400)/100, 1e-9))
 	})
 
-	It("shares a shortfall at the utilization a role really runs at (#193)", func() {
+	It("shares a shortfall at the utilization a role really runs at (ev-shindin/llm-scaling-manager#193)", func() {
 		// m needs 103.5 GPUs of a, o needs 100 of its own: 168 GPUs hold 82.5%
 		// of each. Priced on b, m looked like 51.8 and was given 57 GPUs --
 		// 55% of its need as the a replicas it holds -- while o got 110%.
@@ -399,7 +399,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(mCovered).To(BeNumerically("~", oCovered, 1e-9))
 	})
 
-	It("leaves the need of a role that runs only its best variant as it was (#193)", func() {
+	It("leaves the need of a role that runs only its best variant as it was (ev-shindin/llm-scaling-manager#193)", func() {
 		d, k := 8800.0, 0.85
 		r := only(issue193(0, 4))
 		Expect(r.Need).To(Equal(d / k / (3200.0 / 16)))
@@ -412,7 +412,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(only(same).Need).To(Equal(d / k / (4000.0 / 4)))
 	})
 
-	It("prices a shrink on the replicas a role gives first, the denser ones when they cost more (#209)", func() {
+	It("prices a shrink on the replicas a role gives first, the denser ones when they cost more (ev-shindin/llm-scaling-manager#209)", func() {
 		// v0 is 1-GPU replicas serving 100 at cost 0.5, the most cost-efficient;
 		// v1 one 8-GPU replica serving 1600 (200 per GPU) at cost 16, the least,
 		// so v1 is what the role gives. Required is 1100 of 2400: giving v1
@@ -428,7 +428,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(r.Capacity).To(Equal([]ShareCapacityStep{{GPUs: 8, PerGPU: 1}, {GPUs: 8, PerGPU: 2}, {GPUs: math.Inf(1), PerGPU: 1}}))
 	})
 
-	It("prices a shrink on the replicas a role gives first, the sparser ones when cost follows GPUs (#211)", func() {
+	It("prices a shrink on the replicas a role gives first, the sparser ones when cost follows GPUs (ev-shindin/llm-scaling-manager#211)", func() {
 		// a is 1-GPU replicas serving 100, b 4-GPU replicas serving 800 (200
 		// per GPU); cost is 1 per GPU, so b is the most cost-efficient and a
 		// is given first. Four a and two b serve 2000 on 12 GPUs. Required
@@ -442,7 +442,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(only(req).Need).To(BeNumerically("~", 7.5, 1e-9))
 	})
 
-	It("gives a variant held at its minReplicas last (#209)", func() {
+	It("gives a variant held at its minReplicas last (ev-shindin/llm-scaling-manager#209)", func() {
 		// As above, but a's minReplicas keeps all four a: the role gives b
 		// first, and a's 4 GPUs (400, 2 GPUs of b) are what it keeps last
 		// given. Required 1500 is 7.5 GPUs of b: 2 on a's 4 GPUs, 5.5 on b.
@@ -453,14 +453,14 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(only(req).Need).To(BeNumerically("~", 4+5.5, 1e-9))
 	})
 
-	It("keeps a single-variant role's need and leaves it no capacity curve (#209)", func() {
+	It("keeps a single-variant role's need and leaves it no capacity curve (ev-shindin/llm-scaling-manager#209)", func() {
 		d, k := 1200.0, 0.8
 		r := only(shareReqVariants(d, shareVariant{name: "b", gpus: 4, current: 5, cost: 4, prc: 800}))
 		Expect(r.Need).To(Equal(d / k / (800.0 / 4)))
 		Expect(r.Capacity).To(BeNil())
 	})
 
-	It("counts a running variant with a NaN or infinite capacity as dense as best (#209)", func() {
+	It("counts a running variant with a NaN or infinite capacity as dense as best (ev-shindin/llm-scaling-manager#209)", func() {
 		// The 8-GPU replica with no reading counts as 8 GPUs of best, so the
 		// role holds 10 GPUs of best and required 300 is 3 of them. A NaN
 		// froze the model; an infinity was ranked the best variant and made
@@ -476,7 +476,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		}
 	})
 
-	It("reads a role's utilization from what its GPUs serve, not from their count (#209)", func() {
+	It("reads a role's utilization from what its GPUs serve, not from their count (ev-shindin/llm-scaling-manager#209)", func() {
 		// 8 GPUs of best, then 8 that serve twice as much: 16 GPUs serve 24 GPUs
 		// of best, and a need of 10 GPUs serves 12.
 		r := ShareRole{Need: 10, Capacity: []ShareCapacityStep{{GPUs: 8, PerGPU: 1}, {GPUs: 8, PerGPU: 2}, {GPUs: math.Inf(1), PerGPU: 1}}}
@@ -496,8 +496,8 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(ShareSkipWaits{}.Urgent(r, 11)).To(BeTrue())
 	})
 
-	It("moves a dense replica off a shrinking role only when the quota cannot hold both (#209)", func() {
-		// X as in the first #209 spec (need 9.5 on 16 GPUs), Y one 8-GPU
+	It("moves a dense replica off a shrinking role only when the quota cannot hold both (ev-shindin/llm-scaling-manager#209)", func() {
+		// X as in the first ev-shindin/llm-scaling-manager#209 spec (need 9.5 on 16 GPUs), Y one 8-GPU
 		// replica. Giving X's 8-GPU v1 leaves it serving 800 of 1100.
 		k := 0.8
 		model := func(id string, demand float64, vs ...shareVariant) ModelScalingRequest {
@@ -545,7 +545,7 @@ var _ = Describe("BuildShareGroups: floors, ceilings and replica sizes", func() 
 		Expect(given(8)).To(BeEmpty())
 		Expect(given(10)).To(BeEmpty())
 		// Y short by a replica or more: the quota cannot hold both, and the
-		// share moves v1 to Y as it did before #193.
+		// share moves v1 to Y as it did before ev-shindin/llm-scaling-manager#193.
 		Expect(given(16)).To(Equal(map[string]int{"x-v1": 1}))
 		Expect(given(24)).To(Equal(map[string]int{"x-v1": 1}))
 	})

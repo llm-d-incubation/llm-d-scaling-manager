@@ -648,7 +648,7 @@ func (c *ReplicaMetricsCollector) extractPodMetrics(
 	}
 
 	// Process KV usage averaged over the ITL window (0.0–1.0) — the k of an
-	// ITL(k) reading, over the same minute as the ITL rate (issue #393)
+	// ITL(k) reading, over the same minute as the ITL rate (issue ev-shindin/llm-scaling-manager#393)
 	if result := results[registration.QueryKvUsageMean]; result != nil {
 		if !result.HasError() {
 			for _, value := range result.Values {

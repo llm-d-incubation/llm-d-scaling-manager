@@ -98,7 +98,7 @@ Refusals, flags, the standalone mode and exit codes are in the
 | `KVreq` | KV tokens one in-flight request holds on average: `ILeff + D·OL/2`, `ILeff = IL·(1 − hit)`, `D` the spread of output lengths, 1 with no reading |
 | `V_P` | A prefill pod's prompt-token throughput while it has work |
 | `a` | The fixed latency one request pays on a prefill pod |
-| Batch cap | Most sequences an engine runs: flags, else the `llm-d.ai/max-num-seqs` annotation, else learned (#422, #429) |
+| Batch cap | Most sequences an engine runs: flags, else the `llm-d.ai/max-num-seqs` annotation, else learned (ev-shindin/llm-scaling-manager#422, ev-shindin/llm-scaling-manager#429) |
 | Presence bit | A `...Known` flag beside a metric, so a missing reading is never read as zero |
 
 ## Decode: TPOT from the ITL line
@@ -117,11 +117,11 @@ closed form (Little's law, residence `OL·ITL(k)`):
 valid while the denominator is positive and `n` is under the cap.
 
 Corrections: `KVreq = ILeff + D·OL/2` with the output spread
-`D = E[O²]/E[O]²` (#276), read from the output-length histogram, in the saturation
+`D = E[O²]/E[O]²` (ev-shindin/llm-scaling-manager#276), read from the output-length histogram, in the saturation
 analyzer, the slo analyzer (switch `slo-kv-per-request-output-dispersion`), the
-throughput analyzer (switch `throughput-kv-per-request-output-dispersion`, #433) and
+throughput analyzer (switch `throughput-kv-per-request-output-dispersion`, ev-shindin/llm-scaling-manager#433) and
 [the CLI](#recording-mode-as-built-d3). TPOT per accepted token under speculative
-decoding (#274, PR #430) is applied once, where the saturation analyzer fits its
+decoding (ev-shindin/llm-scaling-manager#274, PR ev-shindin/llm-scaling-manager#430) is applied once, where the saturation analyzer fits its
 line (`domain.ReplicaMetrics.ITLPerToken`). `cmd/whatif` applies nothing of its
 own: it prices that line, so it inherits the correction. That rests on reading the
 code: no committed recording speculates. The slo analyzer still reads step time
@@ -157,8 +157,8 @@ percentile to the mean of per-request TPOT. `R_q` is above 1 because:
   busy periods see a higher mean ITL;
 - a short output averages few gaps, so its TPOT spreads more: `R_q` depends on
   output length, and is learned per output bucket where the data allows;
-- speculative decoding accepts a variable number of tokens per step (#274);
-- on aggregated pods, prefill chunks land in decode steps (#275).
+- speculative decoding accepts a variable number of tokens per step (ev-shindin/llm-scaling-manager#274);
+- on aggregated pods, prefill chunks land in decode steps (ev-shindin/llm-scaling-manager#275).
 
 **Learning `R_q`.** From the router's TPOT histogram, per window: the bucket
 holding the `q` quantile, read at its **upper edge**, over the window's mean
@@ -418,12 +418,12 @@ TTFT's rows are on [its page](slo-capacity-planner-ttft.md#where-it-is-most-wron
 | Limit | Direction | Issue |
 | --- | --- | --- |
 | Decode assumed balanced across `N_d` | Over-promises | — |
-| Output-length spread with no histogram (`D` read as 1; the CLI flags `OutputSpreadUnread`) | Over-promises by 7-44%. Where a histogram is read `D` is a lower bound, so it can still over-promise, by less | #276 |
-| Prefix-cache hits still occupy KV | Over-promises, up to about 4x under multi-turn reuse | #277 |
+| Output-length spread with no histogram (`D` read as 1; the CLI flags `OutputSpreadUnread`) | Over-promises by 7-44%. Where a histogram is read `D` is a lower bound, so it can still over-promise, by less | ev-shindin/llm-scaling-manager#276 |
+| Prefix-cache hits still occupy KV | Over-promises, up to about 4x under multi-turn reuse | ev-shindin/llm-scaling-manager#277 |
 | Positive prompt/output correlation | Over-promises | — |
-| ITL depends on shape on aggregated pods | Either way; about 40% of ITL at 1000/500. The saturation analyzer prices it ([aggregated ITL by shape](aggregated-itl-shape.md)); the slo analyzer does not yet | #275 |
-| SLO analyzer reads step time, not per token | Under-promises on speculating vLLM by `1 + E` | #274 |
-| No saturation line for an unlabeled aggregated variant | Line fitted (switch `itl-line-fits-aggregated`, its own key); sized from once priced by shape and checked (#275) | #432 |
+| ITL depends on shape on aggregated pods | Either way; about 40% of ITL at 1000/500. The saturation analyzer prices it ([aggregated ITL by shape](aggregated-itl-shape.md)); the slo analyzer does not yet | ev-shindin/llm-scaling-manager#275 |
+| SLO analyzer reads step time, not per token | Under-promises on speculating vLLM by `1 + E` | ev-shindin/llm-scaling-manager#274 |
+| No saturation line for an unlabeled aggregated variant | Line fitted (switch `itl-line-fits-aggregated`, its own key); sized from once priced by shape and checked (ev-shindin/llm-scaling-manager#275) | ev-shindin/llm-scaling-manager#432 |
 | Residence exponential in the admission chain | Either way; a constant ITL would over-promise near the knee | — |
 | `R_q` learned under one load and applied at another | Learned at lower load and applied near the knee, over-promises (the spread grows with load); the reverse under-promises | — |
 | `R_q` pooled across output lengths, applied to a short-output bucket | Over-promises | — |
@@ -582,11 +582,11 @@ is made.**
 | P3 | The TTFT model in `whatif`; UNVALIDATED; no switch. Built before P2, against closed-form and synthetic cases, because the prefill-stress runs were blocked on cluster access: [as built](slo-capacity-planner-ttft.md#as-built-p3) | none | P2 (to validate), D2 |
 | TTFT CLI | `--ttft`, `--ttft-percentile`, `--assume-vp` and `--prefill` on both questions, from every source: [as built](#ttft-as-built) | none | P3, D4 |
 | S1, S2 | The SLO analyzer prices TTFT, shadow then enforce, on the same `prefill` and `whatif` library: [SLO tiers, phase 2](slo-tiers.md#phase-2-ttft) | with its switch | S1: P3. S2: S1, Q1, M2 |
-| M1 | Per-bucket and mix answers; aggregated TTFT | none | P3, R1, #276 |
+| M1 | Per-bucket and mix answers; aggregated TTFT | none | P3, R1, ev-shindin/llm-scaling-manager#276 |
 | M2 | The staircase run; an operator page in `docs/reference/`; drops UNVALIDATED if it passes | — | D4, P3 |
-| Q1 | Issue the queue-minimum and KV-transfer-time queries every cycle, not only while a recording is on, and add the per-request computed-prefill-token histogram (`vllm:request_prefill_kv_computed_tokens_bucket`, per instance), for namespaces holding a model whose policy sets a TTFT target: busy minutes fire in production, the measured effective-prompt spread replaces S1's assumed `cv` 2, and `TransferOmitted` clears where a decode pod reads a transfer time. Before S2, not S1: [S1 decisions](slo-tiers.md#s1-decisions). [As built](slo-tiers.md#as-built-q1) | none: the queue minimum and transfer time are in recordings already; the histogram is new, so recordings made after Q1 carry it, and the switch `slo-ttft-measured-spread` replays those both ways | P1's busy minutes (PR #470) |
+| Q1 | Issue the queue-minimum and KV-transfer-time queries every cycle, not only while a recording is on, and add the per-request computed-prefill-token histogram (`vllm:request_prefill_kv_computed_tokens_bucket`, per instance), for namespaces holding a model whose policy sets a TTFT target: busy minutes fire in production, the measured effective-prompt spread replaces S1's assumed `cv` 2, and `TransferOmitted` clears where a decode pod reads a transfer time. Before S2, not S1: [S1 decisions](slo-tiers.md#s1-decisions). [As built](slo-tiers.md#as-built-q1) | none: the queue minimum and transfer time are in recordings already; the histogram is new, so recordings made after Q1 carry it, and the switch `slo-ttft-measured-spread` replays those both ways | P1's busy minutes (PR ev-shindin/llm-scaling-manager#470) |
 | Only if asked | The controller endpoint and two gauges | none | P3 |
-| Later | Prefill line and learned batch cap in the snapshot; the floor's prefill mu from `V_P`; a shared prefill/decode budget; #275, #277 | — | — |
+| Later | Prefill line and learned batch cap in the snapshot; the floor's prefill mu from `V_P`; a shared prefill/decode budget; ev-shindin/llm-scaling-manager#275, ev-shindin/llm-scaling-manager#277 | — | — |
 
 **P1 and busy minutes.** `V_P`'s first source, busy minutes, needs each pod's
 least waiting count over the minute (`min_over_time` of
@@ -687,7 +687,7 @@ TTFT's are on [its page](slo-capacity-planner-ttft.md#open-questions).
    then.
 2. **Per-request logs for the joint length distribution?** *Recommend:* an
    optional input; otherwise assume independence and say so.
-3. **ITL per token in the SLO analyzer (#430's known limit).** *Recommend:* a
+3. **ITL per token in the SLO analyzer (ev-shindin/llm-scaling-manager#430's known limit).** *Recommend:* a
    separate PR with its own switch, not D1.
 
 ## CLI reference
@@ -952,7 +952,7 @@ variant the whole rate, and with several decode variants each is priced at the
 model's whole rate, as S1 prices decode. The assumed figures are S1's own: both
 read them from `internal/signals/whatif/ttft_assumed.go`.
 
-Two more flags are S1's (#486):
+Two more flags are S1's (ev-shindin/llm-scaling-manager#486):
 
 - **`RoutingBound`** is `f / N_p` of at least 0.8, sustained: a learned `f`, or a
   raw share at that level over all of a full 5-cycle window. **`ImbalanceNotSustained`**

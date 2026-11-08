@@ -20,7 +20,7 @@ import (
 // analyzers' lines do.
 
 // SwitchITLAdmitsAtSequenceCap is the replay switch for cap admission
-// (analyzer-learner.md, PR 4b-3; inventory row 1's rule, #287, #293, #331).
+// (analyzer-learner.md, PR 4b-3; inventory row 1's rule, ev-shindin/llm-scaling-manager#287, ev-shindin/llm-scaling-manager#293, ev-shindin/llm-scaling-manager#331).
 // On: a reading above the band is one of the band's when its replica's
 // batch is exactly at the cap the variant's engine states -- the flags'
 // max_num_seqs, lowered by --max-num-active-seqs, else the

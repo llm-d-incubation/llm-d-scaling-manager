@@ -713,7 +713,7 @@ func learnedStateEntries(s saturation.LearnedState) []learnedStateEntry {
 			out = append(out, learnedStateEntry{spare: true, key: "itlbaselineat|" + k, drop: func() { delete(s.ITLBaselineAdmittedAt, k) }})
 		}
 	}
-	// A line's unit mark and its shape (issue #275) go with the line; a mark
+	// A line's unit mark and its shape (issue ev-shindin/llm-scaling-manager#275) go with the line; a mark
 	// or a shape left with no line goes first, as a spent bound does.
 	for k, l := range s.ITLLines {
 		out = append(out, learnedStateEntry{at: l.LearnedAt, key: "itl|" + k, drop: func() {
@@ -788,7 +788,7 @@ func learnedStateEntries(s saturation.LearnedState) []learnedStateEntry {
 	for k, m := range s.Forgotten {
 		out = append(out, learnedStateEntry{at: m.Seen, key: "forgotten|" + k, drop: func() { delete(s.Forgotten, k) }})
 	}
-	// A PR #151 document's previous figures, where no bound holds the key;
+	// A PR ev-shindin/llm-scaling-manager#151 document's previous figures, where no bound holds the key;
 	// one a bound holds goes with it.
 	for k, p := range s.PriorK2 {
 		if _, bound := s.LowerBounds[k]; bound {

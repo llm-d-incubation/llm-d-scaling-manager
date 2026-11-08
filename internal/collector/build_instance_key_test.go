@@ -119,7 +119,7 @@ var buildInstanceKeyTestCases = []buildInstanceKeyTestCase{
 			"instance":       "10.0.0.4:8000",
 			// Spelled out rather than taken from a constant. This is a series
 			// arriving from OUTSIDE — a ServiceMonitor relabeling that predates
-			// #1263, or a shadow-pod layout — so the test should say the literal
+			// llm-d/llm-d-workload-variant-autoscaler#1263, or a shadow-pod layout — so the test should say the literal
 			// string the cluster sends, not import our name for it. The constant
 			// itself is gone: nothing in the controller reads this label.
 			"llm_d_ai_variant": "stale-va",

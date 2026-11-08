@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The line in a rollout (issue #481), each through Analyze with its switch on
+// The line in a rollout (issue ev-shindin/llm-scaling-manager#481), each through Analyze with its switch on
 // and off: the newest revision's rows alone, a hold while no new pod serves,
 // and a forget under new engine arguments.
 

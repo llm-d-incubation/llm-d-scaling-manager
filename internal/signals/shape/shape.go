@@ -17,7 +17,7 @@ const DefaultChangeTolerance = 0.20
 //
 // KVreq = ILeff + OL/2 is the time-averaged per-in-flight-request KV footprint
 // when every request generates the same number of tokens; with a spread of
-// lengths it is ILeff + D*OL/2 (WithOutputDispersion, issue #276).
+// lengths it is ILeff + D*OL/2 (WithOutputDispersion, issue ev-shindin/llm-scaling-manager#276).
 // ILeff is used for both N(k*) (current fleet) and N(k_sat) (new replica capacity).
 //
 // Rationale for using ILeff for new replicas: with cache-aware scheduling (EPP

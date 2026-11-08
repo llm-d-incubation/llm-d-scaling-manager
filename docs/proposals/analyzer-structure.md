@@ -29,7 +29,7 @@ with later features.
 | `steadystate/engine_v2.go` | 1365 lines | 2030 lines |
 
 Re-splitting is pure moves again. It waits for the in-flight learner PRs
-(#341) so the moves do not conflict with them.
+(ev-shindin/llm-scaling-manager#341) so the moves do not conflict with them.
 
 The analyzers work. The problem is that reading them is expensive, and that
 cost is now showing up as real defects: three doc comments silently attached to

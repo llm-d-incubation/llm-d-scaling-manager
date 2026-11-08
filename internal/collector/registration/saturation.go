@@ -59,7 +59,7 @@ const (
 //     which distinguishes DP ranks sharing a pod, and pod drives the
 //     ownerReference walk that resolves the variant.
 //   - engine is NOT in the grouping, and the aggregation that drops it is
-//     the merge rule for data-parallel ranks (issue #150). vLLM running
+//     the merge rule for data-parallel ranks (issue ev-shindin/llm-scaling-manager#150). vLLM running
 //     several DP ranks behind one API server exports every series once per
 //     rank, told apart only by the engine label, from one scrape target. Each
 //     query therefore folds the ranks the way collector.collapseToPods folds
@@ -88,11 +88,11 @@ const (
 //     against the whole pod's capacity, and the queue of one rank.
 //     On an instance with one rank every one of these returns exactly what
 //     the max returned.
-//   - llm_d_ai_variant is deliberately NOT in the grouping (issue #1263).
+//   - llm_d_ai_variant is deliberately NOT in the grouping (issue llm-d/llm-d-workload-variant-autoscaler#1263).
 //     Neither vLLM nor SGLang emits it — it appears only where an operator
 //     relabels the llm-d.ai/variant pod label onto the series — so it was an
 //     empty column on every real deployment. Variant identity now comes from
-//     the PodLocator owner-walk delivered by PR #1260.
+//     the PodLocator owner-walk delivered by PR llm-d/llm-d-workload-variant-autoscaler#1260.
 
 // RegisterSaturationQueries registers queries used by the saturation analyzer.
 func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
@@ -233,7 +233,7 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	})
 
 	// The output-length histogram over the same [5m], for the spread of
-	// output lengths beside the mean (issue #276).
+	// output lengths beside the mean (issue ev-shindin/llm-scaling-manager#276).
 	registerOutputLengthQueries(registry)
 
 	// Average input (prompt) tokens per completed request
@@ -267,7 +267,7 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	//
 	// vLLM declares both as Counters named vllm:prefix_cache_hits and
 	// vllm:prefix_cache_queries; the Prometheus client exposes a Counter with a
-	// _total suffix, so the scraped names carry it (issue #232).
+	// _total suffix, so the scraped names carry it (issue ev-shindin/llm-scaling-manager#232).
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryPrefixCacheHitRate,
 		Type:        source.QueryTypePromQL,
@@ -288,7 +288,7 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 	//
 	// The namespace stays in the grouping key, and the collector keeps only its
 	// own namespace's series (eppSeriesInNamespace). The EPP does not export a
-	// namespace itself (gateway-api-inference-extension #2309), but Prometheus
+	// namespace itself (kubernetes-sigs/gateway-api-inference-extension#2309), but Prometheus
 	// stamps the scraped target's namespace on every series, and the arrival-rate
 	// query already matches on that label. Grouped by model name alone, two
 	// namespaces serving the same model read the sum of both routers' queues: a

@@ -1,8 +1,8 @@
 # llm-d-scaling-manager
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![CI](https://github.com/ev-shindin/llm-scaling-manager/actions/workflows/ci-pr-checks.yaml/badge.svg?branch=main)](https://github.com/ev-shindin/llm-scaling-manager/actions/workflows/ci-pr-checks.yaml)
-[![Go](https://img.shields.io/github/go-mod/go-version/ev-shindin/llm-scaling-manager)](go.mod)
+[![CI](https://github.com/llm-d-incubation/llm-d-scaling-manager/actions/workflows/ci-pr-checks.yaml/badge.svg?branch=main)](https://github.com/llm-d-incubation/llm-d-scaling-manager/actions/workflows/ci-pr-checks.yaml)
+[![Go](https://img.shields.io/github/go-mod/go-version/llm-d-incubation/llm-d-scaling-manager)](go.mod)
 
 llm-d-scaling-manager lets several LLM models on llm-d share one GPU quota. Each
 model gets the GPUs its load needs. The spare GPUs are kept running as
@@ -281,7 +281,7 @@ important`), not on the trigger
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Questions, bugs and ideas:
-[GitHub issues](https://github.com/ev-shindin/llm-scaling-manager/issues).
+[GitHub issues](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues).
 
 ## License
 

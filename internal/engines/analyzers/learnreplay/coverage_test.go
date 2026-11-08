@@ -79,7 +79,7 @@ var reviewed = map[reflect.Type]buckets{
 		// ITLReadings copies a key's readings, and PricingBatchCap reads the
 		// cap without stamping a learned one as used: the what-if planner's
 		// views (whatif_view.go), as is ITLOneSided, which copies the
-		// one-sided admission a key was last priced with (issue #467).
+		// one-sided admission a key was last priced with (issue ev-shindin/llm-scaling-manager#467).
 		// PrefillEstimate copies a prefill variant's stashed estimate for the
 		// slo analyzer, which the analyzer overwrites every cycle and nothing
 		// restores (prefill_observe.go).

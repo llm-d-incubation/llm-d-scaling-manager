@@ -11,7 +11,7 @@ import (
 
 // YAML .inf and .nan in priority and in an analyzer's score, typed or under
 // parameters, are cleared and reported, and the default entry keeps its
-// limiters (#171).
+// limiters (ev-shindin/llm-scaling-manager#171).
 func TestNonFinitePriorityAndScoreAreClearedAtLoad(t *testing.T) {
 	data := map[string]string{
 		"default": "priority: .inf\n" +

@@ -94,7 +94,7 @@ func TestDeclaredBatchCapIsComparedOnlyWhereRead(t *testing.T) {
 }
 
 // StatedBatchCap is the flags' cap, else the declared one, and never the
-// parser's default (issue #420).
+// parser's default (issue ev-shindin/llm-scaling-manager#420).
 func TestStatedBatchCap(t *testing.T) {
 	assert.EqualValues(t, 0, (*EngineParams)(nil).StatedBatchCap())
 	assert.EqualValues(t, 0, (&EngineParams{MaxNumSeqs: 256}).StatedBatchCap(), "a default is no stated cap")

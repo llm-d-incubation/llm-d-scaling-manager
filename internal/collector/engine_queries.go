@@ -53,7 +53,7 @@ var engineSpecificReplicaQueries = []string{
 // series an SGLang fleet simply does not publish (see each entry).
 var agnosticReplicaQueries = []string{
 	// vLLM publishes the prefill computed-token counter; SGLang publishes no
-	// per-stage prefill figure at all (sgl-project/sglang issue #14303). So it
+	// per-stage prefill figure at all (sgl-project/sglang#14303). So it
 	// is registered ONCE under its bare name rather than as a per-engine pair:
 	// there is no SGLang template to write, and on an SGLang fleet the query
 	// simply returns no series, which leaves PrefillComputedTokenRate at zero

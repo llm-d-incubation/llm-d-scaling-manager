@@ -97,7 +97,7 @@ case "$*" in
   "get deploy -n "*)
       case "$*" in
         *' -o json')   # exactly -o json
-            printf '%s' '{"items":[{"metadata":{"name":"scaling-manager-controller-manager"},"spec":{"selector":{"matchLabels":{"control-plane":"controller-manager"}},"template":{"spec":{"serviceAccountName":"scaling-manager-controller-manager","containers":[{"name":"kube-rbac-proxy","image":"quay.io/brancz/kube-rbac-proxy:v0.18.0","args":["--upstream=http://127.0.0.1:8080/"]},{"name":"manager","image":"ghcr.io/ev-shindin/llm-scaling-manager:main","args":["--leader-elect=true","--watch-namespace=$(LLMSM_WATCH_NAMESPACE)"],"env":[{"name":"POD_NAMESPACE","valueFrom":{"fieldRef":{"fieldPath":"metadata.namespace"}}},{"name":"LLMSM_WATCH_NAMESPACE","value":"$(POD_NAMESPACE)"}]}]}}}}]}' ;;
+            printf '%s' '{"items":[{"metadata":{"name":"scaling-manager-controller-manager"},"spec":{"selector":{"matchLabels":{"control-plane":"controller-manager"}},"template":{"spec":{"serviceAccountName":"scaling-manager-controller-manager","containers":[{"name":"kube-rbac-proxy","image":"quay.io/brancz/kube-rbac-proxy:v0.18.0","args":["--upstream=http://127.0.0.1:8080/"]},{"name":"manager","image":"ghcr.io/llm-d-incubation/llm-d-scaling-manager:main","args":["--leader-elect=true","--watch-namespace=$(LLMSM_WATCH_NAMESPACE)"],"env":[{"name":"POD_NAMESPACE","valueFrom":{"fieldRef":{"fieldPath":"metadata.namespace"}}},{"name":"LLMSM_WATCH_NAMESPACE","value":"$(POD_NAMESPACE)"}]}]}}}}]}' ;;
       esac
       exit 0 ;;
   # By the Deployment's own selector, the controller's pods: the newest Running

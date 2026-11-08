@@ -23,7 +23,7 @@ import (
 // tracker (analyzer-learner.md, 2.5 and section 7, PR 2). On, the test reads
 // the engine's tracker (k2Joined). Off, it reads the analyzer's own memo of
 // each Ready time (settleMemo.noteReady), as before the tracker. The rule is
-// the same (#288); two things move. How long a replica may go without a row
+// the same (ev-shindin/llm-scaling-manager#288); two things move. How long a replica may go without a row
 // before it is a new sighting: the tracker's absence tolerance
 // (settle.Tolerance: 1 min, or 2.5 optimize intervals), not the memo's
 // K2SettleMaxGap (2 min). And a Ready row whose Ready time reads zero (the
@@ -123,7 +123,7 @@ func settleModel(namespace, modelID string) string {
 
 // k2Joined reports whether the replica in has joined the fleet under
 // JoinedReplicaWindow ago, and whether its Pod's Ready time decided that
-// (byReadyAt). The rule is #288's, read from the settle tracker:
+// (byReadyAt). The rule is ev-shindin/llm-scaling-manager#288's, read from the settle tracker:
 //
 //   - The replica is aged from the later of its Pod's Ready time and the
 //     first cycle that Ready time was seen (settle.Replica.ReadyFrom). A

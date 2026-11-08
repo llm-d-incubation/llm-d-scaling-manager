@@ -73,7 +73,7 @@ func TestRestoreInFlightEndsTheWakeWaitOnceItHasRead(t *testing.T) {
 	}
 }
 
-// Review of #215: the skipped-variant test set cycleVariants by hand, so a
+// Review of ev-shindin/llm-scaling-manager#215: the skipped-variant test set cycleVariants by hand, so a
 // key the cycle records that differs from the one the ledger holds (the
 // Variant's name against a decision's VariantName) would pass it.
 // Here a real optimizeV2 cycle skips the model -- nothing collected, or

@@ -1,7 +1,7 @@
 package allocation
 
 // A queue's nominal figures beside its borrowing (the Kueue borrowing
-// proposal, PR #161, B3, B7 and B10), for every namespace a Kueue-reading
+// proposal, PR ev-shindin/llm-scaling-manager#161, B3, B7 and B10), for every namespace a Kueue-reading
 // entry reads, counted or not: what of its unused nominal peers borrow now
 // that Kueue reclaims for it -- reclaimWithinCohort Any only -- past what the
 // cohort's free pool covers (growth into it needs no node hole: Kueue

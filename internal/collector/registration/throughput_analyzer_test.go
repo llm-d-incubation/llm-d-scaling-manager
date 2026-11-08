@@ -120,7 +120,7 @@ var _ = Describe("the queries the demand floor and the throughput analyzer share
 			Expect(rendered).NotTo(ContainSubstring(`max_over_time`))
 			Expect(rendered).To(ContainSubstring(`namespace="test-ns"`))
 			Expect(rendered).To(ContainSubstring(`avg by (model_name,`),
-				"the mean over a pod's engine ranks, not the busiest rank (issue #150)")
+				"the mean over a pod's engine ranks, not the busiest rank (issue ev-shindin/llm-scaling-manager#150)")
 			Expect(rendered).NotTo(ContainSubstring(`model_name="`), "the model is partitioned in the collector, not matched in PromQL")
 		})
 
@@ -130,10 +130,10 @@ var _ = Describe("the queries the demand floor and the throughput analyzer share
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rendered).To(ContainSubstring(`avg_over_time(vllm:kv_cache_usage_perc{namespace="test-ns"}[`+ITLWindow+`])`),
-				"the minute AvgITL's rate covers (issue #393)")
+				"the minute AvgITL's rate covers (issue ev-shindin/llm-scaling-manager#393)")
 			Expect(rendered).NotTo(ContainSubstring(`max_over_time`))
 			Expect(rendered).To(ContainSubstring(`avg by (model_name,`),
-				"the mean over a pod's engine ranks, as QueryKvUsageInstant (issue #150)")
+				"the mean over a pod's engine ranks, as QueryKvUsageInstant (issue ev-shindin/llm-scaling-manager#150)")
 		})
 
 		It("should build QueryRequestRate with 1m window over token count, once registered", func() {

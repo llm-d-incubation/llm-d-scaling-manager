@@ -6,7 +6,7 @@ import (
 )
 
 // The spread of output lengths behind the KV a resident request holds
-// (issue #276): a lower bound on E[O^2] from a length histogram, which
+// (issue ev-shindin/llm-scaling-manager#276): a lower bound on E[O^2] from a length histogram, which
 // ReplicaMetrics.AvgOutputTokensSquared carries and shape.Dispersion reads.
 
 // LengthBucket is one cumulative bucket of a length histogram: the requests a second

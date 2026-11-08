@@ -42,7 +42,7 @@ func TestObservationWindowReadsThePolicyBand(t *testing.T) {
 
 // A replica's ITL is a minute's rate, so the window, its band and the tier-2
 // fit pair it with the KV fill averaged over that minute when the collector
-// read it (issue #403): a replica whose instant fill is 0.95, above the
+// read it (issue ev-shindin/llm-scaling-manager#403): a replica whose instant fill is 0.95, above the
 // default band, and whose minute mean is 0.45 teaches the line at 0.45. Without
 // the mean the instant fill is all there is, and the replica is out of band.
 func TestITLPairsTheMinuteMeanKVFill(t *testing.T) {

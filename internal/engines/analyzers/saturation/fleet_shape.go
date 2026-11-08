@@ -163,7 +163,7 @@ func outputCounted(rolesByVariant map[string]string) func(domain.ReplicaMetrics)
 // The factor is under 1 when the request-weighted mean is well under the
 // plain one: 99 requests a second of 100 tokens beside 1 of 1000 read f
 // 0.33. estimateCapacityAtCapSpread reads it as 1, deliberately: the
-// estimate is never priced below the I + O/2 it had before #276, which here
+// estimate is never priced below the I + O/2 it had before ev-shindin/llm-scaling-manager#276, which here
 // is above what the requests hold (1275 against 1091). That is the old
 // over-statement, not a new one. The log carries the factor as computed.
 func modelOutputFactor(replicas []domain.ReplicaMetrics, rolesByVariant map[string]string, plainMean float64) float64 {

@@ -48,7 +48,7 @@ func scheduledPod(dep string, i int) *corev1.Pod {
 	}
 }
 
-// Issue #215: a restored hold counted its variant's pods only from the first
+// Issue ev-shindin/llm-scaling-manager#215: a restored hold counted its variant's pods only from the first
 // steady-state cycle that admitted it, so a replica whose pod landed after
 // the restart kept its hole held -- from wakes too -- until then. The
 // persisted ledger names the scale target, and a restored hold counts its

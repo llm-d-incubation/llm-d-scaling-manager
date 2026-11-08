@@ -16,7 +16,7 @@ import (
 )
 
 // Where an LWS group's Ready time comes from (analyzer-learner.md 4.3 and
-// section 7, PR 2; the group restart #361's workload patch issues: the
+// section 7, PR 2; the group restart ev-shindin/llm-scaling-manager#361's workload patch issues: the
 // leader and its workers recreated, their names kept, their Ready times
 // apart). The collector reports one row per group, the leader's: a worker's
 // instance is dropped before its row is built (isLWSWorker). The row's

@@ -85,7 +85,7 @@ func fixtureRecording(t *testing.T) []byte {
 // number of cycles of every recorded call. A test that adds a recording as
 // a golden uses it rather than the committed one, whose Fidelity replay at a
 // later commit writes the input fields added since and so no longer matches
-// it byte for byte (#400).
+// it byte for byte (ev-shindin/llm-scaling-manager#400).
 func cycledRecording(t *testing.T, cycles int) []byte {
 	t.Helper()
 	f := newFixture(readersAt)

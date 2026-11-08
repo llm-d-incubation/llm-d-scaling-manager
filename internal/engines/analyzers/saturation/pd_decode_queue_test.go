@@ -13,7 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Issue #278. vLLM counts a decode request whose KV is still in flight from
+// Issue ev-shindin/llm-scaling-manager#278. vLLM counts a decode request whose KV is still in flight from
 // prefill in num_requests_waiting. The shape: one decode replica at KV 0.5
 // with 768 waiting, beside a prefill variant. Read as a backlog, the 768 put
 // the decode over queueLengthThreshold (5) -- a saturated reading whose k2 is
@@ -140,7 +140,7 @@ func TestPDDecodeChargesOnlyTheCapacityQueue(t *testing.T) {
 
 // Older vLLM publishes no reason. Which of the 768 are in flight cannot be
 // told, and dropping a real queue under-provisions, so the whole queue counts,
-// as it did before #278: saturated, k2 recorded, every request charged.
+// as it did before ev-shindin/llm-scaling-manager#278: saturated, k2 recorded, every request charged.
 func TestPDDecodeWithoutReasonKeepsTheFullQueue(t *testing.T) {
 	a, res := analyzePD(t, []domain.ReplicaMetrics{pdDecodeRow(halfCache), pdPrefillRow()}, pdStates)
 	assert.True(t, recordedK2(a), "768 waiting is over the threshold of 5: saturated")
@@ -203,7 +203,7 @@ func TestDecodeCapacityView(t *testing.T) {
 // is scheduled, and promotes a landed pull only when the scheduler looks at
 // it, which it stops doing once the batch is at max_num_seqs. So at the cap a
 // request whose pull began below it reads deferred though it waits only for a
-// batch slot here: the shape #287 measured, 256 running at their cap and 768
+// batch slot here: the shape ev-shindin/llm-scaling-manager#287 measured, 256 running at their cap and 768
 // waiting, would otherwise record no k2 and charge no queue demand.
 func TestPDDecodeAtItsSequenceCapKeepsTheFullQueue(t *testing.T) {
 	const maxNumSeqs = 256
@@ -247,7 +247,7 @@ func TestPDDecodeAtItsSequenceCapKeepsTheFullQueue(t *testing.T) {
 
 // --max-num-active-seqs stops the running batch below max_num_seqs (vLLM
 // v0.31+), so a decode running at it is at its cap and keeps its full queue
-// (issue #308). Compared with max_num_seqs alone the batch never reached the
+// (issue ev-shindin/llm-scaling-manager#308). Compared with max_num_seqs alone the batch never reached the
 // cap, and the charge never fired.
 func TestPDDecodeAtItsActiveSequenceCapKeepsTheFullQueue(t *testing.T) {
 	const active = 64

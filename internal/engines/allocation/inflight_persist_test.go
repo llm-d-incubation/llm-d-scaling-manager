@@ -42,7 +42,7 @@ func eightGPUNodes(used map[string]int) map[string]decision.NodeGPU {
 	return out
 }
 
-// PR #187's known limit: after a restart, a replica already Unschedulable --
+// PR ev-shindin/llm-scaling-manager#187's known limit: after a restart, a replica already Unschedulable --
 // waiting for a preempted borrower to leave the node it was ordered into --
 // got no hold. The first cycle sees it at target = current with an unplaced
 // replica (ExistingOnly, Unplaced), which only updates an entry the ledger
@@ -65,7 +65,7 @@ func TestARestartKeepsAnUnschedulableReplicaNodeHeld(t *testing.T) {
 		t.Fatal("setup: the growth's hole is not held before the restart")
 	}
 
-	// Control: the restart of PR #187, nothing persisted.
+	// Control: the restart of PR ev-shindin/llm-scaling-manager#187, nothing persisted.
 	empty := NewInFlightLedger()
 	empty.Commit(nil, firstCycle, t0.Add(2*time.Minute))
 	if !wakeFits(empty, t0.Add(2*time.Minute)) {
@@ -83,7 +83,7 @@ func TestARestartKeepsAnUnschedulableReplicaNodeHeld(t *testing.T) {
 	}
 }
 
-// PR #187's other known limit: a LeaderWorkerSet group whose leader holds a
+// PR ev-shindin/llm-scaling-manager#187's other known limit: a LeaderWorkerSet group whose leader holds a
 // node and whose worker does not lost the worker's hold in the leader's
 // domain on a restart. A 16-GPU group of two 8-GPU pods, its leader on a1 in
 // rack a: restored, the worker's 8 GPUs are held in rack a (a2), not the

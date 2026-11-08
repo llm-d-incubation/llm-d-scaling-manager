@@ -32,7 +32,7 @@ var engineFixtures = append([]string{engineFixture, "pd-restart", olsFixture, ol
 
 // Each golden that carries engine events lists every engine output, and no
 // other lists one. Each compares rows in each, but for an output its replay
-// allows to be empty (engineEmptyRules); the engine golden (issue #345,
+// allows to be empty (engineEmptyRules); the engine golden (issue ev-shindin/llm-scaling-manager#345,
 // step 0) allows none: a file that compared nothing would pass any change.
 func TestEngineGoldens_EveryEngineOutputComparesRows(t *testing.T) {
 	m, err := ReadManifest(goldenDir)
@@ -112,7 +112,7 @@ func TestEngineGoldens_WithoutTheEngineFixtureNoEnginePathRuns(t *testing.T) {
 	require.Empty(t, c.Problems, "the analyzer goldens alone still reproduce")
 	// Pinned: an engine path a cluster golden starts or stops reaching moves
 	// this list, a reviewed change. The throughput line's held slope left it
-	// with the tier dwell (issue #495): throughput-sweep reaches that path.
+	// with the tier dwell (issue ev-shindin/llm-scaling-manager#495): throughput-sweep reaches that path.
 	want := []string{steadystate.PathCompositeExternalResult, steadystate.PathCompositeGrace,
 		steadystate.PathCompositeReplicaClamped, steadystate.PathWarmPoolSupply,
 		settlePathPrefix + string(settle.Lent)}

@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The slo analyzer's forget in a replay (#431): the replay applies a
+// The slo analyzer's forget in a replay (ev-shindin/llm-scaling-manager#431): the replay applies a
 // recorded slo.ForgetVariant to the replay's own slo analyzer, so the
 // replayed line is dropped where the run's was; a recording made before
 // the engine recorded the event replays as the run did, forgetting nothing.

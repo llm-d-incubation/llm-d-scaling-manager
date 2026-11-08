@@ -43,8 +43,8 @@ import (
 // replaySwitches is each replay switch of this PR, saturation's or slo's
 // (switchPackage), and the golden outputs (fixture/file) it is named to move.
 //
-// #275 prices an aggregated variant's ITL line by request shape, in two
-// switches. Its base is main after #432 (67790e633): #432's switch is an earlier
+// ev-shindin/llm-scaling-manager#275 prices an aggregated variant's ITL line by request shape, in two
+// switches. Its base is main after ev-shindin/llm-scaling-manager#432 (67790e633): ev-shindin/llm-scaling-manager#432's switch is an earlier
 // seam here (earlierSeams), on in every run below. Measured, each alone
 // against all off:
 //
@@ -54,7 +54,7 @@ import (
 //     257.14 at the fixture's shape), with no prefill reading (sigmaOK false:
 //     the recordings carry no running-request count or completion rate on
 //     the aggregated rows) and no point (a point needs one). Nothing else
-//     moves: with no prefill reading the reported figure is #432's, on the
+//     moves: with no prefill reading the reported figure is ev-shindin/llm-scaling-manager#432's, on the
 //     same case (the shape never moves past the tolerance in either fixture).
 //   - SwitchITLAggregatedSizes moves nothing: it lifts only a figure with a
 //     prefill reading and a GPS check that agreed, and no fixture has
@@ -64,28 +64,28 @@ import (
 //
 // Both on moves nothing past the shape term's two files: no interaction.
 //
-// #438 prices a vLLM data-parallel decode or aggregated variant at zero
+// ev-shindin/llm-scaling-manager#438 prices a vLLM data-parallel decode or aggregated variant at zero
 // replicas at every engine rank its leader pod runs, not one: the derived
 // figure, and the stored budget it falls back to. It moves no golden: no
 // recorded scale target states a data-parallel size above 1, so every
 // zero-replica estimate the fixtures price is one rank's either way. Its unit
 // tests hold it (heldBy).
 //
-// Earlier PRs' switches (learner PRs 2, 3 and 4a, #396's bands, #399's
-// batch cap, #415's mu key, #392's first k2 reading, #420's batch-cap
-// readers, #274's ITL per accepted token, #276's output spread, #427's
-// zero-replica batch cap, #431's forget of the slo line, #277's resident
-// prefix-cache hits, #432's aggregated line) are not here: "all off" is this
+// Earlier PRs' switches (learner PRs 2, 3 and 4a, ev-shindin/llm-scaling-manager#396's bands, ev-shindin/llm-scaling-manager#399's
+// batch cap, ev-shindin/llm-scaling-manager#415's mu key, ev-shindin/llm-scaling-manager#392's first k2 reading, ev-shindin/llm-scaling-manager#420's batch-cap
+// readers, ev-shindin/llm-scaling-manager#274's ITL per accepted token, ev-shindin/llm-scaling-manager#276's output spread, ev-shindin/llm-scaling-manager#427's
+// zero-replica batch cap, ev-shindin/llm-scaling-manager#431's forget of the slo line, ev-shindin/llm-scaling-manager#277's resident
+// prefix-cache hits, ev-shindin/llm-scaling-manager#432's aggregated line) are not here: "all off" is this
 // PR's switches, and an earlier PR's stay at their constructor default, on,
 // as the base goldens were written (analyzer-learner.md, 2.5).
 //
-// Since learner PR 4b-1 the rows above (#275's two switches, #438's) are
+// Since learner PR 4b-1 the rows above (ev-shindin/llm-scaling-manager#275's two switches, ev-shindin/llm-scaling-manager#438's) are
 // earlier seams (earlierSeams); 4b-1's own two are learner4b1Seams.
 //
 // Since learner PR 4b-2 this PR's are the throughput analyzer's ITL line on
 // the engine's settle tracker, six switches, as learner PR 4a split the
 // saturation and slo lines' (throughput/settle.go). Its base is main after
-// 4b-1 merged (1c9a34fe8, #456), whose goldens are 4b-1's all-on run. The
+// 4b-1 merged (1c9a34fe8, ev-shindin/llm-scaling-manager#456), whose goldens are 4b-1's all-on run. The
 // fixtures that run the throughput analyzer are the in-process three
 // (acceptance, engine, mu-paths), and none was recorded with the analyzer
 // given the engine's view (start.ThroughputConfig is absent): the replay
@@ -116,7 +116,7 @@ import (
 // (throughput.SwitchITLAdmitsAtSequenceCap): a reading above the band from a
 // replica at the sequence cap its engine states, with requests waiting and
 // preemption at most itlBand.capMaxPreemptionRate, is the band's. Its base
-// is main after 4b-2 merged (891c071c4, #458), whose goldens are 4b-1's
+// is main after 4b-2 merged (891c071c4, ev-shindin/llm-scaling-manager#458), whose goldens are 4b-1's
 // all-on run byte for byte. On the three in-process fixtures that run the
 // throughput analyzer it moves nothing, by construction: they predate
 // start.ThroughputConfig, so the replay builds it with no capacity store,
@@ -138,7 +138,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// line is priced. Its unit tests hold it
 	// (heldBy); the CLI, which has no switch, moves its own goldens.
 	slo.SwitchTTFTDecodeTerm: nil,
-	// #495's one slow pod (mu_slow_pod.go), four switches, measured each
+	// ev-shindin/llm-scaling-manager#495's one slow pod (mu_slow_pod.go), four switches, measured each
 	// alone against all off:
 	//
 	//   - SwitchMuWeighsFleet: a reading the served bound refused is now a
@@ -188,10 +188,10 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// hold it (heldBy).
 	saturation.SwitchMuWeighingBand: nil,
 
-	// #526: mu's stale latch reads its ratio smoothed over 3 min. It moves
+	// ev-shindin/llm-scaling-manager#526: mu's stale latch reads its ratio smoothed over 3 min. It moves
 	// no golden: no recording holds a stale measurement whose ratio to the
 	// derived figure crosses the 1.6-2.0 band. Its unit tests hold it
-	// (heldBy), and #524's latch-return-excursion cases.
+	// (heldBy), and ev-shindin/llm-scaling-manager#524's latch-return-excursion cases.
 	saturation.SwitchMuLatchReadsSmoothedRatio: nil,
 
 	// Which rows the transfer is read from. It moves no golden: no committed
@@ -199,13 +199,13 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// holds it (heldBy).
 	slo.SwitchTTFTQuietTransfer: nil,
 
-	// #276 on the slo line: KVreq with the spread of output lengths. It moves
+	// ev-shindin/llm-scaling-manager#276 on the slo line: KVreq with the spread of output lengths. It moves
 	// no golden: of those that list slo, only the four staircases read the
 	// output histogram, at D 1.000. Its unit test holds it (heldBy); the CLI,
 	// which has no switch, moves its own goldens.
 	slo.SwitchKVPerRequestOutputDispersion: nil,
 
-	// #433, #276 on the throughput analyzer: KVreq with the spread of output
+	// ev-shindin/llm-scaling-manager#433, ev-shindin/llm-scaling-manager#276 on the throughput analyzer: KVreq with the spread of output
 	// lengths, in its supply, local demand and GPS check. It moves the two
 	// throughput-sweep recordings, the only ones that run the throughput
 	// analyzer on rows whose output histogram spreads: the variant's
@@ -230,7 +230,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"throughput-sweep/composite-release.csv", "throughput-sweep/variant-capacities.csv",
 	},
 
-	// Issue #459: on the slo analyzer's own settle tracker, a model last
+	// Issue ev-shindin/llm-scaling-manager#459: on the slo analyzer's own settle tracker, a model last
 	// analyzed more than the state timeout ago is first-seen whether or not
 	// EvictStale ran first. It moves no golden: a replay calls EvictStale at
 	// the top of every cycle, as the engine does, so a model past the
@@ -239,7 +239,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// unit tests hold it (heldBy).
 	slo.SwitchITLLongGapFirstSeen: nil,
 
-	// Issue #511: the slo and throughput analyzers' own trackers take a
+	// Issue ev-shindin/llm-scaling-manager#511: the slo and throughput analyzers' own trackers take a
 	// model's first rows as one observation, Joined itl.DefaultSteadyFor
 	// before the cycle, not two whose gap reads as an absence. Neither moves
 	// a golden: a replay hands the slo analyzer the engine's view, and the
@@ -251,7 +251,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 
 	saturation.SwitchPrefillCapacityObserve: nil,
 
-	// #481: the throughput and slo lines take no rows in a rollout, and the
+	// ev-shindin/llm-scaling-manager#481: the throughput and slo lines take no rows in a rollout, and the
 	// throughput line forgets under new arguments. None moves a golden: no
 	// recording holds a rollout or a change of arguments under one variant's
 	// rows. Their unit tests hold them (heldBy).
@@ -259,29 +259,29 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	throughput.SwitchITLForgetsOnNewArguments: nil,
 	slo.SwitchITLRolloutGuard:                 nil,
 
-	// #481 with #498: the saturation line clears its window on a new
+	// ev-shindin/llm-scaling-manager#481 with ev-shindin/llm-scaling-manager#498: the saturation line clears its window on a new
 	// revision, as the slo and throughput lines do under their guards. It
 	// moves no golden: no recording changes a key's revision.
 	saturation.SwitchITLClearsOnNewRevision: nil,
 
-	// #495: the slo and throughput lines file reports, and the slo line logs
+	// ev-shindin/llm-scaling-manager#495: the slo and throughput lines file reports, and the slo line logs
 	// learner-write. They move no golden: nothing the analyzers price reads a
 	// report, and no output reads the line. Their unit tests hold them
 	// (heldBy).
 	slo.SwitchITLFilesReports:        nil,
 	throughput.SwitchITLFilesReports: nil,
 
-	// #504: a variant the engine reports present keeps its throughput state.
+	// ev-shindin/llm-scaling-manager#504: a variant the engine reports present keeps its throughput state.
 	// It moves no replay golden: no recording holds the event.
 	throughput.SwitchITLKeepsPresentVariants: nil,
 
-	// #495: k2 waits after a rollout under a key already seen
+	// ev-shindin/llm-scaling-manager#495: k2 waits after a rollout under a key already seen
 	// (saturation.SwitchK2WaitsAfterRollout). It moves no golden: no recording
 	// changes a replica's revision under its name. Its unit test holds it
 	// (heldBy).
 	saturation.SwitchK2WaitsAfterRollout: nil,
 
-	// #495: mu on learn's list of learners
+	// ev-shindin/llm-scaling-manager#495: mu on learn's list of learners
 	// (saturation.SwitchMuForgetReported). It moves no golden: a forget and
 	// an eviction drop the same entries either way, and only the report's
 	// Forgotten and a learner-write line differ, which no output reads. Its
@@ -290,7 +290,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// publishes, the second a field on lines no output reads.
 	saturation.SwitchMuForgetReported: nil,
 
-	// #495: the ITL baseline's last-admitted stamp in the snapshot
+	// ev-shindin/llm-scaling-manager#495: the ITL baseline's last-admitted stamp in the snapshot
 	// (saturation.SwitchITLBaselineStamped). Measured alone against all off
 	// at main 1573829cd, it adds rows and changes none: each export gains an
 	// ITLBaselineAdmittedAt row per baseline a full fit set (2 in
@@ -300,7 +300,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// hold the restore (itl_baseline_stamp_test.go).
 	saturation.SwitchITLBaselineStamped: {"acceptance/learned-state.csv", "mu-paths/learned-state.csv"},
 
-	// #495: the variants follow a role the throughput floor or the
+	// ev-shindin/llm-scaling-manager#495: the variants follow a role the throughput floor or the
 	// fleet-shape hold raises (saturation.SwitchThroughputFloorRaisesVariants):
 	// the raised role is water-filled over its variants by supply, so they sum
 	// to it. Measured alone against all off at main 01049df61, it moves the
@@ -321,7 +321,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// recording has a hot rank on a floored role, so results, composite-roles,
 	// composite-results, composite-holds and composite-release are unchanged
 	// in every fixture. The unit tests hold that case (heldBy).
-	// #392: a replica's joined clock also starts at its first return of load
+	// ev-shindin/llm-scaling-manager#392: a replica's joined clock also starts at its first return of load
 	// after an idle run, as the settle tracker reads it
 	// (saturation.SwitchJoinedFromFirstServed). Measured alone against all off
 	// at main 39551b9be, it moves two fixtures:
@@ -433,7 +433,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// logs, and no output reads a (P3's adapter reads it, and no golden
 	// runs P3). Its unit tests hold it (heldBy).
 	saturation.SwitchPrefillAQuadratic: nil,
-	// Issue #467, on main after #471 (602054e98): the saturation line priced
+	// Issue ev-shindin/llm-scaling-manager#467, on main after ev-shindin/llm-scaling-manager#471 (602054e98): the saturation line priced
 	// one-sided at the sequence cap while B is unlearned
 	// (itl.Admission.OneSidedAboveKSat, at the line's pricing k), against the
 	// line through the mean of the at-cap readings at or past that k with
@@ -455,7 +455,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"e1/lines.csv", "e1/results.csv", "e1/variant-capacities.csv",
 	},
 
-	// Issue #467: the slo line priced one-sided at the sequence cap while B
+	// Issue ev-shindin/llm-scaling-manager#467: the slo line priced one-sided at the sequence cap while B
 	// is unlearned, at the fill where it meets the TPOT target, against the
 	// line at the prior on B. It moves no
 	// golden: no committed recording runs the slo analyzer on a replica at
@@ -463,7 +463,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	slo.SwitchITLOneSidedAtCap: nil,
 
 	// S1 of the TTFT track (docs/proposals/slo-tiers.md, decision 4), on main
-	// after #482 (59772fce2): each prefill variant of a model with a TTFT
+	// after ev-shindin/llm-scaling-manager#482 (59772fce2): each prefill variant of a model with a TTFT
 	// target is priced against it, in shadow. It moves slo-published.csv in
 	// the two ols-sweep-slo goldens, and nothing else: no result moves, so
 	// no replica count can. Alone from all off,
@@ -477,7 +477,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ols-sweep-slo/slo-published.csv", "ols-sweep-slo-restart/slo-published.csv",
 	},
 
-	// Issue #495: the ITL line's tier is latched, on all three lines that
+	// Issue ev-shindin/llm-scaling-manager#495: the ITL line's tier is latched, on all three lines that
 	// share itl.Tracker's choice of fit, one named change with one switch per
 	// analyzer (itl.Admission.TierHysteresis). Base: main at bef629924. It
 	// moves the sweep recordings, whose load steps collapse the spread; each
@@ -572,7 +572,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ols-sweep-slo/composite-results.csv", "ols-sweep-slo/results.csv",
 		"ols-sweep-slo-restart/composite-results.csv", "ols-sweep-slo-restart/results.csv",
 		"pd-restart/composite-results.csv", "pd-restart/results.csv",
-		// P2's ttft-saturated (#482), added before 5c merged: its decode
+		// P2's ttft-saturated (ev-shindin/llm-scaling-manager#482), added before 5c merged: its decode
 		// key holds two Pods, so RoleStartSeconds.decode rises, 98.3 ->
 		// 100.5 on every cycle. No other TTFT golden moves.
 		"ttft-saturated/composite-results.csv", "ttft-saturated/results.csv",
@@ -590,7 +590,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"throughput-sweep/results.csv",
 	},
 
-	// Learner PR 5d, on main after 5c and #482 (59772fce2). Measured, each
+	// Learner PR 5d, on main after 5c and ev-shindin/llm-scaling-manager#482 (59772fce2). Measured, each
 	// alone against all off:
 	//
 	//   - SwitchStartCountedPodsRestored moves the six learned-state.csv
@@ -617,7 +617,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	},
 	settle.SwitchFirstSightRestored: nil,
 
-	// Issue #397: the prefill bound held at a lower confidence bound
+	// Issue ev-shindin/llm-scaling-manager#397: the prefill bound held at a lower confidence bound
 	// (saturation.SwitchPrefillBoundHeldConfidence): the window keeps its
 	// samples as read, and the bound priced is the larger of their mean and
 	// the max of lower confidence bounds on it, where off it was the running
@@ -691,7 +691,7 @@ var learner4b1Seams = map[string][]string{
 // after their clock jumps a day (settle.Rejoined); the other four move
 // nothing and are held by their unit tests (heldBy).
 var learner4aSeams = map[string][]string{
-	// Since #432 the move reaches the aggregated line of the acceptance and
+	// Since ev-shindin/llm-scaling-manager#432 the move reaches the aggregated line of the acceptance and
 	// engine fixtures too: off, model-01's variant-01 does not settle in
 	// time for its first fit at 09:32:00, so it publishes no |both line that
 	// cycle, variant-02 borrows none, and their reported service rates and
@@ -754,12 +754,12 @@ func switchPackage(name string) string {
 // PR 4a's rows are learner4aSeams, 4b-1's learner4b1Seams and 4b-2's
 // learner4b2Seams, merged in.
 var earlierSeams = withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMoves, withMoves(startSeedSeamMoves, withSeams(learner4b2Seams, withSeams(learner4b1Seams, withSeams(learner4aSeams, map[string][]string{
-	// #275 (two switches) and #438, this file's own rows before learner PR
+	// ev-shindin/llm-scaling-manager#275 (two switches) and ev-shindin/llm-scaling-manager#438, this file's own rows before learner PR
 	// 4b-1 (see replaySwitches).
 	saturation.SwitchZeroReplicaDataParallel: nil,
 	saturation.SwitchITLAggregatedShapeTerm:  {"acceptance/learned-state.csv", "engine/learned-state.csv"},
 	saturation.SwitchITLAggregatedSizes:      nil,
-	// The prefill-stress goldens (P2) were added after #392 and move under
+	// The prefill-stress goldens (P2) were added after ev-shindin/llm-scaling-manager#392 and move under
 	// it too: one decode cycle each in ttft-saturated and ttft-three-pods
 	// takes k2's first reading, at the first queue (P1-obs in place of
 	// P1-obs-unadmitted and P2-hist).
@@ -803,9 +803,9 @@ var earlierSeams = withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMove
 	slo.SwitchBatchCapAdmission:           nil,
 	slo.SwitchBatchCapPerRank:             nil,
 	saturation.SwitchITLPerToken:          nil,
-	// #427's zero-replica estimate at the declared batch cap.
+	// ev-shindin/llm-scaling-manager#427's zero-replica estimate at the declared batch cap.
 	saturation.SwitchBatchCapZeroReplica: nil,
-	// #276's spread of output lengths in the KV per request. It moved no
+	// ev-shindin/llm-scaling-manager#276's spread of output lengths in the KV per request. It moved no
 	// golden until P2's ttft-three-pods, the first whose recorded output
 	// histogram spreads (250 tokens out, three decode pods): there the
 	// decode demand moves by a few parts in 100 million on about 80 cycles.
@@ -828,7 +828,7 @@ var earlierSeams = withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMove
 		"throughput-sweep/variant-capacities.csv",
 		"throughput-sweep/warm-pool-pressure.csv",
 	},
-	// Issue #431 routes the forget-learned-state annotation to the slo
+	// Issue ev-shindin/llm-scaling-manager#431 routes the forget-learned-state annotation to the slo
 	// analyzer's line, one switch, recorded as an event of its own
 	// (slo.ForgetVariant). It moves no golden, measured: the acceptance and
 	// engine recordings were taken again for it, and each carries one
@@ -839,34 +839,34 @@ var earlierSeams = withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMove
 	// jumps a day and that window would have aged out anyway. No cluster
 	// recording forgets. Its unit tests hold it (heldBy).
 	slo.SwitchITLForgetReachesTheLine: nil,
-	// #277 prices a resident request at the KV it is measured to hold,
+	// ev-shindin/llm-scaling-manager#277 prices a resident request at the KV it is measured to hold,
 	// between the prefix-cache hit rate's discount and none. It moves the
 	// derived mu, and the decode demand the floor prices from it, in the two
 	// fixtures whose derived mu the KV binds rather than the batch cap.
 	//
-	// Since #275 it moves the shape an aggregated line is fitted at too
+	// Since ev-shindin/llm-scaling-manager#275 it moves the shape an aggregated line is fitted at too
 	// (ITLLineShapes in the acceptance and engine exports): g is priced from
-	// the KV a request holds, which #277 bounds (g 257.14 on, 281.25 off).
+	// the KV a request holds, which ev-shindin/llm-scaling-manager#277 bounds (g 257.14 on, 281.25 off).
 	saturation.SwitchKVPerRequestHitsResident: {
 		"acceptance/learned-state.csv",
 		"e1-tuned/results.csv", "e1-tuned/variant-capacities.csv",
 		"e1/results.csv", "e1/variant-capacities.csv",
 		"engine/learned-state.csv",
 	},
-	// #432 fits an ITL line for an aggregated (unlabeled, RoleBoth) variant,
+	// ev-shindin/llm-scaling-manager#432 fits an ITL line for an aggregated (unlabeled, RoleBoth) variant,
 	// as for decode, and reports the mu it derives without pricing it; its
 	// line is shared only with other aggregated variants (a physics key
 	// ending in |both). It moves the acceptance and engine fixtures, the two
 	// whose models run aggregated variants (model-01's variant-01 and
-	// variant-02, model-02's variant-03); no other fixture has one. As #432
+	// variant-02, model-02's variant-03); no other fixture has one. As ev-shindin/llm-scaling-manager#432
 	// measured it, all off against all on:
 	//
 	//   - lines.csv: model-01's variant-01 publishes a line under its |both
 	//     key on its first fit (09:32:00), and variant-02, on the same engine
 	//     configuration, borrows it on three cycles. No decode line moves.
 	//   - learned-state.csv: that line, variant-01's intercept and its held
-	//     slope join the two exports (three rows each); since #275 the line's
-	//     shape (ITLLineShapes) too, which #275's switches need it on for.
+	//     slope join the two exports (three rows each); since ev-shindin/llm-scaling-manager#275 the line's
+	//     shape (ITLLineShapes) too, which ev-shindin/llm-scaling-manager#275's switches need it on for.
 	//   - variant-capacities.csv: 28 of 180 rows (acceptance) and 28 of 156
 	//     (engine), all on the three aggregated variants: the ITL window, the
 	//     line and a reported rate of 10.88/s, source derived-report-only.
@@ -878,11 +878,11 @@ var earlierSeams = withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMove
 }))))))
 
 // floorVariantsSeamMoves is what each earlier seam, off alone from all on,
-// moves since #495's SwitchThroughputFloorRaisesVariants is on in all on:
+// moves since ev-shindin/llm-scaling-manager#495's SwitchThroughputFloorRaisesVariants is on in all on:
 // a seam that moves a role's demand on a cycle the floor raises it now moves
 // that role's variants too. Measured at main 01049df61.
 var floorVariantsSeamMoves = map[string][]string{
-	// #276 already moves these fixtures' role demand; on the cycles the
+	// ev-shindin/llm-scaling-manager#276 already moves these fixtures' role demand; on the cycles the
 	// floor raises a role, its variants now follow.
 	saturation.SwitchKVPerRequestOutputDispersion: {
 		"ttft-staircase-b-off/warm-pool-pressure.csv",
@@ -890,7 +890,7 @@ var floorVariantsSeamMoves = map[string][]string{
 		"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
 		"ttft-three-pods/composite-variants.csv", "ttft-three-pods/warm-pool-pressure.csv",
 	},
-	// #415's held mu bucket already moves throughput-sweep-restart's role
+	// ev-shindin/llm-scaling-manager#415's held mu bucket already moves throughput-sweep-restart's role
 	// demand (earlierSeams); where the floor raises a role, its variants follow.
 	saturation.SwitchMuKeyBucketHeld: {
 		"throughput-sweep-restart/composite-variants.csv", "throughput-sweep-restart/warm-pool-pressure.csv",
@@ -980,7 +980,7 @@ func withSeams(more, rows map[string][]string) map[string][]string {
 // test that holds the same on either side is a control, not a hold, and is
 // not listed here.
 var heldBy = map[string][]heldTest{
-	// Issue #397: each runs the switch on and off and asserts both (the
+	// Issue ev-shindin/llm-scaling-manager#397: each runs the switch on and off and asserts both (the
 	// n-dependence cases pass on and fail every seed off; a fleet the bound
 	// grew grows at most once on and stays put off).
 	saturation.SwitchPrefillBoundHeldConfidence: {
@@ -988,7 +988,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestPrefillBoundHeld_TheBiasAtTheMeasuredNoise"},
 		{"../saturation", "TestPrefillBoundHeld_AFleetTheBoundGrewGrowsOnceUnderNoise"},
 	},
-	// #495's one slow pod: each test runs its switch on and off and asserts
+	// ev-shindin/llm-scaling-manager#495's one slow pod: each test runs its switch on and off and asserts
 	// both (the ledger cases fail off, as on the parent; the credit and the
 	// expiry move the sample, the expiry and the probe's fleet).
 	saturation.SwitchMuWeighsFleet: {
@@ -1012,7 +1012,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestWeighingBand_OneChangePerExcursion"},
 		{"../saturation", "TestWeighingBand_ALateSlowReplicaStaysInsideTheProbesBound"},
 	},
-	// #495: the first two run the switch on and off and assert both (the
+	// ev-shindin/llm-scaling-manager#495: the first two run the switch on and off and assert both (the
 	// variants read the role's spare on; their occupancy, sparer, off).
 	saturation.SwitchThroughputFloorRaisesVariants: {
 		{"../saturation", "TestFloorRaisesVariants_TheDecodeVariantReadsTheRolesSpare"},
@@ -1027,7 +1027,7 @@ var heldBy = map[string][]heldTest{
 	},
 	// Runs the switch on and off and asserts both.
 	slo.SwitchTTFTQuietTransfer: {{"../slo", "TestTTFT_TheQuietTransferSwitch"}, {"../slo", "TestTTFT_TheHeldTransferAgesOut"}},
-	// #276 on the slo line: it runs the switch on and off through Analyze and
+	// ev-shindin/llm-scaling-manager#276 on the slo line: it runs the switch on and off through Analyze and
 	// asserts both (the replica's rate halved at D 2 on, as it was off).
 	slo.SwitchKVPerRequestOutputDispersion: {
 		{"../slo", "TestKVOutputDispersion_TheSwitch"},
@@ -1050,7 +1050,7 @@ var heldBy = map[string][]heldTest{
 	throughput.SwitchITLKeepsPresentVariants: {
 		{"../throughput", "TestRollout_APresentVariantKeepsItsState"},
 	},
-	// #495: each runs with the switch on, and the last with it off.
+	// ev-shindin/llm-scaling-manager#495: each runs with the switch on, and the last with it off.
 	slo.SwitchITLFilesReports: {
 		{"../slo", "TestLearner_ALineFilesItsReport"},
 		{"../slo", "TestLearner_TheSwitchOffFilesNothing"},
@@ -1059,12 +1059,12 @@ var heldBy = map[string][]heldTest{
 		{"../throughput", "TestLearnerReports_ALineFilesItsReport"},
 		{"../throughput", "TestLearnerReports_TheSwitchOffFilesNothing"},
 	},
-	// #495: it runs the switch on and off and asserts both (a window of
+	// ev-shindin/llm-scaling-manager#495: it runs the switch on and off and asserts both (a window of
 	// refusals on, read at once off).
 	saturation.SwitchK2WaitsAfterRollout: {
 		{"../saturation", "TestK2Rollout_ANewRevisionWaitsAWindow"},
 	},
-	// #481: each runs the switch on and off through Analyze and asserts both.
+	// ev-shindin/llm-scaling-manager#481: each runs the switch on and off through Analyze and asserts both.
 	throughput.SwitchITLRolloutGuard: {
 		{"../throughput", "TestRollout_ThePublishedRolloutOffersNoRows"},
 		{"../throughput", "TestRollout_MixedRevisionsOfferTheNewestOnly"},
@@ -1077,7 +1077,7 @@ var heldBy = map[string][]heldTest{
 		{"../slo", "TestRollout_ThePublishedRolloutOffersNoRows"},
 		{"../slo", "TestRollout_MixedRevisionsOfferTheNewestOnly"},
 	},
-	// #495: each runs the switch on and off and asserts both (the keys
+	// ev-shindin/llm-scaling-manager#495: each runs the switch on and off and asserts both (the keys
 	// reported and the logged value gone on; neither off).
 	saturation.SwitchMuForgetReported: {
 		{"../saturation", "TestMuLearner_ForgetReportsItsKeysAndClearsWhatWasLogged"},
@@ -1118,7 +1118,7 @@ var heldBy = map[string][]heldTest{
 	slo.SwitchTTFTMeasuredTransfer: {
 		{"../slo", "TestTTFT_TransferOmittedStandsUntilAReading"},
 	},
-	// Issue #275's lift: an aggregated figure sizes once the GPS check has
+	// Issue ev-shindin/llm-scaling-manager#275's lift: an aggregated figure sizes once the GPS check has
 	// agreed. Both run the switch on and fail with it off: the first checks
 	// the lifted rate against a run with it off, the second needs the lift
 	// before the shape moves.
@@ -1126,7 +1126,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestAggregatedShape_ALiftedLineSizesAtTheCorrectedRate"},
 		{"../saturation", "TestAggregatedShape_AnOldLineDoesNotPriceAHeavierShape"},
 	},
-	// Issue #438's data-parallel ranks at zero replicas.
+	// Issue ev-shindin/llm-scaling-manager#438's data-parallel ranks at zero replicas.
 	saturation.SwitchZeroReplicaDataParallel: {
 		{"../saturation", "TestZeroReplicaDataParallel_AnEightRankDecodeIsPricedAtEveryRank"},
 		{"../saturation", "TestZeroReplicaDataParallel_AWholeNodePodWithNoDeclaredCap"},
@@ -1143,14 +1143,14 @@ var heldBy = map[string][]heldTest{
 		{"../throughput", "TestForget_AtTheCapALineIsPricedOneSidedAgain"},
 		{"../throughput", "TestForget_ReportsEachForgottenKey"},
 	},
-	// Issue #459's long gap on the slo analyzer's own tracker: it runs the
+	// Issue ev-shindin/llm-scaling-manager#459's long gap on the slo analyzer's own tracker: it runs the
 	// switch on and off through Analyze, with EvictStale first, between the
 	// two models, and never, and asserts both.
 	slo.SwitchITLLongGapFirstSeen: {
 		{"../slo", "TestSettle_AfterALongGapTheAnalyzerAloneReadsEveryModelAlike"},
 		{"../slo", "TestSettle_AfterALongGapWithTheSwitchOffEvictionOrderStillMatters"},
 	},
-	// Issue #511's backdate on the own trackers: each runs the switch on and
+	// Issue ev-shindin/llm-scaling-manager#511's backdate on the own trackers: each runs the switch on and
 	// off through Analyze and reads the tracker, and the slo one the prefill
 	// share it feeds.
 	slo.SwitchITLOwnSettleBackdates: {
@@ -1161,7 +1161,7 @@ var heldBy = map[string][]heldTest{
 		{"../throughput", "TestITLSettle_TheOwnTrackerBackdatesAFirstSighting"},
 		{"../throughput", "TestITLSettle_TheOwnTrackerInventsNoRowAtTheBackdate"},
 	},
-	// Issue #431's forget of the slo line.
+	// Issue ev-shindin/llm-scaling-manager#431's forget of the slo line.
 	slo.SwitchITLForgetReachesTheLine: {
 		{"../slo", "TestForget_TheAnnotationForgetsTheLine"},
 		{"../slo", "TestForget_DropsTheAcceleratorMemo"},
@@ -1322,7 +1322,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestBatchCapSwitch_LearnedOffLearnsNothing"},
 		{"../saturation", "TestBatchCap_SwitchesOffReproduceTheIssue"},
 	},
-	// #526: the first runs the switch on and off and asserts both, at the
+	// ev-shindin/llm-scaling-manager#526: the first runs the switch on and off and asserts both, at the
 	// measured rate noise; the second states the reaction time either way.
 	saturation.SwitchMuLatchReadsSmoothedRatio: {
 		{"../saturation", "TestMuLatchBand_OneChangePerExcursionAtTheMeasuredNoise"},
@@ -1352,7 +1352,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestStartConfirm_ARestartDropsTheRun"},
 		{"../saturation", "TestStartConfirm_ThroughAnalyze"},
 	},
-	// Issue #467's slo switch: each runs it on and off through the line's
+	// Issue ev-shindin/llm-scaling-manager#467's slo switch: each runs it on and off through the line's
 	// pricing (priceVariant) and asserts both (off, the line through the
 	// default B, which meets the target above the truth's fill).
 	slo.SwitchITLOneSidedAtCap: {
@@ -1463,7 +1463,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"mu-paths/results.csv":              "83fca27f185344e2784706b0b6ae2e3ea8fe0ae70ecabe332862f04f4f4e951c",
 	"mu-paths/variant-capacities.csv":   "dd5b3186f6fe513520ba6e0309d88520e668d60f84003326f57bd7dee0ca0275",
 
-	// Issue #467's saturation switch, as main holds them at 602054e98.
+	// Issue ev-shindin/llm-scaling-manager#467's saturation switch, as main holds them at 602054e98.
 	"e1/lines.csv":                    "d2691a9743301a74e2fdff1b301d2e7f5349edf987604ecadc52a8bddc44fd58",
 	"e1/results.csv":                  "67b1a3af97f5951c65a8c8797a122428e85ad7aae624be4c33171b230651c2e4",
 	"e1/variant-capacities.csv":       "5fc3ce5024a4e49d5712e20741a24d09dfe82d8270d8528f129294f618db13b8",
@@ -1472,7 +1472,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"e1-tuned/variant-capacities.csv": "919fd2193f111f1edc49b20a0db348a98355ecab7be221af5a35925a0d1ac3e4",
 
 	// Learner PR 5c's outputs (SwitchStartBlendsFirstSamples), at main
-	// 602054e98, 5b merged. e1-tuned/results.csv is #467's row above, the same digest.
+	// 602054e98, 5b merged. e1-tuned/results.csv is ev-shindin/llm-scaling-manager#467's row above, the same digest.
 	"acceptance/learned-state.csv":                "da4251071addee288ecbe495759e2af257fa54b3511bbb93c5eddf4517ecc7a9",
 	"engine/learned-state.csv":                    "d823bbfe7f483ebca87d84224c0ae3faa5daef6546f14ffd5648937dc885dacf",
 	"mu-paths/learned-state.csv":                  "97ca32de070b4879ac59a3171a6a9387d91e08cc42c7a267e82f2576e35fa621",
@@ -1484,7 +1484,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"ols-sweep-slo-restart/results.csv":           "49a51c8b1bdbcbfd2401b05b383113727ec51384867dfa49c31e17349d60ae47",
 	"pd-restart/composite-results.csv":            "7cd3bf0237b97c5ec7ec2a26e4c096701275ca79d622ad064c1ce06e3734b3f2",
 	"pd-restart/results.csv":                      "1f7f9e64e4fa1cb7aa467e70358fd74778c45045f7f5460791bd5861e9234637",
-	// ttft-saturated as #482 added it, before 5c (1ffdb6ad8).
+	// ttft-saturated as ev-shindin/llm-scaling-manager#482 added it, before 5c (1ffdb6ad8).
 	"ttft-saturated/composite-results.csv": "a94dd5a36fea549888a525795b152e7199969f46319e25d95bf2f5c8211688bd",
 	"ttft-saturated/results.csv":           "4c1da5e9d1ecb5f7c084703c99c1907811de56e7974fc62b6d96ec965f05b7d7",
 
@@ -1492,7 +1492,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"ols-sweep-slo/slo-published.csv":         "24b0954e3b5811850a2fcc460cf46b7790d478081cb9bee49db1e38847bb3446",
 	"ols-sweep-slo-restart/slo-published.csv": "e9b48abe22e4d484e861290c5f417edb5f28b652ceeb21c89d8aaeb2dd516008",
 
-	// #495's slow-pod outputs not named above, at main 2f02cdbbe, the same
+	// ev-shindin/llm-scaling-manager#495's slow-pod outputs not named above, at main 2f02cdbbe, the same
 	// bytes as the all-off replay.
 	"start-seed-restart-2/composite-results.csv":  "f480bd7e4261f38c4bdeef64fb03b0162dd85c42c56b00a4d3bc51b014f13247",
 	"start-seed-restart-2/results.csv":            "fb1768ede3cb1665c71f5574054132c4e7cbe1086833cfbaa10bff676203bfe0",
@@ -1524,7 +1524,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"throughput-sweep/composite-results.csv":          "dde3434231c8217840247e6b379be47cd730063d362a8d2d6eb93a926b48c68a",
 	"throughput-sweep/results.csv":                    "95273482cb748258383bb0dfb1c1f8001eb6dcd3cc1248d62b7d840cef60f241",
 
-	// Issue #495's outputs, replayed with every switch of replaySwitches off,
+	// Issue ev-shindin/llm-scaling-manager#495's outputs, replayed with every switch of replaySwitches off,
 	// at main f7130a9cb.
 	"ols-sweep-slo-restart/composite-roles.csv":       "19ca7b5ed5edb46e8d77b26cc5fc2b25d3f332f4e4e1ee9a99b8da5540760bb7",
 	"ols-sweep-slo-restart/composite-variants.csv":    "e5abe68787358baa1fd68c648c90ecb8e6200c0d2817b873c1c0f133cb25bbab",
@@ -1545,14 +1545,14 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"throughput-sweep/lines.csv":                      "f55781cb4b727f97f56ab8e1611213f0e92f4c11f76a816323877d1ff101e834",
 	"throughput-sweep/variant-capacities.csv":         "4dddae1473f723feaeabe6ce16b5cc8e3cce8e188df255a08ab1ba2a5808db3e",
 	"throughput-sweep/warm-pool-pressure.csv":         "87ea51257f009bbc7fc85aefda7bd014568a94ccdc29093596a4083b455e979b",
-	// Issue #495's staircase outputs, every switch of replaySwitches off, at bef629924.
+	// Issue ev-shindin/llm-scaling-manager#495's staircase outputs, every switch of replaySwitches off, at bef629924.
 	"ttft-staircase-b-on/composite-results.csv":  "5cd25e0d0b1dc60385ccadfd7898f4528cbafbbb0cbd71da8854bd287936cd89",
 	"ttft-staircase-b-on/composite-roles.csv":    "1b7e97c61bfa58d2e513692b315751d6d3515fdcd767082d2440eaa7540485f3",
 	"ttft-staircase-b-on/lines.csv":              "38728de29b3e63458dfdb0c7293dfeef385402fb353ce28cd88df33ba232d22d",
 	"ttft-staircase-b-on/results.csv":            "6d9d32f9a37f382e0693cd42b2993bf3ad6c82e180243094a767c98689ccb373",
 	"ttft-staircase-b-on/variant-capacities.csv": "69cbc99387df181e10a4f3bfb3e8c80e1f2f761716a6129847946d2d53b60755",
 
-	// #495's floor-raises-variants outputs not named above, at main
+	// ev-shindin/llm-scaling-manager#495's floor-raises-variants outputs not named above, at main
 	// 01049df61: no other switch of replaySwitches moves them, so all off is
 	// the committed golden.
 	"ols-sweep-slo/composite-variants.csv":        "e4d0005a54633b56c8064c28ade5fb7d9b952be307b2ff747f04c29827f5b831",
@@ -1576,7 +1576,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"ttft-three-pods/variant-capacities.csv":      "7d68c9e1678b68410d5bf6a0915a37203e12ef265a14a0d742c5bb4dff78cf0a",
 	"ttft-three-pods/warm-pool-pressure.csv":      "56504bb5742a691393ebb6b33642a5d29fb3518f2bc70588376baee370a90fb4",
 
-	// #392's joined-clock outputs not named above, at main 39551b9be: no
+	// ev-shindin/llm-scaling-manager#392's joined-clock outputs not named above, at main 39551b9be: no
 	// other switch of replaySwitches moves them, so all off is main's golden.
 	"pd-restart/composite-roles.csv": "b6629b4b25d4b0d8d20246ec2319ce6e6c596482def6d1fe7634977798918e07",
 	"pd-restart/store-records.csv":   "5f97bd429a7f97b77ea04146f204c2a310c2bd7f8decf32b993db398e99edd46",

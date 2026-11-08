@@ -47,7 +47,7 @@ const (
 
 	// QueryAvgPrefillTime is the mean time a request spent in prefill, queue
 	// wait excluded, per instance (seconds, [1m]). vLLM only: SGLang
-	// publishes no per-stage figure (sgl-project/sglang issue #14303), so it
+	// publishes no per-stage figure (sgl-project/sglang#14303), so it
 	// is registered once, under its bare name, like
 	// QueryPrefillComputedTokenRate. Source:
 	// constants.VLLMRequestPrefillTimeSeconds.

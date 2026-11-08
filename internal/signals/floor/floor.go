@@ -187,7 +187,7 @@ type Term struct {
 // only with MinThroughputSamplesToOrder readings and a steady shape, never
 // through the standing-queue release, and is capped at LowerBoundMaxGrowth
 // times the role's ready supply. It is what gives prefill a floor on a fleet
-// whose prefill only ever queues behind a full decode (issue #144).
+// whose prefill only ever queues behind a full decode (issue ev-shindin/llm-scaling-manager#144).
 
 // borrowedReading reports whether a replica's service rate is evidence about
 // something other than this variant's own current load, and so may hold a fleet

@@ -63,7 +63,7 @@ type rescaleInput struct {
 // and its cap, and the rest re-splits over the others. HeldGPUs is not
 // reserved beneath a share of the rest: the GPUs a model gained were the next
 // cycle's reserve, so one with a role held against scale-down took more of
-// the budget every cycle, to two thirds of it against an equal model (#440).
+// the budget every cycle, to two thirds of it against an equal model (ev-shindin/llm-scaling-manager#440).
 func heldRescaleTargets(in []rescaleInput, budget int) (map[string]int, bool) {
 	in = slices.Clone(in)
 	for {
@@ -456,7 +456,7 @@ func (o *GreedyByScoreOptimizer) rescaleModelDecisions(
 			reclaimWholeReplicas(ctx, satNamed, records, stateMap, roles, tgtByRole, curByRole, targets)
 		} else {
 			// With more than one replica size the two greedy passes are not
-			// monotone in the target (#219): fill and shed are searched together.
+			// monotone in the target (ev-shindin/llm-scaling-manager#219): fill and shed are searched together.
 			roundExact(satNamed, records, stateMap, roles, split, targetGPUs, tgtByRole, curByRole, demByRole, targets)
 		}
 	}
@@ -510,7 +510,7 @@ func (o *GreedyByScoreOptimizer) rescaleModelDecisions(
 // roles split what is left. Its cur is not reserved as a floor beneath a share
 // of the rest: the fill then made the role's new pods next cycle's floor, so
 // at a constant target it took a share of the other role's GPUs every cycle
-// and moved pods to it for cycle after cycle (#440).
+// and moved pods to it for cycle after cycle (ev-shindin/llm-scaling-manager#440).
 func splitRoles(e NamedAnalyzerResult, records []variantRecord, stateMap map[string]domain.VariantReplicaState,
 	accType string, roles []string, total int, dem, cur, floor map[string]int) map[string]int {
 	low := maps.Clone(floor)

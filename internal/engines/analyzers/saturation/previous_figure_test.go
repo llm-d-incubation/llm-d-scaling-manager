@@ -159,7 +159,7 @@ func TestARestoreFromADocumentWithoutArgumentsKeepsAPreviousFigure(t *testing.T)
 	}
 }
 
-// A previous figure from a PR #151 build's document (priorK2) is installed as
+// A previous figure from a PR ev-shindin/llm-scaling-manager#151 build's document (priorK2) is installed as
 // a lower bound holding it, where LowerBounds has none.
 func TestARestoreReadsAPreviousFigureFromAnOlderBuild(t *testing.T) {
 	a, _, clock := waProcess(mtParams(64, "vllm:v1"))

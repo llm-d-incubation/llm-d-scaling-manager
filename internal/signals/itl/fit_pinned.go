@@ -19,7 +19,7 @@ const DefaultBaselineSec = 0.006
 
 // DefaultBPrior is the floor of the upper prior on B the one-sided rule at
 // the cap pins (Admission.BPrior; BPrior): 30 ms. It is the top of the grid
-// the rule was measured on (issue #467: B of 10 to 30 ms on A of 0.01 and
+// the rule was measured on (issue ev-shindin/llm-scaling-manager#467: B of 10 to 30 ms on A of 0.01 and
 // 0.05), so the grid's worst case is priced exactly. Measured intercepts on
 // the clusters this was built for were 1.5 to 15 ms; a whole-node decode
 // with a true B above 30 ms is under-priced by (B - 30 ms)(1 - k/kbar) until

@@ -996,7 +996,7 @@ LLMSM_PREREQ_KINDS=(Namespace ClusterRole ClusterRoleBinding ServiceMonitor Role
 #   configmaps "scaling-manager-metrics-server-ca" not found
 #
 # with no scrape target, no llmsm_* series, and a dashboard whose scaling manager panels are
-# empty while its vllm:* panels fill. Exactly the failure #1516 fixed for the
+# empty while its vllm:* panels fill. Exactly the failure llm-d/llm-d-workload-variant-autoscaler#1516 fixed for the
 # ServiceMonitor's Secret; the CA was missed because it is a different kind.
 #
 # By NAME rather than by kind, because the overlay renders three ConfigMaps and

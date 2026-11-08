@@ -21,7 +21,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The engine-level recording (issue #345, step 0): the acceptance script run
+// The engine-level recording (issue ev-shindin/llm-scaling-manager#345, step 0): the acceptance script run
 // through collectV2ModelRequest, so each model's composite is recorded beside
 // its analyzers, and replayed. Against the acceptance run it adds what the
 // composite paths need:

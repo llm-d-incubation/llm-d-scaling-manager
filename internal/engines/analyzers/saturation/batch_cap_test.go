@@ -205,7 +205,7 @@ func TestBatchCap_PerRank(t *testing.T) {
 	}
 }
 
-// The negative control for #399, through the switches: with both off the
+// The negative control for ev-shindin/llm-scaling-manager#399, through the switches: with both off the
 // fleet prices as it did before the fix -- k1, 1.905x the truth at S = 126
 // -- on each topology the issue measured.
 func TestBatchCap_SwitchesOffReproduceTheIssue(t *testing.T) {

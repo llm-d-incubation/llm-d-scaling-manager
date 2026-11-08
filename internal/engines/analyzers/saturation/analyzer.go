@@ -131,7 +131,7 @@ type SaturationAnalyzer struct {
 	// figure (prefill_bound_held.go); swept and put aside with the window,
 	// kept past a new window after EpisodeGap.
 	prefillBoundHeld map[string]prefillHeldBound
-	// prefillBoundConfident is SwitchPrefillBoundHeldConfidence (issue #397):
+	// prefillBoundConfident is SwitchPrefillBoundHeldConfidence (issue ev-shindin/llm-scaling-manager#397):
 	// on from the constructor; a replay turns it off (SetSwitchesForReplay).
 	prefillBoundConfident bool
 	// throughputMuChoice is, per saturatedThroughput key, what the choice
@@ -392,7 +392,7 @@ type SaturationAnalyzer struct {
 	batchCapLearned  bool
 	// batchCapITLAdmission, batchCapDecodeView, batchCapDerivedMu and
 	// batchCapZeroReplica are the replay switches of the batch cap's other
-	// readers (batch_cap.go, issues #420 and #427):
+	// readers (batch_cap.go, issues ev-shindin/llm-scaling-manager#420 and ev-shindin/llm-scaling-manager#427):
 	// SwitchBatchCapITLAdmission, SwitchBatchCapDecodeView,
 	// SwitchBatchCapDerivedMu and SwitchBatchCapZeroReplica. On from the
 	// constructor; a replay turns them off (SetSwitchesForReplay).
@@ -400,24 +400,24 @@ type SaturationAnalyzer struct {
 	batchCapDecodeView   bool
 	batchCapDerivedMu    bool
 	batchCapZeroReplica  bool
-	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (#276): on
+	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (ev-shindin/llm-scaling-manager#276): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).
 	kvOutputDispersion bool
-	// kvHitsResident is SwitchKVPerRequestHitsResident (#277): on from the
+	// kvHitsResident is SwitchKVPerRequestHitsResident (ev-shindin/llm-scaling-manager#277): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	kvHitsResident bool
-	// itlFitsAggregated is SwitchITLFitsAggregated (#432): on from the
+	// itlFitsAggregated is SwitchITLFitsAggregated (ev-shindin/llm-scaling-manager#432): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	itlFitsAggregated bool
 	// itlAggShapeTerm is SwitchITLAggregatedShapeTerm and itlAggSizes
-	// SwitchITLAggregatedSizes (#275): on from the constructor; a replay
+	// SwitchITLAggregatedSizes (ev-shindin/llm-scaling-manager#275): on from the constructor; a replay
 	// turns them off (SetSwitchesForReplay).
 	itlAggShapeTerm bool
 	itlAggSizes     bool
 	// itlAggregated is, per ITL window key, an aggregated variant's shape
-	// state (itl_aggregated_shape.go, issue #275).
+	// state (itl_aggregated_shape.go, issue ev-shindin/llm-scaling-manager#275).
 	itlAggregated map[string]*aggState
-	// zeroReplicaDP is SwitchZeroReplicaDataParallel (#438): on from the
+	// zeroReplicaDP is SwitchZeroReplicaDataParallel (ev-shindin/llm-scaling-manager#438): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	zeroReplicaDP bool
 	// itlReadsSettle, itlWaitsAfterRestart, itlKeepsSettle and
@@ -460,21 +460,21 @@ type SaturationAnalyzer struct {
 	// recorded, so an unchanged one is not recorded again.
 	lastExport [32]byte
 	// idleBand is SwitchIdleBand and k2KeyBucketHeld SwitchK2KeyBucketHeld
-	// (#396), muKeyBucketHeld SwitchMuKeyBucketHeld, muSwapFreeze
-	// SwitchMuSwapFreeze and muMarginClamp SwitchMuMarginClamp (#415): on from
+	// (ev-shindin/llm-scaling-manager#396), muKeyBucketHeld SwitchMuKeyBucketHeld, muSwapFreeze
+	// SwitchMuSwapFreeze and muMarginClamp SwitchMuMarginClamp (ev-shindin/llm-scaling-manager#415): on from
 	// the constructor; a replay turns them off (SetSwitchesForReplay).
 	idleBand        bool
 	k2KeyBucketHeld bool
 	muKeyBucketHeld bool
 	muSwapFreeze    bool
 	muMarginClamp   bool
-	// k2FirstReadingWaits is SwitchK2FirstReadingWaits (#392): on from the
+	// k2FirstReadingWaits is SwitchK2FirstReadingWaits (ev-shindin/llm-scaling-manager#392): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	k2FirstReadingWaits bool
-	// joinedFromFirstServed is SwitchJoinedFromFirstServed (#392): on from
+	// joinedFromFirstServed is SwitchJoinedFromFirstServed (ev-shindin/llm-scaling-manager#392): on from
 	// the constructor; a replay turns it off (SetSwitchesForReplay).
 	joinedFromFirstServed bool
-	// itlPerToken is SwitchITLPerToken (#274): on from the constructor; a
+	// itlPerToken is SwitchITLPerToken (ev-shindin/llm-scaling-manager#274): on from the constructor; a
 	// replay turns it off (SetSwitchesForReplay).
 	itlPerToken bool
 	// itlWithheldLogged is, per ITL window key, the reasons its readings were
@@ -504,11 +504,11 @@ type SaturationAnalyzer struct {
 	// prefillAQuadratic is SwitchPrefillAQuadratic (a's curved fit): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).
 	prefillAQuadratic bool
-	// itlOneSidedAtCap is SwitchITLOneSidedAtCap (issue #467,
+	// itlOneSidedAtCap is SwitchITLOneSidedAtCap (issue ev-shindin/llm-scaling-manager#467,
 	// itl_one_sided.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	itlOneSidedAtCap bool
-	// itlTierHysteresis is SwitchITLTierHysteresis (issue #495,
+	// itlTierHysteresis is SwitchITLTierHysteresis (issue ev-shindin/llm-scaling-manager#495,
 	// itl_tier_hysteresis.go): on, the line's tier is latched.
 	itlTierHysteresis bool
 	// itlClearsOnRevision is SwitchITLClearsOnNewRevision
@@ -516,7 +516,7 @@ type SaturationAnalyzer struct {
 	// off (SetSwitchesForReplay).
 	itlClearsOnRevision bool
 	// floorRaisesVariants is SwitchThroughputFloorRaisesVariants (issue
-	// #495, throughput_floor.go): on from the constructor; a replay turns it
+	// ev-shindin/llm-scaling-manager#495, throughput_floor.go): on from the constructor; a replay turns it
 	// off (SetSwitchesForReplay).
 	floorRaisesVariants bool
 	// itlOneSidedLast is, per ITL key, the one-sided fields of the admission
@@ -1036,7 +1036,7 @@ func (a *SaturationAnalyzer) evictStaleHistory() Evicted {
 	evicted.ITLWindows, evicted.ITLBaselines = a.itlTracker.Sweep(now, func(key string) bool {
 		return a.variantIsStale(key, now, variantTimeout)
 	})
-	// The one-sided admission a key was last priced with (issue #467) goes
+	// The one-sided admission a key was last priced with (issue ev-shindin/llm-scaling-manager#467) goes
 	// with its variant, as itlArgs does below.
 	for key := range a.itlOneSidedLast {
 		if a.variantIsStale(key, now, variantTimeout) {

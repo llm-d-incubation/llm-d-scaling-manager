@@ -346,7 +346,7 @@ shared:
   # NixlConnector loses a decode's link to its prefill minutes after start,
   # with both Pods up, no load and no scaling: one NIXL_ERR_REMOTE_DISCONNECT,
   # then "remote agent ... was invalidated" and a 500 on every request that
-  # pair serves, until the decode restarts (vllm-project/vllm#59870, #59971).
+  # pair serves, until the decode restarts (vllm-project/vllm#59870, vllm-project/vllm#59971).
   # The standup pre-pulls and prepares caches for this pin, not the default
   # (hack/benchmark/engine_image.sh reads it from here).
   # --------------------------------------------------------------------------
@@ -1019,7 +1019,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:
@@ -1110,7 +1110,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:

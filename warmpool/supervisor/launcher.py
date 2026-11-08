@@ -853,7 +853,7 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     # socket on :8001 nor to any in-flight TCP connections — the kernel
     # keeps a socket open as long as any process has an fd to it, so a
     # leaked client fd in this child wedges the connection long after
-    # uvicorn has closed its own end (see issue #550). Pipes (including
+    # uvicorn has closed its own end (see issue llm-d-incubation/llm-d-fast-model-actuation#550). Pipes (including
     # multiprocessing's parent-child sentinel pipe used by
     # start_sentinel_watcher) and regular files are deliberately left
     # alone.

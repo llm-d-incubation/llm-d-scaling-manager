@@ -59,7 +59,7 @@ func TestWakeReclaimLowersOwnBorrowerOnce(t *testing.T) {
 	}
 }
 
-// Review #199 (6): the queue is reported yielded only by a pass that yielded
+// Review ev-shindin/llm-scaling-manager#199 (6): the queue is reported yielded only by a pass that yielded
 // for it, so a cycle that ran none (the cost-aware optimizer, a cycle that
 // failed before its pass) loses nothing; and a wake whose entry the record
 // dropped lowers nobody. Before, the queue was emptied when the cycle read

@@ -17,7 +17,7 @@ import (
 // values themselves are held by learnreplay's
 // TestInput_EveryAnalyzerInputFieldSurvivesTheRecording.
 //
-// The VariantMetadata exemption is revisited at #345 step 2, which takes the
+// The VariantMetadata exemption is revisited at ev-shindin/llm-scaling-manager#345 step 2, which takes the
 // composite's variants from it; the step that first has an analyzer read it
 // records it and ends the exemption.
 func TestInput_MirrorsTheAnalyzerInput(t *testing.T) {

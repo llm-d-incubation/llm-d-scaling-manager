@@ -295,7 +295,7 @@ func TestUtilizationShareShadowReportsStandingConditionsOnce(t *testing.T) {
 	}
 }
 
-// §8.2 and the PR #121 security review: a namespace with its own
+// §8.2 and the PR ev-shindin/llm-scaling-manager#121 security review: a namespace with its own
 // scaling-policy map sets every input its models are sized by -- weight,
 // scale-up threshold, KV threshold -- and that map may be the tenant's. In the
 // cluster group, where those inputs would be weighed against every other

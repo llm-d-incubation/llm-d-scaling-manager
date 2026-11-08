@@ -14,7 +14,7 @@ import (
 
 // The derived mu is the line's own figure, whatever token rate the replicas
 // report. A per-variant factor fitted to that rate was tried and removed: on
-// the rerun of issue #270 its steady-state ratio was 0.988 (median of 107
+// the rerun of issue ev-shindin/llm-scaling-manager#270 its steady-state ratio was 0.988 (median of 107
 // cycles), so the 13% it was built to correct had come from lines fitted on
 // transients, which the steady gate now keeps out. What the factor did measure
 // was the transients themselves: a first ratio of 1.42, taken whole on a ramp

@@ -193,6 +193,6 @@ No new issues found.
 ```
 
 When linking to specific lines, use the full commit SHA:
-`https://github.com/ev-shindin/llm-scaling-manager/blob/<full-sha>/path/to/file.go#L42-L45`
+`https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/<full-sha>/path/to/file.go#L42-L45`
 
 Print the PR URL when done.

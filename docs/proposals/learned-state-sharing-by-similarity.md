@@ -3,7 +3,7 @@
 **Status:** proposed; step 3 of [Order of work](#order-of-work) is built
 (per-variant k2 and throughput windows, and a compatible sibling's k2
 borrowed lower-only with an expiry), the rest is not. Supersedes part of the sharing key on
-`feat/engine-config-identity` (PR #126), and proposes a storage model for the
+`feat/engine-config-identity` (PR ev-shindin/llm-scaling-manager#126), and proposes a storage model for the
 k2 and saturated-throughput windows that main does not have; see
 [What this changes](#what-this-changes).
 
@@ -56,14 +56,14 @@ correct it.
 `nearestSaturatedThroughput` extends the pool once more: an empty output bucket
 borrows the nearest neighbour bucket's median, again with no variant in the key.
 
-PR #126 added a fingerprint-keyed ITL line and an `enableLearnedStateReuse`
+PR ev-shindin/llm-scaling-manager#126 added a fingerprint-keyed ITL line and an `enableLearnedStateReuse`
 switch that gates it, and the cross-variant capacity figure a zero-replica
 variant takes (`lookupCompatibleCapacity`). The switch does not reach the k2 or
 throughput windows, because their keys never had a variant to scope by.
 
 ## The problem with proving identity
 
-PR #126 answers "the same engine" with a digest. `EngineParams.Fingerprint()`
+PR ev-shindin/llm-scaling-manager#126 answers "the same engine" with a digest. `EngineParams.Fingerprint()`
 hashes the launch flags that drive latency; `engineFingerprint` refuses to
 produce a key at all unless `Complete()` is true, and `itlPhysicsKey` falls back
 to the unshared per-variant key when there is no fingerprint. A borrowed line is
@@ -140,7 +140,7 @@ it searches the other variants' records and takes the best tier available
 (next section). The search runs over the controller's internal store, never
 over Prometheus series: a series carries no writer identity and no honest age,
 so it cannot be ranked by distance or freshness (the finding recorded for
-learned state across a restart, PR #116).
+learned state across a restart, PR ev-shindin/llm-scaling-manager#116).
 
 **What it fixes on its own.** Keying by configuration digest closes two of the
 three breaks that are about the digest describing the wrong thing: the ITL
@@ -174,7 +174,7 @@ eleven fields that were read and marked as a weaker match. This is why the
 seven breaks stop being breaks: every one of them was "the gate was asked a
 question it could not answer". Remove the gate and the question disappears.
 
-Tier 1 keeps the digest, so `Fingerprint()` and `llmsm_engine_config` stay as #126
+Tier 1 keeps the digest, so `Fingerprint()` and `llmsm_engine_config` stay as ev-shindin/llm-scaling-manager#126
 builds them. What changes is that an absent or incomplete fingerprint demotes a
 variant to tier 2 instead of dropping it to tier 3.
 
@@ -186,7 +186,7 @@ variant to tier 2 instead of dropping it to tier 3.
    a donor can never raise a variant's capacity. Too high costs TTFT: the
    fleet is held small, saturates, and P1-obs measures the true k2 within a
    few cycles, but the tail latency of that episode does not recover. Too
-   low costs replicas and does **not** correct itself -- see rule 2. For the ITL line, #126
+   low costs replicas and does **not** correct itself -- see rule 2. For the ITL line, ev-shindin/llm-scaling-manager#126
    already enforces the equivalent ("cap, never order"): `borrowedReading`
    routes the reading so `mayOrder` is never set, `thinOwnWindow` excludes it
    from the queue release, and `fleetHasMeasuredItself` refuses it. This rule
@@ -217,7 +217,7 @@ variant to tier 2 instead of dropping it to tier 3.
    borrower touching a donor would keep a dead variant's record alive for as
    long as anything borrows it, and the sweep would never reclaim it. A
    variant's own read touches its own window; a borrow reads without touching.
-   This is the same rule `StableAcceleratorFor` follows on #126.
+   This is the same rule `StableAcceleratorFor` follows on ev-shindin/llm-scaling-manager#126.
 4. **A deleted variant's records stay readable until they expire.** A canary
    that replaces a variant is the best case for borrowing, and its donor is the
    variant being replaced. The existing `VariantTimeout` horizon (24h) covers
@@ -242,7 +242,7 @@ Two consequences, both deliberate:
 
 - The tier is **permanent state, not a transient**. It must be visible for as
   long as it applies: in the `k2-decision` and `derived-mu` lines, and in
-  `itl-line-borrowed` from #126, with the donor named, and as a `reason` value so it is
+  `itl-line-borrowed` from ev-shindin/llm-scaling-manager#126, with the donor named, and as a `reason` value so it is
   reachable from Prometheus rather than only from logs.
 - Rule 1 cannot be relaxed on the grounds that a prior has "settled". It has
   not settled; it has persisted.
@@ -269,7 +269,7 @@ already-reviewed answer to the same question.
   a restart does not already cost. What changes after that is how fast a
   window fills: one variant's replicas feed it, not every variant's.
 
-**On PR #126**, this supersedes the key and keeps everything else.
+**On PR ev-shindin/llm-scaling-manager#126**, this supersedes the key and keeps everything else.
 
 Superseded:
 
@@ -296,11 +296,11 @@ distance.
 
 ## One lower bound per key, and windows keyed by their arguments
 
-Built on #151, #163 and #152 together with the borrow controls first proposed
-in #165, after a review found that their mechanisms disagreed once combined. Three of
+Built on ev-shindin/llm-scaling-manager#151, ev-shindin/llm-scaling-manager#163 and ev-shindin/llm-scaling-manager#152 together with the borrow controls first proposed
+in ev-shindin/llm-scaling-manager#165, after a review found that their mechanisms disagreed once combined. Three of
 them each meant "a figure from somewhere else may only make this variant more
-conservative, for a while": the sibling k2 borrow (#132, #165), the restored
-prior (#151), and the ceiling a parked variant keeps after a rollout (#151).
+conservative, for a while": the sibling k2 borrow (ev-shindin/llm-scaling-manager#132, ev-shindin/llm-scaling-manager#165), the restored
+prior (ev-shindin/llm-scaling-manager#151), and the ceiling a parked variant keeps after a rollout (ev-shindin/llm-scaling-manager#151).
 Each had its own clock and its own expiry. Forgetting a variant, turning the
 borrow off, trimming the snapshot and the image check each knew some of them
 and not the others, and each gap was a bug: an image-only rollout re-armed a
@@ -437,8 +437,8 @@ written under, and the first read applies the rule above -- under a
 configuration not read completely too, and for a document that recorded no
 arguments at all (an upgrade from a release without them, or past a
 FingerprintVersion bump), whose windows are tagged with no configuration's
-arguments and so each becomes a previous figure. The separate prior of #151
-is gone; a document a #151 build wrote has its priors read as previous
+arguments and so each becomes a previous figure. The separate prior of ev-shindin/llm-scaling-manager#151
+is gone; a document a ev-shindin/llm-scaling-manager#151 build wrote has its priors read as previous
 figures. What a restart keeps is decided per window, not per variant,
 so a window learned before a live rollout and exported after it is no longer
 restored as if it described the new arguments.
@@ -473,7 +473,7 @@ age. `llmsm_learned_state_restores_total` counts each restore by its outcome:
 
 ## Order of work
 
-1. **Merge #126 as it is.** It ships the digest and `llmsm_engine_config` with
+1. **Merge ev-shindin/llm-scaling-manager#126 as it is.** It ships the digest and `llmsm_engine_config` with
    reuse off, which is what question 3 below needs measured.
 2. **Answer question 3 from `llmsm_engine_config` on a real fleet.**
 3. **Per-variant storage for k2 and throughput**, with tiers 0 and 3 only and
@@ -483,7 +483,7 @@ age. `llmsm_learned_state_restores_total` counts each restore by its outcome:
    that neither inherits the other's k2.
    **Built** for namespace and variant (`historyKey`, `throughputKey`), with
    specs in `per_variant_history_test.go`; the configuration digest, now on
-   main with #126, is the next change to the key. The cluster run is not done.
+   main with ev-shindin/llm-scaling-manager#126, is the next change to the key. The cluster run is not done.
    **Storage alone had a cost**, found in review: a variant with no
    saturated reading of its own used to read a sibling's pooled k2, and
    per-variant windows sent it to the derived figure or to k1 instead. In a
@@ -493,7 +493,7 @@ age. `llmsm_learned_state_restores_total` counts each restore by its outcome:
    `P2-borrow` (`k2_borrow.go`) reads a sibling in the same namespace, on the
    same model, accelerator, GPU count, role, bucket and queue threshold,
    whose engine parameters pass `IsCapacityCompatible` -- tier 2 on main,
-   without waiting for #126's digest. It is used only below the variant's
+   without waiting for ev-shindin/llm-scaling-manager#126's digest. It is used only below the variant's
    own capacity, `min(k1, own k2)` (rule 1), held for `BorrowedK2Hold`
    (30 min) and relaxed to the own figure over `BorrowedK2Relax` (6 h)
    (rule 2), read without touching the donor (rule 3), and logged with the

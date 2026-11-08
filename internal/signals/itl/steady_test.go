@@ -33,7 +33,7 @@ var _ = Describe("Tracker steady readings", func() {
 		return r
 	}
 
-	// The shape of issue #270, cycle by cycle: one replica steady at k=0.65,
+	// The shape of issue ev-shindin/llm-scaling-manager#270, cycle by cycle: one replica steady at k=0.65,
 	// then a second joins and the load splits to k=0.33 each. For a minute the
 	// first replica's ITL still averages the busier minute before, and the
 	// newcomer's covers its own warm-up; then both settle on the line.

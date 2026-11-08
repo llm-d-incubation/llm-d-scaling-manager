@@ -11,7 +11,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// Speculative decoding (#274): vLLM reads its ITL once per engine step, and a
+// Speculative decoding (ev-shindin/llm-scaling-manager#274): vLLM reads its ITL once per engine step, and a
 // step emits 1 + the accepted draft tokens. The ITL line is the time per
 // token, so a fleet that speculates is priced from its tokens, not its steps.
 

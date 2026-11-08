@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The line as a learner (issue #495, analyzer-learner.md 6.1): its report, its
+// The line as a learner (issue ev-shindin/llm-scaling-manager#495, analyzer-learner.md 6.1): its report, its
 // learner-write line, and what a forget and an eviction say.
 
 // learnerCycles runs n cycles of the fleet through Analyze at V(3), and

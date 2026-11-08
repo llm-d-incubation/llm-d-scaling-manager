@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/allocation"
 )
 
-// Issue #372: today's optimizer held utilization-share promises on the freest
+// Issue ev-shindin/llm-scaling-manager#372: today's optimizer held utilization-share promises on the freest
 // nodes, not on the promised holes' nodes. Whole 8-GPU units. Process-wide
 // stores: no t.Parallel.
 
@@ -48,7 +48,7 @@ func TestAWholeNodePodFitsBesideAPromisedHole(t *testing.T) {
 	}
 }
 
-// The view mirrors the planner's picture on #371's case: R1's whole-node hole
+// The view mirrors the planner's picture on ev-shindin/llm-scaling-manager#371's case: R1's whole-node hole
 // on n1 and M1's one-GPU hole on n2, both Filling. The optimizer's view holds
 // each on its own node and leaves n3 whole for an 8-GPU pod; freest-first took
 // M1's GPU off n3.

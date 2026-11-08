@@ -1,7 +1,7 @@
 package steadystate
 
 // Giving borrowed capacity back, on the engine side
-// (the Kueue borrowing proposal, PR #161, B5): the
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B5): the
 // allocation.BorrowGovernor decides; this file feeds it what only the cluster
 // knows -- the persisted ledger, Kueue preemptions, cluster-autoscaler events --
 // and applies and persists what it decides.

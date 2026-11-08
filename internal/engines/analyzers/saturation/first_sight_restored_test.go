@@ -125,7 +125,7 @@ func TestFirstSight_AnEngineRestartUnderTheSameNameStillWaits(t *testing.T) {
 
 // An LWS group restart while the controller was down: leader and workers
 // recreated, Pod names kept, the group's row carrying the latest Ready time
-// over its Pods (#361, TestLWSGroupReadyTimeIsTheLatestOfItsPods). Group 0
+// over its Pods (ev-shindin/llm-scaling-manager#361, TestLWSGroupReadyTimeIsTheLatestOfItsPods). Group 0
 // is recreated and waits, group 1 is not reached and does not; group 2's
 // leader kept its Ready time and a worker restarted alone, so the row's
 // time moved: it waits too.
@@ -172,7 +172,7 @@ func TestFirstSight_ANotReadyFirstRowLosesTheSighting(t *testing.T) {
 
 // A new lend across the restart: the Pod keeps its Ready time from the pool
 // and its key, so only its absence from the snapshot makes it start again.
-// The balance tracker's grace (#283) reads LentSeen, which a bridge first
+// The balance tracker's grace (ev-shindin/llm-scaling-manager#283) reads LentSeen, which a bridge first
 // seen now sets; and k2 refuses a bridge whatever its age.
 func TestFirstSight_ANewLendIsABridgeFirstSeen(t *testing.T) {
 	poolReady := restartT0.Add(-3 * time.Hour)

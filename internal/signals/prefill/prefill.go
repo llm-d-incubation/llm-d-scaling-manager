@@ -69,7 +69,7 @@ const (
 	// NoPrefillCapacity is V_P with no source that cannot over-state it.
 	NoPrefillCapacity Refusal = "NoPrefillCapacity"
 	// SGLangRefused is V_P on SGLang, which publishes no per-stage computed-
-	// token series (sgl-project/sglang issue #14303).
+	// token series (sgl-project/sglang#14303).
 	SGLangRefused Refusal = "SGLangNoComputedTokens"
 	// AggregatedRefused is a on an aggregated pod: its service time includes
 	// decode, so the service time is not the prefill time.

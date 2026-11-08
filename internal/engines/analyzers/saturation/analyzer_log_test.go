@@ -286,7 +286,7 @@ func TestLogContract_ITLWindowCountsEveryRow(t *testing.T) {
 }
 
 // The engine's max_num_seqs reaches the ITL window, so a replica at its
-// sequence cap teaches the line from above the band (issue #287), but only
+// sequence cap teaches the line from above the band (issue ev-shindin/llm-scaling-manager#287), but only
 // when the engine's flag stated it. Without it the reading counts as
 // aboveBand and a fleet routed onto one capped replica never fits a line.
 func TestLogContract_ITLWindowTakesTheCappedReplica(t *testing.T) {

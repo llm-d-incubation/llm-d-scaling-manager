@@ -15,7 +15,7 @@ import (
 
 // The same Deployment applied to two namespaces has one variant name in both,
 // so a line that names only the variant cannot be attributed to either. Issue
-// #271: two identical models learned different lines, and the itl-fit records
+// ev-shindin/llm-scaling-manager#271: two identical models learned different lines, and the itl-fit records
 // that would have shown which was which were indistinguishable.
 func TestITLLinesNameTheirNamespace(t *testing.T) {
 	const variant = "qwen32b-decode-llmsm"

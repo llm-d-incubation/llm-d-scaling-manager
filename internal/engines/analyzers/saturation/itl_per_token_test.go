@@ -14,7 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
 
-// ITL per accepted token (#274). Each test here holds SwitchITLPerToken: it
+// ITL per accepted token (ev-shindin/llm-scaling-manager#274). Each test here holds SwitchITLPerToken: it
 // fails with the switch off.
 
 // Through Analyze, a vLLM variant that speculates fits its line from the time
@@ -175,7 +175,7 @@ func TestITLPerToken_TheExportMarksOnlySpeculatingVariants(t *testing.T) {
 // A variant that does not speculate keeps its pending restored ITL entries in
 // the export: one step is one token there, so their unit cannot differ, and
 // dropping them lost its held slope and baseline across a second restart
-// (review of #274, SHOULD-1).
+// (review of ev-shindin/llm-scaling-manager#274, SHOULD-1).
 func TestITLPerToken_APendingNonSpeculatingVariantIsExported(t *testing.T) {
 	params := keyParams(256)
 	a, _, _ := waProcess(params)
@@ -229,7 +229,7 @@ func TestITLPerToken_AnAcceptedCountAboveTheDraftLengthIsWithheld(t *testing.T) 
 }
 
 // A withheld reading is logged once when it starts and once when it ends,
-// not every cycle, and names why (review of #274, SHOULD-3).
+// not every cycle, and names why (review of ev-shindin/llm-scaling-manager#274, SHOULD-3).
 func TestITLPerToken_AWithheldReadingIsLoggedOncePerChange(t *testing.T) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	var lines []string

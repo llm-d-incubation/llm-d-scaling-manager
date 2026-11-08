@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The ITL baseline's last-admitted stamp across a restart (issue #495,
+// The ITL baseline's last-admitted stamp across a restart (issue ev-shindin/llm-scaling-manager#495,
 // SwitchITLBaselineStamped).
 
 // baselineStampRig is a process that learned a decode variant's line at load

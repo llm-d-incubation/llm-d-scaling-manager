@@ -24,7 +24,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 )
 
-// The ITL line of an aggregated variant (issue #432), through Analyze.
+// The ITL line of an aggregated variant (issue ev-shindin/llm-scaling-manager#432), through Analyze.
 
 // aggVariant is one variant of an aggregatedRig fleet: its role label, the
 // slope its replicas' ITL rises by, and whether they read inside the ITL
@@ -287,7 +287,7 @@ func steps(t *testing.T, r *aggregatedRig, n int) []*domain.AnalyzerResult {
 }
 
 // The aggregated line is reported and sizes nothing (itlLineReportOnly,
-// until #275): at steady load with 50 requests/s arriving, the variant
+// until ev-shindin/llm-scaling-manager#275): at steady load with 50 requests/s arriving, the variant
 // reports the mu its line derives (about 0.396/s a replica, under source
 // derived-report-only), and its demand is what it is with the switch off --
 // 68,000 tokens of KV occupancy (10 replicas at fills 0.20-0.65 of 16,000)
@@ -357,7 +357,7 @@ func TestITLAggregated_AnOldShapeLineNeverOrders(t *testing.T) {
 	assert.Greater(t, dec[len(dec)-1], 10*0.85*aggregatedReplicas*12800, "decode: its own line orders through the change")
 }
 
-// A line kept through light load (the held slope, issue #284): fitted in the
+// A line kept through light load (the held slope, issue ev-shindin/llm-scaling-manager#284): fitted in the
 // band, then 35 minutes below it, so its window ages under the 10 readings a
 // fit needs and the slope is held. Arrivals then come at 100/s. The held
 // aggregated line is reported and orders nothing.

@@ -47,7 +47,7 @@ func withUnnamedVariant(req ModelScalingRequest) ModelScalingRequest {
 	return req
 }
 
-// TestRescaleLeavesAModelWithAnUnnamedVariantToTheAdditivePath (#223): a
+// TestRescaleLeavesAModelWithAnUnnamedVariantToTheAdditivePath (ev-shindin/llm-scaling-manager#223): a
 // variant with no accelerator name holds GPUs no budget counts, so rescale
 // does not take its model; the additive path may shrink it and has no budget
 // to grow it. Taken, the cheaper unnamed variant was filled first with GPUs

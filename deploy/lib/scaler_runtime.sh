@@ -9,7 +9,7 @@
 # KEDA_FALLBACK_MIN_VERSION is the oldest KEDA whose ScaledObject has
 # `spec.fallback.behavior` (currentReplicasIfHigher), added in KEDA v2.17.0
 # ("Add Fallback option `behavior` for dynamic fallback calculation", kedacore
-# #6450). It is NOT a minimum for the install: `external-push` is far older
+# kedacore/keda#6450). It is NOT a minimum for the install: `external-push` is far older
 # (2.0), and on an older KEDA the ScaledObjects are written with no fallback
 # block at all (so_keda_fallback_probe, scaledobject.sh). The preflight says so
 # up front, as a warning, rather than leaving it to the first plan.

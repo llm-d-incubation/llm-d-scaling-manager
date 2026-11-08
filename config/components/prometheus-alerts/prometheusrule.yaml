@@ -16,7 +16,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/monitoring.md#the-logs"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/monitoring.md#the-logs"
         summary: "llm-d-scaling-manager error rate elevated in {{ $labels.component }}"
         description: "Controller component '{{ $labels.component }}' error_type '{{ $labels.error_type }}' rate is {{ $value | printf \"%.2f\" }}/sec (>6/min threshold) sustained for 5+ minutes. Check controller logs for error patterns."
 
@@ -26,7 +26,7 @@ spec:
       labels:
         severity: info
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-controller-is-not-ready-or-crash-looping"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-controller-is-not-ready-or-crash-looping"
         summary: "llm-d-scaling-manager has processed zero models for 15+ minutes"
         description: "llmsm_models_processed has been 0 (or absent) over a 10-minute window, sustained for 15+ minutes. This is EXPECTED when no variants are being managed (an idle controller). If you do have managed workloads, it can indicate the optimization loop is stalled/crashed or metric collection is failing — check controller pod status and logs, and Prometheus connectivity."
 
@@ -39,7 +39,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#metrics-stale-or-missing"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#metrics-stale-or-missing"
         summary: "llm-d-scaling-manager metrics collection failing for {{ $labels.query_type }}"
         description: "Metrics collection query_type '{{ $labels.query_type }}' failing with reason '{{ $labels.reason }}' at {{ $value | printf \"%.2f\" }}/sec (>5/min threshold) sustained for 5+ minutes. Scaling decisions may be based on stale data. Verify Prometheus/metrics endpoint connectivity."
 
@@ -49,7 +49,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#capacity-priced-high-after-a-restart"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#capacity-priced-high-after-a-restart"
         summary: "llm-d-scaling-manager in {{ $labels.namespace }} cannot {{ $labels.operation }} its learned-state snapshot"
         description: "The learned-state snapshot (LEARNED_STATE_SNAPSHOT) has failed to {{ $labels.operation }} for 15 minutes. The controller logs the failure once, so this counter is the lasting signal. write: typically Forbidden -- the Role scaling-manager-learned-state-role or its binding is missing; the snapshot is still read, but nothing learned since is kept, and the next restart restores it as it was when writing stopped. Have an admin re-run 'NAMESPACE=<ns> make setup-prereqs'. read: an API server or network error, or an edited scaling-manager-manager-role; nothing is written until a read succeeds."
 
@@ -59,7 +59,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#cluster-policy-is-not-applied-policy-namespace-unverified"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#cluster-policy-is-not-applied-policy-namespace-unverified"
         summary: "llm-d-scaling-manager in {{ $labels.namespace }} cannot see the cluster policy namespace"
         description: "The controller in {{ $labels.namespace }} was denied get on the Namespaces that decide where its limiters and quotas come from (the scaling-manager-policy namespace, or a scaling-manager.llmd.ai/policy-namespace label), so it runs on its own ConfigMap. A cluster policy an admin published is NOT applied to it, and it may be scaling under a weaker bound than the admin believes is in force. Grouped by namespace, not exported_namespace: this is a controller-level gauge with no model namespace, so the scrape's namespace label is the controller's own. Fix: have a cluster admin re-run 'NAMESPACE=<ns> make setup-prereqs', which grants the Namespace get (components/policy-namespace-reader). The value is set once at startup, so restart the controller after the grant."
 
@@ -69,7 +69,7 @@ spec:
       labels:
         severity: critical
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-controller-is-not-ready-or-crash-looping"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-controller-is-not-ready-or-crash-looping"
         summary: "llm-d-scaling-manager has a GPU limiter configured but cannot read nodes"
         description: "A gpu-inventory limiter is declared ALONE in the scaling-policy ConfigMap, and this controller's ServiceAccount is denied list on nodes. Every variant is therefore charged to no accelerator pool, receives no GPU budget, and HAS STOPPED SCALING UP — with no other error, because an unresolved accelerator is a normal state when no limiter is configured. This usually follows an admin adding a limiters: entry to a controller that was installed without node permission. Either grant the node read to the controller's ServiceAccount, or remove the limiters: entry. A gpu-inventory entry beside a quota does not raise this: the quota still bounds, and LLMSMConstraintProviderSkipped reports the skipped physical limiter instead."
 
@@ -79,7 +79,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#gpus-held-or-quota-spent"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#gpus-held-or-quota-spent"
         summary: "llm-d-scaling-manager is deciding without the {{ $labels.provider }} limiter ({{ $labels.reason }})"
         description: "The declared limiter {{ $labels.provider }} has been left out of scaling decisions for 10 minutes, reason {{ $labels.reason }}. The other declared limiters still bound every decision, so models keep scaling, but nothing checks what this one would deny. node_read_denied: gpu-inventory is declared beside a quota and this controller may not list nodes; a cluster admin grants it with 'make setup-prereqs', or remove gpu-inventory from the limiters: list. failed: the controller log line 'GPU constraint provider skipped' says why (a Kueue read or a node list failed). unobserved: its GPU usage has not been observed yet. no_constraints: it returned none."
 
@@ -89,7 +89,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#gpus-held-or-quota-spent"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#gpus-held-or-quota-spent"
         summary: "GPU-labeled {{ $labels.accelerator_type }} nodes report zero allocatable accelerators"
         description: "The controller sees zero allocatable {{ $labels.accelerator_vendor }} {{ $labels.accelerator_model }} ({{ $labels.accelerator_type }}) GPUs for 5+ minutes. Note: this reflects node *allocatable* capacity (not free/schedulable GPUs), and llmsm_available_gpus is only emitted when a gpu-inventory limiter is declared in the scaling-policy ConfigMap's limiters: list. A GPU-labeled node advertising zero allocatable accelerators usually means it is NotReady or its device plugin/driver is not installed — check GPU node status and device-plugin pods."
 
@@ -99,7 +99,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-is-flapping"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-is-flapping"
         summary: "llm-d-scaling-manager scaling thrashing detected for {{ $labels.exported_namespace }}/{{ $labels.variant_name }}"
         description: "Variant {{ $labels.exported_namespace }}/{{ $labels.variant_name }} scaling at {{ $value | printf \"%.3f\" }}/sec (>2/min threshold) sustained for 10+ minutes, indicating possible thrashing. Review scaling thresholds and consider adjusting stabilization window or thresholds."
 
@@ -109,7 +109,7 @@ spec:
       labels:
         severity: info
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/guides/scale-to-zero/README.md#when-a-model-will-not-park"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/guides/scale-to-zero/README.md#when-a-model-will-not-park"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} cannot reach zero ({{ $labels.reason }})"
         description: "Half of this model's configuration asks it to park and the other half forbids it, so it never will. reason 'variant-floor': scale-to-zero is enabled, but a variant declares minReplicas > 0 — a model is at zero only when nothing serves it, so that one floor keeps the whole model up and the accelerators are billed indefinitely. reason 'policy-forbids-zero': every variant permits zero, but scale-to-zero is disabled by the model's resolved scaling policy or by a tier one of its variants names, so the bounds are inert; most misleading with a single variant, where minReplicas: 0 reads exactly like a deliberate request to park. The controller log line 'Scale-to-zero is disabled by the scaling policy of a tier' lists the tiers (disabledBy); enable scaleToZero on each, or on the model's per-model entry. Neither is an error and neither breaks serving — which is why nothing else reports them: the model is up and healthy, exactly as every other metric says it should be. Either set every variant's minReplicas to 0, or disable scale-to-zero for the model, so the configuration says what it does."
 
@@ -119,7 +119,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-will-not-wake-from-zero"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-will-not-wake-from-zero"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} has no wake signal"
         description: "EPP is exporting no flow-control queue metric at all for this model, so a request arriving while it is parked has nothing that can wake it. This is the ABSENCE of the metric family, not a queue reading zero — an idle queue reports 0 and is healthy. The usual cause is an EPP pod older than the ConfigMap that enabled the flowControl feature gate: EPP reads --config-file once at startup, so enabling the gate does not reach a process already running, and every artifact (image digest, ConfigMap, feature gate, auth) still matches. Check the EPP pod's own startup log for the config it parsed rather than comparing it to the ConfigMap, then restart the EPP deployment. Until this clears, a model that scales to zero will stay there. It stays quiet while the model is parked and EPP refuses its requests: LLMSMModelParkedWhileRequestsRefused pages for that at critical, so one cause pages once."
 
@@ -142,7 +142,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} is frozen: the utilization-share optimizer cannot read its transfer marks"
         description: "The controller cannot read the transfer marks on the donor pods of this model's utilization-share group, so it cannot start the group's ledger: every planned model of the group holds what it runs and none scales, up or down. It does not clear by itself. The Error log line 'Utilization share: could not read transfer marks; retrying next cycle' names the cause, typically a missing RBAC grant to list pods in one model's namespace."
 
@@ -152,7 +152,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
         summary: "The minReplicaCount floors of {{ $labels.exported_namespace }}/{{ $labels.model_name }}'s utilization-share group add up to more than its quota"
         description: "The configured floors (minReplicaCount) of the models sharing this quota add up to more GPUs than the quota holds, so the optimizer cannot honour all of them; every model of the group shows this reason. Lower a floor or raise the quota."
 
@@ -162,7 +162,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything"
         summary: "The utilization-share optimizer block does not validate; today's optimizer runs instead"
         description: "The scaling policy's optimizer block failed validation, so the utilization-share optimizer is not running and the fleet is scaled by today's optimizer, silently. The log line 'Utilization share: invalid optimizer block; keeping today's optimizer' says why: a misspelled key, a value out of range, an empty clusterNamespaces entry, or no limiters: list (no budget to share)."
 
@@ -194,7 +194,7 @@ spec:
         # rather than a page if a tuning finding should not wake anyone.
         component: slo
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} missed its TPOT SLO (mean) in {{ $value | humanizePercentage }} of judged minutes"
         description: "In the last 30 minutes the router-measured TPOT mean was over target in at least half of the judged minutes, and in at least 7: one bad interval of a minute reaches six windows. Minutes around a wake or a starting replica are not judged and count neither way. Only completed requests count, so under shedding the alert can clear while requests fail: read llm_d_epp_request_error_total. On this release the analyzer only observes: the fleet the tier sizes misses the SLO; the autoscaler did not fail. First check the target can be met at all (the runbook says how); if it can, raise the floor or lower the model-level scaleUpThreshold (the slo entry's own band moves only its prediction). Resolves once judged minutes that meet the target outnumber the misses."
 
@@ -222,7 +222,7 @@ spec:
         severity: warning
         component: slo
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} met its {{ $labels.statistic }} TTFT target for only {{ $value | humanizePercentage }} of requests"
         description: "Over the last 30 minutes fewer requests met the router-measured TTFT target than the objective promises (90% for p90), counting every judged request once, with at least 15 judged minutes holding at least half the requests. Windows around a wake or a starting replica are not judged and count neither way. Only completed requests count, so under shedding the alert can clear while requests fail: read llm_d_epp_request_error_total. On this release the analyzer only observes: the fleet the tier sizes misses the SLO; the autoscaler did not fail. First check the target can be met at all (the runbook says how); if it can, raise the floor or lower the model-level scaleUpThreshold (the slo entry's own band moves only its prediction). Resolves once a judged reading of the last 5 minutes meets the objective; a window excluded while a replica starts does not resolve it."
 
@@ -243,7 +243,7 @@ spec:
         severity: info
         component: slo
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} has had no judged {{ $labels.objective }} window for an hour"
         description: "The model's policy has set a {{ $labels.objective }} target for 55 of the last 60 minutes and the model has replicas, but no window was judged in it, and not for lack of traffic: either the fleet was excluded for at least half of it, never holding still for a window plus its grace (llmsm_slo_excluded says why), or the router's series for the objective are missing (router not scraped, not in the model's namespace, or clients not streaming), or TPOT saw no requests while the router served streaming requests (clients do not send stream_options.include_usage, or the router does not publish its TPOT series). The runbook has a table of each case."
 
@@ -253,7 +253,7 @@ spec:
       labels:
         severity: critical
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-will-not-wake-from-zero"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-model-will-not-wake-from-zero"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} is at zero replicas while requests are being refused"
         description: "Grouped by exported_namespace, not namespace: Prometheus renames a scraped `namespace` label to `exported_namespace` because the scrape job already carries one, so plain `namespace` here is the CONTROLLER's namespace and would name the wrong place. Nothing is serving this model and EPP is returning ServiceUnavailable for it, so traffic is being dropped and the autoscaler has not brought it back. This alerts on the SYMPTOM, so it fires whatever the cause. Causes: an EPP with no flow-control queue (blocked reason no-wake-signal; LLMSMModelHasNoWakeSignal stays quiet while this fires, so that cause pages once, here), an EPP that cannot be scraped, KEDA not delivering the activation, an admission or quota refusal on the scale-up, or a bug. Start with llmsm_model_scaling_blocked for this model — if a reason is present it is the likely cause; wake-no-capacity or wake-nominal-lent-out means a limiter had no room for the wake, and the log line 'Scale-from-zero: no variant woken for a model with pending requests' says what it was measured against. The router exports no namespace of its own, so its series carry the router's namespace as plain namespace, added at scrape time; the join matches that to the model's exported_namespace, so a same-named model refusing requests in another namespace does not page this one. A router series with no namespace label at all (a scrape job that does not add one) is joined on model_name alone, as before."
 
@@ -263,7 +263,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#scaledobject-ready-false-or-targets-unknown"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#scaledobject-ready-false-or-targets-unknown"
         summary: "{{ $value }} ScaledObject(s) in {{ $labels.exported_namespace }} have had no usable scaling decision for 10 minutes"
         description: "Grouped by exported_namespace, not namespace: the gauge carries the ScaledObject's namespace, which Prometheus renames to exported_namespace because the scrape job already has a namespace label (the controller's). The KEDA external scaler is answering these ScaledObjects with the target's current replica count because no engine has a usable decision for them, so their replica counts are frozen: they neither scale up under load nor down when idle. For a cycle or two after a controller restart or leader change this is expected; ten minutes is not. llmsm_scaler_undecided_answers_total says why: reason not-managed, or no-decision that never stops, means the model is never planned, usually a trigger metadata value that does not parse; stale means its decision stopped being republished, so read that model's scaling-decision lines. The controller log line 'external scaler has no decision for this target' names each ScaledObject."
 
@@ -284,7 +284,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuereaderstale"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuereaderstale"
         summary: "Kueue borrowing in {{ $value }} namespaces of quota entry {{ $labels.limiter_name }} has been frozen as stale for 5 minutes"
         description: "Borrowing for these namespaces is frozen at the last figures: nothing new is borrowed and nothing is given back. The entry's last Kueue read failed, or is older than twice the refresh interval. The controller log line 'external quota source unreadable' names the read that failed; usually RBAC or a missing CRD. List the namespaces with: llmsm_quota_borrow_withheld{reason=\"stale\"}. To hand capacity back by hand meanwhile, lower the borrowing model's maxReplicaCount on its ScaledObject, or set countBorrowable: false on the quota entry, which caps every namespace of the entry at its nominal quota."
     - alert: LLMSMKueueReaderStaleNamespace
@@ -293,7 +293,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuereaderstale"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuereaderstale"
         summary: "Kueue borrowing in {{ $labels.exported_namespace }} has been frozen as stale for 5 minutes (quota entry {{ $labels.limiter_name }}, its only stale namespace)"
         description: "Borrowing for this namespace is frozen at the last figures: nothing new is borrowed and nothing is given back. It is the entry's only stale namespace, so either the entry covers this namespace alone and its last Kueue read failed or is older than twice the refresh interval, or this namespace's ResourceQuota read is failing. At the default refresh interval (30s) a failing ResourceQuota read turns into resourcequota-unreadable after five intervals, before this alert fires; it reaches 5 minutes only with a refresh interval above one minute. The controller log line 'external quota source unreadable' names the read that failed; usually RBAC or a missing CRD. To hand capacity back by hand meanwhile, lower the borrowing model's maxReplicaCount on its ScaledObject, or set countBorrowable: false on the quota entry, which caps the namespace at its nominal quota."
 
@@ -306,7 +306,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuecontrollerdown"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuecontrollerdown"
         summary: "Quota entry {{ $labels.limiter_name }}: no running Kueue controller is seen; Kueue borrowing is frozen"
         description: "The scaling manager sees no Kueue leader: the leader-election Lease was not renewed within twice its duration (with no Lease, the kueue-controller-manager Deployment has no ready replica), or the controller cannot read the Deployment or the Lease at all (not found, or Forbidden). Borrowing is frozen: nothing new is borrowed, nothing is given back, nothing borrowed is taken away. Check that Kueue runs (kubectl get deploy kueue-controller-manager -n <kueue namespace>). If it does, check the controller may read the Deployment and the Lease c1f6bfd2.kueue.x-k8s.io there: a namespace-scoped install needs a cluster admin to run KUEUE_NAMESPACE=<kueue namespace> make setup-prereqs. Kueue elsewhere than kueue-system needs kueue.controllerNamespace on the entry. A Kueue built with another leader-election ID reads as down too."
 
@@ -323,7 +323,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuelenderwaitingpastcooldown"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueuelenderwaitingpastcooldown"
         summary: "ClusterQueue {{ $labels.cluster_queue }} has waited longer than the borrow cooldown for capacity it lent in cohort {{ $labels.cohort }}"
         description: "A lender has waited longer than the configured borrow cooldown (llmsm_kueue_borrow_cooldown_seconds), plus, in a cohort whose quota entries set releaseToNonReclaimingLenders, the time a release there takes to land (llmsm_kueue_borrow_release_latency_seconds for that cohort), while a namespace this controller governs still borrows in its cohort, and Kueue has not preempted for it. By default the scaling manager counts as borrowable only what Kueue would reclaim for its lender (reclaimWithinCohort Any, or LowerPriority above the borrowing model's priority) and stops new borrowing in the cohort while a lender waits; it hands borrowed replicas back itself only with releaseToNonReclaimingLenders on the quota entry (look for 'Releasing borrowed capacity' with cause lender-waiting in the controller log). A wait this long usually means the lender's pending Workload does not outrank the borrowers' (LowerPriority), or the capacity it waits for is held by a borrower this controller does not govern. Check the lender's pending Workload and Kueue's preemption events (kubectl describe workload). To free capacity by hand, lower the borrowing model's maxReplicaCount on its ScaledObject, or set countBorrowable: false on the quota entry."
 
@@ -338,7 +338,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-kueue-backed-quota-was-never-read"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#a-kueue-backed-quota-was-never-read"
         summary: "Quota entry {{ $labels.limiter_name }} reads Kueue but has never read it; a -1 cap leaves its types unbounded"
         description: "The quota entry has kueue.enabled, leaves at least one accelerator type unlimited (-1) in its static caps so that Kueue supplies the figure, and no Kueue read has succeeded since the controller started. Until one does, nothing bounds that type: the scaling manager applies the static entry alone. Check the controller log for 'external quota source unreadable and never read', that the Kueue CRDs are installed, and that the controller may list ClusterQueues, LocalQueues and ResourceFlavors (kubectl auth can-i list clusterqueues.kueue.x-k8s.io --as=system:serviceaccount:<controller-namespace>:<controller-serviceaccount>). To bound the type meanwhile, replace -1 with a number in the entry."
 
@@ -350,7 +350,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueborrowdrift"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueborrowdrift"
         summary: "ClusterQueue {{ $labels.cluster_queue }}: the borrowed GPUs computed differ from Kueue's by {{ $value }} for 15 minutes"
         description: "For this ClusterQueue, the borrowed GPUs the scaling manager computes (usage past nominal) differ from Kueue's status.flavorsReservation borrowed figure. Borrowing still runs, on figures from a model of Kueue's accounting that no longer matches this cohort, so borrowable may be too high or too low. Brief drift while Kueue admits or preempts is normal; 15 minutes is not. Usual causes: a Kueue feature borrowing does not detect (waitForPodsReady with blockAdmission), or a Kueue release whose accounting changed. If it persists, set countBorrowable: false on the quota entry."
 
@@ -366,7 +366,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueversionunknown"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueversionunknown"
         summary: "The scaling manager cannot tell which Kueue release runs; Kueue borrowing is not counted"
         description: "The Kueue controller's Deployment was read and its image names no version (a digest-only reference), or the Deployment could not be read at all. With an image that names no version, borrowing is withheld as kueue-version-unknown: if Kueue runs a tested release, set kueue.assumeTestedVersion: true on the entry, which clears this alert. A Deployment that cannot be read freezes borrowing as kueue-controller-down, which LLMSMKueueControllerDown reports, so this alert stays quiet while that one's condition holds; assumeTestedVersion does not lift it: a namespace-scoped install needs a cluster admin to run KUEUE_NAMESPACE=<kueue namespace> make setup-prereqs, and Kueue elsewhere than kueue-system needs kueue.controllerNamespace."
 
@@ -379,7 +379,7 @@ spec:
       labels:
         severity: info
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueversionuntested"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#llmsmkueueversionuntested"
         summary: "Quota entry {{ $labels.limiter_name }}: Kueue runs a release borrowing is not tested on; borrowing is withheld"
         description: "The Kueue controller runs a release outside the tested range, so the fields and rules borrowing relies on are not known to hold, and borrowing is withheld (kueue-version-untested). Every namespace stays at its nominal quota; nothing is evicted. Run a tested Kueue release (the supported versions table in the quota limiter reference) to count borrowing again."
 
@@ -389,7 +389,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#replicas-dropped-under-kueue-borrowing"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#replicas-dropped-under-kueue-borrowing"
         summary: "{{ $value }} pod(s) of {{ $labels.exported_namespace }}/{{ $labels.variant_name }} unplaced past the placement timeout"
         description: "Grouped by exported_namespace: the series carries the model's namespace. These pods have been Unschedulable, or held at Kueue's admission gate, for longer than the placement timeout (default 5 minutes), and stayed so for 5 more minutes. Borrowed replicas are released at the timeout, so what stays is usually within guaranteed quota: no node fits the pod, Kueue has not admitted it, or the cluster autoscaler is still adding a node. Check 'kubectl describe pod' for the scheduling message and the Workload's admission status."
 
@@ -421,7 +421,7 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#replicas-dropped-under-kueue-borrowing"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#replicas-dropped-under-kueue-borrowing"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }} lost borrowed capacity more than 3 times in an hour"
         description: "Counts, over the last hour, the times the scaling manager gave borrowed capacity back (llmsm_borrow_releases_total: after a placement timeout; cause kueue-gate, a replica Kueue held at its gate where no borrowing is counted, is not borrowed capacity and is left out, and so is cause lender-waiting, capacity handed back on purpose to a waiting lender with releaseToNonReclaimingLenders) plus the times Kueue preempted it (llmsm_kueue_preempted_pods_total). Both count events: one P/D pair, or one LeaderWorkerSet group, lost together is one. With a lender that reclaims (reclaimWithinCohort Any), Kueue's preemptions are the usual cause. The model keeps growing onto capacity its cohort's lenders keep taking back: every cycle costs a cold start. Raise the model's guaranteed quota (nominalQuota), lengthen borrowCooldown, or set countBorrowable: false for it."
 
@@ -441,6 +441,6 @@ spec:
       labels:
         severity: warning
       annotations:
-        runbook_url: "https://github.com/ev-shindin/llm-scaling-manager/blob/main/docs/reference/troubleshooting.md#one-replica-is-saturated-while-others-idle"
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#one-replica-is-saturated-while-others-idle"
         summary: "Model {{ $labels.exported_namespace }}/{{ $labels.model_name }}: {{ $labels.role }} load is uneven across its replicas"
         description: "For 10 minutes at least one ready {{ $labels.role }} replica has been saturated (KV cache at or over the policy kvCacheThreshold, 80 % by default, or a queue at queueLengthThreshold, except on decode of a model with a prefill variant) while another, Ready for at least 2 minutes, sat idle (KV under 30 %, nothing waiting). The router chose this: the role already has a replica it is not sending work to, so more replicas are unlikely to relieve it. The alert stays firing for 15 minutes after the imbalance clears. The usual cause is the scheduling profile's scorer weights: a prefix-cache-scorer weighted above queue-scorer, active-request-scorer and kv-cache-utilization-scorer sends a request to the replica that saw its prefix however busy it is. llmsm_load_kv_max_to_mean_ratio and llmsm_load_queue_max_to_mean_ratio show the spread; the controller log line 'WARNING: load imbalanced' names the busiest and the idle pods."

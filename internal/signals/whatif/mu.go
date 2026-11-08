@@ -64,7 +64,7 @@ type DerivedMu struct {
 	// of its own records that reason here too.
 	Why string
 	// CapAtMeasured says the figure may not price above a measured rate of
-	// the variant's own (an aggregated variant's lifted figure, issue #275):
+	// the variant's own (an aggregated variant's lifted figure, issue ev-shindin/llm-scaling-manager#275):
 	// where one is on record, the lower of the two prices the replica.
 	// DeriveMuAtCap never sets it; the caller that lifts the figure does.
 	CapAtMeasured bool
@@ -151,14 +151,14 @@ func PricingK(kvCacheThreshold, scaleUpThreshold float64, band FillBand) float64
 // (shape.Shape.KVreq): sequence ages are spread over each request's length,
 // so with equal lengths the average resident sequence carries half its
 // generation, and with a spread D = E[O^2]/OL^2 of them a long request,
-// resident longer, weighs more (shape.WithOutputDispersion, issue #276).
+// resident longer, weighs more (shape.WithOutputDispersion, issue ev-shindin/llm-scaling-manager#276).
 //
 // The cap is the one the derived k2 is priced at (the saturation analyzer's
 // pricingBatchCap): the engine's max_num_seqs, lowered by
-// --max-num-active-seqs when set (issue #335), and where the flags are unread
+// --max-num-active-seqs when set (issue ev-shindin/llm-scaling-manager#335), and where the flags are unread
 // the declared or learned cap in place of the parser's 256, which priced a
 // sequence-bound engine above what it can run and so ordered too few replicas
-// (issue #420). A batchCap of 0 caps nothing. The cap is not optional: short
+// (issue ev-shindin/llm-scaling-manager#420). A batchCap of 0 caps nothing. The cap is not optional: short
 // requests imply more resident sequences than the engine will admit, and the
 // trace's second phase ran at exactly 256, the configured ceiling.
 //
@@ -206,7 +206,7 @@ func DeriveMuAtCap(model itl.Model, params *capacity.EngineParams, batchCap int6
 	// right.) The discount holds only for hits on blocks another running
 	// request holds too, so the caller bounds KVreq by the KV the running
 	// requests are measured to hold (the saturation analyzer's
-	// withResidentKV, issue #277).
+	// withResidentKV, issue ev-shindin/llm-scaling-manager#277).
 	seqs := CappedSequences(kPrice, capacityTokens, fleet.KVreq, replicaCap)
 	if seqs <= 0 {
 		return DerivedMu{Why: "no-seqs"}

@@ -30,7 +30,7 @@ func TestAWakeDoesNotTakeAPromisedNode(t *testing.T) {
 	}
 }
 
-// Issue #372: the wake's node view held a promise on the freest node, not on
+// Issue ev-shindin/llm-scaling-manager#372: the wake's node view held a promise on the freest node, not on
 // the node its hole is on. One GPU promised on a nearly full node (n0) beside
 // a wholly free one (n1): an 8-GPU wake fits n1. Taken off the freest node,
 // the hole made n1 look 7 free and the wake was refused.

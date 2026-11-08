@@ -29,7 +29,7 @@
 #
 # The standup pins v0.6.0-alpha.13. In that build, dual-pods drops a fresh
 # notification for an item already queued with a future processAfter (a prior
-# rate-limited retry) -- upstream #696, "make nodeData.Add pull forward delayed
+# rate-limited retry) -- upstream llm-d-incubation/llm-d-fast-model-actuation#696, "make nodeData.Add pull forward delayed
 # queue items". Fix 1's 403s generate exactly those retries, so the unbind
 # notification lands in the bin and the stale label survives. The two defects
 # compound: one manufactures the retries, the other swallows the correction.

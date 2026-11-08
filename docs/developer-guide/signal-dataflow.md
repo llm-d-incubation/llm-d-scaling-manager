@@ -135,7 +135,7 @@ KVreq   = ILeff + D x O/2
 | --- | --- | --- | --- |
 | `I` = `AvgInputTokens` | tokens/request | collector, `request_prompt_tokens_sum/count` `[5m]` | the prompt length the fleet is serving |
 | `O` = `AvgOutputTokens` | tokens/request | collector, `request_generation_tokens_sum/count` `[5m]` | the generation length |
-| `E[O^2]` = `AvgOutputTokensSquared` | tokens^2/request | collector, the least `E[O^2]` that the output-length histogram `[5m]` (`request_generation_tokens_bucket`, SGLang `generation_tokens_histogram_bucket`) and `O` allow (`domain.SquaredMeanLowerBound`); `AvgOutputTokensSquaredKnown` says it was read | the spread of output lengths, `D` (issue #276) |
+| `E[O^2]` = `AvgOutputTokensSquared` | tokens^2/request | collector, the least `E[O^2]` that the output-length histogram `[5m]` (`request_generation_tokens_bucket`, SGLang `generation_tokens_histogram_bucket`) and `O` allow (`domain.SquaredMeanLowerBound`); `AvgOutputTokensSquaredKnown` says it was read | the spread of output lengths, `D` (issue ev-shindin/llm-scaling-manager#276) |
 | `hitRate` = `PrefixCacheHitRate` | fraction 0-1 | collector, `prefix_cache_hits / queries` | share of prompt tokens served from cache |
 
 `ILeff` is the prompt the engine must actually compute — a cached prefix costs
@@ -147,12 +147,12 @@ holds `D x O/2`. `D` is 1 when any generating replica lacks the histogram,
 while a shape change is outstanding (on every path), and with the replay
 switch `kv-per-request-output-dispersion` off. The slo analyzer prices `D` too,
 behind `slo-kv-per-request-output-dispersion`, and the throughput analyzer,
-behind `throughput-kv-per-request-output-dispersion` (#433), with the same
+behind `throughput-kv-per-request-output-dispersion` (ev-shindin/llm-scaling-manager#433), with the same
 shape-change hold; the slo analyzer has none.
 
 A hit saves KV only when another running request holds the block too, so the
 derived mu does not assume `ILeff` for memory where it can measure it (issue
-#277). It prices a resident request at the tokens in use over
+ev-shindin/llm-scaling-manager#277). It prices a resident request at the tokens in use over
 `RunningRequests`, across the fleet's Ready generating replicas inside the ITL
 band, clamped between `ILeff + D x O/2` and `IL + D x O/2`. With no reading
 (no replica in the band, a missing series, or fewer requests than the shape
@@ -235,10 +235,10 @@ TokenRate              = Sequences / ITL(k)
 
 | in | unit | from | what it is |
 | --- | --- | --- | --- |
-| `itl` = `AvgITL` | seconds/token | collector, `inter_token_latency_seconds_sum/count` | the gap between two generated tokens; on vLLM with speculative decoding, the gap between two engine steps, divided by `1 + SpecAcceptedPerStep` before the saturation analyzer's window reads it (issue #274) |
+| `itl` = `AvgITL` | seconds/token | collector, `inter_token_latency_seconds_sum/count` | the gap between two generated tokens; on vLLM with speculative decoding, the gap between two engine steps, divided by `1 + SpecAcceptedPerStep` before the saturation analyzer's window reads it (issue ev-shindin/llm-scaling-manager#274) |
 | `SpecAcceptedPerStep` | tokens/step | collector, `rate(spec_decode_num_accepted_tokens_total[1m]) / rate(inter_token_latency_seconds_count[1m])`, vLLM only | the draft tokens a speculative step accepted beside its own token |
 | `k` = `KvUsageForITL()` | fraction 0-1 | collector, `kv_cache_usage_perc` **averaged over the ITL's minute** (`KvUsageMean`, `avg_over_time[1m]`); the instantaneous `KvUsageInstant` when that was not read | the occupancy over the minute the ITL was measured in |
-| `RunningRequests`, `PreemptionRate` | count, 1/s | collector, `num_requests_running` and `rate(num_preemptions_total[1m])` | whether a reading above `k` 0.80 is a replica at its sequence cap, which the window keeps (issue #287) |
+| `RunningRequests`, `PreemptionRate` | count, 1/s | collector, `num_requests_running` and `rate(num_preemptions_total[1m])` | whether a reading above `k` 0.80 is a replica at its sequence cap, which the window keeps (issue ev-shindin/llm-scaling-manager#287) |
 | `n` | count | the window | how many `(k, itl)` observations the fit is over; at least `DefaultMinSamples` |
 | `C` | tokens | **-> produced above**, [per-replica capacity](#per-replica-capacity--analyzerssaturation) | the replica's KV budget, `TotalKvCapacityTokens` or the override |
 | `KVreq` | tokens/request | **-> produced above**, [the shape](#the-shape--signalsshape) | what one resident request occupies |
@@ -250,7 +250,7 @@ test, where a mean would hide a replica that spent part of the minute full.
 the resident charge read. The line pairs each ITL, a `rate[1m]` mean, with the
 mean `k` over the same minute: the instant `k` against it, with the batch
 moving inside the minute, flattened the fitted slope and raised the remembered
-`B` (issue #393), and a one-minute max would fit it against the wrong `k`
+`B` (issue ev-shindin/llm-scaling-manager#393), and a one-minute max would fit it against the wrong `k`
 altogether.
 
 A fit is refused unless `A` and `B` are finite, `A > 1e-12` (a flat or falling
@@ -485,7 +485,7 @@ throughput key: (model, namespace, variant, accelerator, gpus, role, outBucket, 
 
 | in | from | why it is in the key |
 | --- | --- | --- |
-| `AcceleratorName` | Kubernetes node labels, via discovery | capacity is a property of the hardware; pooling two GPU products under one key is the `k1 <-> k2` oscillation of PR #40 |
+| `AcceleratorName` | Kubernetes node labels, via discovery | capacity is a property of the hardware; pooling two GPU products under one key is the `k1 <-> k2` oscillation of PR ev-shindin/llm-scaling-manager#40 |
 | `GPUsPerReplica` | the scale target's pod spec | the same reading means something different at a different GPU count |
 | `Role` | variant labels, via discovery | prefill and decode do different work |
 | `queueLengthThreshold` | ConfigMap (5) | it defines saturation, so changing it re-buckets history |
@@ -548,7 +548,7 @@ The rules, the same in both:
 | `PrefixCacheHitRate` | weighted by each rank's prompt tokens |
 
 Latency is a weighted mean and not the busiest rank's, which is what the queries
-took before issue #150. The ranks share a frontend that sends each request to
+took before issue ev-shindin/llm-scaling-manager#150. The ranks share a frontend that sends each request to
 its least-loaded rank, so the pod's latency is what its average request sees,
 and the line is fitted against the pod's mean utilization and priced on its
 whole capacity. One hot rank's backlog is still counted: the queue is summed

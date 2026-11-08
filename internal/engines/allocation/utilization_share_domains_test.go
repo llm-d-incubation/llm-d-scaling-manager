@@ -18,7 +18,7 @@ func oneRack() map[string]ShareNode {
 	return out
 }
 
-// The node view places one exclusive-topology group per domain (#187); the
+// The node view places one exclusive-topology group per domain (ev-shindin/llm-scaling-manager#187); the
 // share's fit did not. Two 16-GPU LeaderWorkerSet groups of two 8-GPU pods,
 // one rack with 32 free GPUs: the share planned both into it, and the second
 // stayed Pending on the exclusive-topology anti-affinity. Control: without

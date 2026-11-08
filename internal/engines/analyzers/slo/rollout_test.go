@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
-// The line in a rollout (issue #481), through Analyze, with the switch on and
+// The line in a rollout (issue ev-shindin/llm-scaling-manager#481), through Analyze, with the switch on and
 // off.
 
 // newRevision is the revision a rollout brings.

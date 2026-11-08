@@ -310,7 +310,7 @@ var _ = Describe("QuotaLimiterEntries.Validate", func() {
 		})
 	})
 
-	// SR-M5 and #216: a quota entry named like the physical limiter, node fit
+	// SR-M5 and ev-shindin/llm-scaling-manager#216: a quota entry named like the physical limiter, node fit
 	// or a borrowing rule would be reported under a name that means something
 	// else. v0.10.0 rejects it; the release before only warned.
 	DescribeTable("reserved names are rejected",

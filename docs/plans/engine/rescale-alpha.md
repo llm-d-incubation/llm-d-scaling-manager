@@ -1,6 +1,6 @@
 # Plan: Priority-Weighted Rescale — Alpha stage
 
-Implements the **Alpha** milestone of the rescale proposal (`docs/proposals/design-rescale.md`, PR #1238):
+Implements the **Alpha** milestone of the rescale proposal (`docs/proposals/design-rescale.md`, PR llm-d/llm-d-workload-variant-autoscaler#1238):
 a redistributive, priority-weighted allocation in the V2 GPU-constrained optimizer.
 
 ## Goal
@@ -15,18 +15,18 @@ allocation by arrival order once the budget is full.
 **In Alpha**
 - Opt-in flag; behavior **unchanged when off, or when a group is uncontended**.
 - V2 `GreedyByScoreOptimizer` only (cost-aware/unlimited path untouched).
-- **All models, including P/D** — role-aware reclaim/fill (dependency #1237 *role-aware scale-down* is
+- **All models, including P/D** — role-aware reclaim/fill (dependency llm-d/llm-d-workload-variant-autoscaler#1237 *role-aware scale-down* is
   merged; the machinery — `scaleDownRoleIterated`, `safeRemovalReplicasForRole`,
   `allocateForModelPaired` — is in `main`).
 - Competition group = **`(accelerator type, budget scope)`** where budget scope is `cluster`
-  (physical #1129 / cluster-scope quota) or `namespace-N` (namespace quota #1162). Namespace-quota
+  (physical llm-d/llm-d-workload-variant-autoscaler#1129 / cluster-scope quota) or `namespace-N` (namespace quota llm-d/llm-d-workload-variant-autoscaler#1162). Namespace-quota
   budgets come from `availableByNS` (already plumbed: `QuotaInventory.NamespaceResourcePools` →
   `ResourceConstraints.NamespacePools` → `mergeNamespaceConstraints` → `availableByNS`).
 - Water-filling targets, reclaim-then-fill, **free-capacity-gated fill**, `DecisionReasonRescale` on
   reclaims.
 
 **Deferred**
-- Physical∧quota **namespace partition** of the cluster budget → needs #1003.
+- Physical∧quota **namespace partition** of the cluster budget → needs llm-d/llm-d-workload-variant-autoscaler#1003.
 - **Multi-accelerator** models (variants spanning GPU types) → future scope.
 - **Observability** (`Rescaled` status condition, surfacing a reclaim **stall** when a role can't
   shed a whole replica) + **hysteresis** (min share-gap / cool-down) → Beta.

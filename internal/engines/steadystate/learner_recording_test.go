@@ -79,7 +79,7 @@ type recScript struct {
 	forgetAt, goneAfter int
 	// engineLayer runs each model through collectV2ModelRequest, the
 	// analyzers and then the composite, with discovery metadata, instead
-	// of the analyzers alone: the engine-level recording (#345 step 0).
+	// of the analyzers alone: the engine-level recording (ev-shindin/llm-scaling-manager#345 step 0).
 	engineLayer bool
 	// policies is a model's own policy, where it is not policy.
 	policies map[string]config.ScalingPolicy
@@ -530,7 +530,7 @@ func TestLearnerRecording_AReplayAtTheSameCommitReproducesEveryResult(t *testing
 		// ITL line waits its settle (SwitchITLWaitsAfterRestart) through
 		// the first two minutes, and settles again after each day the
 		// clock jumps (the settle tracker's absence tolerance). Two lines
-		// are fitted and published, a decode line and, since #432, an
+		// are fitted and published, a decode line and, since ev-shindin/llm-scaling-manager#432, an
 		// aggregated one under its own |both key, and each is borrowed on
 		// three cycles.
 		saturation.KindPublishLine:         2,
@@ -539,7 +539,7 @@ func TestLearnerRecording_AReplayAtTheSameCommitReproducesEveryResult(t *testing
 		slo.KindEvictStale:                 12,
 		slo.KindNoteVariantsPresent:        28,
 		throughput.KindNoteVariantsPresent: 28,
-		// The forget reaches the slo line (#431) and the throughput line too,
+		// The forget reaches the slo line (ev-shindin/llm-scaling-manager#431) and the throughput line too,
 		// on the same token.
 		slo.KindForgetVariant:        1,
 		throughput.KindForgetVariant: 1,

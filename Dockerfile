@@ -34,7 +34,7 @@ FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0
 
 # The repository this image is built from. The workflows pass their own
 # (github.server_url/github.repository), so a fork's image names the fork.
-ARG IMAGE_SOURCE=https://github.com/ev-shindin/llm-scaling-manager
+ARG IMAGE_SOURCE=https://github.com/llm-d-incubation/llm-d-scaling-manager
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}"
 LABEL org.opencontainers.image.description="llm-d-scaling-manager - GPU-aware autoscaler for LLM inference workloads"
 LABEL org.opencontainers.image.licenses="Apache-2.0"

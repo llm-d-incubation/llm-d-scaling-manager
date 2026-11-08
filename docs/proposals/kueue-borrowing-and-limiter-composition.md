@@ -14,7 +14,7 @@
   reclaim for is the opt-in PR-C ([Appendix](#appendix-pr-c)).
 - **Opt-out:** `countBorrowable: false` on the quota entry gives the Kueue cap
   without borrowing. Part A still applies.
-- **Status:** built: Part A (#164) and Part B (#180), from revision 11. PR-C
+- **Status:** built: Part A (ev-shindin/llm-scaling-manager#164) and Part B (ev-shindin/llm-scaling-manager#180), from revision 11. PR-C
   is built (`feat/kueue-borrow-release-v2`), opt-in and experimental. The operator pages are
   [the quota limiter](../reference/quota-limiter.md#cohort-borrowing) and
   [the GPU limiter](../reference/gpu-limiter.md).
@@ -101,17 +101,17 @@ fits on a node. Nothing does today, because limiters do not compose:
 | one GPU spelled two ways (`H100`, `NVIDIA-H100-80GB-HBM3`) | **no** | treated as two types (measured) |
 | P/D pair against a shared budget | **no** | both roles commit before the budget is reduced |
 | free GPUs split across nodes | **no** | ordered by the pool total; a replica larger than any hole stays Pending |
-| Kueue borrowing | **no** | not read (#136) |
+| Kueue borrowing | **no** | not read (ev-shindin/llm-scaling-manager#136) |
 
 The union leak installs today: a cluster quota `{H100: 8}` plus a namespace
 entry `x: {A100: 4}` lets `x` run A100s the cluster quota denies.
 
-## Part A: limiters compose (#164)
+## Part A: limiters compose (ev-shindin/llm-scaling-manager#164)
 
 A decision must fit **every** declared limiter. A GPU type is allowed only if
 every limiter with a view on it allows it, and the budget is the smallest
 figure among them. Internals are in `docs/developer-guide/limiter-composition.md`,
-which lands with #164.
+which lands with ev-shindin/llm-scaling-manager#164.
 
 - **A1. Merge by intersection, along the family tree.** A type a closed
   limiter omits becomes an explicit 0. An explicit family key covers unlisted
@@ -401,11 +401,11 @@ only stops growth.
 
 ## Shipping
 
-Built as planned: #164 merged Part A and #180 merged PR-B. PR-C is built
+Built as planned: ev-shindin/llm-scaling-manager#164 merged Part A and ev-shindin/llm-scaling-manager#180 merged PR-B. PR-C is built
 on `feat/kueue-borrow-release-v2`.
 
-- **#164** carries Part A. No Kueue code. It enforces from its release.
-- **PR-B** is based on #164 and carries Part B and Observability, one commit
+- **ev-shindin/llm-scaling-manager#164** carries Part A. No Kueue code. It enforces from its release.
+- **PR-B** is based on ev-shindin/llm-scaling-manager#164 and carries Part B and Observability, one commit
   per step: read-only figures, counting with node fit, giving back,
   observability, e2e. There is no separate log-only release: default-on
   counting is gated by the live Kueue e2e passing in CI.
@@ -463,7 +463,7 @@ Kueue's reclaim agent, which is why it is off by default.
   the landing. The ledger is versioned (1), written only beside a release;
   nothing is released until it is read, and a newer version is held, not
   overwritten.
-- Review of #203 found the first cut over-gave: it summed every fitting
+- Review of ev-shindin/llm-scaling-manager#203 found the first cut over-gave: it summed every fitting
   Workload, ignored the free pool and the kept part, counted cancelled growth
   as freed, and fired on one read. The rules above replace it.
 
