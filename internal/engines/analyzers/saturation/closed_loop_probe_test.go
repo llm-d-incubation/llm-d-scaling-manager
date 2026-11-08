@@ -98,6 +98,38 @@ type probeCase struct {
 	// ages, variantmeta/discovery.go), so the floor credits what they will
 	// drain once Ready.
 	hidePending bool
+	// serviceNoise, when set, scales each replica's reported service time
+	// by a factor at the cycle (1 + the noise), around its true figure: the
+	// first-read mu read noisy (queue_drain.go).
+	serviceNoise func(i int, elapsed time.Duration) float64
+	// drainHaircut, when set, replaces FirstReadHaircut on every process.
+	drainHaircut float64
+}
+
+// probeBatchCap is the batch cap every probe replica states
+// (--max-num-seqs, probeParams), and what it runs at its limit: a replica's
+// service time at the limit is probeBatchCap / mu, so a saturated row is at
+// its cap and gives the drain price its first read (queue_drain.go). 1024 is
+// the cap the probe's decode variant was priced at before it was stated, so
+// the batch cap prices nothing it did not.
+const probeBatchCap = 1024
+
+// probeParams is the engine configuration every probe variant states.
+func probeParams() *capacity.EngineParams {
+	return &capacity.EngineParams{Engine: "vllm", MaxNumSeqs: probeBatchCap, MaxNumSeqsSet: true, Image: "vllm:v1"}
+}
+
+// probeServiceWindow is the cycles the reported service time averages over:
+// one minute at the probe's 15 s cycle, as the collector's rate window.
+const probeServiceWindow = 4
+
+// probeServiceTime is the service time now of a replica of true rate mu at
+// load (served / mu): shorter on a smaller batch, probeBatchCap / mu at the
+// limit. 0.6 of it at no load puts the first saturated row's one-minute mean
+// at +13.6 % over the limit from a load of 0.6, inside the +5 % to +15 % the
+// recordings showed (FirstReadHaircut).
+func probeServiceTime(mu, load float64) float64 {
+	return probeBatchCap / mu * (0.6 + 0.4*min(max(load, 0), 1))
 }
 
 // probeITL is the decode replicas' ITL at fill k: a line on which the mu
@@ -111,7 +143,7 @@ func probeITL(k float64) float64 { return 0.119 + 0.6*k }
 func probeProcess(t probeTB, rig *propRig, switches map[string]bool) *settle.Tracker {
 	t.Helper()
 	store := capacity.NewStore()
-	store.Update("test-ns", "test-model", "v", capacity.Record{EngineParams: mtParams(1024, "vllm:v1")}, rig.clock)
+	store.Update("test-ns", "test-model", "v", capacity.Record{EngineParams: probeParams()}, rig.clock)
 	st := settle.NewTracker()
 	st.SetInterval(propCycle)
 	rig.a = NewSaturationAnalyzer(store).WithSettleView(st)
@@ -161,7 +193,11 @@ func runProbe(t probeTB, pc probeCase) probeResult {
 	if pc.decode {
 		st = probeProcess(t, rig, pc.switches)
 	} else {
+		rig.a.capacityStore.Update("test-ns", "test-model", "v", capacity.Record{EngineParams: probeParams()}, rig.clock)
 		require.NoError(t, rig.a.SetSwitchesForReplay(pc.switches))
+	}
+	if pc.drainHaircut > 0 {
+		rig.a.drainHaircut = pc.drainHaircut
 	}
 	restarted := false
 	start := probeStart
@@ -178,6 +214,10 @@ func runProbe(t probeTB, pc probeCase) probeResult {
 	if !pc.hidePending {
 		fleet.Starting = func(ages []time.Duration) { starting = ages }
 	}
+	// Each replica's service time over the last probeServiceWindow cycles,
+	// newest last: the reported AvgServiceTime is their mean, so the first
+	// saturated row reads it short, as a one-minute rate does.
+	service := map[string][]float64{}
 	out := fleet.Run(func(now time.Time, elapsed time.Duration, lambda float64, ready []learnertest.Replica) int {
 		require.Equal(t, now, rig.clock, "the rig's clock and the fleet's")
 		if pc.restartAt > 0 && !restarted && elapsed >= pc.restartAt {
@@ -185,6 +225,9 @@ func runProbe(t probeTB, pc probeCase) probeResult {
 			doc := rig.a.ExportLearnedState()
 			sightings := st.Sightings()
 			st = probeProcess(t, rig, pc.switches)
+			if pc.drainHaircut > 0 {
+				rig.a.drainHaircut = pc.drainHaircut
+			}
 			if pc.sightings {
 				st.Restore(sightings, rig.clock)
 			}
@@ -205,6 +248,24 @@ func runProbe(t probeTB, pc probeCase) probeResult {
 				kv = 0.95
 			}
 			rm := imbRow(r.Name, "v", kv, int(math.Round(r.Backlog)), 1000, 1000, r.Served)
+			// What the replica runs now and its one-minute service time, as
+			// Little's law relates them: RunningRequests / AvgServiceTime is
+			// what it completes, read high on its first saturated rows.
+			svc := probeServiceTime(r.Mu, r.Served/r.Mu)
+			if pc.serviceNoise != nil {
+				svc *= 1 + pc.serviceNoise(r.Index, elapsed)
+			}
+			service[r.Name] = append(service[r.Name], svc)
+			if n := len(service[r.Name]); n > probeServiceWindow {
+				service[r.Name] = service[r.Name][n-probeServiceWindow:]
+			}
+			h := service[r.Name]
+			var mean float64
+			for _, s := range h {
+				mean += s
+			}
+			rm.AvgServiceTime = mean / float64(len(h))
+			rm.RunningRequests = int(math.Round(r.Served * probeServiceTime(r.Mu, r.Served/r.Mu)))
 			if pc.start > 0 {
 				rm.StartSeconds = pc.start.Seconds()
 			}
@@ -435,28 +496,41 @@ func restartStepCase(restart time.Duration, snapshot bool, stabilization time.Du
 	}
 }
 
-// With the snapshot off, the restart costs the step its floor: the fleet
-// grows on occupancy alone until the new process has a mu, and sits under
-// need for longer than without the restart -- but inside the bound a
-// start and a settle take, and it settles at need. The SLO side, as 4.4
-// says; measured here, not asserted.
+// With the snapshot off, the restart leaves the step with no mu. With the
+// queue priced by drain time (queue_drain.go, ev-shindin/llm-scaling-manager#520) the first read prices it:
+// the fleet is no longer under need than without the restart, and settles at
+// need. Off, as before, the restart costs the step its floor: the fleet grows
+// on occupancy alone until the new process has a mu, and sits under need for
+// longer than without the restart -- but inside the bound a start and a
+// settle take. The SLO side, as 4.4 says; measured here, not asserted.
 func TestClosedLoopProbe_AControllerRestartBeforeALoadStepSettlesAtNeed(t *testing.T) {
-	control := runProbe(t, restartStepCase(0, false, 0))
-	require.Empty(t, control.verdict(), "premise: without a restart the step settles at need")
-	r := runProbe(t, restartStepCase(15*time.Minute, false, 0))
-	t.Logf("need %d, final %d, peak %d; under need for %s, against %s without the restart", r.need, r.final, r.peak,
-		r.underFor, control.underFor)
-	require.Empty(t, r.verdict())
-	require.Greater(t, r.underFor, control.underFor, "the restart's settle costs the step its floor for a while")
+	for _, on := range []bool{true, false} {
+		sw := map[string]bool{SwitchQueuePricedAsDrain: on}
+		ctl := restartStepCase(0, false, 0)
+		ctl.switches = sw
+		control := runProbe(t, ctl)
+		require.Empty(t, control.verdict(), "premise: without a restart the step settles at need")
+		pc := restartStepCase(15*time.Minute, false, 0)
+		pc.switches = sw
+		r := runProbe(t, pc)
+		t.Logf("queue priced as drain %v: need %d, final %d, peak %d; under need for %s, against %s without the restart",
+			on, r.need, r.final, r.peak, r.underFor, control.underFor)
+		require.Empty(t, r.verdict())
+		if on {
+			require.LessOrEqual(t, r.underFor, control.underFor, "the first read prices the step the restart left without a mu")
+			continue
+		}
+		require.Greater(t, r.underFor, control.underFor, "off: the restart's settle costs the step its floor for a while")
 
-	// The ITL line's share of it: the same restart with the line taking the
-	// first cycle's replicas as settled, as before learner PR 4a.
-	before := restartStepCase(15*time.Minute, false, 0)
-	before.switches = map[string]bool{SwitchITLWaitsAfterRestart: false}
-	b := runProbe(t, before)
-	t.Logf("with the ITL line not waiting after the restart: under need for %s", b.underFor)
-	require.Empty(t, b.verdict())
-	require.GreaterOrEqual(t, r.underFor, b.underFor, "the line's wait adds to the restart's cost, never takes from it")
+		// The ITL line's share of it: the same restart with the line taking
+		// the first cycle's replicas as settled, as before learner PR 4a.
+		before := restartStepCase(15*time.Minute, false, 0)
+		before.switches = map[string]bool{SwitchITLWaitsAfterRestart: false, SwitchQueuePricedAsDrain: false}
+		b := runProbe(t, before)
+		t.Logf("with the ITL line not waiting after the restart: under need for %s", b.underFor)
+		require.Empty(t, b.verdict())
+		require.GreaterOrEqual(t, r.underFor, b.underFor, "the line's wait adds to the restart's cost, never takes from it")
+	}
 }
 
 // With the snapshot on, the restored k2, mu and ITL slope price the step as

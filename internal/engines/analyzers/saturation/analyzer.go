@@ -519,6 +519,13 @@ type SaturationAnalyzer struct {
 	// ev-shindin/llm-scaling-manager#495, throughput_floor.go): on from the constructor; a replay turns it
 	// off (SetSwitchesForReplay).
 	floorRaisesVariants bool
+	// queuePricedAsDrain is SwitchQueuePricedAsDrain (issue ev-shindin/llm-scaling-manager#520,
+	// queue_drain.go): on from the constructor; a replay turns it off
+	// (SetSwitchesForReplay).
+	queuePricedAsDrain bool
+	// drainHaircut is FirstReadHaircut; a test sets another to measure what
+	// the haircut buys.
+	drainHaircut float64
 	// itlOneSidedLast is, per ITL key, the one-sided fields of the admission
 	// the line was last priced under (itlOneSided), and whether it was raised
 	// (noteITLOneSided), for the what-if refit (ITLOneSided): its prior on B
@@ -759,6 +766,8 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		itlTierHysteresis:      true,
 		itlClearsOnRevision:    true,
 		floorRaisesVariants:    true,
+		queuePricedAsDrain:     true,
+		drainHaircut:           FirstReadHaircut,
 		itlOneSidedLast:        make(map[string]itlOneSidedRecord),
 		prefillObserver:        prefill.NewObserver(),
 		prefillBounds:          make(map[string]stashedBound),

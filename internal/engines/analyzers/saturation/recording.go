@@ -125,10 +125,10 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLFitsAggregated, SwitchITLAggregatedShapeTerm,
 // SwitchITLAggregatedSizes, SwitchPrefillCapacityObserve,
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
-// SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap and
-// SwitchPrefillBoundHeldConfidence; a name it does not
-// know is an error, and sets nothing. Never called on a production path;
-// a test holds that.
+// SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap,
+// SwitchPrefillBoundHeldConfidence and SwitchQueuePricedAsDrain; a name
+// it does not know is an error, and sets nothing. Never called on a
+// production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
 	rest := maps.Clone(switches)
 	fields := a.switchFields()
@@ -246,6 +246,9 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// Issue ev-shindin/llm-scaling-manager#397: the prefill bound held at a lower confidence bound
 		// (prefill_bound_held.go).
 		SwitchPrefillBoundHeldConfidence: &a.prefillBoundConfident,
+		// Issue ev-shindin/llm-scaling-manager#520: queued work priced by drain time before mu, and
+		// while the backlog grows (queue_drain.go).
+		SwitchQueuePricedAsDrain: &a.queuePricedAsDrain,
 	}
 }
 
