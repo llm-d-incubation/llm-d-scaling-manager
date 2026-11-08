@@ -1194,7 +1194,7 @@ restores, exact repeats and unknown ages. Two rules apply to all:
 | start time | **both** | too low under-orders a fleet that is behind (λ > mu · ready). Too high, in `internal/signals/floor/floor.go`: `DrainHorizon` under-prices the backlog whenever S exceeds 60 s, `startingCredit` credits a stuck pod for up to 2S, and a fleet with spare projects more drain and orders less. Share pacing errs the other way: too low moves GPUs for bursts that end first. PR 5 bounds both sides |
 | share need history (#14) | too low for the role, too high for its neighbours | `PeakNeed` is a max of adjacent-pair minima, low by design; trimming to the swing window ages a peak out with no new evidence |
 | share release time (#15) | too low | p90 over ≥ 3 releases is the max at n = 3 |
-| first-read mu, `RunningRequests / AvgServiceTime` on a saturated row (ev-shindin/llm-scaling-manager#520) | too high | its one-minute service-time window still holds completions from before the cap: +5 % to +15 % on the first saturated row of three recordings. Priced at 0.85 of the reading before two mu readings, and that price held until every replica ordered under it is Ready; while the backlog grows, the lower of it and the floor's mu ([as built](#queued-work-priced-by-drain-time-as-built-520)) |
+| first-read mu, `RunningRequests / AvgServiceTime` on a saturated row (ev-shindin/llm-scaling-manager#520) | too high | its one-minute service-time window still holds completions from before the cap: +5 % to +15 % on the first saturated row of three recordings. Priced at 0.85 of the reading before two mu readings, and that price held until every replica ordered under it is Ready; while the backlog grows, the lower of it and the floor's mu ([as built](#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520)) |
 
 A clamp that stops k2's fit from rising would turn it into a running minimum:
 one admitted low reading would then price the fleet for good.
@@ -4024,7 +4024,7 @@ Built on `fix/queue-priced-as-drain`, behind one replay switch,
 `queue-priced-as-drain` (`SwitchQueuePricedAsDrain`, `queue_drain.go`), on
 from the constructor. The design follows as written, with the decisions taken
 on it (at the end) and what the build changed and measured
-([as built](#queued-work-priced-by-drain-time-as-built-520)).
+([as built](#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520)).
 
 **What goes wrong.** Occupancy charges each queued request as if it were
 resident: queue x (input + output) tokens (`waitingQueueDemand`,

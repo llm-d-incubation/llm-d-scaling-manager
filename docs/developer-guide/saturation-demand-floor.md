@@ -161,7 +161,7 @@ so each must keep up with all of it), and on the total otherwise.
     `MinMeasuredOfDerived` of the floor's `mu`).
   - A lambda that is not a finite positive figure prices nothing.
   - The design and its measurements are in
-    [the proposal](../proposals/analyzer-learner.md#queued-work-priced-by-drain-time-as-built-520).
+    [the proposal](../proposals/analyzer-learner.md#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520).
 - A role with no `mu` and no saturated row keeps the residency charge, except
   prefill's share of the scheduler queue, which is dropped. A prefill replica
   holds a prompt for its prefill time plus the hand-off. Only a saturated
