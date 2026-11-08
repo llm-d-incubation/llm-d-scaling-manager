@@ -10,7 +10,7 @@
   every variant bound to it. A variant that cannot be bound keeps today's
   per-namespace figure, with a reason.
 - **Shape:** four stages. The first only reads and reports the binding.
-- **Replaces:** #186's `multi-queue-namespace` withholding and its
+- **Replaces:** ev-shindin/llm-scaling-manager#186's `multi-queue-namespace` withholding and its
   per-(namespace, queue) charge, for bound variants.
 
 ## Summary
@@ -45,9 +45,9 @@ guaranteed, within nominal, cohort, lender, flavor. Plus:
 
 All figures are GPUs; every replica is 8 GPUs.
 
-### What #186 fixed, and how
+### What ev-shindin/llm-scaling-manager#186 fixed, and how
 
-#186 fixed three findings of the Kueue review on the per-namespace model:
+ev-shindin/llm-scaling-manager#186 fixed three findings of the Kueue review on the per-namespace model:
 
 1. **Other workloads' reservations were ignored** (KU1). Fixed by
    `chargeNonManaged` (`allocation/quota_charge.go`): each namespace's figures
@@ -279,7 +279,7 @@ is taken.
 
 ## Alternatives considered
 
-- **Keep the targeted fixes.** #186 never over-orders on a multi-queue
+- **Keep the targeted fixes.** ev-shindin/llm-scaling-manager#186 never over-orders on a multi-queue
   namespace, but under-spends (scenarios 1, 2) and leaves a shared queue a
   ceiling (3, 4). Fine where every tenant has its own ClusterQueue. It stays
   the fallback for unbound variants.
@@ -320,7 +320,7 @@ is taken.
   CQ-P; shared CQ-T orders one between A and B, and the second reports
   `queue-spent` without naming A; 64-CPU queue fits one 48-CPU replica.
 - Co-resources: init container larger than the containers, pod overhead.
-- The #186 regression tests stay, rewritten only where they assert the
+- The ev-shindin/llm-scaling-manager#186 regression tests stay, rewritten only where they assert the
   per-namespace min for a variant that is now bound.
 - The Kueue kind e2e suite gains a shared-queue case with two namespaces and
   a P/D case with two queues.

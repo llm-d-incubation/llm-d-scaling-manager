@@ -173,10 +173,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		SwitchBatchCapDerivedMu:          &a.batchCapDerivedMu,
 		SwitchITLPerToken:                &a.itlPerToken,
 
-		// #495: mu on learn's list of learners (mu_learner.go).
+		// ev-shindin/llm-scaling-manager#495: mu on learn's list of learners (mu_learner.go).
 		SwitchMuForgetReported: &a.muForgetReported,
 
-		// #495: the ITL baseline's last-admitted stamp in the snapshot
+		// ev-shindin/llm-scaling-manager#495: the ITL baseline's last-admitted stamp in the snapshot
 		// (learned_snapshot.go).
 		SwitchITLBaselineStamped: &a.itlBaselineStamped,
 
@@ -192,10 +192,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// Learner PR 5d: counted Pods survive a restart (start_est.go).
 		SwitchStartCountedPodsRestored: &a.startCountsRestored,
 
-		// #276: the spread of output lengths in the KV per request.
+		// ev-shindin/llm-scaling-manager#276: the spread of output lengths in the KV per request.
 		SwitchKVPerRequestOutputDispersion: &a.kvOutputDispersion,
 
-		// #427: the zero-replica estimate reads the declared batch cap
+		// ev-shindin/llm-scaling-manager#427: the zero-replica estimate reads the declared batch cap
 		// where the flags state none.
 		SwitchBatchCapZeroReplica: &a.batchCapZeroReplica,
 
@@ -207,17 +207,17 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		SwitchITLRestartUnderName:             &a.itlRestartUnderName,
 		SwitchITLIdleOnEvidence:               &a.itlIdleOnEvidence,
 
-		// #277: a prefix-cache hit stays resident.
+		// ev-shindin/llm-scaling-manager#277: a prefix-cache hit stays resident.
 		SwitchKVPerRequestHitsResident: &a.kvHitsResident,
 
-		// #438: a data-parallel variant at zero replicas is priced at
+		// ev-shindin/llm-scaling-manager#438: a data-parallel variant at zero replicas is priced at
 		// every engine rank its pod runs.
 		SwitchZeroReplicaDataParallel: &a.zeroReplicaDP,
 
-		// #432: an aggregated variant fits an ITL line.
+		// ev-shindin/llm-scaling-manager#432: an aggregated variant fits an ITL line.
 		SwitchITLFitsAggregated: &a.itlFitsAggregated,
 
-		// #275: an aggregated line priced by request shape, and sizing
+		// ev-shindin/llm-scaling-manager#275: an aggregated line priced by request shape, and sizing
 		// from it.
 		SwitchITLAggregatedShapeTerm: &a.itlAggShapeTerm,
 		SwitchITLAggregatedSizes:     &a.itlAggSizes,
@@ -232,18 +232,18 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// a's curved fit: the quadratic where the prompt clusters carry it
 		// (prefill/fixed.go).
 		SwitchPrefillAQuadratic: &a.prefillAQuadratic,
-		// Issue #467: the ITL line priced one-sided at the sequence cap
+		// Issue ev-shindin/llm-scaling-manager#467: the ITL line priced one-sided at the sequence cap
 		// while B is unlearned (itl_one_sided.go).
 		SwitchITLOneSidedAtCap: &a.itlOneSidedAtCap,
 
-		// The ITL line's tier latch (issue #495).
+		// The ITL line's tier latch (issue ev-shindin/llm-scaling-manager#495).
 		SwitchITLTierHysteresis: &a.itlTierHysteresis,
 		// The window across a rollout (itl_tier_hysteresis.go).
 		SwitchITLClearsOnNewRevision: &a.itlClearsOnRevision,
-		// Issue #495: the variants follow a role the throughput floor
+		// Issue ev-shindin/llm-scaling-manager#495: the variants follow a role the throughput floor
 		// raises (throughput_floor.go).
 		SwitchThroughputFloorRaisesVariants: &a.floorRaisesVariants,
-		// Issue #397: the prefill bound held at a lower confidence bound
+		// Issue ev-shindin/llm-scaling-manager#397: the prefill bound held at a lower confidence bound
 		// (prefill_bound_held.go).
 		SwitchPrefillBoundHeldConfidence: &a.prefillBoundConfident,
 	}

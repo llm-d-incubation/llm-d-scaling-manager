@@ -12,7 +12,7 @@ import (
 )
 
 // The capacity part of the waiting queue (vLLM's
-// num_requests_waiting_by_reason{reason="capacity"}, issue #278) rides beside
+// num_requests_waiting_by_reason{reason="capacity"}, issue ev-shindin/llm-scaling-manager#278) rides beside
 // the queue: read where the series exists, unknown where it does not.
 func TestCollectReplicaMetrics_CapacityQueue(t *testing.T) {
 	glm := map[string]string{seriesModelLabel: "glm", "pod": dp8Pod, "instance": "10.0.0.8:8000"}

@@ -3,7 +3,7 @@
 # ghcr.io/llm-d do not have: they crash-loop on it with "unknown flag", and
 # the install has nothing to run. The default therefore points at a build of
 # THIS tree.
-IMAGE_TAG_BASE ?= ghcr.io/ev-shindin
+IMAGE_TAG_BASE ?= ghcr.io/llm-d-incubation
 # `main`, built by ci-main-image on every push to main -- reproducible from a
 # commit and multi-arch, unlike a tag pushed by hand from a laptop. Rebuilt
 # automatically, so it cannot silently go stale the way a personal tag does.
@@ -14,10 +14,10 @@ IMAGE_TAG_BASE ?= ghcr.io/ev-shindin
 ifeq ($(origin IMG_TAG),undefined)
 IMG_TAG := $(or $(shell awk '$$1 == "newTag:" {gsub(/["\r]/, "", $$2); print $$2; exit}' config/base/manager/kustomization.yaml 2>/dev/null),main)
 endif
-IMG ?= $(IMAGE_TAG_BASE)/llm-scaling-manager:$(IMG_TAG)
+IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager:$(IMG_TAG)
 # The warm-pool proxy ships as its own image because it runs in the pool's Pod,
 # not the controller's. Pin a digest in the manifest; this tag is for building.
-WARMPOOL_PROXY_IMG ?= $(IMAGE_TAG_BASE)/llm-scaling-manager/warmpool-proxy:$(IMG_TAG)
+WARMPOOL_PROXY_IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager/warmpool-proxy:$(IMG_TAG)
 KIND_ARGS ?= -t mix -n 3 -g 2   # Default: 3 nodes, 2 GPUs per node, mixed vendors
 # The kind cluster create-kind-cluster and destroy-kind-cluster act on: the
 # variable deploy/kind-emulator/install.sh already reads. Both targets ignored
@@ -444,7 +444,7 @@ dashboards-check: ## Fail if a Grafana dashboard has overlapping panels, duplica
 	python3 hack/check-dashboards.py
 
 .PHONY: check-import-direction
-check-import-direction: ## Fail on a pipeline package importing one above it (the engine-structure proposal, PR #87)
+check-import-direction: ## Fail on a pipeline package importing one above it (the engine-structure proposal, PR ev-shindin/llm-scaling-manager#87)
 	@bash hack/check-import-direction.sh
 
 .PHONY: check-doc-comment-owner
@@ -558,7 +558,7 @@ LLMSM_IMAGE_REF_FIELDS = bash -c '. deploy/lib/cli.sh && llmsm_image_ref_fields 
 IMG_REPO = $(firstword $(subst |, ,$(shell $(LLMSM_IMAGE_REF_FIELDS) '$(IMG)')))
 # A controller deployed from a custom IMG is a controller too: its repository is
 # appended when it is not the published one. Set this to replace the whole list.
-LLMSM_CONTROLLER_IMAGE_REPOS ?= $(strip $(IMAGE_TAG_BASE)/llm-scaling-manager $(filter-out $(IMAGE_TAG_BASE)/llm-scaling-manager,$(IMG_REPO)))
+LLMSM_CONTROLLER_IMAGE_REPOS ?= $(strip $(IMAGE_TAG_BASE)/llm-d-scaling-manager $(filter-out $(IMAGE_TAG_BASE)/llm-d-scaling-manager,$(IMG_REPO)))
 
 .PHONY: enable-physical-limiter
 enable-physical-limiter: ## CLUSTER ADMIN: bound every scaling manager by real GPUs. Publishes cluster policy and grants each controller the node read it then requires. LLMSM_LIMITER_TYPE=gpu-inventory|quota (quota also needs LLMSM_QUOTAS), LLMSM_LIMITER_TARGETS.
@@ -1164,7 +1164,7 @@ deploy-e2e-infra: ## Deploy e2e test infrastructure (the scaling manager + EPP; 
 	@# runtime, and a namespace-scoped controller cannot serve a ScaledObject in a
 	@# namespace that did not exist when it was installed -- KEDA reported the
 	@# ScaledObject Ready=False in smoke-keda-basic-fjr5d because nothing watched it.
-	@# kind used to INFER cluster scope; #24 made namespace the default everywhere and
+	@# kind used to INFER cluster scope; ev-shindin/llm-scaling-manager#24 made namespace the default everywhere and
 	@# nothing here said otherwise. Aligning LLMSM_NS with the model namespace stays:
 	@# it is the SCOPE that has to be cluster, not the controller's location.
 	@# Installed through `make deploy-scaling-manager` -- the target a USER runs -- not by
@@ -1814,7 +1814,7 @@ ACTUATION_TARGET ?=
 ACTUATION_TRIALS ?= 5
 
 # FMA controller version applied by benchmark-fma-fixups. The standup pins
-# v0.6.0-alpha.13, which drops reconcile notifications (upstream #696) and leaves
+# v0.6.0-alpha.13, which drops reconcile notifications (upstream llm-d-incubation/llm-d-fast-model-actuation#696) and leaves
 # dead endpoints in the InferencePool.
 FMA_VERSION ?= v0.6.4
 

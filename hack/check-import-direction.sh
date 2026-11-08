@@ -96,7 +96,7 @@ done <<< "$listing"
 
 [ "$checked" -gt 0 ] || { echo "FATAL: no layered package was found; the layer table no longer matches the tree" >&2; exit 1; }
 if [ "$bad" -gt 0 ]; then
-    echo "$bad upward import(s) across $checked layered package(s); see the engine-structure proposal (PR #87)" >&2
+    echo "$bad upward import(s) across $checked layered package(s); see the engine-structure proposal (PR ev-shindin/llm-scaling-manager#87)" >&2
     exit 1
 fi
 echo "import direction OK ($checked layered packages, no upward edge)"

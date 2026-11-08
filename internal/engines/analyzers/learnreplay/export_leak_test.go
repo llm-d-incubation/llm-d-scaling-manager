@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The adversarial verification of PR #388 (round 2), kept as regression
+// The adversarial verification of PR ev-shindin/llm-scaling-manager#388 (round 2), kept as regression
 // tests: each puts a name where the export at cc54182b2 let it through, and
 // fails when the export commits it. A refusal passes; a refusal that repeats
 // the name fails.

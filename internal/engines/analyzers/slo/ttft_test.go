@@ -286,7 +286,7 @@ func TestTTFT_AnUnsettledPodGivesNoShare(t *testing.T) {
 	assert.Empty(t, r.a.imbalance["ns|m|pre"].shares)
 }
 
-// Issue #511: the analyzer alone takes the pods of its first cycle as long
+// Issue ev-shindin/llm-scaling-manager#511: the analyzer alone takes the pods of its first cycle as long
 // joined (SwitchITLOwnSettleBackdates), so they give a share on that cycle.
 // With the switch off, as before, its own tracker read them as rejoined at
 // the cycle, and the first cycle read the floor.
@@ -776,7 +776,7 @@ func TestTTFT_TheHeldTransferAgesOut(t *testing.T) {
 	assert.InDelta(t, 0.34, seconds, 1e-12)
 }
 
-// The floor is the safety of #494: past the age a saturated fleet's own figure sets
+// The floor is the safety of ev-shindin/llm-scaling-manager#494: past the age a saturated fleet's own figure sets
 // it again, on the fleet's price.
 func TestTTFT_TheFloorRisesAgainAtExpiry(t *testing.T) {
 	floor := func(perToken float64) float64 {

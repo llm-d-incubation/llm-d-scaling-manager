@@ -155,7 +155,7 @@ the report says whether it did.
 | --- | --- | --- | --- |
 | Decode's TTFT rises with step time at about 7 steps | Slope of the decode engine's TTFT on the client's TPOT, per bucket | 5.5 to 9 | 6.36 to 7.79, read by the report's code on all six phases |
 | The hop grows with the prompt | Fit of the hop, ms per 1000 prompt tokens, over the bucket lengths | 0.5 to 1.5 | 1.02 |
-| Bursts cost less than `Ca²` prices | Client p90, C over B, median over the steps | 1.0 to 1.8 | 1.33 off and on, each step 1.14 to 1.80. The model said 2.40 then, and says 2.09 at the operating rate since the `Ca²` tail changed (#501) |
+| Bursts cost less than `Ca²` prices | Client p90, C over B, median over the steps | 1.0 to 1.8 | 1.33 off and on, each step 1.14 to 1.80. The model said 2.40 then, and says 2.09 at the operating rate since the `Ca²` tail changed (ev-shindin/llm-scaling-manager#501) |
 
 The gate buckets' `Ca²` and a void step are read strictly at the gate: a crossing on a
 void step is no reading, so it stops the run as `no valid crossing`, like a fail. At

@@ -193,7 +193,7 @@ func TestK2Hold_TheSwitchOffWritesTheFirstReadingAtOnce(t *testing.T) {
 }
 
 // A k2 reading held as its window's first (k2_confirm.go) while a mu key swap
-// is pending is frozen like a P1-obs one (#415's muSwapFrozen): its mu is not
+// is pending is frozen like a P1-obs one (ev-shindin/llm-scaling-manager#415's muSwapFrozen): its mu is not
 // written under the bucket the key is leaving, and the refusal is counted.
 func TestK2Hold_AHeldReadingDuringAPendingSwapLeavesTheMuWindowFrozen(t *testing.T) {
 	store := capacity.NewStore()

@@ -44,7 +44,7 @@ var _ = Describe("ResolveUtilizationShare", func() {
 		Expect(st.WaitBeforeReverseMove).To(BeNil(), "auto")
 		Expect(st.FlappingWindow).To(BeNil(), "auto")
 		Expect(st.SwingReversals).To(Equal(DefaultSwingReversals))
-		Expect(DefaultSwingReversals).To(Equal(3), "a single swap back is not a swing (issue #269)")
+		Expect(DefaultSwingReversals).To(Equal(3), "a single swap back is not a swing (issue ev-shindin/llm-scaling-manager#269)")
 		Expect(st.SkipWaitsOff).To(BeFalse())
 		Expect(st.SkipWaitsReceiverLoad).To(Equal(DefaultSkipWaitsReceiverLoad))
 		Expect(st.SkipWaitsDonorLoad).To(Equal(DefaultSkipWaitsDonorLoad))

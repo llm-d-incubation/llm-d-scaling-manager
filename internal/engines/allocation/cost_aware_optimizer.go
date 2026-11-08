@@ -136,7 +136,7 @@ func scaleDownVariantSet(
 			n = removable
 		}
 		// cheapest-at-1: the last (cheapest) variant is protected at 1 only when no
-		// more-expensive variant still holds replicas (#1237's positional rule).
+		// more-expensive variant still holds replicas (llm-d/llm-d-workload-variant-autoscaler#1237's positional rule).
 		if i == len(sortedVariants)-1 && current-n < 1 && !anyHasReplicas(sortedVariants[:i], targets) {
 			n = current - 1
 		}

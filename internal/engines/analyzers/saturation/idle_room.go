@@ -59,7 +59,7 @@ const IdleMaxGap = ThroughputSampleSpacing
 // settle idle and clear again on noise: on the property case
 // edges/idle/idle-line-030 (a peak with 10 % per-second noise, correlated
 // over 30 s, on the 0.30 line) the verdict reversed 6 times in 116 cycles on
-// 98 of 100 seeds (#396). A replica on the line is idle or not by chance; the
+// 98 of 100 seeds (ev-shindin/llm-scaling-manager#396). A replica on the line is idle or not by chance; the
 // band makes it the one or the other for as long as it stays near the line.
 //
 // Idle room only relaxes the hold on prefill's demand while decode is
@@ -69,7 +69,7 @@ const IdleMaxGap = ThroughputSampleSpacing
 // idleKvUsage to a full replica (idleBandLevel).
 const IdleLeaveRatio = 1.4
 
-// SwitchIdleBand is the replay switch for the idle band (#396,
+// SwitchIdleBand is the replay switch for the idle band (ev-shindin/llm-scaling-manager#396,
 // analyzer-learner.md 2.5). On, a replica in an idle run stays in it up to
 // idleBandLevel. Off, as before the band, every reading is held to
 // idleKvUsage.

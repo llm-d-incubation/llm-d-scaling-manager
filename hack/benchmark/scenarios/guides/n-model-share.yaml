@@ -436,7 +436,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:
@@ -527,7 +527,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:
@@ -618,7 +618,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:
@@ -712,7 +712,7 @@ scenario:
       wellLitPath: optimized-baseline
       namespace: ""
       image:
-        repository: ghcr.io/ev-shindin/llm-scaling-manager
+        repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
         tag: main
       replicaCount: 1
       controller:

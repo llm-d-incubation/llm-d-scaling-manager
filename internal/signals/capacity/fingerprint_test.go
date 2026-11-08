@@ -30,7 +30,7 @@ var fingerprintHashed = []string{
 	"EffectiveMaxBatchedTokens",
 	"MaxNumSeqs",
 	// The active cap moves the saturated k2 and throughput, so a rollout that
-	// changes only it must be a change of arguments (issue #334).
+	// changes only it must be a change of arguments (issue ev-shindin/llm-scaling-manager#334).
 	"MaxNumActiveSeqs",
 	"MaxModelLen",
 	"EnforceEager",
@@ -260,7 +260,7 @@ func TestFingerprintVersionParticipates(t *testing.T) {
 // computed at 354cbb69b.
 func TestFingerprintVersionIsFour(t *testing.T) {
 	if FingerprintVersion != 4 {
-		t.Fatalf("FingerprintVersion is %d, want 4: version 4 adds max_num_active_seqs (#334)", FingerprintVersion)
+		t.Fatalf("FingerprintVersion is %d, want 4: version 4 adds max_num_active_seqs (ev-shindin/llm-scaling-manager#334)", FingerprintVersion)
 	}
 	p := &EngineParams{Engine: "vllm", MaxNumSeqs: 256, Image: "vllm:v1"}
 	if got := p.Fingerprint(); got == "685b446b731842fd" {

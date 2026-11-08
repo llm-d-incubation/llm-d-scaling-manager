@@ -150,7 +150,7 @@ def plot_ttft(data, out):
             svg.rect(x + 2, y_of(p95), bw - 4, y_of(0) - y_of(p95), color(arm),
                      title="%s %s: p95 %.0f ms, p50 %.0f ms, %d served, %d failed"
                            % (arm, rise_label(models, k), p95, p50, w.get("n", 0), w.get("failed", 0)))
-            svg.line(x + 2, y_of(p50), x + bw - 2, y_of(p50), "#111", 2.0)
+            svg.line(x + 2, y_of(p50), x + bw - 2, y_of(p50), "ev-shindin/llm-scaling-manager#111", 2.0)
             svg.text(x + bw / 2, y_of(p95) - 3, "%.0f" % p95, 10, anchor="middle")
             if w.get("failed"):
                 svg.text(x + bw / 2, H - bottom + 32, "%d failed" % w["failed"], 10, anchor="middle", fill="#c00")
@@ -253,7 +253,7 @@ def plot_timeline(data, out):
         svg.text(left - 6, y + 4, "%d" % g, 11, anchor="end")
     svg.text(16, top + ph / 2, "GPUs", 11, anchor="middle", rotate=-90)
     for t in range(0, int(t_end) + 1, 300):
-        svg.line(x_of(t), top + ph, x_of(t), top + ph + 4, "#333")
+        svg.line(x_of(t), top + ph, x_of(t), top + ph + 4, "ev-shindin/llm-scaling-manager#333")
         svg.text(x_of(t), top + ph + 16, "%d" % t, 10, anchor="middle")
     svg.text(left + pw / 2, H - bottom + 34, "seconds since the load started", 11, anchor="middle")
     for arm in arms:

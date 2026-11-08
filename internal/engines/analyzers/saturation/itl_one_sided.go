@@ -6,7 +6,7 @@ import (
 )
 
 // SwitchITLOneSidedAtCap is the replay switch for the one-sided price at
-// the sequence cap on the ITL line (issue #467; analyzer-learner.md, 4b-3
+// the sequence cap on the ITL line (issue ev-shindin/llm-scaling-manager#467; analyzer-learner.md, 4b-3
 // round 1, which built it for the throughput line). A replica at its stated
 // cap teaches the line from above the band (SwitchBatchCapITLAdmission), at
 // a k above itl.DefaultKSat. While the key has no learned B the pinned fit

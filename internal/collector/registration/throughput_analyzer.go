@@ -60,7 +60,7 @@ const (
 	// engine; a pod running data parallelism behind one API server exports one
 	// per rank, and the mean of the ranks' fractions is the pod's used tokens
 	// over its capacity (the ranks are alike). A max here read the busiest rank
-	// as the whole pod (issue #150). With one rank the mean is that rank's
+	// as the whole pod (issue ev-shindin/llm-scaling-manager#150). With one rank the mean is that rank's
 	// value. A max per rank comes first, so copies of a rank's gauge count
 	// once: duplicate series from a pod scraped by two targets (PodMonitor +
 	// ServiceMonitor), and the per-process copies an older vLLM run with
@@ -73,10 +73,10 @@ const (
 	// fraction (0.0–1.0) averaged over ITLWindow: avg_over_time of the gauge
 	// QueryKvUsageInstant reads, folded over the ranks the same way. It is the
 	// k of an ITL(k) reading (itl.Tracker, and the throughput analyzer's window
-	// and tier-2 fit, issue #403), so the reading pairs the minute's
+	// and tier-2 fit, issue ev-shindin/llm-scaling-manager#403), so the reading pairs the minute's
 	// k with the minute's ITL rate (QueryAvgITL); the instant k against it
 	// flattened the fitted slope whenever the batch moved inside the minute
-	// (issue #393).
+	// (issue ev-shindin/llm-scaling-manager#393).
 	// Source: vllm:kv_cache_usage_perc (gauge)
 	QueryKvUsageMean = "kv_usage_mean"
 
@@ -325,7 +325,7 @@ func RegisterAlwaysOnQueries(sourceRegistry *source.SourceRegistry) {
 		Description: "Instantaneous KV cache utilization per pod (0.0–1.0), used as k* in the ITL model",
 	})
 	// The same mean over the ranks, averaged over the window the ITL rate is
-	// taken over: the k each ITL(k) reading is fitted from (issue #393).
+	// taken over: the k each ITL(k) reading is fitted from (issue ev-shindin/llm-scaling-manager#393).
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryKvUsageMean,
 		Type:        source.QueryTypePromQL,

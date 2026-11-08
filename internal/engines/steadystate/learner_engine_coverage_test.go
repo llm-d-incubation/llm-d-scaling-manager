@@ -21,7 +21,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The engine layer's coverage test (issue #345, step 0; the analyzers' is
+// The engine layer's coverage test (issue ev-shindin/llm-scaling-manager#345, step 0; the analyzers' is
 // learnreplay's coverage_test.go). The analyzers are objects whose exported
 // methods are their inputs; the composite is a function, and its inputs are
 // its arguments. So the test holds the composite to its arguments: the

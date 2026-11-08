@@ -403,7 +403,7 @@ differed run to run (97 s, ~140 s, ~140 s), which sets how deep the first
 ramp goes and is not the code.
 
 ```
-                       PR #62 image          split, no borrow       split + borrow + no
+                       PR ev-shindin/llm-scaling-manager#62 image          split, no borrow       split + borrow + no
                        (arrival floor)       (no arrival floor)     arrival floor
                        wm9k0y_1              0smu2m_1               kb3q2v_1
 first ramp, decode     1 -> 3                1 -> 9 (3 Ready)       1 -> 6 (3 Ready)
@@ -568,7 +568,7 @@ The decode test, and why it is what it is:
   in-flight rows make decode's own P1 fire every cycle, which is the older
   problem and not this one; newer vLLM splits the count by reason
   (`vllm:num_requests_waiting_by_reason`, `reason="capacity"`). P1
-  now reads it (#294); this test keeps the full count, because a landed
+  now reads it (ev-shindin/llm-scaling-manager#294); this test keeps the full count, because a landed
   pull that cannot be scheduled also reads deferred.
 - The test is remembered for the collector's row window
   (`DecodeSaturationMemory`, one minute). The KV bound alone fails on this

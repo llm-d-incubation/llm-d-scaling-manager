@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
-// ITL per token, not per step (issue #274).
+// ITL per token, not per step (issue ev-shindin/llm-scaling-manager#274).
 //
 // vLLM observes inter_token_latency once per request per engine step, however
 // many tokens the step emitted. With speculative decoding or MTP a step emits
@@ -35,7 +35,7 @@ import (
 // The throughput and slo analyzers still read the step time; they keep their
 // own lines.
 
-// SwitchITLPerToken is the replay switch for the correction (#274): on from
+// SwitchITLPerToken is the replay switch for the correction (ev-shindin/llm-scaling-manager#274): on from
 // the constructor; a replay turns it off (SetSwitchesForReplay), and the ITL
 // line is fitted from the step time, as before.
 const SwitchITLPerToken = "itl-per-accepted-token"
@@ -112,7 +112,7 @@ func (a *SaturationAnalyzer) itlRows(rows []domain.ReplicaMetrics, variant strin
 // withheld reading counts as noITL in itl-window, which an idle replica reads
 // too, so without this line a speculating variant with no ITL line could not
 // be told from an idle one. Logged at DEFAULT, once per change rather than per
-// cycle, within the default-verbosity budget (#303).
+// cycle, within the default-verbosity budget (ev-shindin/llm-scaling-manager#303).
 //
 // Withholding has ended only on evidence: a cycle that withheld nothing and
 // kept a positive reading. A cycle with neither -- the variant idle, scaled to

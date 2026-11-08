@@ -90,7 +90,7 @@ func TestActivityReadsPositiveEvidenceOnly(t *testing.T) {
 		{"decode idle: KV 0, generation rate known 0", func() Row { r := idle("d"); r.ITL = ITLAbsent; r.GenerationRateKnown = true; return r }(), Idle},
 		{"KV 0 with a finite ITL is a reading, not idle", func() Row { r := busy("d"); r.KV = 0; return r }(), Load},
 		{"k > 0 with no ITL is busy with its ITL missing", func() Row { r := blind(); r.KV, r.KVKnown = 0.4, true; return r }(), Unknown},
-		{"k == 0 because KV was not read (#273 A4)", func() Row { r := idle("d"); r.KVKnown = false; return r }(), Unknown},
+		{"k == 0 because KV was not read (ev-shindin/llm-scaling-manager#273 A4)", func() Row { r := idle("d"); r.KVKnown = false; return r }(), Unknown},
 		{"KV 0, ITL absent, no generation rate", func() Row { r := idle("d"); r.ITL = ITLAbsent; r.GenerationRateKnown = false; return r }(), Unknown},
 		{"every gauge unknown: a failed scrape", blind(), Unknown},
 		{"not Ready", func() Row { r := idle("d"); r.Ready = false; return r }(), Unknown},
@@ -105,7 +105,7 @@ func TestActivityReadsPositiveEvidenceOnly(t *testing.T) {
 	}
 }
 
-// 2.3's negative control, #273 A4: a busy replica whose KV and ITL queries
+// 2.3's negative control, ev-shindin/llm-scaling-manager#273 A4: a busy replica whose KV and ITL queries
 // both fail for two cycles reads k == 0 with no ITL. The ITL trace counted
 // those rows as idle, so the next good row restarted the replica's settle as
 // load returned after idle. At the tracker they are unknown: no idle run, no

@@ -61,7 +61,7 @@ var _ = Describe("the prefill bound with two pods in one spacing", func() {
 			"a lower minute does not displace the bound's max")
 		Expect(window().Len()).To(Equal(2))
 	})
-	// On (issue #397), the minutes' samples are kept as read, and one
+	// On (issue ev-shindin/llm-scaling-manager#397), the minutes' samples are kept as read, and one
 	// complete minute holds nothing: the bound is the window's mean.
 	It("samples the two pods' mean in one minute, and prices the mean over minutes ("+SwitchPrefillBoundHeldConfidence+" on)", func() {
 		read("prefill-0", 6000)

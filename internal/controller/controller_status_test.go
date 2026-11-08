@@ -129,7 +129,7 @@ optimizer:
 			Expect(status.Data()).To(HaveKeyWithValue(controllerstatus.KeyPolicyIgnored, ""))
 		})
 
-		// #216: a quota entry with a reserved name is rejected from v0.10.0;
+		// ev-shindin/llm-scaling-manager#216: a quota entry with a reserved name is rejected from v0.10.0;
 		// the status says why until it is renamed, and nothing of it applies.
 		It("rejects a quota entry with a reserved name, and accepts it once renamed", func() {
 			reserved := strings.Replace(quotaShadowPolicy, "name: install-quota", "name: gpu-limiter", 1)

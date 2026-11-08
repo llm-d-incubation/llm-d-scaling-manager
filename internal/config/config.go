@@ -27,7 +27,7 @@ type Config struct {
 // LimiterType names one kind of GPU limiter allocation.NewLimiterFromConfig can
 // build. A policy declares a SET of them (Config.EffectiveLimiterTypes): a
 // physical entry and quota entries compose, and a decision must fit every one
-// (bounding by min(physical, quota), issue #1003). LimiterTypeNone is the empty
+// (bounding by min(physical, quota), issue llm-d/llm-d-workload-variant-autoscaler#1003). LimiterTypeNone is the empty
 // set, not a member of one: it never appears in a LimiterTypes, and "none" is
 // only how logs and the controller status spell an empty set
 // (LimiterTypes.String).

@@ -216,7 +216,7 @@ func (r Reading) SlopeAge(now time.Time) time.Duration {
 // fill otherwise. Every use of k below -- the band, the steady gate, the
 // reading -- is that one figure. An instant k against a minute's ITL, with
 // the batch moving inside the minute, flattened the fitted slope and raised
-// the remembered B (issue #393).
+// the remembered B (issue ev-shindin/llm-scaling-manager#393).
 //
 // A row is a reading when it is the variant's, Ready and not lent by the warm
 // pool, with a finite positive ITL and a k inside adm's band (by default
@@ -240,14 +240,14 @@ func (r Reading) SlopeAge(now time.Time) time.Duration {
 // Its intercept was remembered and pinned into every fit after it: on one
 // run, two identical models in two namespaces kept B = 4.5 ms and 14.8 ms
 // from whichever transient each window happened to catch, and priced the
-// same replica at 5.3 and 7.7 requests/s (issue #270). The steady readings
+// same replica at 5.3 and 7.7 requests/s (issue ev-shindin/llm-scaling-manager#270). The steady readings
 // outlive the window by up to DefaultSteadyCarry, so a step's old level is
 // still there when the new one settles, and the two give the spread.
 //
 // The pinned fit takes the steady readings too while there are at least
 // DefaultMinSamples of them, and every reading only below that, so a fleet
 // that has not settled yet still gets a line. A load step is a transient the
-// pinned fit would otherwise take whole: on the issue #270 rerun A jumped from
+// pinned fit would otherwise take whole: on the issue ev-shindin/llm-scaling-manager#270 rerun A jumped from
 // 0.077 to 0.207 on the cycle the load stepped, with every new reading
 // unsteady and 10 steady ones held, and the derived mu fell from 6.4 to 2.65
 // requests/s for two and a half minutes. It does not take the carry: see
@@ -293,7 +293,7 @@ func (t *Tracker) Observe(key, variant string, rows []domain.ReplicaMetrics, adm
 		}
 		r.Considered++
 		// The k paired with the row's ITL: over the same minute as its rate
-		// when the collector read that (issue #393).
+		// when the collector read that (issue ev-shindin/llm-scaling-manager#393).
 		k := rm.KvUsageForITL()
 		// Judged before the switch and noted after it, so a row that is no
 		// reading -- k below the band, no ITL yet -- still says where the
@@ -475,7 +475,7 @@ func (t *Tracker) Observe(key, variant string, rows []domain.ReplicaMetrics, adm
 		// then sat below the band for half an hour lost the line, the
 		// derived mu with it, and was sized by KV occupancy alone, which at
 		// light load reads far below the throughput share it serves
-		// (issue #284). The key's last A is the newest evidence of its line
+		// (issue ev-shindin/llm-scaling-manager#284). The key's last A is the newest evidence of its line
 		// there is -- the mu derived from it is still priced at the shape
 		// arriving now -- and a fresh fit replaces it as soon as the window
 		// holds DefaultMinSamples again. A key that never fitted has no A
@@ -776,7 +776,7 @@ type Refitted struct {
 // judges the steady readings by the clear values. The zero Admission is
 // the pinned fit alone. Without it a refit of a line Observe priced
 // one-sided pins the default B alone, and prices under the line the
-// controller priced (issue #467).
+// controller priced (issue ev-shindin/llm-scaling-manager#467).
 func Refit(obs, steady []Observation, baseline float64, minSettled int, oneSided Admission) Refitted {
 	if minSettled <= 0 {
 		minSettled = DefaultMinSettledSamples

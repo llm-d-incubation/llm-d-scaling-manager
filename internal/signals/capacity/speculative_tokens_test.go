@@ -11,7 +11,7 @@ import (
 // SpeculativeTokens reads num_speculative_tokens from the flags as the parser
 // stores them, in both vLLM spellings, and gives 0 (no bound) for anything it
 // cannot read as a positive integer. The saturation analyzer withholds an ITL
-// reading whose accepted count is over it (#274), so a parser change that
+// reading whose accepted count is over it (ev-shindin/llm-scaling-manager#274), so a parser change that
 // renamed the stored key would turn that bound off without a word.
 func TestSpeculativeTokens(t *testing.T) {
 	vllm := func(args ...string) *EngineParams {

@@ -23,7 +23,7 @@ data:
   # deleting the section opts out of nothing and only drops your thresholds.
   # See docs/reference/scaling-policy.md.
   #
-  # Each analyzer accepts the ScalingPolicy plugin envelope (proposal #1245):
+  # Each analyzer accepts the ScalingPolicy plugin envelope (proposal llm-d/llm-d-workload-variant-autoscaler#1245):
   #   analyzers:
   #     - type: saturation            # plugin type; `name:` still works as an alias
   #       parameters: { scaleUpThreshold: 0.90 }

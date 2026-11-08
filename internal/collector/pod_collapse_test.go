@@ -243,7 +243,7 @@ func TestCollapseToPods_MeanKvKnownOnlyIfEveryRankReportedIt(t *testing.T) {
 
 func TestCollapseToPods_ITLMeanCoversFiniteRanksOnly(t *testing.T) {
 	// The pod's ITL is the generation-weighted mean over the ranks that
-	// measured one (#341 4a). An Empty rank that generated tokens
+	// measured one (ev-shindin/llm-scaling-manager#341 4a). An Empty rank that generated tokens
 	// (max_tokens=1 requests) has no interval: weighed in, it read pod-a as
 	// 0.02 x 100 / 150 = 13.3ms and Absent. pod-b: an Absent rank still makes
 	// the pod Absent, but the value is the Finite rank's. pod-c: with no
@@ -279,7 +279,7 @@ func TestCollapseToPods_ITLMeanCoversFiniteRanksOnly(t *testing.T) {
 func TestCollapseToPods_SpecAcceptedKnownOnlyIfEveryRankReportedIt(t *testing.T) {
 	// The tokens a speculative step emits, per rank: weighted by the steps
 	// each ran, its tokens over 1 + E, and known only when every Finite rank
-	// was read (#274). pod-b: 300/2 = 150 steps at 1 and 100/3 at 2.
+	// was read (ev-shindin/llm-scaling-manager#274). pod-b: 300/2 = 150 steps at 1 and 100/3 at 2.
 	finite := func(pod string, gen float64) domain.ReplicaMetrics {
 		return domain.ReplicaMetrics{PodName: pod, GenerationTokenRate: gen, AvgITL: 0.03, AvgITLKnown: true}
 	}
@@ -307,7 +307,7 @@ func TestCollapseToPods_AnIdleRankDoesNotHideTheSpecAcceptedCount(t *testing.T) 
 	// A rank with no decode step in the window reads its count as 0/0 and its
 	// ITL as empty: it adds nothing, as it adds nothing to the ITL mean, and
 	// must not make the busy rank's count unknown, which would withhold the
-	// pod's ITL under speculative flags (#274). A pod of idle ranks only has
+	// pod's ITL under speculative flags (ev-shindin/llm-scaling-manager#274). A pod of idle ranks only has
 	// no count.
 	instances := []domain.ReplicaMetrics{
 		{PodName: "pod-a", GenerationTokenRate: 300, AvgITL: 0.03, AvgITLKnown: true,

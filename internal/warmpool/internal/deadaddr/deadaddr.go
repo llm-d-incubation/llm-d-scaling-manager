@@ -7,7 +7,7 @@
 // only until the kernel hands it to the next listener -- any httptest server
 // in the same test binary, or in another package's binary that make test runs
 // beside it -- and from then on the "dead" peer answers whatever that server
-// says. That made the warm-pool tests flaky (#217): a broken Pod read as
+// says. That made the warm-pool tests flaky (ev-shindin/llm-scaling-manager#217): a broken Pod read as
 // healthy, and requests meant for nothing reached another test's fake.
 package deadaddr
 

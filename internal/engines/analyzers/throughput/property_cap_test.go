@@ -88,7 +88,7 @@ func admittedAbove(newA propAnalyzer, store *capacity.Store, cfg domain.Analyzer
 
 // Edges, the sequence cap: a replica above the band at its stated cap
 // (llm-d.ai/max-num-seqs 64, 64 running, requests waiting, no preemption)
-// is a reading (#287, #293). Before learner PR 4b-3 the line refused it, and
+// is a reading (ev-shindin/llm-scaling-manager#287, ev-shindin/llm-scaling-manager#293). Before learner PR 4b-3 the line refused it, and
 // the ledger listed the case.
 func checkSequenceCap(newA propAnalyzer) func(uint64) error {
 	return func(uint64) error {

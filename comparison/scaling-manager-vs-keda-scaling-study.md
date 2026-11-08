@@ -82,7 +82,7 @@ needed.
 
 ```yaml
 # the benchmark scenario used at the time (not kept in this repository);
-# it mirrors llm-d PR #1981, the KEDA conversion of the EPP autoscaling guide
+# it mirrors llm-d PR llm-d/llm-d#1981, the KEDA conversion of the EPP autoscaling guide
 scale up when, per pod:
     1 queued request
     16 running requests

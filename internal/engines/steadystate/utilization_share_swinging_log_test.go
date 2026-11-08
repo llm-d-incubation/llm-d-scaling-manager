@@ -12,7 +12,7 @@ import (
 
 // A role the swing rule plans on its mean need is named in the log when the
 // rule takes it and when it lets it go, with both needs, and is not repeated
-// while it holds (issue #269: a swap back sat at 2:2 for eleven minutes and
+// while it holds (issue ev-shindin/llm-scaling-manager#269: a swap back sat at 2:2 for eleven minutes and
 // no log line said why).
 func TestUtilizationShareReportsSwingingRoles(t *testing.T) {
 	var lines []string

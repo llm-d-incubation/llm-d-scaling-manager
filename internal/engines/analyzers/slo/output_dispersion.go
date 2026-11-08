@@ -1,6 +1,6 @@
 package slo
 
-// The KV a resident request holds, with output lengths that vary (issue #276;
+// The KV a resident request holds, with output lengths that vary (issue ev-shindin/llm-scaling-manager#276;
 // the same correction as saturation's, kv_output_dispersion.go there).
 //
 // A long request stays resident longer, so a KV snapshot finds it in
@@ -27,7 +27,7 @@ func (a *Analyzer) outputSpreadUnread(fleet fleetReading) bool {
 }
 
 // SwitchKVPerRequestOutputDispersion is the replay switch for the spread of
-// output lengths in the KV per request on the slo line (issue #276). On, the
+// output lengths in the KV per request on the slo line (issue ev-shindin/llm-scaling-manager#276). On, the
 // line prices a resident request at ILeff + D*OL/2, D the spread read from the
 // output-length histogram. Off, as before, at ILeff + OL/2.
 const SwitchKVPerRequestOutputDispersion = "slo-kv-per-request-output-dispersion"

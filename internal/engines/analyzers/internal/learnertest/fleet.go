@@ -22,7 +22,7 @@ import (
 //     queued past the others gets none. QueueBlind splits by Weight alone,
 //     whatever is queued. The EPP lies between the two: its queue scorer
 //     is one weighted scorer beside KV and prefix affinity, and a slow
-//     replica has been seen to queue behind it (#282 H1). With no queue
+//     replica has been seen to queue behind it (ev-shindin/llm-scaling-manager#282 H1). With no queue
 //     anywhere the two agree: an equal split, or a split by Weight.
 //   - Each replica serves up to its true mu, from its queue first; what it
 //     cannot serve queues on it, and its queue drains as the router sends

@@ -16,7 +16,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 )
 
-// Issue #277: a prefix-cache hit saves KV only when another running request
+// Issue ev-shindin/llm-scaling-manager#277: a prefix-cache hit saves KV only when another running request
 // holds the block too, so where the running requests are read, the KV a
 // resident request holds is measured, between ILeff + D*OL/2 and
 // IL + D*OL/2; where they are not, it is ILeff + D*OL/2 as before.

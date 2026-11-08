@@ -147,7 +147,7 @@ var _ = Describe("Tracker", func() {
 		Expect(r.Model.IsZero()).To(BeTrue())
 	})
 
-	// Issue #284: a fleet that learned its line at load and then sat below the
+	// Issue ev-shindin/llm-scaling-manager#284: a fleet that learned its line at load and then sat below the
 	// band for longer than the window keeps its readings lost every one of
 	// them, and with them the line, the derived mu and the throughput floor.
 	It("holds the key's last line through light load once its readings have aged out", func() {

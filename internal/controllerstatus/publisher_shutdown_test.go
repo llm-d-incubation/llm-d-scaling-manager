@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Review of #200: the debounce returned on shutdown without writing, so the
+// Review of ev-shindin/llm-scaling-manager#200: the debounce returned on shutdown without writing, so the
 // last change of a term -- the in-flight ledger's last cycle -- was lost to
 // the next leader. Start writes it once more, bounded, when its context ends.
 func TestStartWritesTheLastChangeOnShutdown(t *testing.T) {

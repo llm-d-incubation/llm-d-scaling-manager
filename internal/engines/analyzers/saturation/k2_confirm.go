@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// k2's first reading waits for a second (#392).
+// k2's first reading waits for a second (ev-shindin/llm-scaling-manager#392).
 //
 // A k2 window that is empty -- a bucket never measured, or one whose last
 // write is past the episode gap, so the next write starts it again -- was
@@ -56,7 +56,7 @@ import (
 // window past the episode gap -- records its k2 from its second admitted
 // cycle, not its first, and its first is priced at most at its reading.
 
-// SwitchK2FirstReadingWaits is the replay switch for the wait (#392): on from
+// SwitchK2FirstReadingWaits is the replay switch for the wait (ev-shindin/llm-scaling-manager#392): on from
 // the constructor; a replay turns it off (SetSwitchesForReplay), and the
 // first reading starts the window at once, as before.
 const SwitchK2FirstReadingWaits = "k2-first-reading-waits-for-a-second"

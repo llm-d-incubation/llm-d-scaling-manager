@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The third verification of PR #388: messages were checked run of letters
+// The third verification of PR ev-shindin/llm-scaling-manager#388: messages were checked run of letters
 // by run of letters, so a token such as "tenants-production" passed because
 // "tenants" and "production" are each words of the code. Each case failed
 // at 6a79e02df. A message is now checked whole token by whole token.

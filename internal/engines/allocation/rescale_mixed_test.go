@@ -96,7 +96,7 @@ func podCurrentGPUs(req ModelScalingRequest) int {
 	return total
 }
 
-// TestRescaleMixedFillIsMonotone is the fill case of #219. Prefill has an
+// TestRescaleMixedFillIsMonotone is the fill case of ev-shindin/llm-scaling-manager#219. Prefill has an
 // 8-GPU variant at no pods and demand for two; decode a 2-GPU variant at one
 // pod (max 2) and a 4-GPU variant, demand for 8 GPUs. Greedy, a target of 10
 // placed 10 GPUs and 11 placed 4: decode's +2 fitted its share, and the 7
@@ -115,7 +115,7 @@ func TestRescaleMixedFillIsMonotone(t *testing.T) {
 	}
 }
 
-// TestRescaleMixedReclaimFreesAPod is the reclaim case of #219. Prefill holds
+// TestRescaleMixedReclaimFreesAPod is the reclaim case of ev-shindin/llm-scaling-manager#219. Prefill holds
 // an 8- and a 4-GPU pod, decode two 8-GPU pods. Rounded per role, two cuts
 // each short of a pod shed nothing, so the model kept GPUs the water-fill gave
 // another model; summed, a cut of at least one pod frees one.
@@ -195,7 +195,7 @@ func randomPodModel(r *rand.Rand, mixed, strict bool) ModelScalingRequest {
 	}
 }
 
-// TestRescaleMixedPodsGrid is #219's property over a grid of mixed replica
+// TestRescaleMixedPodsGrid is ev-shindin/llm-scaling-manager#219's property over a grid of mixed replica
 // sizes: a larger target never leaves a model fewer GPUs, and with every role
 // able to give a pod, a target at least the largest pod below what the model
 // holds frees one, though a role the split grows may take as many back. On
@@ -374,10 +374,10 @@ func TestRescaleMixedKeepsTheScaleDownRules(t *testing.T) {
 // of what the model holds. A model at its target does not move again, and no
 // model goes back to where it started: that is a pod deleted and created
 // again every cycle. A regression guard: rounded alone, 31 models at their
-// target moved again and 86 went back, and the greedy rounding before #219
+// target moved again and 86 went back, and the greedy rounding before ev-shindin/llm-scaling-manager#219
 // moved 2 and sent 13 back. TestRescaleMixedHoldsAModelAtItsTarget pins the
 // case that took a pod and gave it back; TestRescaleMixedRerunNeverPassesItsTarget
-// pins the second step past the target of #421.
+// pins the second step past the target of ev-shindin/llm-scaling-manager#421.
 func TestRescaleMixedRerunIsStable(t *testing.T) {
 	r := rand.New(rand.NewPCG(219, 3))
 	points, moved, flapped, atTarget := 0, 0, 0, 0
@@ -406,7 +406,7 @@ func TestRescaleMixedRerunIsStable(t *testing.T) {
 	assert.Zero(t, flapped, "a model goes back to where it started")
 }
 
-// TestRescaleMixedRerunStopsAtItsTarget is #421 on whole-node pods. Prefill
+// TestRescaleMixedRerunStopsAtItsTarget is ev-shindin/llm-scaling-manager#421 on whole-node pods. Prefill
 // holds one 8-GPU pod (16-GPU in the second case) and decode four pods half
 // that size, with the same demand, and are given 40 GPUs (80): split evenly,
 // prefill rounds its share up to a whole pod, takes two, and the model is at
@@ -478,7 +478,7 @@ func TestRescaleMixedGrowsWithTheTargetsSpareGPUs(t *testing.T) {
 // its pod is shed and decode grows to 12. At 13 prefill has a share of one
 // GPU and keeps its pod, and 2 + 8 is the most that does not pass 13; the
 // next, 2 + 12, passes it, as rounding alone did. Taking 14 would keep the
-// model monotone and step past its target, which is #421.
+// model monotone and step past its target, which is ev-shindin/llm-scaling-manager#421.
 func TestRescaleMixedKeepingARoleCanCostGPUs(t *testing.T) {
 	req := podRequest(map[string]float64{domain.RolePrefill: 400, domain.RoleDecode: 8500}, []podVariant{
 		{name: "pa", role: domain.RolePrefill, gpus: 2, cur: 1, cost: 4, perGPU: 100},
@@ -566,7 +566,7 @@ func TestRescaleMixedEqualPlansTakeTheHighestTarget(t *testing.T) {
 // models, a third of them with a role held against scale-up or scale-down,
 // and targets within 16 GPUs of what each holds, no cycle ends above both
 // its target and what the model held when it began, the first or the second
-// at the same target. Before #421 was fixed, 4355 first cycles and 1575
+// at the same target. Before ev-shindin/llm-scaling-manager#421 was fixed, 4355 first cycles and 1575
 // second ones did.
 func TestRescaleMixedRerunNeverPassesItsTarget(t *testing.T) {
 	r := rand.New(rand.NewPCG(421, 1))
@@ -641,7 +641,7 @@ func describePodModel(req ModelScalingRequest, targets ...int) string {
 
 // TestRescaleWholeNodeMixedStress: whole-node 8-GPU pods beside 4- and
 // 16-GPU ones, at tens of pods and targets in the hundreds of GPUs. A
-// regression guard: the rounding before #219 passes it too.
+// regression guard: the rounding before ev-shindin/llm-scaling-manager#219 passes it too.
 func TestRescaleWholeNodeMixedStress(t *testing.T) {
 	req := podRequest(map[string]float64{domain.RolePrefill: 30000, domain.RoleDecode: 50000}, []podVariant{
 		{name: "p8", role: domain.RolePrefill, gpus: 8, cur: 12, cost: 8, perGPU: 100},
@@ -688,7 +688,7 @@ func podRoleGPUs(req ModelScalingRequest, role string) int {
 	return total
 }
 
-// TestRescaleMixedHeldRoleSettles is #440. Prefill, held against scale-down,
+// TestRescaleMixedHeldRoleSettles is ev-shindin/llm-scaling-manager#440. Prefill, held against scale-down,
 // holds two 1-GPU pods and three 2-GPU pods (its maximum), 8 GPUs; decode one
 // 8-GPU pod beside an empty 2-GPU variant. Demand is for 5 prefill and 18
 // decode GPUs, and the target is 50. The split reserved prefill what it held
@@ -720,7 +720,7 @@ func TestRescaleMixedHeldRoleSettles(t *testing.T) {
 // within 16 GPUs of what each holds, rerunning the same target reaches a cycle
 // that moves nothing within 8 cycles, and a model with a role held against
 // scale-down within 2. With the held role's pods reserved beneath a share of
-// the rest (#440), 1 point was still moving after 8 cycles and 1780 held
+// the rest (ev-shindin/llm-scaling-manager#440), 1 point was still moving after 8 cycles and 1780 held
 // points took more than 2.
 func TestRescaleMixedHeldRerunSettles(t *testing.T) {
 	r := rand.New(rand.NewPCG(440, 1))

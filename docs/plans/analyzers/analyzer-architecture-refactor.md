@@ -4,7 +4,7 @@
 work changed part of the result; see [§12 After this plan](#12-after-this-plan) before trusting the
 optimizer and saturation sections.
 **Area:** engines/analyzers
-**Related:** `docs/proposals/analyzer-metric-interface.md` (the `(demand, target)` contract & external analyzers), issue #1455 (external analyzers), #1444 (proposal, docs-only)
+**Related:** `docs/proposals/analyzer-metric-interface.md` (the `(demand, target)` contract & external analyzers), issue llm-d/llm-d-workload-variant-autoscaler#1455 (external analyzers), llm-d/llm-d-workload-variant-autoscaler#1444 (proposal, docs-only)
 
 ---
 
@@ -32,7 +32,7 @@ The scaling manager's analyzers carry three coupled problems:
    are split across two structs and muddied by everything else.
 
 3. **Extending the scaling manager requires writing Go.** A new signal (an SLO probe, a queue-depth source, a
-   business metric) cannot be added without compiling a new analyzer. #1455 wants config-driven
+   business metric) cannot be added without compiling a new analyzer. llm-d/llm-d-workload-variant-autoscaler#1455 wants config-driven
    PromQL analyzers, but they can only be *clean* if there is a clean contract to implement.
 
 ### Key finding that shapes this design
@@ -66,7 +66,7 @@ the analyzer's output. This substantially de-risks it.
 - **De-privilege saturation** — delete `saturationEntry`; the optimizer reads identity from discovery.
 - Emit `llmsm_analyzer_demand` / `llmsm_analyzer_target` for every analyzer (the proposal's Phase 1
   observability), driven from the `(D, P)` outputs.
-- Land the **external-analyzer wrapper (#1455)** as a Go analyzer that implements the pure contract
+- Land the **external-analyzer wrapper (llm-d/llm-d-workload-variant-autoscaler#1455)** as a Go analyzer that implements the pure contract
   from a PromQL definition, with **no metadata to supply**.
 
 **Non-Goals**
@@ -201,7 +201,7 @@ Additive, alongside `RecordSaturationMetrics` (`internal/metrics/metrics.go:869`
 meaningful (a missing series is not a zero). This both delivers observability and *enforces* the
 two-number discipline at the emission boundary.
 
-### 3.5 External-analyzer wrapper (#1455)
+### 3.5 External-analyzer wrapper (llm-d/llm-d-workload-variant-autoscaler#1455)
 
 A built-in Go analyzer implementing the pure contract from a PromQL definition (per
 `docs/proposals/analyzer-metric-interface.md`): templated `{{model}}`/`{{ns}}` (escaped via
@@ -499,7 +499,7 @@ stops being disaggregated, a variant that is removed, an analyzer that gets disa
 cycle's `Set` calls, per the existing "no zero-value window" rule, so a surviving series is never
 briefly absent from a concurrent scrape.
 
-**Phase 5 — External-analyzer wrapper (#1455). ✅ DONE.** Delivered as §10 describes (catalog CM +
+**Phase 5 — External-analyzer wrapper (llm-d/llm-d-workload-variant-autoscaler#1455). ✅ DONE.** Delivered as §10 describes (catalog CM +
 per-engine bodies + runtime registry + per-cycle reconcile + built-in→catalog name resolution). Unit
 + envtest coverage at every layer. The KEDA external-scaler **kind e2e** has since been run green
 (smoke 17/17, full 28/28), and the saturation suite was moved onto the external-scaler transport so
@@ -573,7 +573,7 @@ references below are from the pre-removal plan and no longer resolve.
 
 ---
 
-## 10. #1455 external analyzers — as built
+## 10. llm-d/llm-d-workload-variant-autoscaler#1455 external analyzers — as built
 
 The external-analyzer wrapper is wired through the **ScalingPolicy configuration system**, split
 across ConfigMaps exactly as [the scaling-policy reference](../../reference/scaling-policy.md#external-analyzers-analyzerdefinitions) describes — not collapsed into
@@ -631,11 +631,11 @@ with one addition we already have:
 This plan kept the optimizer's coordination math unchanged and removed saturation as the source
 of identity. Later work changed both:
 
-- **One signal to the optimizer (#34).** The engine hands the optimizer one `CompositeSignal`
+- **One signal to the optimizer (ev-shindin/llm-scaling-manager#34).** The engine hands the optimizer one `CompositeSignal`
   (`ModelScalingRequest.CompositeSignal`), not a slice of per-analyzer results.
   `roleBottleneckReplicas` takes that single entry. The multi-entry helpers are kept, unbuilt, in
   `internal/engines/allocation/multi_backup/` (`//go:build ignore`).
-- **The composite (#167, #197).** Every listed analyzer's `D / P` is combined per variant, the
+- **The composite (ev-shindin/llm-scaling-manager#167, ev-shindin/llm-scaling-manager#197).** Every listed analyzer's `D / P` is combined per variant, the
   largest wins, and the result is converted into saturation's units and judged at saturation's
   band. See [the composite analyzer](../../proposals/composite-analyzer.md).
 - **Saturation is privileged again, in a new form.** Identity still comes from discovery. But

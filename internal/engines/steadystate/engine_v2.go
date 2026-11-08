@@ -195,7 +195,7 @@ func (e *Engine) runAnalyzers(
 
 	// The settle tracker first (settle.go), ahead of everything that reads
 	// the cycle's rows: the load-balance diagnostic reads each replica's
-	// grace from it (#345 step 1 left this slot for it).
+	// grace from it (ev-shindin/llm-scaling-manager#345 step 1 left this slot for it).
 	now := e.observeClock()
 	e.observeSettle(namespace, modelID, replicaMetrics, variantStates, now)
 
@@ -416,7 +416,7 @@ func (e *Engine) publishEngineConfig(namespace, modelID, variantName, accelerato
 // carries the ForgetLearnedState annotation with a token not yet acted on.
 // Nothing is forgotten when the saturation analyzer cannot forget: it keeps
 // the token acted on. When it acts on one, the slo and throughput analyzers
-// forget the variant's ITL line too (issue #431); their entries are logged
+// forget the variant's ITL line too (issue ev-shindin/llm-scaling-manager#431); their entries are logged
 // apart.
 func (e *Engine) forgetOnRequest(ctx context.Context, namespace, modelID, variant string, target scaletarget.ScaleTargetAccessor) {
 	token := scaletarget.Annotations(target)[annotations.ForgetLearnedState]

@@ -898,7 +898,7 @@ func shareRolesForRequest(req ModelScalingRequest, records []variantRecord, acc 
 		// A role that may not shrink keeps what it holds, and so does one the
 		// analyzer holds: it gives nothing (BuildShareGroups), so a target
 		// below what it holds promised another role GPUs no transfer could
-		// take (issue #222). Its need stays the demand before the hold.
+		// take (issue ev-shindin/llm-scaling-manager#222). Its need stays the demand before the hold.
 		if hold.NoScaleDown || held {
 			floor = max(floor, roleCurrentGPUs(records, stateMap, acc, role))
 		}
@@ -928,7 +928,7 @@ func shareRolesForRequest(req ModelScalingRequest, records []variantRecord, acc 
 // that puts it at its scale-up threshold, counted in the GPUs it holds and
 // grows, with the role's capacity curve (ShareRole.Capacity). Every share sum
 // and band compares the need with the GPUs a role holds, and a GPU of a
-// variant the role does not run is not one of them (issue #193).
+// variant the role does not run is not one of them (issue ev-shindin/llm-scaling-manager#193).
 //
 // The curve walks the role's GPUs in the order it keeps them, the reverse of
 // the order it gives them (shareGiveVariant): the least cost-efficient

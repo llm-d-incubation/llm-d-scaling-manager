@@ -53,7 +53,7 @@ const (
 	ttftOpenShortFixture = "ttft-open-loop-short"
 )
 
-// pr475A is a, the fixed latency, from P1's curved fit (#475) of runs 3 and 4
+// pr475A is a, the fixed latency, from P1's curved fit (ev-shindin/llm-scaling-manager#475) of runs 3 and 4
 // pooled (TestQuadratic_Runs3And4PooledGiveA, internal/signals/prefill): the
 // intercept 7.95 ms plus run 4's least overhead 2.91 ms. No golden replays
 // the two runs pooled, and P1 refuses a on run 3 alone (NoShortPrompts: its
@@ -357,7 +357,7 @@ type ttftCase struct {
 
 // ttftFrozen is the frozen table. Green is not a pass: the rows record P3
 // under-predicting, and a fix to P3 must rewrite them and the counts below.
-// It is P3 (main afdac8282, with #484) against the router at
+// It is P3 (main afdac8282, with ev-shindin/llm-scaling-manager#484) against the router at
 // p90 and p95, at the spread the load generator sent (cv 0.058) and at S1's
 // assumed 2. V_P is run 2's busy minutes on main, 134,775 tok/s, for every
 // level; a is P1's own on run 4 (the curve's, 11.58 ms) and the runs 3 and 4
@@ -475,7 +475,7 @@ func TestTTFTValidation_PooledAIsP1s(t *testing.T) {
 
 // TestTTFTValidation_P1OnTheGoldens holds what main's P1 learns from each
 // golden: the inputs the validation prices on, and the refusals that make it
-// borrow V_P across runs and a from #475.
+// borrow V_P across runs and a from ev-shindin/llm-scaling-manager#475.
 func TestTTFTValidation_P1OnTheGoldens(t *testing.T) {
 	sat, _ := replayP1(t, ttftSaturatedFixture)
 	assert.Equal(t, string(prefill.SourceBusyMinutes), sat.VPSource)
@@ -519,7 +519,7 @@ func TestTTFTValidation_P1OnTheGoldens(t *testing.T) {
 
 // ttftPrefill is the prefill side P3 prices a fixture's levels with: V_P
 // from run 2's busy minutes, and a from the fixture's own P1 where main fits
-// it, else #475's. f is left unknown: one pod prices as 1.
+// it, else ev-shindin/llm-scaling-manager#475's. f is left unknown: one pod prices as 1.
 func ttftPrefill(t *testing.T, vp, own p1Line) (whatif.Prefill, string) {
 	t.Helper()
 	est := vp.estimate()
@@ -586,7 +586,7 @@ func TestTTFTValidation_AgainstTheRouter(t *testing.T) {
 			assert.InEpsilon(t, w.predicted, g.predicted, 1e-6, "row %d: predicted", i)
 		}
 	}
-	// The finding, counted. At the spread the runs sent, P3 (with #484's
+	// The finding, counted. At the spread the runs sent, P3 (with ev-shindin/llm-scaling-manager#484's
 	// decode-engine term, V_P rescaled to the prompt and the margin near the
 	// knee) is under the mark at 9 of 14 light-load rows (2k at both
 	// percentiles and 4k at p95 pass, 8k is over), 2 of them below even the

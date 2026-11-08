@@ -74,7 +74,7 @@ func cycles(from, to int) map[int]bool {
 
 // Learner PR 1's named change (analyzer-learner.md, 4.2): the grace is read
 // from the settle tracker, which keeps a sighting across an absence of up to
-// its tolerance (a minute at a 15 s interval). #283's tracker rebuilt its
+// its tolerance (a minute at a 15 s interval). ev-shindin/llm-scaling-manager#283's tracker rebuilt its
 // sightings from each cycle's rows, so one missed scrape restarted a
 // replica's grace and put the role's report back by IdleAfterReady. A
 // replica missing for up to two cycles keeps its grace; one missing for
@@ -140,7 +140,7 @@ func TestTrackerEndsTheGraceAtLongIntervals(t *testing.T) {
 	}
 }
 
-// Shipped behaviour (#283, analyzer-learner.md 7, the warm-pool row): a Pod
+// Shipped behaviour (ev-shindin/llm-scaling-manager#283, analyzer-learner.md 7, the warm-pool row): a Pod
 // lent, handed back and lent again to the same variant within the period
 // starts its grace again, though its key and its Ready time are what they
 // were. The new lend time tells it apart; a Pod missing for one cycle under

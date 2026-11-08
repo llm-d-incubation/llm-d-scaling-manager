@@ -13,7 +13,7 @@ scale-up pushed p95 time-to-first-token to **5.2–8.8 s**. With one shared warm
 GPU bridging the rise, the same spikes served at **0.11–0.83 s** — and cost
 **12 % less GPU** than the usual fix of holding a floor of spare replicas.
 
-We are [llm-d-scaling-manager](https://github.com/ev-shindin/llm-scaling-manager): a
+We are [llm-d-scaling-manager](https://github.com/llm-d-incubation/llm-d-scaling-manager): a
 multi-model autoscaler for llm-d, with warm capacity and scale-to-zero on top. It
 decides the replica count; KEDA and the HPA actuate it.
 

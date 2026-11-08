@@ -978,7 +978,7 @@ var _ = Describe("SaturationAnalyzer", func() {
 		})
 
 		// vLLM runs at most --max-num-active-seqs at once, so a lower active
-		// cap bounds N_steady where max_num_seqs would not (issue #335).
+		// cap bounds N_steady where max_num_seqs would not (issue ev-shindin/llm-scaling-manager#335).
 		It("should cap N_steady at a lower --max-num-active-seqs", func() {
 			params := &capacity.EngineParams{
 				EffectiveMaxBatchedTokens: 4096,

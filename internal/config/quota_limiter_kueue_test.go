@@ -370,7 +370,7 @@ var _ = Describe("KueueQuotaSource", func() {
 			Expect(validate(&KueueQuotaSource{Enabled: true, ReleaseToNonReclaimingLenders: true})).To(Succeed())
 		})
 
-		// PR #203 review (SF minor): the option on an entry that reads no
+		// PR ev-shindin/llm-scaling-manager#203 review (SF minor): the option on an entry that reads no
 		// Kueue does nothing, and says so.
 		It("warns about releaseToNonReclaimingLenders on an entry with kueue.enabled false", func() {
 			warnings := func(k *KueueQuotaSource) []string {

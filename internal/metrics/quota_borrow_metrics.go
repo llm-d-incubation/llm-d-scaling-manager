@@ -11,7 +11,7 @@ import (
 )
 
 // Kueue cohort borrowing series
-// (the Kueue borrowing proposal, PR #161, Part C). Every
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, Part C). Every
 // other borrowing condition is a reason on llmsm_model_scaling_blocked.
 var (
 	quotaLimitGPUs      *prometheus.GaugeVec

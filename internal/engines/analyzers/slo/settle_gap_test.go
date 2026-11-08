@@ -21,7 +21,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils"
 )
 
-// Issue #459: the analyzer alone, with no engine tracker, across a gap
+// Issue ev-shindin/llm-scaling-manager#459: the analyzer alone, with no engine tracker, across a gap
 // between two of a model's cycles longer than the state timeout. What the
 // line reads after it depends only on the model's own last sight, not on
 // whether EvictStale ran, or where in the cycle.
@@ -241,7 +241,7 @@ func TestSettle_AfterALongGapWithTheMoveOffTheOwnTraceIsKept(t *testing.T) {
 // left by itself. Holds the forget (without it, under the short timeout, a
 // replica that left stays held) and the backdate: either way each replica
 // reads settle.Joined ownSettleBackdate before the cycle, as on a first
-// sighting (issue #511: two observations that far apart read the gap as an
+// sighting (issue ev-shindin/llm-scaling-manager#511: two observations that far apart read the gap as an
 // absence, settle.Rejoined at the cycle).
 func TestSettle_AfterALongGapTheOwnTrackerHoldsWhatAnEvictionLeaves(t *testing.T) {
 	model := utils.GetNamespacedKey("ns", "m")
@@ -293,7 +293,7 @@ func assertBackdatedJoin(t *testing.T, r settle.Replica, at time.Time) {
 	assert.Equal(t, at, r.LastSeen, "%s: last seen", r.Pod)
 }
 
-// Issue #511: the analyzer alone takes a model's replicas on its first
+// Issue ev-shindin/llm-scaling-manager#511: the analyzer alone takes a model's replicas on its first
 // Analyze as long joined: its own tracker holds each settle.Joined
 // itl.DefaultSteadyFor before the cycle. Observed at the backdate and again
 // at the cycle, the 2 min gap was past the tracker's absence tolerance

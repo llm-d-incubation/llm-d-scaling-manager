@@ -121,7 +121,7 @@ func lastRecordedExport(t *testing.T, path string) (saturation.LearnedState, tim
 //   - variant-04 is borrowing variant-03's lower figure: an armed bound,
 //     dual-written to k2BorrowedSince;
 //   - variant-02 carries a previous figure with no bound and no window of
-//     its own, as a document from before lowerBounds (#151) left it and
+//     its own, as a document from before lowerBounds (ev-shindin/llm-scaling-manager#151) left it and
 //     v0.10.1's trim handles it (an orphan priorK2 entry);
 //   - variant-03 was forgotten on request two hours before.
 func withEveryMap(s *v0101LearnedState, at time.Time) {

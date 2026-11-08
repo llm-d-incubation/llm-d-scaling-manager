@@ -1,6 +1,6 @@
 # Reading a model's weights into memory while its engine starts
 
-- **Status:** proposed, second revision after review (PR #362). Nothing here
+- **Status:** proposed, second revision after review (PR ev-shindin/llm-scaling-manager#362). Nothing here
   is built.
 - **Problem:** on a prepared node the weights are on local disk, but not in
   memory. The engine's weight load then waits on the disk. Measured on

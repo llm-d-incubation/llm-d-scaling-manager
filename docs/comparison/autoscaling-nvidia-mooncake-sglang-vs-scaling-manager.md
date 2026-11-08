@@ -24,7 +24,7 @@
 
 > *When overloaded: The scaling manager and Dynamo **add capacity**; Mooncake **sheds load**; SGLang **defers to Kubernetes**; Fireworks and Together **add replicas to one endpoint** and bill you for them.*
 
-**2026 currency (verified 2026-08-03).** All three verdicts hold on current-year releases. **Dynamo** is under heavy 2026 development (**GA v1.0 Mar 2026**; latest **v1.3.1, 6 Aug 2026**) — the one shipped change of note is that **AIConfigurator (AIC) latency prediction replaced the hand-tuned cost model**, plus a plugin-pipeline refactor and MTP/observability plumbing; its single-DGD / homogeneous / cost-blind / average-ISL-OSL character is **unchanged** (cost, heterogeneity, multi-DGD, and distribution-aware planning are all roadmap — #9178 Global Planner, Grove — **not yet shipped**). **SGLang** (v0.5.16, Jul 2026; router 0.3.2, Jan 2026) and **Mooncake** (v0.3.12, Jul 2026) added **no** scaling control loop in 2026 — posture unchanged.
+**2026 currency (verified 2026-08-03).** All three verdicts hold on current-year releases. **Dynamo** is under heavy 2026 development (**GA v1.0 Mar 2026**; latest **v1.3.1, 6 Aug 2026**) — the one shipped change of note is that **AIConfigurator (AIC) latency prediction replaced the hand-tuned cost model**, plus a plugin-pipeline refactor and MTP/observability plumbing; its single-DGD / homogeneous / cost-blind / average-ISL-OSL character is **unchanged** (cost, heterogeneity, multi-DGD, and distribution-aware planning are all roadmap — ai-dynamo/dynamo#9178 Global Planner, Grove — **not yet shipped**). **SGLang** (v0.5.16, Jul 2026; router 0.3.2, Jan 2026) and **Mooncake** (v0.3.12, Jul 2026) added **no** scaling control loop in 2026 — posture unchanged.
 
 ---
 
@@ -69,7 +69,7 @@ Dynamo offers three ways to scale a `DynamoGraphDeployment`: generic **HPA**, **
 
 > **Correction (2026-08-09):** an earlier revision of this doc stated that Dynamo *"terminates in-flight requests on scale-down (no graceful drain)."* **That is wrong.** Dynamo drains gracefully on both roles: to scale down a **prefill** worker the planner sends **SIGTERM**, which the worker stores and acts on only after finishing the request already pulled from the queue, so *"no remote prefill request is dropped"*; to scale down a **decode** worker it **revokes the worker's etcd lease**, which immediately removes it from the router so it receives no new work, after which it *"finishes all the current requests in their original stream and exits gracefully."* Graceful drain is therefore a Dynamo **strength**, not a gap — see [sla_planner.md](https://github.com/ai-dynamo/dynamo/blob/main/docs/planner/sla_planner.md).
 
-**2026 status:** GA in **March 2026**; latest **v1.3.1 (6 Aug 2026)**, actively developed (planner commits through late Jul 2026). The notable 2026 *shipped* change is that **AIConfigurator (AIC) latency prediction replaced the hand-tuned cost model** — the planner now sizes on AIC-modeled serving cost — alongside a plugin-pipeline refactor (OBSERVE→PREDICT→PROPOSE→RECONCILE→CONSTRAIN→EXECUTE), MTP/speculative accept-length correction, and SLA-target Grafana dashboards. Crucially, the areas where **the scaling manager leads — cost-awareness, heterogeneous GPUs, multi-DGD/multi-cluster, distribution-aware planning — remain roadmap, not shipped** (the planned **Global Planner** + **Grove** topology-aware scheduler target exactly this turf; roadmap #9178). So the scaling manager's structural edges are real *today* but are explicitly in Dynamo's crosshairs — a moat to defend, not assume.
+**2026 status:** GA in **March 2026**; latest **v1.3.1 (6 Aug 2026)**, actively developed (planner commits through late Jul 2026). The notable 2026 *shipped* change is that **AIConfigurator (AIC) latency prediction replaced the hand-tuned cost model** — the planner now sizes on AIC-modeled serving cost — alongside a plugin-pipeline refactor (OBSERVE→PREDICT→PROPOSE→RECONCILE→CONSTRAIN→EXECUTE), MTP/speculative accept-length correction, and SLA-target Grafana dashboards. Crucially, the areas where **the scaling manager leads — cost-awareness, heterogeneous GPUs, multi-DGD/multi-cluster, distribution-aware planning — remain roadmap, not shipped** (the planned **Global Planner** + **Grove** topology-aware scheduler target exactly this turf; roadmap ai-dynamo/dynamo#9178). So the scaling manager's structural edges are real *today* but are explicitly in Dynamo's crosshairs — a moat to defend, not assume.
 
 ### Mooncake — not an autoscaler (load-shedding scheduler)
 
@@ -85,7 +85,7 @@ SGLang ships an **engine** (mature) and a **router / "Model Gateway"** (cache-aw
 
 **Contrast with the scaling manager:** SGLang is a superb *target* for an autoscaler but contributes none of the metric→decision→replica-count control loop. The scaling manager (or Dynamo) is exactly the missing brain; in fact SGLang is a supported Dynamo backend.
 
-**2026:** unchanged — releases through **v0.5.16 (Jul 2026)** and the 2026 roadmaps (#12780, #13098, #21703) add *routing* intelligence (semantic/SLO/session/KV-event-aware routing) and explicitly delegate elasticity to **OME/Kubernetes** ("Auto scaling in OME"); the "Autonomous Model Gateway" is routing automation, not replica scaling.
+**2026:** unchanged — releases through **v0.5.16 (Jul 2026)** and the 2026 roadmaps (sgl-project/sglang#12780, sgl-project/sglang#13098, sgl-project/sglang#21703) add *routing* intelligence (semantic/SLO/session/KV-event-aware routing) and explicitly delegate elasticity to **OME/Kubernetes** ("Auto scaling in OME"); the "Autonomous Model Gateway" is routing automation, not replica scaling.
 
 ---
 
@@ -171,7 +171,7 @@ Two consequences. First, a **~2-minute** provisioning latency is the real-world 
 ## Sources
 
 **the scaling manager (baseline)**
-- Repo: https://github.com/ev-shindin/llm-scaling-manager · releases (v0.10.0): https://github.com/ev-shindin/llm-scaling-manager/releases
+- Repo: https://github.com/llm-d-incubation/llm-d-scaling-manager · releases (v0.10.0): https://github.com/llm-d-incubation/llm-d-scaling-manager/releases
 - What it does and how mature each part is: [why.md](../why.md); measured runs and known limits: [KEDA alone](keda-alone.md#what-was-measured-and-what-failed)
 - How it plugs into KEDA: [how the scaling manager fits together](../concepts/architecture.md)
 
@@ -186,7 +186,7 @@ Two consequences. First, a **~2-minute** provisioning latency is the real-world 
 - Code — K8s connector (`update_graph_replicas`): https://raw.githubusercontent.com/ai-dynamo/dynamo/main/components/src/dynamo/planner/connectors/kubernetes.py
 - **2026** releases (**v1.3.1, 6 Aug 2026**; v1.3.0, 22 Jul 2026 — AIC replaces hand-tuned cost model): https://github.com/ai-dynamo/dynamo/releases
 - **2026** planner commits (active through late Jul 2026): https://github.com/ai-dynamo/dynamo/commits/main/components/src/dynamo/planner
-- **2026** roadmap #9178 (Global Planner, Grove, distribution-aware — *future work*): https://github.com/ai-dynamo/dynamo/issues/9178
+- **2026** roadmap ai-dynamo/dynamo#9178 (Global Planner, Grove, distribution-aware — *future work*): https://github.com/ai-dynamo/dynamo/issues/9178
 - **2026** InfoQ (31 Jan 2026, Profiler + SLO Planner): https://infoq.com/news/2026/01/nvidia-dynamo-ai-kubernetes/
 - **2026** Azure AKS Part 4 (2 Jun 2026, Grove; homogeneous H100; heterogeneous = future): https://blog.aks.azure.com/2026/06/02/dynamo-on-aks-part-4
 
@@ -208,7 +208,7 @@ Two consequences. First, a **~2-minute** provisioning latency is the real-world 
 - OME integration (KEDA/Knative/LWS scale-to-zero): https://www.lmsys.org/blog/2025-07-08-ome/
 - Router package: https://pypi.org/project/sglang-router/
 - **2026** releases (v0.5.16, 25 Jul 2026): https://github.com/sgl-project/sglang/releases · router 0.3.2 (15 Jan 2026): https://pypi.org/project/sglang-router/#history
-- **2026** roadmaps — Q1 #12780, Autonomous Model Gateway #13098, Q2 PD #21703 (30 Mar 2026): https://github.com/sgl-project/sglang/issues/12780 · https://github.com/sgl-project/sglang/issues/13098 · https://github.com/sgl-project/sglang/issues/21703
+- **2026** roadmaps — Q1 sgl-project/sglang#12780, Autonomous Model Gateway sgl-project/sglang#13098, Q2 PD sgl-project/sglang#21703 (30 Mar 2026): https://github.com/sgl-project/sglang/issues/12780 · https://github.com/sgl-project/sglang/issues/13098 · https://github.com/sgl-project/sglang/issues/21703
 - **2026** LMSYS GTC 2026 (25 Mar 2026): https://www.lmsys.org/blog/2026-03-25-gtc2026/
 
 **Fireworks AI** (managed)

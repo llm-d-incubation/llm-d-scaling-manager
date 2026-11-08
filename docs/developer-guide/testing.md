@@ -856,7 +856,7 @@ so the controller, its policy map and the model all live there.
 
    ```bash
    make benchmark-standup BENCHMARK_NAMESPACE="$NS" BENCHMARK_SPEC=guides/pd-disaggregation \
-     MODEL_ID=Qwen/Qwen3-0.6B IMG=ghcr.io/ev-shindin/llm-scaling-manager@sha256:<digest of the commit's image>
+     MODEL_ID=Qwen/Qwen3-0.6B IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest of the commit's image>
    ```
 
    Give both ScaledObjects 1-1 replicas, decode and prefill. With both
@@ -1147,10 +1147,10 @@ To take it again at a new commit:
 
 #### The engine layer
 
-The analyzer events stop at each `Analyze`. The engine layer (issue #345,
+The analyzer events stop at each `Analyze`. The engine layer (issue ev-shindin/llm-scaling-manager#345,
 step 0) carries a recording on to the composite, so a replay holds the
 composite to a golden as it holds the analyzers. The optimizer's decisions
-get a layer of their own, in a later pull request (before #345 step 3).
+get a layer of their own, in a later pull request (before ev-shindin/llm-scaling-manager#345 step 3).
 
 With a recording open, `collectV2ModelRequest` writes one `engine.Composite`
 event per model per cycle, after the model's analyzers
@@ -1256,7 +1256,7 @@ not where its input arrives:
   charged at its instant KV;
 - rows whose Pod Ready time k2's joined test read;
 - k2 readings refused as a joiner because of the Ready time: the restart
-  fix (#288), not the first sight, decided the refusal;
+  fix (ev-shindin/llm-scaling-manager#288), not the first sight, decided the refusal;
 - k2's settle refusals by reason: as a joiner (`k2-unsettled-joined`), and
   as a load step (`k2-unsettled-window`).
 
@@ -1473,7 +1473,7 @@ is replayed off alone from all on, and may move only those. Every name
 golden is invisible to the runs, so it names the unit tests that hold it
 (`heldBy`, checked to exist): mu's three switches are held by
 `mu_repeat_test.go`, `mu_unknown_age_test.go` and `mu_latch_restore_test.go`,
-and #396's idle and k2-key bands by `flap_band_test.go`, not by the goldens.
+and ev-shindin/llm-scaling-manager#396's idle and k2-key bands by `flap_band_test.go`, not by the goldens.
 
 Run `make learner-goldens` only when your PR names the change: it rewrites
 every output file from a replay at your commit. Never edit a golden by hand.
@@ -1671,7 +1671,7 @@ one is a row in `known-failures.yaml` with these fields:
 | `expect` | the violation kind the case fails with |
 | `finding` | the defect |
 | `measured` | how often it failed, and the first failure, when the row was written |
-| `owner` | what clears it: an issue (`#394`), or `open`. `CheckLedger` checks that form and reads no tracker, so a closed issue passes |
+| `owner` | what clears it: an issue (`ev-shindin/llm-scaling-manager#394`), or `open`. `CheckLedger` checks that form and reads no tracker, so a closed issue passes |
 
 The test is strict both ways:
 
@@ -1746,14 +1746,14 @@ The simulator has two routers, and the real one lies between them.
 
 The EPP is neither. Its queue scorer is one weighted scorer beside KV
 utilization and prefix affinity, and a slow replica has been seen to queue
-behind it (#282 H1). With no queue anywhere the two routers agree.
+behind it (ev-shindin/llm-scaling-manager#282 H1). With no queue anywhere the two routers agree.
 
 The two bounds fail in opposite directions. The even split keeps feeding
 replicas that are already queued, so behind a slow start the backlog on
-the first replicas drains for most of an hour (#520, cause C). The
+the first replicas drains for most of an hour (ev-shindin/llm-scaling-manager#520, cause C). The
 shortest-queue limit fills every replica that joins a queued fleet to the
 same queue at once, so the analyzer reads the whole fleet as full and
-overshoots (#520, cause B). Cases whose premise is a replica that queues
+overshoots (ev-shindin/llm-scaling-manager#520, cause B). Cases whose premise is a replica that queues
 while its siblings do not (the slow replica, the steering router) set
 `queueBlind`, because the shortest-queue limit would never let that queue
 form.
@@ -2177,7 +2177,7 @@ The specs:
   once it first does, while the small models return their spare. Then,
   with the optimizer off and room in the quota, today's optimizer orders a G
   replica that stays Pending.
-- **A released node taken** (issue #234). Same layout as "funded", plus a
+- **A released node taken** (issue ev-shindin/llm-scaling-manager#234). Same layout as "funded", plus a
   pause pod waiting for one GPU on the small models' node, and G at a
   `PriorityClass` the spec creates. The pause pod takes the first GPU freed;
   G's raised pod preempts it, the transfer ends `done`, and G runs two

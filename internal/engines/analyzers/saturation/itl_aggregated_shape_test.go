@@ -18,7 +18,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// The ITL line of an aggregated variant, by request shape (issue #275),
+// The ITL line of an aggregated variant, by request shape (issue ev-shindin/llm-scaling-manager#275),
 // through Analyze and in its parts.
 
 // shapeWorld is the physics an aggregated pod follows in these tests: a step

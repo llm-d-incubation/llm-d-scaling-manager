@@ -194,6 +194,9 @@ type Engine struct {
 	CodeMoved  bool
 	Stats      *Stats
 	residualRe *regexp.Regexp
+	// issueRe finds a bare issue number, which needs the table once the code
+	// has moved even in a file with no old name in it.
+	issueRe *regexp.Regexp
 	// prevComment is the comment line before the one being rewritten, in a
 	// comment block: RewriteGo sees each comment on its own.
 	prevComment string
@@ -218,6 +221,7 @@ func NewEngine(t Targets, metrics []string) (*Engine, error) {
 		CodeMoved:  t.CodeMoved,
 		Stats:      NewStats(),
 		residualRe: regexp.MustCompile(residualPattern),
+		issueRe:    regexp.MustCompile(issueRefPattern),
 	}
 	e.verify = e.verifyGo
 	return e, nil
@@ -226,7 +230,7 @@ func NewEngine(t Targets, metrics []string) (*Engine, error) {
 // mentionsOld is a cheap test that saves running the table over a file that
 // has nothing to do.
 func (e *Engine) mentionsOld(b []byte) bool {
-	return e.residualRe.Match(b)
+	return e.residualRe.Match(b) || (e.CodeMoved && e.issueRe.Match(b))
 }
 
 // RewriteText applies the table to text in one context of one path and returns

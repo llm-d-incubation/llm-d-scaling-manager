@@ -68,7 +68,7 @@ func TestReadyAgain(t *testing.T) {
 }
 
 // ObserveOwnSince backdates a first observation past the tracker's absence
-// tolerance (issue #511): the replica reads Joined at the backdate, and a
+// tolerance (issue ev-shindin/llm-scaling-manager#511): the replica reads Joined at the backdate, and a
 // later observation keeps it. ObserveOwn at the same backdate reads the gap
 // as an absence.
 func TestObserveOwnSinceBackdatesPastTheTolerance(t *testing.T) {

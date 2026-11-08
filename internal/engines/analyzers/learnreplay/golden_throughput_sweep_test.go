@@ -48,7 +48,7 @@ const (
 // with throughput.SwitchITLAdmitsAtSequenceCap off the path counts 0 pinned
 // there, and 7 above-band fits take their place.
 //
-// Since the tier dwell (issue #495) throughput-sweep's 9 pinned fits are gone:
+// Since the tier dwell (issue ev-shindin/llm-scaling-manager#495) throughput-sweep's 9 pinned fits are gone:
 // the spread collapses inside the dwell, and the line holds its slope, 8 times.
 // Its floor is the held path in their place; the restart recording still
 // floors the pinned one. The restart recording's light load holds nothing: it

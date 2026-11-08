@@ -7,7 +7,7 @@ import (
 
 // The queries that say whether a replica's batch is at its sequence cap and
 // whether it preempted, so the ITL fit can take a capped replica's reading
-// above its KV band (itl.Tracker; issue #287).
+// above its KV band (itl.Tracker; issue ev-shindin/llm-scaling-manager#287).
 const (
 	// QueryRunningRequests is the query name for the number of sequences in
 	// the running batch per pod, summed over its engine ranks: the figure

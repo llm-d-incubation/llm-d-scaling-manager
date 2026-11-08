@@ -10,7 +10,7 @@ import (
 )
 
 // The batch cap the derived k2 (P3) is priced at, and where it comes from
-// (issue #399).
+// (issue ev-shindin/llm-scaling-manager#399).
 //
 // P3 prices a decode or aggregated replica at min(B*O/(I+O), S) sequences of
 // (I + O/2) tokens, where S is one engine rank's batch cap. Where the
@@ -38,23 +38,23 @@ import (
 // The cap the flags state wins over both: it is what the engine runs.
 
 // SwitchBatchCapDeclared is the replay switch for the declared batch cap
-// (issue #399). On, a variant whose flags state no batch cap prices its
+// (issue ev-shindin/llm-scaling-manager#399). On, a variant whose flags state no batch cap prices its
 // derived k2 at the cap the llm-d.ai/max-num-seqs annotation states. Off,
 // as before, at the parser's default.
 const SwitchBatchCapDeclared = "batch-cap-declared"
 
 // SwitchBatchCapLearned is the replay switch for the learned batch cap
-// (issue #399). On, a variant whose policy sets enableBatchCapLearning
+// (issue ev-shindin/llm-scaling-manager#399). On, a variant whose policy sets enableBatchCapLearning
 // learns its batch cap from where its pods' running counts plateau with
 // requests waiting, and prices its derived k2 at no more than that. Off, as
 // before, nothing is learned or read whatever the policy says.
 const SwitchBatchCapLearned = "batch-cap-learned"
 
-// The readers of the batch cap besides P3 (issue #420). Each took the cap
+// The readers of the batch cap besides P3 (issue ev-shindin/llm-scaling-manager#420). Each took the cap
 // from the engine's flags alone, so where the flags are unread a declared or
 // learned cap reached P3 and nothing else: the ITL fit admitted no reading
 // at the cap, a P/D decode at its cap dropped the part of its queue vLLM
-// calls deferred (the #287 symptom), and the derived mu priced the replica
+// calls deferred (the ev-shindin/llm-scaling-manager#287 symptom), and the derived mu priced the replica
 // at 256 sequences per rank. Each now reads the declared cap, behind its own
 // switch.
 //
@@ -69,7 +69,7 @@ const SwitchBatchCapLearned = "batch-cap-learned"
 // memory-bound reading above the band as capped.
 
 // SwitchBatchCapITLAdmission is the replay switch for the ITL fit's
-// sequence-cap admission (issue #420). On, a replica is at its cap
+// sequence-cap admission (issue ev-shindin/llm-scaling-manager#420). On, a replica is at its cap
 // (itl.Admission.MaxNumSeqs) at the cap the flags or the
 // llm-d.ai/max-num-seqs annotation state (atCapBatchCap). Off, as before,
 // at the flags' cap alone, so where they state none no reading above the
@@ -77,20 +77,20 @@ const SwitchBatchCapLearned = "batch-cap-learned"
 const SwitchBatchCapITLAdmission = "batch-cap-itl-admission"
 
 // SwitchBatchCapDecodeView is the replay switch for the P/D decode view's
-// at-cap exception (issue #420). On, a decode at the cap the flags or the
+// at-cap exception (issue ev-shindin/llm-scaling-manager#420). On, a decode at the cap the flags or the
 // annotation state (atCapBatchCap) keeps its full queue
 // (decodeCapacityView). Off, as before, only a decode at the cap its flags
 // state does.
 const SwitchBatchCapDecodeView = "batch-cap-decode-view"
 
 // SwitchBatchCapDerivedMu is the replay switch for the derived mu's batch
-// cap (issue #420). On, whatif.DeriveMuAtCap caps the resident sequences at the cap
+// cap (issue ev-shindin/llm-scaling-manager#420). On, whatif.DeriveMuAtCap caps the resident sequences at the cap
 // the derived k2 is priced at (pricingBatchCap). Off, as before, at the
 // flags' cap or the parser's default of 256.
 const SwitchBatchCapDerivedMu = "batch-cap-derived-mu"
 
 // SwitchBatchCapZeroReplica is the replay switch for the zero-replica
-// estimate's batch cap (issue #427). On, a variant at zero replicas is
+// estimate's batch cap (issue ev-shindin/llm-scaling-manager#427). On, a variant at zero replicas is
 // priced at the cap the flags or the llm-d.ai/max-num-seqs annotation state
 // (zeroReplicaBatchCap). Off, as before, at the flags' cap or the parser's
 // default of 256.
@@ -189,7 +189,7 @@ func batchCapRules() []batchCapRule {
 		{"joined", func(o batchCapObs) bool { return o.joined }},
 		// Requests waiting on the pod itself. Under flow control the router
 		// holds the queue, and a pod held with none waiting may be far from
-		// its cap: the router judges the pool, not the pod (#399's 1.68x
+		// its cap: the router judges the pool, not the pod (ev-shindin/llm-scaling-manager#399's 1.68x
 		// over-order with one loaded pod and one idle).
 		{"no-waiting", func(o batchCapObs) bool { return o.queue < 1 }},
 		// A decode request whose KV is still in flight from prefill counts as
@@ -338,7 +338,7 @@ func (a *SaturationAnalyzer) pricingBatchCapFor(namespace, modelID, variant stri
 
 // atCapBatchCap is the batch cap a reader that asks whether a replica is AT
 // its cap reads, and its source: the flags' cap, and with readsDeclared (that
-// reader's switch, issue #420) the cap the llm-d.ai/max-num-seqs annotation
+// reader's switch, issue ev-shindin/llm-scaling-manager#420) the cap the llm-d.ai/max-num-seqs annotation
 // declares where the flags state none (capacity.EngineParams.StatedBatchCap,
 // as the declared cap prices P3 only under SwitchBatchCapDeclared). Never
 // the parser's default -- vLLM V1 defaults to 1024 on large accelerators
@@ -359,7 +359,7 @@ func (a *SaturationAnalyzer) atCapBatchCap(params *capacity.EngineParams, readsD
 }
 
 // flagsOrDefaultBatchCap is the cap the derived mu was capped at before
-// issue #420 (SwitchBatchCapDerivedMu off): the flags' cap, else the
+// issue ev-shindin/llm-scaling-manager#420 (SwitchBatchCapDerivedMu off): the flags' cap, else the
 // parser's default (capacity.EngineParams.BatchCap), named as
 // pricingBatchCap names the same two.
 func flagsOrDefaultBatchCap(params *capacity.EngineParams) pricedBatchCap {
@@ -377,7 +377,7 @@ func flagsOrDefaultBatchCap(params *capacity.EngineParams) pricedBatchCap {
 // and its source. With SwitchBatchCapZeroReplica on, for a decode or
 // aggregated variant, it is pricingBatchCap without learning: the cap the flags state, else, with
 // SwitchBatchCapDeclared on, the cap the llm-d.ai/max-num-seqs annotation
-// declares, else the parser's default. Off, as before issue #427, the
+// declares, else the parser's default. Off, as before issue ev-shindin/llm-scaling-manager#427, the
 // flags' cap or the default (flagsOrDefaultBatchCap): a variant that
 // declares 64 was priced at 64 per replica once a pod ran, and at 256 on its
 // way up from zero.

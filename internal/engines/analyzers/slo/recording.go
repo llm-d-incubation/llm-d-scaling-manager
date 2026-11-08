@@ -131,29 +131,29 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		SwitchITLRestartUnderName:             &a.itlRestartUnderName,
 		SwitchITLIdleOnEvidence:               &a.itlIdleOnEvidence,
 
-		// Issue #459: a long gap on the analyzer's own tracker is
+		// Issue ev-shindin/llm-scaling-manager#459: a long gap on the analyzer's own tracker is
 		// first-seen, whenever EvictStale ran (settle.go).
 		SwitchITLLongGapFirstSeen: &a.itlLongGapFirstSeen,
 
-		// Issue #511: the own tracker's first sighting is one observation,
+		// Issue ev-shindin/llm-scaling-manager#511: the own tracker's first sighting is one observation,
 		// backdated (settle.go).
 		SwitchITLOwnSettleBackdates: &a.itlOwnBackdate,
 
-		// Issue #495: the line's reports and learner-write (learner.go).
+		// Issue ev-shindin/llm-scaling-manager#495: the line's reports and learner-write (learner.go).
 		SwitchITLFilesReports: &a.itlFilesReports,
 
-		// Issue #481: no rows for the line in a rollout (rollout.go).
+		// Issue ev-shindin/llm-scaling-manager#481: no rows for the line in a rollout (rollout.go).
 		SwitchITLRolloutGuard: &a.itlRolloutGuard,
 
-		// Issue #431: the forget-learned-state annotation reaches the line
+		// Issue ev-shindin/llm-scaling-manager#431: the forget-learned-state annotation reaches the line
 		// (forget.go).
 		SwitchITLForgetReachesTheLine: &a.itlForgetReachesLine,
 
-		// Issue #467: the line priced one-sided at the sequence cap while B
+		// Issue ev-shindin/llm-scaling-manager#467: the line priced one-sided at the sequence cap while B
 		// is unlearned (one_sided.go).
 		SwitchITLOneSidedAtCap: &a.itlOneSidedAtCap,
 
-		// The ITL line's tier latch (issue #495).
+		// The ITL line's tier latch (issue ev-shindin/llm-scaling-manager#495).
 		SwitchITLTierHysteresis: &a.itlTierHysteresis,
 
 		// S1: each prefill variant priced against the TTFT target, in shadow
@@ -165,7 +165,7 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// The decode term of a TTFT on a decode line (ttft.go).
 		SwitchTTFTDecodeTerm: &a.ttftDecodeTerm,
 
-		// Issue #276: the spread of output lengths in the KV per request
+		// Issue ev-shindin/llm-scaling-manager#276: the spread of output lengths in the KV per request
 		// (output_dispersion.go).
 		SwitchKVPerRequestOutputDispersion: &a.kvOutputDispersion,
 	}

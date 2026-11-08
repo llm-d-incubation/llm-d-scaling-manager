@@ -80,7 +80,7 @@ type ITLBandTuning struct {
 	// CapMaxPreemptionRate is the most preemptions per second, over the
 	// inter-token latency's window, a replica at its sequence cap may show
 	// and still have its reading above MaxObservableK teach the line (issue
-	// #287). Nil takes DefaultITLCapMaxPreemptionRate, zero: no preemption at
+	// ev-shindin/llm-scaling-manager#287). Nil takes DefaultITLCapMaxPreemptionRate, zero: no preemption at
 	// all. A pointer, because zero is the default and a meaningful setting:
 	// an entry must be able to set 0 over a tier that raised it.
 	CapMaxPreemptionRate *float64 `yaml:"capMaxPreemptionRate,omitempty"`

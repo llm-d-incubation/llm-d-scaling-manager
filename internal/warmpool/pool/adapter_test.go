@@ -38,7 +38,7 @@ const lentUpstream = "127.0.0.1:9001"
 // deadAddr is where a broken Pod's supervisor is: an address that resets
 // every connection for the life of the test binary, and that no other listener
 // can take (deadaddr). A port bound and then closed could be, and a broken Pod
-// then answered as healthy (#217).
+// then answered as healthy (ev-shindin/llm-scaling-manager#217).
 var deadAddr = deadaddr.Addr()
 
 // journal records what happened, in order, across all three protocols and the

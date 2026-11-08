@@ -197,7 +197,7 @@ func TestVPRescaleNeverAboveTheStepModel(t *testing.T) {
 	}
 }
 
-// Run 2's 37k level (P2, PR #482): the pod served 115,953 tok/s at a mean
+// Run 2's 37k level (P2, PR ev-shindin/llm-scaling-manager#482): the pod served 115,953 tok/s at a mean
 // prompt of 36,965 tokens, 14% under the busy-minute V_P of 134,775 read at
 // 31,816. Rescaled along the pooled curve, V_P reads 1.5% above what it
 // served: an over-read, on the unsafe side, which the step model says cannot

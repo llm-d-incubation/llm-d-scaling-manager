@@ -15,7 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// Review round 2 of the aggregated line by shape (issue #275).
+// Review round 2 of the aggregated line by shape (issue ev-shindin/llm-scaling-manager#275).
 
 // A heavier shape with no c, inside the band, is priced at A_g*g*/gFit: with
 // A_g = A + c*gFit and A >= 0, never under the true slope A + c*g*, for any

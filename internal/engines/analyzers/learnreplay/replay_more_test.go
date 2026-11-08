@@ -52,7 +52,7 @@ func mixedRecording(t *testing.T) []byte {
 }
 
 // An event of an owner the replay does not drive (the engine-level layer
-// #345 adds to the same recording) is skipped, counted, and left out of the
+// ev-shindin/llm-scaling-manager#345 adds to the same recording) is skipped, counted, and left out of the
 // comparison, so the events after it still compare.
 func TestReplay_IgnoresAndCountsOtherOwnersEvents(t *testing.T) {
 	rec := mixedRecording(t)

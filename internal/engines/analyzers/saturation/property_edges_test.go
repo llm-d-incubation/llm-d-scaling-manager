@@ -838,7 +838,7 @@ func probePricingK(center float64) probe {
 	}
 }
 
-// --- thresholds with no edge of their own until #495 ---
+// --- thresholds with no edge of their own until ev-shindin/llm-scaling-manager#495 ---
 
 // probeSteadyRows: n replicas spread over 0.40 of k on one cycle, every
 // reading steady: the steady window holds all of them up to its 40

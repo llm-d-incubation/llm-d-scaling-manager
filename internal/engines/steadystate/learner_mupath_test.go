@@ -25,7 +25,7 @@ import (
 // The mu-paths run: a second scripted engine run, recorded, for the learner
 // paths the acceptance run does not reach (docs/proposals/analyzer-learner.md,
 // 2.5, per-path counters). Its replicas saturate, so k2 records readings and
-// mu's window takes samples folded by the mean across pods (#282), and each
+// mu's window takes samples folded by the mean across pods (ev-shindin/llm-scaling-manager#282), and each
 // of mu's three yields runs on a variant of its own:
 //
 //   - yv-a, the served yield: a measured mu under the derived one gives way to it once a
@@ -35,7 +35,7 @@ import (
 //   - yv-c, the stale yield: a measurement far above the derived figure gives way to it
 //     once its bucket has read nothing in agreement for freshFor (5 min);
 //   - yv-d, a restart: a saturated replica restarts under the same name (a new Ready
-//     time), and k2 refuses its readings for a minute (noteReady, #288).
+//     time), and k2 refuses its readings for a minute (noteReady, ev-shindin/llm-scaling-manager#288).
 //
 // With LEARNREC_MUPATHS_OUT set, the raw recording is also written there: the
 // input `make learner-golden-add` takes to commit it as the mu-paths golden.
@@ -99,7 +99,7 @@ func newMuScript(start time.Time) *recScript {
 				served = 2.5 * measured
 			}
 			// Two saturated replicas a fifth apart: each minute's sample is their
-			// mean (#282).
+			// mean (ev-shindin/llm-scaling-manager#282).
 			return append(line("yv-a", served, at),
 				muRow("yv-a", "yv-a-2", 0.92, at, ready, measured, 6),
 				muRow("yv-a", "yv-a-3", 0.92, at, ready, 1.2*measured, 6))

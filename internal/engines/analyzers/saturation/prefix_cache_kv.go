@@ -8,7 +8,7 @@ import (
 )
 
 // The KV a resident request holds, when some of its prompt was a prefix-cache
-// hit (issue #277).
+// hit (issue ev-shindin/llm-scaling-manager#277).
 //
 // shape.New discounts the prompt by the hit rate, ILeff = IL*(1 - hit), as if
 // every hit saved KV. A hit saves compute, but it saves KV only when the block
@@ -104,7 +104,7 @@ import (
 // which price the full prompt already (estimateCapacityAtCapSpread).
 
 // SwitchKVPerRequestHitsResident is the replay switch for prefix-cache hits
-// that stay resident (issue #277). On, the derived mu and the GPS check price
+// that stay resident (issue ev-shindin/llm-scaling-manager#277). On, the derived mu and the GPS check price
 // a resident request at the KV the fleet's running requests are measured to
 // hold, between ILeff + D*OL/2 and IL + D*OL/2, and at ILeff + D*OL/2 with no
 // reading. Off, at ILeff + D*OL/2 throughout.

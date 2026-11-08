@@ -26,7 +26,7 @@ import (
 const SwitchITLReadsSettle = "slo-itl-reads-the-settle-tracker"
 
 // SwitchITLLongGapFirstSeen is the replay switch for a long gap on the
-// analyzer's own tracker (issue #459): on, a model last analyzed more than
+// analyzer's own tracker (issue ev-shindin/llm-scaling-manager#459): on, a model last analyzed more than
 // the state timeout ago is first-seen, whether or not EvictStale ran
 // meanwhile, and wherever in the cycle it ran (observeOwnSettle); off, as
 // before, only a model EvictStale evicted is, and one it did not reads the
@@ -35,7 +35,7 @@ const SwitchITLReadsSettle = "slo-itl-reads-the-settle-tracker"
 const SwitchITLLongGapFirstSeen = "slo-itl-own-settle-reads-a-long-gap-as-first-seen"
 
 // SwitchITLOwnSettleBackdates is the replay switch for the backdate on the
-// analyzer's own tracker (issue #511): on, a model's first observation is
+// analyzer's own tracker (issue ev-shindin/llm-scaling-manager#511): on, a model's first observation is
 // one, at the cycle, of replicas Joined ownSettleBackdate earlier
 // (settlerow.ObserveOwnSince), so the prefill share and decode term read
 // them as settled on that cycle; off, as before, the rows are observed at
@@ -97,7 +97,7 @@ func (a *Analyzer) WithOptimizationInterval(d time.Duration) *Analyzer {
 // analyzer's own tracker takes the model's replicas as seen: the line's
 // settle, so a replica on the first cycle has settled, Joined that long ago
 // (settlerow.ObserveOwnSince: one observation, since the backdate is longer
-// than the tracker's absence tolerance, issue #511). The saturation analyzer
+// than the tracker's absence tolerance, issue ev-shindin/llm-scaling-manager#511). The saturation analyzer
 // backdates by k2's JoinedReplicaWindow instead, the wait its own tracker
 // serves first; for the ITL line neither matters, since a line with no
 // engine tracker never waits after a restart.

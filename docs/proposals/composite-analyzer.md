@@ -1,12 +1,12 @@
 # The composite analyzer: how analyzers combine
 
-**Status:** built (#34, then #167 and #197), still moving. This is the design
+**Status:** built (ev-shindin/llm-scaling-manager#34, then ev-shindin/llm-scaling-manager#167 and ev-shindin/llm-scaling-manager#197), still moving. This is the design
 record: the rule as built, why, what it cannot do yet, and where it is going.
 How each step works, function by function, is in the developer guide:
 [How results combine](../developer-guide/multi-analyzer-pipeline.md#how-results-combine).
 
 It lives in `docs/proposals/` because it is built and still moving: two open
-issues change the rule (#305, #226), and the target below replaces part of it.
+issues change the rule (ev-shindin/llm-scaling-manager#305, ev-shindin/llm-scaling-manager#226), and the target below replaces part of it.
 
 ## What it is
 
@@ -63,7 +63,7 @@ Code: `internal/engines/steadystate/composite.go` (`buildComposite`) and
 ## Decisions behind it
 
 - **Combine in the engine, not the optimizer.** One decision path in one
-  place, and the optimizers stay single-signal. Before #34 the optimizer
+  place, and the optimizers stay single-signal. Before ev-shindin/llm-scaling-manager#34 the optimizer
   helpers looped over every analyzer; that version is kept, unbuilt, in
   `internal/engines/allocation/multi_backup/` (`//go:build ignore`).
 - **Largest need wins.** Scale-up follows the analyzer asking for most;

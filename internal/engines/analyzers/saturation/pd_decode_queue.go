@@ -30,7 +30,7 @@ import (
 //     max_num_seqs. So at the cap every request whose pull began
 //     below it reads deferred, landed or not, and each of them waits for a
 //     batch slot on this replica. Read as the capacity part alone, a capped
-//     decode's backlog -- the one #287 measured at 256 running and 768
+//     decode's backlog -- the one ev-shindin/llm-scaling-manager#287 measured at 256 running and 768
 //     waiting -- would record no k2 and charge no queue demand.
 //   - Where it does not, the queue is the full count, as before. Which part
 //     of it is in flight cannot be told, and reading too little of it is the

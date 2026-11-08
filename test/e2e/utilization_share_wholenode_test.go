@@ -315,7 +315,7 @@ var _ = Describe("Utilization share with a whole-node model: funded by small mod
 			}
 		}
 
-		By("G, a whole-node model at no PriorityClass, is named by the controller's warning (issue #234)")
+		By("G, a whole-node model at no PriorityClass, is named by the controller's warning (issue ev-shindin/llm-scaling-manager#234)")
 		Expect(controllerLogsSince(setUp)).To(MatchRegexp(`set no priorityClassName.*`+e.ns+"/"+msG),
 			"no whole-node priority warning names G")
 	})

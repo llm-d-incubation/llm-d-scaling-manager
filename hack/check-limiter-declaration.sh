@@ -1076,7 +1076,7 @@ run_enable() {   # run_enable <fn> [fail-list]
         NODE_JSON=""; export NODE_JSON
         DEPLOY_NS_LIST="tenant-a"; export DEPLOY_NS_LIST
         # A genuine controller there, so the grant path is reached.
-        DEPLOY_JSON='{"items":[{"metadata":{"name":"scaling-manager-controller-manager"},"spec":{"template":{"spec":{"serviceAccountName":"scaling-manager-controller-manager","containers":[{"name":"manager","image":"ghcr.io/ev-shindin/llm-scaling-manager:main"}]}}}}]}'
+        DEPLOY_JSON='{"items":[{"metadata":{"name":"scaling-manager-controller-manager"},"spec":{"template":{"spec":{"serviceAccountName":"scaling-manager-controller-manager","containers":[{"name":"manager","image":"ghcr.io/llm-d-incubation/llm-d-scaling-manager:main"}]}}}}]}'
         export DEPLOY_JSON
         unset LLMSM_CONTROLLER_SA LLMSM_CONTROLLER_IMAGE_REPOS LLMSM_IMAGE_REPO
         CURRENT_POLICY="scaleUpThreshold: 0.85"; export CURRENT_POLICY
@@ -1411,7 +1411,7 @@ got="$(
     || fail "the install summary reported [$got] for a kept gpu-inventory,quota policy"
 
 # ---------------------------------------------------------------------------
-# #216: a quota entry with a reserved name stops the new controller at start.
+# ev-shindin/llm-scaling-manager#216: a quota entry with a reserved name stops the new controller at start.
 # The installer refuses it before applying anything, with the controller's own
 # message, rather than reporting a controller that never became ready. Executed
 # against the stubbed kubectl; what is asserted is the exit and what it said.

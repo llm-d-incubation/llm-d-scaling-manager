@@ -12,7 +12,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 )
 
-// The engine-level layer (issue #345, step 0): a recording also carries the
+// The engine-level layer (issue ev-shindin/llm-scaling-manager#345, step 0): a recording also carries the
 // composite's inputs and what it built (internal/engines/enginerec). The
 // engine replays those itself, with its own functions, and this package
 // cannot import it -- the engine's tests import this package -- so the

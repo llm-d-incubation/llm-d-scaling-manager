@@ -18,7 +18,7 @@ import (
 )
 
 // floorRaisedResult is the saturation analyzer's result on a P/D fleet whose
-// decode the throughput floor raises (issue #495; the saturation package's
+// decode the throughput floor raises (issue ev-shindin/llm-scaling-manager#495; the saturation package's
 // TestFloorRaisesVariants_TheDecodeVariantReadsTheRolesSpare): decode seen
 // saturated at 5.4 completions/s, then six decode replicas holding 3 000
 // tokens each at 6 req/s. switchOn sets SwitchThroughputFloorRaisesVariants.

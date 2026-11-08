@@ -118,7 +118,7 @@ func TestPodSearchIsBounded(t *testing.T) {
 	assert.Equal(t, podSearchMaxUnits, fillRoleExact(records, domain.RoleDecode, buildStateMap(req.VariantStates), targets, 1<<30))
 }
 
-// legacyRoundFillsToReplicas is roundFillsToReplicas before #219, the oracle
+// legacyRoundFillsToReplicas is roundFillsToReplicas before ev-shindin/llm-scaling-manager#219, the oracle
 // a model of uniform replica sizes must still match.
 func legacyRoundFillsToReplicas(records []variantRecord, stateMap map[string]domain.VariantReplicaState,
 	roles []string, tgt, cur, dem, targets map[string]int) {
@@ -148,7 +148,7 @@ func legacyRoundFillsToReplicas(records []variantRecord, stateMap map[string]dom
 	}
 }
 
-// legacyReclaimWholeReplicas is reclaimWholeReplicas before #219.
+// legacyReclaimWholeReplicas is reclaimWholeReplicas before ev-shindin/llm-scaling-manager#219.
 func legacyReclaimWholeReplicas(ctx context.Context, e NamedAnalyzerResult, records []variantRecord,
 	stateMap map[string]domain.VariantReplicaState, roles []string, tgt, cur, targets map[string]int) {
 	cut := make(map[string]int, len(roles))
@@ -198,7 +198,7 @@ func legacyReclaimWholeReplicas(ctx context.Context, e NamedAnalyzerResult, reco
 
 // TestRescaleUniformSizesUnchanged: with one replica size across the model
 // (1-GPU pods through whole-node and two-node pods) the rounding is the
-// pre-#219 one, output for output, over a grid of shares, holds and floors.
+// pre-ev-shindin/llm-scaling-manager#219 one, output for output, over a grid of shares, holds and floors.
 func TestRescaleUniformSizesUnchanged(t *testing.T) {
 	r := rand.New(rand.NewPCG(219, 2))
 	ctx := context.Background()

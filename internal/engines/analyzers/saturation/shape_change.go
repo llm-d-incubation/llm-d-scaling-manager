@@ -66,14 +66,14 @@ type shapeMemo struct {
 	// fleet off a bucket boundary.
 	//
 	// Measured on the rerun of the 1000/6000 -> 8000/1000 trace (2026-09-22,
-	// biran-pd, on the build that carries #85): phase 1 generates exactly
+	// biran-pd, on the build that carries ev-shindin/llm-scaling-manager#85): phase 1 generates exactly
 	// 6000-token outputs, which is the xxlong/huge boundary, and the fleet's
 	// rate-weighted average wobbled either side of it. The whole fleet shares
-	// one throughput key since #85, so the wobble moved all of it at once --
+	// one throughput key since ev-shindin/llm-scaling-manager#85, so the wobble moved all of it at once --
 	// mu alternated 2.36 and 0.82 req/s cycle to cycle, a 2.9x swing, and the
 	// decode target with it, 10 -> 4 -> 10 -> 4 every 30-45 s for the length
 	// of the phase. Only KEDA's scale-down stabilization window kept the
-	// fleet itself from following. Before #85 the replicas straddled the
+	// fleet itself from following. Before ev-shindin/llm-scaling-manager#85 the replicas straddled the
 	// boundary independently and the median smoothed it; one key per fleet
 	// made the edge total, which is the cost of that fix and this is its
 	// other half.

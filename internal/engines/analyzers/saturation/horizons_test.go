@@ -163,7 +163,7 @@ var _ = Describe("learned-state horizons", func() {
 			Expect(h.BucketRetention).To(Equal(240 * time.Hour))
 		})
 
-		// Issue #319: config reads an unset LEARNED_STATE_* variable as 0, and
+		// Issue ev-shindin/llm-scaling-manager#319: config reads an unset LEARNED_STATE_* variable as 0, and
 		// naming those made every controller started with default settings log
 		// "Unusable learned-state horizon" at ERROR.
 		It("names nothing and uses the defaults when nothing is configured", func() {

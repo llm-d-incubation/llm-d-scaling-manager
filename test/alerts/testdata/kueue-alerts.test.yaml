@@ -188,7 +188,7 @@ tests:
   #     to the wait of c's lender alone, so it is quiet at 14 minutes and
   #     pages once past 960s (minute 17) for two minutes. Cohort any, whose
   #     lender Kueue reclaims for, publishes no latency: its threshold stays
-  #     the cooldown alone, and it pages at 14 minutes as in case 6 (PR #203
+  #     the cooldown alone, and it pages at 14 minutes as in case 6 (PR ev-shindin/llm-scaling-manager#203
   #     review SF2: one tenant's latency must not delay every cohort's page).
   - interval: 1m
     input_series:
@@ -217,7 +217,7 @@ tests:
 
   # 7. A release to a waiting lender is capacity handed back on purpose, not
   #    a loss: four of them in an hour (cause lender-waiting) do not page
-  #    LLMSMKueueBorrowThrashing (PR #203 review, SF minor); four placement-
+  #    LLMSMKueueBorrowThrashing (PR ev-shindin/llm-scaling-manager#203 review, SF minor); four placement-
   #    timeout releases of another model in the same hour do.
   - interval: 50s
     input_series:

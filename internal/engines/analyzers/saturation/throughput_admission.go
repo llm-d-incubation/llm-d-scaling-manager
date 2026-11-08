@@ -136,7 +136,7 @@ import (
 // they stop filling, until they read what it does (siblingYield). A replica at 0.55x its siblings passes the served bound
 // above, and as the only queued replica it is the window: in review it priced
 // the fleet at 1.8x the replicas for as long as it stayed slow, and neither
-// the bound nor MeasuredLowHoldFor released it. Since #495 the yield is
+// the bound nor MeasuredLowHoldFor released it. Since ev-shindin/llm-scaling-manager#495 the yield is
 // capped at the measurement (SwitchMuYieldCappedAtMeasurement), so it no
 // longer prices: the siblings reach mu through the weighed sample
 // (mu_slow_pod.go), and a slow replica's figure under what the fleet serves
@@ -558,7 +558,7 @@ type muChoice struct {
 }
 
 // MuLatchRatioSmoothing is the time constant of the ratio the stale latch
-// is set and released on (#526): the measured mu over the derived one,
+// is set and released on (ev-shindin/llm-scaling-manager#526): the measured mu over the derived one,
 // smoothed exponentially in time.
 //
 // The latch sets at MeasuredDerivedMaxRatio (2.0) and releases at

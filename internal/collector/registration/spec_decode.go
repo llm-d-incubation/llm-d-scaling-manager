@@ -14,7 +14,7 @@ import (
 // vLLM observes inter_token_latency once per request per engine step, however
 // many tokens the step emitted, so with speculation the ITL mean is the step
 // time. A step emits 1 + this many tokens, and the time per token is the ITL
-// mean over that (issue #274). The ITL count is the denominator rather than
+// mean over that (issue ev-shindin/llm-scaling-manager#274). The ITL count is the denominator rather than
 // vllm:spec_decode_num_drafts_total: a step that proposed no draft (an n-gram
 // drafter that found no match) is an ITL observation and no draft, and
 // dividing by drafts would over-state the tokens per step.

@@ -48,7 +48,7 @@ const PathITLPinned = "itl-pinned"
 
 // PathRowsInstantKV counts rows whose instant KV a learner read: a reading
 // the ITL line took (at its k over the ITL's minute, KvUsageMean, where the
-// collector read one: issue #393), or a replica demand charged at its instant
+// collector read one: issue ev-shindin/llm-scaling-manager#393), or a replica demand charged at its instant
 // KV rather than its one-minute peak.
 const PathRowsInstantKV = "rows-instant-kv"
 
@@ -57,7 +57,7 @@ const PathRowsReadySince = "rows-ready-since"
 
 // PathJoinedRefusedReadySince counts saturated readings k2 refused as a
 // replica that joined under a rate window ago because of its Pod's Ready
-// time: the restart fix (#288) deciding the refusal, not the first sight.
+// time: the restart fix (ev-shindin/llm-scaling-manager#288) deciding the refusal, not the first sight.
 const PathJoinedRefusedReadySince = "joined-refused-ready-since"
 
 // PathK2UnsettledJoined counts saturated readings k2's settle test refused

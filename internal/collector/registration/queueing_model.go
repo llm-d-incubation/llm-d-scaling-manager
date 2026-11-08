@@ -82,7 +82,7 @@ const (
 	// differ, so mean and max agree there anyway.
 	//
 	// vLLM only. SGLang publishes no per-stage prefill counter
-	// (sgl-project/sglang issue #14303), so there is deliberately no SGLang
+	// (sgl-project/sglang#14303), so there is deliberately no SGLang
 	// registration below and an SGLang prefill variant keeps the request-rate
 	// reading it has today.
 	QueryPrefillComputedTokenRate = "prefill_computed_token_rate"
@@ -105,7 +105,7 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 			"used by queueing model tuner for parameter learning",
 	})
 	// The tokens a step emits beside it, over the same window: with
-	// speculative decoding the ITL above is the step time (issue #274).
+	// speculative decoding the ITL above is the step time (issue ev-shindin/llm-scaling-manager#274).
 	registerSpecDecodeQueries(registry)
 
 	// Average per-request service time (seconds), queue wait excluded.

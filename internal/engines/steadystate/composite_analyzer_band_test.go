@@ -13,7 +13,7 @@ import (
 )
 
 // TestCompositeIsJudgedAgainstSaturationsBand pins what an analyzer's band
-// does (#220): a band set on throughput shapes throughput's own result but
+// does (ev-shindin/llm-scaling-manager#220): a band set on throughput shapes throughput's own result but
 // not the combined decision, which reads throughput's replica need and judges
 // it against saturation's band. Saturation's own override does move the
 // decision. The config read warns about the first

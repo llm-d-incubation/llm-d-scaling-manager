@@ -7,7 +7,7 @@
 #
 # This is the direction the floor reads worst. Run
 # biran-20260921-235843-225 (2026-09-21) took it on a build that predates
-# #85: the decode replicas kept their own output-length buckets across the
+# ev-shindin/llm-scaling-manager#85: the decode replicas kept their own output-length buckets across the
 # switch, the fleet split six `long` against four `xxlong`, and the floor
 # asked for 142 replicas against 5.68 req/s arriving. The regression spec
 # in throughput_floor_test.go replays those cycles; this file is what

@@ -236,7 +236,7 @@ type ReplicaMetrics struct {
 	// (SquaredMeanLowerBound). With AvgOutputTokens it gives the
 	// spread of output lengths, D = E[O^2]/E[O]^2, which sets the KV a
 	// resident request holds: a long request stays resident longer, so
-	// KVreq = ILeff + D*OL/2, not ILeff + OL/2 (issue #276).
+	// KVreq = ILeff + D*OL/2, not ILeff + OL/2 (issue ev-shindin/llm-scaling-manager#276).
 	//
 	// A lower bound, so a spread priced from it moves the KV per request
 	// towards the truth and never past it; equal lengths read as D = 1.
@@ -351,7 +351,7 @@ type ReplicaMetrics struct {
 	// rate(vllm:inter_token_latency_seconds_count). vLLM observes ITL once per
 	// request per step, however many tokens the step emitted, so with
 	// speculation AvgITL is the step time and a step emits
-	// 1 + SpecAcceptedPerStep tokens (issue #274). SGLang's ITL is already per
+	// 1 + SpecAcceptedPerStep tokens (issue ev-shindin/llm-scaling-manager#274). SGLang's ITL is already per
 	// token, and it is never collected for SGLang.
 	SpecAcceptedPerStep float64
 	// SpecAcceptedPerStepKnown is set when SpecAcceptedPerStep was read from a
@@ -398,7 +398,7 @@ type ReplicaMetrics struct {
 	// length says nothing about another.
 	//
 	// Zero on SGLang, which publishes no per-stage prefill counter
-	// (sgl-project/sglang issue #14303); those variants keep the request-rate
+	// (sgl-project/sglang#14303); those variants keep the request-rate
 	// reading.
 	PrefillComputedTokenRate float64
 	// PrefillComputedTokenRateKnown is set when the rate was read from a
@@ -434,7 +434,7 @@ type ReplicaMetrics struct {
 	// KvUsageMean is the KV cache utilization fraction on this replica
 	// (0.0–1.0) averaged over the minute AvgITL's rate is taken over
 	// (avg_over_time over the ITL window), so an ITL(k) reading pairs a
-	// minute's k with the same minute's ITL (issue #393). Read it through
+	// minute's k with the same minute's ITL (issue ev-shindin/llm-scaling-manager#393). Read it through
 	// KvUsageForITL. Zero when the metric is unavailable.
 	KvUsageMean float64
 	// KvUsageMeanKnown is set when KvUsageMean was read from a series. A pod
@@ -659,7 +659,7 @@ const (
 )
 
 // ITLPerToken is the record with AvgITL read per generated token rather
-// than per engine step (issue #274), and why a reading was withheld.
+// than per engine step (issue ev-shindin/llm-scaling-manager#274), and why a reading was withheld.
 //
 //   - On an engine whose ITL is per token already (ITLStep.PerToken), the
 //     record is returned as it is.
@@ -763,8 +763,8 @@ func (m ReplicaMetrics) BusiestRankKvUsage() float64 {
 
 // KvUsageForITL is the k an ITL(k) reading pairs with AvgITL: KvUsageMean,
 // taken over the same minute as the ITL's rate, when it was read, and
-// otherwise KvUsageInstant (issue #393). The instant k against a minute's
-// ITL is the mismatch #273 A5 names: with the batch moving inside the minute
+// otherwise KvUsageInstant (issue ev-shindin/llm-scaling-manager#393). The instant k against a minute's
+// ITL is the mismatch ev-shindin/llm-scaling-manager#273 A5 names: with the batch moving inside the minute
 // it flattens the fitted slope and moves the intercept.
 func (m ReplicaMetrics) KvUsageForITL() float64 {
 	if m.KvUsageMeanKnown {

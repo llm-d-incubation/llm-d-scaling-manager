@@ -22,7 +22,7 @@ import (
 // variant as the window was. Two named changes, each behind a replay switch.
 
 // SwitchITLSteadyGate is the replay switch for the move onto itl.Tracker,
-// and #273's fixes with it. On: the full fit is taken from steady readings
+// and ev-shindin/llm-scaling-manager#273's fixes with it. On: the full fit is taken from steady readings
 // only; a reading taken while its replica settles (it joined, or load came
 // back after idle) is stamped and kept out of the pinned fit; the pinned fit
 // is the k-weighted mean of (ITL - B) / k over the window's readings in the
@@ -44,7 +44,7 @@ import (
 const SwitchITLSteadyGate = "throughput-itl-steady-gate"
 
 // SwitchITLTierHysteresis is the replay switch for the latch on the line's
-// tier (issue #495, itl.Admission.TierHysteresis). Off, each cycle chooses
+// tier (issue ev-shindin/llm-scaling-manager#495, itl.Admission.TierHysteresis). Off, each cycle chooses
 // its tier alone, as before.
 const SwitchITLTierHysteresis = "throughput-itl-tier-hysteresis"
 
@@ -68,7 +68,7 @@ const itlReasonT2Held = "T2-held"
 const itlReasonT2AboveBand = "T2-above-band"
 
 // SwitchITLRolloutGuard is the replay switch for the line's rollout guard
-// (issue #481, itl.Tracker.RolloutRows). On, while the variant's scale target
+// (issue ev-shindin/llm-scaling-manager#481, itl.Tracker.RolloutRows). On, while the variant's scale target
 // rolls out (capacity.Record.InRollout) or its replicas report more than one
 // revision (domain.RevisionsMixed), the line is offered the newest revision's
 // rows alone: an old pod's reading would be judged against the new engine's
@@ -80,7 +80,7 @@ const itlReasonT2AboveBand = "T2-above-band"
 const SwitchITLRolloutGuard = "throughput-itl-rollout-guard"
 
 // SwitchITLForgetsOnNewArguments is the replay switch for the line under new
-// engine arguments (issue #481). On, a change of the variant's arguments
+// engine arguments (issue ev-shindin/llm-scaling-manager#481). On, a change of the variant's arguments
 // (capacity.EngineParams.ArgsTag) forgets what the tracker learned of the key,
 // keeping the replicas' traces, as the slo line's linesUnderArgs does: the
 // window and B of the old engine. While the guard holds the line, the forget

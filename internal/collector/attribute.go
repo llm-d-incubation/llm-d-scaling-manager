@@ -37,7 +37,7 @@ const minUptimeForServiceTimeBound = time.Minute
 // variant identity: the llm_d_ai_variant metric label used to short-circuit it,
 // but neither vLLM nor SGLang emits that label, so on a real deployment it only
 // ever appeared where an operator had relabelled it in — and it is no longer
-// carried in the query groupings either (#1263).
+// carried in the query groupings either (llm-d/llm-d-workload-variant-autoscaler#1263).
 //
 // Returns vaName="" when the pod has no managed scaler above it; the caller
 // treats that as "skip".

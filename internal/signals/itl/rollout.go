@@ -2,7 +2,7 @@ package itl
 
 import "github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 
-// A key's line across a rollout (issue #481). A line is one engine's, and a
+// A key's line across a rollout (issue ev-shindin/llm-scaling-manager#481). A line is one engine's, and a
 // rollout puts two under one key: the readings of each stay out of the other's
 // fit. So the key remembers the revision its readings are of, and the rows
 // decide (domain.NewestRevision): not the scale target's status, which a plain

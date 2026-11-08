@@ -155,7 +155,7 @@ func TestScalingManagerMetricNamesComesFromTheConstants(t *testing.T) {
 }
 
 // runbookPrefix is where every runbook_url points: the docs on main.
-const runbookPrefix = "https://github.com/ev-shindin/llm-scaling-manager/blob/main/"
+const runbookPrefix = "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/"
 
 // Every alert names a runbook, and the runbook resolves: the URL is under the
 // repository's main branch, the file exists in this tree, and the anchor is a
@@ -271,7 +271,7 @@ func TestKueueLenderWaitingComparesAgainstTheCooldownGauge(t *testing.T) {
 		"one cooldown, matched against every lender series")
 	// PR-C: with releaseToNonReclaimingLenders a release lands only after the
 	// KEDA scale-down window; the latency is taken off the wait of the
-	// cohort it was measured for alone (PR #203 review SF2), and a cohort
+	// cohort it was measured for alone (PR ev-shindin/llm-scaling-manager#203 review SF2), and a cohort
 	// with no latency series keeps the cooldown alone.
 	assert.Contains(t, expr, "- on (cohort) group_left () max by (cohort) (llmsm_kueue_borrow_release_latency_seconds) or max by (cohort, cluster_queue) (llmsm_kueue_lender_waiting_seconds)")
 }

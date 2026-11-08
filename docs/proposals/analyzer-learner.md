@@ -2,20 +2,20 @@
 
 - **Review:** Revision 6 was reviewed in five rounds by four reviewers; all
   four: good enough (round 5).
-- **Status:** built. The PRs of [section 7](#7-migration) have merged and #341 is
+- **Status:** built. The PRs of [section 7](#7-migration) have merged and ev-shindin/llm-scaling-manager#341 is
   closed. What this document asks for and main does not do yet is listed in
-  #495. The notes below are each PR's decisions, as it made them, and read in
+  ev-shindin/llm-scaling-manager#495. The notes below are each PR's decisions, as it made them, and read in
   the future tense where the PR came first. Revision 6 merged as
-  #286. Revision 7 re-checked it against main 3515c6ccd, after #282, #283,
-  #288, #293, #294, #298, #302, #303, #306, #329, #331 and #361 merged. Line
+  ev-shindin/llm-scaling-manager#286. Revision 7 re-checked it against main 3515c6ccd, after ev-shindin/llm-scaling-manager#282, ev-shindin/llm-scaling-manager#283,
+  ev-shindin/llm-scaling-manager#288, ev-shindin/llm-scaling-manager#293, ev-shindin/llm-scaling-manager#294, ev-shindin/llm-scaling-manager#298, ev-shindin/llm-scaling-manager#302, ev-shindin/llm-scaling-manager#303, ev-shindin/llm-scaling-manager#306, ev-shindin/llm-scaling-manager#329, ev-shindin/llm-scaling-manager#331 and ev-shindin/llm-scaling-manager#361 merged. Line
   numbers are main's at that commit.
   [Shipped behaviour each PR must keep](#shipped-behaviour-each-pr-must-keep)
   lists what those PRs fixed that a later step could undo.
-- **Since revision 7:** #345 step 1 landed: one analyzer registry, and one
+- **Since revision 7:** ev-shindin/llm-scaling-manager#345 step 1 landed: one analyzer registry, and one
   `AnalyzerInput` per model built before any `Analyze` (`buildAnalyzerInput`).
   It runs after `observeLoadBalance`, as the scale-target load did. PR 1's
   settle tracker must observe before the balance tracker reads (4.2), so it
-  goes at the top of `runAnalyzers`, ahead of both (decided on #345; the PR 1
+  goes at the top of `runAnalyzers`, ahead of both (decided on ev-shindin/llm-scaling-manager#345; the PR 1
   row says so). The engine now reaches
   saturation's capabilities through typed fields resolved at registration
   (`saturationCapabilities`), not by assertion at each call; a wrapper around
@@ -58,7 +58,7 @@
   again from the return (cautious, accepted). A not-Ready leader still makes
   the group's Ready time zero. Checked in the code (the collector and lws
   v0.8.0's pod controller), not on a run. k2's joined
-  test reads the tracker, keeping #288's rule, behind two replay switches:
+  test reads the tracker, keeping ev-shindin/llm-scaling-manager#288's rule, behind two replay switches:
   `k2-reads-the-settle-tracker` (a replica unseen past the tracker's
   absence tolerance waits again, where the memo held it 2 min; and a Ready
   row whose Ready time reads zero keeps the settle, where the memo waited
@@ -106,7 +106,7 @@
   (restored, or brought back) has an unknown latch, which resolves latched
   over the derived figure and unlatched under it, and its first choice is
   evidence. Before the fold was touched, two prefill pods in one spacing pin
-  row 7 (`prefill_bound_pin_test.go`): since #395 the bound folds by pod
+  row 7 (`prefill_bound_pin_test.go`): since ev-shindin/llm-scaling-manager#395 the bound folds by pod
   name, so the sample is the pods' mean and the bound the max across
   minutes. Mu's `learner-write` band is 5 %, over the 4 % noise that flipped
   the choice, not measured on a run; a source flip (measured, derived,
@@ -199,7 +199,7 @@ blocker that round, and nothing in it changed.
 | A mid-run snapshot is not the analyzer's state | - | A recording starts only at a controller start, and keeps its head at the cap. No mid-run snapshot. The claim that `ExportLearnedState` touches `LastUsed` was false and is removed | The cap is per recording, with a per-volume ceiling that holds two, so the recording after a container restart has room | The volume's `sizeLimit` is that per-volume ceiling plus headroom, not one cap (the deferred row now says so) | [2.4](#24-the-recorder) |
 | Goldens without a stated rule | Change behind a switch; off equals the parent, on moves only named outputs | One switch per named change, set on by the constructor. Committed goldens are the all-on run; the off-run compares against the base commit's goldens. Runs: all off, each alone, all on. New recordings land with base goldens first. One golden file per output. The check re-runs on PR edits | The full store-record check runs in the all-off run only; the other runs compare the engine-supplied fields, and the analyzer-written store fields are a golden output. "All off" means this PR's switches. Replay runs every recorded analyzer together, or checks only the fields one analyzer reads. Each package exposes its switches through one exported test hook, a seam in the coverage test | The whole-record check runs only in the fidelity run (replay at the recording's own commit); all off compares the analyzer-written fields through their golden against `$BASE_SHA`, since a reused recording holds an earlier PR's k2. Elsewhere the engine-supplied fields are compared by the store's own rule (`EngineParams` by `ArgsFingerprint` and `Image`, hardware by `sameHardware`) and only where both records share `LearnedFrom`. `EvictStale`'s removed set fails only the fidelity run; elsewhere it is reported | [2.4](#24-the-recorder), [2.5](#25-replay-and-the-golden-rule) |
 | Presence and idle | A known bit per gauge; idle is a two-gauge rule | ITL presence is three-state. Idle needs **positive** evidence, so two failed queries do not restart the settle fleet-wide | Idle evidence is role-aware: a prefill pod never has an ITL, so its idle reads the request or prompt-token rate. KV means peak KV. A listed row with unknown gauges is a sighting, and an idle run spans at most 1 min (revision 7: per gap, see [4.3](#43-what-the-tracker-owns)) | Prefill idle reads the request rate for both entering and leaving idle (the prompt-token rate is absent on SGLang). The brownout trade is stated: an idle-and-return inside a long brownout keeps its settle (cost side); PR 1 may end the settle after more than 2 min of unknown rows, and the section 8 brownout case pins the choice | [4.3](#43-what-the-tracker-owns) |
-| Property tests | Twelve classes, thresholds enumerated, findings mapped | A known-failures ledger; a mutant per mapping row; estimands declared, so section 5's estimators can pass; time base is an input family | A section-5 estimator that over-prices when one pod is genuinely slow declares where it starts to, and the case is in the ledger, owned by PR 3. Both mu rows (`half-served-max-slow-pod`, `sibling-yield-slow-pod`) pass since #495 and are out of the ledger ([one slow pod, as built](#one-slow-pod-as-built-495)) | - | [2.6](#26-property-tests) |
+| Property tests | Twelve classes, thresholds enumerated, findings mapped | A known-failures ledger; a mutant per mapping row; estimands declared, so section 5's estimators can pass; time base is an input family | A section-5 estimator that over-prices when one pod is genuinely slow declares where it starts to, and the case is in the ledger, owned by PR 3. Both mu rows (`half-served-max-slow-pod`, `sibling-yield-slow-pod`) pass since ev-shindin/llm-scaling-manager#495 and are out of the ledger ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)) | - | [2.6](#26-property-tests) |
 | Settle tracker ownership | The saturation analyzer owns the one tracker | The **engine** owns it and observes rows at the top of `runAnalyzers`, before the balance tracker and every analyzer. The throughput analyzer takes the view at registration | The engine's observation is a recorded event with the engine's own clock read. A rollout is detected from the rows' `Revision`, not from `capacity.Record.RollingOut`, which is filed later in the cycle | - | [4.2](#42-one-owner), [4.3](#43-what-the-tracker-owns) |
 | PR 4a was called neutral | - | Its two behaviour changes are named, each behind a switch, tested by the restart suite with a negative control | 4.4 states what an operator sees during the ITL wait (the floor is silent for about 2.75 min, the SLO side, masked by the 300 s scale-down stabilization). 4a runs the closed-loop probe through a restart, and the missing-row case runs through ITL | The masking holds "as long as the controller is back within about 2 min" | [4.4](#44-the-cost-after-a-controller-restart), [7](#7-migration) |
 
@@ -222,17 +222,17 @@ recording.
 
 ## Why
 
-The two-namespace runs of October 2026 (issue #270, its rerun, E1 and E2) and
-the reviews of #273 and #282 found six kinds of defect:
+The two-namespace runs of October 2026 (issue ev-shindin/llm-scaling-manager#270, its rerun, E1 and E2) and
+the reviews of ev-shindin/llm-scaling-manager#273 and ev-shindin/llm-scaling-manager#282 found six kinds of defect:
 
 | defect class | where it hit |
 | --- | --- |
-| **A transient admitted as a reading.** A replica that just joined, the first minute of a load step, a slow fill. | ITL intercept learned from a ramp (#273). k2 taken at 8 % KV behind a 160-request step (#282). k2 recorded mid-fill on long outputs (#282). A replica just Ready counted as idle room (#282). A filling replica's token rate taken as mu, 11 % high (#282 round 4). |
-| **The first sample adopted raw.** | A fresh pod's 0.0995 req/s became the bucket's mu (E1, #282). k2 prices its first admitted reading at once. The start-time estimator's first measurement replaces the 70 s default. |
-| **A stale value never refreshed.** | A measured mu outranked a derived one for the rest of a run (#282). The 6 ms default intercept stayed on every multi-replica fleet (#273). |
-| **A missing reading read as a value.** | k == 0 meant "not collected" and was traced as zero load (#273). A NaN KV read as 0, and so as idle (#283 review). |
-| **One reading dominates.** | Least squares pulled by three joined-pod readings out of sixteen (#273: now dropped by state, then a k-weighted mean). The saturated throughput sample was the hottest replica (#282: now the mean across replicas, bounded by the served rate). One slow replica set the fleet's mu (#282 round 4: now yields to its full siblings). |
-| **A hard edge with no hysteresis.** The most frequent class. | The k2 key boundary swung capacity 39 % at constant load. Demand fell 48 % for a 2 % rise in lambda. Mu flipped between measured and derived 11 times in 20 cycles under 4 % noise. `backlogGrew` swung demand 1.54x on one request (fixed on #282 by e7d9f0ff1). |
+| **A transient admitted as a reading.** A replica that just joined, the first minute of a load step, a slow fill. | ITL intercept learned from a ramp (ev-shindin/llm-scaling-manager#273). k2 taken at 8 % KV behind a 160-request step (ev-shindin/llm-scaling-manager#282). k2 recorded mid-fill on long outputs (ev-shindin/llm-scaling-manager#282). A replica just Ready counted as idle room (ev-shindin/llm-scaling-manager#282). A filling replica's token rate taken as mu, 11 % high (ev-shindin/llm-scaling-manager#282 round 4). |
+| **The first sample adopted raw.** | A fresh pod's 0.0995 req/s became the bucket's mu (E1, ev-shindin/llm-scaling-manager#282). k2 prices its first admitted reading at once. The start-time estimator's first measurement replaces the 70 s default. |
+| **A stale value never refreshed.** | A measured mu outranked a derived one for the rest of a run (ev-shindin/llm-scaling-manager#282). The 6 ms default intercept stayed on every multi-replica fleet (ev-shindin/llm-scaling-manager#273). |
+| **A missing reading read as a value.** | k == 0 meant "not collected" and was traced as zero load (ev-shindin/llm-scaling-manager#273). A NaN KV read as 0, and so as idle (ev-shindin/llm-scaling-manager#283 review). |
+| **One reading dominates.** | Least squares pulled by three joined-pod readings out of sixteen (ev-shindin/llm-scaling-manager#273: now dropped by state, then a k-weighted mean). The saturated throughput sample was the hottest replica (ev-shindin/llm-scaling-manager#282: now the mean across replicas, bounded by the served rate). One slow replica set the fleet's mu (ev-shindin/llm-scaling-manager#282 round 4: now yields to its full siblings). |
+| **A hard edge with no hysteresis.** The most frequent class. | The k2 key boundary swung capacity 39 % at constant load. Demand fell 48 % for a 2 % rise in lambda. Mu flipped between measured and derived 11 times in 20 cycles under 4 % noise. `backlogGrew` swung demand 1.54x on one request (fixed on ev-shindin/llm-scaling-manager#282 by e7d9f0ff1). |
 
 The joined-replica test now exists four times, with four sets of rules (see
 [Settled replicas](#4-settled-replicas)): the case for one settle tracker. The
@@ -250,7 +250,7 @@ age-out, no reset. That rule stays.
 | --- | --- |
 | Why did a light model run at 0.95 utilisation? | `throughput-demand-floor` names `muKey` and `muSource` (PR 3); mu's `learner-write` shows the first sample, its pod and its joined age. The `[1m]` peak after a swap belongs to no learner and stays open |
 | Why did a fleet hold 3 replicas? | `heldAtFleet`/`heldWhy` (exist), `muSource`, `startEstimateSeconds` and `startSource` (PR 3), `k2-decision`'s P-code |
-| Why did the second GPU transfer wait? | **Not answered here.** The share planner's holds are out of scope; they belong to the utilization-share work (#272 and its follow-ups) |
+| Why did the second GPU transfer wait? | **Not answered here.** The share planner's holds are out of scope; they belong to the utilization-share work (ev-shindin/llm-scaling-manager#272 and its follow-ups) |
 
 ## 1. Inventory
 
@@ -258,7 +258,7 @@ D = `internal/engines/analyzers/saturation`. "Persisted" means it is in the
 learned-state snapshot (`D/learned_snapshot.go`, ConfigMap `scaling-manager-learned-state`,
 off by default).
 
-Since #298 most admission and settle figures below are operator policy keys:
+Since ev-shindin/llm-scaling-manager#298 most admission and settle figures below are operator policy keys:
 `analyzerTuning` and `loadImbalance` in a scaling policy
 (`internal/config/analyzer_tuning.go`, documented in
 [scaling policy](../reference/scaling-policy.md#advanced-tuning-analyzertuning-and-loadimbalance)).
@@ -266,16 +266,16 @@ The numbers in this document are their defaults.
 
 | # | quantity | where | admission | fit | memory and forgetting | persisted |
 | - | --- | --- | --- | --- | --- | --- |
-| 1 | ITL line `ITL(k) = A·k + B`, saturation analyzer | `internal/signals/itl/`, wired in `D/analyze.go` | Ready, not a bridge, finite ITL > 0, k > 0. k inside the policy KV band (`analyzerTuning.itlBand`), or above it when the replica's batch is at its sequence cap (`max_num_seqs`, lowered by `--max-num-active-seqs`, #331) with preemption at most `itlBand.capMaxPreemptionRate` (`internal/signals/itl/admission.go`, #293). Each reading goes to the main window, the main and steady windows, or nowhere (see [Admission shapes](#33-admission-shapes)). A reading taken while its replica settles (joined, or load returned after idle, under `steadyGate.steadyFor`, 2 min) is stamped and kept out of the pinned fit | OLS on the steady window at ≥ 10 rows spread ≥ 0.30. Otherwise A = k-weighted mean of `ITL − B` over unstamped readings, B pinned. Fewer than `steadyGate.minSettledSamples` (3) such readings, or fewer than 10 in the window at all (light or overloaded load ages them out): the last A is held (`SlopeHeld`), up to `BucketRetention` after its fit and under the same args; a held line is not republished to row 2. A < 0 refused | Main 20 rows / 30 min. Steady 40 rows, carried `steadyGate.carry` (5 min) past the main window. Swept 24 h unseen. Args change stashes B | B, its stash, and the held slope (`ITLSlopes`, #329): without it a restart under light load had no line and sized by KV occupancy alone (issue #316) |
+| 1 | ITL line `ITL(k) = A·k + B`, saturation analyzer | `internal/signals/itl/`, wired in `D/analyze.go` | Ready, not a bridge, finite ITL > 0, k > 0. k inside the policy KV band (`analyzerTuning.itlBand`), or above it when the replica's batch is at its sequence cap (`max_num_seqs`, lowered by `--max-num-active-seqs`, ev-shindin/llm-scaling-manager#331) with preemption at most `itlBand.capMaxPreemptionRate` (`internal/signals/itl/admission.go`, ev-shindin/llm-scaling-manager#293). Each reading goes to the main window, the main and steady windows, or nowhere (see [Admission shapes](#33-admission-shapes)). A reading taken while its replica settles (joined, or load returned after idle, under `steadyGate.steadyFor`, 2 min) is stamped and kept out of the pinned fit | OLS on the steady window at ≥ 10 rows spread ≥ 0.30. Otherwise A = k-weighted mean of `ITL − B` over unstamped readings, B pinned. Fewer than `steadyGate.minSettledSamples` (3) such readings, or fewer than 10 in the window at all (light or overloaded load ages them out): the last A is held (`SlopeHeld`), up to `BucketRetention` after its fit and under the same args; a held line is not republished to row 2. A < 0 refused | Main 20 rows / 30 min. Steady 40 rows, carried `steadyGate.carry` (5 min) past the main window. Swept 24 h unseen. Args change stashes B | B, its stash, and the held slope (`ITLSlopes`, ev-shindin/llm-scaling-manager#329): without it a restart under light load had no line and sized by KV occupancy alone (issue ev-shindin/llm-scaling-manager#316) |
 | 2 | Shared and borrowed ITL line | `D/analyzer.go` `publishLine`/`borrowLine` | `EnableLearnedStateReuse` (off), same fingerprint | none | Ages on last write. May hold a fleet, never order one | yes |
-| 3 | k2, KV at saturation | `D/replica_capacity.go` `k2Chain`, `D/k2_settle.go`, `D/keys.go` | Queue ≥ threshold; downstream not saturated; not a bridge; not mid-rollout; under the physical ceiling. Joined under 1 min, counted from the later of the Pod's Ready time and the first sight of that Ready time (`k2Joined`, `D/settle_view.go`, on the settle tracker; #288), or from its first return of load after an idle run in its current settle (`D/joined_served.go`, #392): refused, k2 and the mu beside it. When queue × footprint exceeds what the busiest rank holds, also: rate ≥ `k2Settle.rateFraction` (0.7) of mu on record **and** residency ≥ 0.7 of k2 on record, **or** residency within ±`k2Settle.maxRise` (25 %) of the reading 1 min back with the queue standing on every cycle. On decode of a P/D model, the queue k2 reads is the engine's own deferred queue, rewritten before k2 reads it (`D/pd_decode_queue.go`, #294, #306) | Mean of a 10-sample window. Admitted readings raise it as well as lower it. The first admitted reading of an empty window waits for a second, from a later cycle (`D/k2_confirm.go`, #392): it is held aside, labelled `P1-obs-unconfirmed`, and its cycle is priced at most at the reading. A window that holds readings, or was restored, takes each at once | Key: the fleet's output length for decode and aggregated, its bucket held by a band (smoothed over 10 min, 3 % past the boundary, or 20 % past it for 2 min; #396); prefill's own average. 24 h write gap starts a new episode. Evicted 7 d after last read | yes, with args tags and stash |
+| 3 | k2, KV at saturation | `D/replica_capacity.go` `k2Chain`, `D/k2_settle.go`, `D/keys.go` | Queue ≥ threshold; downstream not saturated; not a bridge; not mid-rollout; under the physical ceiling. Joined under 1 min, counted from the later of the Pod's Ready time and the first sight of that Ready time (`k2Joined`, `D/settle_view.go`, on the settle tracker; ev-shindin/llm-scaling-manager#288), or from its first return of load after an idle run in its current settle (`D/joined_served.go`, ev-shindin/llm-scaling-manager#392): refused, k2 and the mu beside it. When queue × footprint exceeds what the busiest rank holds, also: rate ≥ `k2Settle.rateFraction` (0.7) of mu on record **and** residency ≥ 0.7 of k2 on record, **or** residency within ±`k2Settle.maxRise` (25 %) of the reading 1 min back with the queue standing on every cycle. On decode of a P/D model, the queue k2 reads is the engine's own deferred queue, rewritten before k2 reads it (`D/pd_decode_queue.go`, ev-shindin/llm-scaling-manager#294, ev-shindin/llm-scaling-manager#306) | Mean of a 10-sample window. Admitted readings raise it as well as lower it. The first admitted reading of an empty window waits for a second, from a later cycle (`D/k2_confirm.go`, ev-shindin/llm-scaling-manager#392): it is held aside, labelled `P1-obs-unconfirmed`, and its cycle is priced at most at the reading. A window that holds readings, or was restored, takes each at once | Key: the fleet's output length for decode and aggregated, its bucket held by a band (smoothed over 10 min, 3 % past the boundary, or 20 % past it for 2 min; ev-shindin/llm-scaling-manager#396); prefill's own average. 24 h write gap starts a new episode. Evicted 7 d after last read | yes, with args tags and stash |
 | 4 | Borrowed k2 (lower bound) | `D/k2_borrow.go` | Only when lower than the variant's own k2. KV total within 3 % | none | Held 30 min, then relaxed **upward** over 6 h of serving time. Re-arms on an args change or a figure ≥ 20 % lower | yes |
-| 5 | Measured mu | `D/throughput_floor.go`, `D/throughput_admission.go` | Only on a P1-obs k2 write, so it inherits k2's joined test. RequestRate > 0. Not filling: generated tokens at most `admission.maxTokensOverCompletions` (1.15x) completions × output length. Not under half the highest rate a Ready replica of the variant served, its own included (`servedBounds`). Not under `muChoice.minMeasuredOfDerived` (0.5) of derived, unless the same pod read that low on every saturated cycle for 2 min | One sample a minute. Within the minute a reading rewrites the last sample: max per pod, **mean** across pods (`meanOf`, `D/throughput_floor.go`, #282): a fleet serves the sum of its replicas' rates | See [the mu choice](#the-mu-choice) below. Evicted 7 d after last read | window yes, choice no |
+| 5 | Measured mu | `D/throughput_floor.go`, `D/throughput_admission.go` | Only on a P1-obs k2 write, so it inherits k2's joined test. RequestRate > 0. Not filling: generated tokens at most `admission.maxTokensOverCompletions` (1.15x) completions × output length. Not under half the highest rate a Ready replica of the variant served, its own included (`servedBounds`). Not under `muChoice.minMeasuredOfDerived` (0.5) of derived, unless the same pod read that low on every saturated cycle for 2 min | One sample a minute. Within the minute a reading rewrites the last sample: max per pod, **mean** across pods (`meanOf`, `D/throughput_floor.go`, ev-shindin/llm-scaling-manager#282): a fleet serves the sum of its replicas' rates | See [the mu choice](#the-mu-choice) below. Evicted 7 d after last read | window yes, choice no |
 | 6 | Derived mu | `D/mu_from_itl.go` `deriveMu` | none: a formula on #1 per replica | none | As fresh as the line | no |
 | 7 | Prefill throughput bound | `D/prefill_bound.go` | `EnablePrefillThroughputBound`. Saturated, serving rows. No joined test, no rate check, no band | Window max. It writes through #5's fold with pod `""`, so it kept its max only because every prefill pod folds under one empty key | **Only rises.** The prior max is read before the write and put back with `RaiseLast`, so it survives the 24 h episode reset. Touched on every read, so never ages while pricing. Cleared only by an args change or a forget | with #5 |
 | 8 | Fleet shape and shape-change hold | `D/shape_change.go`, `D/fleet_shape.go` | Tolerance band on the router's prompt length | Rate-weighted mean | Hold up to 5 min | no |
-| 9 | Decode-saturation memory | `D/roles.go` `roleSaturated` | One full decode pod gates prefill learning (the #282 fix that changed this was reverted, 7ab00fa8c). Bridges count | none | 1 min | no |
-| 10 | Idle room | `D/idle_room.go` | Decode only. Idle on every reading for 2 min, no gap > 1 min, not a bridge. A run starts under the idle line and goes on under 1.4 times it (#396) | none | Run resets on a non-idle reading | no |
+| 9 | Decode-saturation memory | `D/roles.go` `roleSaturated` | One full decode pod gates prefill learning (the ev-shindin/llm-scaling-manager#282 fix that changed this was reverted, 7ab00fa8c). Bridges count | none | 1 min | no |
+| 10 | Idle room | `D/idle_room.go` | Decode only. Idle on every reading for 2 min, no gap > 1 min, not a bridge. A run starts under the idle line and goes on under 1.4 times it (ev-shindin/llm-scaling-manager#396) | none | Run resets on a non-idle reading | no |
 | 11 | Floor arrival rate, trust and backlog memory | `D/throughput_floor.go`, `internal/signals/floor/` | none | Blend from 0.5 to 0.8 of resident demand. A queue counts as grown past a noise band over a minute. An engine's own queue is capped at what it drains (mu × T) **only while it stands**; while the role's backlog grows it is charged in full (round 4) | Last cycle's backlog per role; `backlogGrew` remembers 1 min, so the full charge outlives growth by up to a minute (an over-order) | no |
 | 12 | Replica start time | `D/start_est.go` | Each pod once, not a bridge, 0–3600 s. A sample over 3x the estimate is refused until 3 distinct Pods have reported one (`startConfirmPods`, 5b), so one Pod repeating never opens the guard | EWMA α 0.3, and the first sample replaces the prior. The prior is the ScaledObject's `replicaStartSeconds` seed (5c, [trigger reference](../reference/scaledobject-trigger.md)), else the 70 s default (`DefaultReplicaStartSeconds`). With a seed and no sample, sizing reads the seed; with neither, the floor does not project. Under 3 counted Pods the published figure blends the prior with their mean, held in half to twice the seed, and sizing reads the largest of the blend, the mean and the EWMA | Counted Pods' Ready times are persisted (`StartCounted`, 5d): after a restart a Pod with the same Ready time is not folded again, and any other is. The floor reads it as a min per role, share pacing as a max | yes |
 | 13 | SLO analyzer line | `internal/engines/analyzers/slo/` | Its own ITL tracker, same rules as #1 | Same as #1 | 24 h unseen | no |
@@ -291,7 +291,7 @@ A measured mu and a derived mu are both offered every cycle, and
 | rule | when |
 | --- | --- |
 | Yields to derived **at once** | the measurement is under derived and a Ready replica (its own included) serves more than `muChoice.maxRatio` (2x) it |
-| Yields to the full siblings (`siblingYield`, #282) | the measurement is under `admission.siblingMuTolerance` (0.8) of the lower median served by every Ready replica with a full cache, queued ones included. A yield opens only when at least one of them is unqueued. Logged as `saturated-throughput-yields-to-siblings`, bucket `served-siblings`. Remembered in `muChoice` until the measurement comes within 0.8 or the window starts over |
+| Yields to the full siblings (`siblingYield`, ev-shindin/llm-scaling-manager#282) | the measurement is under `admission.siblingMuTolerance` (0.8) of the lower median served by every Ready replica with a full cache, queued ones included. A yield opens only when at least one of them is unqueued. Logged as `saturated-throughput-yields-to-siblings`, bucket `served-siblings`. Remembered in `muChoice` until the measurement comes within 0.8 or the window starts over |
 | Yields when stale | freshness is the last saturated reading that **agreed** with it within 2x. Above derived: after `muChoice.freshFor` (5 min). Below derived: after `muChoice.lowHoldFor` (30 min) |
 | Latch | out at `muChoice.maxRatio` (2.0), back at `muChoice.returnRatio` (1.6) |
 
@@ -312,7 +312,7 @@ The snapshot carries #1 (B, its stash and the held slope `ITLSlopes`),
 rollback build still reads them. A restore never makes a figure younger, and an
 unknown age resolves to the safe side ([3.4](#34-which-side-breaks-the-slo)).
 
-Row 16 has none of #273's fixes (steady gate, settling stamp, k > 0 guard) and
+Row 16 has none of ev-shindin/llm-scaling-manager#273's fixes (steady gate, settling stamp, k > 0 guard) and
 none of row 1's cap admission. It reads the same policy band as row 1. It
 moves in PR 4b.
 
@@ -320,7 +320,7 @@ moves in PR 4b.
 
 ### 2.1 What the recorded runs can and cannot replay
 
-The E1, E2 and #270-rerun logs were the planned fixtures. They cannot carry
+The E1, E2 and ev-shindin/llm-scaling-manager#270-rerun logs were the planned fixtures. They cannot carry
 most of the migration:
 
 - **No instant KV, no ReadySince, no warm-pool flag** on any line. The
@@ -392,8 +392,8 @@ fake clock** that `a.now()` uses. That is the defect.
 ### 2.3 Presence bits
 
 Three bits exist (`internal/domain/replica_metrics.go`):
-`KvUsageInstantKnown`, `CapacityQueueKnown` (#294, the engine's own queue)
-and `PreemptionRateKnown` (#293). The collector turns NaN, Inf and absent
+`KvUsageInstantKnown`, `CapacityQueueKnown` (ev-shindin/llm-scaling-manager#294, the engine's own queue)
+and `PreemptionRateKnown` (ev-shindin/llm-scaling-manager#293). The collector turns NaN, Inf and absent
 series into 0 (`collector/extract.go`). PR 0a reuses the three bits and adds a
 `...Known` bit beside each other gauge a learner reads: peak KV, ITL
 (`AvgITL`), request rate, generation-token rate, prompt-token rate, and
@@ -404,7 +404,7 @@ its block's range. A read zero is known (no work), except for ITL: ITL is
 value at or below 0, or a failed query is `ITLAbsent`. A not-Ready Pod clears
 only its ITL bits. Ranks merge by AND; for ITL, Finite needs one Finite rank
 and none Absent; Empty needs every rank Empty and none that generated tokens.
-The Pod's mean is generation-weighted over its Finite ranks only (#341 4a's
+The Pod's mean is generation-weighted over its Finite ranks only (ev-shindin/llm-scaling-manager#341 4a's
 named change, made in the collector ahead of 4a): an Empty rank that generated
 tokens (max_tokens=1) has no interval, so it neither dilutes the mean nor
 blocks Finite. The per-pod query divides by inter-token intervals instead
@@ -422,10 +422,10 @@ fits ITL(k) high and mu low, the side that over-orders; it is left as is and
 must not be "fixed" by putting the Empty ranks back into the ITL mean. A
 prefill-role Pod reads Empty permanently, so readers gate by role.
 
-`RunningRequestsKnown` is a prerequisite of #277 (reading
+`RunningRequestsKnown` is a prerequisite of ev-shindin/llm-scaling-manager#277 (reading
 `num_requests_running` as resident load). `RunningRequests` is "zero when the
 metric is unavailable" today, so without the bit a missing series would read
-as 0 resident. #277 reads it as that: where the running requests are read, the derived mu
+as 0 resident. ev-shindin/llm-scaling-manager#277 reads it as that: where the running requests are read, the derived mu
 prices a resident request at the KV they hold, between the hit rate's discount
 and none; a row without the bit is no reading, and with no reading the
 discount stands (behind the switch `kv-per-request-hits-resident`).
@@ -444,7 +444,7 @@ single bool would merge the idle signal with a failed query, so ITL carries
   series, and ITL's three states on a live, an empty and a failed query. The
   three existing bits keep their tests.
 - Negative control, in PR 1 (the first PR with a tracker to read the bits):
-  #273's A4 case (k == 0 unsettles a replica) and 273-r3 #2 (a missed scrape
+  ev-shindin/llm-scaling-manager#273's A4 case (k == 0 unsettles a replica) and 273-r3 #2 (a missed scrape
   restarts a settle) fail on the parent.
 - Until a learner moves onto the tracker it ignores the bits, so this part
   changes no output.
@@ -461,7 +461,7 @@ So the recorder is a field inside each analyzer (`a.rec`, nil when off). The
 saturation, SLO and throughput analyzers each get one, and so does the shared
 `*capacity.Store`. All write to one sink with one `seq`.
 
-The recorder owns its schema. 0b lands before #345 step 1 creates
+The recorder owns its schema. 0b lands before ev-shindin/llm-scaling-manager#345 step 1 creates
 `AnalyzerInput`, so the `Analyze` event mirrors the input shape that
 engine-structure stage 3 plans: the input, each variant's capacity record,
 `VariantMetadata`, and the merged policy including `analyzerTuning`.
@@ -592,7 +592,7 @@ and `now`:
 | store mutations, engine-side | the exported values method behind `LoadFromScaleTarget` (the parsed `EngineParams`, accelerator, GPU count, `RollingOut`, `now`), `EvictStale` (the timeout and `now`; what it removed, as a check that fails only the fidelity run) |
 | settle observation, engine-side (from PR 1) | the model and the engine's own `now`, read where the engine observes the tracker; the rows are the next `Analyze` event's ([4.2](#42-one-owner)) |
 | `RestoreLearnedState`, `ExportLearnedState` | the document in or out |
-| `ForgetVariant`, `ForgetLearnedState`; SLO `ForgetVariant` (#431) | the variant, key and cause (annotation, model gone) |
+| `ForgetVariant`, `ForgetLearnedState`; SLO `ForgetVariant` (ev-shindin/llm-scaling-manager#431) | the variant, key and cause (annotation, model gone) |
 | `EvictStaleHistory`, `NoteVariantsPresent`, SLO `BeginCycle`, `EvictStale`, `NoteVariantsPresent`, throughput `Observe` (engine-called only) | the arguments |
 | `HoldLowerBounds` | the flag |
 | `StableAcceleratorFor` | the arguments and the answer, when the engine calls it (it moves the memo) |
@@ -666,12 +666,12 @@ post-step, not from `Analyze`, so an analyzer replay does not compare them.
 `AnalyzedAt` is excluded. 0b records the analyzer boundary only. An
 engine-level golden layer (the composite, its holds and their reasons,
 `ReleaseBound`/`OtherFrames`, the warm-pool supply and pressure, the
-optimizer's decisions) is #345's and outside this plan: #345 step 0 adds its
+optimizer's decisions) is ev-shindin/llm-scaling-manager#345's and outside this plan: ev-shindin/llm-scaling-manager#345 step 0 adds its
 own recorder events (composite, optimizer and warm-pool inputs) to 0b's sink
 and builds its goldens on them. Status: the composite and the warm pool's
 figures are recorded and replayed (`engine.Composite`, the `engine` golden;
 [testing](../developer-guide/testing.md#the-engine-layer)); the optimizer's
-decisions get their own PR, before #345 step 3.
+decisions get their own PR, before ev-shindin/llm-scaling-manager#345 step 3.
 
 **The rule.**
 
@@ -724,7 +724,7 @@ section does not name. The check also runs on the PR's `edited` event, so
 correcting the `goldens:` section re-runs it. Goldens are written only by the
 `make` target, never by hand.
 
-As built (#495), the check is `.github/workflows/ci-goldens-gate.yaml`, which runs
+As built (ev-shindin/llm-scaling-manager#495), the check is `.github/workflows/ci-goldens-gate.yaml`, which runs
 `deploy/ci-pr-checks/goldens-section.sh`. `hack/check-goldens-section.sh` tests it
 on fixture PRs from `make lint-deploy-scripts`. The section is a strict line
 format, set out in [testing](../developer-guide/testing.md#the-goldens-section),
@@ -735,7 +735,7 @@ more than this rule's replay outputs: also the `cmd/whatif` goldens and schema,
 `goldens.yaml`, and each `recording.jsonl.gz`, so a retaken recording or a new
 fixture is named too. It compares file names only. The direction and the pasted
 summary stay with the reviewer, and nothing machine-checks them. Run on the 77
-PRs merged since #388, with their real bodies and changed paths, the 46 that moved
+PRs merged since ev-shindin/llm-scaling-manager#388, with their real bodies and changed paths, the 46 that moved
 no golden pass. The 31 that moved one fail, because their bodies predate the
 format, so that count says nothing about the format.
 
@@ -747,17 +747,17 @@ fails rather than passes. A counter counts only where its path can run on the
 PR's base: a counter that is zero by construction there is not coverage, and is
 required from the PR that makes it non-zero. Joined refusals with a known
 ReadySince are not such a counter: the collector reports ReadySince, and k2 and
-mu read it through `noteReady` since #288, so it is required from 0b.
+mu read it through `noteReady` since ev-shindin/llm-scaling-manager#288, so it is required from 0b.
 
 **The closed-loop probe** is new work, not a commit of an existing test. The
-probes #282's model reviews wrote hold the fleet fixed: they compute the
+probes ev-shindin/llm-scaling-manager#282's model reviews wrote hold the fleet fixed: they compute the
 implied replicas and never add one. A closed-loop probe needs a fleet
 simulator: the order becomes replicas after the start time S, a new replica
 is Ready after the settle, load splits equally across Ready replicas or by a
 recorded imbalance, and the queue grows by λ minus what was served. It lands
 in **PR 3**, the first PR that needs it, as `D/closed_loop_probe_test.go`,
 with one known-failing case as its negative control (one slow pod's confirmed
-low rate, #282 round 3 H1; a passing case since #495, whose switches off
+low rate, ev-shindin/llm-scaling-manager#282 round 3 H1; a passing case since ev-shindin/llm-scaling-manager#495, whose switches off
 are now its negative control). Holds, latches, the sibling yield and the
 self-sealing low mu are closed-loop behaviours; a PR that changes one runs the
 probe and pastes the result. PRs 3, 4a, 4b and 5 must; 4a runs it through a
@@ -781,7 +781,7 @@ class below runs on it as well as on direct inputs.
 | First sample | one reading does not set a figure that a second, identifying reading would move by more than the band |
 | Stale value | from identifying data **at N ≥ 2**, the figure converges (catches A3: B stuck at 6 ms) |
 | Missing and duplicated values | a missing gauge (presence false), a single missed row, and two rows for one pod each leave the figure where it was. A series doubled inside PromQL reaches the analyzer as one value at 2x: that is the heterogeneity case here, and a collector test |
-| Contamination **paired with** heterogeneity | a **state-flagged** contaminant is dropped, and a genuinely slower replica with no flag moves the estimate by its weight under the declared estimand. A learner using a value estimator allowed by [section 5](#5-fits-exclude-by-state-then-fit-untrimmed) (half the served max, `siblingMuTolerance` of the siblings' lower median) runs the heterogeneity case with the deviation it declares, on the side it declares. Where that side is the risky one (half the served max; the sibling yield), the learner declares the deviation at which it starts to over-price, and the case goes into the known-failures ledger with an issue as its owner (#495). Since #495 mu uses neither: the slow reading counts by its weight, and the sibling yield never prices above the measurement it replaces, so both mu cases pass ([one slow pod, as built](#one-slow-pod-as-built-495)). Mu's fold across pods is the mean (#282), the declared estimand, so one slow pod at N in {4, 16} (for example {1, 1, 1, 0.5}) is a **passing** case: 0b commits it as a guard, not a ledger row |
+| Contamination **paired with** heterogeneity | a **state-flagged** contaminant is dropped, and a genuinely slower replica with no flag moves the estimate by its weight under the declared estimand. A learner using a value estimator allowed by [section 5](#5-fits-exclude-by-state-then-fit-untrimmed) (half the served max, `siblingMuTolerance` of the siblings' lower median) runs the heterogeneity case with the deviation it declares, on the side it declares. Where that side is the risky one (half the served max; the sibling yield), the learner declares the deviation at which it starts to over-price, and the case goes into the known-failures ledger with an issue as its owner (ev-shindin/llm-scaling-manager#495). Since ev-shindin/llm-scaling-manager#495 mu uses neither: the slow reading counts by its weight, and the sibling yield never prices above the measurement it replaces, so both mu cases pass ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)). Mu's fold across pods is the mean (ev-shindin/llm-scaling-manager#282), the declared estimand, so one slow pod at N in {4, 16} (for example {1, 1, 1, 0.5}) is a **passing** case: 0b commits it as a guard, not a ledger row |
 | Redistribution invariance | the same fleet load moved between replicas leaves fleet demand and learned figures within a declared tolerance |
 | N-dependence | under iid noise, an estimate's expectation does not depend on N in {1, 2, 4, 16} beyond a declared bias (catches the max across replicas, +13.6 % at 16) |
 | Known truth | with a true mu and k2, the priced capacity is at most truth × (1 + ε) under every family, idle replicas included. At the documented target the steady order equals λ / (mu · target) |
@@ -792,12 +792,12 @@ class below runs on it as well as on direct inputs.
 
 **Known-failures ledger.** Some classes fail on today's code by design. Those
 listed when 0b landed that have since been cleared are known truth on the
-time-base family (A5, #393), first sample on k2 and on mu (#392), first sample on start
+time-base family (A5, ev-shindin/llm-scaling-manager#393), first sample on k2 and on mu (ev-shindin/llm-scaling-manager#392), first sample on start
 time (`first-sample/start-time/between-sample-and-default`, 86f9cb5f0), edges
-on the k2 key boundary (#396), heterogeneity on mu
-(`half-served-max-slow-pod` and `sibling-yield-slow-pod`, #495), and
+on the k2 key boundary (ev-shindin/llm-scaling-manager#396), heterogeneity on mu
+(`half-served-max-slow-pod` and `sibling-yield-slow-pod`, ev-shindin/llm-scaling-manager#495), and
 n-dependence on the prefill bound (`n-dependence/prefill-bound/iid-max`,
-#397, with three more cases at 15 % and AR(1) noise). 0b commits a ledger of (class, learner, finding,
+ev-shindin/llm-scaling-manager#397, with three more cases at 15 % and AR(1) noise). 0b commits a ledger of (class, learner, finding,
 measured result, the issue that clears it or "open"), and `CheckLedger` holds
 the owner to that form. It reads no tracker, so a closed issue passes. A listed
 case runs and must
@@ -833,11 +833,11 @@ not cover a key.
 | finding | caught by |
 | --- | --- |
 | GPS ratio first raw; pinned B from unsteady readings; k2 at 8 % behind a step | first sample, transient |
-| Full fit never runs at N ≥ 2, B stays 6 ms (#273 A3) | stale value at N ≥ 2 |
+| Full fit never runs at N ≥ 2, B stays 6 ms (ev-shindin/llm-scaling-manager#273 A3) | stale value at N ≥ 2 |
 | k == 0 unsettles; router queue without engine metrics | missing values |
-| Instant k against a rate[1m] ITL (#273 A5, caught since #393) | known truth, on the time-base family |
+| Instant k against a rate[1m] ITL (ev-shindin/llm-scaling-manager#273 A5, caught since ev-shindin/llm-scaling-manager#393) | known truth, on the time-base family |
 | Sum of per-pod one-minute peaks | redistribution invariance, on the time-base family |
-| Settle refuses one cycle of a fill (#282 F1) | transient, on the time-base family |
+| Settle refuses one cycle of a fill (ev-shindin/llm-scaling-manager#282 F1) | transient, on the time-base family |
 | k2 key flips on the output-length boundary; mu key flips on the output-length boundary; measured/derived flips near 2x; the 0.30 idle line; `backlogGrew` | edges by enumeration (the operating point on the boundary, or the ratio built at 2) |
 | Headroom counted twice (+17.6 %); idle room counted twice; the rules together always pick the higher mu | known truth |
 | KV and throughput units mixed | scale |
@@ -846,16 +846,16 @@ not cover a key.
 | Demand falls when λ lags a step; local queue priced as drainable | monotonicity along a trajectory |
 | Weighted median flapping between modes | edges, on a **bimodal** fleet |
 | IQM breaks at 25 % contamination | **flagged** contamination swept to 50 %; unflagged contamination only up to a section-5 estimator's declared breakdown, so the sweep does not reward the median |
-| A genuinely slow replica trimmed away (#273 r3, #282 r3) | contamination paired with heterogeneity (the old "one reading dominates" test rewarded the trim) |
-| No floor under flow control; prefill never learns (#144) | liveness per topology |
+| A genuinely slow replica trimmed away (ev-shindin/llm-scaling-manager#273 r3, ev-shindin/llm-scaling-manager#282 r3) | contamination paired with heterogeneity (the old "one reading dominates" test rewarded the trim) |
+| No floor under flow control; prefill never learns (ev-shindin/llm-scaling-manager#144) | liveness per topology |
 | Imbalance audit (load moved between replicas) | redistribution invariance |
 | Settle holes: fall, rate escape, restart, idle return, lend | transient, one case per event |
-| Restart fix stubbed | per-path counter "joined refusals with a known ReadySince", required from 0b (the Ready time is on since #288) |
+| Restart fix stubbed | per-path counter "joined refusals with a known ReadySince", required from 0b (the Ready time is on since ev-shindin/llm-scaling-manager#288) |
 | "For good" self-sealing low mu | closed-loop probe |
-| k2 adopts its first reading (#392) | first sample |
-| A replica routed to late adopts a partial rate[1m] as mu (#392) | first sample |
-| Speculative decoding prices the ITL step as a token (#274) | known truth |
-| KV per request assumes one output length (#276) | known truth |
+| k2 adopts its first reading (ev-shindin/llm-scaling-manager#392) | first sample |
+| A replica routed to late adopts a partial rate[1m] as mu (ev-shindin/llm-scaling-manager#392) | first sample |
+| Speculative decoding prices the ITL step as a token (ev-shindin/llm-scaling-manager#274) | known truth |
+| KV per request assumes one output length (ev-shindin/llm-scaling-manager#276) | known truth |
 
 **Where each row stands after 0b.** The code table is `findings` in
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
@@ -867,19 +867,19 @@ finding above is in exactly one state:
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
   restart case fails on it, and the per-path counter "joined refusals with a
-  known ReadySince" drops to zero. "Prefill never learns (#144)" is caught
+  known ReadySince" drops to zero. "Prefill never learns (ev-shindin/llm-scaling-manager#144)" is caught
   too: behind a full decode the prefill bound learns a mu within 3 min, and
   with `enablePrefillThroughputBound` off, its default, prefill learns
-  none. "Instant k against a rate[1m] ITL (#273 A5)" is caught since #393:
+  none. "Instant k against a rate[1m] ITL (ev-shindin/llm-scaling-manager#273 A5)" is caught since ev-shindin/llm-scaling-manager#393:
   the ITL line pairs each rate[1m] ITL with the KV fill averaged over the
   same minute, and a rows mutant that withholds that average fails known
   truth on the time base on 15 of 100 seeds. "k2 key flips on the
-  output-length boundary" and "The 0.30 idle line" are caught since #396:
+  output-length boundary" and "The 0.30 idle line" are caught since ev-shindin/llm-scaling-manager#396:
   a stub mutant turns each band's replay switch off, and its edge case
   fails (13 of 50 seeds, and 98 of 100). "k2 adopts its first reading" is caught since
-  #392: a stub mutant turns the hold's replay switch off, and
+  ev-shindin/llm-scaling-manager#392: a stub mutant turns the hold's replay switch off, and
   first-sample/k2/second-reading fails (20 of 20 seeds). "A replica routed
-  to late adopts a partial rate[1m] as mu" is caught since #392 too: the case
+  to late adopts a partial rate[1m] as mu" is caught since ev-shindin/llm-scaling-manager#392 too: the case
   drives Analyze with a replica Ready for an hour and idle until a burst, and
   with the joined clock's replay switch off
   first-sample/mu/joiner-rate-timebase fails (20 of 20 seeds; the first mu
@@ -887,16 +887,16 @@ finding above is in exactly one state:
   variant with an ITL line, joiner-rate-timebase-line, where a reading that
   served 30-50 s of the minute passes minMeasuredOfDerived (20 of 20; seed 1:
   5.70 against a derived 9.32 and a truth of 10.06). "Speculative
-  decoding prices the ITL step as a token" is caught since #274: ten vLLM
+  decoding prices the ITL step as a token" is caught since ev-shindin/llm-scaling-manager#274: ten vLLM
   replicas each accepting 0.5-2 draft tokens a step read ITL per step, and
   with the correction's replay switch off
   known-truth/itl/speculative-accepted-tokens fails (20 of 20 seeds).  "KV per request
-  assumes one output length" is caught since #276: a bimodal workload with
+  assumes one output length" is caught since ev-shindin/llm-scaling-manager#276: a bimodal workload with
   lengths on vLLM's bucket bounds, read through the histogram's bound on
   E[O^2], and with the spread's replay switch off known-truth/k2/output-spread
   and known-truth/mu/output-spread each fail (19 of 20 seeds). "k == 0 unsettles"
   and the settle holes "fall", "rate escape", "idle return" and "lend" are
-  caught since #495, each on 20 of 20 seeds. A stub mutant turns
+  caught since ev-shindin/llm-scaling-manager#495, each on 20 of 20 seeds. A stub mutant turns
   `Admission.IdleOnEvidence` off, and a scrape that read nothing counts as idle.
   `k2Settle.maxRise` 1e9 admits a fall, `k2Settle.rateFraction` 1e-9 admits a
   rate alone, and `steadyGate.idleRows` 1000 leaves load returning with no
@@ -916,17 +916,17 @@ finding above is in exactly one state:
 | --- | --- |
 | Router queue without engine metrics | the missing-values case passes, and no row edit reproduces the pre-fix reading |
 | Demand falls when λ lags a step | the trajectory passes; no pre-fix floor is reproduced |
-| No floor under flow control (#144) | a ledger row for k2; no case drives mu or the floor under flow control |
-| "For good" self-sealing low mu | fixed on #495, but no property class runs a closed loop, so none catches it. The probe holds it: `TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound` passes, and with the unread replica's credit off it is over-ordered for good again |
-| Share swing and cancel (#272 F1/F2 and the d3 reviews) | the share ledger (#14, #15) is not recorded or replayed. Out of scope for PR 0 |
-| Alert debounce and sustain (#283 M2/M3) | not a learner |
-| Shape dependence of the ITL line (#275) | no generator models it |
+| No floor under flow control (ev-shindin/llm-scaling-manager#144) | a ledger row for k2; no case drives mu or the floor under flow control |
+| "For good" self-sealing low mu | fixed on ev-shindin/llm-scaling-manager#495, but no property class runs a closed loop, so none catches it. The probe holds it: `TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound` passes, and with the unread replica's credit off it is over-ordered for good again |
+| Share swing and cancel (ev-shindin/llm-scaling-manager#272 F1/F2 and the d3 reviews) | the share ledger (#14, #15) is not recorded or replayed. Out of scope for PR 0 |
+| Alert debounce and sustain (ev-shindin/llm-scaling-manager#283 M2/M3) | not a learner |
+| Shape dependence of the ITL line (ev-shindin/llm-scaling-manager#275) | no generator models it |
 | A self-sealing error in a PR that does not touch a hold | the probe runs only when a PR names a closed-loop change |
 
 ### 2.8 Recordings each PR needs
 
 None exists yet: no recorder has run. No recorded run has ever reached OLS.
-#283 and #288 have merged, so a run recorded on main carries ReadySince; none
+ev-shindin/llm-scaling-manager#283 and ev-shindin/llm-scaling-manager#288 have merged, so a run recorded on main carries ReadySince; none
 of the older runs does.
 
 | PR | recording needed | counters that must be above zero | synthetic stand-in |
@@ -1188,9 +1188,9 @@ restores, exact repeats and unknown ages. Two rules apply to all:
 | --- | --- | --- |
 | k2 | too high | none. The window mean rises on admitted readings only. A too-low k2 is **permanent** on a serving variant: touched on every read, never evicted, and its episode resets only on a write, which needs the saturation a low k2 prevents. The only exit is `llm-d.ai/forget-learned-state`; the runbook says so |
 | borrowed k2 | too high | the upward relaxation over 6 h of serving time |
-| measured mu | too high | the stale yield to a higher derived figure after 30 min (5 min toward a lower one). The restart that drops the latch (see [the mu choice](#the-mu-choice); restored to the safe side since PR 3). An unknown age (above; safe side since PR 3). An exact repeat: since PR 3 it refreshes freshness only under the derived figure, where losing it would let a repeating low rate yield to the higher figure, and not over it, where staleness yields to the lower one. Since #526 the stale latch sets and releases on the ratio to derived smoothed over 3 min, so the stale yield to a lower figure waits up to 5.4 min (a step to 2.2x) while it prices the higher, measured one; a cycle's own ratio at 2.8x or more sets it at once, and the release, toward the risky side, is never faster than the smoothing (`mu-latch-reads-smoothed-ratio`). Backed by new evidence, so allowed: the **immediate** yield when a Ready replica serves more than 2x it. The sibling yield was on this list; since #495 it is capped at the measurement (`mu-yield-capped-at-measurement`), so it no longer moves mu up: what the siblings serve reaches mu through the sample instead. Since #495, with no line, a figure a minority of the fleet wrote, under what the fleet's Ready replicas serve, gives way to that served bound after `lowHoldFor` with no saturated reading agreeing with it (`mu-minority-figure-expires`). The reason is the low hold's: an over-ordered fleet never saturates to correct a low figure. The bound is a lower bound, so the move stops at what the replicas showed they sustain, never at no mu. A figure at or over the bound, the whole fleet's, a borrowed one, or one whose writers are unknown (a restore), stands. And an unread replica under the KV line counts at what it serves over the scale-up target (`mu-unread-replica-at-target`): at most 1 / target over what it served unqueued, so the floor orders the fleet in which it serves that again, and no more ([one slow pod, as built](#one-slow-pod-as-built-495)) The weighing's band (`mu-weighing-band`) holds a weighing key on the weighed sample until its readers average 0.90 of the unread replicas over 10 min, not 0.80 on one reading: a move toward the higher figure that the readings no longer back on their own. The reason is the noise (one crossing switched the source up to 11 times) and that the weighed figure still counts every replica at what it served |
+| measured mu | too high | the stale yield to a higher derived figure after 30 min (5 min toward a lower one). The restart that drops the latch (see [the mu choice](#the-mu-choice); restored to the safe side since PR 3). An unknown age (above; safe side since PR 3). An exact repeat: since PR 3 it refreshes freshness only under the derived figure, where losing it would let a repeating low rate yield to the higher figure, and not over it, where staleness yields to the lower one. Since ev-shindin/llm-scaling-manager#526 the stale latch sets and releases on the ratio to derived smoothed over 3 min, so the stale yield to a lower figure waits up to 5.4 min (a step to 2.2x) while it prices the higher, measured one; a cycle's own ratio at 2.8x or more sets it at once, and the release, toward the risky side, is never faster than the smoothing (`mu-latch-reads-smoothed-ratio`). Backed by new evidence, so allowed: the **immediate** yield when a Ready replica serves more than 2x it. The sibling yield was on this list; since ev-shindin/llm-scaling-manager#495 it is capped at the measurement (`mu-yield-capped-at-measurement`), so it no longer moves mu up: what the siblings serve reaches mu through the sample instead. Since ev-shindin/llm-scaling-manager#495, with no line, a figure a minority of the fleet wrote, under what the fleet's Ready replicas serve, gives way to that served bound after `lowHoldFor` with no saturated reading agreeing with it (`mu-minority-figure-expires`). The reason is the low hold's: an over-ordered fleet never saturates to correct a low figure. The bound is a lower bound, so the move stops at what the replicas showed they sustain, never at no mu. A figure at or over the bound, the whole fleet's, a borrowed one, or one whose writers are unknown (a restore), stands. And an unread replica under the KV line counts at what it serves over the scale-up target (`mu-unread-replica-at-target`): at most 1 / target over what it served unqueued, so the floor orders the fleet in which it serves that again, and no more ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)) The weighing's band (`mu-weighing-band`) holds a weighing key on the weighed sample until its readers average 0.90 of the unread replicas over 10 min, not 0.80 on one reading: a move toward the higher figure that the readings no longer back on their own. The reason is the noise (one crossing switched the source up to 11 times) and that the weighed figure still counts every replica at what it served |
 | ITL line and derived mu | ITL(kPrice) too low, that is, derived mu too high (with B pinned low, A comes out too high and the prediction is still low) | the 6 ms default B or a stashed B. With B pinned below the true intercept, the pinned A absorbs the error and the prediction at kPrice is low by (B_true − B_pin)(1 − kPrice / k̄): **risky whenever the fleet runs above its pricing point**, the under-provisioned fleet that most needs a correct line |
-| prefill bound | too high | before #397, its window max only rose, survived the episode reset through `RaiseLast`, and never aged while read: a running max over the bound's life, about 1.5σ above the mean after 10 readings and 3.2σ after a day at one a minute (measured at one pod: +15 % after ten minutes at 10 % noise, +50 % after a day at 15 %). Since #397 (`prefill-bound-held-confidence`) the window keeps its samples as read and the bound is the larger of their mean and a **held** figure, the max of lower confidence bounds on a window's mean (`mean - t * sd / sqrt(n)`, Student's t), the k-th taken at `1 - alpha/(k(k+1))` with alpha 0.05, so over the bound's life all of them stand under the true rate with 95 % confidence, provided each minute's sample is an unbiased, roughly independent reading (not yet true in production: [#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531), below). The held figure still only rises and carries past a new window after `EpisodeGap`; the reason is the episode test's (a reading behind a full decode falls once the bound grows prefill, and pricing on it grew prefill every episode). It is the move toward the SLO side this row names, bounded: measured at one pod and 19 % stationary noise, one read a minute, the bound is within 0.2 % of the truth after ten minutes and an hour and 1.2 % high after a day. The held figure falls only on eviction, an engine-argument change, a per-variant forget or a restart, as the old max did; a window restored from a build that raised its samples is not tested until its samples are all new. Not in the snapshot: after a restart the bound is the window's mean, the safe side. Left: the within-minute fold takes a max over one pod's re-reads, as mu's does, which the property rig (one read a pod a minute) does not exercise; read four times a minute at AR(1) noise (phi 0.3 per 15 s cycle), the bound reads 8.8 % high at 10 % noise and 13 % at 15 %, at one pod and at four, and the held figure stands above the true rate on 47-50 of 50 seeds (#531) |
+| prefill bound | too high | before ev-shindin/llm-scaling-manager#397, its window max only rose, survived the episode reset through `RaiseLast`, and never aged while read: a running max over the bound's life, about 1.5σ above the mean after 10 readings and 3.2σ after a day at one a minute (measured at one pod: +15 % after ten minutes at 10 % noise, +50 % after a day at 15 %). Since ev-shindin/llm-scaling-manager#397 (`prefill-bound-held-confidence`) the window keeps its samples as read and the bound is the larger of their mean and a **held** figure, the max of lower confidence bounds on a window's mean (`mean - t * sd / sqrt(n)`, Student's t), the k-th taken at `1 - alpha/(k(k+1))` with alpha 0.05, so over the bound's life all of them stand under the true rate with 95 % confidence, provided each minute's sample is an unbiased, roughly independent reading (not yet true in production: [#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531), below). The held figure still only rises and carries past a new window after `EpisodeGap`; the reason is the episode test's (a reading behind a full decode falls once the bound grows prefill, and pricing on it grew prefill every episode). It is the move toward the SLO side this row names, bounded: measured at one pod and 19 % stationary noise, one read a minute, the bound is within 0.2 % of the truth after ten minutes and an hour and 1.2 % high after a day. The held figure falls only on eviction, an engine-argument change, a per-variant forget or a restart, as the old max did; a window restored from a build that raised its samples is not tested until its samples are all new. Not in the snapshot: after a restart the bound is the window's mean, the safe side. Left: the within-minute fold takes a max over one pod's re-reads, as mu's does, which the property rig (one read a pod a minute) does not exercise; read four times a minute at AR(1) noise (phi 0.3 per 15 s cycle), the bound reads 8.8 % high at 10 % noise and 13 % at 15 %, at one pod and at four, and the held figure stands above the true rate on 47-50 of 50 seeds (ev-shindin/llm-scaling-manager#531) |
 | start time | **both** | too low under-orders a fleet that is behind (λ > mu · ready). Too high, in `internal/signals/floor/floor.go`: `DrainHorizon` under-prices the backlog whenever S exceeds 60 s, `startingCredit` credits a stuck pod for up to 2S, and a fleet with spare projects more drain and orders less. Share pacing errs the other way: too low moves GPUs for bursts that end first. PR 5 bounds both sides |
 | share need history (#14) | too low for the role, too high for its neighbours | `PeakNeed` is a max of adjacent-pair minima, low by design; trimming to the swing window ages a peak out with no new evidence |
 | share release time (#15) | too low | p90 over ≥ 3 releases is the max at n = 3 |
@@ -1222,12 +1222,12 @@ per excursion at a noise of 0.3 of the excursion (`TestLatch_OneReversalPerExcur
 each edge), about 9 flips with none. At 0.5 the simulation reads a mean of 2.0 flips
 and a worst of 4. **The noise is assumed:** phi 0.9 is not measured on the fit's own
 series.
-This latch is its own: the ITL tier's (#495) is private to its tracker.
+This latch is its own: the ITL tier's (ev-shindin/llm-scaling-manager#495) is private to its tracker.
 
 The rows as built are in the developer guide's
 [set, clear and dwell table](../developer-guide/saturation-analyzer.md#set-clear-and-dwell).
 
-#### The ITL tier, as built (#495)
+#### The ITL tier, as built (ev-shindin/llm-scaling-manager#495)
 
 `internal/signals/itl/tier_latch.go`, on the saturation, slo and throughput
 lines, one named change with one `SwitchITLTierHysteresis` per analyzer.
@@ -1254,7 +1254,7 @@ lines, one named change with one `SwitchITLTierHysteresis` per analyzer.
   zero and so was not kept.
 
 Measured before the change, main at f7130a9cb, every golden replayed, the
-staircase recordings of #492 included: 78 analyzer-key series, 7758 cycles.
+staircase recordings of ev-shindin/llm-scaling-manager#492 included: 78 analyzer-key series, 7758 cycles.
 Recorded fleets hold 1 or 2 decode replicas.
 
 | line | tier flips | back within 1 h | largest move of ITL at k 0.68 at a flip |
@@ -1316,7 +1316,7 @@ change. No golden runs one, so its size is not measured. The gap between the
 variant's figure and the role's is main's too, on any cycle the floor raises a role.
 
 **The reversal trade: 2.6's "at most one reversal per excursion" does not hold near
-the set value.** Decided on review of #498: pricing safety over flip count. The
+the set value.** Decided on review of ev-shindin/llm-scaling-manager#498: pricing safety over flip count. The
 measured bound is at most 16 reversals in 4 h on flat paths at spreads 0.26 to
 0.30, 4 at 0.32, and 6 on a two-crossing ramp (`ols-spread-reversals-bounded`).
 All of this noise is synthetic: rate[1m] noise, 40 seeds of 4 h from a cold key for
@@ -1364,12 +1364,12 @@ The clock fix itself is [2.2](#22-one-clock). The clocks in use:
 | --- | --- |
 | **write** | ITL line age, the shared line |
 | **use** | k2 and mu eviction, 7 d after the last read; the prefill bound's `Touch` |
-| **write gap** | k2's and mu's new episode after 24 h without a write, on the same window as the use clock. The prefill bound's held figure outlives it (`RaiseLast` before #397) |
+| **write gap** | k2's and mu's new episode after 24 h without a write, on the same window as the use clock. The prefill bound's held figure outlives it (`RaiseLast` before ev-shindin/llm-scaling-manager#397) |
 | **agreement** | mu freshness: the last saturated reading within 2x. Refused readings set it too. An exact repeat sets it only while the measurement is under the derived figure (PR 3) |
 | **serving** | the borrowed k2 relaxation, and the hold clocks that only a serving row advances |
 | **existence** | `VariantTimeout` (last reported or found to exist), the ITL sweep at 24 h unseen, `evictStartSeenPods` |
 | **since event** | the settle tracker: time since join, idle return, restart or lend |
-| **cycle count** | start-time outliers, #273's `idleRows`, `PeakNeed`'s two in a row |
+| **cycle count** | start-time outliers, ev-shindin/llm-scaling-manager#273's `idleRows`, `PeakNeed`'s two in a row |
 
 An age shown to an operator is the age of the last **admitted reading**, never
 of the last use. A use-touched k2 otherwise reads young however old its
@@ -1380,7 +1380,7 @@ a different clock and is logged, not published as an age.
 
 ### 4.1 Four rules today
 
-| | ITL steady trace (#273) | k2 settle (#282 `D/k2_settle.go`) | `noteReady` (#282, #288 `D/throughput_admission.go:176-210`) | balance tracker (#283 `internal/signals/balance/tracker.go`) |
+| | ITL steady trace (ev-shindin/llm-scaling-manager#273) | k2 settle (ev-shindin/llm-scaling-manager#282 `D/k2_settle.go`) | `noteReady` (ev-shindin/llm-scaling-manager#282, ev-shindin/llm-scaling-manager#288 `D/throughput_admission.go:176-210`) | balance tracker (ev-shindin/llm-scaling-manager#283 `internal/signals/balance/tracker.go`) |
 | --- | --- | --- | --- | --- |
 | joined wait | `steadyGate.steadyFor` (2 min) | 1 min lookback, queue standing | 1 min | `loadImbalance.idleAfterReady` (2 min) |
 | ready time | first sight | later of Pod Ready and first sight of that Ready time, through `noteReady` (`k2_settle.go:197`) | later of Pod Ready (`replicaReadySince`, from `ReplicaMetrics.ReadySince`) and first sight of that Ready time | later of Pod Ready and first sight of that Ready time |
@@ -1396,13 +1396,13 @@ One tracker in `internal/signals/settle` replaces them.
 | question | answer |
 | --- | --- |
 | owner | **the engine**, one tracker per model, swept with the model. It observes this cycle's rows into the tracker at the top of `runAnalyzers`, before `observeLoadBalance` (`engine_v2.go:156`) and before any analyzer. An analyzer-owned tracker would be written after the balance tracker reads it (`observeLoadBalance` runs before `runV2AnalysisOnly`), one cycle late on every join |
-| readers | the balance tracker (#283), the saturation, SLO and throughput analyzers, each through a **read-only view**. None writes. The engine builds the saturation and SLO analyzers (`steadystate/engine.go:335, 405`) and passes the view at construction. The throughput analyzer is built in `cmd/main.go:918` and added by `RegisterAnalyzer` after the engine exists, so it takes the view at registration through an optional interface (`settleViewTaker`), as the engine's other capabilities are reached |
+| readers | the balance tracker (ev-shindin/llm-scaling-manager#283), the saturation, SLO and throughput analyzers, each through a **read-only view**. None writes. The engine builds the saturation and SLO analyzers (`steadystate/engine.go:335, 405`) and passes the view at construction. The throughput analyzer is built in `cmd/main.go:918` and added by `RegisterAnalyzer` after the engine exists, so it takes the view at registration through an optional interface (`settleViewTaker`), as the engine's other capabilities are reached |
 | replay | the tracker is a function of the rows and the engine's clock read only. The engine's observation is an engine-side event in the stream ([2.4](#24-the-recorder)): the model and the `now` the engine read, which is earlier than the `a.now()` each analyzer reads inside `Analyze`. Replay applies it as the engine did, at that instant, with the next `Analyze` event's rows. It reads nothing from the store, so a rollout is detected from the rows (4.3) |
 | concurrency | the tracker holds its own lock; one writer per model per cycle, any number of readers |
 | key | (model, pod, variant, bridge). A warm-pool lend from the pool keeps the pool's Ready time but changes variant and bridge, so it is a new key and a new settle |
-| prerequisite | #283 (merged) |
+| prerequisite | ev-shindin/llm-scaling-manager#283 (merged) |
 
-**Difference to reconcile with #283.** The balance tracker rebuilds its
+**Difference to reconcile with ev-shindin/llm-scaling-manager#283.** The balance tracker rebuilds its
 sightings from this cycle's rows, so one missing row forgets a replica
 (`tracker.go:117-141`). That forget is load-bearing: its comment says a
 warm-pool Pod lent again "starts its grace again". The shared tracker keeps a
@@ -1411,14 +1411,14 @@ interval over 24 s, one missed cycle and half a cycle of slack, 2.5
 intervals, so a long interval does not make every cycle an absence, PR 1): a
 single missing row
 is a missed scrape, and restarting a busy replica's settle for k2, mu and ITL
-would re-open #273's A4. Under that rule a Pod lent again to the **same**
+would re-open ev-shindin/llm-scaling-manager#273's A4. Under that rule a Pod lent again to the **same**
 variant inside a minute keeps its key, (pod, variant, bridge = true), and so
 would keep its grace. Not verified on a run: whether a re-lend keeps the key,
 and whether ReadySince changes on a re-lend. PR 1 checks both, and keeps a
 re-lend a new settle by an explicit lend event, not by absence.
 
 When the balance tracker moves onto the view in PR 1, its imbalance timers
-take the 1 min rule. That is a named change for #283's metrics and for the
+take the 1 min rule. That is a named change for ev-shindin/llm-scaling-manager#283's metrics and for the
 `LLMSMLoadImbalanced` alert, whose description says "Ready for at least 2
 minutes" (`loadImbalance.idleAfterReady`). PR 1 updates the alert text and the
 idle row in `docs/reference/prometheus.md` if their meaning moves. It is outside
@@ -1440,11 +1440,11 @@ the third passes on the parent and must keep passing.
   the cycle than the engine observes the tracker. An LWS group's row is its
   leader's, and its Ready time is the latest over the leader and its live,
   Ready workers (`groupReadyTimes` in
-  `internal/collector/pod_serving_state.go`), so a group restart (#361) and a
+  `internal/collector/pod_serving_state.go`), so a group restart (ev-shindin/llm-scaling-manager#361) and a
   worker restarted alone under `restartPolicy: None` both give a new Ready
   time (the "PR 2's decisions" note at the top).
 - **The ready time:** the later of the Pod's Ready time and the controller's
-  first sight of it, as the balance tracker (#283) and `noteReady` (#288) do
+  first sight of it, as the balance tracker (ev-shindin/llm-scaling-manager#283) and `noteReady` (ev-shindin/llm-scaling-manager#288) do
   today. A node clock behind the controller's, or a
   lend that keeps the pool's Ready time, makes the Pod time too old.
 - **Idle needs positive evidence, and the evidence is role-aware.** KV here
@@ -1525,7 +1525,7 @@ Under the shared tracker every replica waits the window again after a
 controller restart. This is **on the SLO side**: capacity is `min(k1, k2)`, and
 with the snapshot off (the default) every k2 window is empty, so a saturated
 fleet prices from k1, the high figure, for 1 min longer than today. ITL does
-not refit for `steadyFor`, 2 min by default (a named change in PR 4a). #273 chose the current behaviour to avoid exactly this
+not refit for `steadyFor`, 2 min by default (a named change in PR 4a). ev-shindin/llm-scaling-manager#273 chose the current behaviour to avoid exactly this
 delay.
 
 What an operator sees during the ITL wait, and which side it errs on: with no
@@ -1552,7 +1552,7 @@ PRs 2, 3 and 4a.
 
 ## 5. Fits: exclude by state, then fit untrimmed
 
-The pinned ITL fit changed five times inside #273. A weighted median jumped
+The pinned ITL fit changed five times inside ev-shindin/llm-scaling-manager#273. A weighted median jumped
 between two groups of slopes. A trimmed mean dropped a genuinely slower replica
 and priced capacity 8.5 % high, on the SLO side. What holds is: stamp each
 reading by the replica's state, drop the settling ones, and fit the rest
@@ -1568,11 +1568,11 @@ Existing fits stay until a replay justifies a change.
 ### 6.1 Logs
 
 **`learner-write`**, at `perReplicaLogLevel` (V(3)), one level above the
-shipped `-v=2`. #303 moved the per-replica lines there because at the default
+shipped `-v=2`. ev-shindin/llm-scaling-manager#303 moved the per-replica lines there because at the default
 they were most of the controller's log, about 1.9 KB per replica per cycle;
 `replica-capacity-summary` says what each replica was priced at, at the
 default, split under the CRI line limit. A learner may log at the default only
-if its lines pass #303's per-cycle budget test
+if its lines pass ev-shindin/llm-scaling-manager#303's per-cycle budget test
 (`TestCycleLogAtTheShippedVerbosityDoesNotGrowPerReplica`) with the first-write
 burst after a restart included. Not verified: whether that test, as written,
 fails on such a burst; the first PR that adds `learner-write` checks it, and
@@ -1587,7 +1587,7 @@ extends the test if it does not.
 | heartbeat | a key that priced or was written in the last 10 min, and has not logged for 10 min, logs once |
 | source change | a mu choice flip (measured, derived, siblings) is a `learner-write` with `source` changing, so latch flaps count from one line |
 | fields | `learner`, `modelID`, `namespace`, `variant`, `role`, `key`, `value`, `previousValue`, `source`, `samples`, `pods` (each contributing pod with its reading and time base), and the admission tests passed with their margins |
-| fields, ITL (as built, #495) | `a`, `b` for `value`. `pods`: the pods whose readings the line was fitted from this cycle, at most 16, lowest mean ITL first, each with `reading` (its mean ITL), `k`, `rows` and `timeBase`, and `podsOmitted`; none for a held slope. Margins: `kSpread` against `kSpreadThreshold` (0.30) and `steadyHeld` against `steadyHeldThreshold` (10), the full fit's gate, each with its `...OverThreshold` (negative when missed), and `fitRows`. The same fields on the saturation, throughput and slo lines. The tier latch's clear values (8 readings, 0.18) and the pinned fit's settled floor (3) are not logged |
+| fields, ITL (as built, ev-shindin/llm-scaling-manager#495) | `a`, `b` for `value`. `pods`: the pods whose readings the line was fitted from this cycle, at most 16, lowest mean ITL first, each with `reading` (its mean ITL), `k`, `rows` and `timeBase`, and `podsOmitted`; none for a held slope. Margins: `kSpread` against `kSpreadThreshold` (0.30) and `steadyHeld` against `steadyHeldThreshold` (10), the full fit's gate, each with its `...OverThreshold` (negative when missed), and `fitRows`. The same fields on the saturation, throughput and slo lines. The tier latch's clear values (8 readings, 0.18) and the pinned fit's settled floor (3) are not logged |
 | ceiling | at V(3), keys × 1 per cycle. 100 variants × about 9 keys = 900 lines per cycle (about 450 KB), reached once after a snapshot-off restart when every key is set for the first time. Steady state, with the heartbeat: up to keys / 40 per cycle, about 90 lines a minute at 900 keys. Each line stays under the CRI line limit (16 KiB); `pods` is bounded for that reason. At the default verbosity the per-cycle volume does not grow with keys or replicas |
 
 E1's 0.0995 req/s was **admitted**; this is the line that would have shown it.
@@ -1607,8 +1607,8 @@ source. No metric gains a `restored` label value; a restored figure shows as
 
 | learner | restored? | prices at once? |
 | --- | --- | --- |
-| k2 | yes, a held first reading no (#392) | a restored window yes, as `P2-hist` (or `P2-prior`); a reading held when the controller stopped is dropped, and the next one waits for a second |
-| ITL | B, its stash and the held slope (`ITLSlopes`, #329) | yes, from the held slope, within `BucketRetention` and under the same args; otherwise not until refit |
+| k2 | yes, a held first reading no (ev-shindin/llm-scaling-manager#392) | a restored window yes, as `P2-hist` (or `P2-prior`); a reading held when the controller stopped is dropped, and the next one waits for a second |
+| ITL | B, its stash and the held slope (`ITLSlopes`, ev-shindin/llm-scaling-manager#329) | yes, from the held slope, within `BucketRetention` and under the same args; otherwise not until refit |
 | mu | window yes, choice no | the window yes; the choice restores to the safe side (PR 3) |
 | start time | yes | yes |
 
@@ -1626,11 +1626,11 @@ lines and no "cleared" lines: counts are metrics only.
 `replica-capacity-store-fallback`, `variant-capacity-source`,
 `zero-replica-capacity-estimate`, `itl-window`, `itl-fit`, `derived-mu` and the
 shared-cache decision line. `replica-capacity-summary`, the default-level line
-#303 added, is held to the same rule, and a tool that wants per-replica prices
+ev-shindin/llm-scaling-manager#303 added, is held to the same rule, and a tool that wants per-replica prices
 at `-v=2` reads it. A PR that changes any line a tool in
 `hack/benchmark/` parses either keeps its fields (adding is fine) or bumps a
 `v` field and updates the tools in the same PR. `k2-decision`,
-`replica-capacity-decision` and `derived-mu` are at V(3) since #303, and
+`replica-capacity-decision` and `derived-mu` are at V(3) since ev-shindin/llm-scaling-manager#303, and
 `dump_k2_decisions.py` already says a run needs `--v=3`. So the zero-line guard
 applies only to a run at `--v=3` or higher: there the tools fail when a run has
 zero `k2-decision` or zero `throughput-demand-floor` lines, or zero lines of a
@@ -1643,7 +1643,7 @@ only; `restored` is rendered as a separate column.
 
 - Labels: `namespace`, `model_name`, `variant_name`, `role`, and
   `controller_instance` when set; one metric takes `learner` rather than one
-  name per learner ([as built](#reports-restored-and-mus-forget-as-built-495)).
+  name per learner ([as built](#reports-restored-and-mus-forget-as-built-ev-shindinllm-scaling-manager495)).
   No pod, no bucket. The vocabulary is
   [Every signal as a metric](signals-as-metrics.md), within its budget of about
   60 series per model.
@@ -1689,14 +1689,14 @@ or deprecated, docs rows rewritten, tools updated.
 
 | PR | change | recording (exists?) | what an operator sees |
 | --- | --- | --- | --- |
-| **0a** | One clock (2.2), including the capacity store and the engine's calls into it; presence bits with ITL's three states (2.3), reusing `KvUsageInstantKnown`, `CapacityQueueKnown` and `PreemptionRateKnown` and adding `RunningRequestsKnown` (a prerequisite of #277). Unit tests, the `EpisodeGap` negative control, the one-cycle boundary test | none needed | Nothing, beyond 2.2's one-cycle boundary. Metrics: none |
+| **0a** | One clock (2.2), including the capacity store and the engine's calls into it; presence bits with ITL's three states (2.3), reusing `KvUsageInstantKnown`, `CapacityQueueKnown` and `PreemptionRateKnown` and adding `RunningRequestsKnown` (a prerequisite of ev-shindin/llm-scaling-manager#277). Unit tests, the `EpisodeGap` negative control, the one-cycle boundary test | none needed | Nothing, beyond 2.2's one-cycle boundary. Metrics: none |
 | **0b** | The recorder at the input boundary in each analyzer and the store (2.4), with each `Analyze` result recorded and the test that a replay at the recording's commit reproduces it byte for byte; raw rows and the merged policy recorded every cycle; the store split into parsing and one shared method; one switch hook per package; replay with goldens and the golden rule (2.5), per-path counters, property tests with the known-failures ledger and a mutant per mapping row (2.6, 2.7). Mu's mean fold and the sibling yield go into the base goldens, the one-slow-pod case as a passing guard | E1 re-run from a build with 0a, and one under a non-default `analyzerTuning` (no) | Nothing. A recorder flag and overlay in `testing.md`. Metrics: none |
-| **1** | `internal/signals/settle`, written by the engine at the top of `runAnalyzers`, ahead of `observeLoadBalance` and of the input builder (`buildAnalyzerInput`, #345 step 1), as #345 decided; read-only views for the balance tracker and the analyzers. The tracker exposes event times; each learner keeps its policy-keyed window (4.3). #283's one-missing-row forget becomes the gap rule, a named change proved by unit tests on the balance tracker, with a re-lend within 1 min still restarting the grace (4.2): a row missing one cycle under the same lend keeps the grace, and a Pod lent again restarts it, told apart by a lend event, not by the absence (both restart on the parent). `idleRows`, `steadyFor` and `idleAfterReady` keep their documented meaning, or the PR names the change in scaling-policy.md. 2.3's A4 and 273-r3 #2 negative controls | 0b's, the non-default one included (no) | The imbalance timers no longer restart on one missed scrape. The `LLMSMLoadImbalanced` alert text is checked against the new rule |
-| **2** | k2 (#3, #4) onto the tracker. k2 keeps the Ready-time rule `noteReady` applies today (#288), now read from the tracker; nothing is switched on twice. First task: a fixture from #361's workload-patch group restart (leader and workers recreated, pod names kept, Ready times differ). It establishes where a group's Ready time comes from. Done: the latest Ready time over the leader and its Ready workers (`TestLWSGroupReadyTimeIsTheLatestOfItsPods`). The rule: each pod waits from the later of its own Ready time and first sight. `learn` lands. `learner-write` for k2, at V(3). Restart suite | flow control off, P/D, same-name restart (no) | After a controller restart every replica waits once: `P1-obs-unsettled` across the fleet for 1 min, and with the snapshot off k2-less fleets price at k1 for that minute (SLO side). A pod back from a restart under the same name already waits today (#288) and still does. `learner-start` at the default; k2 writes at `--v=3` |
-| **3** | Mu (#5, #6). The fold across pods stays the mean (#282). Its joined test reads k2's stamp. Exact repeats count as use. Unknown age resolves safe. The latch persisted or restored safe-side. Two prefill pods in one spacing pin #7's max before the fold is touched. The closed-loop probe and its fleet simulator land here (2.5) | flow control off (no) | `learner-write` for mu, including choice flips. `throughput-demand-floor` names `muKey`, `muSource`, `startEstimateSeconds`, `startSource`. Measured mu waits out the post-restart settle |
-| **4a** | ITL #1 and #13 onto the tracker. Cap admission above the band (#293, #331), the policy band, the steady-gate keys and the persisted held slope (`ITLSlopes`, #329) stay as they are. Neutral on the recording except two named changes, each behind its own switch: ITL waits the settle after a controller restart (today it takes the first cycle as settled), and one missing row no longer restarts a settle (the 1 min absence rule, 4.2). Neither occurs in the OLS recording, so 4a carries its own two tests through ITL, a controller restart and one missing row, each failing on 4a's parent; PR 2's restart suite runs as well. The closed-loop probe runs through a controller restart (4.4) | a run that reaches OLS, SLO analyzer recorded with its router latency (no) | No ITL refit for 2 min after a controller restart; with the snapshot off the throughput floor is silent for about 2.75 min (SLO side, masked by the default 300 s scale-down stabilization as long as the controller is back within about 2 min). A missed scrape no longer restarts ITL's settle |
-| **4b** | ITL #16 (throughput analyzer) moves onto `itl.Tracker`, a tracker of its own, and gains #273's fixes and row 1's cap admission, still reading the policy band (`ITLBand()`). Five switches over four PRs (4b-0 to 4b-3): the steady gate (the move, with the settling stamp, the pinned fit over the window, positive B, +Inf refused and the held slope), the GPS-mismatch clear dropped, the settle tracker, the wait after a controller restart, and cap admission; each with a negative control on the parent, and the probe for the slope hold. Design: [PR 4b](#pr-4b-the-throughput-analyzers-itl-line) | `throughput-sweep` and `throughput-sweep-restart` (no) | `learner-write` when A or B moves; `Reason` `T2-held`; no throughput capacity for about 2 min after a controller restart. Throughput-analyzer fleets may change, as named: mostly fewer replicas where the throughput analyzer set the order (above-band rows and joiners' warm-up no longer steepen A), and the analyzer is silent, so out of the scale-down vote, more often. Metrics: none |
-| **5** | Start time (#12) and snapshot. Confirmations counted by distinct pod. The first-sample rule, a named change that bounds **both** sides. PR 5 first wires the seed, a named change of its own: `replicaStartSeconds` is reserved and read by nothing today ([trigger reference](../reference/scaledobject-trigger.md)), so every estimate starts from 70 s. Once it is read, the first-sample bound is anchored to the seed when the ScaledObject sets one, not to the 70 s default. With no seed it blends toward the default until N distinct pods agree, rather than clamping: measured starts run from 15 s (snapshot restore) to 463 s (cold JIT cache) ([start time](../reference/start-time.md)), and a fixed band around 70 s would clamp both ends. Property cases: with a seed of 120 s, a first sample of 15 s gives an estimate in [lower bound, 120] and one of 460 s an estimate in [120, upper bound]; with no seed the estimate sits strictly between the sample and 70 s (never clamped to 70) and reaches the measured value after N distinct pods. First sight persisted. The writer stays central (`internal/engines/steadystate/learned_state_store.go`) with per-learner adapters. The document stays **v1 and additive**: new fields are `omitempty`, as #329's `itlSlopes` was, and PR 5 does not bump the version, which is part of the data key (a v2 would make every upgrade a cold start). `PriorK2` and `K2BorrowedSince` stay dual-written for rollback builds. Fixtures: a v0.10.0 v1 document (no `itlSlopes`) and a v0.10.1 v1 document both restore, and the previous release reads PR 5's document: a test pins a frozen copy of v0.10.1's `learnedStateDoc` and decodes PR 5's document with it. Restart suite plus restore-then-run, including a restore under light load that keeps the ITL line (issue #316). Design: [PR 5 design](#pr-5-design-start-time-and-the-snapshot) | controller restart with the snapshot on (no) | Start estimates no longer take one pod's first sample raw. `restored: true` on restored lines. With the snapshot on, only replicas with no record wait after a restart |
+| **1** | `internal/signals/settle`, written by the engine at the top of `runAnalyzers`, ahead of `observeLoadBalance` and of the input builder (`buildAnalyzerInput`, ev-shindin/llm-scaling-manager#345 step 1), as ev-shindin/llm-scaling-manager#345 decided; read-only views for the balance tracker and the analyzers. The tracker exposes event times; each learner keeps its policy-keyed window (4.3). ev-shindin/llm-scaling-manager#283's one-missing-row forget becomes the gap rule, a named change proved by unit tests on the balance tracker, with a re-lend within 1 min still restarting the grace (4.2): a row missing one cycle under the same lend keeps the grace, and a Pod lent again restarts it, told apart by a lend event, not by the absence (both restart on the parent). `idleRows`, `steadyFor` and `idleAfterReady` keep their documented meaning, or the PR names the change in scaling-policy.md. 2.3's A4 and 273-r3 #2 negative controls | 0b's, the non-default one included (no) | The imbalance timers no longer restart on one missed scrape. The `LLMSMLoadImbalanced` alert text is checked against the new rule |
+| **2** | k2 (#3, #4) onto the tracker. k2 keeps the Ready-time rule `noteReady` applies today (ev-shindin/llm-scaling-manager#288), now read from the tracker; nothing is switched on twice. First task: a fixture from ev-shindin/llm-scaling-manager#361's workload-patch group restart (leader and workers recreated, pod names kept, Ready times differ). It establishes where a group's Ready time comes from. Done: the latest Ready time over the leader and its Ready workers (`TestLWSGroupReadyTimeIsTheLatestOfItsPods`). The rule: each pod waits from the later of its own Ready time and first sight. `learn` lands. `learner-write` for k2, at V(3). Restart suite | flow control off, P/D, same-name restart (no) | After a controller restart every replica waits once: `P1-obs-unsettled` across the fleet for 1 min, and with the snapshot off k2-less fleets price at k1 for that minute (SLO side). A pod back from a restart under the same name already waits today (ev-shindin/llm-scaling-manager#288) and still does. `learner-start` at the default; k2 writes at `--v=3` |
+| **3** | Mu (#5, #6). The fold across pods stays the mean (ev-shindin/llm-scaling-manager#282). Its joined test reads k2's stamp. Exact repeats count as use. Unknown age resolves safe. The latch persisted or restored safe-side. Two prefill pods in one spacing pin #7's max before the fold is touched. The closed-loop probe and its fleet simulator land here (2.5) | flow control off (no) | `learner-write` for mu, including choice flips. `throughput-demand-floor` names `muKey`, `muSource`, `startEstimateSeconds`, `startSource`. Measured mu waits out the post-restart settle |
+| **4a** | ITL #1 and #13 onto the tracker. Cap admission above the band (ev-shindin/llm-scaling-manager#293, ev-shindin/llm-scaling-manager#331), the policy band, the steady-gate keys and the persisted held slope (`ITLSlopes`, ev-shindin/llm-scaling-manager#329) stay as they are. Neutral on the recording except two named changes, each behind its own switch: ITL waits the settle after a controller restart (today it takes the first cycle as settled), and one missing row no longer restarts a settle (the 1 min absence rule, 4.2). Neither occurs in the OLS recording, so 4a carries its own two tests through ITL, a controller restart and one missing row, each failing on 4a's parent; PR 2's restart suite runs as well. The closed-loop probe runs through a controller restart (4.4) | a run that reaches OLS, SLO analyzer recorded with its router latency (no) | No ITL refit for 2 min after a controller restart; with the snapshot off the throughput floor is silent for about 2.75 min (SLO side, masked by the default 300 s scale-down stabilization as long as the controller is back within about 2 min). A missed scrape no longer restarts ITL's settle |
+| **4b** | ITL #16 (throughput analyzer) moves onto `itl.Tracker`, a tracker of its own, and gains ev-shindin/llm-scaling-manager#273's fixes and row 1's cap admission, still reading the policy band (`ITLBand()`). Five switches over four PRs (4b-0 to 4b-3): the steady gate (the move, with the settling stamp, the pinned fit over the window, positive B, +Inf refused and the held slope), the GPS-mismatch clear dropped, the settle tracker, the wait after a controller restart, and cap admission; each with a negative control on the parent, and the probe for the slope hold. Design: [PR 4b](#pr-4b-the-throughput-analyzers-itl-line) | `throughput-sweep` and `throughput-sweep-restart` (no) | `learner-write` when A or B moves; `Reason` `T2-held`; no throughput capacity for about 2 min after a controller restart. Throughput-analyzer fleets may change, as named: mostly fewer replicas where the throughput analyzer set the order (above-band rows and joiners' warm-up no longer steepen A), and the analyzer is silent, so out of the scale-down vote, more often. Metrics: none |
+| **5** | Start time (#12) and snapshot. Confirmations counted by distinct pod. The first-sample rule, a named change that bounds **both** sides. PR 5 first wires the seed, a named change of its own: `replicaStartSeconds` is reserved and read by nothing today ([trigger reference](../reference/scaledobject-trigger.md)), so every estimate starts from 70 s. Once it is read, the first-sample bound is anchored to the seed when the ScaledObject sets one, not to the 70 s default. With no seed it blends toward the default until N distinct pods agree, rather than clamping: measured starts run from 15 s (snapshot restore) to 463 s (cold JIT cache) ([start time](../reference/start-time.md)), and a fixed band around 70 s would clamp both ends. Property cases: with a seed of 120 s, a first sample of 15 s gives an estimate in [lower bound, 120] and one of 460 s an estimate in [120, upper bound]; with no seed the estimate sits strictly between the sample and 70 s (never clamped to 70) and reaches the measured value after N distinct pods. First sight persisted. The writer stays central (`internal/engines/steadystate/learned_state_store.go`) with per-learner adapters. The document stays **v1 and additive**: new fields are `omitempty`, as ev-shindin/llm-scaling-manager#329's `itlSlopes` was, and PR 5 does not bump the version, which is part of the data key (a v2 would make every upgrade a cold start). `PriorK2` and `K2BorrowedSince` stay dual-written for rollback builds. Fixtures: a v0.10.0 v1 document (no `itlSlopes`) and a v0.10.1 v1 document both restore, and the previous release reads PR 5's document: a test pins a frozen copy of v0.10.1's `learnedStateDoc` and decodes PR 5's document with it. Restart suite plus restore-then-run, including a restore under light load that keeps the ITL line (issue ev-shindin/llm-scaling-manager#316). Design: [PR 5 design](#pr-5-design-start-time-and-the-snapshot) | controller restart with the snapshot on (no) | Start estimates no longer take one pod's first sample raw. `restored: true` on restored lines. With the snapshot on, only replicas with no record wait after a restart |
 
 Later, each after a recorded run that covers it: idle room and the decode gate
 (#9, #10) after a P/D run; the prefill bound (#7), with a double-scrape fixture
@@ -1707,13 +1707,13 @@ squares through B to row 1's k-weighted mean, since that is the fit
 #14, #15, and the share planner's holds (why a second transfer waited), which
 belong to the utilization-share work.
 
-**Order with #345** (a composite that does not depend on saturation): 0a, 0b,
-then #345's step 0 (the engine-level golden, with its own events in 0b's
+**Order with ev-shindin/llm-scaling-manager#345** (a composite that does not depend on saturation): 0a, 0b,
+then ev-shindin/llm-scaling-manager#345's step 0 (the engine-level golden, with its own events in 0b's
 sink) and its step 1 (one registry, one
 `AnalyzerInput` built before `Analyze`, zero golden change), then PRs 1 to 5,
-then #305 and #345's later steps. `AnalyzerInput.Capacity` is a read-only view
+then ev-shindin/llm-scaling-manager#305 and ev-shindin/llm-scaling-manager#345's later steps. `AnalyzerInput.Capacity` is a read-only view
 of the store for the cycle; learning capacity stays in the analyzers, as this
-plan has it. #345's last step (saturation runs only when listed) needs an owner
+plan has it. ev-shindin/llm-scaling-manager#345's last step (saturation runs only when listed) needs an owner
 for k2, mu, start time and the snapshot first.
 
 ### Shipped behaviour each PR must keep
@@ -1724,14 +1724,14 @@ that fails it. The owning PR adds the test, or keeps it green if it exists.
 
 | behaviour (shipped in) | input | assertion | negative control | owner |
 | --- | --- | --- | --- | --- |
-| A restart under light load keeps the ITL line (issue #316, #329) | a v0.10.0 v1 document (no `itlSlopes`), a v0.10.1 v1 document, and PR 5's document; a restore under light load | both old documents restore and the held slope keeps the line. A frozen copy of v0.10.1's `learnedStateDoc` (`steadystate/learned_state_store.go:83`), pinned in the test, decodes PR 5's document with every field it knows intact | a PR 5 document that renames or drops a v0.10.1 field fails the frozen decode | 5. 4a keeps `TestARestoredSlopeIsInstalledOnlyWhenItCanBeTrusted` (`saturation/held_slope_restore_guard_test.go`) and `TestAHeldITLLineSurvivesARestart` green and does not drop `ITLSlopes` |
-| A non-default `analyzerTuning` is honoured (#298) | `idleRows`, `steadyFor` and `idleAfterReady` all off their defaults | idle after exactly `idleRows` rows, steady after exactly `steadyFor`, grace over after exactly `idleAfterReady`; none of them one cycle earlier | a build that hard-codes the defaults fails it | 0b (records it), 1 and 4a (test it) |
-| On P/D decode, k2 reads the engine's deferred queue, rewritten before k2 reads `MaxRankQueueLength` (#294, #306) | a P/D replay; raw rows recorded | replay runs `decodeCapacityView` again and matches the golden | the base goldens | 0b |
-| ITL admits a replica at its sequence cap above the band (#293, #331) | running equal to `max_num_seqs` (from the flag, lowered by `--max-num-active-seqs`) on every rank, requests waiting, preemption read and under `capMaxPreemptionRate`, KV above the band, a valid ITL | the reading is admitted to the fit | admission removed (`itl/admission.go` `atSequenceCap`) fails it | 4a. 4b runs the same input through the throughput analyzer, where admission is new: a named change, refused on its parent |
-| Mu folds across pods by the mean, and yields to its full siblings (#282; since #495 never above the measurement) | the base recordings; one slow pod | the goldens hold; one slow pod moves mu by its weight only | a fold by max or min fails the one-slow-pod case | 0b, 3 |
-| The default verbosity does not grow per replica; no line passes the CRI limit (#303) | one cycle at 8 and at 64 replicas, the `learner-write` burst included | the same line count at the default verbosity for both, and every line under the CRI limit | a per-replica line at the default fails it | every PR that adds `learner-write` (2, 3, 4a, 4b, 5). Today the test lives only in the saturation package (`saturation/replica_log_test.go`: `TestCycleLogAtTheShippedVerbosityDoesNotGrowPerReplica` at 1 and 8 replicas, `TestSummaryStaysWithinTheCRILineLimit`); each other package that adds `learner-write` adds the same test (throughput in 4b) |
-| A warm-pool Pod lent, and lent again, starts its grace again (#283) | balance-tracker rows: one Pod missing one cycle under the same lend; one Pod lent again to a variant within 1 min | the missing row keeps the grace; the re-lend restarts it. The tracker keys by {pod, variant, bridge} plus a changed ReadySince (`balance/tracker.go:117-141`), and a re-lend to the same variant keeps that key, so the discriminator is a lend event PR 1 adds (`ReplicaMetrics` carries only `FromWarmPool` today) | the parent restarts on both, so the first case fails there | 1 |
-| A pod back from an engine or LWS group restart waits again, from the later of its Ready time and first sight (#288; #361 issues LWS group restarts) | PR 2's first task: a fixture from #361's workload-patch group restart, leader and workers recreated, pod names kept, Ready times differ. It establishes where a group's Ready time comes from. Done: the group's row is its leader's, with the latest Ready time over the leader and its Ready workers, so a worker restarted alone under `restartPolicy: None` makes the group wait (`TestLWSGroupReadyTimeIsTheLatestOfItsPods`) | each pod waits from the later of its own Ready time and first sight | on the parent, a pod whose Ready time the group restart does not change shows no wait | 2 |
+| A restart under light load keeps the ITL line (issue ev-shindin/llm-scaling-manager#316, ev-shindin/llm-scaling-manager#329) | a v0.10.0 v1 document (no `itlSlopes`), a v0.10.1 v1 document, and PR 5's document; a restore under light load | both old documents restore and the held slope keeps the line. A frozen copy of v0.10.1's `learnedStateDoc` (`steadystate/learned_state_store.go:83`), pinned in the test, decodes PR 5's document with every field it knows intact | a PR 5 document that renames or drops a v0.10.1 field fails the frozen decode | 5. 4a keeps `TestARestoredSlopeIsInstalledOnlyWhenItCanBeTrusted` (`saturation/held_slope_restore_guard_test.go`) and `TestAHeldITLLineSurvivesARestart` green and does not drop `ITLSlopes` |
+| A non-default `analyzerTuning` is honoured (ev-shindin/llm-scaling-manager#298) | `idleRows`, `steadyFor` and `idleAfterReady` all off their defaults | idle after exactly `idleRows` rows, steady after exactly `steadyFor`, grace over after exactly `idleAfterReady`; none of them one cycle earlier | a build that hard-codes the defaults fails it | 0b (records it), 1 and 4a (test it) |
+| On P/D decode, k2 reads the engine's deferred queue, rewritten before k2 reads `MaxRankQueueLength` (ev-shindin/llm-scaling-manager#294, ev-shindin/llm-scaling-manager#306) | a P/D replay; raw rows recorded | replay runs `decodeCapacityView` again and matches the golden | the base goldens | 0b |
+| ITL admits a replica at its sequence cap above the band (ev-shindin/llm-scaling-manager#293, ev-shindin/llm-scaling-manager#331) | running equal to `max_num_seqs` (from the flag, lowered by `--max-num-active-seqs`) on every rank, requests waiting, preemption read and under `capMaxPreemptionRate`, KV above the band, a valid ITL | the reading is admitted to the fit | admission removed (`itl/admission.go` `atSequenceCap`) fails it | 4a. 4b runs the same input through the throughput analyzer, where admission is new: a named change, refused on its parent |
+| Mu folds across pods by the mean, and yields to its full siblings (ev-shindin/llm-scaling-manager#282; since ev-shindin/llm-scaling-manager#495 never above the measurement) | the base recordings; one slow pod | the goldens hold; one slow pod moves mu by its weight only | a fold by max or min fails the one-slow-pod case | 0b, 3 |
+| The default verbosity does not grow per replica; no line passes the CRI limit (ev-shindin/llm-scaling-manager#303) | one cycle at 8 and at 64 replicas, the `learner-write` burst included | the same line count at the default verbosity for both, and every line under the CRI limit | a per-replica line at the default fails it | every PR that adds `learner-write` (2, 3, 4a, 4b, 5). Today the test lives only in the saturation package (`saturation/replica_log_test.go`: `TestCycleLogAtTheShippedVerbosityDoesNotGrowPerReplica` at 1 and 8 replicas, `TestSummaryStaysWithinTheCRILineLimit`); each other package that adds `learner-write` adds the same test (throughput in 4b) |
+| A warm-pool Pod lent, and lent again, starts its grace again (ev-shindin/llm-scaling-manager#283) | balance-tracker rows: one Pod missing one cycle under the same lend; one Pod lent again to a variant within 1 min | the missing row keeps the grace; the re-lend restarts it. The tracker keys by {pod, variant, bridge} plus a changed ReadySince (`balance/tracker.go:117-141`), and a re-lend to the same variant keeps that key, so the discriminator is a lend event PR 1 adds (`ReplicaMetrics` carries only `FromWarmPool` today) | the parent restarts on both, so the first case fails there | 1 |
+| A pod back from an engine or LWS group restart waits again, from the later of its Ready time and first sight (ev-shindin/llm-scaling-manager#288; ev-shindin/llm-scaling-manager#361 issues LWS group restarts) | PR 2's first task: a fixture from ev-shindin/llm-scaling-manager#361's workload-patch group restart, leader and workers recreated, pod names kept, Ready times differ. It establishes where a group's Ready time comes from. Done: the group's row is its leader's, with the latest Ready time over the leader and its Ready workers, so a worker restarted alone under `restartPolicy: None` makes the group wait (`TestLWSGroupReadyTimeIsTheLatestOfItsPods`) | each pod waits from the later of its own Ready time and first sight | on the parent, a pod whose Ready time the group restart does not change shows no wait | 2 |
 
 ### PR 4b: the throughput analyzer's ITL line
 
@@ -1760,7 +1760,7 @@ I = `internal/signals/itl`, D as before.
 | Report | `itl.Reading` counts, `learn.Report`, `learner-write` (`D/itl_learner.go`), path counters `itl-ols`/`itl-pinned` (`D/mu_from_itl.go:370-375`) | `Reason` `T1-ols`/`T2-default`/`T2-pinned`/`T2-failed` (`T/constants.go:75-79`), debug lines, `VariantState` (`T/types.go:63-96`) |
 
 Persistence, sharing, the args stash, the rollout rule, speculative decoding
-(#274) and the key are **not** in 4b: none is one of #273's fixes or the cap
+(ev-shindin/llm-scaling-manager#274) and the key are **not** in 4b: none is one of ev-shindin/llm-scaling-manager#273's fixes or the cap
 admission.
 
 #### Reuse
@@ -1784,7 +1784,7 @@ keys differ. What blocks the move today, each fixed in 4b-0:
    analyzers on one store; the field check for a throughput-only replay is
    `EngineParams` (2.4).
 3. **The two window clears.** The shape-change clear is kept, holding B and
-   the last A. #453 added `Tracker.ClearWindow(key)` (`I/tracker.go:503`):
+   the last A. ev-shindin/llm-scaling-manager#453 added `Tracker.ClearWindow(key)` (`I/tracker.go:503`):
    the main and steady windows go; B, the held slope and the settle traces
    stay. The shape-change clear calls it from 4b-1. The GPS-mismatch clear
    is dropped in 4b-1 ([below](#the-gps-mismatch-clear-dropped-in-4b-1)).
@@ -1809,11 +1809,11 @@ base goldens.
 
 | switch | changes | an operator sees | negative control (fails on the parent) |
 | --- | --- | --- | --- |
-| `throughput-itl-steady-gate` | The move onto the tracker, with the key's own trace, and #273's fixes with it: the steady gate on the full fit; the settling stamp; a pinned fit over the window's readings, in the band, k-weighted, with at least 10 readings and 3 settled; a positive B only; +Inf refused; the held slope. The shape-change clear through `ClearWindow`, which drops the held slope too; the above-band fallback for a key with no line and no slope to hold ([as built](#4b-1-as-built)) | `Reason` `T2-held` and `T2-above-band`. `learner-write` for the line when A or B moves (band 5 %, as 4a), and a tier change. Fewer `T2-*` lines in a variant's first cycles (10 readings first). Metrics: none | A joiner's warm-up reading (k 0.46, 450 ms against a line near 0.09) moves A on the parent and not on; one reading of one replica sets A on the parent and not on; an +Inf ITL leaves `T2-failed` for 20 rows on the parent; a step through the band teaches B on the parent from unsteady rows |
+| `throughput-itl-steady-gate` | The move onto the tracker, with the key's own trace, and ev-shindin/llm-scaling-manager#273's fixes with it: the steady gate on the full fit; the settling stamp; a pinned fit over the window's readings, in the band, k-weighted, with at least 10 readings and 3 settled; a positive B only; +Inf refused; the held slope. The shape-change clear through `ClearWindow`, which drops the held slope too; the above-band fallback for a key with no line and no slope to hold ([as built](#4b-1-as-built)) | `Reason` `T2-held` and `T2-above-band`. `learner-write` for the line when A or B moves (band 5 %, as 4a), and a tier change. Fewer `T2-*` lines in a variant's first cycles (10 readings first). Metrics: none | A joiner's warm-up reading (k 0.46, 450 ms against a line near 0.09) moves A on the parent and not on; one reading of one replica sets A on the parent and not on; an +Inf ITL leaves `T2-failed` for 20 rows on the parent; a step through the band teaches B on the parent from unsteady rows |
 | `throughput-itl-keeps-the-window-on-gps-mismatch` | Three cycles of GPS mismatch no longer clear the window; the comparison stays a diagnostic, on the minute-mean k, one summary line per variant ([why](#the-gps-mismatch-clear-dropped-in-4b-1)) | `GPS mismatch persisted, clearing observation window` is gone; `GPS mismatch detected` moves to the debug level with a per-variant summary. More full fits on a P/D decode fleet | A correct line with the generation rate 30 % off for three cycles: the window empties on the parent, keeps every reading on |
 | `throughput-itl-reads-the-settle-tracker` | A replica's settle start comes from the engine's tracker, with 4a's rules: restart under its name, idle on evidence, the absence tolerance, the Finite pod mean. Meaningful only with the gate on; on alone it moves nothing | None in logs; a missed scrape no longer restarts a replica's settle | A restart under the same Pod name with no not-Ready row between: settles on, not on the key's own trace |
 | `throughput-itl-waits-after-controller-restart` | After a controller restart, replicas already serving wait their settle. With no snapshot of this line (none exists), the analyzer has no line for `steadyFor` | `T2-failed` and no throughput capacity for about 2 min after a restart: the analyzer is not live, so it neither orders nor vetoes a scale-down | The restart case of 4a, through the throughput analyzer: a line on the first cycle on the parent, none for `steadyFor` on |
-| `throughput-itl-admits-at-sequence-cap` | Readings above the band from a replica at its stated cap, with preemption at most `itlBand.capMaxPreemptionRate`, enter the window | A line, and so throughput capacity, on a variant whose only replica in reach is at its cap (#287) | A replica at its cap above the band: refused on the parent, admitted on. With the gate on and this off, the variant has no line |
+| `throughput-itl-admits-at-sequence-cap` | Readings above the band from a replica at its stated cap, with preemption at most `itlBand.capMaxPreemptionRate`, enter the window | A line, and so throughput capacity, on a variant whose only replica in reach is at its cap (ev-shindin/llm-scaling-manager#287) | A replica at its cap above the band: refused on the parent, admitted on. With the gate on and this off, the variant has no line |
 
 What can move the fleet size, and which way:
 
@@ -1935,13 +1935,13 @@ Decided on the design: the real 2-GPU recording; the cap stays synthetic;
 the shape-change clear is kept, holding B (it held the last A too until
 4b-1's review dropped that: see [4b-1 as built](#4b-1-as-built)) (the GPS-mismatch
 clear, first kept too, is dropped: see below); the
-analyzer reads `EngineParams` from the store now, not after #345;
+analyzer reads `EngineParams` from the store now, not after ev-shindin/llm-scaling-manager#345;
 `T2-held` is a new `Reason`; the k-weighted pinned fit is in scope (the
 exception section 7 names); the four-PR split.
 
 #### 4b-1 as built
 
-Status: built on `feat/learner-4b1`, on main after 4b-0 (#455). The
+Status: built on `feat/learner-4b1`, on main after 4b-0 (ev-shindin/llm-scaling-manager#455). The
 `throughput-sweep` recordings are not in it; they landed later in their own
 commit, with `TestGoldens_ThroughputSweepFloors` on them (see
 [Recordings](#recordings)).
@@ -2081,7 +2081,7 @@ cycles in a row clear the variant's window (`consecutiveGPSMismatches`,
 `T/analyzer.go:441-455`, `DefaultGPSMismatchClearThreshold`); B is kept.
 
 **Why it existed, and why that is gone.** It came with the analyzer
-(efca1b4cf, #1250). There a mismatch also suppressed spare capacity, and the
+(efca1b4cf, llm-d/llm-d-workload-variant-autoscaler#1250). There a mismatch also suppressed spare capacity, and the
 stale readings kept that suppression on for up to the window's 30 minutes;
 the clear was added "to break calibration lock". The same PR then dropped
 the suppression: `anyGPSMismatch` is a placeholder no output reads
@@ -2134,7 +2134,7 @@ on the line itself.
 
 #### 4b-2 as built
 
-Status: built on `feat/learner-4b2`, on main after 4b-1 merged (#456,
+Status: built on `feat/learner-4b2`, on main after 4b-1 merged (ev-shindin/llm-scaling-manager#456,
 1c9a34fe8). The line reads each replica's settle from the engine's
 settle tracker (`T/settle.go`), which 4b-0 wired (`WithSettleView`) and
 4b-1 withheld. An analyzer given no view -- a test that drives `Analyze`
@@ -2264,7 +2264,7 @@ band (`T2-above-band`) inside that wait. Before the review it priced 4.
   cycles 8 to 15 (`pinned-B` for 11 cycles) and the second never. A no-op
   `observeOwnSettle` fails it and four other `TestITLSettle_` tests. The
   goldens came back to main's (above).
-- **The slo analyzer had the same logic, fixed by issue #459** (`slo/settle.go`:
+- **The slo analyzer had the same logic, fixed by issue ev-shindin/llm-scaling-manager#459** (`slo/settle.go`:
   first-seen only on a model's first sight, forgotten after `stateTimeout`).
   Its eviction runs only from `EvictStale`, which the engine and the replay
   call at the top of the cycle, so there every model reads a long gap
@@ -2468,7 +2468,7 @@ published, a peak ceiling of 1.5x need plus one, and need at the horizon.
 The probe reports the replicas still starting, as the engine does, so
 the floor credits them. At 15 s and 90 s every case passes (the 90 s
 decode step peaks at 24 for a need of 17). At 463 s four cases fail,
-ledger rows owned by issue #520: the decode step, alone or through the
+ledger rows owned by issue ev-shindin/llm-scaling-manager#520: the decode step, alone or through the
 snapshot, holds 22 and ends at 21, over the 20.5 bound; after a restart,
 before mu is back, it climbs to 29 and ends at 23; and the aggregated
 load step peaks at 16 for a need of 9. It runs E through
@@ -2482,7 +2482,7 @@ The document stays v1. New fields, all `omitempty`:
 | --- | --- | --- | --- |
 | `startSamples` | `LearnedState` | per key: n (capped at N) and mean m | n = N: the estimate keeps full authority, as before. No fleet moves on upgrade |
 | `startAdmittedAt` | `LearnedState` | per key: last admitted start (the deferred last-admitted stamp) | zero: as old as can be |
-| `itlBaselineAdmittedAt` | `LearnedState` | per ITL key: when its baseline B was last admitted (#495, [as built](#bs-last-admitted-stamp-as-built-495)) | zero: as old as can be |
+| `itlBaselineAdmittedAt` | `LearnedState` | per ITL key: when its baseline B was last admitted (ev-shindin/llm-scaling-manager#495, [as built](#bs-last-admitted-stamp-as-built-ev-shindinllm-scaling-manager495)) | zero: as old as can be |
 | `startCounted` | `LearnedState` | per counted pod (`itlKey\|ns\|pod`): its Ready time | every running pod is folded again, as today |
 | `settle` | `learnedStateDoc`, beside `state` | per model: each replica's key and its three sighting times | every replica waits, as today |
 
@@ -2538,7 +2538,7 @@ with the recorder on, `LEARNED_STATE_SNAPSHOT=true` and `--v=3`:
 4. When the ConfigMap holds both keys, copy the recordings out, then delete
    the controller pod under load. `kubectl rollout restart` alone loses them:
    the recording volume is an `emptyDir`.
-5. 5 min after the restart, drop to light load (issue #316) and restart again
+5. 5 min after the restart, drop to light load (issue ev-shindin/llm-scaling-manager#316) and restart again
    the same way.
 6. One more scale-up per variant after the second restart.
 
@@ -2612,7 +2612,7 @@ confirmation rule it leans on is already proven.
 
 #### 5a as built
 
-Built on main 35bd3dd88 (after #462, R1), not on f82a55480, so line numbers
+Built on main 35bd3dd88 (after ev-shindin/llm-scaling-manager#462, R1), not on f82a55480, so line numbers
 above are f82a55480's.
 
 - **The seed.** `registry.ParseMeta` (`internal/registry/scalermeta.go`)
@@ -2674,7 +2674,7 @@ above are f82a55480's.
 
 #### 4b-3 as built
 
-Status: built on `feat/learner-4b3`, on main after 4b-2 merged (#458,
+Status: built on `feat/learner-4b3`, on main after 4b-2 merged (ev-shindin/llm-scaling-manager#458,
 891c071c4). One switch, `throughput-itl-admits-at-sequence-cap`
 (`T/admission.go`), on by the constructor.
 
@@ -2716,7 +2716,7 @@ this way (`case k > hi && !adm.atSequenceCap(rm)` sends only uncapped rows
 to the fallback); 4b-3 is what gives it a cap to read. Why the band's
 window:
 
-- A reading at the cap is a point on the line (#287): the batch cannot grow,
+- A reading at the cap is a point on the line (ev-shindin/llm-scaling-manager#287): the batch cannot grow,
   and the fill above the band is its sequences' contexts, not memory
   pressure. Rows 1 and 13 fit it into their lines; the throughput line now
   reads the same rows the same way.
@@ -2894,7 +2894,7 @@ source changes (`TestITLCap_TheSummaryLogsTheCapWhileTheLineIsLive`).
 
 **Tables.** `mergedRows` panics on a switch in both `replaySwitches` and
 `earlierSeams`, as `withSeams` does (`TestGoldens_ASwitchWithTwoRowsPanics`).
-`replaySwitches` carries a note: #460 rewrites the start of that table too,
+`replaySwitches` carries a note: ev-shindin/llm-scaling-manager#460 rewrites the start of that table too,
 and 4b-2's six switches belong only in `learner4b2Seams`, whichever merges
 second.
 
@@ -2924,7 +2924,7 @@ before 4b or since; with the cap read from the store, a rollout that
 changes `--max-num-seqs` can briefly judge old pods against the new cap.
 A small PR of its own. (The forget for this line has landed:
 [as built](#the-throughput-lines-forget-as-built), and so has the guard:
-[as built](#rollouts-k2s-wait-and-the-lines-reports-as-built-481-495).)
+[as built](#rollouts-k2s-wait-and-the-lines-reports-as-built-ev-shindinllm-scaling-manager481-ev-shindinllm-scaling-manager495).)
 
 #### 4b-3 round-2 review
 
@@ -2975,7 +2975,7 @@ killed):
 
 #### The throughput line's forget, as built
 
-The forget-learned-state annotation reaches this line, as #431 took it to
+The forget-learned-state annotation reaches this line, as ev-shindin/llm-scaling-manager#431 took it to
 the slo line. One switch, on by the constructor:
 `throughput-itl-forget-reaches-the-line` (`T/forget.go`). `forgetOnRequest`
 calls `ThroughputAnalyzer.ForgetVariant` on the token the saturation analyzer
@@ -3048,9 +3048,9 @@ saturation config registers it. The forget log line gains `throughputEntries`.
 - **Measured versus assumed.** The tests above are unit and replay tests on
   synthetic rows. It has not been run on a cluster.
 
-#### 4b-3's follow-up: the saturation and slo lines at the cap (#467)
+#### 4b-3's follow-up: the saturation and slo lines at the cap (ev-shindin/llm-scaling-manager#467)
 
-Built on main after #471 (602054e98), merged with main after #475
+Built on main after ev-shindin/llm-scaling-manager#471 (602054e98), merged with main after ev-shindin/llm-scaling-manager#475
 (0c2e4431a). Two switches, on by the constructors:
 `saturation-itl-one-sided-at-cap` (`D/itl_one_sided.go`) and
 `slo-itl-one-sided-at-cap` (`slo/one_sided.go`). Each turns on the shared
@@ -3072,7 +3072,7 @@ by at most `(B - b)(1 - k/kbar)` for `k <= kbar`.
 learned B across every key of the tracker. Measured intercepts run 1.5 to
 15 ms, so one learned B anywhere replaced 30 ms: a whole-node variant (A
 0.01, B 30 ms) priced -11.9, -17.4 and -19.5 % with siblings at 15, 8 and 3
-ms, the bias #467 is about. Four rules replace it:
+ms, the bias ev-shindin/llm-scaling-manager#467 is about. Four rules replace it:
 
 - **Scope.** A learned B counts only from the variant's physics
   (`itl.PriorScope`): a window key of the same model, accelerator and GPU
@@ -3265,7 +3265,7 @@ and 2 added:
 4b-3: the saturation line empties a variant's rows while its scale target
 rolls out (`rec.InRollout()`, `D/analyze.go`), and the throughput line has
 no such guard. Left for an issue of its own, as the round-1 review planned
-(#481, since [built](#rollouts-k2s-wait-and-the-lines-reports-as-built-481-495)).
+(ev-shindin/llm-scaling-manager#481, since [built](#rollouts-k2s-wait-and-the-lines-reports-as-built-ev-shindinllm-scaling-manager481-ev-shindinllm-scaling-manager495)).
 
 #### 5b as built
 
@@ -3344,8 +3344,8 @@ on from the constructor.
 - **Zero golden diff.** Measured alone against all off, the switch moves no
   output of any recording (`TestGoldens_TheSwitchRuns`). Its row is in
   `replaySwitches` with no outputs, held by its unit tests (`heldBy`). 4b-2's
-  six switches stay in that table, as main has them after #460 (P1, whose
-  `SwitchPrefillCapacityObserve` row sits beside this one); #465 (4b-3)
+  six switches stay in that table, as main has them after ev-shindin/llm-scaling-manager#460 (P1, whose
+  `SwitchPrefillCapacityObserve` row sits beside this one); ev-shindin/llm-scaling-manager#465 (4b-3)
   moves them to `earlierSeams`.
 - **Tests** (`D/start_confirm_test.go`), each the figure with the switch on
   and, where it decides, off:
@@ -3465,7 +3465,7 @@ both on from the constructor: `saturation.SwitchStartReadsSeed`
 
 #### 5d as built
 
-Built on main 59772fce2 (5c and #482 merged). Changes D and E, snapshot on only,
+Built on main 59772fce2 (5c and ev-shindin/llm-scaling-manager#482 merged). Changes D and E, snapshot on only,
 behind two switches, both on from the constructor:
 `saturation.SwitchStartCountedPodsRestored` (`start-counted-pods-restored`) and
 `settle.SwitchFirstSightRestored` (`settle-first-sight-restored`), the settle
@@ -3493,7 +3493,7 @@ package's first switch, with its own hook (`Tracker.SetSwitchesForReplay`,
 - **A departure from the design: a bridge is never kept.** The design says a new
   lend changes the Ready time. It does not: a lend keeps the Ready time the Pod
   had in the pool, and a Pod lent again to the same variant keeps its key
-  (`settle.Key`, #283). The three stored times cannot tell a new lend from the old
+  (`settle.Key`, ev-shindin/llm-scaling-manager#283). The three stored times cannot tell a new lend from the old
   one, so every bridge waits after a restart, as with the snapshot off. That costs
   a bridge that was not re-lent one wait, on the SLO side
   (`TestRestore_ABridgeIsNotKeptSoANewLendStartsAgain`,
@@ -3663,7 +3663,7 @@ package's first switch, with its own hook (`Tracker.SetSwitchesForReplay`,
   an earlier pass showed an export filter and a clone were dead, both removed, and
   that the claim and the spare order were not reached, which tests now reach.
 
-#### Reports, restored and mu's forget, as built (#495)
+#### Reports, restored and mu's forget, as built (ev-shindin/llm-scaling-manager#495)
 
 Built on main f7130a9cb. One replay switch, `saturation.SwitchMuForgetReported`
 (`mu-forget-reported`), on from the constructor, for mu on the list; the series
@@ -3680,7 +3680,7 @@ and the `restored` field have none, because no replay output reads either.
   budget of about 60 per model. The `learner` label is bounded by
   `learn.Learners`, and a test holds a variant to one series through 1000 key
   changes. Only the saturation analyzer filed reports when this was built; the
-  slo and throughput lines [do now](#rollouts-k2s-wait-and-the-lines-reports-as-built-481-495).
+  slo and throughput lines [do now](#rollouts-k2s-wait-and-the-lines-reports-as-built-ev-shindinllm-scaling-manager481-ev-shindinllm-scaling-manager495).
 
   | overlapping series | kept or replaced |
   | --- | --- |
@@ -3725,9 +3725,9 @@ and the `restored` field have none, because no replay output reads either.
   and are not reported. Eviction reports too, as k2's does.
 - **Open.** Not measured on a cluster: no run has read this series. B's own
   last-admitted stamp, Deferred here, is
-  [built since](#bs-last-admitted-stamp-as-built-495).
+  [built since](#bs-last-admitted-stamp-as-built-ev-shindinllm-scaling-manager495).
 
-#### B's last-admitted stamp, as built (#495)
+#### B's last-admitted stamp, as built (ev-shindin/llm-scaling-manager#495)
 
 Built on main 1573829cd. One replay switch, `saturation.SwitchITLBaselineStamped`
 (`itl-baseline-stamped`), on from the constructor.
@@ -3761,7 +3761,7 @@ Built on main 1573829cd. One replay switch, `saturation.SwitchITLBaselineStamped
   the same way for their own intercepts.
 - Not measured on a cluster.
 
-#### Rollouts, k2's wait and the lines' reports, as built (#481, #495)
+#### Rollouts, k2's wait and the lines' reports, as built (ev-shindin/llm-scaling-manager#481, ev-shindin/llm-scaling-manager#495)
 
 Eight replay switches, on from the constructors. None moves a replay golden: no
 recording holds a rollout, a change of arguments or a new revision under a key,
@@ -3783,7 +3783,7 @@ run on a cluster.
   new, so `domain.NewestRevision` takes the one whose oldest Ready pod is youngest:
   a rollout makes new pods, and an old pod restarted in place does not move its
   revision's oldest. Two revisions that cannot be ordered are treated as no new pod.
-  With the guard off, a test holds the defect #481 names: an old pod above the
+  With the guard off, a test holds the defect ev-shindin/llm-scaling-manager#481 names: an old pod above the
   band counted as at the new cap (`TestRollout_AnOldPodIsNotJudgedAgainstTheNewCap`).
 - **A stalled rollout (round-one review).** As first built, an arguments change
   forgot the line on the rollout's first cycle and the guard then offered no rows,
@@ -3831,7 +3831,7 @@ run on a cluster.
 
   A stuck rollout's hold is log-only: `rolloutHeld` is on the summary line and
   `lineRolloutHeld` on `slo-variant`, and no metric or alert carries it.
-- **The tier latch and B (#498, round-one review).** Resetting the latch alone kept
+- **The tier latch and B (ev-shindin/llm-scaling-manager#498, round-one review).** Resetting the latch alone kept
   nothing out: a full fit over both engines' readings rewrote the stored B for
   good. On an image-only rollout B went from .0100 to .0027 with one new pod, about
   47 % too much capacity with three. So the first rows of a real change of revision
@@ -3845,7 +3845,7 @@ run on a cluster.
   re-stamping the slope's `fittedAt`, so the hold ends on time. The tier stands
   through a hold, the window being frozen. A status with no change of revision
   clears nothing.
-- **"Forget the line".** #481 lists it without saying when. Read here as the
+- **"Forget the line".** ev-shindin/llm-scaling-manager#481 lists it without saying when. Read here as the
   arguments rule the saturation and slo lines have, and the table in
   [PR 4b](#pr-4b-the-throughput-analyzers-itl-line) records this line lacking
   ("no args rule; no rollout rule"). Not a forget on every rollout: that would
@@ -3887,7 +3887,7 @@ run on a cluster.
   One field on one log line, which no output reads, so it has no switch, as
   `restored` has none.
 
-#### One slow pod, as built (#495)
+#### One slow pod, as built (ev-shindin/llm-scaling-manager#495)
 
 Built on main 2f02cdbbe, merged with main 1879d7207. Mu's estimand is the fleet's mean (2.6), but a sample
 reads only the replicas that queued, so what it meant depended on who queued.
@@ -3979,7 +3979,7 @@ Measured on the closed-loop probe (sixteen replicas at 12.8 req/s, one slow for
 its first 10 min; 60 min, past `lowHoldFor` after the recovery and the 5 min
 stabilization), need 18, bound 21.7:
 
-| case | all on | credit off | expiry off | both off | before #495 |
+| case | all on | credit off | expiry off | both off | before ev-shindin/llm-scaling-manager#495 |
 | --- | --- | --- | --- | --- | --- |
 | slow pod at 0.55 | 21 from 1.75 min, 20 from 16.25 to the end; peak 21 | 28 for good, peak 29 | as all on | 28 for good | 28 for good |
 | slow pod at 0.3 | 24 at peak, 20 from 21.5 to the end | 23 for good, peak 27 | as all on | 23 for good | 18 from 27, peak 19 |
@@ -4024,7 +4024,7 @@ stabilization), need 18, bound 21.7:
   [4.3](#43-what-the-tracker-owns)), the same brownout with no rows at all (a
   failed collection: held), an optimize interval over a minute, a restart under the same name, an LWS group with mixed Ready times,
   a missed cycle, a slow fill, a just-Ready pod, a bridge lend, clock skew.
-- **A shared write path already changed a learner silently.** #282 turned #5's
+- **A shared write path already changed a learner silently.** ev-shindin/llm-scaling-manager#282 turned #5's
   in-spacing fold from a max into a lower median, and then into the mean. #7 kept its max only through
   an empty pod name.
 - **Self-sealing errors.** Each capacity learner is witnessed only when
@@ -4040,17 +4040,17 @@ stabilization), need 18, bound 21.7:
   ([PR 5 design](#pr-5-design-start-time-and-the-snapshot)).
 - **The prefill bound** is reviewed before it moves: a double scrape once
   doubled its input, its max kept it, and `RaiseLast` kept it past a reset.
-  #395 folded the pods of a minute at their mean; #397 replaced the max over
+  ev-shindin/llm-scaling-manager#395 folded the pods of a minute at their mean; ev-shindin/llm-scaling-manager#397 replaced the max over
   minutes with the larger of the window's mean and a held lower confidence
   bound ([3.4](#34-which-side-breaks-the-slo)). Both moved on property cases
   and unit tests: no committed recording turns the bound on, so the recorded
   P/D run with a double-scrape fixture is still owed.
 - **The recorder can evict the controller** if pointed at `/tmp`. It is off by
   default and has its own volume and cap.
-- **Open defects this does not fix:** shape dependence of the ITL line (#275).
-  An instant k against a rate[1m] ITL is fixed since #393, and 2.7 holds it to
+- **Open defects this does not fix:** shape dependence of the ITL line (ev-shindin/llm-scaling-manager#275).
+  An instant k against a rate[1m] ITL is fixed since ev-shindin/llm-scaling-manager#393, and 2.7 holds it to
   a mutant. Speculative decoding is read
-  per accepted token in the saturation analyzer since #274; the throughput
+  per accepted token in the saturation analyzer since ev-shindin/llm-scaling-manager#274; the throughput
   and slo analyzers still read the step time.
 
 ## Deferred to the implementing PRs
@@ -4063,11 +4063,11 @@ Round-3 lows, each settled in the PR named.
 | The recorder volume's `sizeLimit` is the per-volume ceiling (two recordings at the cap) plus headroom for the export. The writer stops each recording at the cap and deletes the oldest closed recording before the ceiling | 0b |
 | The export also pseudonymises args and config strings and borrowed-line donors, with a per-export key that is not committed | 0b |
 | `learner-write`'s `pods` lists at most 16, lowest reading first, with `podsOmitted` | 2 |
-| Forget reaches every learner through a plain list of learner names in `learn`, not a registry; it is a named change of its own; when no key remains, the variant's learner series are deleted. Built for the saturation analyzer (2), the slo line (#431) and the throughput line ([as built](#the-throughput-lines-forget-as-built)). The deletion is built with the first series ([as built](#reports-restored-and-mus-forget-as-built-495)) | 2 |
+| Forget reaches every learner through a plain list of learner names in `learn`, not a registry; it is a named change of its own; when no key remains, the variant's learner series are deleted. Built for the saturation analyzer (2), the slo line (ev-shindin/llm-scaling-manager#431) and the throughput line ([as built](#the-throughput-lines-forget-as-built)). The deletion is built with the first series ([as built](#reports-restored-and-mus-forget-as-built-ev-shindinllm-scaling-manager495)) | 2 |
 | Each operator-column cell names its metric series, or "metrics: none" | each PR |
 | A witness column per learner in 3.4 ("witnessed when", "non-saturating witness"), which also tells the probe which side to drive | 3 |
 | 3.6's cycle-count clocks become durations, or record the cycle interval in the threshold | each learner's PR |
-| The snapshot gains a last-admitted stamp for start time and B, as an additive `omitempty` field of v1; a document without it publishes 0 (as old as can be) | Start time: 5c. B: #495, `itlBaselineAdmittedAt`; a line with an empty window publishes its held slope's fit, and an intercept with no slope its own stamp, 0 only when it has none ([as built](#bs-last-admitted-stamp-as-built-495)) |
+| The snapshot gains a last-admitted stamp for start time and B, as an additive `omitempty` field of v1; a document without it publishes 0 (as old as can be) | Start time: 5c. B: ev-shindin/llm-scaling-manager#495, `itlBaselineAdmittedAt`; a line with an empty window publishes its held slope's fit, and an intercept with no slope its own stamp, 0 only when it has none ([as built](#bs-last-admitted-stamp-as-built-ev-shindinllm-scaling-manager495)) |
 
 ## Review notes (round 1)
 

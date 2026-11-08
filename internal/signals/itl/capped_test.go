@@ -26,7 +26,7 @@ var _ = Describe("Tracker on a replica at its sequence cap", func() {
 		now = time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
 	})
 
-	// The shape of issue #287, cycle by cycle: one decode replica took all the
+	// The shape of issue ev-shindin/llm-scaling-manager#287, cycle by cycle: one decode replica took all the
 	// traffic, at its max_num_seqs of 256 running with 768 waiting and k
 	// between 0.86 and 0.89, reading ITL 73-85 ms, while three siblings sat
 	// idle below the band.

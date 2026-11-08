@@ -59,20 +59,20 @@ Read the review first; the implementation design says what was built.
 
 - **[Priority scoping](priority-scoping.md)** — parked. Read before redesigning.
 - **[Kueue borrowing, and limiters that compose](kueue-borrowing-and-limiter-composition.md)**
-  — built (#136). #164 makes every declared limiter
-  bound together and a replica fit a node; #180 counts borrowable cohort
+  — built (ev-shindin/llm-scaling-manager#136). ev-shindin/llm-scaling-manager#164 makes every declared limiter
+  bound together and a replica fit a node; ev-shindin/llm-scaling-manager#180 counts borrowable cohort
   capacity from lenders Kueue would reclaim for, where Kueue governs the pods
   and a GPU bound is declared. Counting other lenders (PR-C) is an open,
   opt-in follow-up.
 - **[One claims ledger](claims-ledger.md)** — proposed. What a replica that is
   ordered but not yet visible holds is kept in six stores today, each with its
-  own keys and clocks; the limiter fixes in #183–#187 were gaps between them.
+  own keys and clocks; the limiter fixes in ev-shindin/llm-scaling-manager#183–ev-shindin/llm-scaling-manager#187 were gaps between them.
   One entry per replica claim, one lifecycle and timeout, persisted, read by
   both engines through one view; Kueue borrowing moves to its own package.
 - **[Model Kueue per ClusterQueue](kueue-per-clusterqueue.md)** — proposed.
   Bind each variant to its ClusterQueue through its pod template's
   `kueue.x-k8s.io/queue-name` label and compute every Kueue figure per queue.
-  Replaces #186's per-namespace min and `multi-queue-namespace`, and makes a
+  Replaces ev-shindin/llm-scaling-manager#186's per-namespace min and `multi-queue-namespace`, and makes a
   shared queue one budget instead of a ceiling each namespace sees in full.
 - **[Utilization-share optimizer](utilization-share-optimizer.md)** — built:
   shadow mode and actuation (stages 1 and 2); the short window for urgent
@@ -108,7 +108,7 @@ Read the review first; the implementation design says what was built.
   composite below.
 - **[The composite analyzer](composite-analyzer.md)** — built, still moving.
   How listed analyzers combine into the one signal the optimizer reads, the
-  decisions behind it, its known limits (#305, #226) and the target: each
+  decisions behind it, its known limits (ev-shindin/llm-scaling-manager#305, ev-shindin/llm-scaling-manager#226) and the target: each
   analyzer at its own band, and no dependence on saturation's units.
 - **[Sizing a backlog](backlog-sizing.md)** — what the shape-swap P/D run
   showed: peaks of 7 and 9 decode replicas against a need of 2, troughs of 1
@@ -174,7 +174,7 @@ last; it is the unit change that makes the other two land.
   order fewer replicas. A borrowed reading may only make a variant more
   conservative, and it expires, because a k2 that is too low never corrects
   itself: nothing saturates, so nothing is measured. Replaces the identity
-  digest as the gate for sharing on #126, after seven measured ways to make
+  digest as the gate for sharing on ev-shindin/llm-scaling-manager#126, after seven measured ways to make
   that digest wrong.
 - **[Engine structure](engine-structure.md)** — scope and layering of the
   engine packages: what to split, and which way imports may point.
@@ -189,7 +189,7 @@ last; it is the unit change that makes the other two land.
   estimate, and a forgotten k2 falls back to a higher capacity, so fewer
   replicas. Stores them in one ConfigMap, each entry with its own clocks so a
   restore never makes a figure younger; leader-only writes, deletion flushes,
-  off by default. Supersedes the Prometheus refit in #116, which cannot
+  off by default. Supersedes the Prometheus refit in ev-shindin/llm-scaling-manager#116, which cannot
   attribute old readings to a variant now that learned state is per variant.
 - **[SLO tiers](slo-tiers.md)** — phase 0 (the analyzer, observing) and step
   2a (the TTFT curve's inputs, observed) built; nothing that changes a replica

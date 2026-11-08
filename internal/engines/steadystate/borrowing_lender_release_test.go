@@ -106,7 +106,7 @@ func TestALenderReleaseSurvivesANewLeaderTerm(t *testing.T) {
 	}
 }
 
-// PR #203 review SF2: a release's latency is measured per cohort whose pool
+// PR ev-shindin/llm-scaling-manager#203 review SF2: a release's latency is measured per cohort whose pool
 // opts in, over the models a release there may lower, and capped; a tenant
 // elsewhere, or one an Any lender reclaims from, does not lengthen it.
 func TestReleaseLatencyIsPerCohortAndCapped(t *testing.T) {
@@ -148,7 +148,7 @@ func TestReleaseLatencyIsPerCohortAndCapped(t *testing.T) {
 	}
 }
 
-// PR #203 review (GT minor): a ledger a newer build wrote is held unread --
+// PR ev-shindin/llm-scaling-manager#203 review (GT minor): a ledger a newer build wrote is held unread --
 // no release to a lender starts -- and is not persisted over.
 func TestALedgerOfANewerVersionIsHeldUnread(t *testing.T) {
 	ctx := context.Background()

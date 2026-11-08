@@ -468,7 +468,7 @@ func TestShareRecurringDonorPeakIsKept(t *testing.T) {
 	t.Logf("donor-peak held %d cycles", held)
 }
 
-// A single swap back is not a swing (issue #269). Two models swap a load of
+// A single swap back is not a swing (issue ev-shindin/llm-scaling-manager#269). Two models swap a load of
 // 2.9 GPUs for 0.17 after 25 minutes, then 0.7 for 2.9 for 20, then swap
 // back for good, as the real-GPU run did; a short model reads at most 1.5
 // GPUs per GPU it holds, its demand measured from what it serves. Counting
@@ -530,7 +530,7 @@ func TestShareSingleSwapBackIsNotHeldOnTheMean(t *testing.T) {
 // singleSwapBackAt is when the scenario of singleSwapBack swaps back for good.
 const singleSwapBackAt = 50 * time.Minute
 
-// singleSwapBack is the swap and swap back of issue #269 with g-GPU replicas
+// singleSwapBack is the swap and swap back of issue ev-shindin/llm-scaling-manager#269 with g-GPU replicas
 // (TestShareSingleSwapBackIsNotHeldOnTheMean), and the demand a short model
 // is measured at: at most 1.5 GPUs per GPU it holds.
 func singleSwapBack(g int) ([]stallPhase, func(need float64, held int) float64) {
@@ -603,7 +603,7 @@ func TestShareCancelledReturnsDoNotHoldASwapBack(t *testing.T) {
 
 // stabilization.swingReversals sets how many changes of direction a swing
 // takes. At 2 -- the rule before the default became three -- the single swap
-// back of issue #269 is a swing again: the busy model is planned on its mean
+// back of issue ev-shindin/llm-scaling-manager#269 is a swing again: the busy model is planned on its mean
 // after it, and reaches 3:1 later than with the rule off. At 3, set
 // explicitly, it is not held, as with the default. Both orders, 1-GPU
 // replicas and whole 8-GPU nodes.

@@ -98,7 +98,7 @@ const (
 	OutputLearnedState = "learned-state.csv"
 )
 
-// The engine's outputs (issue #345, step 0), from each composite the engine
+// The engine's outputs (issue ev-shindin/llm-scaling-manager#345, step 0), from each composite the engine
 // events record: written for a fixture whose recording carries the engine
 // layer, and for no other.
 const (

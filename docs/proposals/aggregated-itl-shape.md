@@ -1,6 +1,6 @@
 # The ITL line of an aggregated pod, by request shape
 
-**Status:** built for issue #275, 2026-11-03. Builds on #432, which fits a
+**Status:** built for issue ev-shindin/llm-scaling-manager#275, 2026-11-03. Builds on ev-shindin/llm-scaling-manager#432, which fits a
 line for an aggregated variant (prefill and decode in one pod, no role label)
 and reports the mu it derives without pricing it. The code is
 `internal/engines/analyzers/saturation/itl_aggregated_shape.go`.
@@ -11,7 +11,7 @@ An aggregated pod runs the prompts it admits as chunks inside its decode
 steps. So its step time, the ITL, carries prefill work, and how much depends
 on the request shape. A line fitted at one shape mis-prices another, in
 either direction: at 1000 in / 500 out about 40% of the ITL is prefill.
-#432 therefore reports the figure and sizes nothing from it.
+ev-shindin/llm-scaling-manager#432 therefore reports the figure and sizes nothing from it.
 
 Two more errors sit in the derived mu:
 
@@ -55,7 +55,7 @@ would flip when the cold ones are the majority.
 
 ## What is fitted, from which readings
 
-**The line.** As #432: the same tracker, band, settle and cap admission.
+**The line.** As ev-shindin/llm-scaling-manager#432: the same tracker, band, settle and cap admission.
 Every line carries the shape it was fitted at, `gFit`: a fit made this
 cycle, a held slope, a restored line and a borrowed `|both` line.
 
@@ -124,7 +124,7 @@ For the shape priced now, `g*`, and the line's `(A_g, gFit)`:
    most `A_g / gFit`, so the true slope `A + c * g*` is never above it.
    A line is never priced lighter than its shape, with no exception.
 4. `g*` heavier by more, no `c`: no figure (`priceCase=shape-unpriced`),
-   reported or priced. A line with no `gFit` (from a #432 build) has none
+   reported or priced. A line with no `gFit` (from a ev-shindin/llm-scaling-manager#432 build) has none
    either.
 
 Then, with the occupancy correction:
@@ -135,7 +135,7 @@ mu = mu(k, ITL) * D / (D + sigma * IL_eff)
 
 By Little's law a resident sequence completes once per
 `(D + sigma * IL_eff)` steps, not once per `D`. On an engine that
-speculates the line is per token (issue #274), so its rate is already in
+speculates the line is per token (issue ev-shindin/llm-scaling-manager#274), so its rate is already in
 tokens and the GPS check compares it as it is. With `sigma`
 unknown the figure is reported uncorrected and never sizes.
 
@@ -173,7 +173,7 @@ its `gFit`, and the line key's points. So:
 - the next fit is taken at the new shape only;
 - meanwhile the held, restored or borrowed line prices a heavier shape only
   through `c`, and a lighter one at its measured slope. The stale line of
-  #432 can no longer price after the shape hold;
+  ev-shindin/llm-scaling-manager#432 can no longer price after the shape hold;
 - a lifted variant drops to report-only and earns the lift again.
 
 ## Persistence and rollback
@@ -183,15 +183,15 @@ The learned-state document stays version 1. One map is added, `omitempty`:
 points. `c` is refitted from the points on restore, never read. A held slope
 restored across a restart takes its shape from the line it published.
 
-A document from #432 has no `itlLineShapes`: its aggregated lines restore
+A document from ev-shindin/llm-scaling-manager#432 has no `itlLineShapes`: its aggregated lines restore
 with no shape and price nothing until fitted again. A build before this one
-ignores the map: #432 keeps reporting only. Forgetting a variant drops its
+ignores the map: ev-shindin/llm-scaling-manager#432 keeps reporting only. Forgetting a variant drops its
 shape state, and a change of engine arguments drops it with the window.
 Decode lines do not change.
 
 ## Replay switches
 
-Off, each does what #432 does.
+Off, each does what ev-shindin/llm-scaling-manager#432 does.
 
 - `itl-aggregated-shape-term`: the shape tags, the window drop, the points,
   `c` and the corrected figure. Alone it moves `learned-state.csv` of the
@@ -200,13 +200,13 @@ Off, each does what #432 does.
   golden: no fixture records a prefill reading for an aggregated variant.
   Its unit tests hold it.
 
-#277's switch (`kv-per-request-hits-resident`) now also moves those two
-files: `g` is priced from the KV a request holds, which #277 bounds.
+ev-shindin/llm-scaling-manager#277's switch (`kv-per-request-hits-resident`) now also moves those two
+files: `g` is priced from the KV a request holds, which ev-shindin/llm-scaling-manager#277 bounds.
 
 ## Limits
 
 - One shape per fleet: `g*` is the fleet's shape, so a variant serving a
-  shape of its own is priced at the average (as #432).
+  shape of its own is priced at the average (as ev-shindin/llm-scaling-manager#432).
 - `sigma` is measured at the current load and priced at the pricing fill.
   At a higher fill decode takes more of each step's token budget and
   prefill stretches, so mu is a little high there.

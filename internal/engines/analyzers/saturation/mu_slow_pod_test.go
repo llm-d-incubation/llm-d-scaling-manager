@@ -295,7 +295,7 @@ func TestMuSlowPod_AFleetThatSaturatedTogetherKeepsItsFigure(t *testing.T) {
 	require.Negative(t, first, "the fleet's own figure never expires")
 }
 
-// The two ledger cases #495 cleared, each failing with its switch off, as
+// The two ledger cases ev-shindin/llm-scaling-manager#495 cleared, each failing with its switch off, as
 // they did on the parent: the slow reading refused (SwitchMuWeighsFleet) and
 // the yield to the full siblings' median (SwitchMuYieldCappedAtMeasurement).
 func TestMuSlowPod_TheClearedLedgerCasesFailWithTheirSwitchOff(t *testing.T) {

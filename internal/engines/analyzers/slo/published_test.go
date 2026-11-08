@@ -44,7 +44,7 @@ func gaugeIn(registry *prometheus.Registry, name string, match map[string]string
 	return 0, false
 }
 
-// What the analyzer publishes, read back from a registry: the review of #148
+// What the analyzer publishes, read back from a registry: the review of ev-shindin/llm-scaling-manager#148
 // found specs that asserted on the result and never on the snapshot, so a
 // published fill, ITL or source could be wrong with every spec green.
 var _ = Describe("What Analyze publishes", func() {

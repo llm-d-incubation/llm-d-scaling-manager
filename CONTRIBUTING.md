@@ -3,7 +3,7 @@
 Thanks for contributing to llm-d-scaling-manager.
 
 Issues and pull requests go to
-[github.com/ev-shindin/llm-scaling-manager](https://github.com/ev-shindin/llm-scaling-manager).
+[github.com/llm-d-incubation/llm-d-scaling-manager](https://github.com/llm-d-incubation/llm-d-scaling-manager).
 
 ## Setting Up
 
@@ -21,11 +21,11 @@ Issues and pull requests go to
 
 ```bash
 # Clone your fork
-git clone https://github.com/<your-username>/llm-scaling-manager.git
-cd llm-scaling-manager
+git clone https://github.com/<your-username>/llm-d-scaling-manager.git
+cd llm-d-scaling-manager
 
 # Add this project (not llm-d) as upstream
-git remote add upstream https://github.com/ev-shindin/llm-scaling-manager.git
+git remote add upstream https://github.com/llm-d-incubation/llm-d-scaling-manager.git
 
 # Download Go modules
 go mod download
@@ -181,7 +181,7 @@ conventions:
 - [ ] The PR description explains the change
 
 For help, read the [Developer Guide](docs/developer-guide/development.md) or
-search [GitHub Issues](https://github.com/ev-shindin/llm-scaling-manager/issues).
+search [GitHub Issues](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues).
 
 ## License
 

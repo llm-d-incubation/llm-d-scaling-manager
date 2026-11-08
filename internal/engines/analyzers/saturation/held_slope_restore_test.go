@@ -21,7 +21,7 @@ type heldLinePricing struct {
 	utilization float64
 }
 
-// Issue #316: a line held through light load (issue #284) survives a restart.
+// Issue ev-shindin/llm-scaling-manager#316: a line held through light load (issue ev-shindin/llm-scaling-manager#284) survives a restart.
 // The snapshot carried the ITL baseline and not the held slope, so a
 // controller restarted under light load found a window with no readings and
 // no slope to hold, had no line of its own -- its own published line is not

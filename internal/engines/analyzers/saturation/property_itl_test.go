@@ -140,7 +140,7 @@ func checkITLOneReading(newL func() itlLearner) func(uint64) error {
 }
 
 // checkITLStaleB: from identifying data at N >= 2 -- replicas held at
-// distinct levels -- B converges to the true intercept (catches #273 A3, B
+// distinct levels -- B converges to the true intercept (catches ev-shindin/llm-scaling-manager#273 A3, B
 // stuck at the 6 ms default).
 func checkITLStaleB(newL func() itlLearner, n int, dur time.Duration) func(uint64) error {
 	return func(seed uint64) error {
@@ -297,7 +297,7 @@ const (
 // as the collector reads it: the instant fill and the scraped minute's mean
 // (avg_over_time[1m], KvUsageMean). Within 15 minutes the key learns its own
 // B, and the line priced at kPrice is within propTruthTol of the true ITL
-// there, on either side (#273 A5, #393). edit, when not nil, changes each row
+// there, on either side (ev-shindin/llm-scaling-manager#273 A5, ev-shindin/llm-scaling-manager#393). edit, when not nil, changes each row
 // before the learner sees it.
 func checkITLKnownTruthTimeBase(newL func() itlLearner, edit func(*domain.ReplicaMetrics)) func(uint64) error {
 	return func(seed uint64) error {

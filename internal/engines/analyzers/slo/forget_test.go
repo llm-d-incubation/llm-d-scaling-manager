@@ -26,7 +26,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils"
 )
 
-// The forget-learned-state annotation reaches the slo line (issue #431),
+// The forget-learned-state annotation reaches the slo line (issue ev-shindin/llm-scaling-manager#431),
 // behind SwitchITLForgetReachesTheLine. Off is the line before the fix: the
 // negative control the switch must fail.
 

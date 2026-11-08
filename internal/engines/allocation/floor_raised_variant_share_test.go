@@ -10,7 +10,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 )
 
-// Issue #495: the throughput floor raises decode to 100 tokens on a supply of
+// Issue ev-shindin/llm-scaling-manager#495: the throughput floor raises decode to 100 tokens on a supply of
 // 100 -- d4 80 of it, d2 20 -- while d2 holds 50 on its own, above its supply
 // share of 20. How the analyzer spreads the floor over the variants decides
 // what the optimizer prices each at: it takes the role's demand at each

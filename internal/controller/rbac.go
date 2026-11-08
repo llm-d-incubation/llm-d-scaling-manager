@@ -80,7 +80,7 @@ package controller
 // ClusterQueue namespaceSelector; the namespaces rule above already covers that.
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=clusterqueues;localqueues;resourceflavors,verbs=get;list
 
-// Kueue cohort borrowing (the Kueue borrowing proposal, PR #161,
+// Kueue cohort borrowing (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161,
 // B2). Cohorts are listed to tell a flat cohort from a nested one; a Forbidden
 // list reads as "hierarchy unknown", never as flat. Workloads, the namespace's
 // own ResourceQuotas and the owners of GPU pods (Jobs; the apps kinds and

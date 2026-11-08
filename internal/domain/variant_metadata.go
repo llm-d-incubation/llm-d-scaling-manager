@@ -105,7 +105,7 @@ type VariantMetadata struct {
 	MinReplicas *int
 	MaxReplicas *int
 	// UnplacedReplicas counts replicas that cannot place
-	// (the Kueue borrowing proposal, PR #161, B5): a pod
+	// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B5): a pod
 	// with PodScheduled=False reason Unschedulable, or held at Kueue's
 	// admission gate for longer than one cycle. Pulling an image or loading
 	// weights is not unplaced. In scale-target units: a LeaderWorkerSet group

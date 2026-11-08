@@ -378,7 +378,7 @@ func shedPlan(e NamedAnalyzerResult, records []variantRecord, stateMap map[strin
 // more. Bounded by it, the model ends at or below its target, or where it is
 // when the target is the lower: rounded alone, a role rounded up to a whole
 // pod left the next cycle a cut no pod meets while the other role grew, and
-// the model ended a partial pod above its target (#421). A model shrinking
+// the model ended a partial pod above its target (ev-shindin/llm-scaling-manager#421). A model shrinking
 // toward its target may now end up to a partial pod below it, where rounding
 // alone left it above.
 //

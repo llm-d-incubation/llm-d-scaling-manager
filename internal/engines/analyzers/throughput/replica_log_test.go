@@ -20,7 +20,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 )
 
-// The shipped-behaviour row of analyzer-learner.md 7 (#303): the default
+// The shipped-behaviour row of analyzer-learner.md 7 (ev-shindin/llm-scaling-manager#303): the default
 // verbosity does not grow per replica, and no line passes the CRI limit.
 // Every package that adds learner-write carries the saturation package's two
 // tests (saturation/replica_log_test.go); these are the throughput

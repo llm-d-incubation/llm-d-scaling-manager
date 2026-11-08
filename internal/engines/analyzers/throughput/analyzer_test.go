@@ -974,7 +974,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 				ReplicaMetrics: []domain.ReplicaMetrics{replica},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// The EPP gate that used to suppress SC here is dropped (#1261), and
+			// The EPP gate that used to suppress SC here is dropped (llm-d/llm-d-workload-variant-autoscaler#1261), and
 			// SC is the engine's to compute regardless. Assert the raw inequality
 			// the engine reads as SC > 0.
 			Expect(aggregation.SumTotalSupply(result.VariantCapacities)).
@@ -1830,7 +1830,7 @@ var _ = Describe("ThroughputAnalyzer", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// GPS gate is dropped — the mismatch does not change the emitted (D, P).
 			// Assert the raw inequality the engine interprets as SC>0, so restoring
-			// the gate (#1261) has a fixture that shows what it must suppress.
+			// the gate (llm-d/llm-d-workload-variant-autoscaler#1261) has a fixture that shows what it must suppress.
 			Expect(aggregation.SumTotalSupply(result.VariantCapacities)).
 				To(BeNumerically(">", result.TotalDemand))
 		})

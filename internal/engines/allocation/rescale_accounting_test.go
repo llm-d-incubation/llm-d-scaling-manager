@@ -9,7 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 )
 
-// TestRescaleCapsEachRoleAtItsCeiling (#218): a P/D model's water-fill cap is
+// TestRescaleCapsEachRoleAtItsCeiling (ev-shindin/llm-scaling-manager#218): a P/D model's water-fill cap is
 // each role's demand capped at the role's maxReplicas, summed. Prefill at its
 // maximum of two 8-GPU pods with demand worth 70 pods counted 560 GPUs
 // toward the cap, though it can reach only 16.
@@ -30,7 +30,7 @@ func TestRescaleCapsEachRoleAtItsCeiling(t *testing.T) {
 	assert.Equal(t, 16+6*8, in[0].CapGPUs, "prefill at its ceiling of 16, decode at its demand of 6 pods")
 }
 
-// TestRescaleWeighsTheDemandItCaps (#218): the water-fill weight is the same
+// TestRescaleWeighsTheDemandItCaps (ev-shindin/llm-scaling-manager#218): the water-fill weight is the same
 // raised demand the cap is sized on. A model whose own demand is 400 while
 // another analyzer keeps 800 weighs as one saturation reads at 800; weighed
 // on its own 400 it was given 3 of 12 GPUs, not 4.

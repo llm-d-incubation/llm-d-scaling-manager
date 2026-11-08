@@ -181,7 +181,7 @@ func TestRefitFindsAnAboveBandLine(t *testing.T) {
 	}
 }
 
-// A pinned line the analyzer priced at the prior on B (issue #467; the
+// A pinned line the analyzer priced at the prior on B (issue ev-shindin/llm-scaling-manager#467; the
 // recorded PinnedAtBPrior) is given back by the refit through the default B
 // with the analyzer's one-sided admission, which the state carries for the
 // bands (OneSided). The gate is the recorded flag: a line recorded as not
@@ -445,7 +445,7 @@ func TestStateAt_TheBandBracketsTheControllersLineOnAScopedPrior(t *testing.T) {
 	require.Less(t, plain.Band.Hi, ctrl, "negative control: without the admission the band reached the controller's line")
 }
 
-// A full fit kept under the set values by the tier latch (issue #495) is
+// A full fit kept under the set values by the tier latch (issue ev-shindin/llm-scaling-manager#495) is
 // refitted by the clear values: the same line, not the pinned fit.
 func TestVariantState_ALatchedFullFitIsRefitted(t *testing.T) {
 	obs := make([]itl.Observation, 0, 19)

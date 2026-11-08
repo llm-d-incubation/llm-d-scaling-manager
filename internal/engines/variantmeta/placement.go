@@ -21,7 +21,7 @@ import (
 var GateGrace = 30 * time.Second
 
 // placement counts a variant's unplaced replicas
-// (the Kueue borrowing proposal, PR #161, B5): pods the
+// (the Kueue borrowing proposal, PR ev-shindin/llm-scaling-manager#161, B5): pods the
 // scheduler reports Unschedulable, and pods held at Kueue's admission gate for
 // longer than GateGrace. A pod pulling an image or loading weights is placed:
 // it has a node. On a LeaderWorkerSet a replica is a group, unplaced while any
