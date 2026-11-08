@@ -94,10 +94,9 @@ make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
 <!-- guide:deploy.register end -->
 
 Set `minReplicas` and `maxReplicas` in the plan so the model's current replica
-count lies between them. The trigger answers the live count, clamped to those
-bounds, so a count outside them moves to the nearest bound. Inside them,
-nothing moves the count except you: `kubectl scale` still works and sticks.
-This is the `hold` mode.
+count lies between them; a count outside them moves to the nearest bound.
+This is the `hold` mode: the count stays where it is, and `kubectl scale`
+still changes it.
 
 **Scaled by KEDA.** The plan writes `apply: "no"` for it, with a note that
 offers `adopt`. Leave it at `no`: `adopt` replaces the ScaledObject's triggers
@@ -134,15 +133,8 @@ kubectl patch scaledobject ${SCALEDOBJECT} -n ${NAMESPACE} --type json --patch-f
 <!-- guide:deploy.observe end -->
 
 KEDA keeps scaling on your triggers. This is the `observe` mode. `MODEL_ID`
-is what the container serves: its `--served-model-name`, else `--model`; the
-plan's `modelID` for that workload shows it. If your install serves the scaler
-without TLS (`kubectl get clustertriggerauthentication
-scaling-manager-external-scaler-${CONTROLLER_NAMESPACE}` answers NotFound), use
-`scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc.cluster.local:9090`
-and leave out `authenticationRef`. If the ScaledObject has a
-`scalingModifiers` formula, do not name this trigger in it. From now on a new
-plan writes `apply: adopt` for this workload, which would drop your triggers:
-set it to `no` until you hand the model over.
+is the `modelID` the plan wrote for that workload. Before you run the plan
+again, read [A new plan offers adopt](#a-new-plan-offers-adopt).
 
 **Scaled by an HPA you wrote.** KEDA cannot share a workload with another
 HPA: two HPAs on one workload fight over its replica count. Move that HPA's
@@ -167,8 +159,8 @@ You should see two lines for each model, one from the controller's cycle and
 one from the scaler KEDA calls, with the mode and the setting that decided it:
 
 ```text
-... Passive mode entered: the external scaler answers KEDA for this variant without moving it {"namespace": "llm-d-sim", "scaledObject": "dev-model-decode-llmsm", "model": "meta/llama", "mode": "hold", "previousMode": "", "source": "LLMSM_PASSIVE"}
-... Passive mode entered: the controller computes and publishes for this variant and changes none of its replica counts {"namespace": "llm-d-sim", "model": "meta/llama", "variant": "dev-model-decode", "mode": "hold", "source": "LLMSM_PASSIVE", ...}
+2026-11-08T18:20:16Z	INFO	scaler/passive.go:58	Passive mode entered: the external scaler answers KEDA for this variant without moving it	{"namespace": "llm-d-sim", "scaledObject": "dev-model-decode-keda", "model": "test-model", "mode": "observe", "previousMode": "", "source": "LLMSM_PASSIVE"}
+2026-11-08T18:20:25Z	INFO	steadystate/passive.go:101	Passive mode entered: the controller computes and publishes for this variant and changes none of its replica counts	{"namespace": "llm-d-sim", "model": "test-model", "variant": "dev-model-decode", "mode": "observe", "source": "LLMSM_PASSIVE", "foreignTriggers": 1}
 ```
 
 `mode` is `hold` for a model registered with the plan and `observe` for one
@@ -206,11 +198,9 @@ The message reads `passive: would scale from 3 to 5 replicas`, followed by the
 reason.
 
 Leave it through each model's busy period, typically a day. A positive gap
-during a peak is a scale-up it would have made earlier or larger; a negative
-gap when load is low is capacity it would have released. In `observe` mode it
-decides from the fleet KEDA sized, so read the gap as "what it would order
-next from here", not as where its own fleet would be. In `hold` the fleet
-never moves, so it learns at one replica count only.
+during a peak is a scale-up it would have made; a negative gap when load is
+low is capacity it would have released. See [Reading the
+gap](#reading-the-gap) for what the gap cannot tell you.
 
 ## Make one model active
 
@@ -262,11 +252,17 @@ kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NA
 ```
 <!-- guide:active.switch end -->
 
-The key is read live, within one KEDA poll. Run the [log check](#1-check-each-model-is-passive)
+The key is read live. Run the [log check](#1-check-each-model-is-passive)
 again. You should see `Passive mode left` for this model, with
-`"source": "perModel"`. Its `desired` and `current` lines on the dashboard now
-meet. A scale-up applies at the next HPA sync; a scale-down waits KEDA's
-300-second window. Its Events are now `ScaledUp` and `ScaledDown`.
+`"source": "perModel"`:
+
+```text
+2026-11-08T18:21:46Z	INFO	scaler/passive.go:60	Passive mode left: the external scaler answers KEDA with the controller's decision again	{"namespace": "llm-d-sim", "scaledObject": "dev-model-decode-keda", "model": "test-model", "mode": "active", "previousMode": "observe", "source": "perModel"}
+2026-11-08T18:21:56Z	INFO	steadystate/passive.go:103	Passive mode left: the controller scales this variant again, under the HPA's own behavior	{"namespace": "llm-d-sim", "model": "test-model", "variant": "dev-model-decode", "mode": "active", "source": "perModel", "foreignTriggers": 1}
+```
+
+From now on a scale-up applies at the next HPA sync,
+and a scale-down waits KEDA's 300-second window.
 
 ### 4. Switch it back
 
@@ -370,9 +366,7 @@ Events.
 
 To go live, make every model of the group active, as in [Make one model
 active](#make-one-model-active). The group acts once none of its models is
-passive, after two to three minutes in which nothing in it scales. One
-model made passive again puts the whole group back to reporting; a transfer
-already under way is dropped after two minutes.
+passive, after two to three minutes in which nothing in it scales.
 
 If your models are already active and you only want sharing to report first,
 you do not need passive mode: use the optimizer's own shadow mode in [Turn on
@@ -395,6 +389,39 @@ It removes the ScaledObjects it created, and KEDA returns each workload to its
 earlier replica count. ScaledObjects you adopted are left and listed by name.
 
 ## Details
+
+### A new plan offers adopt
+
+Once the scaling manager's trigger sits on a ScaledObject, `make
+scaledobjects-plan` writes `apply: adopt` for that workload. Adopt replaces
+the ScaledObject's triggers with the scaling manager's alone, so applying it
+drops yours. Set it to `no` until you hand the model over, as in [step
+2](#2-hand-the-model-over).
+
+### A scaler without TLS
+
+The trigger in step 3 is the TLS form, the install's default. If
+`kubectl get clustertriggerauthentication scaling-manager-external-scaler-${CONTROLLER_NAMESPACE}`
+answers NotFound, the scaler is plaintext: use
+`scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc.cluster.local:9090`
+and leave out `authenticationRef`.
+
+### A scalingModifiers formula
+
+If the ScaledObject combines its triggers with a `scalingModifiers` formula,
+do not name the scaling manager's trigger in it. A passive trigger answers 0,
+and the formula would take that in. The log then reports `observe-unsafe`.
+
+### Reading the gap
+
+In `observe` the scaling manager decides from the fleet KEDA sized, so the
+gap is what it would order next from there, not where its own fleet would
+be. In `hold` the fleet never moves, so it learns at one replica count only.
+
+### A share group switched back to passive
+
+Making one model of an acting group passive again puts the whole group back
+to reporting. A transfer already under way is dropped after two minutes.
 
 ### What a passive model does not get
 
