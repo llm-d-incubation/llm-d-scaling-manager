@@ -136,6 +136,17 @@ const maxPromptCV = 10
 // 8% high); the two figures differ by less than the spread itself.
 const minPromptCV = 1e-4
 
+// MaxPSPromptCV is the widest prompt spread the processor-sharing prefill is
+// priced on alone. The staircase that validated it sent prompts at cv 0.058,
+// and the engine's chunked prefill need not share a prompt longer than its
+// step budget (max_num_batched_tokens) as processor sharing does: at a wide
+// spread it may serve the long ones closer to first come. Past this cv,
+// about four times the spread measured, a TTFT with
+// TTFTFleet.ProcessorSharing is the larger of the two queues' figures,
+// flagged SpreadBeyondProcessorSharing, until a run at a wide spread
+// validates processor sharing there.
+const MaxPSPromptCV = 0.25
+
 // FlowControlState is what is known of EPP flow control.
 type FlowControlState int
 
@@ -528,6 +539,9 @@ type ttftPlan struct {
 	flags  []Flag
 	// ps is TTFTFleet.ProcessorSharing.
 	ps bool
+	// psCapped is ps at a prompt spread past MaxPSPromptCV: each price is
+	// the larger of processor sharing's and first come's.
+	psCapped bool
 }
 
 // plan checks a fleet and places its flow-control onsets.
@@ -541,7 +555,8 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 			return ttftPlan{}, u
 		}
 	}
-	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing}
+	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing,
+		psCapped: fl.ProcessorSharing && pf.cv > MaxPSPromptCV}
 	if fl.ProcessorSharing && fl.Decode != nil {
 		// The pull is its own stage on the decode pods. With no decode line
 		// there are no pods to share, and it stays in the own time.
@@ -584,6 +599,9 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 		}
 	}
 	pl.pf, pl.flags = pf, pf.flags
+	if pl.psCapped {
+		pl.flags = append(pl.flags, SpreadBeyondProcessorSharing)
+	}
 	switch fl.FlowControl.State {
 	case FlowControlOff:
 	case FlowControlNoSeries:
@@ -716,7 +734,33 @@ type priced struct {
 // price is the TTFT at rate and percentile q (0 for the mean). With
 // withDecodeWait false the decode admission wait is left out: the prefill
 // side alone, which RateForTTFT compares against.
+//
+// Under processor sharing past MaxPSPromptCV it is the larger of the two
+// queues' prices (the plan carries SpreadBeyondProcessorSharing): the figure
+// and its parts are the larger one's. A refusal from either is the answer.
 func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
+	if !pl.psCapped {
+		return pl.priceOne(rate, q, withDecodeWait, extras)
+	}
+	ps := pl.priceOne(rate, q, withDecodeWait, extras)
+	if ps.u != nil {
+		return ps
+	}
+	fc := pl
+	fc.ps = false
+	first := fc.priceOne(rate, q, withDecodeWait, extras)
+	if first.u != nil {
+		return first
+	}
+	if first.out.Seconds > ps.out.Seconds {
+		return first
+	}
+	return ps
+}
+
+// priceOne is price on the plan's one queue: processor sharing with pl.ps,
+// first come without.
+func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced {
 	pk := pl.pf.knee()
 	out := TTFT{PrefillKnee: pk, Onsets: pl.onsets, Flags: append([]Flag(nil), pl.flags...)}
 	if rate >= pk {
@@ -741,19 +785,36 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	out.PrefillUtilization = rho
 	out.Parts.OwnPrefill = a + own.mean
 	// side is block 1 for a plan's own time: the worst pod's wait and the own
-	// time, or the PS stages; pooled, the pods pooled with no imbalance.
-	var side func(p prefillPlan, pooled bool) quantiler
+	// time, or the PS stages; old at the old sum's transfer; pooled, the pods
+	// pooled with no imbalance. Under processor sharing each of the four is
+	// worked out once a price, and a refusal of any is the price's.
+	var side func(old, pooled bool) (quantiler, *Unanswerable)
 	var wait waitTail
 	if pl.ps {
-		_, parts, u := pf.psMix(rate, pl.decodePods(), false)
+		type key struct{ old, pooled bool }
+		mixes := map[key]stageMix{}
+		side = func(old, pooled bool) (quantiler, *Unanswerable) {
+			k := key{old, pooled}
+			if m, ok := mixes[k]; ok {
+				return m, nil
+			}
+			p := pf
+			if old {
+				p = pf.withTransfer(pl.term.oldTransfer)
+			}
+			m, _, u := p.psStages(rate, pl.decodePods(), pooled)
+			if u != nil {
+				return nil, u
+			}
+			mixes[k] = m
+			return m, nil
+		}
+		m, parts, u := pf.psStages(rate, pl.decodePods(), false)
 		if u != nil {
 			return priced{u: u}
 		}
+		mixes[key{}] = m
 		out.Parts.EngineWait, out.Parts.KVPullWait = parts.prefill, parts.pull
-		side = func(p prefillPlan, pooled bool) quantiler {
-			m, _, _ := p.psMix(rate, pl.decodePods(), pooled)
-			return m
-		}
 	} else {
 		theta := pf.waitScale(rho)
 		var tail float64
@@ -767,17 +828,21 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 			out.WaitOffset = wait.s[0]
 		}
 		out.Parts.EngineWait = rho * theta
-		side = func(p prefillPlan, pooled bool) quantiler {
-			if pooled {
-				return block{wait: pf.pooledWait(rate), own: p.own()}
+		side = func(old, pooled bool) (quantiler, *Unanswerable) {
+			p := pf
+			if old {
+				p = pf.withTransfer(pl.term.oldTransfer)
 			}
-			return block{wait: wait, own: p.own()}
+			if pooled {
+				return block{wait: pf.pooledWait(rate), own: p.own()}, nil
+			}
+			return block{wait: wait, own: p.own()}, nil
 		}
 	}
 	// stretch is the mean of the waits on the prefill side, the KV pull's
 	// stretch with them.
 	stretch := out.Parts.EngineWait + out.Parts.KVPullWait
-	b1 := side(pf, false)
+	b1, _ := side(false, false)
 
 	var dec waitTail
 	var first, floorStep float64
@@ -919,7 +984,11 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	// old sum's, the old sum cannot stand over it, in any figure below.
 	oldCounts := pl.term != nil && (first < oldFirst || pf.xfer < pl.term.oldTransfer)
 	if oldCounts {
-		oldV, oldBeta := split(side(pf.withTransfer(pl.term.oldTransfer), false), dec, q)
+		oldSide, u := side(true, false)
+		if u != nil {
+			return priced{u: u}
+		}
+		oldV, oldBeta := split(oldSide, dec, q)
 		oldSeconds = a + oldV + oldFirst
 		if oldSeconds > out.Seconds {
 			out.DecodeShare = oldBeta
@@ -937,12 +1006,13 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 		// stands for the independent figure, which it never undercuts. Each
 		// figure takes the old sum's floor on its own, so each stays under
 		// the headline, which takes it too.
-		if mix, ok := b1.(psMix); ok && len(dec.w) > 0 {
+		if mix, ok := b1.(stageMix); ok && len(dec.w) > 0 {
 			// Each part's own time behind the decode wait, independent.
 			out.Independent = a + mix.withWait(dec).quantile(1-q) + first
 			if oldCounts {
-				old := side(pf.withTransfer(pl.term.oldTransfer), false).(psMix)
-				out.Independent = max(out.Independent, a+old.withWait(dec).quantile(1-q)+oldFirst)
+				// side(true, false) priced above, when oldCounts.
+				old, _ := side(true, false)
+				out.Independent = max(out.Independent, a+old.(stageMix).withWait(dec).quantile(1-q)+oldFirst)
 			}
 		} else if both, ok := wait.sum(dec); ok && len(dec.w) > 0 && !pl.ps {
 			out.Independent = a + block{wait: both, own: own}.quantile(1-q) + first
@@ -950,10 +1020,18 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 				out.Independent = max(out.Independent, a+block{wait: both, own: oldOwn}.quantile(1-q)+oldFirst)
 			}
 		}
-		pv, _ := split(side(pf, true), dec, q)
+		pooledSide, u := side(false, true)
+		if u != nil {
+			return priced{u: u}
+		}
+		pv, _ := split(pooledSide, dec, q)
 		out.Pooled = a + pv + first
 		if oldCounts {
-			oldPv, _ := split(side(pf.withTransfer(pl.term.oldTransfer), true), dec, q)
+			oldPooled, u := side(true, true)
+			if u != nil {
+				return priced{u: u}
+			}
+			oldPv, _ := split(oldPooled, dec, q)
 			out.Pooled = max(out.Pooled, a+oldPv+oldFirst)
 		}
 		// Allen-Cunneen decays at Kingman's rate. Below cv 1 that is slower than
@@ -979,7 +1057,7 @@ func (pl ttftPlan) pooledMeanWait(pf prefillPlan, rate float64) float64 {
 	if !pl.ps {
 		return pf.pooledWait(rate).mean()
 	}
-	m, _, u := pf.psMix(rate, pl.decodePods(), true)
+	m, _, u := pf.psStages(rate, pl.decodePods(), true)
 	if u != nil {
 		return math.Inf(1)
 	}

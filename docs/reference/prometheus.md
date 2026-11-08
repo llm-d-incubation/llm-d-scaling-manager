@@ -1341,7 +1341,7 @@ p90 and 7 at p95. Which way it errs depends on the prompt spread:
   and at 7 of 7 at p95, worst 4.13x. That is a wrong spread hiding a missing
   term, not a margin.
 - **With the spread the load generator actually sent,** it reads **low**: under
-  at 5 of 7 points at p90 and 4 of 7 at p95, worst 34% under. Two terms are
+  at 5 of 7 points at p90 and 4 of 7 at p95, worst 33% under. Two terms are
   missing: decode's spread, and the prefill engine's overhead on long prompts.
 - **At saturation** the model refuses the rate: no prediction,
   `llmsm_slo_ttft_refused` `1`, and `llmsm_slo_ttft_unmet` `1`.
@@ -1416,6 +1416,7 @@ model reads all of them `0`, including the two marked "on every answer":
 | `FlowControlMismatch` | The declared `slo.flowControl` contradicts the series. Priced as declared; the log says so. |
 | `AboveFlowControlOnset` | At the rate answered, the prefill gate is closing: the model is not proven conservative there. |
 | `HeldByDecodeAdmission` | The decode wait lowers the rate a little. Informational below `decode-bound`. |
+| `SpreadBeyondProcessorSharing` | The prompt spread is wider than cv 0.25, where processor sharing has not been checked against a run: TTFT is the higher of processor sharing and the first-come queue. The assumed spread of 2 always raises it. |
 | `PromptSpreadClamped` | The measured spread was above 3 or ran past the histogram: priced at 3. |
 | `PromptSpreadAbovePeak` | The spread, assumed or measured, is above the one that prices the longest prompt at this percentile (2.22 at p90, 1.66 at p85), so a wider spread reads a shorter floor. At p85 and below the assumed 2 sets it. |
 | `BelowFittedBand`, `KVBoundSlots` | Decode ran below its fitted band, or KV set its slots rather than the batch cap. |

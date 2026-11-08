@@ -238,7 +238,7 @@ func (bl block) quantile(alpha float64) float64 {
 
 // quantiler is block 1 of the union bound: a time with a quantile, which is
 // a block (a wait, then the request's own time) or, under processor sharing,
-// a psMix.
+// a stageMix.
 type quantiler interface {
 	quantile(alpha float64) float64
 }

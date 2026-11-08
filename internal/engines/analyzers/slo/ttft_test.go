@@ -1394,7 +1394,7 @@ func TestTTFT_TheFlagListIsTheModels(t *testing.T) {
 		whatif.DecodeStepSlopeAssumed, whatif.RouterHopAssumed, whatif.DecodeTermFloored, whatif.DecodeTermPrefixHits,
 		whatif.VPScaledToPrompt, whatif.VPShapeMoved,
 		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.HeldByDecodeAdmission,
-		whatif.DecodeOnsetUnchecked, whatif.BelowFittedBand, whatif.KVBoundSlots,
+		whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
 		AssumedPoissonArrivals, PromptSpreadClamped, FlowControlMismatch, PromptSpreadAbovePeak, ImbalanceNotSustained,
 		whatif.OutputSpreadUnread}
 	want := make([]string, len(flags))
@@ -1580,9 +1580,20 @@ func TestTTFT_TheProcessorSharingSwitch(t *testing.T) {
 	assert.NotEqual(t, on.at.Seconds, off.at.Seconds)
 }
 
-// The switch through Analyze on a decode line that prices: on and off publish
-// different figures, and on publishes what the switch's fleet prices.
+// The switch through Analyze on a decode line that prices: each publishes what
+// whatif.TTFTAt prices on the fleet ttftFleet builds from the cycle's inputs,
+// processor sharing as the switch. The rig's spread is S1's assumed cv 2, past
+// whatif.MaxPSPromptCV, so on is the larger of the two queues, flagged, and
+// never under off.
 func TestTTFT_TheProcessorSharingSwitchOnALine(t *testing.T) {
+	type priced struct {
+		in     ttftInputs
+		rate   float64
+		target whatif.TTFTTarget
+	}
+	var last priced
+	onTTFTPriced = func(in ttftInputs, rate float64, target whatif.TTFTTarget) { last = priced{in, rate, target} }
+	t.Cleanup(func() { onTTFTPriced = nil })
 	read := func(on bool) metrics.SLOTTFTReading {
 		rows := func(i int) []domain.ReplicaMetrics {
 			return append(prefillRows("pre", 4000), cycleRows("dec", i)...)
@@ -1600,10 +1611,18 @@ func TestTTFT_TheProcessorSharingSwitchOnALine(t *testing.T) {
 			got = r.one(t)
 		}
 		require.False(t, math.IsNaN(got.Predicted), got.Reason)
+		fl, _ := ttftFleet(last.in, last.in.pods)
+		require.Equal(t, on, fl.ProcessorSharing)
+		require.NotNil(t, fl.Decode, "priced on the decode line")
+		want, ok := whatif.TTFTAt(fl, last.rate, last.target.Percentile).(whatif.TTFT)
+		require.True(t, ok)
+		assert.Equal(t, want.Seconds, got.Predicted, "switch %v: published is the fleet's price", on)
+		assert.Equal(t, on, want.HasFlag(whatif.SpreadBeyondProcessorSharing))
+		assert.Equal(t, on, slices.Contains(got.Flags, string(whatif.SpreadBeyondProcessorSharing)), "published")
 		return got
 	}
 	on, off := read(true), read(false)
-	assert.NotEqual(t, on.Predicted, off.Predicted)
+	assert.GreaterOrEqual(t, on.Predicted, off.Predicted)
 }
 
 // The judge runs first, so the router's mean of the cycle reaches the window

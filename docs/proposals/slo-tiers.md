@@ -1053,7 +1053,8 @@ The flag series zero-fills a fixed list, `constants.SLOTTFTFlags`, in this
 order: P3's TTFT flags (`UnvalidatedTTFT`, `AssumedVP`, `VPLowerBound`,
 `VPAboveSlopeBound`, `AssumedImbalance`, `AssumedPromptSpread`,
 `TransferOmitted`, `DecodeSideOmitted`, `DecodeTTFTUnmeasured`, `DecodeEngineMeasured`, `DecodeTermOmitted`, `DecodeStepSlopeAssumed`, `RouterHopAssumed`, `DecodeTermFloored`, `DecodeTermPrefixHits`, `VPScaledToPrompt`, `VPShapeMoved`, `FlowControlInferredOff`,
-`AboveFlowControlOnset`, `HeldByDecodeAdmission`, `DecodeOnsetUnchecked`),
+`AboveFlowControlOnset`, `HeldByDecodeAdmission`, `DecodeOnsetUnchecked`,
+`SpreadBeyondProcessorSharing`),
 the decode flags a TTFT answer can carry (`BelowFittedBand`,
 `KVBoundSlots`), and S1's (`AssumedPoissonArrivals`,
 `PromptSpreadClamped`, `FlowControlMismatch`). `AssumedVP` and `DecodeOnsetUnchecked` always read 0
@@ -1344,7 +1345,7 @@ P2](slo-capacity-planner-ttft.md#as-built-p3-after-p2), 7 each at p90 and p95:
 | Spread | Result | Worst |
 | --- | --- | --- |
 | Assumed `cv` 2, all S1 has today | Reads **high**: over the mark at 13 of 14 (6 of 7 at p90, 7 of 7 at p95) | 3.15x at p90, 4.13x at p95 |
-| The spread sent, `cv` 0.058 | Reads **low**: under the mark at 9 of 14 (5 of 7 at p90, 4 of 7 at p95) | 34% under, at p90 |
+| The spread sent, `cv` 0.058 | Reads **low**: under the mark at 9 of 14 (5 of 7 at p90, 4 of 7 at p95) | 33% under, at p90 |
 
 `constants.SLOTTFTPredictionCaveat` carries this into the metric's help, and
 `TestS1_TheCaveatIsTheFrozenTable` holds its figures to the frozen table.

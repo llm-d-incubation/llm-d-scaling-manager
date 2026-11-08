@@ -401,6 +401,9 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 		}
 		in.outputSpreadUnread = a.outputSpreadUnread(fleet)
 		p := gateOrPrice(&in, fresh, arrival, target)
+		if onTTFTPriced != nil {
+			onTTFTPriced(in, arrival, target)
+		}
 		out = append(out, metrics.SLOTTFTReading{
 			Variant: v, Statistic: statistic, Predicted: p.published(), PerReplica: p.perReplica,
 			Unmet: p.unmet, VPSource: vpSource(est), Reason: p.reason, Refused: p.currentRefusal(),
@@ -410,6 +413,11 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 	}
 	return out
 }
+
+// onTTFTPriced, when set, is called with each variant's inputs, rate and
+// target once they are priced. It is a test hook, nil outside tests, which
+// run serially.
+var onTTFTPriced func(in ttftInputs, rate float64, target whatif.TTFTTarget)
 
 // promptSpreadWindow is a prefill variant's prompt window, kept once a row has
 // carried a histogram: until then it could only read assumed.
@@ -546,10 +554,23 @@ func logTTFT(logger logr.Logger, input domain.AnalyzerInput, variant string, in 
 	nan := math.NaN()
 	bound, independent, pooled, floor, beta, rho, theta := nan, nan, nan, nan, nan, nan, nan
 	knee, onsetPrefill, onsetDecode := nan, nan, nan
+	engineWait, kvPullWait := nan, nan
 	if t := p.at; t != nil {
 		bound, independent, pooled, floor, beta = t.Seconds, t.Independent, t.Pooled, t.Floor, t.DecodeShare
 		rho, theta, knee = t.PrefillUtilization, t.WaitScale, t.PrefillKnee
 		onsetPrefill, onsetDecode = t.Onsets.Prefill, t.Onsets.Decode
+		engineWait, kvPullWait = t.Parts.EngineWait, t.Parts.KVPullWait
+		if in.processorSharing {
+			// No first-come wait, so no wait scale (0 in the answer).
+			theta = nan
+		}
+	}
+	// decodePerToken is D's per-token part as priced: under processor sharing
+	// with a decode line, net of the pull, which is its own stage (whatif's
+	// netOfPull takes it from the per-token part first).
+	decodePerToken := term.Engine.PerToken
+	if in.processorSharing && in.decode != nil && !term.EngineOmitted {
+		decodePerToken = max(decodePerToken-in.transfer, 0)
 	}
 	fleetRate, prefillRate := nan, nan
 	var boundBy []whatif.Bound
@@ -579,7 +600,9 @@ func logTTFT(logger logr.Logger, input domain.AnalyzerInput, variant string, in 
 		"rate", rate, "pods", in.pods, "unmet", p.unmet,
 		// The model's figures.
 		"bound", bound, "independent", independent, "pooled", pooled, "floor", floor, "beta", beta,
-		"rho", rho, "theta", theta, "fleetRate", fleetRate, "perReplicaRate", p.perReplica,
+		"rho", rho, "theta", theta, "processorSharing", in.processorSharing,
+		"engineWait", engineWait, "kvPullWait", kvPullWait,
+		"fleetRate", fleetRate, "perReplicaRate", p.perReplica,
 		"prefillOnlyRate", prefillRate, "boundBy", boundBy, "knee", knee,
 		"onsetPrefill", onsetPrefill, "onsetDecode", onsetDecode, "flags", p.flags,
 		// The inputs.
@@ -591,7 +614,7 @@ func logTTFT(logger logr.Logger, input domain.AnalyzerInput, variant string, in 
 		"decodeTTFTPrompt", in.decodeTTFT.PromptTokens, "flowControl", flowControlName(in.flow.State),
 		// The decode term as priced: on no fit, base is the held D, read at
 		// heldPrompt and fromITL.
-		"decodeBase", term.Engine.Base, "decodePerToken", term.Engine.PerToken, "decodePerStep", term.PerStep,
+		"decodeBase", term.Engine.Base, "decodePerToken", decodePerToken, "decodePerStep", term.PerStep,
 		"decodeHeldPrompt", term.Engine.HeldPromptTokens, "decodeFromITL", term.FromITL,
 		"decodeTermRefused", string(term.EngineRefused), "hopBase", term.Hop.Base, "hopPerToken", term.Hop.PerToken,
 		"hopHeldPrompt", term.Hop.HeldPromptTokens, "hopRefused", string(term.HopRefused),

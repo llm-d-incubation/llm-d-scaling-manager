@@ -1,8 +1,8 @@
 role     est. rate at SLO   bound by                                 basis
-prefill  2.89 r/s           TTFT p95                                 UNVALIDATED; a ASSUMED [2.89 .. 3.40] at V_P +-15%
+prefill  2.70 r/s           TTFT p95                                 UNVALIDATED; a ASSUMED [2.18 .. 3.22] at V_P +-15%
          inputs V_P 134775 learned (busy-minutes, at 31816 tokens); a 11.00 ms ASSUMED; f 1 (one pod); N_p 1 (recording); prompt 36966 tokens (measured, cycles 170-189); decode engine TTFT 211.2 ms at 36925 tokens, measured
          assumed a 11ms (--assume-a); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
-fleet    2.89 r/s           TTFT p95, end to end                     UNVALIDATED; a ASSUMED [2.50 .. 3.39] at V_P +-15%
-flags: UnvalidatedTTFT; AssumedPromptSpread; DecodeEngineMeasured; FlowControlInferredOff; AssumedPoissonArrivals; AssumedA
+fleet    2.70 r/s           TTFT p95, end to end                     UNVALIDATED; a ASSUMED [2.18 .. 3.22] at V_P +-15%
+flags: UnvalidatedTTFT; AssumedPromptSpread; DecodeEngineMeasured; SpreadBeyondProcessorSharing; FlowControlInferredOff; AssumedPoissonArrivals; AssumedA
 estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json)
-TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. a ASSUMED.
+TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. a ASSUMED.

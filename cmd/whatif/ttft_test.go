@@ -45,6 +45,14 @@ func workedTTFT(args ...string) []string {
 		"--assume-vp", "30000"}, workedShape)
 }
 
+// pullTTFT is the throughput sweep's fleet (outputSpreadRun) priced with its
+// KV pull a stage: two prefill pods, a narrow prompt spread, V_P and a
+// assumed.
+func pullTTFT() []string {
+	return []string{"replicas-to-slo", "--recording", outputSpreadRun, "--prefill", "2", "--assume-vp", "30000",
+		"--assume-a", "9ms", "--assume-prompt-cv", "0.06", "--ttft-percentile", "90"}
+}
+
 // The golden outputs of the TTFT half: both questions, in text and in JSON,
 // answered and refused. They are regression pins, read back from the code:
 // TestTTFT_HandComputedAtCV2 is what holds a figure to the model. go test
@@ -79,6 +87,15 @@ func TestTTFTGolden(t *testing.T) {
 		{"ttft-no-vp", []string{"replicas-to-slo", "--recording", shortRun, "--ttft-percentile", "90"}, 3},
 		{"ttft-no-vp-json", []string{"slo-to-rate", "--recording", shortRun, "--ttft", "1s", "-o", "json"}, 3},
 		{"ttft-no-a", []string{"replicas-to-slo", "--recording", saturatedRun, "--ttft-percentile", "95"}, 3},
+		// The KV pull as its own stage, end to end: a decode line, the
+		// recording's measured transfer (held from a quiet cycle), D held
+		// from a quiet row, two prefill pods at an assumed f, and a narrow
+		// spread, under MaxPSPromptCV, so processor sharing prices alone.
+		// kvPullWait is not 0, and D net of the pull (netOfPull, its held
+		// branch) reads 0 here: the pull holds all of the held D. No
+		// committed recording prices a decode line with D fitted.
+		{"ttft-replicas-pull", pullTTFT(), 0},
+		{"ttft-replicas-pull-json", slices.Concat(pullTTFT(), []string{"-o", "json"}), 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { checkGolden(t, c.name, c.code, c.args) })
@@ -94,7 +111,7 @@ func TestTTFT_SaysUnvalidatedAndAssumedInTextAndJSON(t *testing.T) {
 		require.Equal(t, 0, code, text)
 		assert.Contains(t, text, "UNVALIDATED; V_P ASSUMED")
 		assert.Contains(t, text, "TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read "+
-			"1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it.")
+			"1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it.")
 		assert.Contains(t, text, "UnvalidatedTTFT")
 		assert.Contains(t, text, "AssumedVP")
 		// Each assumed input is named.
@@ -135,7 +152,7 @@ func TestTTFT_TheNoteFollowsTheSpread(t *testing.T) {
 		return pf
 	}
 	want := "TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read " +
-		"1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it."
+		"1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it."
 	assert.Equal(t, want, footerNote([]*pricedFleet{assumed(false)}))
 	assert.Equal(t, want+" V_P ASSUMED.", footerNote([]*pricedFleet{assumed(false), assumed(true)}))
 	// A refused fleet has no spread of its own to go by.
@@ -143,7 +160,7 @@ func TestTTFT_TheNoteFollowsTheSpread(t *testing.T) {
 	// A measured spread has only the sent spread's row: no word of 4.1x.
 	got := footerNote([]*pricedFleet{{}})
 	assert.Equal(t, "TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the sent spread (cv 0.06) "+
-		"it read up to 34% under the router's percentile on the P2 recordings.", got)
+		"it read up to 33% under the router's percentile on the P2 recordings.", got)
 }
 
 // The CLI reads the spread the histogram says, as S1 does: measured it is not
@@ -174,7 +191,7 @@ func TestTTFT_TheSpreadOrder(t *testing.T) {
 	assert.Equal(t, shapeMeasured, pf.in.PromptCVSource)
 	assert.NotContains(t, pf.inputsText, "prompt cv")
 	assert.NotContains(t, strings.Join(pf.in.Assumed, " "), "prompt cv")
-	assert.Contains(t, footerNote([]*pricedFleet{pf}), "at the sent spread (cv 0.06) it read up to 34%")
+	assert.Contains(t, footerNote([]*pricedFleet{pf}), "at the sent spread (cv 0.06) it read up to 33%")
 
 	asked := fleetOf(t, withBuckets(measured), answerFlags{inputTokens: 500}, "assume-input-tokens")
 	assert.Equal(t, want.CV, asked.fleet.Prefill.PromptCV)

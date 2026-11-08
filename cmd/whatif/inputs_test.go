@@ -181,14 +181,14 @@ func TestPromptCV_TheNoteQuotesTheTableAtItsOwnCV(t *testing.T) {
 	assert.Contains(t, footerNote([]*pricedFleet{assumedAt(whatif.AssumedPromptCV)}), "at the assumed prompt cv 2")
 	got := footerNote([]*pricedFleet{assumedAt(1)})
 	assert.NotContains(t, got, "4.1x")
-	assert.Contains(t, got, "at the sent spread (cv 0.06) it read up to 34%")
+	assert.Contains(t, got, "at the sent spread (cv 0.06) it read up to 33%")
 
 	// Both rows were read at Poisson arrivals: a stated Ca^2 quotes neither.
 	bursty := assumedAt(whatif.AssumedPromptCV)
 	bursty.in.ArrivalCV2 = 4
 	note := footerNote([]*pricedFleet{bursty})
 	assert.NotContains(t, note, "4.1x")
-	assert.NotContains(t, note, "34%")
+	assert.NotContains(t, note, "33%")
 	assert.Contains(t, note, "no recording has checked it at a stated Ca^2")
 }
 
@@ -240,9 +240,9 @@ func TestInputs_TheWorkedExampleAtTheStatedInputs(t *testing.T) {
 		flags []string
 		want  string
 	}{
-		{nil, "fleet    1.47 r/s"},
+		{nil, "fleet    0.25 r/s"},
 		{[]string{"--assume-prompt-cv", "1"}, "fleet    9.64 r/s"},
-		{[]string{"--assume-prompt-cv", "1", "--arrival-cv2", "4"}, "fleet    4.78 r/s"},
+		{[]string{"--assume-prompt-cv", "1", "--arrival-cv2", "4"}, "fleet    4.21 r/s"},
 	} {
 		text, code := runCmd(t, slices.Concat(asked, c.flags)...)
 		assert.Equal(t, 0, code, text)

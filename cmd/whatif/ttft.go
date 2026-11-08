@@ -64,8 +64,8 @@ const outputSpreadUnreadWords = "no output-length histogram: KVreq is ILeff + OL
 // (TestTTFTFrozen_TheNotesFigures, learnreplay).
 const (
 	ttftNoteOpen     = "TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: "
-	ttftNoteAssumed  = "at the assumed prompt cv %s it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34%% under it."
-	ttftNoteMeasured = "at the sent spread (cv 0.06) it read up to 34% under the router's percentile on the P2 recordings."
+	ttftNoteAssumed  = "at the assumed prompt cv %s it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33%% under it."
+	ttftNoteMeasured = "at the sent spread (cv 0.06) it read up to 33% under the router's percentile on the P2 recordings."
 	// ttftNoteArrivals stands for both: the P2 table was read at Poisson arrivals.
 	ttftNoteArrivals = "no recording has checked it at a stated Ca^2."
 )

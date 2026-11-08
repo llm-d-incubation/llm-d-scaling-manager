@@ -668,7 +668,7 @@ roles' rates.
    M/D/1 wait and a Lindley simulation of M/G/1, [the tests](#what-the-tests-check)),
    which is not the same as conservative on a real pod: a real pod's chunked
    prefill is not the M/G/1 server it assumes, and on P2's goldens the whole
-   prediction reads up to about 34% under the router's p90 at light load
+   prediction reads up to about 33% under the router's p90 at light load
    ([after P2](#as-built-p3-after-p2)).
 3. **The gamma prompt.** Is a gamma with the measured cv a fair stand-in for
    the prompt histogram? P2 should compare the floor and the low-load
@@ -1616,9 +1616,17 @@ always in the CLI:
     TTFT = a + T_P(I) + T_X(I) + I·(perToken − κ) + R + D_rest(ITL) + W_decode
 
 - `T_P` is the prefill pod as an M/G/1 processor-sharing stage. The busiest pod
-  takes `f/N_p` of the arrivals and the others share the rest evenly; a request
-  is on one or the other by those shares. There is no prefill wait: the stretch
-  is the wait.
+  takes `f/N_p` of the arrivals and the others fall linearly from it, down to
+  the least share that keeps the mean (`(2 − f)/N_p`, or 0 past `f` 2); at two
+  pods that is the rest. A request is on a pod by its share, so the percentile
+  is the population's, a request on any pod, not the busiest pod's. `f` says
+  only how loaded the busiest pod is: spreading the others evenly is the least
+  spread they can have, and the stretch is convex in a pod's share, so that
+  read about 10 % low at three pods in review. The linear fall is a
+  conservative stand-in until the router's per-pod shares are read: at `f` 1.5
+  and 0.8 of the knee it prices the mean stretch 4.6 % above the even spread
+  at three pods and 9.6 % at four. There is no prefill wait: the stretch is
+  the wait.
 - `T_X` is the KV pull, work `I·κ`, as a processor-sharing stage on the decode
   pod it lands on, the `N_d` pods sharing the arrivals evenly. A pull that
   saturates its pods is refused (`Saturated`).
@@ -1639,8 +1647,8 @@ of work `x`, the time past its work, `E = T(x) − x`:
 | | Value | Exact where |
 | --- | --- | --- |
 | `P(E = 0)` | `(1 − ρ)·e^(−λx)`: the pod was empty and nothing arrived while it ran | Poisson arrivals |
-| `E[E]` | `x·sρ/(1 − ρ)`, `s = (1 + Ca²)/2` | `Ca²` 1, any work: the M/G/1-PS sojourn `x/(1 − ρ)` |
-| `Var[E]` | `2sρ/(1 − ρ)²·(xk/(1 − ρ) − k²(1 − e^(−(1 − ρ)x/k))/(1 − ρ)²)`, `k = E[S]·(Ca² + max(1, Cs²))/2` | `Ca²` 1 and exponential work: the M/M/1-PS conditional variance. Any work: its small-`x` limit `ρx²/(1 − ρ)²` |
+| `E[E]` | `x·sρ/(1 − ρ)`, `s = (Ca² + Cs²)/(1 + Cs²)` past `Ca²` 1, `(1 + Ca²)/2` below it | `Ca²` 1, any work: the M/G/1-PS sojourn `x/(1 − ρ)` |
+| `Var[E]` | `2vρ/(1 − ρ)²·(xk/(1 − ρ) − k²(1 − e^(−(1 − ρ)x/k))/(1 − ρ)²)`, `k = E[S]·(Ca² + max(1, Cs²))/2`, `v = s²` past `Ca²` 1, `s` below it | `Ca²` 1 and exponential work: the M/M/1-PS conditional variance. Any work, `Ca²` 1: its small-`x` limit `ρx²/(1 − ρ)²` |
 
 Given `E > 0`, `E` is a gamma of those moments. Each stage then has two outcomes
 (alone or shared), the two stages four, independent given the prompt. The
@@ -1649,8 +1657,31 @@ scale with it, so each outcome's first two moments over the prompt have a
 closed form: every term is `c·u^n·e^(−a·u)`, `u` the prompt over its mean. Each
 outcome is priced as a gamma of those moments, mixed by its weight and by the
 pod's share: at most eight gammas. The decode admission wait joins it as before,
-by the optimised union bound. `s` for `Ca²` above 1 is an interpolation (the PS
-mean's insensitivity to the work in place of Kingman's `Cs²`), not derived.
+by the optimised union bound.
+
+**Burstier than Poisson.** `s` past `Ca²` 1 is Kingman's ratio, the first-come
+wait's at that `Ca²` over its Poisson one, and the variance scales as `s²`: a
+burst stretches every request in it by about its size. It is a stated rule,
+checked against simulation, not derived. The first version priced
+`s = (1 + Ca²)/2` with the variance at `s`, and on one pod with near-constant
+prompts that read 15 to 49 % short at `Ca²` 2 to 4 and `ρ` 0.6 to 0.85. Each
+stage is priced at its own pods' `Ca²`: a pod taking share `p` of a stream sees
+`p·Ca² + 1 − p` (exact for a renewal stream split at random), the prefill pods
+at their shares and the pull at `1/N_d`. Against a one-pod M/G/1-PS
+simulation at `Ca²` 2 and 4, `ρ` 0.3 to 0.93 and prompt cv 0.058 and 1, p90 and
+p95 read −1.1 % to +117 %, the mean −3.8 % to +45 %: never more than 5 % short
+at a percentile, and most high at light load with near-constant prompts at
+`Ca²` 4. A first-come queue (Kingman's mean, an exponential tail) read at or
+below the rule at every one of those points, so it is no floor for burst.
+
+**Past a wide prompt spread.** The staircase sent prompts at cv 0.058. vLLM's
+chunked prefill need not share a prompt longer than its step budget
+(`max_num_batched_tokens`) as processor sharing does, and may serve long
+prompts closer to first come. Past a prompt cv of 0.25 (`whatif.MaxPSPromptCV`,
+about four times the spread measured) the TTFT is the larger of processor
+sharing's and the first-come queue's, flagged `SpreadBeyondProcessorSharing`,
+until a run at a wide spread validates processor sharing there. S1's assumed
+cv 2 is always past it.
 
 **Checked against a simulation** of the same tandem stages
 (`TestPS_AgainstATandemSimulation`, 180,000 requests a point, `V_P` unmargined):
@@ -1659,7 +1690,13 @@ mean's insensitivity to the work in place of Kingman's `Cs²`), not derived.
 | --- | --- | --- | --- | --- |
 | B, 2 + 2 | 13.3 to 31.6 r/s | within 0.1 % | 0.6 to 0.8 % short | 3.3 to 4.4 % short |
 | B-onset, 2 + 4 | 39.1 to 53.6 r/s | 0.4 to 2.2 % short | −1.8 to +2.4 % | 0.7 to 2.1 % short |
-| C, `Ca²` 4 | 13.3 to 31.6 r/s | 7 to 9 % high | +1 to +6 % | −7.5 to +10 % |
+| C, `Ca²` 4, 2 + 2 | 13.3 to 31.6 r/s | +8 to +12 % | +25 to +27 % | +26 to +32 % |
+| One pod, `Ca²` 2 | `ρ` 0.3 to 0.85 | +1 to +8 % | +3 to +19 % | −1.1 to +20 % |
+| One pod, `Ca²` 4 | `ρ` 0.3 to 0.85 | +8 to +23 % | +16 to +61 % | +16 to +71 % |
+
+At Poisson the p95 reads 3.3 to 4.4 % short, inside the test's band of 5 %:
+the two-moment gamma per part has a lighter tail than the simulated sum.
+Burstier than Poisson the test's bands are one-sided, at most 5 % short.
 
 At no load the stages are the old own time to the bit; toward the knee they
 run away as `1/(1 − ρ)`; the TTFT never falls as the rate rises
@@ -1693,11 +1730,15 @@ The gate, the predicted rate over the client's crossing of the target:
 | B off | **1.162** | 0.974 | **1.217** | 0.989 |
 | B on | **1.147** | 0.976 | **1.212** | 0.993 |
 | B-onset on | 0.936 | 0.850 to 0.876 | 0.922 | 0.850 to 0.876 |
-| C off | 0.850 to 0.944 | 0.955 | 0.850 to 0.944 | 1.000 |
+| C off | 0.850 to 0.944 | 0.850 to 0.944 | 0.850 to 0.944 | 0.850 to 0.944 |
 
 Bold is out of the mark (0.75 to 1.10). Every phase is in it on the new shape
 but A on's p95, which a one-minute transient at its second step decides
-(64.6 ms between 52.9 and 56.4) on either shape.
+(64.6 ms between 52.9 and 56.4) on either shape. C (`Ca²` 4) reads high under
+the burst rule: its targets at the operating rate are 334.6 ms at p90 and
+397.7 ms at p95 (282.7 and 307.9 under the first version's `s`), above the
+client's ladder at the fourth step, so its ratio is the interval past it, as on
+the first-come shape.
 
 **Where it reads high.** At B-onset's operating rate, 47.5 r/s, the busiest
 prefill pod is at `ρ` 0.81 and the 5 % `V_P` margin is whole, which takes it to
@@ -1709,11 +1750,48 @@ interval up to the knee, 0.85 to 0.88: inside the mark, on the side of
 under-promising. The margin is unchanged here; whether processor sharing still
 needs it is open.
 
+Follow-up: the 5 % `V_P` margin was sized for the first-come shape, where it
+moved the wait as `1/(1 − ρ)` once; under processor sharing the stretch moves
+the same way but on every request, so the margin at B-onset reads p90 +50 %
+high. Re-size it against a frozen run on the processor-sharing shape (or price
+it by `ρ` alone, not by a fixed share of `V_P`) before the next staircase.
+
 **What it does not change.** The flow-control onsets still read a first-come
 queue length on the prefill pods (`meanScore`). Under processor sharing the
 vLLM queue is near empty below saturation (the run's router queue peaked at 0
 at the B-onset step above the predicted onset), so the prefill onset is likely
 placed too low. Not addressed here.
+
+**P2, re-frozen.** S1 prices with the switch on, so the router comparison of
+[P3 after P2](#as-built-p3-after-p2) (`TestTTFTValidation_AgainstTheRouter`)
+now prices processor sharing, and its table is re-frozen. One prefill pod, no
+decode line, so the prefill stage is the only one. At the spread sent (cv
+0.058) the rows moved:
+
+| Level | p | Router, ms | First come, ms and ratio | Processor sharing, ms and ratio | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1k | p90 | 47.0 | 32.1, 0.682 | 32.4, 0.689 | UNDER |
+| 1k | p95 | 48.5 | 36.4, 0.750 | 35.5, 0.732 | UNDER |
+| 2k | p90 | 47.9 | 44.8, 0.935 | 48.3, 1.009 | pass |
+| 2k | p95 | 49.2 | 54.5, 1.109 | 53.9, 1.096 | pass |
+| 4k | p90 | 92.1 | 70.4, 0.765 | 79.7, 0.865 | UNDER |
+| 4k | p95 | 96.0 | 90.3, 0.940 | 90.1, 0.938 | pass |
+| 16k | p90 | 316.3 | 212.8, 0.673 | 217.9, 0.689 | UNDER |
+| 16k | p95 | 358.1 | 281.7, 0.787 | 267.8, 0.748 | UNDER |
+| 8k | p90 | 97.6 | 146.4, 1.499 | 141.9, 1.454 | over\* |
+| 8k | p95 | 109.6 | 160.6, 1.464 | 162.2, 1.479 | over |
+| 30k | p90 | 569.7 | 379.9, 0.667 | 384.4, 0.675 | UNDER |
+| 30k | p95 | 584.9 | 392.5, 0.671 | 452.2, 0.773 | UNDER |
+| 37k | p90 | 794.7 | 522.5, 0.657 | 540.1, 0.680 | UNDER (was UNDER\*) |
+| 37k | p95 | 915.0 | 713.7, 0.780 | 679.0, 0.742 | UNDER\* |
+
+\* is beyond the bucket. Still under at 9 of 14, now 1 beyond the bucket (was
+2), worst 32.5 % under (was 34 %). At S1's assumed cv 2, past
+`MaxPSPromptCV`, the price is the larger of the two queues, and that is first
+come's at every row: those 14 rows did not move (13 over, worst 3.15x at p90 and
+4.13x at p95). Processor sharing alone would read them lower (2.48x and 3.31x
+at worst in review), but no run has validated it at that spread.
+`constants.SLOTTFTPredictionCaveat` and the CLI's note carry the new figures.
 
 **Goldens.** No replay golden moves: no committed recording's cycle holds an
 `a`, so S1 stops before it prices a fleet. The CLI's TTFT goldens move.

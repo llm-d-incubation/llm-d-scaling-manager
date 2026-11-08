@@ -145,7 +145,7 @@
         },
         "ttft": {
           "answer": {
-            "value": 11.095065114802047,
+            "value": 14.634239395210875,
             "unit": "s",
             "basis": {
               "fill": 0,
@@ -159,15 +159,16 @@
               "UnvalidatedTTFT",
               "AssumedPromptSpread",
               "DecodeEngineMeasured",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "AssumedPoissonArrivals",
               "AssumedA"
             ],
             "parts": {
-              "independent": 11.095065114802047,
-              "pooled": 11.095065114802047,
+              "independent": 14.634239395210875,
+              "pooled": 14.185800739014844,
               "decodeShare": 0,
-              "engineWait": 1.6360615520407165,
+              "engineWait": 4.090153880101791,
               "kvPullWait": 0,
               "ownPrefill": 0.2997167444777735,
               "decodeWait": 0,
@@ -176,15 +177,15 @@
               "routerHop": 0,
               "prefillUtilization": 0.85,
               "vpMarginApplied": 0.05,
-              "waitScale": 0,
+              "waitScale": 4.970782014649694,
               "waitOffset": 0,
               "decodeWaitProbability": 0,
               "prefillKnee": 3.4636023685040676,
               "decodeKnee": 0
             },
             "sensitivity": {
-              "lo": 5.559931908863635,
-              "hi": 11.095065114802047,
+              "lo": 7.423901727165208,
+              "hi": 14.634239395210875,
               "refused": "Saturated"
             }
           }
@@ -193,5 +194,5 @@
     }
   ],
   "exitCode": 3,
-  "note": "estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. a ASSUMED."
+  "note": "estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. a ASSUMED."
 }

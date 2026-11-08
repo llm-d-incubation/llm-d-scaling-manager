@@ -69,6 +69,11 @@ func TestFreeze_PricesTheBucketAndNamesWhatIsAssumed(t *testing.T) {
 }
 
 func TestFreeze_AMarginAboveThePricedFigureRaisesTheTarget(t *testing.T) {
+	// 3, not 1.9: priced as processor sharing the targets stand further
+	// above their floor than first come put them (the stretch's tail is
+	// heavier than the Kingman wait on near-constant work), and 1.9 raised
+	// none of them, so the case no longer exercised the margin. 3 is above
+	// the priced figure at some target here; the assertion below holds that.
 	high := strings.Replace(freezeSpecText, "targetFloorMargin: 1.2", "targetFloorMargin: 3", 1)
 	out, err := runCLI(freezeArgs(writeSpec(t, high))...)
 	require.NoError(t, err)

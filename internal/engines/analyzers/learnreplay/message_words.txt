@@ -366,6 +366,7 @@ SetRecordedValue
 SetUsed
 SingularFit
 Skipping
+SpreadBeyondProcessorSharing
 StartOptimizeLoop
 StatefulSet
 Successfully
@@ -996,6 +997,7 @@ engine-agnostic
 engineParams
 engineParamsSource
 engineRanks
+engineWait
 engines
 enough
 entered
@@ -1455,6 +1457,7 @@ kvCeiling
 kvFromInstant
 kvFullPods
 kvMaxToMean
+kvPullWait
 kvReqFleet
 kvReqPerSeq
 kvTokensPerRequest
@@ -2074,6 +2077,7 @@ priork2|
 priors
 probe
 processing
+processorSharing
 produced
 product
 production

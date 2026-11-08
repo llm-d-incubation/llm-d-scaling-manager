@@ -71,7 +71,7 @@ func TestPS_AtNoLoadIsTheOwnWork(t *testing.T) {
 			if u != nil {
 				t.Fatal(u)
 			}
-			mix, parts, bad := pl.pf.psMix(0, pl.decodePods(), false)
+			mix, parts, bad := pl.pf.psStages(0, pl.decodePods(), false)
 			if bad != nil {
 				t.Fatal(bad)
 			}
@@ -195,31 +195,42 @@ func TestPS_TheTermIsNetOfThePull(t *testing.T) {
 
 // The PS side against a tandem simulation of the same fleet: prefill pods at
 // f, then the pull on the decode pods, each M/G/1-PS, at the staircase's
-// buckets B, B-onset and C. The bands are what the method was measured to
-// reach (ttft_ps.go): at Poisson below the onset the mean to 1 %, p90 to 2 %
-// and p95 up to 5 % short; above it (four decode pods, rho_w to 0.84) every
-// figure to 5 %; at Ca^2 4, where the stretch is an interpolation, 12 %.
+// buckets B, B-onset and C, and one prefill pod at Ca^2 2 and 4. The bands
+// are what the method was measured to reach (ttft_ps.go): at Poisson below
+// the onset the mean to 1 %, p90 to 2 % and p95 up to 5 % short; above it
+// (four decode pods, rho_w to 0.84) every figure to 5 %. Burstier than
+// Poisson the bands are one-sided: never more than 5 % under, and as high as
+// the rule reads (most at light load).
 func TestPS_AgainstATandemSimulation(t *testing.T) {
 	type band struct{ lo, hi float64 }
 	for _, c := range []struct {
-		name           string
-		ca2            float64
-		decode         int
-		rates          []float64
-		mean, p90, p95 band
+		name            string
+		ca2             float64
+		prefill, decode int
+		rates           []float64
+		mean, p90, p95  band
 	}{
-		{"B", 1, 2, []float64{13.317, 24.970, 28.299, 31.629}, band{-0.01, 0.01}, band{-0.02, 0.02}, band{-0.05, 0.01}},
-		{"B-onset", 1, 4, []float64{39.110, 47.490, 53.636}, band{-0.05, 0.05}, band{-0.05, 0.05}, band{-0.05, 0.05}},
-		{"C", 4, 2, []float64{13.317, 28.299, 31.629}, band{0, 0.12}, band{-0.12, 0.12}, band{-0.12, 0.12}},
+		{"B", 1, 2, 2, []float64{13.317, 24.970, 28.299, 31.629}, band{-0.01, 0.01}, band{-0.02, 0.02}, band{-0.05, 0.01}},
+		{"B-onset", 1, 2, 4, []float64{39.110, 47.490, 53.636}, band{-0.05, 0.05}, band{-0.05, 0.05}, band{-0.05, 0.05}},
+		{"C", 4, 2, 2, []float64{13.317, 28.299, 31.629}, band{-0.05, 0.15}, band{-0.05, 0.40}, band{-0.05, 0.40}},
+		// One pod at rho 0.3, 0.6 and 0.85 (21.744 r/s is 0.6): no split
+		// softens the burst, the case the earlier (1 + Ca^2)/2 read 15-49 %
+		// short. One-sided: never more than 5 % under; high is allowed.
+		{"one pod, Ca^2 2", 2, 1, 2, []float64{10.872, 21.744, 30.804}, band{-0.05, 0.15}, band{-0.05, 0.30}, band{-0.05, 0.30}},
+		{"one pod, Ca^2 4", 4, 1, 2, []float64{10.872, 21.744, 30.804}, band{-0.05, 0.30}, band{-0.05, 0.75}, band{-0.05, 0.85}},
 	} {
 		fl := psFleet(0.0577, c.ca2)
+		fl.Prefill.Replicas = c.prefill
+		if c.prefill == 1 {
+			fl.Prefill.Imbalance = 1
+		}
 		fl.Decode.Replicas = c.decode
 		pl, u := fl.plan()
 		if u != nil {
 			t.Fatal(u)
 		}
 		for _, rate := range c.rates {
-			mix, _, bad := pl.pf.psMix(rate, c.decode, false)
+			mix, _, bad := pl.pf.psStages(rate, c.decode, false)
 			if bad != nil {
 				t.Fatal(bad)
 			}
@@ -256,7 +267,7 @@ func (s simSample) quantile(q float64) float64 { return s.v[int(q*float64(len(s.
 // two-phase hyperexponential at the plan's Ca^2; the prompt a gamma at the
 // plan's cv; the busiest prefill pod picked at f/N_p and the others evenly;
 // the decode pod uniformly, the pull arriving as the prefill ends. Each
-// sample is the prompt's own work and both stages' stretch, as psMix prices.
+// sample is the prompt's own work and both stages' stretch, as stageMix prices.
 func simulateTandemPS(pf prefillPlan, rate float64, decodePods, n int, seed uint64) simSample {
 	rng := rand.New(rand.NewPCG(seed, 2))
 	np := pf.p.Replicas

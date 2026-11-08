@@ -47,7 +47,7 @@ const (
 	// UnvalidatedTTFT is on every TTFT figure. Repeat 1 of the staircase run
 	// (M2) failed the form before the decode term. That run chose the term,
 	// so it cannot validate it: validation is a fresh frozen run. On P2's
-	// goldens it reads low at light load, up to about 34% under the router's
+	// goldens it reads low at light load, up to about 33% under the router's
 	// p90: not a bound.
 	UnvalidatedTTFT Flag = "UnvalidatedTTFT"
 	// AssumedVP is V_P supplied by the caller (--assume-vp) rather than
@@ -146,6 +146,11 @@ const (
 	// priced, could not be placed, so the answer may stand above it. Pass
 	// the decode role to check it.
 	DecodeOnsetUnchecked Flag = "DecodeOnsetUnchecked"
+	// SpreadBeyondProcessorSharing is a TTFT priced with
+	// TTFTFleet.ProcessorSharing at a prompt spread past MaxPSPromptCV, wider
+	// than any run has validated processor sharing at: the figure is the
+	// larger of processor sharing's and the first-come queue's.
+	SpreadBeyondProcessorSharing Flag = "SpreadBeyondProcessorSharing"
 )
 
 // The bounds a TTFT rate or a prefill knee can be set by.
@@ -183,7 +188,11 @@ type TTFTBasis struct {
 type TTFT struct {
 	// Seconds is the answer: at a percentile, the optimised union bound over
 	// the prefill side (block 1) and the decode admission wait; for the mean,
-	// the sum of the parts' means.
+	// the sum of the parts' means. On the first-come queue block 1 is a
+	// request on the busiest prefill pod, so the percentile and the mean are
+	// that pod's. With TTFTFleet.ProcessorSharing block 1 is every prefill
+	// pod's requests mixed by their shares, so they are the population's: a
+	// request on any pod.
 	Seconds float64
 	// Independent is the same percentile with the two blocks taken
 	// independent, printed beside the union bound; never above it. Equal to

@@ -82,10 +82,12 @@ estimate from cycles 1-226, not a guarantee; see basis (-o json)
 
 These are the proposal's figures, at `cv` 1. [As built](#ttft-as-built) the CLI
 assumes S1's `cv` 2, prints no TTFT band and adds a `prefill knee` row: the same
-commands read 250 ms and 1.47 r/s, the 20 ms a hop the recording has no fit of
-([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)), the prefill
-pod priced as processor sharing
-([as built](slo-capacity-planner-ttft.md#as-built-processor-sharing)).
+commands read 373 ms and 0.25 r/s, the 20 ms a hop the recording has no fit of
+([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)). The prefill
+pod is priced as processor sharing
+([as built](slo-capacity-planner-ttft.md#as-built-processor-sharing)), but past a prompt
+cv of 0.25 as the larger of that and the first-come queue, which at `cv` 2 is first
+come's.
 
 Refusals, flags, the standalone mode and exit codes are in the
 [CLI reference](#cli-reference).
@@ -992,21 +994,23 @@ named under `bound by`.
 
 ```
 prefill knee    30.00 r/s   [25.50 .. 34.50] N_p 1 x V_P 30000 / (f 1 x 1000 tokens); UNVALIDATED; V_P ASSUMED
-TTFT p90        250.3 ms    [205.9 .. 324.2] end to end; UNVALIDATED; V_P ASSUMED
+TTFT p90        373.4 ms    [302.6 .. 489.1] end to end; UNVALIDATED; V_P ASSUMED
                 (bands: V_P +-15%, a sweep, not a confidence interval)
-                (225.5 ms if prefill and decode waits were independent)
-                (floor 133.3 ms, pooled 250.3 ms, worst pod utilization 0.377)
+                (343.4 ms if prefill and decode waits were independent)
+                (floor 133.3 ms, pooled 331.4 ms, worst pod utilization 0.377)
 ttft inputs     V_P 30000 ASSUMED; a 11.04 ms learned; f 1 (one pod); N_p 1 (--prefill); prompt 1000 tokens (assumed); decode by its line, term omitted, hop assumed
 assumed         V_P 30000 tok/s (--assume-vp); prompt 1000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); decode term omitted (no fit, TooFewDecodeMinutes, and no quiet decode row): T_xfer + ITL stands for it; router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
 ```
 
-That is the worked example with the CLI's `cv` of 2, an assumed 20 ms hop and the
-prefill pod as processor sharing, so 250 ms where the page, at `cv` 1 on the old sum
-and a first-come queue, has 160 ms (the first-come queue read 373 ms here); `a` is
-P1's 11.04 ms. Question 1 at 200 ms p95 reads 1.47 r/s where the page has 11.10, and
-the JSON's note says the assumed term moved it from 4.66. `--assume-prompt-cv 1`, the
-page's `cv`, reads 9.64, and `--arrival-cv2 4` on top of it 4.78
-(`TestInputs_TheWorkedExampleAtTheStatedInputs`; 0.25, 10.80 and 4.80 first come).
+That is the worked example with the CLI's `cv` of 2 and an assumed 20 ms hop. At
+that spread the price is the larger of processor sharing's and the first-come
+queue's (flag `SpreadBeyondProcessorSharing`), here first come's, so 373 ms where
+the page, at `cv` 1 on the old sum, has 160 ms (processor sharing alone reads 250
+ms); `a` is P1's 11.04 ms. Question 1 at 200 ms p95 reads 0.25 r/s where the page
+has 11.10, and the JSON's note says the assumed term moved it from 1.19.
+`--assume-prompt-cv 1`, the page's `cv`, reads 9.64 (processor sharing's, the
+larger there), and `--arrival-cv2 4` on top of it 4.21
+(`TestInputs_TheWorkedExampleAtTheStatedInputs`; 10.80 and 4.80 first come).
 `TestTTFT_TheWorkedExampleFromTheRecording` puts `cv` 1, the old sum and the
 first-come queue back on the fleet the CLI read, and gets the page's figures within
 1 ms, 1.6 ms lower as the page says. `TestTTFT_HandComputedAtCV2` holds a figure at
@@ -1019,7 +1023,7 @@ files are regression pins, read back from the code.
 `V_P ASSUMED` when `--assume-vp` supplied it and `a ASSUMED` when `--assume-a` did. The closing line, and the JSON's
 `note`, give the direction for what the CLI can print: "at the assumed prompt
 cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the
-sent spread (cv 0.06) up to 34% under it". At `cv` 2 the frozen table in
+sent spread (cv 0.06) up to 33% under it". At `cv` 2 the frozen table in
 `ttft_validation_test.go` reads 13 of 14 levels over the 25% mark, none under,
 and one pass; `TestTTFTFrozen_TheNotesFigures` holds the note to the table. With
 a measured `cv` (Q1) the note keeps only the sent spread's half.

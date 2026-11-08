@@ -15,7 +15,7 @@ func TestSensitivity_TheWorkedExample(t *testing.T) {
 	q := workedTTFT("replicas-to-slo", "--ttft-percentile", "90")
 	text, _ := runCmd(t, q...)
 	assert.Regexp(t, `prefill knee +30\.00 r/s +\[25\.50 \.\. 34\.50\]`, text)
-	assert.Regexp(t, `TTFT p90 +250\.3 ms +\[\d+\.\d \.\. \d+\.\d\] +end to end`, text)
+	assert.Regexp(t, `TTFT p90 +373\.4 ms +\[\d+\.\d \.\. \d+\.\d\] +end to end`, text)
 	assert.Contains(t, text, "(bands: V_P +-15%, a sweep, not a confidence interval)", "one pod has one f")
 
 	out, _ := runCmd(t, append(q, "-o", "json")...)

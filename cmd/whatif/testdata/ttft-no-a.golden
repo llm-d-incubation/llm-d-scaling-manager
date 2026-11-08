@@ -2,4 +2,4 @@ decode          refused: NoLine (no ITL line learned by cycle 193)
 shape           IL 36661 OL 16 (measured, cycles 171-190), output spread D 1.000 (measured)
 TTFT p95        refused: NoFixedLatency (P1 refused a: TooFewLowLoadMinutes; pass --assume-a for a flagged answer)
 estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json)
-TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it.
+TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it.
