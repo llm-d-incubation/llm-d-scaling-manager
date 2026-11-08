@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 400" width="680" height="400" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328">
+  <rect width="680" height="400" rx="12" fill="#ffffff"/>
+  <text x="24" y="30" font-size="16" font-weight="700">Warm pool: near-floor latency on 3 of 4 rises, for 12 % fewer GPU-seconds</text>
+  <text x="24" y="49" font-size="11.5" fill="#57606a">p95 TTFT per scale-up (bar: range over 4 rises, dot: worst; the pool's worst, 831 ms, is the one rise not near the floor)</text>
+
+  <!-- axes -->
+  <line x1="80" y1="300" x2="600" y2="300" stroke="#8c959f"/>
+  <line x1="80" y1="60" x2="80" y2="300" stroke="#8c959f"/>
+  <!-- y grid (log) -->
+  <g stroke="#eaeef2">
+    <line x1="80" y1="272.2" x2="600" y2="272.2"/>
+    <line x1="80" y1="180" x2="600" y2="180"/>
+    <line x1="80" y1="87.8" x2="600" y2="87.8"/>
+  </g>
+  <g font-size="11" fill="#57606a" text-anchor="end">
+    <text x="72" y="276">0.1 s</text>
+    <text x="72" y="184">1 s</text>
+    <text x="72" y="92">10 s</text>
+  </g>
+  <!-- x ticks -->
+  <g font-size="11" fill="#57606a" text-anchor="middle">
+    <line x1="166.7" y1="300" x2="166.7" y2="305" stroke="#8c959f"/><text x="166.7" y="319">12 000</text>
+    <line x1="340" y1="300" x2="340" y2="305" stroke="#8c959f"/><text x="340" y="319">14 000</text>
+    <line x1="513.3" y1="300" x2="513.3" y2="305" stroke="#8c959f"/><text x="513.3" y="319">16 000</text>
+  </g>
+  <text x="340" y="340" text-anchor="middle" font-size="11.5" fill="#57606a">GPU-seconds per arm (lower is cheaper)</text>
+  <text x="26" y="180" font-size="11.5" fill="#57606a" transform="rotate(-90 26 180)" text-anchor="middle">p95 TTFT per rise (log scale)</text>
+
+  <!-- no pool -->
+  <line x1="177.8" y1="114.3" x2="177.8" y2="92.7" stroke="#cf222e" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+  <circle cx="177.8" cy="92.7" r="7" fill="#cf222e"/>
+  <text x="192" y="88" font-weight="700" fill="#cf222e">Autoscaling alone</text>
+  <text x="192" y="104" font-size="11" fill="#57606a">12 129 GPU-s · 5.2–8.8 s</text>
+
+  <!-- warm pool -->
+  <line x1="352" y1="267.7" x2="352" y2="187.4" stroke="#0969da" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+  <circle cx="352" cy="187.4" r="8" fill="#0969da"/>
+  <text x="366" y="183" font-weight="700" fill="#0969da">+ one-Pod warm pool</text>
+  <text x="366" y="199" font-size="11" fill="#57606a">14 138 GPU-s · 0.11–0.83 s</text>
+
+  <!-- floor -->
+  <line x1="520.3" y1="276.5" x2="520.3" y2="261.7" stroke="#6e7781" stroke-width="6" stroke-linecap="round" opacity="0.45"/>
+  <circle cx="520.3" cy="261.7" r="7" fill="#6e7781"/>
+  <text x="510" y="240" font-weight="700" fill="#57606a" text-anchor="end">Floor of 2 replicas</text>
+  <text x="510" y="256" font-size="11" fill="#57606a" text-anchor="end">16 080 GPU-s · 0.09–0.13 s</text>
+
+  <text x="24" y="372" font-size="11" fill="#57606a">Two 8B models bursting out of phase on H200 nodes, 1 GPU per replica, 30 720 requests per arm, all served.</text>
+  <text x="24" y="388" font-size="11" fill="#57606a">One run per arm, no confidence intervals. Method and caveats: docs/well-lit-paths/warm-pool-bridge/measured.md</text>
+</svg>

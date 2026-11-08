@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-classes-config
+  namespace: scaling-manager-system
+data:
+  premium.yaml: |
+    name: Premium
+    priority: 1
+    data:
+      - model: default/default
+        slo-tpot: 24
+        slo-ttft: 500
+      - model: meta/llama0-70b
+        slo-tpot: 80
+        slo-ttft: 500
+  freemium.yaml: |
+    name: Freemium
+    priority: 10
+    data:
+      - model: ibm/granite-13b
+        slo-tpot: 200
+        slo-ttft: 2000
+      - model: meta/llama0-7b
+        slo-tpot: 150
+        slo-ttft: 1500

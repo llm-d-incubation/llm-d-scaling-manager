@@ -1,0 +1,35 @@
+name: install-small-model
+
+prerequisites:
+  namespace:
+    note: Where the model goes, and which model.
+    run: |
+      export NAMESPACE=<your-namespace>
+      export MODEL_ID=Qwen/Qwen3-0.6B
+  gpu:
+    note: List nodes with allocatable GPUs. You need at least one.
+    run: kubectl get nodes -o custom-columns=NODE:.metadata.name,GPU:.status.allocatable.'nvidia\.com/gpu' --no-headers
+
+deploy:
+  standup:
+    note: Deploy the model server, its EPP and InferencePool. BENCHMARK_LLMSM_DEPLOY=false leaves the scaling manager out.
+    run: |
+      make benchmark-standup BENCHMARK_NAMESPACE=${NAMESPACE} MODEL_ID=${MODEL_ID} \
+        BENCHMARK_LLMSM_DEPLOY=false
+
+verify:
+  serving:
+    run: kubectl get pods -n ${NAMESPACE}
+  model:
+    note: Ask the endpoint what it loaded. This is the name every request must use.
+    run: |
+      kubectl run probe -n ${NAMESPACE} --rm -i --restart=Never --quiet \
+        --image=registry.k8s.io/e2e-test-images/agnhost:2.47 --command -- \
+        /bin/sh -c "curl -s http://$(kubectl get svc -n ${NAMESPACE} -o name | grep epp | head -1 | cut -d/ -f2).${NAMESPACE}.svc.cluster.local:80/v1/models"
+  smoke:
+    note: Drive load through it and snapshot the dashboard.
+    run: make benchmark-smoke NAMESPACE=${NAMESPACE}
+
+cleanup:
+  teardown:
+    run: make benchmark-teardown BENCHMARK_NAMESPACE=${NAMESPACE}

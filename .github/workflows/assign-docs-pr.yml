@@ -1,0 +1,140 @@
+# Assigns documentation PRs created by the Update Docs workflow
+# to the AUTHOR (not merger) of the original PR that triggered the docs update
+name: Assign Docs PR to Original Author
+
+on:
+  pull_request:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      docs_pr_number:
+        description: 'The docs PR number to assign (will extract source PR from body/branch)'
+        required: true
+        type: number
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  assign-to-original-author:
+    # Run for: 1) PRs created by github-actions bot with docs: title, or 2) manual workflow_dispatch
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.actor == 'github-actions[bot]' && startsWith(github.event.pull_request.title, 'docs:'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get original PR author
+        id: get_author
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT_PR_BODY: ${{ github.event.pull_request.body }}
+          EVENT_PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          INPUT_DOCS_PR: ${{ inputs.docs_pr_number }}
+        run: |
+          echo "Finding original PR author..."
+
+          # For workflow_dispatch, fetch the docs PR details
+          if [ -n "$INPUT_DOCS_PR" ]; then
+            echo "Manual trigger - fetching docs PR #$INPUT_DOCS_PR details..."
+            if ! PR_BODY=$(gh pr view "$INPUT_DOCS_PR" --repo "$REPO" --json body --jq '.body'); then
+              echo "Error: Unable to fetch body for docs PR #$INPUT_DOCS_PR. Check that the PR number is valid and accessible."
+              exit 1
+            fi
+            if ! PR_HEAD_REF=$(gh pr view "$INPUT_DOCS_PR" --repo "$REPO" --json headRefName --jq '.headRefName'); then
+              echo "Error: Unable to fetch head ref for docs PR #$INPUT_DOCS_PR. Check that the PR number is valid and accessible."
+              exit 1
+            fi
+          else
+            PR_BODY="$EVENT_PR_BODY"
+            PR_HEAD_REF="$EVENT_PR_HEAD_REF"
+          fi
+
+          ORIGINAL_PR_NUMBER=""
+
+          # Try to extract original PR number from the docs PR body (e.g., 'Source PR: #123' or just '#123')
+          if echo "$PR_BODY" | grep -Eq '#[0-9]+'; then
+            ORIGINAL_PR_NUMBER="$(echo "$PR_BODY" | grep -oE '#[0-9]+' | head -n1 | tr -d '#')"
+            echo "Detected original PR number from body: #$ORIGINAL_PR_NUMBER"
+          # Fallback: try to extract PR number from the head branch name (e.g., 'docs/update-123')
+          elif echo "$PR_HEAD_REF" | grep -Eq '[0-9]+'; then
+            ORIGINAL_PR_NUMBER="$(echo "$PR_HEAD_REF" | grep -oE '[0-9]+' | head -n1)"
+            echo "Detected original PR number from head ref: #$ORIGINAL_PR_NUMBER"
+          fi
+
+          PR_AUTHOR=""
+
+          if [ -n "$ORIGINAL_PR_NUMBER" ]; then
+            echo "Fetching author for original PR #$ORIGINAL_PR_NUMBER..."
+            PR_AUTHOR=$(gh pr view "$ORIGINAL_PR_NUMBER" \
+              --repo "$REPO" \
+              --json author \
+              --jq '.author.login' 2>/dev/null || echo "")
+          fi
+
+          # Fallback: use the most recently merged PR to main (within last hour)
+          if [ -z "$PR_AUTHOR" ] || [ "$PR_AUTHOR" = "null" ]; then
+            echo "Could not determine original PR from metadata; falling back to most recently merged PR..."
+            ONE_HOUR_AGO=$(date -u -d '1 hour ago' +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-1H +'%Y-%m-%dT%H:%M:%SZ')
+            PR_AUTHOR=$(gh pr list \
+              --repo "$REPO" \
+              --base main \
+              --state merged \
+              --limit 5 \
+              --search "merged:>=$ONE_HOUR_AGO" \
+              --json author,mergedAt \
+              --jq '[.[] | select(.mergedAt != null)] | sort_by(.mergedAt) | reverse | .[0].author.login' 2>/dev/null || echo "")
+          fi
+
+          if [ -n "$PR_AUTHOR" ] && [ "$PR_AUTHOR" != "null" ]; then
+            echo "Found original PR author: $PR_AUTHOR"
+            echo "author=$PR_AUTHOR" >> $GITHUB_OUTPUT
+          else
+            echo "No suitable original PR found, skipping assignment"
+            echo "author=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Assign PR to original author
+        if: steps.get_author.outputs.author != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DOCS_PR: ${{ inputs.docs_pr_number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          AUTHOR="${{ steps.get_author.outputs.author }}"
+          # Use input docs_pr_number if provided (workflow_dispatch), otherwise use event PR number
+          PR_NUMBER="${INPUT_DOCS_PR:-$EVENT_PR_NUMBER}"
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Error: PR_NUMBER is empty. Cannot assign PR."
+            exit 1
+          fi
+
+          echo "Assigning PR #$PR_NUMBER to $AUTHOR (original PR author)"
+
+          gh pr edit "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --add-assignee "$AUTHOR"
+
+          echo "Successfully assigned PR #$PR_NUMBER to $AUTHOR"
+
+      - name: Add comment with attribution
+        if: steps.get_author.outputs.author != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DOCS_PR: ${{ inputs.docs_pr_number }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          AUTHOR="${{ steps.get_author.outputs.author }}"
+          # Use input docs_pr_number if provided (workflow_dispatch), otherwise use event PR number
+          PR_NUMBER="${INPUT_DOCS_PR:-$EVENT_PR_NUMBER}"
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Error: PR_NUMBER is empty. Cannot add comment."
+            exit 1
+          fi
+
+          gh pr comment "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --body "This documentation update was triggered by changes from @$AUTHOR. Assigning for review."

@@ -1,0 +1,572 @@
+package allocation
+
+import (
+	"maps"
+	"math"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+)
+
+var _ = Describe("Node-aware donor sets (§6.5)", func() {
+	// B, far short, grows by one replica. A and C hold surplus in Deployment
+	// replicas of one 8-GPU pod, whose pods run on the nodes given.
+	type pod struct{ name, node string }
+	run := func(receiverPods []int, nodes map[string]ShareNode, a, c []pod, domainKey string) SharePlan {
+		roles := []ShareRole{
+			{Key: "A", Weight: 1, Need: 4, Ceiling: 64, ReplicaGPUs: 8},
+			{Key: "B", Weight: 1, Need: 64, Ceiling: 64, ReplicaGPUs: 16},
+			{Key: "C", Weight: 1, Need: 4, Ceiling: 64, ReplicaGPUs: 8},
+		}
+		units := func(ps []pod) []ShareUnit {
+			out := make([]ShareUnit, 0, len(ps))
+			for _, p := range ps {
+				out = append(out, ShareUnit{Pods: []SharePod{{Name: p.name, Node: p.node, GPUs: 8}}})
+			}
+			return out
+		}
+		in := SharePlanInput{Roles: roles, Held: map[string]int{"A": 24, "B": 16, "C": 24},
+			Thresholds: map[string]float64{"A": 0.8, "B": 0.8, "C": 0.8}, Budget: 64, Tolerance: 0.15,
+			Give: map[string]ShareVariant{
+				"A": {Name: "a", GPUs: 8, PodGPUs: []int{8}},
+				"C": {Name: "c", GPUs: 8, PodGPUs: []int{8}},
+			},
+			Grow:       map[string]ShareVariant{"B": {Name: "b", GPUs: 16, PodGPUs: receiverPods}},
+			Nodes:      nodes,
+			DonorUnits: map[string][]ShareUnit{"A": units(a), "C": units(c)},
+		}
+		if domainKey != "" {
+			in.DomainKey = map[string]string{"B": domainKey}
+		}
+		l := NewShareLedger()
+		var p SharePlan
+		for i := range 3 {
+			if p = PlanShareTransfers(l, in, time.Unix(int64(30*i), 0), simTimings()); len(p.Started) > 0 {
+				break
+			}
+		}
+		return p
+	}
+	planned := func(p SharePlan) []string {
+		out := make([]string, 0, 2*len(p.Started))
+		for _, t := range p.Started {
+			out = append(out, t.PlannedPods...)
+		}
+		return out
+	}
+	full := func(names ...string) map[string]ShareNode {
+		m := map[string]ShareNode{}
+		for _, n := range names {
+			m[n] = ShareNode{}
+		}
+		return m
+	}
+
+	It("adds up two donor pods sharing a node into one hole for a larger receiver pod", func() {
+		p := run([]int{16}, full("n1", "n2"),
+			[]pod{{"ns/a-0", "n1"}, {"ns/a-1", "n2"}}, []pod{{"ns/c-0", "n1"}}, "")
+		Expect(p.Started).To(HaveLen(2))
+		Expect(p.Started[0].IsSetPrimary()).To(BeTrue())
+		Expect(p.Started[1].SetID).To(Equal(p.Started[0].ID))
+		Expect(planned(p)).To(ConsistOf("ns/a-0", "ns/c-0"), "the two pods on n1, not a-1 on n2")
+	})
+
+	It("finds nothing when the donor pods are on different nodes (control)", func() {
+		p := run([]int{16}, full("n1", "n2"),
+			[]pod{{"ns/a-0", "n1"}}, []pod{{"ns/c-0", "n2"}}, "")
+		Expect(p.Started).To(BeEmpty())
+		Expect(p.Unfunded).To(HaveKeyWithValue("B", ShareUnfundedNoCompatibleDonor))
+	})
+
+	It("never uses free GPUs in place of a donor's quota", func() {
+		// n1 has 8 free and a-0: the hole fits, but one donor replica gives 8
+		// of the 16 the receiver's replica costs.
+		nodes := full("n1", "n2")
+		nodes["n1"] = ShareNode{Free: 8}
+		p := run([]int{16}, nodes, []pod{{"ns/a-0", "n1"}}, nil, "")
+		Expect(p.Started).To(BeEmpty())
+	})
+
+	It("keeps every hole of an exclusive-topology receiver in one domain", func() {
+		nodes := map[string]ShareNode{
+			"n1": {Labels: map[string]string{"rack": "r1"}},
+			"n2": {Labels: map[string]string{"rack": "r2"}},
+			"n3": {Labels: map[string]string{"rack": "r1"}},
+		}
+		p := run([]int{8, 8}, nodes,
+			[]pod{{"ns/a-0", "n1"}}, []pod{{"ns/c-0", "n2"}, {"ns/c-1", "n3"}}, "rack")
+		Expect(p.Started).To(HaveLen(2))
+		Expect(planned(p)).To(ConsistOf("ns/a-0", "ns/c-1"), "c-0 is on rack r2")
+	})
+
+	It("crosses domains for a receiver without one (control)", func() {
+		nodes := map[string]ShareNode{
+			"n1": {Labels: map[string]string{"rack": "r1"}},
+			"n2": {Labels: map[string]string{"rack": "r2"}},
+			"n3": {Labels: map[string]string{"rack": "r1"}},
+		}
+		p := run([]int{8, 8}, nodes,
+			[]pod{{"ns/a-0", "n1"}}, []pod{{"ns/c-0", "n2"}, {"ns/c-1", "n3"}}, "")
+		Expect(p.Started).To(HaveLen(2))
+		Expect(planned(p)).To(ConsistOf("ns/a-0", "ns/c-0"), "first node in name order")
+	})
+
+	It("starts nothing for a domain receiver when no domain holds enough", func() {
+		nodes := map[string]ShareNode{
+			"n1": {Labels: map[string]string{"rack": "r1"}},
+			"n2": {Labels: map[string]string{"rack": "r2"}},
+		}
+		p := run([]int{8, 8}, nodes, []pod{{"ns/a-0", "n1"}}, []pod{{"ns/c-0", "n2"}}, "rack")
+		Expect(p.Started).To(BeEmpty(), "the node-blind search must not be used for a domain receiver")
+	})
+})
+
+var _ = Describe("Which donor pod went (§6.5)", func() {
+	tm := simTimings()
+	t0 := time.Unix(0, 0)
+	start := func(l *ShareLedger) ShareTransfer {
+		return l.Start(ShareTransfer{Donor: "A", Receiver: "B", GPUs: 8, DonorGPUs: 8, PlannedPods: []string{"ns/a-0"}},
+			map[string]int{"A": 16}, t0, tm)
+	}
+
+	It("ends a planned transfer whose donor shrank while its planned pod still runs, raising nothing", func() {
+		l := NewShareLedger()
+		t := start(l)
+		l.PlannedRunning(map[string]bool{t.ID: true}, nil)
+		ends := l.Observe(map[string]int{"A": 8}, t0.Add(time.Minute), tm)
+		Expect(ends).To(HaveLen(1))
+		Expect(ends[0].Outcome).To(Equal(ShareOutcomeWrongPod))
+		Expect(l.TakeReleased()).To(BeEmpty(), "the receiver must not be raised into a hole that did not open")
+		Expect(l.Promised()).To(BeZero())
+		Expect(l.GivingHeld("A", t0.Add(time.Minute), tm)).To(BeFalse(), "the donor released promptly: no back-off")
+	})
+
+	It("releases normally once the planned pod is the one that went (control)", func() {
+		l := NewShareLedger()
+		start(l)
+		l.PlannedRunning(nil, nil)
+		Expect(l.Observe(map[string]int{"A": 8}, t0.Add(time.Minute), tm)).To(BeEmpty())
+		Expect(l.TakeReleased()).To(HaveLen(1))
+	})
+
+	It("never releases a set's primary when a contributor's planned pod is the wrong one", func() {
+		l := NewShareLedger()
+		held := map[string]int{"A": 8, "C": 8}
+		p := l.Start(ShareTransfer{Donor: "A", Receiver: "B", GPUs: 16, DonorGPUs: 8, SetID: "pending",
+			PlannedPods: []string{"ns/a-0"}}, held, t0, tm)
+		c := l.Start(ShareTransfer{Donor: "C", DonorGPUs: 8, SetID: "pending", PlannedPods: []string{"ns/c-0"}},
+			held, t0, tm)
+		l.LinkSet(p.ID, c.ID)
+		// Both donors shrank; A lost its planned pod, C lost another one.
+		l.PlannedRunning(map[string]bool{c.ID: true}, nil)
+		ends := l.Observe(map[string]int{"A": 0, "C": 0}, t0.Add(time.Minute), tm)
+		Expect(ends).To(HaveLen(1))
+		Expect(ends[0].Transfer.ID).To(Equal(c.ID))
+		Expect(ends[0].Outcome).To(Equal(ShareOutcomeWrongPod))
+		Expect(l.TakeReleased()).To(BeEmpty(), "the receiver must not be raised on half a set")
+		// The set is now broken: its primary is aborted, not released.
+		l.PlannedRunning(nil, nil)
+		ends = l.Observe(map[string]int{"A": 0, "C": 0}, t0.Add(2*time.Minute), tm)
+		Expect(ends).To(HaveLen(1))
+		Expect(ends[0].Transfer.ID).To(Equal(p.ID))
+		Expect(ends[0].Outcome).To(Equal(ShareOutcomeAborted))
+		Expect(l.TakeReleased()).To(BeEmpty())
+	})
+
+	It("holds a transfer whose planned pod could not be read: neither released nor wrong", func() {
+		l := NewShareLedger()
+		t := start(l)
+		l.PlannedRunning(nil, map[string]bool{t.ID: true})
+		Expect(l.Observe(map[string]int{"A": 8}, t0.Add(time.Minute), tm)).To(BeEmpty())
+		Expect(l.TakeReleased()).To(BeEmpty())
+		got, _ := l.Transfer(t.ID)
+		Expect(got.State).To(Equal(ShareReleasing))
+		l.PlannedRunning(nil, nil)
+		Expect(l.Observe(map[string]int{"A": 8}, t0.Add(2*time.Minute), tm)).To(BeEmpty())
+		Expect(l.TakeReleased()).To(HaveLen(1), "released once the pod reads as gone")
+	})
+
+	It("does nothing while the donor has not shrunk, planned pod running or not", func() {
+		l := NewShareLedger()
+		t := start(l)
+		l.PlannedRunning(map[string]bool{t.ID: true}, nil)
+		Expect(l.Observe(map[string]int{"A": 16}, t0.Add(time.Minute), tm)).To(BeEmpty())
+		got, _ := l.Transfer(t.ID)
+		Expect(got.State).To(Equal(ShareReleasing))
+	})
+})
+
+var _ = Describe("Node-aware donor sets: guards and shapes (§6.5)", func() {
+	// B grows by one replica; A and C give Deployment replicas of one 8-GPU
+	// pod each, on the nodes given. mut adjusts the input before planning.
+	pod8 := func(name, node string) ShareUnit {
+		return ShareUnit{Pods: []SharePod{{Name: name, Node: node, GPUs: 8}}}
+	}
+	// prepare, when set, readies the ledger before planning.
+	var prepare func(*ShareLedger)
+	BeforeEach(func() { prepare = nil })
+	plan := func(receiverPods []int, nodes map[string]ShareNode, a, c []ShareUnit, mut func(*SharePlanInput)) SharePlan {
+		g := 0
+		for _, p := range receiverPods {
+			g += p
+		}
+		in := SharePlanInput{
+			Roles: []ShareRole{
+				{Key: "A", Weight: 1, Need: 4, Ceiling: 64, ReplicaGPUs: 8},
+				{Key: "B", Weight: 1, Need: 64, Ceiling: 64, ReplicaGPUs: g},
+				{Key: "C", Weight: 1, Need: 4, Ceiling: 64, ReplicaGPUs: 8},
+			},
+			Held:       map[string]int{"A": 24, "B": 16, "C": 24},
+			Thresholds: map[string]float64{"A": 0.8, "B": 0.8, "C": 0.8}, Budget: 64, Tolerance: 0.15,
+			Give: map[string]ShareVariant{
+				"A": {Name: "a", GPUs: 8, PodGPUs: []int{8}},
+				"C": {Name: "c", GPUs: 8, PodGPUs: []int{8}},
+			},
+			Grow:         map[string]ShareVariant{"B": {Name: "b", GPUs: g, PodGPUs: receiverPods}},
+			Nodes:        nodes,
+			DonorUnits:   map[string][]ShareUnit{"A": a, "C": c},
+			PhysicalFree: math.MaxInt, // unbounded, as the engine passes it
+		}
+		if mut != nil {
+			mut(&in)
+		}
+		l := NewShareLedger()
+		if prepare != nil {
+			prepare(l)
+		}
+		var p SharePlan
+		for i := range 3 {
+			if p = PlanShareTransfers(l, in, time.Unix(int64(30*i), 0), simTimings()); len(p.Started) > 0 {
+				break
+			}
+		}
+		return p
+	}
+	full := func(names ...string) map[string]ShareNode {
+		m := map[string]ShareNode{}
+		for _, n := range names {
+			m[n] = ShareNode{}
+		}
+		return m
+	}
+	planned := func(p SharePlan) []string {
+		out := make([]string, 0, 2*len(p.Started))
+		for _, t := range p.Started {
+			out = append(out, t.PlannedPods...)
+		}
+		return out
+	}
+
+	It("counts a donor set once against the concurrency limit, however many members it has", func() {
+		// A 24-GPU pod needs three 8-GPU donor pods on one node: two from A
+		// and one from C. The set funds one receiver replica, so it is one
+		// transfer against the limit -- counted per member, three whole-node
+		// donors could never fund it.
+		p := plan([]int{24}, full("n1"),
+			[]ShareUnit{pod8("ns/a-0", "n1"), pod8("ns/a-1", "n1")}, []ShareUnit{pod8("ns/c-0", "n1")}, nil)
+		Expect(p.Started).To(HaveLen(3), "one set of three members")
+		sets := map[string]bool{}
+		for _, t := range p.Started {
+			sets[t.SetID] = true
+		}
+		Expect(sets).To(HaveLen(1), "the three members are one set")
+		Expect(sets).NotTo(HaveKey(""))
+	})
+
+	It("never takes a donor below its floor", func() {
+		p := plan([]int{16}, full("n1"),
+			[]ShareUnit{pod8("ns/a-0", "n1")}, []ShareUnit{pod8("ns/c-0", "n1")}, func(in *SharePlanInput) {
+				in.Roles[0].Floor, in.Roles[2].Floor = 24, 24
+			})
+		Expect(p.Started).To(BeEmpty())
+	})
+
+	It("refuses a set that lowers the group's lowest score", func() {
+		// A and C need every GPU they hold: giving makes them worse off than
+		// B gains.
+		p := plan([]int{16}, full("n1"),
+			[]ShareUnit{pod8("ns/a-0", "n1")}, []ShareUnit{pod8("ns/c-0", "n1")}, func(in *SharePlanInput) {
+				in.Roles[0].Need, in.Roles[2].Need, in.Roles[1].Need = 24, 24, 17
+			})
+		Expect(p.Started).To(BeEmpty())
+	})
+
+	It("funds a receiver pod from one LWS group whose smaller pods share its node, as an ordinary transfer", func() {
+		// No 4-GPU pod holds the 8-GPU receiver pod pod-for-pod, so only the
+		// node search funds it; one donor replica gives the whole replica.
+		group := ShareUnit{Pods: []SharePod{{Name: "ns/a-0-0", Node: "n1", GPUs: 4}, {Name: "ns/a-0-1", Node: "n1", GPUs: 4}}}
+		p := plan([]int{8}, full("n1", "n2"), []ShareUnit{group}, nil, func(in *SharePlanInput) {
+			in.Give["A"] = ShareVariant{Name: "a", GPUs: 8, PodGPUs: []int{4, 4}}
+			delete(in.Give, "C") // its 8-GPU pod would fund B pod-for-pod
+		})
+		Expect(p.Started).To(HaveLen(1))
+		Expect(p.Started[0].SetID).To(BeEmpty(), "one donor replica is not a set")
+		Expect(p.Started[0].Receiver).To(Equal("B"))
+		Expect(p.Started[0].PlannedPods).To(ConsistOf("ns/a-0-0", "ns/a-0-1"))
+	})
+
+	It("credits a donor group spanning two nodes to each node's hole", func() {
+		// Two 8-GPU receiver pods in one rack; one A group of two 4-GPU pods
+		// per node on n1 and n2: neither node holds 8 alone without both of
+		// its pods, which one group provides on each node only with the other.
+		group := ShareUnit{Pods: []SharePod{
+			{Name: "ns/a-0-0", Node: "n1", GPUs: 4}, {Name: "ns/a-0-1", Node: "n1", GPUs: 4},
+			{Name: "ns/a-0-2", Node: "n2", GPUs: 4}, {Name: "ns/a-0-3", Node: "n2", GPUs: 4}}}
+		p := plan([]int{8, 8}, full("n1", "n2"), []ShareUnit{group}, nil, func(in *SharePlanInput) {
+			in.Give["A"] = ShareVariant{Name: "a", GPUs: 16, PodGPUs: []int{4, 4, 4, 4}}
+			in.Roles[0].ReplicaGPUs, in.Roles[0].Need = 16, 4
+			in.Held["A"], in.Budget = 32, 72
+		})
+		Expect(p.Started).To(HaveLen(1), "the second pod uses the hole the same group opened on n2")
+		Expect(p.Started[0].PlannedPods).To(HaveLen(4))
+	})
+
+	It("tries every domain rather than the one its first pod would pick", func() {
+		// r1 has one donor pod (on n1, first in name order); r2 has two.
+		nodes := map[string]ShareNode{
+			"n1": {Labels: map[string]string{"rack": "r1"}},
+			"n2": {Labels: map[string]string{"rack": "r2"}},
+			"n3": {Labels: map[string]string{"rack": "r2"}},
+			"n4": {},
+		}
+		p := plan([]int{8, 8}, nodes,
+			[]ShareUnit{pod8("ns/a-0", "n1"), pod8("ns/a-1", "n2"), pod8("ns/a-4", "n4")}, []ShareUnit{pod8("ns/c-0", "n3")},
+			func(in *SharePlanInput) { in.DomainKey = map[string]string{"B": "rack"} })
+		Expect(planned(p)).To(ConsistOf("ns/a-1", "ns/c-0"), "r2 holds both pods; n4 has no rack")
+	})
+
+	It("funds a receiver whose pod fits free GPUs from donors on any node, when the quota is spent", func() {
+		// B's 8-GPU pod fits n1's free GPUs, but the quota has nothing idle:
+		// two of A's 4-GPU replicas, on n2, must give their quota. No A pod
+		// holds B's pod alone, so the node-blind search funds nothing.
+		four := func(name string) ShareUnit {
+			return ShareUnit{Pods: []SharePod{{Name: name, Node: "n2", GPUs: 4}}}
+		}
+		p := plan([]int{8}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0"), four("ns/a-1")}, nil, func(in *SharePlanInput) {
+				in.Give["A"] = ShareVariant{Name: "a", GPUs: 4, PodGPUs: []int{4}}
+				in.Roles[0].ReplicaGPUs = 4
+				delete(in.Give, "C")
+			})
+		Expect(p.Started).To(HaveLen(2), "a set of two A replicas paying for B's replica")
+		Expect(p.Started[0].Receiver).To(Equal("B"))
+		Expect(planned(p)).To(BeEmpty(), "they only pay quota: any of A's pods may go")
+	})
+
+	It("leaves a receiver whose pod fits free GPUs to the idle fill when the quota has room", func() {
+		four := func(name string) ShareUnit {
+			return ShareUnit{Pods: []SharePod{{Name: name, Node: "n2", GPUs: 4}}}
+		}
+		p := plan([]int{8}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0"), four("ns/a-1")}, nil, func(in *SharePlanInput) {
+				in.Give["A"] = ShareVariant{Name: "a", GPUs: 4, PodGPUs: []int{4}}
+				in.Roles[0].ReplicaGPUs = 4
+				delete(in.Give, "C")
+				in.Budget += 8           // 8 idle GPUs: B's replica
+				in.Roles[1].Ceiling = 24 // short by exactly the idle: the fill funds it whole
+			})
+		Expect(p.Started).To(BeEmpty(), "no donor need shrink")
+	})
+
+	// B's two 4-GPU pods fit n1's free GPUs; A's and C's 4-GPU pods would fund
+	// them pod for pod -- the node-blind search's case.
+	fourPods := func(in *SharePlanInput) {
+		in.Give["A"] = ShareVariant{Name: "a", GPUs: 4, PodGPUs: []int{4}}
+		in.Give["C"] = ShareVariant{Name: "c", GPUs: 4, PodGPUs: []int{4}}
+		in.Roles[0].ReplicaGPUs, in.Roles[2].ReplicaGPUs = 4, 4
+	}
+	// A donor replica of one 4-GPU pod on n2, where nothing is free.
+	four := func(name string) ShareUnit {
+		return ShareUnit{Pods: []SharePod{{Name: name, Node: "n2", GPUs: 4}}}
+	}
+	It("does not fall back to the node-blind search once it has left a receiver to the idle fill", func() {
+		p := plan([]int{4, 4}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0")}, []ShareUnit{four("ns/c-0")}, func(in *SharePlanInput) {
+				fourPods(in)
+				in.Budget += 8
+				in.Roles[1].Ceiling = 24 // short by exactly the idle
+			})
+		Expect(p.Started).To(BeEmpty(), "the fill funds B; neither A nor C need shrink")
+		Expect(p.Unfunded).NotTo(HaveKey("B"), "a receiver left to the fill is not unfunded")
+	})
+
+	It("funds the same receiver from donors when the quota is spent (control)", func() {
+		p := plan([]int{4, 4}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0")}, []ShareUnit{four("ns/c-0")}, fourPods)
+		Expect(p.Started).To(HaveLen(2))
+	})
+
+	It("does not move on to another domain once one fits the receiver in free GPUs", func() {
+		nodes := map[string]ShareNode{
+			"n1": {Free: 8, Labels: map[string]string{"rack": "r1"}},
+			"n2": {Labels: map[string]string{"rack": "r2"}},
+		}
+		p := plan([]int{4, 4}, nodes, []ShareUnit{four("ns/a-0")}, []ShareUnit{four("ns/c-0")},
+			func(in *SharePlanInput) {
+				fourPods(in)
+				in.Budget += 8
+				in.Roles[1].Ceiling = 24 // short by exactly the idle
+				in.DomainKey = map[string]string{"B": "rack"}
+			})
+		Expect(p.Started).To(BeEmpty(), "r1 holds B in free GPUs; r2's donors need not shrink")
+	})
+
+	It("counts GPUs held for a woken model against the idle it leaves to the fill", func() {
+		p := plan([]int{4, 4}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0")}, []ShareUnit{four("ns/c-0")}, func(in *SharePlanInput) {
+				fourPods(in)
+				in.Budget += 8
+				in.WakeHeld = 8 // the idle quota is a wake's
+			})
+		Expect(p.Started).To(HaveLen(2), "the fill could not fund B: donors must")
+	})
+
+	It("does not leave a receiver to a fill that left it short last cycle", func() {
+		prepare = func(l *ShareLedger) { l.SetFillShort([]string{"B"}) }
+		p := plan([]int{4, 4}, map[string]ShareNode{"n1": {Free: 8}, "n2": {}},
+			[]ShareUnit{four("ns/a-0")}, []ShareUnit{four("ns/c-0")}, func(in *SharePlanInput) {
+				fourPods(in)
+				in.Budget += 8
+			})
+		Expect(p.Started).To(HaveLen(2))
+	})
+
+	It("returns the node state its sets left, for the idle fill", func() {
+		// B's two 4-GPU pods: one into n1's 4 free GPUs, one into the hole
+		// a-0 opens on n2. n1's free GPUs are now B's.
+		p := plan([]int{4, 4}, map[string]ShareNode{"n1": {Free: 4}, "n2": {}},
+			[]ShareUnit{pod8("ns/a-0", "n2")}, nil, nil)
+		Expect(planned(p)).To(ConsistOf("ns/a-0"))
+		Expect(p.Nodes["n1"].Free).To(BeZero(), "the fill must not count n1's free GPUs again")
+	})
+
+	It("spends a started set's node state for the rest of the cycle", func() {
+		nodes := map[string]ShareNode{"n1": {Free: 4}, "n2": {Free: 8}}
+		units := map[string][]ShareUnit{"A": {pod8("ns/a-0", "n1"), pod8("ns/a-1", "n2")}}
+		// The set took a-0, placing a 12-GPU pod on n1: 4 free + 8 donated.
+		withdrawNodeSet(nodes, units, []shareDonor{{role: "A", unit: []string{"ns/a-0"}}}, map[string]int{"n1": 0, "n2": 8})
+		Expect(nodes["n1"].Free).To(BeZero(), "the free GPUs went to this receiver")
+		Expect(nodes["n2"].Free).To(Equal(8), "an untouched node keeps its free GPUs")
+		Expect(units["A"]).To(HaveLen(1))
+		Expect(units["A"][0].Pods[0].Name).To(Equal("ns/a-1"), "the set's donor pod is not offered again")
+	})
+})
+
+var _ = Describe("ShareFitPods", func() {
+	nodes := func() map[string]ShareNode {
+		return map[string]ShareNode{
+			"n1": {Free: 4, Labels: map[string]string{"rack": "r1"}},
+			"n2": {Free: 2, Labels: map[string]string{"rack": "r2"}},
+			"n3": {Free: 2, Labels: map[string]string{"rack": "r2"}},
+		}
+	}
+	It("places largest first into the smallest node that holds each, and spends it", func() {
+		n := nodes()
+		Expect(ShareFitPods(n, ShareReplicaFit{PodGPUs: []int{2, 4}})).To(BeTrue())
+		Expect(n["n1"].Free + n["n2"].Free + n["n3"].Free).To(Equal(2))
+		Expect(n["n1"].Free).To(BeZero(), "the 4-GPU pod takes the only node it fits")
+	})
+	It("spends nothing when a pod does not fit", func() {
+		n := nodes()
+		Expect(ShareFitPods(n, ShareReplicaFit{PodGPUs: []int{4, 4}})).To(BeFalse())
+		Expect(n).To(Equal(nodes()))
+	})
+	It("keeps a domain receiver in one domain, trying each", func() {
+		// r1 (n1: 4) cannot hold a 3 and a 2; r2 (n2: 3, n3: 2) can.
+		n := nodes()
+		n["n2"] = ShareNode{Free: 3, Labels: map[string]string{"rack": "r2"}}
+		Expect(ShareFitPods(n, ShareReplicaFit{PodGPUs: []int{3, 2}, DomainKey: "rack"})).To(BeTrue())
+		Expect(n["n1"].Free).To(Equal(4), "r1 is untouched")
+		Expect(n["n2"].Free + n["n3"].Free).To(BeZero())
+		Expect(ShareFitPods(nodes(), ShareReplicaFit{PodGPUs: []int{4, 2}, DomainKey: "rack"})).To(BeFalse(), "no single rack holds 4 and 2")
+		Expect(ShareFitPods(nodes(), ShareReplicaFit{PodGPUs: []int{4, 2}})).To(BeTrue(), "without a domain, any nodes do (control)")
+	})
+})
+
+var _ = Describe("Fill-blocked reasons", func() {
+	It("drops an expired reason rather than keeping it forever", func() {
+		l := NewShareLedger()
+		t0 := time.Unix(0, 0)
+		l.FillBlocked("B", "release-taken", t0.Add(time.Minute))
+		Expect(l.FillBlockedReason("B", t0)).To(Equal("release-taken"))
+		Expect(l.FillBlockedReason("B", t0.Add(time.Minute))).To(BeEmpty())
+		Expect(l.fillBlocked).NotTo(HaveKey("B"))
+	})
+})
+
+var _ = Describe("Placement agrees between the planner and the fill", func() {
+	// Where no donor is needed, the planner's node search and the idle fill
+	// place a replica the same way: or the fill would refuse what the planner
+	// left to it, or the reverse. Domains, groups, claims and templates
+	// included: the search walks shareDomains, the fill NodeView.domainsOf.
+	type node struct {
+		free    int
+		labels  map[string]string
+		groups  []string
+		claimed []string
+	}
+	DescribeTable("the same holes are left",
+		func(in map[string]node, fit ShareReplicaFit) {
+			nodes := map[string]ShareNode{}
+			for n, x := range in {
+				nodes[n] = ShareNode{Free: x.free, Labels: x.labels, Groups: x.groups, Claimed: x.claimed}
+			}
+			// The domain walk of shareNodeSet, with no donor to take.
+			var hole map[string]int
+			placed := false
+			key, exclusive := fit.domainKey()
+			for _, d := range shareDomains(nodes, key) {
+				in1 := shareNodesInDomain(nodes, key, d)
+				if exclusive && domainClaimed(nodes, in1, key) {
+					continue
+				}
+				search := shareNodeSearch{in: SharePlanInput{Nodes: nodes, Placements: map[string][]domain.PodPlacement{"B": fit.Placements}},
+					rc: "B", taken: map[string]int{}, used: map[shareUnitRef]bool{}}
+				h, ok := search.place(fit.PodGPUs, in1)
+				if ok && (!exclusive || search.freesGroups(in1)) {
+					hole, placed = h, true
+					break
+				}
+			}
+			got := maps.Clone(nodes)
+			Expect(ShareFitPods(got, fit)).To(Equal(placed))
+			if placed {
+				for n := range nodes {
+					Expect(got[n].Free).To(Equal(hole[n]), "node %s", n)
+				}
+			}
+		},
+		Entry("best fit across nodes", map[string]node{"n1": {free: 4}, "n2": {free: 6}, "n3": {free: 8}},
+			ShareReplicaFit{PodGPUs: []int{4, 6}}),
+		Entry("a tie broken by name", map[string]node{"a": {free: 4}, "b": {free: 4}}, ShareReplicaFit{PodGPUs: []int{4}}),
+		Entry("does not fit", map[string]node{"n1": {free: 3}, "n2": {free: 3}}, ShareReplicaFit{PodGPUs: []int{4}}),
+		Entry("the first rack in label order that holds the group",
+			map[string]node{
+				"a1": {free: 8, labels: map[string]string{"rack": "r2"}}, "a2": {free: 8, labels: map[string]string{"rack": "r2"}},
+				"b1": {free: 8, labels: map[string]string{"rack": "r1"}}, "b2": {free: 4, labels: map[string]string{"rack": "r1"}},
+				"c1": {free: 8, labels: map[string]string{"rack": "r3"}}, "c2": {free: 8, labels: map[string]string{"rack": "r3"}},
+			}, ShareReplicaFit{PodGPUs: []int{8, 8}, DomainKey: "rack"}),
+		Entry("a rack holding a group, and one claimed, are skipped",
+			map[string]node{
+				"a1": {free: 8, labels: map[string]string{"rack": "r1"}, groups: []string{"ns/z-0"}}, "a2": {free: 8, labels: map[string]string{"rack": "r1"}},
+				"b1": {free: 8, labels: map[string]string{"rack": "r2"}, claimed: []string{"rack"}}, "b2": {free: 8, labels: map[string]string{"rack": "r2"}, claimed: []string{"rack"}},
+				"c1": {free: 8, labels: map[string]string{"rack": "r3"}}, "c2": {free: 8, labels: map[string]string{"rack": "r3"}},
+			}, ShareReplicaFit{PodGPUs: []int{8, 8}, DomainKey: "rack"}),
+		Entry("a claim on another key does not count",
+			map[string]node{
+				"a1": {free: 8, labels: map[string]string{"rack": "r1", "zone": "z1"}, claimed: []string{"zone"}},
+				"a2": {free: 8, labels: map[string]string{"rack": "r1", "zone": "z1"}, claimed: []string{"zone"}},
+			}, ShareReplicaFit{PodGPUs: []int{8, 8}, DomainKey: "rack"}),
+		Entry("leader and workers by their own templates",
+			map[string]node{"n0": {free: 8}, "n1": {free: 8, labels: map[string]string{"pool": "a"}}, "n2": {free: 8, labels: map[string]string{"pool": "b"}}},
+			ShareReplicaFit{PodGPUs: []int{8, 8}, Placements: []domain.PodPlacement{
+				{NodeSelector: map[string]string{"pool": "a"}}, {NodeSelector: map[string]string{"pool": "b"}}}}),
+		Entry("no node admits the workers' template",
+			map[string]node{"n1": {free: 8, labels: map[string]string{"pool": "a"}}, "n2": {free: 8, labels: map[string]string{"pool": "a"}}},
+			ShareReplicaFit{PodGPUs: []int{8, 8}, Placements: []domain.PodPlacement{
+				{NodeSelector: map[string]string{"pool": "a"}}, {NodeSelector: map[string]string{"pool": "b"}}}}),
+	)
+})

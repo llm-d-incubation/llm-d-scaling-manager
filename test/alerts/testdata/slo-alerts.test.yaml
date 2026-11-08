@@ -1,0 +1,802 @@
+# promtool unit tests for the SLO alerts. hack/check-alert-rules.sh copies the
+# shipped PrometheusRule groups, annotations stripped, to rules.yaml beside
+# this file and runs promtool test rules on it.
+#
+# An excluded window is written as `stale`, then `_`: the analyzer deletes the
+# observed series, so Prometheus writes a staleness marker and the series is
+# absent at once, not for the five-minute lookback a plain gap would give.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. A sustained, judged TPOT miss with a live analyzer fires once seven
+  #    misses are counted (t=6m) and for: 2m has passed (t=8m), not before.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="scaling-manager-a"}'
+        values: '5x60'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="scaling-manager-a"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="scaling-manager-a"}'
+        values: '300+1x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 30m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 30m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 2. The same miss with the analyzer stopped (request count frozen) does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x60'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # 3. Fewer than seven judged misses (judged for 4 minutes, then excluded) does
+  #    not fire, though every judged minute missed.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x3 stale'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # 4. A controller restart: the old pod's series and the new one's overlap.
+  #    max by () keeps the join one-to-one; the miss still fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="old"}'
+        values: '0.2x15'
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x10 0.2x50'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="old"}'
+        values: '0.1x15'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x10 0.1x50'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x10 300+1x50'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m",pod="old"}'
+        values: '2x15'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m",pod="new"}'
+        values: '_x10 2x50'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 5. A target set from t=0, replicas present, nothing ever judged. A new
+  #    model is quiet for its first hour (the target must have been set for
+  #    55 of the hour's minutes, true from 54m), then for: 15m: firing from
+  #    69m.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x120'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x120'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 68m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 6. Judged for the first 10 minutes, then never again: the last judgement
+  #    leaves the hour at 70m, then for: 15m, so firing from 85m and not at 80m.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '2x10 stale'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x120'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x120'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 7. A parked model (no replicas) fires neither alert.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x10 stale'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x120'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x120'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 8. A fleet that keeps scaling up while it misses: judged 3 minutes in every
+  #    10 (a replica starts every 10 minutes, each excluding 7), every judged
+  #    minute a miss. Counted in wall-clock minutes this never reaches a fixed
+  #    count; counted against judged minutes it fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5 5 5 stale _x6 5 5 5 stale _x6 5 5 5 stale _x6 5 5 5 stale _x6 5 5 5 stale _x6 5 5 5 stale _x6'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 9. Misses in fewer than half of the judged minutes: 9 misses, then 21
+  #    minutes that meet the target. Does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x8 2x21'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # 10. Recovery: a miss for 30 minutes, then the target met. Still firing at
+  #     40m (20 misses of 30 judged), resolved by 50m (10 of 30).
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x29 2x60'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x90'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x90'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x90'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 50m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # 11. The freshness gate is per objective: a TPOT miss whose request count
+  #     froze does not fire because TTFT's count still moves.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x60'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x60'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x19 320x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '300+1x60'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 30m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # 12. A target set, removed at 21m, and set again at 56m, nothing ever
+  #     judged: "set for an hour" counts the whole hour, so it stays quiet
+  #     until 55 minutes after the target came back (pending 110m, firing 125m).
+  #     A check of one instant an hour ago fired at 76m and flapped.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x20 stale _x34 3x90'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 76m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 135m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 13. A quiet model: requests below the sample minimum all hour, nothing
+  #     excluded. Too little traffic to judge is not something to act on.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '30x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '0x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 14. The same quiet model with one scale-up in the hour: excluded for 10
+  #     minutes of 60, still not a fleet that never holds still.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '30x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '0x60 1x10 0x80'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 15. A fleet excluded the whole time (it keeps scaling up), with traffic:
+  #     firing from 69m (54m, then for: 15m).
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '300+1x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '1x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 68m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 16. TPOT sees no requests while the router serves plenty: clients do not
+  #     send include_usage. TPOT is unjudged and fires; TTFT, judged, does not.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '300+1x150'
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '1x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="tpot",reason="starting"}'
+        values: '0x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="m",streaming="true"}'
+        values: '0+60x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 17. Excluded a little over half the time (11 minutes in every 20, about
+  #     0.55 of the hour): a fleet that rarely holds still. Fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x160'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '300+1x160'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '1x10 0x8 1x10 0x8 1x10 0x8 1x10 0x8 1x10 0x8 1x10 0x8 1x10 0x8 1x10 0x8'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x160'
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 18. Excluded a little under half the time (9 minutes in every 20, about
+  #     0.45): mostly still, and too quiet to judge in the rest. Quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x160'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '30x160'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '1x8 0x10 1x8 0x10 1x8 0x10 1x8 0x10 1x8 0x10 1x8 0x10 1x8 0x10 1x8 0x10'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x160'
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 19. An idle model: replicas up, the router reporting both objectives with
+  #     no requests at all. Nothing to act on -- neither TPOT (no TTFT traffic
+  #     either, so not missing include_usage) nor TTFT fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="m",streaming="true"}'
+        values: '0x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '1x150'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 20. A controller restart with a gap: the old pod's series go stale at 41m
+  #     and the new leader publishes from 43m. A sustained miss keeps firing
+  #     through it; an instant replicas gate was empty for the gap, resolved
+  #     the alert, and fired it again after for: 2m.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="old"}'
+        values: '5x40 stale'
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x42 5x30'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="old"}'
+        values: '3x40 stale'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x42 3x30'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="old"}'
+        values: '300+1x40 stale'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean",pod="new"}'
+        values: '_x42 400+1x30'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m",pod="old"}'
+        values: '2x40 stale'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m",pod="new"}'
+        values: '_x42 2x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 42m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 44m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 21. A policy with a TPOT target alone, clients without include_usage: no
+  #     TTFT objective to compare with, but the router's own counter shows
+  #     streaming traffic. Fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="tpot",reason="starting"}'
+        values: '0x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="m",streaming="true"}'
+        values: '0+60x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 22. Never judged, as in 15, through a controller restart that loses two
+  #     scrapes at 30m: still "set for the hour", still firing by 75m. Counting
+  #     all 60 minutes went quiet for an hour after every restart.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '3x29 stale _ 3x120'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '300+1x29 stale _ 330+1x120'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="ttft",reason="starting"}'
+        values: '1x29 stale _ 1x120'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x29 stale _ 2x120'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # 23. As 21, with the router recording the request under an alias it
+  #     rewrote to the model: target_model_name names the model, as the
+  #     collector resolves it. Fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="tpot",reason="starting"}'
+        values: '0x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="alias",target_model_name="m",streaming="true"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts:
+          - exp_labels: {severity: info, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+
+  # 24. As 21, but the router serves only non-streaming requests: TPOT is
+  #     streaming-only, so no requests is no traffic to judge, not a client
+  #     missing include_usage. Quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="tpot",reason="starting"}'
+        values: '0x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="m",streaming="false"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 25. TPOT has requests but too few to judge, the router busy: the
+  #     include_usage cause needs TPOT at zero. Quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '0.1x150'
+      - series: 'llmsm_slo_excluded{exported_namespace="ns",model_name="m",objective="tpot",reason="starting"}'
+        values: '0x150'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x150'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '30x150'
+      - series: 'llm_d_epp_request_ttft_seconds_count{namespace="ns",model_name="m",streaming="true"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: LLMSMModelSLOUnjudged
+        exp_alerts: []
+
+  # 26. A model that parks while the miss fires: replicas 0 from 30m, the
+  #     analyzer stops publishing. The 5-minute replicas lookback that carries
+  #     the alert through a restart also keeps it up for that long after a
+  #     park; it clears by 36m.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_observed_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '5x29 stale'
+      - series: 'llmsm_slo_target_seconds{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '3x29 stale'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="tpot",statistic="mean"}'
+        values: '300+1x29 stale'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x29 0x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: tpot, statistic: mean}
+      - eval_time: 36m
+        alertname: LLMSMModelSLOMissed
+        exp_alerts: []
+
+  # A1. TTFT attainment: eight minutes with half the requests late, after 20
+  #     good ones. Counted in miss-minutes this reached 10 of 30 and did not
+  #     fire; request-weighted, the 30-minute attainment is below 0.9 from 24m
+  #     (pending), firing 26m, and it resolves once a judged reading of the
+  #     last five minutes meets the objective again (32m).
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="scaling-manager-a"}'
+        values: '0.98x19 0.5x7 0.98x40'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="scaling-manager-a"}'
+        values: '0.9x70'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="scaling-manager-a"}'
+        values: '600+1x70'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x70'
+    alert_rule_test:
+      - eval_time: 22m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+      - eval_time: 27m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+      - eval_time: 34m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A2. A steady miss: 89% within target against a promise of 90% fires once
+  #     15 minutes are judged (14m) and for: 2m has passed.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.89x40'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '600+1x40'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # A3. One bad minute: a fifth of its requests late, so the five windows that
+  #     hold it read 0.8. Request-weighted over 30 minutes that is 0.95: quiet.
+  #     Counted in miss-minutes it reached five and fired for 25 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.98x19 0.8x4 0.98x20'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '600+1x40'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A4. A miss with the analyzer stopped (request count frozen) does not fire,
+  #     nor does one on a parked model.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.5x40'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '600x40'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="parked",objective="ttft",statistic="p90"}'
+        values: '0.5x40'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="parked",objective="ttft",statistic="p90"}'
+        values: '0.9x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="parked",objective="ttft",statistic="p90"}'
+        values: '600+1x40'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="parked"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A5. A controller restart: the old pod's series and the new one's overlap.
+  #     max by () keeps every join one-to-one; the miss still fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="old"}'
+        values: '0.5x15'
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="new"}'
+        values: '_x10 0.5x30'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="old"}'
+        values: '0.9x15'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="new"}'
+        values: '_x10 0.9x30'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="old"}'
+        values: '600+1x15'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90",pod="new"}'
+        values: '_x10 600+1x30'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+
+  # A6. A starting replica excludes the windows while the miss goes on: judged
+  #     at 0.5 from 10m to 14m, then excluded, requests flowing. The exclusion
+  #     does not resolve it (25m, firing): only a judged reading that meets the
+  #     objective does. It ends once the judged windows hold under half the
+  #     half hour's requests (35m).
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.98x9 0.5x4 stale'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '600+1x40'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+      - eval_time: 25m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: m, objective: ttft, statistic: p90}
+      - eval_time: 35m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A7. Sparse traffic at p99: a window needs 1000 requests to be judged, so
+  #     only busy minutes are. Judged at 0.97 for 15 minutes while 15 more
+  #     carried 1500 requests each unjudged: the judged windows hold 40% of the
+  #     half hour's requests, and a burst's misses are not the half hour's.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '0.97x14 stale'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '0.99x40'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '1000x14 1500 1501 1502 1503 1504 1505 1506 1507 1508 1509 1510 1511 1512 1513 1514 1515 1516 1517 1518 1519 1520 1521 1522 1523 1524'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A8. A new series (a percentile changed, a fresh install): judged at 0.985
+  #     against p99 for ten minutes. Fewer than 15 judged minutes is not a half
+  #     hour; it stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '0.985x10'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '0.99x10'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p99"}'
+        values: '1200+1x10'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A9. Requests weigh, not minutes: 15 minutes at 0.98 on 5000 requests a
+  #     window, then 15 at 0.5 on 120. Request-weighted the half hour is 0.97:
+  #     quiet. A plain average of the readings, 0.74, would fire.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.98x14 0.5x14'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x29'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '5000+1x14 120+1x14'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x29'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []
+
+  # A10. The objective is the gauge's, not a fixed 0.9: p50 at 0.7 met is
+  #      quiet, p99 at 0.985 is a miss.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="median",objective="ttft",statistic="p50"}'
+        values: '0.7x29'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="median",objective="ttft",statistic="p50"}'
+        values: '0.5x29'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="median",objective="ttft",statistic="p50"}'
+        values: '600+1x29'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="median"}'
+        values: '2x29'
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="tail",objective="ttft",statistic="p99"}'
+        values: '0.985x29'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="tail",objective="ttft",statistic="p99"}'
+        values: '0.99x29'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="tail",objective="ttft",statistic="p99"}'
+        values: '1200+1x29'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="tail"}'
+        values: '2x29'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts:
+          - exp_labels: {severity: warning, component: slo, exported_namespace: ns, model_name: tail, objective: ttft, statistic: p99}
+
+  # A11. Exactly the promised share is met, and a recent reading that meets
+  #      the objective keeps the alert quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_slo_attainment_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x29'
+      - series: 'llmsm_slo_objective_ratio{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '0.9x29'
+      - series: 'llmsm_slo_window_requests{exported_namespace="ns",model_name="m",objective="ttft",statistic="p90"}'
+        values: '600+1x29'
+      - series: 'llmsm_model_replicas{exported_namespace="ns",model_name="m"}'
+        values: '2x29'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LLMSMModelSLOAttainmentLow
+        exp_alerts: []

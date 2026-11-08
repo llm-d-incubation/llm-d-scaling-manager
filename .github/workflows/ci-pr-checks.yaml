@@ -1,0 +1,786 @@
+name: CI - PR Checks
+
+# Cancel previous runs on the same PR when new commits are pushed
+concurrency:
+  group: ci-pr-checks-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+      # Patch lines (release-0.10): a fix to one is checked like a fix to main.
+      - 'release-*'
+  # Also on push to main. This workflow holds the ONLY build, test and lint
+  # steps in the repo, and it used to fire on pull_request alone -- so a commit
+  # pushed straight to main was never compiled, tested or linted by CI at all.
+  # Nothing else covers it: the other push-triggered workflows build the
+  # container image, update docs and run prow automerge.
+  #
+  # Only lint-and-test, docs-check and kustomize-build run here. The e2e jobs are
+  # excluded explicitly, at their own `if`, because a post-merge check should not
+  # spend 60-90 minutes of runner time on every push.
+  #
+  # It has to be explicit. has_code_changes does NOT gate them out: the Set output
+  # step forces it to 'true' for every non-pull_request event, so adding this
+  # trigger put e2e-tests-full on every push until the condition below was fixed.
+  push:
+    branches:
+      - main
+      - 'release-*'
+  # Nightly, for the live-Kueue borrowing e2e (e2e-tests-kueue-borrow): it runs
+  # on a PR only when the PR touches borrowing, so main is checked every night
+  # whatever merged. The other e2e jobs exclude this event at their own `if`;
+  # the cheap checks (lint-and-test, docs-check, ...) run with it.
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      run_full_tests:
+        description: 'Run full e2e test suite on Kind (check to run full; unchecked runs no e2e)'
+        required: false
+        default: false
+        type: boolean
+      run_kueue_tests:
+        description: 'Run the live-Kueue borrowing e2e on Kind'
+        required: false
+        default: false
+        type: boolean
+  # Called by ci-release.yaml so a tag publishes nothing until the same lint,
+  # unit-test, deploy-script, docs and kustomize jobs pass on the tagged commit.
+  # github.event_name is the CALLER's event there (push), so the e2e jobs, which
+  # run only on pull_request or an explicit dispatch, skip.
+  workflow_call:
+    inputs:
+      run_full_tests:
+        description: 'Unused when called; declared so the e2e condition reads a defined input'
+        required: false
+        default: false
+        type: boolean
+      run_kueue_tests:
+        description: 'Unused when called; declared so the Kueue e2e condition reads a defined input'
+        required: false
+        default: false
+        type: boolean
+
+# Read-only by default; the jobs that need more say so themselves.
+permissions:
+  contents: read
+
+jobs:
+  # Check if PR contains code changes (not just docs/metadata)
+  check-code-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Check for code changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**/*.md'
+              - '!docs/**/*.png'
+              - '!docs/**/*.svg'
+              - '!README.md'
+              - '!CONTRIBUTING.md'
+              - '!LICENSE'
+              - '!OWNERS'
+              - '!PROJECT'
+
+      - name: Set output
+        id: set-output
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          elif [ -n "${{ steps.filter.outputs.code }}" ]; then
+            echo "has_code_changes=${{ steps.filter.outputs.code }}" >> $GITHUB_OUTPUT
+          else
+            echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  lint-and-test:
+    runs-on: ubuntu-latest
+    # Skipped step by step on a docs-only PR, not by a job-level `if`, because
+    # e2e-tests-full needs lint-and-test to succeed and decides for itself what
+    # to skip. `!cancelled()` and `!= 'false'` fail closed: if
+    # check-code-changes itself fails, every step here still runs. On push and
+    # dispatch has_code_changes is always true, so everything runs there.
+    needs: check-code-changes
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout source
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Sanity check repo contents
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: ls -la
+
+      - name: Extract Go version from go.mod
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: go mod download
+
+      - name: Install golangci-lint
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.9.0
+          args: ""
+          # The action's config check downloads the JSON schema from
+          # golangci-lint.run on every run; a timeout there failed this job
+          # before any lint ran. Linting itself still runs, and an invalid
+          # .golangci.yml still fails it.
+          verify: false
+
+      - name: Run make build
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        shell: bash
+        run: |
+          make build
+
+      - name: Run make test
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        shell: bash
+        run: |
+          make test
+
+  deploy-scripts-check:
+    runs-on: ubuntu-latest
+    # Skipped step by step on a docs-only PR, not by a job-level `if`, because
+    # e2e-tests-full needs lint-and-test to succeed and decides for itself what
+    # to skip. `!cancelled()` and `!= 'false'` fail closed: if
+    # check-code-changes itself fails, every step here still runs. On push and
+    # dispatch has_code_changes is always true, so everything runs there.
+    needs: check-code-changes
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout source
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # The deploy libraries are ~5k lines of shell that no Go test covers, and
+      # `make lint-deploy-scripts` -- their entire safety net -- ran in no
+      # workflow: it was a command a human had to remember. Every defect it now
+      # catches was found by hand instead, including several that reached main.
+      #
+      # yq is not preinstalled on ubuntu-latest; the readiness checks are FATAL
+      # without it rather than skipping, because a skip is how a green run comes
+      # to mean nothing.
+      #
+      # The download retries: GitHub's release CDN answered a 500 once and the
+      # PR went red before a single check had run. --retry-all-errors covers
+      # HTTP 5xx, which plain --retry does not; the six attempts span ~2 min.
+      - name: Install yq
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: |
+          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      # hack/check-kps-images.sh renders the kube-prometheus-stack release the
+      # installer deploys, and is FATAL without helm rather than skipping. Pinned
+      # and checked against the published checksum instead of whatever helm the
+      # runner image ships (the e2e jobs use that one, unpinned). v3.19.0 is the
+      # version the check was verified with. The chart is pulled from
+      # prometheus-community.github.io at check time, with retries.
+      - name: Install helm
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          HELM_VERSION: v3.19.0
+          HELM_SHA256: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
+        run: |
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/helm.tgz \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  /tmp/helm.tgz" | sha256sum -c -
+          tar -xzf /tmp/helm.tgz -C /tmp linux-amd64/helm
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          helm version --short
+
+      - name: Run make lint-deploy-scripts
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: make lint-deploy-scripts
+
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # docs/guides/README.md tells contributors this runs in CI. It did not,
+      # so a guide could drift from the guide.yaml it is generated from, and a
+      # broken doc link could sit on main unnoticed -- both of which happened.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Run make guides-check
+        run: make guides-check
+
+      # The pool Pod is described in config/warmpool and COPIED into
+      # deploy/warmpool.sh by a generator, so the script needs no repo, no yq
+      # and no kustomize at run time. The copy is what drifts: it once lost the
+      # supervisor container entirely, and every pool the script created held
+      # its GPUs and answered nothing until it was found on a cluster.
+      - name: Run make warmpool-check
+        run: make warmpool-check
+
+      # The dashboards are checked here for the same reason: nine overlapping
+      # panel pairs sat in the operational dashboard for months because Grafana
+      # repacks a broken layout on load and shows something plausible.
+      - name: Run make dashboards-check
+        run: make dashboards-check
+
+  kustomize-build:
+    runs-on: ubuntu-latest
+    # Skipped step by step on a docs-only PR, not by a job-level `if`, because
+    # e2e-tests-full needs lint-and-test to succeed and decides for itself what
+    # to skip. `!cancelled()` and `!= 'false'` fail closed: if
+    # check-code-changes itself fails, every step here still runs. On push and
+    # dispatch has_code_changes is always true, so everything runs there.
+    needs: check-code-changes
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout source
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Install kustomize
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: make kustomize
+
+      - name: Build kubernetes overlay
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: bin/kustomize build config/overlays/cluster-scoped/kubernetes > /dev/null
+
+      - name: Build openshift overlay
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: bin/kustomize build config/overlays/namespace-scoped/openshift > /dev/null
+
+      - name: Build namespace-scoped kubernetes overlay
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: bin/kustomize build config/overlays/namespace-scoped/kubernetes > /dev/null
+
+      # The builds above prove each overlay renders; this asserts what it
+      # renders. Same yq pin and retries as deploy-scripts-check.
+      - name: Install yq
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: |
+          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Check the rendered manifests
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: KUSTOMIZE=bin/kustomize bash hack/check-rendered-manifests.sh
+
+  # E2E smoke tests - run automatically on every PR with code changes.
+  # Skip if PR only contains docs/metadata changes.
+  e2e-tests-smoke:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-code-changes]
+    if: >-
+      !cancelled() && needs.lint-and-test.result == 'success'
+      && github.event_name == 'pull_request'
+      && needs.check-code-changes.outputs.has_code_changes != 'false'
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Two PRs failed e2e setup on a nearly full disk (43 MB and 89 MB free)
+      # with only "grafana not ready" in the log. Free the toolchains no e2e
+      # job uses and log df, so the next disk failure reads as one.
+      - name: Free runner disk
+        run: deploy/ci-pr-checks/free-disk.sh
+
+      - name: Extract Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install Kind
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the scaling manager image locally
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: deploy/ci-pr-checks/build-scaling-manager-image-local.sh
+
+      - name: Run e2e tests (smoke)
+        shell: bash
+        env:
+          ENVIRONMENT: kind-emulator
+          # Drop the host Docker copy of each image pre-loaded into kind.
+          KIND_PRUNE_HOST_IMAGES: "true"
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: "false"
+          CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
+          LLM_D_ROUTER_VERSION: "v0.9.0"
+          # The install turns the scaler's mutual TLS on by default; fail, not
+          # skip, if it fell back to plaintext.
+          E2E_EXPECT_SCALER_TLS: "true"
+          LLMSM_E2E_SECONDARY_OVERLAY_PATH: ${{ github.workspace }}/test/e2e/testdata/secondary-controller
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          DELETE_CLUSTER: "true"
+        run: |
+          make test-e2e-smoke-with-setup
+
+      # Disk left at the end of the run, pass or fail, and the lowest free
+      # space the job reached (sampled since Free runner disk).
+      - name: Disk usage after the e2e run
+        if: ${{ always() }}
+        run: deploy/ci-pr-checks/disk-report.sh
+
+      # The release's blocking scan, on the image this job already built, so a
+      # fixable CRITICAL fails the PR that brings it in instead of the tag. Same
+      # action and flags as ci-release.yaml. After the e2e run, and whatever its
+      # result, so a finding does not hide the e2e verdict or the other way round.
+      - name: Scan for fixable CRITICAL vulnerabilities (blocking)
+        if: ${{ !cancelled() && steps.build-image.outcome == 'success' }}
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: ${{ steps.build-image.outputs.image }}
+          severity: CRITICAL
+          ignore-unfixed: 'true'
+          exit-code: '1'
+
+  # Full Kind E2E - runs automatically on every PR with code changes.
+  # Add "e2e-tests-full" as a required status check in branch protection so it appears on every PR
+  # and must run and pass before merge.
+  e2e-tests-full:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-code-changes]
+    # Runs on a PR, or on a manual dispatch that asked for it. Never on push:
+    # see the note on the push trigger above.
+    #
+    # The inputs.run_full_tests half is what makes that input real. It has
+    # always described itself as 'Run full e2e test suite on Kind' while being
+    # referenced by nothing, so ticking the box did nothing whatsoever.
+    #
+    # has_code_changes is deliberately no longer part of this condition. What
+    # this job should skip is now decided INSIDE it, in the first step, because
+    # this one is meant to be a required status check, and a run that says why
+    # it skipped is clearer than a job skipped by its `if`. A docs-only diff
+    # still costs nothing; it returns in under a minute. `!cancelled()` and the
+    # lint-and-test result let it run when only check-code-changes failed.
+    if: >-
+      !cancelled() && needs.lint-and-test.result == 'success'
+      && (github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch' && inputs.run_full_tests))
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      # fetch-depth: 0, because the step below diffs against the base. The
+      # default shallow checkout has no merge base to diff from.
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # What this suite adds over e2e-tests-smoke is CONTROLLER behaviour across
+      # more scenarios. Smoke already stands the scaling manager up through `make deploy-scaling-manager` --
+      # deploy-e2e-infra says so in its own comment -- so the installer libraries
+      # are executed either way, and a diff that touches none of the compiled
+      # surface has nothing here that smoke did not already cover.
+      #
+      # Decided with git rather than with the paths-filter above, on purpose. The
+      # question is "is EVERY changed file outside this set", the filter answers
+      # "does ANY file match" unless predicate-quantifier is right, and getting
+      # that backwards fails OPEN: a Go change would skip its own tests and the
+      # run would still be green. A grep over the file list is one line and says
+      # what it means. It errs the safe way too -- anything unexpected in the
+      # diff, or an empty file list, runs the suite.
+      - name: Decide whether the full suite is needed
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" != 'pull_request' ]; then
+            echo 'Manual dispatch asked for the full suite.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null)"
+          if [ -z "$changed" ]; then
+            echo 'Could not read the changed-file list; running the suite.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "$changed" | sed 's/^/  /'
+          # The compiled surface, plus the things that DRIVE this suite:
+          # test-e2e-full-with-setup lives in the Makefile, the job in the
+          # workflow, and the Kueue and kind installs it runs in
+          # deploy/ci-pr-checks, so a change to any can break the run it would skip.
+          if echo "$changed" | grep -qE '(\.go|go\.mod|go\.sum|Dockerfile|Makefile)$|^(config|test)/|^\.github/workflows/|^deploy/ci-pr-checks/'; then
+            echo 'Compiled surface touched -- running the full suite.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+          else
+            echo 'Every changed file is outside the compiled surface (shell, hack'
+            echo 'checks, docs). e2e-tests-smoke covers the installer path this'
+            echo 'diff can reach; skipping the full suite.'
+            echo 'run=false' >> $GITHUB_OUTPUT
+          fi
+
+
+      # Two PRs failed e2e setup on a nearly full disk (43 MB and 89 MB free)
+      # with only "grafana not ready" in the log. Free the toolchains no e2e
+      # job uses and log df, so the next disk failure reads as one.
+      - name: Free runner disk
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/free-disk.sh
+
+      - name: Extract Go version from go.mod
+        if: steps.decide.outputs.run == 'true'
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
+        run: go mod download
+
+      - name: Install Kind
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Set up Docker Buildx
+        if: steps.decide.outputs.run == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the scaling manager image locally
+        if: steps.decide.outputs.run == 'true'
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: deploy/ci-pr-checks/build-scaling-manager-image-local.sh
+
+      - name: Run e2e tests (full)
+        if: steps.decide.outputs.run == 'true'
+        shell: bash
+        env:
+          ENVIRONMENT: kind-emulator
+          # Drop the host Docker copy of each image pre-loaded into kind.
+          KIND_PRUNE_HOST_IMAGES: "true"
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: "true"
+          CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
+          LLM_D_ROUTER_VERSION: "v0.9.0"
+          # The install turns the scaler's mutual TLS on by default; fail, not
+          # skip, if it fell back to plaintext.
+          E2E_EXPECT_SCALER_TLS: "true"
+          DEPLOY_LWS: "true"
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          DELETE_CLUSTER: "false"
+          # The live-Kueue borrowing spec (kueue_borrow_test.go) runs in its own
+          # job, e2e-tests-kueue-borrow, and the full suite's label filter
+          # excludes it. What is left here of Kueue is the quota-reader spec
+          # (kueue_quota_test.go), which needs only the CRDs: no Kueue
+          # controller, so no Kueue webhook the rest of the suite could trip on.
+          KUEUE_CONTROLLER: "false"
+          # The passive-mode specs are excluded from this suite's label filter
+          # too, and run in parallel in e2e-tests-passive: with them the suite
+          # outgrew this job's 90 minutes.
+          # Same simulator saturation tuning as smoke — defaults are too high for reliable scale-up signals.
+        run: |
+          make test-e2e-full-with-setup
+
+      # Disk left at the end of the run, pass or fail, and the lowest free
+      # space the job reached (sampled since Free runner disk).
+      - name: Disk usage after the e2e run
+        if: ${{ always() && steps.decide.outputs.run == 'true' }}
+        run: deploy/ci-pr-checks/disk-report.sh
+
+  # The passive-mode e2e specs (label passive), on their own kind cluster in
+  # parallel with e2e-tests-full, which excludes them: 19 specs, each with 90 s
+  # hold windows, pushed the full suite past its 90-minute limit. Same triggers
+  # and the same in-job decision as e2e-tests-full, so it runs whenever the full
+  # suite would have run them, and always reports a conclusion.
+  #
+  # Budget: the 19 specs took 43 minutes (2602 s) on a 22-CPU kind host.
+  # test-e2e-passive bounds them at 70m (ginkgo, E2E_PASSIVE_TIMEOUT) and 75m
+  # (go test, which must exceed ginkgo's), about 1.6 times that, for a slower
+  # runner. Setup (kind, image, infra) takes about 15 minutes, so the job
+  # timeout, 95m, is above both and a slow run fails with ginkgo's report, not
+  # a kill.
+  e2e-tests-passive:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-code-changes]
+    if: >-
+      !cancelled() && needs.lint-and-test.result == 'success'
+      && (github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch' && inputs.run_full_tests))
+    timeout-minutes: 95
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # The same rule as e2e-tests-full's step of this name: skip only when
+      # every changed file is outside the compiled surface.
+      - name: Decide whether the passive e2e is needed
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" != 'pull_request' ]; then
+            echo 'Manual dispatch asked for the full suite.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null)"
+          if [ -z "$changed" ]; then
+            echo 'Could not read the changed-file list; running the passive e2e.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "$changed" | sed 's/^/  /'
+          if echo "$changed" | grep -qE '(\.go|go\.mod|go\.sum|Dockerfile|Makefile)$|^(config|test)/|^\.github/workflows/|^deploy/ci-pr-checks/'; then
+            echo 'Compiled surface touched -- running the passive e2e.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+          else
+            echo 'Every changed file is outside the compiled surface; skipping the passive e2e.'
+            echo 'run=false' >> $GITHUB_OUTPUT
+          fi
+
+      # Two PRs failed e2e setup on a nearly full disk (43 MB and 89 MB free)
+      # with only "grafana not ready" in the log. Free the toolchains no e2e
+      # job uses and log df, so the next disk failure reads as one.
+      - name: Free runner disk
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/free-disk.sh
+
+      - name: Extract Go version from go.mod
+        if: steps.decide.outputs.run == 'true'
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
+        run: go mod download
+
+      - name: Install Kind
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Set up Docker Buildx
+        if: steps.decide.outputs.run == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the scaling manager image locally
+        if: steps.decide.outputs.run == 'true'
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: deploy/ci-pr-checks/build-scaling-manager-image-local.sh
+
+      # USE_SIMULATOR and SCALE_TO_ZERO_ENABLED are required, not tuning: the
+      # specs skip without the simulator's --fake-metrics or EPP flow control.
+      - name: Run the passive-mode e2e
+        if: steps.decide.outputs.run == 'true'
+        shell: bash
+        env:
+          ENVIRONMENT: kind-emulator
+          # Drop the host Docker copy of each image pre-loaded into kind.
+          KIND_PRUNE_HOST_IMAGES: "true"
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: "true"
+          CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
+          LLM_D_ROUTER_VERSION: "v0.9.0"
+          E2E_EXPECT_SCALER_TLS: "true"
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          DELETE_CLUSTER: "false"
+        run: |
+          make test-e2e-passive-with-setup
+
+      # Disk left at the end of the run, pass or fail, and the lowest free
+      # space the job reached (sampled since Free runner disk).
+      - name: Disk usage after the e2e run
+        if: ${{ always() && steps.decide.outputs.run == 'true' }}
+        run: deploy/ci-pr-checks/disk-report.sh
+
+  # The live-Kueue cohort borrowing e2e, alone on its own kind cluster. Runs on
+  # a PR that touches borrowing (the paths below), on a PR labelled
+  # ok-to-test-kueue (add the label, then push: a re-run reuses the event the
+  # run started from, which had no label), nightly, and on a manual dispatch
+  # that asks for it. Like e2e-tests-full it decides inside the job, so it always
+  # reports a conclusion.
+  #
+  # Budget: setup (kind, image, infra, Kueue) takes about 20 minutes; the spec
+  # takes about 25 and is bounded at E2E_TIMEOUT 45m (ginkgo) and
+  # E2E_GO_TIMEOUT 50m (go test, which must exceed ginkgo's). The job timeout,
+  # 80m, is above both, so a slow run fails with ginkgo's report, not a kill.
+  # REQUIRE_KUEUE_E2E=true turns the spec's runtime skips into failures: this
+  # job exists to run it, and a run that checked nothing must not go green.
+  e2e-tests-kueue-borrow:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test]
+    if: >-
+      github.event_name == 'pull_request'
+      || github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.run_kueue_tests)
+    timeout-minutes: 80
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the borrowing e2e is needed
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'ok-to-test-kueue') }}
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" != 'pull_request' ]; then
+            echo "${{ github.event_name }}: running the borrowing e2e."
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [ "$LABELLED" = 'true' ]; then
+            echo 'Labelled ok-to-test-kueue: running the borrowing e2e.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null)"
+          if [ -z "$changed" ]; then
+            echo 'Could not read the changed-file list; running the borrowing e2e.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if echo "$changed" | grep -qE '^internal/kueue/|^internal/engines/allocation/borrow|^internal/engines/steadystate/borrowing|^test/e2e/kueue|^test/e2e/fixtures/kueue|^deploy/ci-pr-checks/install-kueue\.sh$|^\.github/workflows/ci-pr-checks\.yaml$'; then
+            echo 'Borrowing code, its e2e or its install touched: running the borrowing e2e.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+          else
+            echo 'Nothing on the borrowing path changed; skipping (label ok-to-test-kueue to force it).'
+            echo 'run=false' >> $GITHUB_OUTPUT
+          fi
+
+      # Two PRs failed e2e setup on a nearly full disk (43 MB and 89 MB free)
+      # with only "grafana not ready" in the log. Free the toolchains no e2e
+      # job uses and log df, so the next disk failure reads as one.
+      - name: Free runner disk
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/free-disk.sh
+
+      - name: Extract Go version from go.mod
+        if: steps.decide.outputs.run == 'true'
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
+        run: go mod download
+
+      - name: Install Kind
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Set up Docker Buildx
+        if: steps.decide.outputs.run == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the scaling manager image locally
+        if: steps.decide.outputs.run == 'true'
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: deploy/ci-pr-checks/build-scaling-manager-image-local.sh
+
+      - name: Run the live-Kueue borrowing e2e
+        if: steps.decide.outputs.run == 'true'
+        shell: bash
+        env:
+          ENVIRONMENT: kind-emulator
+          # Drop the host Docker copy of each image pre-loaded into kind.
+          KIND_PRUNE_HOST_IMAGES: "true"
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: "false"
+          CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
+          LLM_D_ROUTER_VERSION: "v0.9.0"
+          IMG: ${{ steps.build-image.outputs.image }}
+          SKIP_BUILD: "true"
+          DELETE_CLUSTER: "false"
+          REQUIRE_KUEUE_E2E: "true"
+          E2E_TIMEOUT: 45m
+          E2E_GO_TIMEOUT: 50m
+        run: |
+          make test-e2e-kueue-borrow-with-setup
+
+      # Disk left at the end of the run, pass or fail, and the lowest free
+      # space the job reached (sampled since Free runner disk).
+      - name: Disk usage after the e2e run
+        if: ${{ always() && steps.decide.outputs.run == 'true' }}
+        run: deploy/ci-pr-checks/disk-report.sh

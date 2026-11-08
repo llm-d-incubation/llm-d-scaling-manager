@@ -1,0 +1,129 @@
+name: utilization-share-namespaced
+
+steps:
+  tools:
+    note: Prints nothing when every tool is there.
+    run: |
+      for t in kubectl helm git jq yq make openssl; do command -v $t >/dev/null || echo "missing: $t"; done
+  admin:
+    note: Prints yes for a cluster admin.
+    run: |
+      kubectl auth can-i '*' '*' --all-namespaces
+  pools:
+    note: One InferencePool in each model namespace.
+    run: |
+      kubectl get inferencepools -A
+  podgpus:
+    note: The GPUs each model pod asks for, and the node it runs on.
+    run: |
+      kubectl get pods -A -l 'llm-d.ai/role in (decode,prefill)' \
+        -o custom-columns='NAMESPACE:.metadata.namespace,POD:.metadata.name,GPUS:.spec.containers[*].resources.limits.nvidia\.com/gpu,NODE:.spec.nodeName'
+  products:
+    note: The GPU product of each node.
+    run: |
+      kubectl get nodes -L nvidia.com/gpu.product
+  names:
+    note: Manage every namespace that runs llm-d, from the scaling manager's own namespace. Every later step reads both.
+    run: |
+      export LLMSM_WATCH_NS=auto
+      export CONTROLLER_NAMESPACE=scaling-manager-system
+  check:
+    note: Read-only. Checks the tools, your rights, KEDA, Prometheus, and each namespace it will manage.
+    run: |
+      make check-prereqs KEDA_HELM_INSTALL=true
+  vars:
+    note: The GPU product from step 5, and how many of its GPUs the models may hold together.
+    run: |
+      export ACCELERATOR=<gpu product>
+      export GPUS=<gpus>
+  varskueue:
+    note: "Option C: Kueue. The GPU product from step 5. Kueue's ClusterQueues give the number."
+    run: |
+      export ACCELERATOR=<gpu product>
+  checkkueue:
+    note: "Option C: Kueue. Read-only. Checks each managed namespace has a LocalQueue on a GPU ClusterQueue, with its model servers on it."
+    run: |
+      make check-prereqs KEDA_HELM_INSTALL=true \
+        LLMSM_LIMITER=quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=-1" LLMSM_QUOTA_KUEUE=true
+  setup:
+    note: "Option A: quota. Cluster admin, once. A Role in each managed namespace, the monitors, and KEDA only if the cluster has none."
+    run: |
+      make setup-prereqs KEDA_HELM_INSTALL=true
+  setupphysical:
+    note: "Option B: quota plus the cluster's GPUs. As option A, and the read-only Pod list and node read the GPU count needs."
+    run: |
+      make setup-prereqs KEDA_HELM_INSTALL=true \
+        LLMSM_LIMITER=gpu-inventory,quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
+  setupkueue:
+    note: "Option C: Kueue. As option A, and the Kueue reads, granted for the managed namespaces only."
+    run: |
+      make setup-prereqs KEDA_HELM_INSTALL=true \
+        LLMSM_LIMITER=quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=-1" LLMSM_QUOTA_KUEUE=true
+  render:
+    note: "Not a cluster admin? Option A, read-only. Writes the step to admin-setup/ for an admin to run, and applies nothing. For option B or C, add that option's settings."
+    run: |
+      make setup-prereqs KEDA_HELM_INSTALL=true RENDER=admin-setup
+  adminrun:
+    note: The cluster admin, in the directory you gave them. No checkout needed.
+    run: |
+      bash admin-setup/admin.sh
+  install:
+    note: "Option A: quota. The scaling manager, with one GPU budget for every namespace it manages."
+    run: |
+      make deploy-scaling-manager INSTALL_PHASE=scaling-manager \
+        LLMSM_LIMITER=quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
+  installphysical:
+    note: "Option B: quota plus the cluster's GPUs. The same budget, and a replica goes only where a node has a free GPU."
+    run: |
+      make deploy-scaling-manager INSTALL_PHASE=scaling-manager \
+        LLMSM_LIMITER=gpu-inventory,quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
+  installkueue:
+    note: "Option C: Kueue. The scaling manager, with the GPU quota of Kueue's ClusterQueues as one budget for every namespace it manages."
+    run: |
+      make deploy-scaling-manager INSTALL_PHASE=scaling-manager \
+        LLMSM_LIMITER=quota LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS="${ACCELERATOR}=-1" LLMSM_QUOTA_KUEUE=true
+  plan:
+    note: Read-only. Lists the model servers in the managed namespaces and writes a plan. Applies nothing.
+    run: |
+      make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=share-plan.yaml
+  workloads:
+    note: Read-only. Checks that each model server can be scaled safely. Applies nothing.
+    run: |
+      make workload-patch
+  register:
+    note: Applies the plan. One ScaledObject for each model server.
+    run: |
+      make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=share-plan.yaml
+  budget:
+    note: Read-only. Is there a budget to share, and does the GPU product resolve.
+    run: |
+      make utilization-share-check CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE}
+  shadow:
+    note: "Shadow: it reports what it would move, and moves nothing."
+    run: |
+      make utilization-share-shadow CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE}
+  status:
+    note: Read-only. The mode and the recent decisions.
+    run: |
+      make utilization-share-status CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE}
+  activate:
+    note: Let it act in every namespace it manages.
+    run: |
+      make utilization-share-activate CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE} GRANT_SHARED=true
+  events:
+    note: GPUs moving between namespaces, oldest first.
+    run: |
+      kubectl get events -A --sort-by=.lastTimestamp | grep UtilizationShare
+  log:
+    note: The optimizer's decisions, from the controller's log.
+    run: |
+      kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep -E 'Utilization share: (rebalancing|transfer (started|ended|cancelled))'
+  disable:
+    note: Turn the optimizer off. The budget stays.
+    run: |
+      make utilization-share-off CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE}
+  uninstall:
+    note: Remove the scaling manager. The models keep serving; KEDA and Prometheus stay.
+    run: |
+      make undeploy-scaling-manager CONTROLLER_NAMESPACE=${CONTROLLER_NAMESPACE}

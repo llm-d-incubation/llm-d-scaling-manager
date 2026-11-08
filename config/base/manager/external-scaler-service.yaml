@@ -1,0 +1,20 @@
+# Exposes the scaling manager KEDA external-scaler gRPC endpoint so KEDA can reach it in-cluster.
+# With the deploy overlay's namePrefix (scaling-manager-) this becomes
+#   scaling-manager-external-scaler.<namespace>.svc.cluster.local:9090
+# which a KEDA ScaledObject references via an external trigger's scalerAddress.
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/name: scaling-manager
+  name: external-scaler
+spec:
+  ports:
+  - name: grpc
+    port: 9090
+    protocol: TCP
+    targetPort: ext-scaler
+  selector:
+    control-plane: controller-manager
+    app.kubernetes.io/name: scaling-manager

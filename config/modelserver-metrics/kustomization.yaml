@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Scrapes the llm-d model servers the scaling manager sizes.
+#
+# `make setup-prereqs` applies this, marked llm-d.ai/applied-by=scaling-manager-setup-prereqs,
+# in each llm-d namespace where nothing scrapes the model servers yet, and
+# `undeploy-scaling-manager` removes it again by that mark (llmsm_ensure_llmd_monitors in
+# deploy/lib/infra_monitoring.sh). DEPLOY_LLMD_MONITORS=false turns that off.
+#
+# PREFER llm-d's, which is where this is maintained:
+#
+#   kubectl apply -n <ns> -k $REPO_ROOT/guides/recipes/modelserver/components/monitoring
+#   kubectl apply -n <ns> -k $REPO_ROOT/guides/recipes/modelserver/components/monitoring-pd
+#
+# This file is for a reader with no llm-d checkout to hand. It goes into the
+# WORKLOAD namespace. Applied by hand it carries no mark, so `undeploy-scaling-manager`
+# leaves it in place.
+#
+# The scaling manager's whole capacity model reads vllm:* series (num_requests_waiting,
+# kv_cache_usage_perc, time_per_output_token_seconds, …), so without these there is
+# nothing for it to decide from.
+#
+# It is deliberately the same thing llm-d ships, as two kustomize components:
+#
+#   guides/recipes/modelserver/components/monitoring/decode-podmonitor.yaml
+#   guides/recipes/modelserver/components/monitoring-pd/prefill-podmonitor.yaml
+#
+# each selecting `llm-d.ai/role: <role>` on port "modelserver", path /metrics,
+# interval 30s. This is those two merged into one selector, so a P/D namespace
+# needs one object instead of two.
+#
+# Why a copy exists at all: in llm-d's guide this is "### 3. (Optional) Enable
+# monitoring", carrying prerequisites of its own (install a monitoring stack;
+# enable Prometheus on the router back in step 1). Optional is right for llm-d —
+# the stack serves fine unmonitored — and wrong for the scaling manager, which cannot size anything
+# without these series. So a reader who followed the llm-d guide correctly, and
+# skipped an optional step, arrives with a working llm-d and a scaling manager that can never
+# work. Measured on the shared GPU cluster: a tenant namespace ran four replicas for hours and
+# produced ZERO vllm series while every install check passed.
+#
+# Do not apply this on top of llm-d's. Two scrape configs on one pod give it two
+# targets under the same key, and the scaling manager's additive queries would double-count
+# throughput while per-replica capacity still looked right.
+
+resources:
+- modelserver-podmonitor.yaml

@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+metadata:
+  name: keda-sample
+# the scaling manager as a KEDA external scaler. There is no annotation-based variant: KEDA
+# naming the scaling manager in a trigger is what puts the workload under the scaling manager's management, and
+# the trigger metadata is the whole configuration surface.
+# Apply with: kubectl kustomize config/samples/keda | kubectl apply -f -
+resources:
+- external-scaler/scaledobject.yaml

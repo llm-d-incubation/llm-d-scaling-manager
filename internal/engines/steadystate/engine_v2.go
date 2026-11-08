@@ -1,0 +1,2129 @@
+package steadystate
+
+import (
+	"context"
+	"fmt"
+	"maps"
+	"math"
+	"slices"
+	"sort"
+	"time"
+
+	"github.com/go-logr/logr"
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/accelerator"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/annotations"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/decision"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/aggregation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/allocation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/throughput"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/enginerec"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils/scaletarget"
+	llmdvariant "github.com/llm-d-incubation/llm-d-scaling-manager/internal/variant"
+)
+
+// buildAnalyzerInput is the input builder: it prepares the cycle's state for
+// one model and returns the one AnalyzerInput every analyzer of the model
+// receives, built before any of them runs.
+//
+// Per variant, in this order, before any Analyze:
+//
+//  1. forget on request (forgetOnRequest), so a forgotten variant's capacity
+//     record is refiled from the scale target this cycle and nothing
+//     restored for it is installed;
+//  2. file the scale target's engine parameters in the capacity store
+//     (LoadFromScaleTarget);
+//  3. publish llmsm_engine_config from the record just filed
+//     (publishEngineConfig).
+//
+// The input carries the rows, the variant states and their discovery
+// metadata, the merged policy, the scheduler queue and the arrival rate, and
+// the router latency and flow-control pools it collects here.
+// Learning capacity stays in the analyzers; what the capacity-build step
+// derives from their results (the role join, the clamp to the scale target,
+// supply and the scaling signals) still runs after Analyze, in
+// buildCapacities.
+func (e *Engine) buildAnalyzerInput(
+	ctx context.Context,
+	modelID, namespace string,
+	replicaMetrics []domain.ReplicaMetrics,
+	config config.ScalingPolicy,
+	variantStates []domain.VariantReplicaState,
+	variantMetadata []domain.VariantMetadata,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variants map[string]*llmdvariant.Variant,
+	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
+) domain.AnalyzerInput {
+	logger := ctrl.LoggerFrom(ctx)
+	sat := e.analyzers.saturationCaps()
+
+	// In key order, not map order: a learner recording writes the forget,
+	// accelerator and scale-target events below in the order they run, and a
+	// recording made again must have the same bytes. No step below reads what
+	// another variant's step writes, so the order changes no result.
+	for _, vaKey := range slices.Sorted(maps.Keys(variants)) {
+		va := variants[vaKey]
+		key := utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())
+		scaleTarget := scaleTargets[key]
+		if scaleTarget == nil {
+			logger.V(logging.DEBUG).Info("No scale target found for VA, skipping capacity store pre-population",
+				"variant", va.Name, "scaleTargetKey", key)
+			continue
+		}
+		// Before the record is loaded and before Analyze, so a forgotten
+		// variant's capacity record is refiled from the scale target this
+		// cycle and nothing restored for it is installed.
+		e.forgetOnRequest(ctx, namespace, modelID, va.Name, scaleTarget)
+		// Get accelerator name from scale target nodeSelector/nodeAffinity or VA label
+		accelerator := accelerator.GetAcceleratorNameFromScaleTarget(va, scaleTarget)
+		gpuCount := scaleTarget.GetTotalGPUsPerReplica()
+		// Published, and filed, under the accelerator the learned-state key is
+		// built with, not the raw reading: the two differ on a fleet whose pods
+		// disagree, and that is the fleet an operator is reading this metric to
+		// understand -- and the one where a record filed under the raw value
+		// was missed by the analyzer's stabilised lookup. A saturation analyzer
+		// without the capability leaves the raw value, which is what a
+		// test-built engine gets.
+		publishAccel := accelerator
+		if sat.stabiliser != nil {
+			publishAccel = sat.stabiliser.StableAcceleratorFor(namespace, va.Name, accelerator)
+		}
+		e.capacityStore.LoadFromScaleTarget(namespace, modelID, va.Name, publishAccel, gpuCount, scaleTarget, e.clock.Now())
+		logger.V(logging.DEBUG).Info("Pre-populated capacity store from scale target",
+			"variant", va.Name, "accelerator", accelerator, "gpuCount", gpuCount)
+		// Publish the engine-configuration fingerprint. Read back from the
+		// store rather than re-parsed, so the published digest is the one the
+		// rest of the pipeline will key on -- including when the record was
+		// learned live and LoadFromScaleTarget deliberately left it alone.
+		//
+		// The digest is keyed on -- it composes the learned-state key for ITL
+		// line sharing -- and publishing it here is what makes that key
+		// explicable on a dashboard. Note the two can diverge by design: a
+		// configuration the parser could not fully read is published WITH its
+		// unresolved label and withheld as a sharing key, so a variant can
+		// appear here and have no learned state filed under it.
+		e.publishEngineConfig(namespace, modelID, va.Name, publishAccel, gpuCount)
+	}
+
+	input := domain.AnalyzerInput{
+		ModelID:         modelID,
+		Namespace:       namespace,
+		ReplicaMetrics:  replicaMetrics,
+		VariantStates:   variantStates,
+		VariantMetadata: variantMetadata,
+		Config:          &config,
+		SchedulerQueue:  schedulerQueue,
+		ArrivalRate:     arrivalRate,
+	}
+	// The router's latency and flow-control pools, every cycle whatever the
+	// policy lists, while a learner recording is on, so the recording
+	// carries them for the TTFT model (docs/proposals/analyzer-learner.md,
+	// 2.9). Off, neither is queried: they would cost up to eight queries per
+	// namespace a cycle that nothing reads. No analyzer reads them: the slo
+	// analyzer asks its router source as before, and reads the same results
+	// from the collector's cycle memo.
+	if c := e.ReplicaMetricsCollector; c != nil && c.RecordsTTFTInputs() {
+		input.RouterLatency = c.CollectRouterLatency(ctx, modelID, namespace)
+		input.FlowControlPools = c.CollectFlowControlPools(ctx, modelID, namespace)
+	}
+	return input
+}
+
+// runSaturation runs the saturation analyzer on the cycle's input and
+// returns its raw AnalyzerResult. Its failure fails the model's cycle: the
+// composite takes its variant list from saturation's result.
+func (e *Engine) runSaturation(ctx context.Context, input domain.AnalyzerInput) (*domain.AnalyzerResult, error) {
+	result, err := e.analyzers.saturationCaps().analyzer.Analyze(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("V2 saturation analysis failed: %w", err)
+	}
+	// Analysis results are logged by the caller (runAnalyzers) after the
+	// capacity-build step, so the single Info line can include the real
+	// RequiredCapacity/SpareCapacity. They are left zero here, so logging
+	// them at this point would always report 0 and be misleading.
+	return result, nil
+}
+
+// analyzerLivenessStaleCycles is the number of optimization cycles an
+// analyzer's last informative result may age before it is treated as stale
+// (non-live) for the scale-down veto gate. Fixed for now; revisit as a
+// per-deployment config field if operators need to tune it.
+// TODO: make configurable if needed.
+const analyzerLivenessStaleCycles = 3
+
+// runAnalyzers builds the cycle's input (buildAnalyzerInput), runs the
+// saturation analyzer plus every other registered, enabled analyzer on it,
+// builds a NamedAnalyzerResult for each, runs liveness tracking and logs
+// each, and returns the full slice. It records no metrics: the caller does,
+// once.
+//
+// Saturation always runs; every other registered analyzer runs only if
+// config.AnalyzerEnabled. The capacity-build step (buildNamedResult) runs
+// once per analyzer, after it. Per-variant identity (cost, accelerator, role)
+// comes from discovery (variantMetadata), not from any analyzer. Saturation
+// runs unlisted too because buildComposite takes its variant list and its
+// units from saturation's result.
+func (e *Engine) runAnalyzers(
+	ctx context.Context,
+	modelID, namespace string,
+	replicaMetrics []domain.ReplicaMetrics,
+	config config.ScalingPolicy,
+	variantStates []domain.VariantReplicaState,
+	variantMetadata []domain.VariantMetadata,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variants map[string]*llmdvariant.Variant,
+	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
+) ([]allocation.NamedAnalyzerResult, error) {
+	logger := ctrl.LoggerFrom(ctx)
+
+	// metaByVariant is the authoritative discovery metadata the capacity builder
+	// joins onto every analyzer's output (empty on paths that pass no metadata,
+	// e.g. unit tests, in which case the build step is a no-op join).
+	metaByVariant := metadataByVariant(variantMetadata)
+
+	// The settle tracker first (settle.go), ahead of everything that reads
+	// the cycle's rows: the load-balance diagnostic reads each replica's
+	// grace from it (#345 step 1 left this slot for it).
+	now := e.observeClock()
+	e.observeSettle(namespace, modelID, replicaMetrics, variantStates, now)
+
+	// Observe only: how evenly the router loads each role (load_balance.go).
+	// Before the analyzers, so a failing analyzer does not leave the series at
+	// a value from a cycle that no longer stands: the rows are this cycle's
+	// whatever the analysis makes of them.
+	e.observeLoadBalance(logger, namespace, modelID, replicaMetrics, variantStates,
+		loadBalanceThresholds(config), now)
+
+	// One input, complete before any analyzer runs, shared by all of them.
+	// Each reports demand and capacity only: the engine applies the
+	// thresholds after it runs (buildNamedResult).
+	input := e.buildAnalyzerInput(ctx, modelID, namespace, replicaMetrics, config,
+		variantStates, variantMetadata, scaleTargets, variants, schedulerQueue, arrivalRate)
+
+	// Run saturation analyzer (always needed for PerReplicaCapacity).
+	baseResult, err := e.runSaturation(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Run every analyzer and build its NamedAnalyzerResult. Saturation is
+	// first and always runs; each non-saturation analyzer is run only if
+	// registered and enabled.
+	namedResults := []allocation.NamedAnalyzerResult{
+		cycleEntry(ctx, domain.SaturationAnalyzerName, baseResult, config, metaByVariant),
+	}
+	for _, entry := range e.analyzerRunEntries() {
+		if entry.name == domain.SaturationAnalyzerName {
+			continue
+		}
+		if !config.AnalyzerEnabled(entry.name) {
+			continue
+		}
+		result := runRegisteredAnalyzer(ctx, logger, entry, modelID, input)
+		if result == nil {
+			continue
+		}
+		namedResults = append(namedResults, cycleEntry(ctx, entry.name, result, config, metaByVariant))
+	}
+
+	e.updateLivenessAndSetLive(ctx, namespace, modelID, namedResults)
+
+	for _, nr := range namedResults {
+		logAnalyzerResult(ctx, modelID, namespace, nr)
+	}
+	return namedResults, nil
+}
+
+// analyzerDemandSeries identifies one llmsm_analyzer_demand series within a model
+// instance. Role is "" for a non-disaggregated model.
+type analyzerDemandSeries struct {
+	analyzer string
+	role     string
+}
+
+// analyzerTargetSeries identifies one llmsm_analyzer_target series within a model
+// instance.
+type analyzerTargetSeries struct {
+	analyzer string
+	variant  string
+}
+
+// analyzerSeries is the set of analyzer metric series emitted for one model
+// instance in a cycle, plus the identity needed to evict them wholesale when the
+// model departs.
+type analyzerSeries struct {
+	namespace string
+	modelID   string
+	demand    map[analyzerDemandSeries]struct{}
+	target    map[analyzerTargetSeries]struct{}
+	// serviceRate holds the variants whose service-rate signal was published,
+	// and pricingK whether the model's llmsm_pricing_k was. Per variant, not per
+	// analyzer: only the saturation analyzer prices a service rate.
+	serviceRate map[string]struct{}
+	pricingK    bool
+	// engineConfig holds the variants whose llmsm_engine_config series the
+	// model keeps this cycle: the ones published this cycle, and any an
+	// analyzer still reports. Per variant, never per (analyzer, variant): one
+	// analyzer dropping a variant that the model still runs must not take the
+	// configuration with it.
+	engineConfig map[string]struct{}
+}
+
+// engineConfigPublished is the set of variants publishEngineConfig recorded
+// for one model since the model's last recordAnalyzerMetrics.
+type engineConfigPublished struct {
+	namespace string
+	modelID   string
+	variants  map[string]struct{}
+}
+
+// recordAnalyzerMetrics publishes the llmsm_analyzer_demand / llmsm_analyzer_target
+// series for every analyzer that ran this cycle, straight from the (D, P) it
+// produced: demand per model instance (per role when disaggregated) and the
+// per-replica target per variant. This exposes every analyzer's reasoning — the
+// same D/P contract the optimizer and the external-analyzer wrapper use.
+//
+// Absence is meaningful for these series: a missing one means the analyzer did
+// not report, which is different from reporting zero. So after emitting, any
+// series published last cycle but not this one is deleted — otherwise a role
+// that disappears, a variant that is removed, or an analyzer that stops running
+// would leave its last value frozen in the registry forever, and no consumer
+// could tell it apart from a live reading.
+func (e *Engine) recordAnalyzerMetrics(namespace, modelID string, results []allocation.NamedAnalyzerResult) {
+	current := analyzerSeries{
+		namespace:    namespace,
+		modelID:      modelID,
+		demand:       make(map[analyzerDemandSeries]struct{}),
+		target:       make(map[analyzerTargetSeries]struct{}),
+		serviceRate:  make(map[string]struct{}),
+		engineConfig: make(map[string]struct{}),
+	}
+	// The configuration published at the start of this cycle is kept whatever
+	// the analyzers report: a variant the cycle enumerated has not left.
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	for variant := range e.publishedEngineConfig[modelKey].variants {
+		current.engineConfig[variant] = struct{}{}
+	}
+	delete(e.publishedEngineConfig, modelKey)
+	borrows := map[string][]domain.LearnedStateBorrow{}
+	// k2s holds, per variant, the entry that carries a k2 source, if any
+	// analyzer reported one; otherwise any entry, so the variant is still
+	// written and a source it no longer has is removed.
+	k2s := map[string]domain.VariantCapacity{}
+
+	for _, nr := range results {
+		if nr.Result == nil {
+			continue
+		}
+		if len(nr.RoleCapacities) > 0 {
+			for role, rc := range nr.RoleCapacities {
+				e.metricsEmitter.RecordAnalyzerDemand(nr.Name, namespace, modelID, role, rc.TotalDemand)
+				current.demand[analyzerDemandSeries{analyzer: nr.Name, role: role}] = struct{}{}
+			}
+		} else {
+			e.metricsEmitter.RecordAnalyzerDemand(nr.Name, namespace, modelID, "", nr.Result.TotalDemand)
+			current.demand[analyzerDemandSeries{analyzer: nr.Name}] = struct{}{}
+		}
+		for _, vc := range nr.Result.VariantCapacities {
+			e.metricsEmitter.RecordAnalyzerTarget(nr.Name, namespace, modelID, vc.VariantName, vc.PerReplicaCapacity)
+			e.metricsEmitter.RecordAnalyzerObservedReplicas(nr.Name, namespace, modelID, vc.VariantName, vc.ObservedReplicas)
+			current.target[analyzerTargetSeries{analyzer: nr.Name, variant: vc.VariantName}] = struct{}{}
+			current.engineConfig[vc.VariantName] = struct{}{}
+			borrows[vc.VariantName] = append(borrows[vc.VariantName], vc.Borrowed...)
+			if _, seen := k2s[vc.VariantName]; !seen || vc.K2Source != "" {
+				k2s[vc.VariantName] = vc
+			}
+			// Beside the target it explains, from the struct the analyzer
+			// priced with (domain.ServiceRateSignal), so the published line
+			// and rate are the ones the target came from.
+			if vc.ServiceRate != nil {
+				e.metricsEmitter.RecordServiceRateSignal(namespace, modelID, vc.VariantName, *vc.ServiceRate)
+				current.serviceRate[vc.VariantName] = struct{}{}
+			}
+		}
+		if nr.Result.PricingK > 0 {
+			e.metricsEmitter.RecordPricingK(namespace, modelID, nr.Result.PricingK)
+			current.pricingK = true
+		}
+	}
+	// Per variant, not per analyzer: gathered across every analyzer that
+	// reported the variant this cycle, so one that borrows nothing does not
+	// unpublish another's borrow. Every reported variant is written,
+	// borrowing or not, which is what removes a borrow that ended. A variant
+	// that one analyzer stops reporting while another still does keeps its
+	// borrow: the eviction below deletes it only for a variant no analyzer
+	// reports.
+	for variant, b := range borrows {
+		e.metricsEmitter.RecordLearnedStateBorrows(namespace, modelID, variant, b)
+	}
+	for variant, vc := range k2s {
+		e.metricsEmitter.RecordLearnedStateK2Source(namespace, modelID, variant, vc.Role, vc.K2Source, vc.K2Age, vc.HasK2Age)
+	}
+
+	// Evict after emitting, never before, so a series that survives the cycle is
+	// never briefly absent from a concurrent scrape.
+	e.evictStaleAnalyzerSeries(namespace, modelID, current)
+}
+
+// publishEngineConfig records llmsm_engine_config for one variant from the
+// capacity store's record. A variant with no record, or a record with no
+// parsed params, publishes nothing: an absent series is the honest signal for
+// "the configuration could not be read", and a partial one would be read as a
+// configuration.
+func (e *Engine) publishEngineConfig(namespace, modelID, variantName, accelerator string, gpuCount int) {
+	if e.capacityStore == nil || e.metricsEmitter == nil {
+		return
+	}
+	rec := e.capacityStore.Get(namespace, modelID, variantName)
+	if rec == nil || rec.EngineParams == nil {
+		return
+	}
+	e.metricsEmitter.RecordEngineConfig(
+		namespace, modelID, variantName, accelerator, gpuCount,
+		rec.EngineParams.Fingerprint(),
+		capacity.FingerprintVersion,
+		rec.EngineParams.FingerprintValues(),
+	)
+	if e.publishedEngineConfig == nil {
+		e.publishedEngineConfig = make(map[string]engineConfigPublished)
+	}
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	published, ok := e.publishedEngineConfig[modelKey]
+	if !ok {
+		published = engineConfigPublished{
+			namespace: namespace,
+			modelID:   modelID,
+			variants:  make(map[string]struct{}),
+		}
+		e.publishedEngineConfig[modelKey] = published
+	}
+	published.variants[variantName] = struct{}{}
+}
+
+// forgetOnRequest forgets one variant's learned state when its scale target
+// carries the ForgetLearnedState annotation with a token not yet acted on.
+// Nothing is forgotten when the saturation analyzer cannot forget: it keeps
+// the token acted on. When it acts on one, the slo and throughput analyzers
+// forget the variant's ITL line too (issue #431); their entries are logged
+// apart.
+func (e *Engine) forgetOnRequest(ctx context.Context, namespace, modelID, variant string, target scaletarget.ScaleTargetAccessor) {
+	token := scaletarget.Annotations(target)[annotations.ForgetLearnedState]
+	if token == "" {
+		return
+	}
+	f := e.analyzers.saturationCaps().forgetter
+	if f == nil || f.ForgottenToken(namespace, variant) == token {
+		return
+	}
+	n := f.ForgetVariant(namespace, modelID, variant, token)
+	sloN := 0
+	if e.sloAnalyzer != nil {
+		sloN = e.sloAnalyzer.ForgetVariant(ctx, namespace, modelID, variant)
+	}
+	throughputN := e.forgetThroughputLine(ctx, namespace, modelID, variant)
+	ctrl.LoggerFrom(ctx).Info("Learned state forgotten for one variant, on request",
+		"namespace", namespace, "modelID", modelID, "variant", variant,
+		"annotation", annotations.ForgetLearnedState, "token", token, "entries", n, "sloEntries", sloN,
+		"throughputEntries", throughputN)
+}
+
+// forgetThroughputLine forgets the variant's ITL line in the throughput
+// analyzer, and returns how many entries it dropped, windows and intercepts,
+// not lines: a line with a learned intercept is 2. It is 0 when the analyzer
+// is not registered, which the saturation config decides.
+func (e *Engine) forgetThroughputLine(ctx context.Context, namespace, modelID, variant string) int {
+	for _, entry := range e.analyzers.builtins() {
+		if a, ok := entry.analyzer.(*throughput.ThroughputAnalyzer); ok {
+			return a.ForgetVariant(ctx, namespace, modelID, variant)
+		}
+	}
+	return 0
+}
+
+// beginSLOCycle starts a cycle for the slo analyzer: its cycle count, by
+// which a model it did not analyze on the cycle before is unobserved. Called
+// once per cycle that gets past its error returns: on the no-model return, and
+// before the models are analyzed.
+//
+// Failed cycles do not count, so a failure and the executor's retry a moment
+// later are one cycle. But failures that went on for an optimization interval
+// or more are cycles nobody saw: they count as one skipped cycle, so a model
+// is not judged on recovery as if it had been watched throughout. A slow cycle
+// that succeeds is not a failure and counts once, however long it took; one
+// slow failure lasting an interval does count as a skipped cycle, which costs a
+// window and its grace unjudged and is the safe direction.
+func (e *Engine) beginSLOCycle() {
+	failedSince := e.sloFailedSince
+	e.sloFailedSince = time.Time{}
+	if e.sloAnalyzer == nil {
+		return
+	}
+	if !failedSince.IsZero() && time.Since(failedSince) >= e.sloMissedAfter() {
+		e.sloAnalyzer.BeginCycle()
+	}
+	e.sloAnalyzer.BeginCycle()
+}
+
+// sloMissedAfter is how long a run of failed cycles lasts before it counts as
+// a skipped cycle: one optimization interval, or the loader's default when none
+// is configured (only a hand-built test Engine has none).
+func (e *Engine) sloMissedAfter() time.Duration {
+	if e.Config != nil {
+		if d := e.Config.OptimizationInterval(); d > 0 {
+			return d
+		}
+	}
+	return config.DefaultOptimizationInterval
+}
+
+// sloStateKeeper is the part of the slo analyzer the per-cycle sweeps need:
+// its learned state is stamped by notePresentVariants, aged by
+// evictStaleLearnedState and forgotten on request by forgetOnRequest, like
+// the saturation analyzer's.
+type sloStateKeeper interface {
+	presenceNoter
+	EvictStale(now time.Time) slo.Evicted
+	BeginCycle()
+	ForgetVariant(ctx context.Context, namespace, modelID, variant string) int
+}
+
+var _ sloStateKeeper = (*slo.Analyzer)(nil)
+
+// notePresentVariants stamps every variant that still exists as present, ahead
+// of the sweep that would otherwise take its learned state (see
+// SaturationAnalyzer.NoteVariantsPresent). It runs before the sweep because
+// Analyze, the other stamp, runs after it.
+//
+// Two lists, because the engine analyses only one of them. modelGroups is the
+// ACTIVE variants; stamping them here is what keeps a fleet that was parked
+// for longer than the timeout from losing its state on the cycle it wakes. A
+// variant PARKED at zero replicas is inactive and in no model group, so the
+// inactive list is read for it. That list leaves out a Variant
+// whose scale target is missing or being deleted, so a variant that is really
+// gone is not stamped and still ages out.
+//
+// Best effort: a failed list stamps no parked variant this cycle, and the next
+// cycle tries again long before a 24h timeout could be reached.
+func (e *Engine) notePresentVariants(
+	ctx context.Context,
+	modelGroups map[string][]llmdvariant.Variant,
+) {
+	var noters []presenceNoter
+	if noter := e.analyzers.saturationCaps().noter; noter != nil {
+		noters = append(noters, noter)
+	}
+	if e.sloAnalyzer != nil {
+		noters = append(noters, e.sloAnalyzer)
+	}
+	for _, entry := range e.analyzers.builtins() {
+		if a, ok := entry.analyzer.(*throughput.ThroughputAnalyzer); ok {
+			noters = append(noters, a)
+		}
+	}
+	if len(noters) == 0 {
+		return
+	}
+	// Models in key order, not map order, so a learner recording made again
+	// writes their NoteVariantsPresent events in the same order. Each stamps
+	// only its own model's variants.
+	note := func(groups map[string][]llmdvariant.Variant) {
+		for _, groupKey := range slices.Sorted(maps.Keys(groups)) {
+			modelVAs := groups[groupKey]
+			if len(modelVAs) == 0 {
+				continue
+			}
+			names := make([]string, 0, len(modelVAs))
+			for i := range modelVAs {
+				names = append(names, modelVAs[i].Name)
+			}
+			// Sorted too: modelVAs comes from a map, and every noter stamps each
+			// name on the one clock reading, so their order matters to the
+			// recording alone.
+			slices.Sort(names)
+			for _, noter := range noters {
+				noter.NoteVariantsPresent(modelVAs[0].Namespace, modelVAs[0].Spec.ModelID, names)
+			}
+		}
+	}
+	note(modelGroups)
+	parked, _, err := utils.InactiveVariants(ctx, e.client, e.Variants)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Could not list parked variants to keep their learned state", "error", err.Error())
+		return
+	}
+	note(utils.GroupVariantsByModel(parked))
+}
+
+// evictStaleLearnedState sweeps the stores of learned per-variant state
+// whose eviction functions existed with no caller at all.
+//
+// The saturation analyzer's EvictStaleHistory takes the k2 history and, beside
+// it, the accelerator memo, the saturated-throughput windows, the ITL windows
+// (with the learned baseline and start estimate keyed to them) and the
+// decode-saturation memory. The capacity store's EvictStale takes its records,
+// and the slo analyzer's EvictStale its lines, accelerator memos and
+// transient memos, on the same variant timeout.
+// All are keyed by variant, so until now a renamed, deleted or recreated
+// variant left its entry behind for the lifetime of the process -- exactly the
+// leak the analyzer's own comment describes: "one window per variant that has
+// EVER been seen, including deleted and renamed ones".
+//
+// Here rather than on a timer because this is the one place that runs once per
+// cycle for the whole fleet, which is where this engine's other prunes already
+// live. The horizons are the analyzer's (capacity.Horizons, configurable from
+// LEARNED_STATE_*; a day and a week by default, and floored at a minute), and
+// the records' is still the store's own 7-day EvictionTimeout. At any setting
+// the scan is a walk of a handful of maps, so the cost is in the logging rather
+// than the work -- which is why it logs only when it evicted something, and
+// why that line breaks the count out per map.
+//
+// One consequence of living on the optimize path: a fleet with NO active
+// variants does not reach here at all. optimize returns early on
+// "No active Variants found", so a fleet parked at zero stops
+// sweeping until something wakes. That is survivable rather than a second
+// leak -- a parked fleet learns nothing new, so the state it holds is bounded
+// by what it had when it parked -- but it does mean the horizons describe a
+// fleet that is being reconciled, not wall-clock time. It also means a
+// variant's state ages out only while SOME variant is still live, which is the
+// normal case and the one worth testing. In that case a parked variant is kept
+// by notePresentVariants, which runs just before this sweep; what ages
+// out is a variant that is no longer discovered at all.
+func (e *Engine) evictStaleLearnedState(ctx context.Context) {
+	logger := ctrl.LoggerFrom(ctx)
+	var history saturation.Evicted
+	if evictor := e.analyzers.saturationCaps().evictor; evictor != nil {
+		// The horizons live on the analyzer, which is what configuration can
+		// reach and what owns the state they govern. They are logged once at
+		// startup rather than on every sweep -- see engine.go, where the
+		// analyzer is built.
+		history = evictor.EvictStaleHistory()
+	} else {
+		// Production always satisfies it (engine.go constructs the concrete
+		// analyzer), so this is a test shape -- but a memory sweep that
+		// silently did nothing is worth one line either way.
+		logger.V(logging.DEBUG).Info("analyzer cannot evict learned state; skipping its half of the sweep")
+	}
+	records := 0
+	if e.capacityStore != nil {
+		records = e.capacityStore.EvictStale(e.clock.Now(), capacity.EvictionTimeout)
+	}
+	if history.Any() || records > 0 {
+		// Broken out per map, not summed. Which map lost entries is the whole
+		// diagnostic: muWindows going non-zero means the demand floor just
+		// lost the rate it prices from, k2History that a variant's capacity
+		// moved off its measurement, and the rest are routine. One line per
+		// fleet per 24h, so the cardinality cost of naming all of them is nil.
+		logger.Info("evicted stale learned state",
+			"k2History", history.K2History,
+			"muWindows", history.MuWindows,
+			"k2Borrows", history.K2Borrows,
+			"k2Priors", history.K2Priors,
+			"pendingRestores", history.PendingRestores,
+			"itlWindows", history.ITLWindows,
+			"itlBaselines", history.ITLBaselines,
+			"startEstimates", history.StartEstimates,
+			"startOutliers", history.StartOutliers,
+			"startSeenPods", history.Pods,
+			"itlLines", history.ITLLines,
+			"accelerators", history.Accelerators,
+			"decodeSaturation", history.DecodeSaturation,
+			"hotRankHolds", history.HotRankHolds,
+			"fleetShapes", history.FleetShapes,
+			"variantStamps", history.VariantStamps,
+			"stashedWindows", history.StashedWindows,
+			"batchCaps", history.BatchCaps,
+			"prefillObservations", history.PrefillObservations,
+			"prefillBounds", history.PrefillBounds,
+			"prefillEstimates", history.PrefillEstimates,
+			"capacityRecords", records,
+
+			"recordTimeout", capacity.EvictionTimeout)
+	}
+	if e.sloAnalyzer != nil {
+		if ev := e.sloAnalyzer.EvictStale(e.clock.Now()); ev.Any() {
+			logger.Info("evicted stale slo analyzer state",
+				"lines", ev.Lines, "baselines", ev.Baselines,
+				"transients", ev.Transients, "accelerators", ev.Accelerators)
+		}
+	}
+}
+
+// onNothingObserved is what a cycle whose collection returned no replica rows
+// does to the analyzer series, for a model scaled to zero or one whose pods
+// are not scraped. The analyzers do not run on that cycle, so without it:
+//   - the observed-replicas series keeps last cycle's count for as long as
+//     the gap lasts, reading as a fully scraped fleet in exactly the case it
+//     exists to expose (zeroObservedReplicas);
+//   - the service rate and its line read as a parked fleet still priced at
+//     its last rate for as long as it stays parked (dropServiceRateSeries).
+//
+// One call, so the two cannot be separated at the call site. A cycle whose
+// collection or analysis FAILS does not come here: it leaves every analyzer
+// series at its last value, llmsm_analyzer_target included.
+func (e *Engine) onNothingObserved(namespace, modelID string) {
+	e.zeroObservedReplicas(namespace, modelID)
+	e.dropServiceRateSeries(namespace, modelID)
+	// No ready replica, so no distribution: a parked role must not keep
+	// reporting the imbalance it had.
+	e.forgetLoadBalance(namespace, modelID)
+	// No rows either: the settle tracker holds what it saw last, so an
+	// outage that drops every series is not an absence (holdSettle).
+	e.holdSettle(namespace, modelID, e.observeClock())
+}
+
+// zeroObservedReplicas sets llmsm_analyzer_observed_replicas to 0 for every
+// (analyzer, variant) this model published last cycle. Called on the cycle
+// that skips analysis because the model had no replica rows at all: the
+// series is kept -- a blip must not make it flap, and its siblings are kept
+// too -- but its value has to be what was observed, which is nothing.
+func (e *Engine) zeroObservedReplicas(namespace, modelID string) {
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	for prev := range e.lastAnalyzerSeries[modelKey].target {
+		e.metricsEmitter.RecordAnalyzerObservedReplicas(prev.analyzer, namespace, modelID, prev.variant, 0)
+	}
+	// Nothing was priced, so nothing was borrowed and no k2 is in use: a
+	// model parked at zero, or whose scrape is lost, must not keep reporting
+	// the borrow or the k2 source its last priced cycle had. The next priced
+	// cycle publishes afresh.
+	e.metricsEmitter.DeleteLearnedStateBorrowsForModel(namespace, modelID)
+}
+
+// dropServiceRateSeries deletes every service-rate series this model
+// published last cycle, llmsm_pricing_k included, and forgets them. Called from
+// onNothingObserved beside zeroObservedReplicas, and unlike it deletes rather
+// than zeroes: a rate of 0 would read as a replica that completes nothing, and
+// "absent" is what the series document for a variant nothing priced. The next
+// cycle that analyzes the model publishes them again.
+func (e *Engine) dropServiceRateSeries(namespace, modelID string) {
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	series, ok := e.lastAnalyzerSeries[modelKey]
+	if !ok {
+		return
+	}
+	for prev := range series.serviceRate {
+		e.metricsEmitter.DeleteServiceRateSignal(namespace, modelID, prev)
+	}
+	if series.pricingK {
+		e.metricsEmitter.DeletePricingK(namespace, modelID)
+	}
+	series.serviceRate = make(map[string]struct{})
+	series.pricingK = false
+	e.lastAnalyzerSeries[modelKey] = series
+}
+
+// evictStaleAnalyzerSeries deletes the analyzer series this model published on
+// the previous cycle but not on this one, then records the current set.
+func (e *Engine) evictStaleAnalyzerSeries(namespace, modelID string, current analyzerSeries) {
+	if e.lastAnalyzerSeries == nil {
+		e.lastAnalyzerSeries = make(map[string]analyzerSeries)
+	}
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	for prev := range e.lastAnalyzerSeries[modelKey].demand {
+		if _, still := current.demand[prev]; !still {
+			e.metricsEmitter.DeleteAnalyzerDemand(prev.analyzer, namespace, modelID, prev.role)
+		}
+	}
+	reported := make(map[string]struct{}, len(current.target))
+	for series := range current.target {
+		reported[series.variant] = struct{}{}
+	}
+	for prev := range e.lastAnalyzerSeries[modelKey].target {
+		if _, still := current.target[prev]; !still {
+			e.metricsEmitter.DeleteAnalyzerTarget(prev.analyzer, namespace, modelID, prev.variant)
+			e.metricsEmitter.DeleteAnalyzerObservedReplicas(prev.analyzer, namespace, modelID, prev.variant)
+			// The borrow series is per variant, not per analyzer: it goes
+			// only when no analyzer reports the variant any more.
+			if _, still := reported[prev.variant]; !still {
+				e.metricsEmitter.DeleteLearnedStateBorrows(namespace, modelID, prev.variant)
+			}
+		}
+	}
+	// So is the config series, and it goes only when the variant has left:
+	// not published this cycle and reported by no analyzer. Evicting it per
+	// (analyzer, variant) made it vanish for a cycle whenever any one
+	// analyzer stopped reporting a variant the model still runs.
+	for prev := range e.lastAnalyzerSeries[modelKey].engineConfig {
+		if _, still := current.engineConfig[prev]; !still {
+			e.metricsEmitter.DeleteEngineConfig(namespace, modelID, prev)
+		}
+	}
+	for prev := range e.lastAnalyzerSeries[modelKey].serviceRate {
+		if _, still := current.serviceRate[prev]; !still {
+			e.metricsEmitter.DeleteServiceRateSignal(namespace, modelID, prev)
+		}
+	}
+	if e.lastAnalyzerSeries[modelKey].pricingK && !current.pricingK {
+		e.metricsEmitter.DeletePricingK(namespace, modelID)
+	}
+	e.lastAnalyzerSeries[modelKey] = current
+}
+
+// pruneAnalyzerSeries evicts every analyzer series belonging to a model that is
+// no longer reconciled. Mirrors pruneLastGoodAnalysis, including its empty-set
+// guard — though at this call site activeKeys is never empty, because a cycle
+// with no active models returns before reaching here (and evicts everything via
+// evictAllAnalyzerSeries instead). The guard is kept for symmetry with
+// pruneLastGoodAnalysis and to stay safe if the call site moves.
+//
+// Note this only covers models that stop being *enumerated*. A model that is
+// still enumerated but skips analysis this cycle — config not loaded, a
+// prepare/collect error — keeps its last published series deliberately: a
+// transient collection blip should not make the series flap in and out, and
+// staleness there is reported separately through the analyzer liveness signal.
+func (e *Engine) pruneAnalyzerSeries(activeKeys map[string]bool) {
+	if len(activeKeys) == 0 {
+		return
+	}
+	// A configuration published by a cycle that never reached
+	// recordAnalyzerMetrics is tracked only here.
+	for modelKey, published := range e.publishedEngineConfig {
+		if !activeKeys[modelKey] {
+			e.metricsEmitter.DeleteEngineConfigForModel(published.namespace, published.modelID)
+			delete(e.publishedEngineConfig, modelKey)
+		}
+	}
+	for modelKey, series := range e.lastAnalyzerSeries {
+		if !activeKeys[modelKey] {
+			e.metricsEmitter.DeleteAnalyzerSeriesForModel(series.namespace, series.modelID)
+			e.metricsEmitter.DeleteEngineConfigForModel(series.namespace, series.modelID)
+			e.metricsEmitter.DeleteServiceRateSeriesForModel(series.namespace, series.modelID)
+			e.metricsEmitter.DeleteLearnedStateBorrowsForModel(series.namespace, series.modelID)
+			metrics.DeleteSLOModel(series.namespace, series.modelID)
+			delete(e.lastAnalyzerSeries, modelKey)
+		}
+	}
+	// Published before the model reached recordAnalyzerMetrics, so tracked
+	// apart from lastAnalyzerSeries.
+	e.retainLoadBalance(activeKeys)
+	e.retainSettle(activeKeys)
+}
+
+// evictAllAnalyzerSeries removes every analyzer series the engine has published,
+// for every model it tracks. Used when a cycle analyzes no models at all, where
+// the per-model prune has nothing to compare against: without this, the series
+// would keep their last values with nothing left to refresh or contradict them.
+// Safe to call repeatedly — it empties its own bookkeeping, so subsequent idle
+// cycles are no-ops.
+func (e *Engine) evictAllAnalyzerSeries() {
+	for modelKey, published := range e.publishedEngineConfig {
+		e.metricsEmitter.DeleteEngineConfigForModel(published.namespace, published.modelID)
+		delete(e.publishedEngineConfig, modelKey)
+	}
+	for modelKey, series := range e.lastAnalyzerSeries {
+		e.metricsEmitter.DeleteAnalyzerSeriesForModel(series.namespace, series.modelID)
+		e.metricsEmitter.DeleteEngineConfigForModel(series.namespace, series.modelID)
+		e.metricsEmitter.DeleteServiceRateSeriesForModel(series.namespace, series.modelID)
+		e.metricsEmitter.DeleteLearnedStateBorrowsForModel(series.namespace, series.modelID)
+		metrics.DeleteSLOModel(series.namespace, series.modelID)
+		delete(e.lastAnalyzerSeries, modelKey)
+	}
+	e.retainLoadBalance(nil)
+	e.retainSettle(nil)
+}
+
+// livenessThreshold is how long an analyzer stays live after its last
+// informative result: analyzerLivenessStaleCycles optimization intervals.
+//
+// Config is nil in unit tests that construct a minimal Engine directly
+// (bypassing NewEngine, which panics on a nil Config in production). A present
+// Config returning a non-positive interval falls back to the same 30s default —
+// a zero/negative interval would otherwise zero the threshold and latch every
+// analyzer non-live, blocking all scale-down.
+func (e *Engine) livenessThreshold() time.Duration {
+	interval := 30 * time.Second
+	if e.Config != nil && e.Config.OptimizationInterval() > 0 {
+		interval = e.Config.OptimizationInterval()
+	}
+	return analyzerLivenessStaleCycles * interval
+}
+
+// listedInGrace returns an entry with no Result, and Live set, for each
+// analyzer the policy lists -- saturation and slo aside -- that returned
+// nothing this cycle while its last informative result is still inside the
+// staleness window. A failed run leaves no entry behind, so without this the
+// composite could not tell an analyzer inside its grace from one never listed.
+func (e *Engine) listedInGrace(namespace, modelID string, policy config.ScalingPolicy,
+	ran []allocation.NamedAnalyzerResult) []allocation.NamedAnalyzerResult {
+	perAnalyzer := e.lastGoodAnalysis[utils.GetNamespacedKey(namespace, modelID)]
+	// The cycle clock, the one the analyzers stamp AnalyzedAt with
+	// (updateLivenessAndSetLive).
+	threshold, now := e.livenessThreshold(), e.clock.Now()
+	var out []allocation.NamedAnalyzerResult
+	for _, a := range policy.Analyzers {
+		name := a.EffectiveType()
+		named := func(nr allocation.NamedAnalyzerResult) bool { return nr.Name == name }
+		switch {
+		case name == domain.SaturationAnalyzerName || name == domain.SLOAnalyzerName,
+			!policy.AnalyzerEnabled(name),
+			slices.ContainsFunc(ran, named),
+			slices.ContainsFunc(out, named):
+			continue
+		}
+		if lastGood, ok := perAnalyzer[name]; ok && now.Sub(lastGood) <= threshold {
+			out = append(out, allocation.NamedAnalyzerResult{Name: name, Live: true})
+		}
+	}
+	return out
+}
+
+// updateLivenessAndSetLive refreshes e.lastGoodAnalysis for this model with
+// every informative result's AnalyzedAt (or the current time, as a fail-safe,
+// when an informative result carries a zero-valued AnalyzedAt), then sets
+// nr.Live on each entry in place based on whether its last good analysis (if
+// any) is within the staleness window. Applies uniformly to every analyzer,
+// including saturation — no name-based exemption. After the liveness pass it
+// runs the warn-only demand-liveness detector (see detectDemandLiveness).
+func (e *Engine) updateLivenessAndSetLive(
+	ctx context.Context,
+	namespace, modelID string,
+	namedResults []allocation.NamedAnalyzerResult,
+) {
+	if e.lastGoodAnalysis == nil {
+		e.lastGoodAnalysis = make(map[string]map[string]time.Time)
+	}
+	modelKey := utils.GetNamespacedKey(namespace, modelID)
+	if e.lastGoodAnalysis[modelKey] == nil {
+		e.lastGoodAnalysis[modelKey] = make(map[string]time.Time)
+	}
+	perAnalyzer := e.lastGoodAnalysis[modelKey]
+
+	// The cycle clock, which the analyzers stamp AnalyzedAt with: pinned, so
+	// a result is compared with the instant it was stamped at, not with the
+	// wall clock some time into the cycle. Against time.Now the margin of
+	// the staleness window shrank by however long the cycle had run.
+	now := e.clock.Now()
+	threshold := e.livenessThreshold()
+
+	for i := range namedResults {
+		nr := &namedResults[i]
+		if allocation.ResultIsInformative(*nr) {
+			at := nr.Result.AnalyzedAt
+			if at.IsZero() {
+				// Fail-safe: an informative result observed this cycle is current by
+				// definition, so a forgotten AnalyzedAt cannot silently disarm the veto.
+				at = now
+			}
+			perAnalyzer[nr.Name] = at
+		}
+		lastGood, ok := perAnalyzer[nr.Name]
+		nr.Live = ok && now.Sub(lastGood) <= threshold
+	}
+
+	e.detectDemandLiveness(ctx, modelID, namespace, namedResults, perAnalyzer, now, threshold)
+}
+
+// demandLatchSuffix is appended to an analyzer name to form the synthetic inner
+// key under which a demand latch is stored in lastGoodAnalysis. The NUL byte
+// guarantees the key cannot collide with any real analyzer name (analyzer names
+// are printable identifiers), so the Live/veto path — which only reads the map
+// via keyed lookups on real analyzer names (perAnalyzer[nr.Name]) and never
+// ranges over it in the decision path — can never observe this key and can
+// never have an nr.Live flipped by it.
+//
+// DEFERRED (future, per-pod demand): when demand becomes per-replica, the demand
+// latch key extends with a pod component (analyzerName + demandLatchSuffix +
+// "\x00" + podID) and a per-replica latch is tracked alongside the model-level
+// one. Not built now — 0.9 demand is model-level only.
+const demandLatchSuffix = "\x00demand"
+
+// detectDemandLiveness emits a warn-only observability signal when the
+// throughput analyzer has a live capacity/supply signal but has reported no
+// demand (Result.TotalDemand > 0) for at least the staleness window. It never
+// sets nr.Live, never touches RoleSpare, and never gates any decision.
+//
+// Why warn-only, and why a veto here would be wrong:
+//   - Zero demand is a legitimate state, not necessarily a fault. With no
+//     served-rate floor, arrival→0 correctly drives TotalDemand→0, which only
+//     permits scale-down and never forces a scale action. A missing or zero
+//     arrival signal can therefore never cause a spurious scale-up or a spurious
+//     veto, so vetoing on "demand looks absent" would defeat the very scale-down
+//     the liveness gate exists to enable.
+//   - The veto path is already covered by the supply/capacity liveness gate: an
+//     analyzer with no capacity signal is excluded from the scale-down vote via
+//     nr.Live. This detector is strictly additive telemetry pointing a human at
+//     a likely-broken arrival query.
+//
+// The detector pairs two latches in the same per-model map:
+//   - Supply latch: perAnalyzer[throughput.AnalyzerName], the analyzer's
+//     last-informative timestamp (maintained by the liveness loop above; the
+//     throughput analyzer resolves per-replica capacity regardless of arrival).
+//   - Demand latch: perAnalyzer[throughput.AnalyzerName+demandLatchSuffix],
+//     stamped with AnalyzedAt each cycle TotalDemand > 0.
+//
+// The signal is a timestamp gap, not a boolean, so a cold-start EPP scrape lag
+// (supply comes up a cycle or two before the first arrival scrape) does not
+// false-positive: on the first cycle the demand latch is seeded to the current
+// supply timestamp, so the gap starts at zero and only reaches the staleness
+// window after demand has genuinely been absent for that long.
+func (e *Engine) detectDemandLiveness(
+	ctx context.Context,
+	modelID, namespace string,
+	namedResults []allocation.NamedAnalyzerResult,
+	perAnalyzer map[string]time.Time,
+	now time.Time,
+	threshold time.Duration,
+) {
+	var tp *allocation.NamedAnalyzerResult
+	for i := range namedResults {
+		if namedResults[i].Name == throughput.AnalyzerName {
+			tp = &namedResults[i]
+			break
+		}
+	}
+	if tp == nil {
+		return // throughput not participating this cycle
+	}
+
+	demandKey := throughput.AnalyzerName + demandLatchSuffix
+
+	// Stamp the demand latch whenever demand is observed.
+	if tp.Result != nil && tp.Result.TotalDemand > 0 {
+		perAnalyzer[demandKey] = tp.Result.AnalyzedAt
+	}
+
+	// Only meaningful while supply is live now; otherwise the supply liveness
+	// gate already covers the situation and there is nothing to seed or compare.
+	supplyTS, hasSupply := perAnalyzer[throughput.AnalyzerName]
+	if !hasSupply || now.Sub(supplyTS) > threshold {
+		return
+	}
+
+	// Seed the demand latch to the current supply timestamp the first time we
+	// see live supply, so a fresh model / cold start starts with a zero gap.
+	demandTS, hasDemand := perAnalyzer[demandKey]
+	if !hasDemand {
+		perAnalyzer[demandKey] = supplyTS
+		return
+	}
+
+	if supplyTS.Sub(demandTS) >= threshold {
+		logger := ctrl.LoggerFrom(ctx)
+		logger.Info("throughput analyzer has a live capacity signal but has reported no demand "+
+			"for at least the staleness window; the request-arrival query is likely misconfigured "+
+			"or EPP is not reporting arrivals — scale-up will not trigger until arrivals are observed",
+			"modelID", modelID,
+			"namespace", namespace,
+			"analyzer", throughput.AnalyzerName,
+			"noDemandFor", supplyTS.Sub(demandTS).String(),
+		)
+	}
+}
+
+// pruneLastGoodAnalysis evicts liveness state for models that are no longer
+// active. activeKeys is the set of currently-active model keys (as produced by
+// utils.GetNamespacedKey(namespace, modelID)); any outer key in
+// e.lastGoodAnalysis absent from activeKeys belongs to a departed model (its
+// Variants are gone) and is deleted, bounding the map to live models
+// rather than letting it grow unboundedly across the controller's lifetime.
+//
+// Guards against an empty active set: a cycle that enumerates no models (e.g.
+// saturation config not loaded yet) must not wipe accumulated state, so pruning
+// is skipped when activeKeys is empty. This also means a genuine all-models-removed
+// state is indistinguishable from a transient empty cycle here: those entries leak
+// until a model reappears. Accepted, bounded leak — distinguishing the two cases
+// would need a separate "models were present last cycle" signal.
+func (e *Engine) pruneLastGoodAnalysis(activeKeys map[string]bool) {
+	if len(activeKeys) == 0 || e.lastGoodAnalysis == nil {
+		return
+	}
+	for modelKey := range e.lastGoodAnalysis {
+		if !activeKeys[modelKey] {
+			delete(e.lastGoodAnalysis, modelKey)
+		}
+	}
+}
+
+// runRegisteredAnalyzer invokes a single non-saturation analyzer's Analyze
+// method, isolating the call from the rest of the cycle. Errors are logged
+// and nil is returned; panics are recovered and logged. Returns the result
+// so the caller can apply the universal threshold post-step before discarding.
+func runRegisteredAnalyzer(
+	ctx context.Context,
+	logger logr.Logger,
+	entry analyzerEntry,
+	modelID string,
+	input domain.AnalyzerInput,
+) (result *domain.AnalyzerResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Non-fatal, and logged where an operator sees it: a built-in
+			// analyzer (slo) runs through here too, and a panic at debug left
+			// its series stale with nothing in a default log to say why.
+			logger.Error(fmt.Errorf("%v", r), "registered analyzer panicked; result discarded",
+				"name", entry.name, "modelID", modelID)
+			result = nil
+		}
+	}()
+	var err error
+	result, err = entry.analyzer.Analyze(ctx, input)
+	if err != nil {
+		// Plugin failure is non-fatal; log at debug to avoid spamming
+		// operator logs every optimize cycle.
+		logger.V(logging.DEBUG).Info("registered analyzer failed; result discarded",
+			"name", entry.name, "modelID", modelID, "error", err)
+		return nil
+	}
+	return result
+}
+
+// applyUniversalThreshold recalibrates RequiredCapacity and SpareCapacity in
+// place for the analyzer result and every RoleCapacity entry using the pure
+// formula:
+//
+//	RC = max(0, TotalDemand/scaleUp − TotalAnticipatedSupply)
+//	SC = max(0, TotalSupply    − TotalDemand/scaleDown)
+//
+// TotalAnticipatedSupply is read as-is — zero is a literal value, not a
+// sentinel. The analyzer is responsible for populating it correctly (see
+// internal/engines/aggregation for shared helpers). The asymmetry preserves
+// the conservative "don't double-scale while replicas are launching, don't
+// count pending as removable" stance.
+//
+// The same formula and the same (scaleUp, scaleDown) are applied at every
+// scope — model-level and each RoleCapacity entry. There are no per-role
+// threshold overrides. A non-positive scaleUp or scaleDown leaves the
+// corresponding signal unchanged. A role the analyzer holds has no spare,
+// and no required capacity within a rounding residue of zero
+// (settleHeldRoles).
+func applyUniversalThreshold(nr *allocation.NamedAnalyzerResult, scaleUp, scaleDown float64) {
+	if nr == nil || nr.Result == nil {
+		return
+	}
+	demand := nr.Result.TotalDemand
+
+	if scaleUp > 0 {
+		nr.RequiredCapacity = atLeastZero(demand/scaleUp - nr.TotalAnticipatedSupply)
+	}
+	if scaleDown > 0 {
+		nr.SpareCapacity = atLeastZero(nr.TotalSupply - demand/scaleDown)
+	}
+
+	for role, rc := range nr.RoleCapacities {
+		if scaleUp > 0 {
+			rc.RequiredCapacity = atLeastZero(rc.TotalDemand/scaleUp - rc.TotalAnticipatedSupply)
+		}
+		if scaleDown > 0 {
+			rc.SpareCapacity = atLeastZero(rc.TotalSupply - rc.TotalDemand/scaleDown)
+		}
+		nr.RoleCapacities[role] = rc
+	}
+	settleHeldRoles(nr, scaleUp, scaleDown)
+}
+
+// heldRequiredResidue is the largest RequiredCapacity, as a fraction of
+// anticipated supply, that a held role reads as zero: far below a replica
+// on any fleet, far above the rounding of one multiply and one divide.
+const heldRequiredResidue = 1e-9
+
+// settleHeldRoles fixes the signals of every role the analyzer holds
+// (Result.HeldRoleDemand), and the model-level ones when every role is held:
+// its spare is zero, and a required capacity within heldRequiredResidue of
+// zero is zero.
+//
+// A hold keeps a role where it is by moving its demand to the edge of the
+// band where the formula above gives zero: up to scaleDown x supply, or,
+// for prefill while decode is saturated, down to scaleUp x anticipated
+// supply. In floating point the formula does not always land on zero:
+// 0.7 x (21 x 24576) / 0.7 comes back 5.8e-11 above 21 x 24576. A positive
+// spare let the optimizer release up to the role's releasable capacity,
+// about 5% of supply at the default thresholds, so a held role of twenty or
+// more replicas shed one under the hold meant to stop it; a positive
+// required capacity is rounded up to a whole replica and ordered one.
+//
+// The spare is zeroed outright: no hold releases. The required capacity only
+// within the residue, because a hold is a floor on the way up: a shape
+// change, or prefill's undispatched queue, still orders.
+func settleHeldRoles(nr *allocation.NamedAnalyzerResult, scaleUp, scaleDown float64) {
+	held := nr.Result.HeldRoleDemand
+	if len(held) == 0 {
+		return
+	}
+	settle := func(required, spare *float64, anticipated float64) {
+		if scaleUp > 0 && *required <= heldRequiredResidue*anticipated {
+			*required = 0
+		}
+		if scaleDown > 0 {
+			*spare = 0
+		}
+	}
+	if nr.RoleCapacities == nil {
+		if _, ok := held[domain.RoleBoth]; ok {
+			settle(&nr.RequiredCapacity, &nr.SpareCapacity, nr.TotalAnticipatedSupply)
+		}
+		return
+	}
+	all := true
+	for role, rc := range nr.RoleCapacities {
+		if _, ok := held[role]; !ok {
+			all = false
+			continue
+		}
+		settle(&rc.RequiredCapacity, &rc.SpareCapacity, rc.TotalAnticipatedSupply)
+		nr.RoleCapacities[role] = rc
+	}
+	if all {
+		settle(&nr.RequiredCapacity, &nr.SpareCapacity, nr.TotalAnticipatedSupply)
+	}
+}
+
+// atLeastZero floors a computed capacity at zero, and reads a non-finite one as
+// zero too.
+//
+// All four capacities above were clamped with `if v < 0 { v = 0 }`, and a NaN
+// fails every comparison, so a NaN walked straight through into
+// RequiredCapacity -- the figure that sizes a scale-up -- and into
+// SpareCapacity, which sizes a scale-down. `!(v > 0)` catches both the negative
+// and the NaN; +Inf is excluded explicitly because it passes `v > 0`, and an
+// infinite required capacity is not a request the optimizer can honour.
+//
+// The supply side of these differences is finite by construction --
+// aggregation refuses to carry a non-finite per-replica capacity into a sum --
+// but demand is deliberately NOT sanitized on the way in, because silently
+// dropping a role's demand would be worse than declining to act on it. So this
+// is where a non-finite figure has to fail closed.
+func atLeastZero(v float64) float64 {
+	if !(v > 0) || math.IsInf(v, 1) {
+		return 0
+	}
+	return v
+}
+
+// gpuUsageViews assembles both measures of current GPU usage for this cycle, so
+// each constraint provider can be fed the one it actually asked for (see
+// allocation.UsageBasis). They answer different questions and are not
+// interchangeable: broadcasting one figure to every provider is what this
+// replaces.
+//
+// PHYSICAL comes from the shared snapshot. The engine READS that now; it used to
+// write it. internal/gpuusage is its sole producer, discovering usage from the
+// pods occupying GPU nodes rather than from whatever population this cycle
+// happened to assemble, which changes what the number means in two ways:
+//
+//   - it no longer depends on discovery. A population sum is blind to any
+//     workload the scaling manager has not been called about, so it reported a full cluster as
+//     empty during the window before KEDA's first call — and that is exactly when
+//     scale-from-zero is placing wakes;
+//   - it includes GPUs held by workloads the scaling manager does not manage. Budgets get
+//     correspondingly tighter, which is the point: they were over-stated before.
+//
+// MANAGED is summed from this cycle's population, and is the figure a quota draws
+// against — an allowance granted to the scaling manager may only be spent by the scaling manager. It is always
+// available here, because the population is what this engine is holding.
+//
+// The requests serve one further purpose on BOTH views: every namespace being
+// optimized must be PRESENT in the per-namespace map, with an empty inner map if
+// it holds nothing. A namespace-scoped quota is materialised only for namespaces
+// that appear there (see DefaultLimiter.ComputeConstraints), so a namespace whose
+// fleet currently holds no GPUs would silently lose its cap and be judged against
+// the cluster aggregate — able to exceed its own limit, or refused because a
+// different namespace is full. The population sum gives this by construction; a
+// discovered view cannot, because it only sees namespaces holding a GPU right now.
+func gpuUsageViews(requests []allocation.ModelScalingRequest) allocation.GPUUsageViews {
+	views := allocation.GPUUsageViews{
+		ManagedByType:      computeCurrentGPUUsage(requests),
+		ManagedByNamespace: computeCurrentGPUUsageByNamespace(requests),
+	}
+	// The warm pools too, and HERE rather than only where the managed figure is
+	// published. These views are what the constraint providers are given, so a
+	// quota built without them does not bind on the pool at all -- the published
+	// figure would say the pool costs something while the limiter enforcing it
+	// carried on as though it did not. The version of the figure charged rides
+	// with the views, onto the constraints, into the headroom snapshot: it is
+	// how the pool knows the snapshot it grows on has seen its Pods.
+	views.PoolsVersion = addWarmPoolGPUs(views.ManagedByType, views.ManagedByNamespace)
+	if snap, ok := decision.LatestGPUUsage(); ok {
+		views.PhysicalByType = snap.ByType
+		views.PhysicalByNamespace = withActiveNamespaces(snap.ByNamespace, requests)
+	}
+	return views
+}
+
+// withActiveNamespaces returns byNamespace with an entry for every namespace in
+// requests, adding empty ones as needed. The stored snapshot must not be mutated
+// (GPUUsageStore.Get documents it as shared), so it copies — but only when there
+// is something to add, which is the uncommon case once a namespace has any
+// GPU-holding pod.
+func withActiveNamespaces(
+	byNamespace map[string]map[string]int,
+	requests []allocation.ModelScalingRequest,
+) map[string]map[string]int {
+	out := byNamespace
+	copied := false
+	for _, req := range requests {
+		if _, present := out[req.Namespace]; present {
+			continue
+		}
+		if !copied {
+			out = make(map[string]map[string]int, len(byNamespace)+1)
+			maps.Copy(out, byNamespace)
+			copied = true
+		}
+		out[req.Namespace] = map[string]int{}
+	}
+	return out
+}
+
+// gpuUsageByType accumulates a request's current GPU usage into perType.
+//
+// Accelerator identity comes from the request's discovery metadata, the only
+// place that carries it. Replica counts come from VariantReplicaState rather
+// than from the analyzer's VariantCapacity: both are in scale-target units, but
+// GPU accounting must reflect what is actually allocated, not what reported
+// metrics this cycle.
+//
+// KNOWN LIMITATION — unresolved accelerators are not attributable. A variant
+// with neither a nodeSelector/nodeAffinity GPU key nor the
+// inference.optimization/acceleratorName label resolves to
+// constants.DefaultAcceleratorName ("unknown"), so its GPUs are keyed under a
+// placeholder. TypeInventory.GetResourcePools iterates the DISCOVERED types, so
+// that entry never lands in a pool: a quota fed this view sees less consumed than
+// there is, and reports more of its allowance free than it should. SetUsed,
+// meanwhile, sums every key into totalUsed, so the aggregate includes them — the
+// two views disagree, though nothing reads the aggregate today.
+//
+// This is not fixable here: usage that cannot be attributed to a type cannot be
+// charged to a pool, and charging it to every candidate type would be worse.
+// The durable fix is resolving the accelerator. Both behaviours are pinned by
+// internal/engines/pipeline/unresolved_accelerator_usage_test.go so they cannot
+// drift silently.
+func gpuUsageByType(req allocation.ModelScalingRequest, perType map[string]int) {
+	stateMap := make(map[string]domain.VariantReplicaState, len(req.VariantStates))
+	for _, s := range req.VariantStates {
+		stateMap[s.VariantName] = s
+	}
+	for _, m := range req.Variants {
+		state := stateMap[m.VariantName]
+		gpusPerReplica := state.GPUsPerReplica
+		if gpusPerReplica <= 0 {
+			gpusPerReplica = 1
+		}
+		perType[m.AcceleratorName] += state.CurrentReplicas * gpusPerReplica
+	}
+}
+
+// measuredThisCycle reports whether the request carries a result this cycle,
+// so its replica counts are charged to a quota. A result with no usable signal
+// still counts: its replicas hold their GPUs whatever the analyzers made of
+// them, and charging them nothing published headroom the warm pool then grew
+// into (TestASteadyFleetStillPublishesHeadroom). A request with no result at
+// all was not measured, and is not charged.
+func measuredThisCycle(req allocation.ModelScalingRequest) bool {
+	return req.CompositeSignal.Result != nil
+}
+
+// computeCurrentGPUUsage sums the GPUs the scaling manager's own variants hold, per accelerator
+// type, across this cycle's population. This is the ManagedUsage view: the only
+// consumption an operator-declared quota may be charged for.
+func computeCurrentGPUUsage(requests []allocation.ModelScalingRequest) map[string]int {
+	usage := make(map[string]int)
+	for _, req := range requests {
+		if !measuredThisCycle(req) {
+			continue
+		}
+		gpuUsageByType(req, usage)
+	}
+	return usage
+}
+
+// computeCurrentGPUUsageByNamespace mirrors computeCurrentGPUUsage but buckets
+// usage by namespace, then accelerator type. Every request's namespace is
+// represented (with at least an empty per-type map) so namespaces carrying a
+// quota but zero current usage are still surfaced as active namespaces to the
+// constraint providers, and therefore still constrained.
+func computeCurrentGPUUsageByNamespace(requests []allocation.ModelScalingRequest) map[string]map[string]int {
+	usage := make(map[string]map[string]int)
+	for _, req := range requests {
+		perType, ok := usage[req.Namespace]
+		if !ok {
+			perType = make(map[string]int)
+			usage[req.Namespace] = perType
+		}
+		if !measuredThisCycle(req) {
+			continue
+		}
+		gpuUsageByType(req, perType)
+	}
+	return usage
+}
+
+// reportUnattributedGPUs surfaces usage that could not be charged to any
+// accelerator type.
+//
+// GetResourcePools iterates the DISCOVERED types, so a bucket keyed by the
+// unresolved sentinel never lands in a pool: those GPUs are held but invisible,
+// every pool over-states how much is free by that amount, and the wake capacity
+// check can allow a placement it should refuse. Nothing about that fails — it is
+// silent over-provisioning, which is why it is worth a metric and a warning
+// rather than a debug line.
+//
+// This reports the condition; it deliberately does not change the budget policy,
+// which is a separate decision about whether an unattributable variant should
+// block scaling for everyone.
+func reportUnattributedGPUs(ctx context.Context, byType map[string]int) {
+	unattributed, names := unattributedGPUs(byType)
+	metrics.SetUnattributedGPUs(unattributed)
+	if unattributed == 0 {
+		return
+	}
+	ctrl.LoggerFrom(ctx).Info(
+		"GPUs are held by variants whose accelerator could not be resolved; "+
+			"they are charged to no accelerator pool, so free capacity is over-stated by this amount "+
+			"and a wake may be allowed onto an accelerator that is full. "+
+			"Set a GPU product nodeSelector on the workload, or the accelerator label on its scaler.",
+		"unattributedGPUs", unattributed, "underKeys", names)
+}
+
+// gpuConstraintProviders returns the ConstraintProvider(s) backing the GPU
+// limiter for the V2 optimizer path. A limiter that is itself a
+// ConstraintProvider (a *DefaultLimiter) contributes itself; a CompositeLimiter
+// contributes each constituent that is a ConstraintProvider, so multi-entry
+// quota configs are all consulted. Other limiter shapes (e.g. NoOpLimiter)
+// contribute nothing.
+func gpuConstraintProviders(l allocation.Limiter) []allocation.ConstraintProvider {
+	return allocation.ConstraintProvidersFrom(l)
+}
+
+// collectV2ModelRequest performs V2 analysis for a single model and returns
+// a ModelScalingRequest for the optimizer, or nil if analysis should be skipped.
+func (e *Engine) collectV2ModelRequest(
+	ctx context.Context,
+	modelID, namespace string,
+	replicaMetrics []domain.ReplicaMetrics,
+	config config.ScalingPolicy,
+	variantStates []domain.VariantReplicaState,
+	variantMetadata []domain.VariantMetadata,
+	scaleTargets map[string]scaletarget.ScaleTargetAccessor,
+	variants map[string]*llmdvariant.Variant,
+	schedulerQueue *domain.SchedulerQueueMetrics,
+	arrivalRate float64,
+) (*allocation.ModelScalingRequest, error) {
+	namedResults, err := e.runAnalyzers(ctx, modelID, namespace, replicaMetrics, config,
+		variantStates, variantMetadata, scaleTargets, variants, schedulerQueue, arrivalRate)
+	if err != nil {
+		return nil, fmt.Errorf("collecting V2 model request for %s/%s: %w", namespace, modelID, err)
+	}
+
+	// Detect P/D disaggregation: true when any variant has role != domain.RoleBoth
+	disaggregated := false
+	for _, vs := range variantStates {
+		if vs.Role != "" && vs.Role != domain.RoleBoth {
+			disaggregated = true
+			break
+		}
+	}
+
+	// The optimizer's input is the composite of every analyzer that ran,
+	// never saturation's own entry, even when it runs alone (buildComposite).
+	// Saturation contributes only when the policy lists it; it is the
+	// composite's identity and unit either way. The slo analyzer never
+	// contributes: it only observes, so its series are published and its
+	// result sizes nothing. The thresholds are saturation's own, a
+	// per-analyzer override included: the composite's demand is saturation's,
+	// and the warm pool's pressure reads the same pair.
+	grace := e.listedInGrace(namespace, modelID, config, namedResults)
+	eligibleAnalyzers := append(eligibleEntries(namedResults, config), grace...)
+	satUp, satDown := compositeThresholds(config)
+	composite, holdReasons := composeSignal(ctx, namedResults, eligibleAnalyzers, satUp, satDown)
+	if e.learnRec.Active() {
+		e.recordComposite(compositeInputs{namespace: namespace, modelID: modelID, named: namedResults,
+			grace: grace, metadata: variantMetadata}, composite, holdReasons, satUp)
+	}
+	// How hard each variant is being pushed, for the retained pool's switching
+	// decision. Published from the composite, the result the optimizer acts on,
+	// with saturation's scale-up threshold, so the pool never switches for a
+	// variant the optimizer considers comfortable, nor sits still for one it is
+	// already growing.
+	publishVariantPressure(namespace, composite, satUp)
+	// What each variant is getting from the pool, from the same result as its
+	// pressure: a role priced in another analyzer's frame has its PRCs, and its
+	// bridges', in that frame (priceRole), so supply read from saturation's
+	// entry was in a different unit. It is deliberately absent from every
+	// supply total the optimizer reads.
+	publishWarmPoolSupply(namespace, composite)
+
+	// One record per cycle, the composite included: two calls each evicted
+	// what the other had published, and each variant's engine configuration
+	// with it.
+	e.recordAnalyzerMetrics(namespace, modelID, append(slices.Clone(namedResults), composite))
+	logAnalyzerResult(ctx, modelID, namespace, composite)
+
+	return &allocation.ModelScalingRequest{
+		ModelID:         modelID,
+		Namespace:       namespace,
+		CompositeSignal: composite,
+		VariantStates:   variantStates,
+		Variants:        variantMetadata,
+		Priority:        config.Priority,
+		WeightClass:     config.WeightClass,
+		Weight:          config.Weight,
+		Disaggregated:   disaggregated,
+	}, nil
+}
+
+// eligibleEntries is the entries of namedResults the composite may size
+// from: every one less the slo analyzer, which only observes, and less
+// saturation when the policy does not list it. The grace entries are the
+// caller's to add.
+func eligibleEntries(namedResults []allocation.NamedAnalyzerResult, config config.ScalingPolicy) []allocation.NamedAnalyzerResult {
+	eligible := excludeByName(namedResults, domain.SLOAnalyzerName)
+	if !config.SaturationListed() {
+		eligible = excludeByName(eligible, domain.SaturationAnalyzerName)
+	}
+	return eligible
+}
+
+// compositeThresholds is the scale-up threshold and scale-down boundary the
+// composite is judged at, and the warm pool's pressure read with:
+// saturation's, a per-analyzer override included.
+func compositeThresholds(config config.ScalingPolicy) (scaleUp, scaleDown float64) {
+	return config.AnalyzerThresholds(domain.SaturationAnalyzerName)
+}
+
+// excludeByName returns a copy of results without the entries named name.
+func excludeByName(results []allocation.NamedAnalyzerResult, name string) []allocation.NamedAnalyzerResult {
+	return slices.DeleteFunc(slices.Clone(results), func(nr allocation.NamedAnalyzerResult) bool {
+		return nr.Name == name
+	})
+}
+
+// metadataByVariant indexes discovery metadata by variant name for the capacity
+// builder.
+func metadataByVariant(variantMetadata []domain.VariantMetadata) map[string]domain.VariantMetadata {
+	byName := make(map[string]domain.VariantMetadata, len(variantMetadata))
+	for _, m := range variantMetadata {
+		byName[m.VariantName] = m
+	}
+	return byName
+}
+
+// cycleEntry is one analyzer's entry for the cycle: its result built at
+// the policy's thresholds for it (buildNamedResult). runAnalyzers builds every
+// entry here, and a learner replay rebuilds each one here, from the policy
+// the recording kept.
+func cycleEntry(
+	ctx context.Context,
+	name string,
+	result *domain.AnalyzerResult,
+	config config.ScalingPolicy,
+	metaByVariant map[string]domain.VariantMetadata,
+) allocation.NamedAnalyzerResult {
+	up, down := config.AnalyzerThresholds(name)
+	return buildNamedResult(ctx, name, result, config, metaByVariant, up, down)
+}
+
+// buildNamedResult wraps one analyzer's raw (D, P) result in the optimizer-facing
+// entry: it runs the capacity-build step to derive the engine-owned aggregates,
+// then seeds the optimizer's mutable allocation counters from the built signals.
+//
+// Ordering matters — Remaining/Spare are the optimizer's working copies of RC/SC,
+// so they can only be seeded after buildCapacities has computed them.
+func buildNamedResult(
+	ctx context.Context,
+	name string,
+	result *domain.AnalyzerResult,
+	config config.ScalingPolicy,
+	metaByVariant map[string]domain.VariantMetadata,
+	scaleUp, scaleDown float64,
+) allocation.NamedAnalyzerResult {
+	nr := allocation.NamedAnalyzerResult{
+		Name:              name,
+		Result:            result,
+		Score:             config.AnalyzerScore(name),
+		ScaleUpThreshold:  scaleUp,
+		ScaleDownBoundary: scaleDown,
+	}
+	buildCapacities(ctx, &nr, metaByVariant, scaleUp, scaleDown)
+	nr.Remaining = nr.RequiredCapacity
+	nr.Spare = nr.SpareCapacity
+	return nr
+}
+
+// buildCapacities is the dedicated capacity-building step between the analyzers
+// and the optimizer. For one analyzer's result it (1) joins the authoritative
+// per-variant identity (cost, accelerator, role) from the discovery step onto the
+// analyzer's per-variant capacities, and (2) computes the engine-owned scaling
+// signals (RequiredCapacity/SpareCapacity) via the universal threshold. The
+// analyzer supplies only the measured signal (demand + per-replica capacity); the
+// builder assembles the structure the optimizer consumes. The metadata join is a
+// no-op when metaByVariant is empty (paths without discovery keep analyzer values).
+func buildCapacities(ctx context.Context, nr *allocation.NamedAnalyzerResult, metaByVariant map[string]domain.VariantMetadata, scaleUp, scaleDown float64) {
+	if nr == nil || nr.Result == nil {
+		return
+	}
+	result := nr.Result
+	// (1) Reconcile the analyzer's per-variant view with discovery's.
+	//
+	// Role is joined because the per-role supply grouped below must be keyed the
+	// same way discovery keys the fleet, or RoleDemand and that supply would pair
+	// up wrongly. Cost and accelerator left VariantCapacity entirely; the
+	// optimizer reads those from VariantMetadata.
+	//
+	// ReplicaCount is clamped to the scale target's own count, so that the supply
+	// assembled below cannot describe a fleet larger than the one the target is
+	// already committed to. See clampReplicaCountToScaleTarget.
+	if len(metaByVariant) > 0 {
+		for i := range result.VariantCapacities {
+			if m, ok := metaByVariant[result.VariantCapacities[i].VariantName]; ok {
+				result.VariantCapacities[i].Role = m.Role
+				clampReplicaCountToScaleTarget(&result.VariantCapacities[i], m)
+			}
+		}
+	}
+	// (1b) What the BRIDGES serving each variant are worth.
+	//
+	// Derived from two measurements the analyzer supplies (how many bridges, and
+	// what one is worth), so it is built here for the same reason supply is: a
+	// derived capacity written inside one analyzer is absent from the others.
+	//
+	// Deliberately NOT added to any supply total below. A bridge is borrowed --
+	// counting it as supply would tell the optimizer the fleet is already big
+	// enough and suppress the scale-up the bridge exists to cover, after which the
+	// pool holds the Pod forever because the replicas that would release it were
+	// never created. The single consumer is the retained-pool switching decision.
+	// Its demand IS counted, in the analyzer's TotalDemand.
+	for i := range result.VariantCapacities {
+		vc := &result.VariantCapacities[i]
+		vc.WarmPoolCapacity = float64(vc.WarmPoolReplicas) * vc.WarmPoolPerReplicaCapacity
+	}
+	// (2) Assemble supply from each variant's (ReplicaCount, per-replica P), and
+	// the model-level utilization from demand vs supply.
+	nr.TotalSupply = aggregation.SumTotalSupply(result.VariantCapacities)
+	nr.TotalAnticipatedSupply = aggregation.SumTotalAnticipatedSupply(result.VariantCapacities)
+	if nr.TotalSupply > 0 {
+		nr.Utilization = result.TotalDemand / nr.TotalSupply
+	} else {
+		nr.Utilization = 0
+	}
+	// (3) Assemble per-role capacities: supply grouped by role, demand from the
+	// analyzer's per-role attribution (RoleDemand).
+	nr.RoleCapacities = buildRoleCapacities(ctx, result)
+	// (4) Engine-owned scaling signals (RC/SC) from demand vs supply.
+	applyUniversalThreshold(nr, scaleUp, scaleDown)
+	// (5) Flag a shortfall the optimizer cannot act on.
+	warnUnsizableShortfall(ctx, nr)
+}
+
+// clampReplicaCountToScaleTarget caps a variant's measured replica count at the
+// scale target's own count. It never raises it.
+//
+// ReplicaCount is what actually reported capacity this cycle, which is the right
+// basis for supply while the fleet is steady. During a scale-down that is
+// already in flight it is not: the scale target has been reduced while the
+// condemned replicas keep reporting, so the measured count runs AHEAD of the
+// target. Supply built from the larger count then credits the optimizer with
+// spare capacity that the in-flight scale-down has already claimed, and
+// safeRemovalReplicasForRole subtracts it a second time from the smaller count —
+// removing those replicas twice for one decision.
+//
+// Measured on a 14 QPS benchmark: with the target already down to 3 and five
+// replicas still reporting, SC came to two replicas of slack and the decision
+// was 3 − 2 = 1, mid-load. Clamped, the same inputs hold at 3.
+//
+// This is the departure half of what TotalAnticipatedSupply does for arrivals:
+// there, a launching replica counts toward supply so a scale-up is not ordered
+// twice while it boots. PendingReplicas only ever describes replicas arriving,
+// so nothing covered the same double-count on the way down.
+//
+// The clamp is ONE-SIDED on purpose. When the measured count is LOWER than the
+// target — replicas still launching, or a pod that missed a scrape — the
+// measured value still wins, because it is what demonstrably served this cycle.
+// Counting capacity that has not arrived yet is how a fleet gets scaled down
+// onto replicas that cannot take the load.
+//
+// The two signals it feeds are NOT conservative in the same direction, and the
+// scale-up side is the one to watch. SC shrinks, which can only hold replicas.
+// RC is sized against TotalAnticipatedSupply, which shrinks too, while demand is
+// still summed over the larger pod set — including resident KV on the condemned
+// replicas that is about to drain. Since a scale-up rounds up
+// (analyzer_helpers.go), a fractional shortfall orders a whole replica. Replaying
+// the benchmark: of the 45 passes where the clamp fires, 5 turn RC positive, each
+// anticipating by 15-30s a scale-up that pass made anyway. Excluding condemned
+// demand symmetrically would settle it, and needs a signal Kubernetes does not
+// publish (see below).
+//
+// A CurrentReplicas of zero is skipped rather than clamped to zero. Zero reaches
+// here only for a variant whose scale target IS readable and reports no replicas
+// — a parked one — because discovery drops a variant whose scale target it could
+// not resolve before any metadata exists (variantmeta.discovery, `continue` on an
+// unresolved target), so that case never arrives at all. Clamping a parked
+// variant to zero would erase supply for replicas still draining, and nothing is
+// gained: a decision based at zero replicas cannot remove any.
+//
+// Kubernetes publishes no terminating-replica count on a scale target's status,
+// so the symmetric fix — a departing counterpart to PendingReplicas — would mean
+// listing pods, which is the cluster-wide watch this design removed. Clamping to
+// a count the scale target already publishes is what makes this cheap.
+//
+// ObservedReplicas is deliberately NOT derived here from the pre-clamp
+// ReplicaCount: when a variant had no rows this cycle the analyzer fills
+// ReplicaCount from scale-target status, which would make "saw the whole
+// fleet" and "saw nothing" read the same. The analyzer sets it from its rows.
+func clampReplicaCountToScaleTarget(vc *domain.VariantCapacity, m domain.VariantMetadata) {
+	if m.CurrentReplicas > 0 {
+		vc.ReplicaCount = min(vc.ReplicaCount, m.CurrentReplicas)
+	}
+}
+
+// warnUnsizableShortfall logs when an analyzer reports that more capacity is
+// needed while no variant has a per-replica capacity to supply it with. The
+// optimizer sizes a scale-up as demand/target ÷ per-replica capacity, so with
+// every capacity at zero there is nothing to divide by: the engine asks for
+// capacity every cycle and can never act on the answer, which reads from the
+// outside exactly like a stuck autoscaler.
+//
+// The usual cause is configuration rather than load — a KvCacheThreshold small
+// enough that the usable-capacity estimate rounds away, or a variant whose
+// capacity was never learned — so the log names the variants involved.
+func warnUnsizableShortfall(ctx context.Context, nr *allocation.NamedAnalyzerResult) {
+	result := nr.Result
+	if nr.RequiredCapacity <= 0 || len(result.VariantCapacities) == 0 {
+		return
+	}
+	// An analyzer that priced no variant this cycle (every one no-data or
+	// error) has no capacity to be missing: the slo analyzer before its line
+	// is ready, or for a role it does not price, carries demand with no PRC.
+	// Warned, every such model logged a stuck-looking shortfall every cycle.
+	if !allocation.ResultIsInformative(*nr) {
+		return
+	}
+	for _, vc := range result.VariantCapacities {
+		if vc.PerReplicaCapacity > 0 {
+			return // at least one variant can absorb the shortfall
+		}
+	}
+	names := make([]string, 0, len(result.VariantCapacities))
+	for _, vc := range result.VariantCapacities {
+		names = append(names, vc.VariantName)
+	}
+	sort.Strings(names)
+	ctrl.LoggerFrom(ctx).Info("analyzer needs capacity but no variant has a per-replica capacity to scale with",
+		"modelID", result.ModelID, "namespace", result.Namespace,
+		"analyzer", result.AnalyzerName, "requiredCapacity", nr.RequiredCapacity,
+		"variants", names,
+		"hint", "check kvCacheThreshold: a value small enough to round the usable-capacity estimate to zero makes the shortfall unsizable")
+}
+
+// buildRoleCapacities pairs per-role supply (grouped from the variant capacities)
+// with the analyzer's per-role demand to produce the RoleCapacities the optimizer
+// consumes for P/D-disaggregated models. Returns nil when the analyzer emitted no
+// per-role demand (non-disaggregated). RequiredCapacity/SpareCapacity are left
+// zero here — the universal threshold post-step fills them.
+//
+// Pairing the two halves relies on an invariant the type system cannot express:
+// the roles an analyzer keyed its demand by must be the roles the variant
+// capacities are keyed by. Both come from the same discovery output in a cycle
+// (the engine projects VariantMetadata into the analyzers' VariantReplicaState
+// and re-joins it in step (1) of buildCapacities), so they agree in practice. A
+// role carrying demand with no variants behind it would otherwise silently
+// produce a zero-supply bucket, which the threshold post-step reads as an
+// unservable shortfall and turns into a spurious scale-up — so log it rather
+// than let it pass unnoticed.
+func buildRoleCapacities(ctx context.Context, result *domain.AnalyzerResult) map[string]domain.RoleCapacity {
+	roleDemand := result.RoleDemand
+	if len(roleDemand) == 0 {
+		return nil
+	}
+	totals := aggregation.AggregateByRole(result.VariantCapacities)
+	out := make(map[string]domain.RoleCapacity, len(roleDemand))
+	for role, demand := range roleDemand {
+		t, ok := totals[role]
+		if !ok && demand > 0 {
+			// modelID/namespace included so the line is actionable: the engine
+			// reconciles many models per cycle into one controller log.
+			ctrl.LoggerFrom(ctx).Info("analyzer attributed demand to a role with no variants",
+				"modelID", result.ModelID, "namespace", result.Namespace,
+				"analyzer", result.AnalyzerName, "role", role, "demand", demand,
+				"variantRoles", rolesOf(totals))
+		}
+		out[role] = domain.RoleCapacity{
+			Role:                   role,
+			TotalSupply:            t.TotalSupply,
+			TotalDemand:            demand,
+			TotalAnticipatedSupply: t.TotalAnticipatedSupply,
+		}
+	}
+	return out
+}
+
+// rolesOf returns the roles present in a per-role aggregation, sorted so the
+// log line above is stable across cycles.
+func rolesOf(totals map[string]aggregation.ScopeTotals) []string {
+	roles := make([]string, 0, len(totals))
+	for role := range totals {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	return roles
+}
+
+// logAnalyzerResult emits one INFO "analyzer-result" line for a single named
+// analyzer result. Called for every analyzer that ran in a model's reconcile
+// cycle, after the universal threshold post-step has been applied.
+func logAnalyzerResult(ctx context.Context, modelID, namespace string, nr allocation.NamedAnalyzerResult) {
+	if nr.Result == nil {
+		return
+	}
+	logger := ctrl.LoggerFrom(ctx)
+
+	type variantEntry struct {
+		Name string  `json:"name"`
+		PRC  float64 `json:"prc"`
+		// Role is included because V2 charges waiting requests by P/D role, so
+		// demand is not interpretable without knowing which role was resolved —
+		// a missing llm-d.ai/role label reads as "both" and changes the charge.
+		// Emitted unconditionally: an analyzer that leaves Role unset (the
+		// queueing model does) is treated as "both" downstream, so the value is
+		// canonicalized below and the field always carries a meaningful role
+		// rather than being absent.
+		Role   string `json:"role"`
+		Reason string `json:"reason,omitempty"`
+		// Observed is how many replicas reported rows this cycle, before the
+		// scale-target clamp. It differs from the target's ready count exactly
+		// when something unowned is serving or a Pod's metrics were missing, so
+		// a cycle that saw only part of the fleet is visible in this line rather
+		// than inferred from demand afterwards.
+		Observed int `json:"observed"`
+	}
+	variants := make([]variantEntry, 0, len(nr.Result.VariantCapacities))
+	for _, vc := range nr.Result.VariantCapacities {
+		role := vc.Role
+		if role == "" {
+			role = domain.RoleBoth
+		}
+		variants = append(variants, variantEntry{
+			Name:     vc.VariantName,
+			PRC:      vc.PerReplicaCapacity,
+			Role:     role,
+			Reason:   vc.Reason,
+			Observed: vc.ObservedReplicas,
+		})
+	}
+
+	kv := []any{
+		"modelID", modelID,
+		"namespace", namespace,
+		"analyzer", nr.Name,
+		// live surfaces whether THIS analyzer currently contributes to the
+		// composite aggregation and the scale-down veto
+		// (allocation.Eligible) -- without it, "why didn't the
+		// composite pick up this analyzer's signal" or "why is this
+		// analyzer's non-live result still showing real numbers here" is
+		// undiagnosable from the log: a stale analyzer's Result/RC/SC are
+		// still real values (this line has no Live guard, deliberately, so
+		// a reader can see exactly what a non-live analyzer WOULD have
+		// contributed), and only this field says whether it currently
+		// counts. Emitted for every entry, live or not, informative or not.
+		"live", nr.Live,
+		"supply", nr.TotalSupply,
+		"demand", nr.Result.TotalDemand,
+		"util", nr.Utilization,
+		"rc", nr.RequiredCapacity,
+		"sc", nr.SpareCapacity,
+	}
+
+	// roleRC/roleSC surface the per-role RC/SC the optimizer's
+	// anyRoleNeedsScaleUp actually branches on (cost_aware_optimizer.go),
+	// which the model-level rc/sc above cannot: applyUniversalThreshold
+	// recalibrates them independently per role, so a role can sit above its
+	// own scale-up threshold -- keeping the optimizer on the scale-up branch,
+	// where an already-at-max variant just no-ops -- while the model-level rc
+	// nets to 0 and looks like nothing is holding the fleet up. Without this,
+	// "why didn't it scale down" was undiagnosable from the log: a variant
+	// pinned at max for many cycles despite trivial model-level demand, until
+	// a single cycle's per-role RC dipped to 0 and every replica but the
+	// MinReplicas floor got shed in one shot.
+	//
+	// Appended only when the model has roles at all: a non-disaggregated model
+	// would otherwise carry two null fields on every line, and null does not
+	// read as "this model has no roles" -- it reads as a bug in the producer.
+	if len(nr.RoleCapacities) > 0 {
+		roleRC := make(map[string]float64, len(nr.RoleCapacities))
+		roleSC := make(map[string]float64, len(nr.RoleCapacities))
+		for role, rc := range nr.RoleCapacities {
+			roleRC[role] = rc.RequiredCapacity
+			roleSC[role] = rc.SpareCapacity
+		}
+		kv = append(kv, "roleRC", roleRC, "roleSC", roleSC)
+	}
+
+	kv = append(kv,
+		"scaleUpThreshold", nr.ScaleUpThreshold,
+		"scaleDownBoundary", nr.ScaleDownBoundary,
+		"variants", variants,
+	)
+
+	logger.Info("analyzer-result", kv...)
+}
+
+// logScalingDecisions emits one INFO "scaling-decision" line per model after
+// the optimizer has produced per-variant decisions. borrowed, non-nil while
+// the cycle counts Kueue borrowing, is per "namespace/model" the GPUs the
+// decision draws from the cohorts' shared pools; every model's line then
+// carries it as "borrowed", 0 included.
+func logScalingDecisions(
+	ctx context.Context,
+	modelRequests []allocation.ModelScalingRequest,
+	decisions []domain.VariantDecision,
+	borrowed map[string]int,
+) {
+	logger := ctrl.LoggerFrom(ctx)
+
+	type modelKey struct{ ns, modelID string }
+	type decisionEntry struct {
+		Name   string `json:"name"`
+		Curr   int    `json:"curr"`
+		Tgt    int    `json:"tgt"`
+		Action string `json:"action"`
+		// AtMax reports that the target sits on the variant's own maxReplicas
+		// ceiling, so it cannot grow further however much demand asks for.
+		//
+		// WasLimited does not cover this and deliberately never will: it means
+		// GPUs ran out, and marking a self-imposed ceiling as scarcity would
+		// raise a spurious ResourceConstrained warning (see
+		// gpu_limit_attribution.go). But without SOME signal the two outcomes
+		// are indistinguishable in the log -- a run pinned at its ceiling and a
+		// run that got everything it asked for both read as a steady target.
+		//
+		// That is not hypothetical: a benchmark capped at 4 while demand implied
+		// 12 produced a P99 TTFT of 73s and an average of 3.21 replicas, and
+		// nothing in the output said the number was a ceiling rather than a
+		// decision. Read it beside `demand` and `prc` in analyzer-result: at max
+		// with demand still climbing means raise maxReplicas, which is a
+		// different remedy from adding GPUs.
+		AtMax bool `json:"atMax,omitempty"`
+		// LimitedBy names what held a scale-up back this cycle -- a limiter
+		// entry, node-fit, or a borrowing rule -- as the ResourceConstrained
+		// Event and the limiter_name label of llmsm_decisions_limited_total
+		// name it. Absent when nothing did.
+		LimitedBy string `json:"limitedBy,omitempty"`
+		// LimitedByAlso names the limiters tied with LimitedBy: their pools
+		// left exactly as little.
+		LimitedByAlso []string `json:"limitedByAlso,omitempty"`
+	}
+
+	// maxReplicas per variant, from the request the optimizer was given. The
+	// decisions themselves do not carry the ceiling.
+	maxByVariant := make(map[modelKey]map[string]int, len(modelRequests))
+	for _, req := range modelRequests {
+		k := modelKey{req.Namespace, req.ModelID}
+		for _, st := range req.VariantStates {
+			if st.MaxReplicas == nil || *st.MaxReplicas <= 0 {
+				continue
+			}
+			if maxByVariant[k] == nil {
+				maxByVariant[k] = make(map[string]int, len(req.VariantStates))
+			}
+			maxByVariant[k][st.VariantName] = *st.MaxReplicas
+		}
+	}
+
+	grouped := make(map[modelKey][]decisionEntry, len(modelRequests))
+	for _, d := range decisions {
+		k := modelKey{d.Namespace, d.ModelID}
+		atMax := false
+		if m, ok := maxByVariant[k][d.VariantName]; ok {
+			atMax = d.TargetReplicas >= m
+		}
+		entry := decisionEntry{
+			Name:   d.VariantName,
+			Curr:   d.CurrentReplicas,
+			Tgt:    d.TargetReplicas,
+			Action: string(d.Action),
+			AtMax:  atMax,
+		}
+		if d.WasLimited {
+			entry.LimitedBy, entry.LimitedByAlso = d.LimitedBy, d.LimitedByAlso
+		}
+		grouped[k] = append(grouped[k], entry)
+		metrics.SetVariantAtMaxReplicas(d.Namespace, d.VariantName, atMax)
+	}
+
+	for _, req := range modelRequests {
+		k := modelKey{req.Namespace, req.ModelID}
+		entries := grouped[k]
+		if len(entries) == 0 {
+			continue
+		}
+		kv := []any{
+			"modelID", req.ModelID,
+			"namespace", req.Namespace,
+			"decisions", entries,
+		}
+		if borrowed != nil {
+			kv = append(kv, "borrowed", borrowed[req.Namespace+"/"+req.ModelID])
+		}
+		logger.Info("scaling-decision", kv...)
+	}
+}
+
+// unattributedGPUs totals usage that no accelerator pool accounts for, and names
+// the keys it was found under.
+//
+// Both the empty string and the "unknown" sentinel land here: they arrive by
+// different routes — discovery resolving nothing at all versus resolving to the
+// placeholder — and have identical consequences, so they are counted together.
+// Keys come back sorted so the log line is stable across cycles.
+func unattributedGPUs(byType map[string]int) (total int, keys []string) {
+	for accType, gpus := range byType {
+		if constants.IsAcceleratorResolved(accType) {
+			continue
+		}
+		total += gpus
+		keys = append(keys, accType)
+	}
+	sort.Strings(keys)
+	return total, keys
+}
+
+// publishHeadroomForIdleFleet answers "how many GPUs may this namespace still
+// take" when there is nothing to optimize.
+//
+// The usage it measures against is gpuUsageViews(nil): no variants hold
+// anything, so what remains is whatever the warm pools hold. That is the whole
+// point -- a pool is the scaling manager's own consumption and is charged against the same
+// allowance, so a pool at its quota must read as no headroom left rather than as
+// a namespace nobody bounds.
+//
+// A provider whose usage basis is unobserved, or that fails, is skipped and the
+// others still bound the pool (allocation.ComputeAvailableConstraints). Where
+// no constraints can be had at all -- no limiter, or every provider
+// unavailable -- it publishes UNBOUNDED, the
+// same posture the optimizing path takes for the models in those states, rather
+// than a fabricated figure or nothing: a fabricated one would cap a pool for a
+// reason nobody could find, and nothing would now hold it, since a pool grows
+// only on a snapshot. It is NOT called when models exist but failed collection;
+// a view without their usage would over-state what is free (see the
+// len(requests)==0 branch in optimize).
+func (e *Engine) publishHeadroomForIdleFleet(ctx context.Context) {
+	providers := gpuConstraintProviders(e.currentGPULimiter())
+	if len(providers) == 0 {
+		// Nothing bounds anything. Published, not merely implied by silence:
+		// the pool grows only on a snapshot, and this is the only place one
+		// would come from on a limiter-less cluster with nothing to optimize.
+		e.providerSkips.report(ctx, nil)
+		allocation.PublishUnboundedHeadroom(decision.WarmPoolGPUsVersion(), time.Now())
+		return
+	}
+	views := gpuUsageViews(nil)
+	constraints, skipped := allocation.ComputeAvailableConstraints(ctx, providers, views, nil)
+	// The optimizing path does not run on an idle fleet, so this is the cycle's
+	// one report of which providers bound.
+	e.providerSkips.report(ctx, skipped)
+	if len(constraints) == 0 {
+		// Every provider unavailable. The optimizing path runs the models
+		// unbounded in this state; the pool is told the same, rather than held
+		// against a limit nobody could compute.
+		allocation.PublishUnboundedHeadroom(views.PoolsVersion, time.Now())
+		return
+	}
+	now := time.Now()
+	// Nothing is being ordered, so the nodes' holes are as observed.
+	nodes, reason := allocation.NodeViewFor(constraints, e.utilizationShare.nodes, now)
+	e.reportNodeFitSkipped(ctx, allocation.PhysicalBounds(constraints), reason)
+	allocation.PublishNamespaceHeadroomOnNodes(constraints, nodes, now)
+}
+
+// publishWarmPoolSupply records what BRIDGES are contributing to each variant.
+//
+// Zero is published as readily as a positive figure, and for every variant the
+// analyzer saw. A switching decision needs "this variant has no bridge" as much
+// as it needs the number, and publishing only the non-zero ones would leave the
+// last reading standing after the Pod went back -- saying a variant is being
+// carried by a pool that has already reclaimed it.
+//
+// It is published from the composite, so a cycle that builds no composite
+// publishes none, and the last reading stands until the reader's maxAge.
+// That is only a cycle whose saturation run fails (runAnalyzers fails on
+// nothing else; another analyzer that fails leaves no entry and the
+// composite is built without it), and saturation's entry, where supply was
+// published before, did not exist on that cycle either.
+func publishWarmPoolSupply(namespace string, nr allocation.NamedAnalyzerResult) {
+	if nr.Result == nil {
+		return
+	}
+	now := time.Now()
+	for _, s := range warmPoolSupply(nr) {
+		decision.PublishWarmPoolSupply(namespace, s.Variant, s.Replicas, s.Capacity, now)
+	}
+}
+
+// warmPoolSupply is what publishWarmPoolSupply publishes for each variant of
+// nr, in nr's variant order: nothing without a result, and nothing for a
+// variant with no name.
+func warmPoolSupply(nr allocation.NamedAnalyzerResult) []enginerec.WarmPoolSupply {
+	if nr.Result == nil {
+		return nil
+	}
+	var out []enginerec.WarmPoolSupply
+	for _, vc := range nr.Result.VariantCapacities {
+		if vc.VariantName == "" {
+			continue
+		}
+		out = append(out, enginerec.WarmPoolSupply{Variant: vc.VariantName, Replicas: vc.WarmPoolReplicas,
+			Capacity: vc.WarmPoolCapacity})
+	}
+	return out
+}
+
+// publishVariantPressure records how close each variant is to needing capacity.
+//
+// Spare is expressed as a FRACTION of the variant's own supply, because the
+// consumer compares variants of different sizes against one threshold. A variant
+// with no measurable supply is skipped rather than published as fully spare:
+// unknown and idle are opposite answers to the question a retained pool asks,
+// and the safer of the two is to say nothing.
+func publishVariantPressure(namespace string, nr allocation.NamedAnalyzerResult, scaleUp float64) {
+	if nr.Result == nil {
+		return
+	}
+	now := time.Now()
+	for _, p := range variantPressure(nr, scaleUp) {
+		decision.PublishPressure(namespace, p.Variant, decision.Pressure{
+			SpareFraction: p.SpareFraction,
+			NeedsScaleUp:  p.NeedsScaleUp,
+			At:            now,
+		})
+	}
+}
+
+// variantPressure is what publishVariantPressure publishes for each variant
+// of nr, in nr's variant order.
+func variantPressure(nr allocation.NamedAnalyzerResult, scaleUp float64) []enginerec.VariantPressure {
+	if nr.Result == nil {
+		return nil
+	}
+	var out []enginerec.VariantPressure
+	for _, vc := range nr.Result.VariantCapacities {
+		if vc.VariantName == "" {
+			continue
+		}
+		supply := float64(vc.ReplicaCount) * vc.PerReplicaCapacity
+		if supply <= 0 {
+			continue
+		}
+		// Utilization is demand over the variant's OWN supply, so a bridge
+		// carrying its load raises it rather than hiding it -- which is what
+		// makes this the right number for deciding whether the pool should be
+		// serving this model instead of another.
+		// A role the composite holds against growth is not being grown, however
+		// hard it is pushed.
+		out = append(out, enginerec.VariantPressure{
+			Variant:       vc.VariantName,
+			SpareFraction: 1 - vc.Utilization,
+			NeedsScaleUp:  vc.Utilization > scaleUp && !nr.Holds[domain.RoleOfVC(vc)].NoScaleUp,
+		})
+	}
+	return out
+}

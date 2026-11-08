@@ -1,0 +1,19 @@
+# The snapshot shim, presented to Grafana as an ordinary Prometheus datasource.
+#
+# The dashboard's panels reference their datasource by type or by the default,
+# so this must be the default one -- otherwise every panel renders "datasource
+# not found" and the images come out empty in a way that looks like missing
+# data.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: scaling-manager-snapshot-prom
+    type: prometheus
+    access: proxy
+    url: ${SHIM_URL}
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: GET
+      timeInterval: 15s

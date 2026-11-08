@@ -1,0 +1,23 @@
+# Lets the Prometheus pod scrape the controller's secure /metrics endpoint by
+# granting it `get` on the /metrics non-resource URL.
+#
+# The subject below is a PLACEHOLDER: the kube-prometheus-stack the installer
+# deploys, in its default namespace. deploy/install.sh replaces it with the
+# Prometheus it finds (a Prometheus CR's serviceAccountName, or PROMETHEUS_SA),
+# and drops the binding when it can find none -- see llmsm_prometheus_scraper_sa.
+# Applying an overlay by hand, replace it yourself; the OpenShift component
+# already does.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-reader-rolebinding
+  labels:
+    app.kubernetes.io/name: scaling-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: kube-prometheus-stack-prometheus
+  namespace: scaling-manager-monitoring

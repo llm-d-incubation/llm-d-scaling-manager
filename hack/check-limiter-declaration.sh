@@ -1,0 +1,1528 @@
+#!/usr/bin/env bash
+#
+# Executes limiter_entry_yaml() and policy_with_limiters() in
+# deploy/lib/limiter_policy.sh, and asserts the
+# controller would ACCEPT what it emits.
+#
+# It exists because LLMSM_LIMITER=quota had never bounded anything. The installer
+# wrote `limiters: [{type: quota}]`, which parses as YAML, applies cleanly, and
+# is rejected by the controller on read:
+#
+#     Invalid saturation scaling config entry ... "limiters: entry[0]: name must
+#     not be empty"
+#
+# A rejected entry costs the WHOLE `default` policy -- thresholds included -- and
+# the controller then builds `type: none`, logging "scaling is UNCONSTRAINED".
+# The install printed "Scaling is now bounded by the quota limiter" either way.
+# `bash -n` sees nothing wrong; neither does a cluster run, which reports a
+# healthy controller and a fleet that scales.
+#
+# The rules asserted below mirror QuotaLimiterEntries.Validate() and
+# validateLimiters() in internal/config. A mirror nobody notices going stale is
+# how this class of bug returns, so two cases read the Go back: the constants
+# limiter_entry_yaml hardcodes (MaxQuotaValue, QuotaUnlimited), and whether
+# validateLimiters singles out the name we emit. Neither covers a NEW rejection
+# rule -- read Validate() when you touch it.
+#
+# limiter_entry_yaml and policy_with_limiters are pure and are called directly.
+# pl_set_limiter is not: it writes to a cluster, so it runs against a STUBBED
+# kubectl, and what is asserted is what it would have written. That case exists
+# because two earlier versions of it asserted on the source instead, and an
+# audit walked past both.
+
+set -u
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FAIL=0
+
+# Sourced through a CR-stripped copy, for the reason hack/check-workload-gaps.sh
+# gives: a Windows checkout writes these LF files as CRLF and bash then stops at
+# the first function definition, which looks exactly like every function missing.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+for lib in common.sh limiter_policy.sh physical_limiter.sh verify.sh; do
+    tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$WORK/$lib"
+done
+# common.sh logs in colour and dies on an unbound variable under `set -u`.
+BLUE=''; GREEN=''; YELLOW=''; RED=''; NC=''
+# shellcheck disable=SC1090
+. "$WORK/common.sh"
+# EVERY variable the builders read, pinned -- not just the ones the cases set.
+# LLMSM_QUOTA_SCOPE is a documented install variable an admin plausibly has
+# exported, and with `LLMSM_QUOTA_SCOPE=cluster` in the environment this check
+# produced six FAILs all blaming the code. A check that depends on the caller's
+# shell reports on the shell.
+unset LLMSM_QUOTAS LLMSM_QUOTA_SCOPE LLMSM_QUOTA_KUEUE LLMSM_QUOTA_KUEUE_BORROW LLMSM_SCOPE LLMSM_WATCH_NS LLMSM_LIMITER LLMSM_LIMITER_TYPE
+LLMSM_NS="scaling-manager-system"
+# shellcheck disable=SC1090
+. "$WORK/limiter_policy.sh"
+# physical_limiter.sh is sourced only so the cluster-policy case below can call
+# pl_set_limiter's validation sibling. It declares no top-level work.
+LLMSM_POLICY_NS="scaling-manager-policy"
+# shellcheck disable=SC1090
+. "$WORK/physical_limiter.sh"
+# verify.sh, for the install summary's limiter line. Functions only.
+# shellcheck disable=SC1090
+. "$WORK/verify.sh"
+
+# The tools, named before anything is asserted. Without this a missing jq made
+# every case that parses output fail, first among them "name is empty -- the
+# controller rejects the entry and drops the whole policy" -- fifteen confident
+# accusations against the code for an absent binary. Both siblings in this Make
+# target already guard; this one did not.
+for tool in yq jq; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "FATAL: $tool is required by this check, and is missing. Nothing below would be about the code."
+        exit 2
+    }
+done
+
+if ! declare -F limiter_entry_yaml >/dev/null; then
+    echo "FAIL limiter_entry_yaml is not defined -- the library did not source"
+    exit 1
+fi
+
+CASES=0
+# A case is counted where it BEGINS, by case_begin, not derived from whether it
+# passed or failed. Two previous attempts derived it and both were wrong in
+# opposite directions: counting in both fail() and ok() double-counted a failing
+# multi-assert case ("FAIL 35 cases ran, not 30"), and moving the increment
+# behind ok()'s suppression under-counted one ("32 cases ran, not 33"). Either
+# way a real failure printed a SECOND, untrue verdict accusing the reader of
+# editing the test. A marker at the start of each case cannot depend on its
+# outcome.
+case_begin() { CASES=$((CASES + 1)); CASE_FAIL_AT="$FAIL"; }
+fail() { echo "FAIL $*"; FAIL=$((FAIL + 1)); }
+# A case ends in one summarising ok, but its assertions are separate statements,
+# so a failed one does not stop the ok from printing after it. Suppress it when
+# anything failed since this case began -- an `ok` under four FAILs describing
+# the same output is how a negative control gets read as half-passing.
+ok()   { [ "$FAIL" -eq "${CASE_FAIL_AT:-0}" ] || return 0; echo "ok   $*"; }
+
+# emit <type> -- runs limiter_entry_yaml with the environment already set by the
+# caller, into $OUT/$RC/$ERR. Never lets a non-zero status abort the harness: a
+# refusal is the expected result for half these cases. Every case starts here, so
+# this is also where the per-case failure mark is taken.
+emit() {
+    case_begin
+    OUT="$(limiter_entry_yaml "$1" 2>"$WORK/err")"
+    RC=$?
+    ERR="$(cat "$WORK/err")"
+}
+
+# ---------------------------------------------------------------------------
+# The shape the controller accepts
+# ---------------------------------------------------------------------------
+
+# A namespace-scoped install names the namespace it manages, because the
+# reserved `default` key means "this much PER unlisted namespace" -- ten tenants
+# would get ten budgets, not one.
+LLMSM_LIMITER=quota LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8 A100=4' \
+    emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "quota/namespace refused a valid budget: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    if [ -z "$got" ]; then
+        fail "quota/namespace emitted invalid YAML:"$'\n'"$OUT"
+    else
+        # Validate() rule by rule, on the parsed document.
+        [ "$(printf '%s' "$got" | jq -r '.[0].name // ""')" != "" ] \
+            || fail "quota/namespace: name is empty -- the controller rejects the entry and drops the whole policy"
+        [ "$(printf '%s' "$got" | jq -r '.[0].type')" = "quota" ] \
+            || fail "quota/namespace: type is not \"quota\""
+        [ "$(printf '%s' "$got" | jq -r '.[0].scope')" = "namespace" ] \
+            || fail "quota/namespace: scope is not \"namespace\""
+        [ "$(printf '%s' "$got" | jq -r '.[0].quotas // "absent"')" = "absent" ] \
+            || fail "quota/namespace: carries a cluster-scope quotas map, which Validate rejects for namespace scope"
+        [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas["tenant-a"].H200 // "absent"')" = "8" ] \
+            || fail "quota/namespace: H200 budget is not keyed under the managed namespace: $got"
+        [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas["tenant-a"].A100 // "absent"')" = "4" ] \
+            || fail "quota/namespace: the second LLMSM_QUOTAS entry was dropped: $got"
+        ok "quota/namespace emits a budget the controller accepts, keyed on the managed namespace"
+    fi
+fi
+
+# A cluster-scoped install has no single namespace to key on, so it falls through
+# to the reserved key -- and uses `quotas`, never `namespaceQuotas`, for scope
+# cluster.
+LLMSM_LIMITER=quota LLMSM_SCOPE=cluster LLMSM_QUOTA_SCOPE=cluster LLMSM_QUOTAS='H100=16' emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "quota/cluster refused a valid budget: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ -n "$got" ] || fail "quota/cluster emitted invalid YAML:"$'\n'"$OUT"
+    if [ -n "$got" ]; then
+        [ "$(printf '%s' "$got" | jq -r '.[0].scope')" = "cluster" ] \
+            || fail "quota/cluster: scope is not \"cluster\""
+        [ "$(printf '%s' "$got" | jq -r '.[0].quotas.H100 // "absent"')" = "16" ] \
+            || fail "quota/cluster: budget is not under .quotas: $got"
+        [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas // "absent"')" = "absent" ] \
+            || fail "quota/cluster: carries namespaceQuotas, which Validate rejects for cluster scope"
+        ok "quota/cluster emits a cluster-wide budget under .quotas"
+    fi
+fi
+
+LLMSM_SCOPE=cluster LLMSM_QUOTA_SCOPE=namespace LLMSM_QUOTAS='H200=2' emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "quota/cluster-install-namespace-scope refused a valid budget: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas.default.H200 // "absent"')" = "2" ] \
+        || fail "cluster install with namespace scope should fall through to the reserved \`default\` key: $got"
+    ok "a cluster install with namespace scope keys on the reserved \`default\`"
+fi
+
+# The CLUSTER-policy key. `make enable-physical-limiter` publishes ONE policy
+# that every controller on the cluster reads, so a namespace-scoped budget there
+# must use the reserved per-unlisted-namespace key: keyed on a single namespace,
+# that namespace gets the budget and every other one gets ZERO, and the command
+# meant to bound the cluster stops scaling on it instead.
+#
+# It also has to work with NO LLMSM_NS and no LLMSM_WATCH_NS, because the Makefile
+# recipe passes neither. That combination hard-failed the documented command.
+case_begin
+( unset LLMSM_NS LLMSM_WATCH_NS LLMSM_SCOPE
+  LLMSM_QUOTAS='H200=8' limiter_entry_yaml quota default )     >"$WORK/clusterkey" 2>"$WORK/clustererr"
+clusterrc=$?
+if [ "$clusterrc" -ne 0 ]; then
+    fail "the cluster-policy path refused a valid budget with no LLMSM_NS set, which is exactly how the Makefile recipe calls it: $(cat "$WORK/clustererr")"
+elif [ "$(yq -o=json '.' "$WORK/clusterkey" 2>/dev/null | jq -r '.[0].namespaceQuotas.default.H200 // "absent"')" != "8" ]; then
+    fail "the cluster-policy path did not key on the reserved \`default\`: $(cat "$WORK/clusterkey")"
+else
+    ok "the cluster-policy path keys on the reserved \`default\`, with no namespace of its own"
+fi
+
+# The key is an ARGUMENT, so nothing in the operator's environment can set it.
+# It was an environment variable for one commit, and that made it the
+# highest-precedence input to the document while being the only input with no
+# validation: `LLMSM_QUOTA_NS_KEY='evil: 1'` emitted YAML no parser accepts, and a
+# merely wrong one left the managed namespace unlisted -- a budget of zero for
+# everything, reported as success.
+case_begin
+( export LLMSM_QUOTA_NS_KEY=hijacked
+  LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8'       limiter_entry_yaml quota ) >"$WORK/envkey" 2>/dev/null
+if grep -q 'hijacked' "$WORK/envkey"; then
+    fail "an exported LLMSM_QUOTA_NS_KEY reached the policy; the namespace key must come only from the caller's argument: $(cat "$WORK/envkey")"
+else
+    ok "no environment variable can set the namespace key"
+fi
+
+# And an invalid key argument is refused rather than written verbatim.
+case_begin
+( LLMSM_QUOTAS='H200=8' limiter_entry_yaml quota 'evil: 1' ) >"$WORK/badkey" 2>/dev/null
+if [ $? -eq 0 ] || [ -s "$WORK/badkey" ]; then
+    fail "an invalid namespace key was accepted: $(cat "$WORK/badkey")"
+else
+    ok "an invalid namespace key is refused rather than written into the document"
+fi
+
+# An INVALID LLMSM_SCOPE must stop the build, not fall through to a default. It
+# fell through: llmsm_install_scope reports through log_error, whose exit dies in
+# the command substitution, so install_scope came back empty, the namespace
+# branch was not taken, and the entry was keyed `default` -- on a path with no
+# `set -e`, which then published it and printed SUCCESS.
+case_begin
+( LLMSM_SCOPE=bogus LLMSM_NS=scaling-manager-system LLMSM_QUOTAS='H200=8' limiter_entry_yaml quota )     >"$WORK/badscope" 2>/dev/null
+if [ $? -eq 0 ] || [ -s "$WORK/badscope" ]; then
+    fail "an invalid LLMSM_SCOPE produced an entry instead of stopping: $(cat "$WORK/badscope")"
+else
+    ok "an invalid LLMSM_SCOPE stops the build rather than falling through to a key"
+fi
+
+# The physical limiter must carry NO quota fields: validateLimiters rejects
+# scope/quotas/namespaceQuotas/exclude/kueue on a gpu-inventory entry. This shape
+# ships today and works; the case pins it so the quota fix cannot bleed into it.
+# LLMSM_QUOTA_KUEUE=true is set deliberately: it too must be dropped, not emitted.
+LLMSM_QUOTAS='H200=8' LLMSM_QUOTA_KUEUE=true emit gpu-inventory
+if [ "$RC" -ne 0 ]; then
+    fail "gpu-inventory refused: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].type')" = "gpu-inventory" ] \
+        || fail "gpu-inventory: type is wrong: $got"
+    [ "$(printf '%s' "$got" | jq -r '[.[0] | has("scope"), has("quotas"), has("namespaceQuotas"), has("exclude"), has("kueue")] | any')" = "false" ] \
+        || fail "gpu-inventory: carries quota fields, which validateLimiters rejects: $got"
+    ok "gpu-inventory emits a bare entry, with none of the quota fields it forbids"
+fi
+
+# ---------------------------------------------------------------------------
+# The Kueue reader, on the quota entry only
+# ---------------------------------------------------------------------------
+
+# LLMSM_QUOTA_KUEUE=true adds the `kueue: {enabled: true}` block the controller
+# reads (config.KueueQuotaSource); the budget stays, as the types Kueue's
+# untyped grant is applied to. Its shape is what internal/config parses, so an
+# entry that drifted here would be rejected on read and cost the whole policy.
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=-1' LLMSM_QUOTA_KUEUE=true emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "quota with LLMSM_QUOTA_KUEUE=true refused a valid budget: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].kueue.enabled // "absent"')" = "true" ] \
+        || fail "LLMSM_QUOTA_KUEUE=true did not emit kueue.enabled: $got"
+    [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas["tenant-a"].H100 // "absent"')" = "-1" ] \
+        || fail "the budget must still be emitted beside the kueue block (it names the types): $got"
+    ok "LLMSM_QUOTA_KUEUE=true emits kueue.enabled beside the budget"
+fi
+
+# Unset means absent, not `enabled: false`: an entry without the block is the
+# shape every install before the reader existed wrote, and it must stay so.
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=8' emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "quota without LLMSM_QUOTA_KUEUE refused: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0] | has("kueue")')" = "false" ] \
+        || fail "an unset LLMSM_QUOTA_KUEUE emitted a kueue block: $got"
+    ok "an unset LLMSM_QUOTA_KUEUE emits no kueue block"
+fi
+
+# A value that is neither true nor false is refused before anything is printed.
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=8' LLMSM_QUOTA_KUEUE=yes emit quota
+if [ "$RC" -eq 0 ]; then
+    fail "LLMSM_QUOTA_KUEUE=yes was accepted; emitted: $OUT"
+elif [ -n "$OUT" ]; then
+    fail "LLMSM_QUOTA_KUEUE=yes was refused but a partial entry was printed first: $OUT"
+else
+    ok "LLMSM_QUOTA_KUEUE takes only true or false"
+fi
+
+# LLMSM_QUOTA_KUEUE_BORROW=false opts the entry out of counting cohort borrowing:
+# the kueue block carries countBorrowable: false (config.KueueQuotaSource).
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=-1' LLMSM_QUOTA_KUEUE=true LLMSM_QUOTA_KUEUE_BORROW=false emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "LLMSM_QUOTA_KUEUE_BORROW=false refused a valid entry: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].kueue.countBorrowable')" = "false" ] \
+        || fail "LLMSM_QUOTA_KUEUE_BORROW=false did not emit kueue.countBorrowable: false: $got"
+    [ "$(printf '%s' "$got" | jq -r '.[0].kueue.enabled')" = "true" ] \
+        || fail "LLMSM_QUOTA_KUEUE_BORROW=false lost kueue.enabled: $got"
+    ok "LLMSM_QUOTA_KUEUE_BORROW=false emits countBorrowable: false in the kueue block"
+fi
+
+# true (the default) writes nothing: the controller default counts borrowing.
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=-1' LLMSM_QUOTA_KUEUE=true LLMSM_QUOTA_KUEUE_BORROW=true emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "LLMSM_QUOTA_KUEUE_BORROW=true refused a valid entry: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].kueue.countBorrowable // "absent"')" != "false" ] \
+        || fail "LLMSM_QUOTA_KUEUE_BORROW=true emitted countBorrowable: false: $got"
+    ok "LLMSM_QUOTA_KUEUE_BORROW=true leaves countBorrowable to its default"
+fi
+
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=-1' LLMSM_QUOTA_KUEUE=true LLMSM_QUOTA_KUEUE_BORROW=no emit quota
+if [ "$RC" -eq 0 ]; then
+    fail "LLMSM_QUOTA_KUEUE_BORROW=no was accepted; emitted: $OUT"
+elif [ -n "$OUT" ]; then
+    fail "LLMSM_QUOTA_KUEUE_BORROW=no was refused but a partial entry was printed first: $OUT"
+else
+    ok "LLMSM_QUOTA_KUEUE_BORROW takes only true or false"
+fi
+
+# Without the Kueue block there is nothing to put it on: ignored, and said so.
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H100=8' LLMSM_QUOTA_KUEUE_BORROW=false emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "LLMSM_QUOTA_KUEUE_BORROW=false without LLMSM_QUOTA_KUEUE refused a valid entry: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0] | has("kueue")')" = "false" ] \
+        || fail "LLMSM_QUOTA_KUEUE_BORROW without LLMSM_QUOTA_KUEUE emitted a kueue block: $got"
+    case "$ERR" in
+        *LLMSM_QUOTA_KUEUE_BORROW*IGNORED*) ;;
+        *) fail "LLMSM_QUOTA_KUEUE_BORROW without LLMSM_QUOTA_KUEUE was dropped silently: $ERR" ;;
+    esac
+    ok "LLMSM_QUOTA_KUEUE_BORROW without LLMSM_QUOTA_KUEUE is ignored, with a warning"
+fi
+
+# ---------------------------------------------------------------------------
+# The refusals. Each one used to be a silently unbounded (or frozen) install.
+# ---------------------------------------------------------------------------
+
+# The original bug. An unset LLMSM_QUOTAS has no safe reading: an empty quota entry
+# is not "unlimited", it is zero for every accelerator, so the fleet freezes.
+unset LLMSM_QUOTAS 2>/dev/null || true
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a emit quota
+if [ "$RC" -eq 0 ]; then
+    fail "quota with no LLMSM_QUOTAS was accepted -- that is the entry the controller rejects, costing the whole policy: $OUT"
+else
+    case "$ERR" in
+        *LLMSM_QUOTAS*) ok "quota with no budget is refused, naming LLMSM_QUOTAS" ;;
+        *) fail "quota with no budget was refused without naming LLMSM_QUOTAS: $ERR" ;;
+    esac
+fi
+
+# Each pairs the bad value with the WORDS its refusal must carry. A bare
+# "did it exit non-zero" is satisfied by a function replaced with `log_error
+# "boom"` -- mutation-tested, all six printed ok against a one-line stub.
+#
+# '12abc' and '16Gi' are here because they were ACCEPTED: the guard was
+# `[0-9][0-9]*`, a glob whose `*` matches anything, so every value starting with
+# two digits passed and `H200: 12abc` was written into the policy.
+refuse_quota() {
+    local bad="$1" want="$2"
+    LLMSM_QUOTAS="$bad" LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a emit quota
+    if [ "$RC" -eq 0 ]; then
+        fail "LLMSM_QUOTAS='$bad' was accepted and emitted: $OUT"
+        return
+    fi
+    case "$ERR" in
+        *"$want"*) ok "LLMSM_QUOTAS='$bad' refused, saying why" ;;
+        *) fail "LLMSM_QUOTAS='$bad' was refused without '$want'; it said: ${ERR:-<nothing>}" ;;
+    esac
+}
+refuse_quota 'H200'         'is not TYPE=N'
+refuse_quota 'H200='        'is not TYPE=N'
+refuse_quota '=8'           'is not TYPE=N'
+refuse_quota 'H200=eight'   'whole number of GPUs'
+refuse_quota 'H200=12abc'   'whole number of GPUs'
+refuse_quota 'H200=16Gi'    'whole number of GPUs'
+refuse_quota 'H200=12.5'    'whole number of GPUs'
+refuse_quota 'H200=-4'      'whole number of GPUs'
+refuse_quota 'H200=1048577' 'maximum quota'
+# All digits, so the numeric case lets it past; `[ -gt ]` on 20 digits then
+# errors with "integer expression expected", which is not fatal inside an `if`,
+# and the entry was emitted for go-yaml to refuse -- taking the whole policy.
+refuse_quota 'H200=99999999999999999999' 'far above the maximum'
+# Also all digits. YAML reads a leading zero as OCTAL: 010 becomes 8, so the
+# operator asks for ten GPUs and silently gets eight.
+refuse_quota 'H200=010'      'leading zero'
+# Two budgets for one type emit a duplicate YAML key; the controller refuses the
+# document and discards the entire policy.
+refuse_quota 'H200=8 H200=4' 'twice'
+# Non-empty, but naming NOTHING. The loop runs no iterations, so the entry came
+# out with an empty accelerator map: structurally valid, accepted by
+# validateLimiters, and read as a budget of ZERO for every type -- which stops
+# every managed workload from scaling up. The check for an EMPTY LLMSM_QUOTAS did
+# not see these, because they are not empty.
+refuse_quota '   '           'names no accelerator'
+refuse_quota ','             'names no accelerator'
+
+# A glob in LLMSM_QUOTAS must not be expanded against the working directory. It
+# was: with `for pair in $pairs` unguarded, LLMSM_QUOTAS='*' in a directory of
+# `name=value` files produced a GPU budget synthesised from filenames, exit 0.
+case_begin
+globdir="$WORK/globtest"; mkdir -p "$globdir"
+: > "$globdir/aaa=1"; : > "$globdir/bbb=2"
+( cd "$globdir" && LLMSM_QUOTAS='*' LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a \
+    limiter_entry_yaml quota >"$WORK/globout" 2>"$WORK/globerr" )
+if [ -s "$WORK/globout" ] && grep -q 'aaa' "$WORK/globout"; then
+    fail "LLMSM_QUOTAS='*' was expanded against the working directory: $(cat "$WORK/globout")"
+else
+    ok "a glob in LLMSM_QUOTAS is not expanded against the working directory"
+fi
+
+# The namespace key cannot be empty: it renders as a bare `:`, yq refuses the
+# document, and the cluster-policy caller (no set -e) then wrote an EMPTY policy
+# and announced the limiter in force.
+case_begin
+( unset LLMSM_NS LLMSM_WATCH_NS; LLMSM_SCOPE=namespace LLMSM_QUOTAS='H200=8' \
+    limiter_entry_yaml quota >"$WORK/nskey" 2>"$WORK/nserr" )
+if [ -s "$WORK/nskey" ]; then
+    fail "namespace scope with no namespace emitted an entry with an empty key: $(cat "$WORK/nskey")"
+else
+    ok "namespace scope with no namespace to key on is refused"
+fi
+
+LLMSM_QUOTAS='H200=8' LLMSM_QUOTA_SCOPE=global emit quota
+if [ "$RC" -eq 0 ]; then
+    fail "LLMSM_QUOTA_SCOPE=global was accepted; Validate only knows cluster and namespace"
+else
+    ok "an unknown LLMSM_QUOTA_SCOPE is refused"
+fi
+
+# -1 is the documented no-cap sentinel (QuotaUnlimited), so it must survive.
+LLMSM_QUOTAS='H200=-1' LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a emit quota
+if [ "$RC" -ne 0 ]; then
+    fail "the -1 no-cap sentinel was refused: $ERR"
+else
+    got="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null)"
+    [ "$(printf '%s' "$got" | jq -r '.[0].namespaceQuotas["tenant-a"].H200 // "absent"')" = "-1" ] \
+        || fail "the -1 no-cap sentinel did not survive: $got"
+    ok "-1 (QuotaUnlimited) is accepted"
+fi
+
+# ---------------------------------------------------------------------------
+# The merge into the policy. Emitting a good entry is half of it; the other half
+# is landing it in data["default"] without losing the rest.
+#
+# This is not hypothetical: the first version used `env(LIMITERS_YAML)`, which
+# yq parses as YAML and which fails on a multi-line document with `Error: EOF`
+# and no mention of the variable. The install aborted AFTER re-applying the
+# shipped ConfigMap, so the policy was left with no limiters at all.
+# ---------------------------------------------------------------------------
+case_begin
+FIXTURE_POLICY='# a comment the operator wrote
+scaleUpThreshold: 0.85
+kvCacheThreshold: 0.80
+enableRescale: false
+limiters:
+  - type: gpu-inventory'
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8' emit quota
+merged="$(policy_with_limiters "$FIXTURE_POLICY" "$OUT" 2>"$WORK/err")"
+mrc=$?
+if [ "$mrc" -ne 0 ] || [ -z "$merged" ]; then
+    fail "policy_with_limiters failed on a multi-line entry: $(cat "$WORK/err")"
+else
+    [ "$(printf '%s\n' "$merged" | yq '.scaleUpThreshold')" = "0.85" ] \
+        || fail "the merge lost scaleUpThreshold -- a rejected or truncated policy costs every default in it"
+    [ "$(printf '%s\n' "$merged" | yq '.limiters | length')" = "1" ] \
+        || fail "the merge APPENDED instead of replacing; the install's list is its whole limiter set"
+    [ "$(printf '%s\n' "$merged" | yq '.limiters[0].name')" = "install-quota" ] \
+        || fail "the merge did not replace the previous limiter: $merged"
+    [ "$(printf '%s\n' "$merged" | yq '.limiters[0].namespaceQuotas.tenant-a.H200')" = "8" ] \
+        || fail "the budget did not survive the merge: $merged"
+    ok "the entry merges into the policy, replacing the old limiters and keeping the rest"
+fi
+
+# ---------------------------------------------------------------------------
+# LLMSM_LIMITER is a SET. Every limiter in it is built and a decision must fit all
+# of them, so a list declares each one, physical first.
+# ---------------------------------------------------------------------------
+
+# Normalised: physical first, each kind once, separators either commas or spaces.
+case_begin
+got="$(limiter_types_of 'quota,gpu-inventory' 2>&1)"; got2="$(limiter_types_of 'inventory quota quota' 2>&1)"
+if [ "$got" != "gpu-inventory quota" ] || [ "$got2" != "inventory quota" ]; then
+    fail "limiter_types_of did not normalise the set: [$got] [$got2]"
+elif [ "$(limiter_types_of '' 2>&1)" != none ] || [ "$(limiter_types_of none 2>&1)" != none ]; then
+    fail "an empty LLMSM_LIMITER, or none, is not the empty set"
+else
+    ok "a limiter list is normalised, physical first"
+fi
+
+# Refusals: two physical entries (the controller refuses them too), none beside
+# a limiter, and an unknown kind.
+for bad in 'gpu-inventory,inventory' 'none,quota' 'gpu-inventory,bogus'; do
+    case_begin
+    if ( limiter_types_of "$bad" ) >/dev/null 2>&1; then
+        fail "LLMSM_LIMITER='$bad' was accepted"
+    else
+        ok "LLMSM_LIMITER='$bad' is refused"
+    fi
+done
+
+# Both entries, and no IGNORED warning: LLMSM_QUOTAS belongs to the quota entry
+# beside the physical one, not to the physical one.
+case_begin
+OUT="$(LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8' LLMSM_QUOTA_KUEUE=true \
+    limiter_set_yaml 'gpu-inventory quota' 2>"$WORK/err")"; RC=$?; ERR="$(cat "$WORK/err")"
+if [ "$RC" -ne 0 ]; then
+    fail "limiter_set_yaml refused a valid set: $ERR"
+else
+    [ "$(printf '%s\n' "$OUT" | yq '.[0].type')" = "gpu-inventory" ] \
+        || fail "the physical entry is not first: $OUT"
+    [ "$(printf '%s\n' "$OUT" | yq '.[1].name')" = "install-quota" ] \
+        || fail "the quota entry is missing: $OUT"
+    [ "$(printf '%s\n' "$OUT" | yq '.[1].kueue.enabled')" = "true" ] \
+        || fail "the quota entry lost its kueue block: $OUT"
+    printf '%s' "$ERR" | grep -q 'IGNORED' \
+        && fail "a composed set warned that LLMSM_QUOTAS or LLMSM_QUOTA_KUEUE is IGNORED; the quota takes them: $ERR"
+    ok "a set emits the physical entry first, then the quota, with no IGNORED warning"
+fi
+
+# The installer's own policy REPLACES the whole list with the set it declares.
+case_begin
+merged="$(
+    LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8' \
+        policy_declared_limiters 'gpu-inventory,quota' 'scaleUpThreshold: 0.85
+limiters:
+  - type: gpu-inventory
+  - name: stale
+    type: quota
+    scope: cluster
+    quotas:
+      H200: 1' >/dev/null 2>"$WORK/err"
+    printf '%s\n' "$POLICY_DECLARED"
+)"
+if [ "$(printf '%s\n' "$merged" | yq '.limiters | length')" != "2" ] \
+    || printf '%s' "$merged" | grep -q 'name: stale'; then
+    fail "the install did not replace its list with the declared set: [$merged] $(cat "$WORK/err")"
+else
+    ok "the install declares exactly its set, replacing the old list"
+fi
+
+# The install declares exactly the set LLMSM_LIMITER names: a Kueue-bounded quota
+# on a cluster-scoped install gets nothing added beside it.
+case_begin
+got="$(LLMSM_LIMITER=quota LLMSM_SCOPE=cluster LLMSM_QUOTA_KUEUE=true llmsm_limiter_set 2>&1)"
+if [ "$got" != "quota" ]; then
+    fail "llmsm_limiter_set (quota, Kueue, cluster scope) = [$got], want [quota]"
+else
+    ok "llmsm_limiter_set declares only the limiters LLMSM_LIMITER names"
+fi
+
+# ---------------------------------------------------------------------------
+# The CLUSTER policy path, EXECUTED.
+#
+# `make enable-physical-limiter LLMSM_LIMITER_TYPE=quota` publishes into the
+# well-known namespace every scaling manager on the cluster reads and cannot opt out of. It
+# built `[{"type": "quota"}]` of its own -- the entry the controller rejects --
+# which would have stripped the policy from every controller at once while
+# printing "The quota limiter is now in force for every scaling manager on this cluster."
+#
+# RUN, not pattern-matched. Two successive versions of this case asserted on the
+# source instead, and an audit walked past both: the first grepped the FILE for
+# two function names that also appear in its comments, and the second, reading
+# `declare -f`, was satisfied by `.limiters |= [...]` (the glob wanted `=[`) and
+# by the function NAME inside an unrelated log string. Pattern-matching source is
+# not a test of behaviour. kubectl is stubbed, so what is asserted is what this
+# function would WRITE.
+# ---------------------------------------------------------------------------
+case_begin
+STUB="$WORK/stub"; mkdir -p "$STUB"
+# Records every write and answers reads with whatever CURRENT_POLICY holds.
+cat > "$STUB/kubectl" <<'STUBEOF'
+#!/usr/bin/env bash
+# A payload is recorded as a SENTINEL line, not raw.
+#
+# `--from-literal=default=` with an EMPTY value is the worst write this function
+# can make -- it is the blanked data.default that was published to every target
+# namespace -- and recording it raw left a zero-byte file, which `[ -s ]` reads
+# as "nothing was written". The assertion was blind to precisely the catastrophe
+# it exists to catch.
+# BOTH write shapes. pl_set_limiter creates a missing ConfigMap with
+# --from-literal and PATCHES an existing one -- it has to, because the
+# create|apply pipeline's manifest carries only data.default and apply's
+# three-way merge then deletes every other key in it. A stub that knew only the
+# create form reported the patch path as writing nothing.
+prev=""
+for a in "$@"; do
+  case "$a" in
+    --from-literal=default=*) printf 'WROTE[%s]\n' "${a#--from-literal=default=}" >> "$KWROTE" ;;
+    -p) : ;;
+    *) if [ "$prev" = "-p" ]; then
+         # A merge patch setting data.default to NULL REMOVES the key; one
+         # setting it to "" blanks the policy. `// ""` collapsed both into the
+         # same WROTE[] sentinel -- the one the refusal case below reads as the
+         # catastrophe -- so the disable path could not be told from it.
+         if [ "$(printf '%s' "$a" | jq -r 'if .data.default == null then "null" else "set" end' 2>/dev/null)" = "null" ]; then
+           printf 'PATCHNULL[%s]\n' "$(printf '%s' "$a" | jq -r '.data | keys | join(",")' 2>/dev/null)" >> "$KWROTE"
+         else
+           printf 'WROTE[%s]\n' "$(printf '%s' "$a" | jq -r '.data.default' 2>/dev/null)" >> "$KWROTE"
+         fi
+         # The label the patch carries, recorded on its own line. cmd/main.go
+         # filters cached ConfigMaps by it in cluster-scoped mode, so a patch
+         # that drops it writes a policy nothing reads.
+         printf 'PLABEL[%s]\n' "$(printf '%s' "$a" | jq -r '.metadata.labels["app.kubernetes.io/name"] // ""' 2>/dev/null)" >> "$KWROTE"
+       fi ;;
+  esac
+  prev="$a"
+done
+# Every invocation too, so a case can tell "composed a document" from "delivered
+# it": dropping the `| kubectl apply -f -` off the end of the pipeline leaves a
+# function that builds the right ConfigMap and ships it nowhere.
+printf 'CALL[%s]\n' "$*" >> "$KCALLS"
+# A listing this token cannot do. Recorded first, so a case can still see that
+# the attempt was made.
+if [ -n "${FAIL_LIST_DEPLOY:-}" ]; then
+  case "$*" in *"get deploy -A"*) exit 1 ;; esac
+fi
+case "$1" in
+  get) case "$*" in
+         # Each read answered from its own variable. Answering them all with
+         # CURRENT_POLICY made `get deploy -A` hand back the policy text as a
+         # list of NAMESPACES, and the command then looped over "scaleUpThreshold:".
+         *"deploy -A"*) printf '%s\n' "${DEPLOY_NS_LIST:-}" ;;
+         # The per-namespace read that decides which labelled Deployments are
+         # genuine controllers (pl_controller_targets). Anchored at the end:
+         # `-o json` is also a prefix of every `-o jsonpath=...` read.
+         *"deploy -n "*" -o json") printf '%s' "${DEPLOY_JSON:-}" ;;
+         *nodes*)       printf '%s' "${NODE_JSON:-}" ;;
+         *)             printf '%s' "${CURRENT_POLICY:-}" ;;
+       esac ;;
+  *) : ;;
+esac
+exit 0
+STUBEOF
+chmod +x "$STUB/kubectl"
+
+# run_pl <LLMSM_QUOTAS> -- pl_set_limiter in a SUBSHELL (its refusals exit), with
+# the stub first on PATH. Leaves the written policy in $WROTE and status in $PLRC.
+run_pl() {
+    WROTE="$WORK/wrote"; : > "$WROTE"
+    CALLS="$WORK/calls"; : > "$CALLS"
+    (
+        PATH="$STUB:$PATH"; export PATH
+        KWROTE="$WROTE"; export KWROTE
+        KCALLS="$CALLS"; export KCALLS
+        # "fresh" is the cluster with NO policy ConfigMap yet -- the common case
+        # on a first `make enable-physical-limiter`, and one this harness never
+        # ran because CURRENT_POLICY was always set.
+        if [ "${2:-}" = "fresh" ]; then
+            unset CURRENT_POLICY
+        else
+            CURRENT_POLICY="scaleUpThreshold: 0.85"; export CURRENT_POLICY
+        fi
+        LLMSM_QUOTAS="$1" LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a \
+            pl_set_limiter scaling-manager-policy quota
+    ) >/dev/null 2>"$WORK/plerr"
+    PLRC=$?
+}
+
+# run_pl_limiter <limiter> <the policy the cluster already has> -- the same, for
+# the cases that are about the LIMITER rather than the budget, `none` above all:
+# what an operator reaches for when they want less effect, and the path whose
+# data loss outlived the fix to its sibling.
+run_pl_limiter() {
+    WROTE="$WORK/wrote"; : > "$WROTE"
+    CALLS="$WORK/calls"; : > "$CALLS"
+    (
+        PATH="$STUB:$PATH"; export PATH
+        KWROTE="$WROTE"; export KWROTE
+        KCALLS="$CALLS"; export KCALLS
+        CURRENT_POLICY="$2"; export CURRENT_POLICY
+        LLMSM_QUOTAS='H200=8' LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a \
+            pl_set_limiter scaling-manager-policy "$1"
+    ) >/dev/null 2>"$WORK/plerr"
+    PLRC=$?
+}
+
+if ! declare -F pl_set_limiter >/dev/null; then
+    fail "pl_set_limiter is not defined -- physical_limiter.sh did not source"
+else
+    run_pl 'H200=8'
+    wrote="$(cat "$WROTE")"
+    calls="$(cat "$CALLS")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter refused a VALID budget: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q 'install-quota'; then
+        fail "pl_set_limiter wrote a policy with no named limiter entry, which the controller rejects: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'scaleUpThreshold'; then
+        fail "pl_set_limiter dropped the rest of the policy while declaring the limiter: $wrote"
+    # DELIVERY, not just composition. Dropping the `| kubectl apply -f -` from
+    # the end of the pipeline leaves a function that builds the right ConfigMap
+    # and ships it nowhere, and asserting only on the built document passed it.
+    # apply OR patch: an existing ConfigMap is PATCHED (the create|apply
+    # pipeline's manifest carries only data.default, and apply's three-way merge
+    # then deletes every other key), a missing one is created and applied.
+    elif ! printf '%s' "$calls" | grep -qE 'CALL\[(apply|patch)'; then
+        fail "pl_set_limiter composed a ConfigMap and never delivered it; the policy would never reach the cluster. Calls seen: $calls"
+    elif ! printf '%s' "$calls" | grep -q 'scaling-manager-scaling-policy-config'; then
+        fail "pl_set_limiter did not name the scaling-manager-scaling-policy-config ConfigMap: $calls"
+    elif ! printf '%s' "$calls" | grep -q 'scaling-manager-policy'; then
+        fail "pl_set_limiter wrote to a namespace other than the one it was given: $calls"
+    else
+        ok "pl_set_limiter writes a named entry, keeps the rest, and applies it where it was told"
+    fi
+
+    # THE ONE THAT MATTERS. A budget the builder refuses must leave the policy
+    # ALONE. Removing the status check here wrote an EMPTY data.default to every
+    # target namespace and returned 0, and the command then announced the limiter
+    # in force -- which is what the two source-pattern versions of this case
+    # failed to catch.
+    #
+    # Asserted on the stub's SENTINEL, not on the size of what it recorded. An
+    # empty --from-literal left a zero-byte file, `[ -s ]` read that as "nothing
+    # was written", and the case was blind to the one write that matters most.
+    case_begin
+    run_pl 'H200=12abc'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -eq 0 ]; then
+        fail "pl_set_limiter returned 0 on a budget the builder refuses; enable_physical_limiter would go on to announce a limiter it did not write"
+    elif printf '%s' "$wrote" | grep -q 'WROTE\[\]'; then
+        fail "pl_set_limiter wrote an EMPTY policy over data.default -- the blanked-policy failure itself"
+    elif [ -n "$wrote" ] && ! printf '%s' "$wrote" | grep -q 'scaleUpThreshold'; then
+        fail "pl_set_limiter wrote a policy anyway, and it is not the one it started from: [$wrote]"
+    elif [ -n "$wrote" ]; then
+        fail "pl_set_limiter wrote to the ConfigMap despite refusing the budget: [$wrote]"
+    else
+        ok "a refused budget leaves the cluster policy untouched, and stops the command"
+    fi
+
+    # THE CALL SITE, not the library. The three cases above prove the library
+    # HONOURS a key it is given; none of them proved pl_set_limiter GIVES it one.
+    # Deleting the `default` argument from the call was green on all 35 cases
+    # while, with LLMSM_NS exported -- the state of anyone who just ran the
+    # installer -- it wrote `namespaceQuotas: {<LLMSM_NS>: ...}` into the policy
+    # every controller on the cluster reads: that one namespace gets the budget
+    # and every other gets ZERO, under "in force for every scaling manager on this cluster".
+    #
+    # LLMSM_WATCH_NS is set here deliberately. If the call site stops passing
+    # `default`, the installer's own rule picks it up, and the emitted key
+    # changes to tenant-a -- which is exactly the regression.
+    case_begin
+    run_pl 'H200=8'
+    wrote="$(cat "$WROTE")"
+    # Grepped, not reparsed: the sentinel wraps a MULTI-LINE payload, so
+    # `WROTE[` opens on one line and `]` closes on another and no per-line
+    # extraction gets the document back. The two key names are all this needs.
+    if printf '%s' "$wrote" | grep -q 'tenant-a:'; then
+        fail "the cluster policy was keyed on the managed namespace instead of the reserved \`default\`: every OTHER namespace then reads a budget of zero and stops scaling up. Wrote: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'default:'; then
+        fail "the cluster policy carries no namespace key at all: $wrote"
+    else
+        ok "the cluster-policy call site keys the budget on the reserved \`default\`"
+    fi
+
+    # AN EXISTING ConfigMap must be PATCHED, never re-applied from a manifest
+    # that carries only data.default.
+    #
+    # Measured against a real apiserver: the create|apply pipeline renders a
+    # manifest with one key, and apply's three-way merge deletes every key that
+    # was in last-applied-configuration and is not in the new manifest -- so a
+    # ConfigMap carrying a per-model override entry beside `default` came back
+    # with the override GONE, exit 0, "the limiter is now in force for every scaling manager
+    # on this cluster". Those override entries are the shape
+    # config/base/manager/scaling-policy-configmap.yaml documents.
+    #
+    # The stub cannot model apply's merge, so what is asserted is the CHOICE:
+    # an existing ConfigMap is patched by name, not re-created.
+    case_begin
+    run_pl 'H200=8'
+    calls="$(cat "$CALLS")"
+    if printf '%s' "$calls" | grep -q 'CALL\[create configmap'; then
+        fail "pl_set_limiter re-CREATED an existing ConfigMap; kubectl apply then deletes every other data key in it, and the per-model override entries beside \`default\` are lost. Calls: $calls"
+    elif ! printf '%s' "$calls" | grep -q 'CALL\[patch configmap'; then
+        fail "pl_set_limiter neither patched nor created: $calls"
+    else
+        ok "an existing policy ConfigMap is patched by key, so its other entries survive"
+    fi
+
+    # THE PATCH MUST CARRY THE LABEL THE CREATE PATH APPLIES.
+    #
+    # Switching from create|label|apply to a merge patch dropped
+    # app.kubernetes.io/name, and nothing failed: the write succeeded, the
+    # command reported the limiter in force, and the policy was simply never
+    # READ. cmd/main.go filters cached ConfigMaps by that label in
+    # cluster-scoped mode and exempts only the policy namespace -- while this
+    # function also writes into each ADMIN-OWNED controller's own namespace,
+    # which is not exempt. Written, never read, under a success banner.
+    case_begin
+    run_pl 'H200=8'
+    wrote="$(cat "$WROTE")"
+    if ! printf '%s\n' "$wrote" | grep -q '^PLABEL\['; then
+        fail "the policy was not written by a patch carrying any metadata at all; this case can no longer see the label: $wrote"
+    elif printf '%s\n' "$wrote" | grep -q '^PLABEL\[\]$'; then
+        fail "the patch dropped app.kubernetes.io/name. A cluster-scoped controller's cache filters on that label outside the policy namespace, so the policy is written and never read -- under 'the limiter is now in force for every scaling manager on this cluster'."
+    elif ! printf '%s\n' "$wrote" | grep -q '^PLABEL\[scaling-manager\]$'; then
+        fail "the patch carries the wrong app.kubernetes.io/name: $(printf '%s\n' "$wrote" | grep '^PLABEL')"
+    else
+        ok "the patch carries the app.kubernetes.io/name the controller's cache filters on"
+    fi
+
+    # A FRESH cluster: no policy ConfigMap yet, which is the first thing
+    # `make enable-physical-limiter` meets and which this harness never ran,
+    # because CURRENT_POLICY was always set. pl_set_limiter substitutes
+    # `limiters: []` for the missing read; dropping that fallback leaves the
+    # merge with empty input.
+    case_begin
+    run_pl 'H200=8' fresh
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed on a cluster with no policy ConfigMap yet: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q 'install-quota'; then
+        fail "pl_set_limiter wrote no limiter entry on a fresh cluster: [$wrote]"
+    else
+        ok "a cluster with no policy ConfigMap yet gets one with the entry in it"
+    fi
+
+    # DISABLE MUST TAKE OUT THE ENTRY, NOT THE OBJECT.
+    #
+    # `make disable-physical-limiter` DELETED the whole ConfigMap whenever
+    # removing the limiter left `default` empty -- taking the per-model and
+    # named-tier entries beside it, which are the shape
+    # config/base/manager/scaling-policy-configmap.yaml documents. That is the
+    # same data loss the enable path had just been fixed for, still live on the
+    # disable path, and it is the direction an operator reaches for when they
+    # want LESS effect, not more.
+    #
+    # A merge patch with a null value removes one key.
+    case_begin
+    run_pl_limiter none 'limiters:
+  - type: gpu-inventory'
+    wrote="$(cat "$WROTE")"
+    calls="$(cat "$CALLS")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while removing the limiter: $(tail -1 "$WORK/plerr")"
+    elif printf '%s' "$calls" | grep -q 'CALL\[delete'; then
+        fail "disable DELETED the ConfigMap rather than the entry; every other policy entry in it goes too: $calls"
+    elif ! printf '%s' "$wrote" | grep -q '^PATCHNULL\[default\]$'; then
+        fail "disable did not patch data.default out by name; it recorded: [$wrote] calls: $calls"
+    else
+        ok "disabling removes the \`default\` entry by name, leaving the ConfigMap and its other entries"
+    fi
+
+    # And a policy that says MORE than limiters keeps saying it: the entry is
+    # rewritten without the limiters list rather than removed.
+    case_begin
+    run_pl_limiter none 'scaleUpThreshold: 0.85
+limiters:
+  - type: gpu-inventory'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while removing the limiter from a fuller policy: $(tail -1 "$WORK/plerr")"
+    elif printf '%s' "$wrote" | grep -q 'PATCHNULL'; then
+        fail "disable removed the whole \`default\` entry, thresholds included, when only the limiter should have gone: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'scaleUpThreshold'; then
+        fail "disable did not keep the rest of the policy: $wrote"
+    elif printf '%s' "$wrote" | grep -q 'limiters'; then
+        fail "disable left the limiters list in place: $wrote"
+    else
+        ok "disabling a fuller policy drops only the limiters list"
+    fi
+
+    # ENABLING COMPOSES. Every declared limiter is built and a decision must fit
+    # all of them, so publishing the physical limiter to a policy that already
+    # carries a quota keeps the quota, and the reverse. It used to REPLACE the
+    # list, because a quota entry then silenced a physical one anyway.
+    case_begin
+    run_pl_limiter gpu-inventory 'scaleUpThreshold: 0.85
+limiters:
+  - name: tenant-q
+    type: quota
+    scope: cluster
+    quotas:
+      H200: 8'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while adding the physical limiter beside a quota: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q 'name: tenant-q'; then
+        fail "enabling the physical limiter DROPPED the quota already declared: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'type: gpu-inventory'; then
+        fail "enabling the physical limiter did not declare it: $wrote"
+    elif [ "$(printf '%s' "$wrote" | grep -c 'type: gpu-inventory')" -ne 1 ]; then
+        fail "the physical limiter is declared more than once: $wrote"
+    else
+        ok "enabling the physical limiter keeps the quota beside it"
+    fi
+
+    case_begin
+    run_pl_limiter quota 'limiters:
+  - type: gpu-inventory
+  - name: old-quota
+    type: quota
+    scope: cluster
+    quotas:
+      H200: 1'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while declaring a quota beside the physical limiter: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q 'type: gpu-inventory'; then
+        fail "declaring a quota DROPPED the physical limiter already declared: $wrote"
+    elif printf '%s' "$wrote" | grep -q 'name: old-quota'; then
+        fail "declaring a quota kept the old quota entry beside it; one kind replaces its own kind: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'name: install-quota'; then
+        fail "declaring a quota did not write it: $wrote"
+    else
+        ok "declaring a quota replaces the old quota and keeps the physical limiter"
+    fi
+
+    # DISABLING REMOVES ONE KIND. The mirror of the composing enable:
+    # `make disable-physical-limiter` takes the physical entry out and keeps a
+    # quota beside it. It used to remove every limiter.
+    case_begin
+    run_pl_limiter remove-gpu-inventory 'scaleUpThreshold: 0.85
+limiters:
+  - type: gpu-inventory
+  - name: tenant-q
+    type: quota
+    scope: cluster
+    quotas:
+      H200: 8'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while removing the physical limiter: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q 'name: tenant-q'; then
+        fail "disabling the physical limiter DROPPED the quota beside it: $wrote"
+    elif printf '%s' "$wrote" | grep -q 'gpu-inventory'; then
+        fail "disabling the physical limiter left it declared: $wrote"
+    elif ! printf '%s' "$wrote" | grep -q 'scaleUpThreshold'; then
+        fail "disabling the physical limiter lost the rest of the policy: $wrote"
+    else
+        ok "disabling the physical limiter keeps the quota beside it"
+    fi
+
+    # The last entry going behaves as `none`: the default entry is patched out.
+    case_begin
+    run_pl_limiter remove-gpu-inventory 'limiters:
+  - type: gpu-inventory'
+    wrote="$(cat "$WROTE")"
+    if [ "$PLRC" -ne 0 ]; then
+        fail "pl_set_limiter failed while removing the only limiter: $(tail -1 "$WORK/plerr")"
+    elif ! printf '%s' "$wrote" | grep -q '^PATCHNULL\[default\]$'; then
+        fail "removing the last limiter did not patch data.default out, as none does: [$wrote]"
+    else
+        ok "removing the last limiter removes the default entry, as none does"
+    fi
+
+    # NOTHING OF THAT KIND: write nothing, and say what stays. Removing the
+    # physical limiter from a policy that holds only a quota reported "Removed
+    # the gpu-inventory limiter" -- the documented undo of a quota, which left
+    # the quota in force.
+    case_begin
+    run_pl_limiter remove-gpu-inventory 'limiters:
+  - name: tenant-q
+    type: quota
+    scope: cluster
+    quotas:
+      H200: 8'
+    wrote="$(cat "$WROTE")"
+    calls="$(cat "$CALLS")"
+    if [ "$PLRC" -ne 3 ]; then
+        fail "removing a kind the policy does not declare returned $PLRC, want 3 (nothing removed): $(tail -1 "$WORK/plerr")"
+    elif [ -n "$wrote" ] || printf '%s' "$calls" | grep -qE 'CALL\[(apply|patch)'; then
+        fail "removing a kind the policy does not declare wrote the policy anyway: [$wrote] calls: $calls"
+    elif ! grep -q 'no gpu-inventory entry.*nothing removed.*the quota limiter stays' "$WORK/plerr"; then
+        fail "removing a kind the policy does not declare did not say the quota stays: $(cat "$WORK/plerr")"
+    else
+        ok "removing a kind the policy does not declare writes nothing and says the other kind stays"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Who the cluster policy is published TO.
+# ---------------------------------------------------------------------------
+
+# A glob in LLMSM_LIMITER_TARGETS must not be expanded against the working
+# directory -- the same guard LLMSM_QUOTAS needed, and it was missing here.
+# Measured: `LLMSM_LIMITER_TARGETS='*'` published a cluster policy ConfigMap into a
+# namespace named after every file in the working directory, fifteen of them,
+# exit 0. The recipe runs from the repository root, where those names are things
+# like `Makefile` and `go.mod`.
+case_begin
+tdir="$WORK/targets"; mkdir -p "$tdir"
+: > "$tdir/ns-one"; : > "$tdir/ns-two"
+( cd "$tdir" && LLMSM_LIMITER_TARGETS='*' pl_controller_namespaces ) >"$WORK/tgt" 2>/dev/null
+if grep -q 'ns-one' "$WORK/tgt"; then
+    fail "LLMSM_LIMITER_TARGETS='*' was expanded against the working directory; each of those filenames becomes a namespace this command publishes cluster policy into: $(cat "$WORK/tgt")"
+elif [ "$(cat "$WORK/tgt")" != '*' ]; then
+    fail "LLMSM_LIMITER_TARGETS was not passed through verbatim: $(cat "$WORK/tgt")"
+else
+    ok "a glob in LLMSM_LIMITER_TARGETS is not expanded against the working directory"
+fi
+
+# ---------------------------------------------------------------------------
+# The unadvertised-accelerator warning, on fixture nodes.
+#
+# A budget keyed on a name nothing matches is an error NOWHERE: the entry
+# validates, the controller accepts it, and every accelerator the cluster does
+# have is then unlisted -- which QuotaForNamespace reads as a budget of zero, so
+# every managed workload stops scaling up. The warning is the only thing between
+# an operator and that, and the first version of it was SILENT ON ITS OWN WORKED
+# EXAMPLE: `grep -qi "$q_name"` is a substring match, and `H20` is a substring of
+# `NVIDIA-H200` -- the exact typo the commit message quoted. `A10` matched `A100`
+# the same way, a different real GPU.
+#
+# So both directions, on both traps: the typo must warn AND the correct name must
+# stay quiet. A warning that fires on everything is removed by the first operator
+# who reads it.
+# ---------------------------------------------------------------------------
+# Three nodes, and the third carries the GKE key rather than the GPU Feature
+# Discovery one -- because the check read that ONE key and was therefore inert on
+# CoreWeave, GKE, EKS and every AMD cluster, which is exactly where an
+# accelerator name is least predictable. With only the GFD key read, A100 below
+# warns.
+NODES='{"items":[
+  {"metadata":{"labels":{"nvidia.com/gpu.product":"NVIDIA-H100-80GB-HBM3"}}},
+  {"metadata":{"labels":{"nvidia.com/gpu.product":"NVIDIA-H200"}}},
+  {"metadata":{"labels":{"cloud.google.com/gke-accelerator":"NVIDIA-A100-SXM4-40GB"}}}
+]}'
+accel_case() {   # accel_case <LLMSM_QUOTAS> <warn|silent> <why>
+    case_begin
+    (
+        PATH="$STUB:$PATH"; export PATH
+        KWROTE="$WORK/wrote"; KCALLS="$WORK/calls"; export KWROTE KCALLS
+        NODE_JSON="$NODES"; export NODE_JSON
+        # Under pipefail, as deploy/install.sh runs it: a match that still
+        # warned came from a SIGPIPE only pipefail turns into a failure.
+        set -o pipefail
+        LLMSM_QUOTAS="$1" warn_unadvertised_accelerators
+    ) >/dev/null 2>"$WORK/accelerr"
+    local said="" ; grep -q 'does not advertise' "$WORK/accelerr" && said=warn
+    if [ "$2" = warn ] && [ "$said" != warn ]; then
+        fail "LLMSM_QUOTAS='$1' drew no warning, and $3. A budget on a name no node carries leaves every accelerator the cluster HAS unlisted, which the quota limiter reads as zero."
+    elif [ "$2" = silent ] && [ "$said" = warn ]; then
+        fail "LLMSM_QUOTAS='$1' was warned about, and $3. A warning that fires on correct input is one nobody reads: $(cat "$WORK/accelerr")"
+    else
+        ok "LLMSM_QUOTAS='$1' $([ "$2" = warn ] && echo warns || echo "stays silent") -- $3"
+    fi
+}
+accel_case 'H20=8'  warn   "H20 is a substring of NVIDIA-H200 but not a token of it"
+accel_case 'H100=8' silent "H100 is a whole token of NVIDIA-H100-80GB-HBM3"
+accel_case 'A10=8'  warn   "A10 is a substring of NVIDIA-A100-SXM4-40GB, a different real GPU"
+accel_case 'A100=8' silent "A100 is advertised, under the GKE label key rather than the GFD one"
+# The whole label is the name the controller logs where it cannot shorten one
+# (kind's NVIDIA-A100-PCIE-80GB). It warned, then listed that same name as
+# advertised.
+accel_case 'NVIDIA-H100-80GB-HBM3=8' silent "the whole product label is advertised"
+accel_case 'NVIDIA-H100-80GB=8' warn "a prefix of a product label is no product"
+
+# ---------------------------------------------------------------------------
+# enable_physical_limiter, EXECUTED end to end against the stub.
+#
+# The cases above prove pl_set_limiter writes the right thing. These prove the
+# COMMAND stops when it cannot know who it is publishing to -- the failure that
+# shipped twice. `pl_controller_namespaces` refused from inside `$( )`, where the
+# exit ends the subshell and nothing else, so the command printed
+#
+#     [ERROR] could not list the scaling manager controllers ... Refusing to announce a bound it
+#             cannot deliver
+#     [SUCCESS] The quota limiter is now in force for every scaling manager on this cluster.
+#
+# and exited 0. It returns a status now; the refusal is the caller's to make.
+# What is asserted is both halves: the refusal, and -- so the refusal means
+# something -- that this same harness can drive the command to success.
+# ---------------------------------------------------------------------------
+run_enable() {   # run_enable <fn> [fail-list]
+    CALLS="$WORK/calls"; : > "$CALLS"
+    WROTE="$WORK/wrote"; : > "$WROTE"
+    (
+        PATH="$STUB:$PATH"; export PATH
+        KWROTE="$WROTE"; export KWROTE
+        KCALLS="$CALLS"; export KCALLS
+        NODE_JSON=""; export NODE_JSON
+        DEPLOY_NS_LIST="tenant-a"; export DEPLOY_NS_LIST
+        # A genuine controller there, so the grant path is reached.
+        DEPLOY_JSON='{"items":[{"metadata":{"name":"scaling-manager-controller-manager"},"spec":{"template":{"spec":{"serviceAccountName":"scaling-manager-controller-manager","containers":[{"name":"manager","image":"ghcr.io/ev-shindin/llm-scaling-manager:main"}]}}}}]}'
+        export DEPLOY_JSON
+        unset LLMSM_CONTROLLER_SA LLMSM_CONTROLLER_IMAGE_REPOS LLMSM_IMAGE_REPO
+        CURRENT_POLICY="scaleUpThreshold: 0.85"; export CURRENT_POLICY
+        if [ "${2:-}" = "fail-list" ]; then
+            FAIL_LIST_DEPLOY=1; export FAIL_LIST_DEPLOY
+        fi
+        unset LLMSM_LIMITER_TARGETS
+        LLMSM_LIMITER_TYPE=quota LLMSM_QUOTAS='H200=8' "$1"
+    ) >"$WORK/enableout" 2>&1
+    ENRC=$?
+}
+
+case_begin
+run_enable enable_physical_limiter
+out="$(cat "$WORK/enableout")"
+if [ "$ENRC" -ne 0 ]; then
+    fail "enable_physical_limiter failed on a cluster where everything answers: $out"
+elif ! printf '%s' "$out" | grep -q 'in force'; then
+    fail "enable_physical_limiter succeeded without announcing anything; the cases below can no longer tell a refusal from a success: $out"
+elif ! grep -q 'install-quota' "$WROTE"; then
+    fail "enable_physical_limiter announced the limiter without writing one: $(cat "$WROTE")"
+else
+    ok "enable_physical_limiter publishes the entry and says so, when the cluster answers"
+fi
+
+case_begin
+run_enable enable_physical_limiter fail-list
+out="$(cat "$WORK/enableout")"
+if [ "$ENRC" -eq 0 ]; then
+    fail "enable_physical_limiter exited 0 having failed to list the controllers it is publishing to. Every controller it never reached goes on reading its own unbounded policy: $out"
+elif printf '%s' "$out" | grep -q 'in force'; then
+    fail "enable_physical_limiter announced the limiter in force after failing to list the controllers -- the refusal printed and the command carried on, which is the subshell trap this returns a status to avoid: $out"
+elif ! printf '%s' "$out" | grep -q 'could not list the scaling manager controllers'; then
+    fail "enable_physical_limiter stopped without saying the listing was what failed: $out"
+elif grep -q 'WROTE\[' "$WROTE"; then
+    fail "enable_physical_limiter wrote policy despite refusing: $(cat "$WROTE")"
+else
+    ok "a controller listing it cannot do stops enable before it publishes anything"
+fi
+
+# disable is the SECOND caller of the same function, and it was the second
+# instance of the same bug: reporting a limiter removed from controllers it never
+# reached, which is the worse direction for a safety bound.
+case_begin
+run_enable disable_physical_limiter fail-list
+out="$(cat "$WORK/enableout")"
+if [ "$ENRC" -eq 0 ]; then
+    fail "disable_physical_limiter exited 0 having failed to list the controllers whose policy it would clear: $out"
+elif printf '%s' "$out" | grep -q 'Removed the limiter'; then
+    fail "disable_physical_limiter reported the limiter removed after failing to list the controllers: $out"
+else
+    ok "a controller listing it cannot do stops disable before it reports anything removed"
+fi
+
+# The TOOL preflight. This target does not run check_prerequisites -- only
+# deploy/install.sh does -- and the write path builds its patch with jq. Absent,
+# `-p ""` reached kubectl, the patch was rejected, and with no `set -e` on this
+# path the command still announced the limiter in force.
+#
+# jq is hidden from the PREFLIGHT only, by shadowing `command` -- a regular
+# builtin, so a function of the same name wins. The binary is still there, which
+# is the honest limit of this case: what it asserts is that the preflight EXISTS
+# and stops the command, not what a genuinely absent jq does downstream. The
+# alternative, rebuilding PATH out of symlinks to every coreutil bash itself
+# needs, tests the harness rather than the code. The shadow is verified to have
+# taken before anything is concluded from its silence.
+case_begin
+(
+    PATH="$STUB:$PATH"; export PATH
+    KWROTE="$WORK/wrote"; KCALLS="$WORK/calls"; export KWROTE KCALLS
+    command() {
+        case "$*" in *jq*) return 1 ;; esac
+        builtin command "$@"
+    }
+    command -v jq >/dev/null 2>&1 && { echo "HARNESS: the command shadow did not take, so this case proves nothing"; exit 99; }
+    unset LLMSM_LIMITER_TARGETS
+    LLMSM_LIMITER_TYPE=quota LLMSM_QUOTAS='H200=8' enable_physical_limiter
+) >"$WORK/nojq" 2>&1
+njrc=$?
+out="$(cat "$WORK/nojq")"
+if [ "$njrc" -eq 99 ]; then
+    fail "$out"
+elif [ "$njrc" -eq 0 ]; then
+    fail "enable_physical_limiter ran to completion with jq missing; the patch it builds with jq becomes -p \"\", kubectl rejects it, and this path has no set -e to notice: $out"
+elif ! printf '%s' "$out" | grep -q 'jq is required'; then
+    fail "enable_physical_limiter stopped with jq missing but did not name jq: $out"
+elif printf '%s' "$out" | grep -q 'in force'; then
+    fail "enable_physical_limiter announced the limiter in force with jq missing: $out"
+else
+    ok "a missing jq stops the command by name, before it touches the cluster"
+fi
+
+# And it must refuse a budgetless quota BEFORE it creates the namespace and
+# grants RBAC -- its own writes come last, so a late refusal leaves a
+# half-configured cluster behind.
+#
+# ORDER is the assertion, not presence. A validation moved to the LAST line of
+# the function satisfies "contains limiter_entry_yaml" while producing exactly
+# the half-configured cluster the case exists to prevent -- mutation-tested, it
+# printed ok.
+case_begin
+if declare -F enable_physical_limiter >/dev/null; then
+    body="$(declare -f enable_physical_limiter)"
+    # The CALL, not the name. Matching the name ANYWHERE was satisfied by putting
+    # it in a log string near the top while the real call moved to the last line
+    # -- mutation-tested, that printed ok. A call is the first word of a command,
+    # so anchor on that.
+    # An assignment PREFIX is still a call -- `LLMSM_QUOTA_NS_KEY=default
+    # limiter_entry_yaml ...` is how the cluster path passes the key -- so the
+    # pattern allows any number of VAR=value words before the command.
+    validate_at="$(printf '%s\n' "$body" \
+        | grep -nE '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(limiter_entry_yaml|policy_declared_limiters)[[:space:]]' \
+        | head -1 | cut -d: -f1)"
+    # Anything that touches the cluster. kubectl is the only way this function
+    # writes, so the first kubectl line is the point of no return.
+    # A kubectl CALL, not the word. Unanchored, this matched
+    # `for tool in kubectl jq yq` -- the preflight that names the tools -- and
+    # reported the validation as happening after a write that is a loop header.
+    # Same anchoring the validate_at pattern needs, and for the same reason.
+    first_write="$(printf '%s\n' "$body" \
+        | grep -nE '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(kubectl|pl_grant_[a-z_]*|pl_set_limiter)[[:space:]]' \
+        | head -1 | cut -d: -f1)"
+    if [ -z "$validate_at" ]; then
+        fail "enable_physical_limiter never validates the limiter entry; a rejected LLMSM_QUOTAS would abort it after the namespace and grants exist"
+    elif [ -z "$first_write" ]; then
+        fail "enable_physical_limiter appears to touch no cluster state at all; this case can no longer tell early from late"
+    elif [ "$validate_at" -lt "$first_write" ]; then
+        ok "enable_physical_limiter validates the budget before it changes anything"
+    else
+        fail "enable_physical_limiter validates at line $validate_at of its body but first writes at line $first_write: a rejected LLMSM_QUOTAS would abort after the namespace and grants exist"
+    fi
+else
+    fail "enable_physical_limiter is not defined -- physical_limiter.sh did not source"
+fi
+
+# ---------------------------------------------------------------------------
+# The mirror above is only worth anything while it matches the Go it mirrors.
+# ---------------------------------------------------------------------------
+VALIDATE="$ROOT/internal/config/quota_limiter.go"
+case_begin
+if [ ! -f "$VALIDATE" ]; then
+    fail "cannot find $VALIDATE to cross-check against"
+else
+    # The two numbers limiter_entry_yaml HARDCODES, read back from the Go that
+    # gives them meaning. A counting tripwire stood here before and was blind to
+    # every drift worth catching: it counted `errs = append(errs` lines, so
+    # changing MaxQuotaValue or QuotaUnlimited moved nothing, and swapping one
+    # rule for another kept the total at 14. Mutation-tested -- all three
+    # printed ok.
+    if grep -qE 'MaxQuotaValue += +1 +<< +20' "$VALIDATE"; then
+        ok "MaxQuotaValue is still 1<<20, the 1048576 this script refuses above"
+    else
+        fail "MaxQuotaValue is no longer 1<<20; the 1048576 hardcoded in limiter_entry_yaml now rejects values the controller would accept, or passes ones it would not:
+     $(grep -n 'MaxQuotaValue' "$VALIDATE" | head -2)"
+    fi
+    if grep -qE 'QuotaUnlimited += +-1' "$VALIDATE"; then
+        ok "QuotaUnlimited is still -1, the no-cap sentinel this script accepts above"
+    else
+        fail "QuotaUnlimited is no longer -1; limiter_entry_yaml still emits -1 for 'no cap':
+     $(grep -n 'QuotaUnlimited' "$VALIDATE" | head -2)"
+    fi
+fi
+
+# The name limiter_entry_yaml emits must be one validateLimiters() accepts. This
+# is the rule a counting tripwire could never see: a new rejection there -- on
+# the name, the scope, a field combination -- would make every install emit an
+# entry the controller throws the whole policy away over, and nothing in this
+# file would notice.
+case_begin
+SATURATION="$ROOT/internal/config/saturation_scaling.go"
+LLMSM_SCOPE=namespace LLMSM_WATCH_NS=tenant-a LLMSM_QUOTAS='H200=8' emit quota
+emitted_name="$(printf '%s\n' "$OUT" | yq -o=json '.' 2>/dev/null | jq -r '.[0].name // ""')"
+if [ -z "$emitted_name" ]; then
+    fail "could not read back the emitted limiter name"
+elif [ ! -f "$SATURATION" ]; then
+    fail "cannot find $SATURATION to check the emitted name against"
+elif grep -q "\"$emitted_name\"" "$SATURATION"; then
+    fail "validateLimiters() now names '$emitted_name' literally -- the name limiter_entry_yaml emits may be special-cased or rejected there:
+     $(grep -n "\"$emitted_name\"" "$SATURATION" | head -2)"
+else
+    ok "the emitted name '$emitted_name' is not singled out by validateLimiters()"
+fi
+
+# ---------------------------------------------------------------------------
+# A re-install that does not name LLMSM_LIMITER keeps the limiter in force
+# ---------------------------------------------------------------------------
+# The overlay apply resets data.default to the shipped one, limiters: and all,
+# so `make deploy-scaling-manager` re-run without LLMSM_LIMITER silently unbounded a controller
+# that an admin had bounded. llmsm_live_limiters reads what is in force BEFORE the
+# apply; llmsm_keep_live_limiters writes it back AFTER. Executed against a stubbed
+# kubectl: what is asserted is what it read, and the patch it would have sent.
+LIVE_POLICY='scaleUpThreshold: 0.85
+limiters:
+- name: quota
+  type: quota
+  quotas:
+    H200: 8
+  kueue:
+    enabled: true'
+SHIPPED_POLICY='scaleUpThreshold: 0.85
+scaleDownBoundary: 0.7'
+
+# lim_stub serves scaling-manager-scaling-policy-config from LIM_DEFAULT ("" = no ConfigMap,
+# FORBIDDEN = denied) and records a patch in $WORK/lim-patch.
+lim_stub() {
+    case "$*" in
+        "get configmap scaling-manager-scaling-policy-config -n "*" -o json")
+            case "${LIM_DEFAULT-}" in
+                FORBIDDEN) echo 'Error from server (Forbidden): configmaps "scaling-manager-scaling-policy-config" is forbidden' >&2; return 1 ;;
+                '') echo 'Error from server (NotFound): configmaps "scaling-manager-scaling-policy-config" not found' >&2; return 1 ;;
+            esac
+            jq -n --arg d "$LIM_DEFAULT" '{data:{default:$d}}' ;;
+        "get configmap scaling-manager-scaling-policy-config -n "*" -o jsonpath="*)
+            printf '%s' "$LIM_DEFAULT" ;;
+        "patch configmap scaling-manager-scaling-policy-config "*)
+            local a next=0
+            for a in "$@"; do
+                [ "$next" = 1 ] && { printf '%s' "$a" > "$WORK/lim-patch"; next=0; }
+                [ "$a" = "-p" ] && next=1
+            done ;;
+        *) return 0 ;;
+    esac
+}
+
+live_limiters() {   # live_limiters <default entry> -- echoes "rc|limiters json"
+    local rc=0
+    LIM_DEFAULT="$1"
+    kubectl() { lim_stub "$@"; }
+    llmsm_live_limiters scaling-manager-system 2>/dev/null || rc=$?
+    unset -f kubectl
+    printf '%s|%s' "$rc" "${LLMSM_LIVE_LIMITERS:-}"
+}
+
+case_begin
+got="$(live_limiters "$LIVE_POLICY")"
+if [ "${got%%|*}" = 0 ] \
+   && [ "$(printf '%s' "${got#*|}" | jq -r '.[0].type + "|" + (.[0].kueue.enabled | tostring) + "|" + (.[0].quotas.H200 | tostring)' 2>/dev/null)" = 'quota|true|8' ]; then
+    ok "llmsm_live_limiters reads the live limiters: block, quota and Kueue settings included"
+else
+    fail "llmsm_live_limiters did not read the declared limiter back: [$got]"
+fi
+
+case_begin
+got="$(live_limiters '')"
+[ "$got" = '0|' ] && ok "no ConfigMap yet (a first install) is no limiter, not an error" \
+    || fail "an absent ConfigMap read as [$got], not [0|]"
+
+case_begin
+got="$(live_limiters "$SHIPPED_POLICY
+limiters: []")"
+[ "$got" = '0|' ] && ok "limiters: [] declares none, and nothing is kept" \
+    || fail "limiters: [] read as [$got], not [0|]"
+
+case_begin
+got="$(live_limiters FORBIDDEN)"
+[ "${got%%|*}" = 2 ] && ok "a Forbidden read is 'could not look' (2), never 'no limiter'" \
+    || fail "a Forbidden ConfigMap read returned [$got] -- folded into no limiter, an upgrade would unbound in silence"
+
+case_begin
+rm -f "$WORK/lim-patch"
+(
+    LIM_DEFAULT="$SHIPPED_POLICY"
+    kubectl() { lim_stub "$@"; }
+    log_warning() { :; }
+    llmsm_keep_live_limiters scaling-manager-system "$(printf '%s\n' "$LIVE_POLICY" | yq -o=json -I=0 '.limiters')"
+) >/dev/null 2>&1
+written="$(jq -r '.data.default' "$WORK/lim-patch" 2>/dev/null | yq -o=json -I=0 '[.limiters[0].type, .limiters[0].kueue.enabled, .scaleDownBoundary]' 2>/dev/null)"
+[ "$written" = '["quota",true,0.7]' ] \
+    && ok "llmsm_keep_live_limiters writes the kept limiter back into the freshly applied default, keeping the rest" \
+    || fail "the kept limiter was not written back over the reset default: [$written]"
+
+# An upgrade with LLMSM_LIMITER unset over a live COMPOSED policy: both entries
+# are written back, physical first, the quota's settings intact. The live set
+# is what the prerequisite check asks node read for.
+COMPOSED_LIVE="$SHIPPED_POLICY
+limiters:
+  - type: gpu-inventory
+  - name: tenant-quota
+    type: quota
+    scope: cluster
+    quotas: { H200: 8 }"
+case_begin
+rm -f "$WORK/lim-patch"
+(
+    LIM_DEFAULT="$SHIPPED_POLICY"
+    kubectl() { lim_stub "$@"; }
+    log_warning() { :; }
+    unset LLMSM_LIMITER
+    LIM_DEFAULT="$COMPOSED_LIVE"; llmsm_live_limiters scaling-manager-system
+    LIM_DEFAULT="$SHIPPED_POLICY"; llmsm_keep_live_limiters scaling-manager-system "$LLMSM_LIVE_LIMITERS"
+) >/dev/null 2>&1
+written="$(jq -r '.data.default' "$WORK/lim-patch" 2>/dev/null | yq -o=json -I=0 '[.limiters[0].type, .limiters[1].type, .limiters[1].quotas.H200, .scaleDownBoundary]' 2>/dev/null)"
+[ "$written" = '["gpu-inventory","quota",8,0.7]' ] \
+    && ok "an upgrade without LLMSM_LIMITER writes a live gpu-inventory,quota policy back whole, physical first" \
+    || fail "the kept composed policy was not written back whole: [$written]"
+
+case_begin
+got="$(
+    LIM_DEFAULT="$COMPOSED_LIVE"
+    kubectl() { lim_stub "$@"; }
+    llmsm_live_limiter_set scaling-manager-system 2>/dev/null
+)"
+[ "$got" = "gpu-inventory quota" ] \
+    && ok "llmsm_live_limiter_set reads the live composed set as 'gpu-inventory quota'" \
+    || fail "llmsm_live_limiter_set read the live composed policy as [$got], want [gpu-inventory quota]"
+
+case_begin
+got="$(
+    LIM_DEFAULT=FORBIDDEN
+    kubectl() { lim_stub "$@"; }
+    log_warning() { echo "WARNED: $1" >&2; }
+    llmsm_live_limiter_set scaling-manager-system 2>"$WORK/live-set-err"
+)"
+if [ "$got" = none ] && grep -q 'WARNED: Could not read the live limiters' "$WORK/live-set-err"; then
+    ok "an unreadable live policy is none for the node check, and says so"
+else
+    fail "an unreadable live policy read as [$got] with [$(cat "$WORK/live-set-err")]"
+fi
+
+# The install summary names the limiters in force after the install: with
+# LLMSM_LIMITER unset that is the live set the install kept. It printed
+# "No GPU limiter: scaling is UNBOUNDED" over a kept gpu-inventory,quota policy.
+case_begin
+got="$(
+    LIM_DEFAULT="$COMPOSED_LIVE"
+    kubectl() { lim_stub "$@"; }
+    unset LLMSM_LIMITER
+    effective_limiter_summary
+)"
+[ "$got" = "gpu-inventory quota" ] \
+    && ok "the install summary reports the kept live limiters when LLMSM_LIMITER is unset" \
+    || fail "the install summary reported [$got] for a kept gpu-inventory,quota policy"
+
+# ---------------------------------------------------------------------------
+# #216: a quota entry with a reserved name stops the new controller at start.
+# The installer refuses it before applying anything, with the controller's own
+# message, rather than reporting a controller that never became ready. Executed
+# against the stubbed kubectl; what is asserted is the exit and what it said.
+reserved_refusal() {   # reserved_refusal <default entry> [optional] -- echoes "rc|stderr"
+    local rc=0 err
+    err="$(
+        LIM_DEFAULT="$1"
+        kubectl() { lim_stub "$@"; }
+        LLMSM_LIVE_LIMITERS='[{"type":"gpu-inventory"}]'
+        llmsm_refuse_reserved_limiter_names scaling-manager-system "${2:-}" 2>&1 >/dev/null
+        # Left as the caller had it: the install reads it again afterwards.
+        [ "$LLMSM_LIVE_LIMITERS" = '[{"type":"gpu-inventory"}]' ] || echo "LLMSM_LIVE_LIMITERS was overwritten"
+    )" || rc=$?
+    printf '%s|%s' "$rc" "$err"
+}
+RESERVED_POLICY='limiters:
+- name: gpu-limiter
+  type: quota
+  scope: cluster
+  quotas:
+    H100: 8'
+
+case_begin
+got="$(reserved_refusal "$RESERVED_POLICY")"
+if [ "${got%%|*}" = 1 ] && printf '%s' "$got" | grep -q 'quota entry name "gpu-limiter" is reserved' \
+   && printf '%s' "$got" | grep -q 'rename the entry'; then
+    ok "a quota entry named gpu-limiter is refused before the apply, with the controller's message"
+else
+    fail "a quota entry named gpu-limiter was not refused with the controller's message: [$got]"
+fi
+
+case_begin
+got="$(reserved_refusal 'limiters:
+- name: gpu-limiter
+  type: gpu-inventory
+- name: install-quota
+  type: quota
+  scope: cluster
+  quotas:
+    H100: 8')"
+[ "$got" = '0|' ] && ok "a physical entry named gpu-limiter beside a quota named otherwise passes, quietly" \
+    || fail "a physical entry named gpu-limiter was refused or warned about: [$got]"
+
+case_begin
+got="$(reserved_refusal '')"
+[ "$got" = '0|' ] && ok "no ConfigMap (a first install) passes the reserved-name check" \
+    || fail "an absent ConfigMap failed the reserved-name check: [$got]"
+
+case_begin
+got="$(reserved_refusal FORBIDDEN)"
+[ "${got%%|*}" = 0 ] && printf '%s' "$got" | grep -q 'Could not read' \
+    && ok "an unreadable policy is warned about, not passed in silence" \
+    || fail "an unreadable policy was not warned about: [$got]"
+
+case_begin
+got="$(reserved_refusal FORBIDDEN optional)"
+[ "${got%%|*}" = 0 ] && ! printf '%s' "$got" | grep -q 'WARNING\|Could not read' \
+    && ok "an unreadable optional policy namespace is an info line, not a warning on every tenant install" \
+    || fail "an unreadable optional policy namespace was [$got]"
+
+# The preflight runs for a controller install and is skipped for a
+# prerequisites-only apply, which installs no controller.
+case_begin
+got="$(
+    LIM_DEFAULT="$RESERVED_POLICY"
+    kubectl() { lim_stub "$@"; }
+    rc=0; ( unset LLMSM_LIMITER; LLMSM_APPLY_SCOPE=all llmsm_preflight_reserved_limiter_names ) >/dev/null 2>&1 || rc=$?
+    prc=0; ( LLMSM_APPLY_SCOPE=prereqs llmsm_preflight_reserved_limiter_names ) >/dev/null 2>&1 || prc=$?
+    printf '%s|%s' "$rc" "$prc"
+)"
+[ "$got" = '1|0' ] && ok "the reserved-name preflight refuses a controller install and skips a prerequisites-only apply" \
+    || fail "the reserved-name preflight returned [$got] for (install|prereqs), want [1|0]"
+
+# And deploy_scaling_manager_controller calls it before its first step that writes to the
+# cluster. Testing the function alone stays green when the call is removed or
+# moved after a write, which is how the refusal message would become untrue.
+case_begin
+body="$(tr -d '\r' < "$ROOT/deploy/lib/infra_scaling_manager.sh" | awk '/^deploy_scaling_manager_controller\(\) \{/{f=1} f{print NR": "$0} f&&/^\}/{exit}')"
+code="$(printf '%s\n' "$body" | grep -vE '^[0-9]+: *(#|$)')"
+pre_at="$(printf '%s\n' "$code" | grep -m1 -E '^[0-9]+: *llmsm_preflight_reserved_limiter_names *$' | cut -d: -f1)"
+write_at="$(printf '%s\n' "$code" | grep -m1 -E 'kubectl |llmsm_(delete|sync|apply|regrant|scaler_tls|refuse_unknown|keep)_' | cut -d: -f1)"
+if [ -n "$body" ] && [ -n "$pre_at" ] && [ -n "$write_at" ] && [ "$pre_at" -lt "$write_at" ]; then
+    ok "deploy_scaling_manager_controller runs the reserved-name preflight (line $pre_at) before its first write (line $write_at)"
+else
+    fail "deploy_scaling_manager_controller does not run llmsm_preflight_reserved_limiter_names before its first write (preflight at [${pre_at:-none}], first write at [${write_at:-none}], body $(printf '%s\n' "$body" | grep -c .) lines)"
+fi
+
+# The shell list mirrors config.ReservedLimiterNames; read the Go back.
+case_begin
+go_names="$(tr -d '\r' < "$ROOT/internal/config/quota_limiter.go" \
+    | awk '/^var ReservedLimiterNames = \[\]string\{/{f=1;next} f&&/^\}/{f=0} f' \
+    | tr -d ' \t",' | grep . | tr '\n' ' ' | sed 's/ $//')"
+if [ -n "$go_names" ] && [ "$go_names" = "$LLMSM_RESERVED_LIMITER_NAMES" ]; then
+    ok "LLMSM_RESERVED_LIMITER_NAMES matches config.ReservedLimiterNames ($go_names)"
+else
+    fail "LLMSM_RESERVED_LIMITER_NAMES [$LLMSM_RESERVED_LIMITER_NAMES] differs from config.ReservedLimiterNames [$go_names]"
+fi
+
+# How many cases ran. Without it, deleting a refuse_quota line removes a case
+# and the check still prints OK -- and the ok() suppression means the count of
+# ok lines is not comparable against a known-good run either.
+case_begin
+CASES_EXPECTED=89
+if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
+    fail "$CASES cases ran, not $CASES_EXPECTED. A case was added or removed; update CASES_EXPECTED deliberately rather than letting coverage drift out."
+else
+    ok "all $CASES cases ran"
+fi
+
+if [ "$FAIL" -ne 0 ]; then
+    echo "limiter declaration check FAILED"
+    exit 1
+fi
+echo "limiter declaration OK"

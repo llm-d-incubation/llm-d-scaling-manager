@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Restricts the controller's cache to ONE namespace.
+#
+# The namespace is LLMSM_WATCH_NAMESPACE, which the base defaults to the pod's own —
+# so the default behaviour is what this component always did. It reads an env var
+# rather than $(POD_NAMESPACE) directly so the two can be pulled apart, because
+# forcing them equal has a consequence that only shows up in a multi-tenant
+# cluster: the controller must then live in the namespace it manages, which for a
+# tenant namespace means the TENANT owns this Deployment. Anyone who owns the
+# Deployment owns its args, its env and its image, and can therefore lift any
+# limit placed on them. Deploying the controller into an admin-owned namespace and
+# pointing it at the tenant's is what makes a bound hold.
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: "--watch-namespace=$(LLMSM_WATCH_NAMESPACE)"
+  target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: controller-manager

@@ -1,0 +1,71 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# A warm pool whose Pods hold several GPUs, for models whose engines span more
+# than one of them.
+#
+#   kubectl apply -k config/warmpool-multi-gpu -n <the models' namespace>
+#
+# There is nothing to configure on the controller to match it. The scaling manager reads the GPU
+# count from this Pod's own spec, so the Deployment is the only place the number
+# lives and there is no second copy to disagree with it.
+#
+# This overlay REPLACES the base pool rather than adding a second one: it patches
+# the same Deployment, so the namespace ends up with one pool whose Pods hold
+# four GPUs. If you want both shapes at once -- a cheap single-GPU pool for most
+# models and a wide one for tensor-parallel models -- deploy two pools with
+# different llm-d.ai/warm-pool names, EACH WITH ITS OWN ScaledObject carrying a
+# matching warmPoolName, and have each model name the one it wants with the
+# warmPool trigger metadata key. The trigger is what declares a pool: a second
+# Deployment without one holds accelerators nothing will ever use, which the scaling manager
+# reports rather than using. See docs/guides/warm-pool/.
+#
+# WHAT THIS SUPPORTS, and what remains untested, because the difference matters
+# more than the list:
+#
+#   - tensor parallelism within the Pod. The engine sees every GPU the Pod
+#     holds, so a --tensor-parallel-size equal to that count works with no
+#     placement logic at all. The one-awake invariant carries over unchanged:
+#     one engine spanning every device, its sleepers holding residue on all of
+#     them.
+#   - pipeline parallelism within the Pod, on the same footing.
+#   - expert parallelism, which asks for no GPUs of its own -- it shards a
+#     mixture-of-experts model's experts across the ranks tensor and data
+#     parallelism already provide. The flags are copied so the warm copy is laid
+#     out like the replicas it stands in for.
+#   - data parallelism is COUNTED (each rank is an engine replica with its own
+#     devices) but is the least certain of these: a DP engine is several engine
+#     cores, and whether sleep and wake reach all of them has not been shown.
+#
+# NOT supported, and not a gap this overlay could close:
+#
+#   - anything spanning NODES. A LeaderWorkerSet engine is several Pods; a pool
+#     Pod is one Pod holding several engines. Warming that means holding an
+#     entire group warm and coordinating sleep across it -- a warm group, not a
+#     warm Pod -- and it rests on multi-node sleep, which has been claimed and
+#     never demonstrated here. Such variants are filtered out before the pool
+#     ever sees them, because their scale target is not a Deployment.
+#
+# MEASURED, on two H100s in one Pod: TP=2 sleeps in 966 ms and wakes to a first
+# token in 208 ms; DP=2 in 1,225 ms and 229 ms. Both answer correctly after
+# waking, and both drop each GPU to residue while asleep. A single-GPU engine
+# wakes in 247 ms, so parallelism costs the pool nothing in speed.
+#
+# One asymmetry to size for: a DP=2 sleeper holds TWICE the host memory of a
+# TP=1 one, because each data-parallel rank keeps its own copy of the weights.
+# Tensor parallelism shards a single copy and holds about the same.
+#
+# One thing this deliberately does NOT do: place instances on particular GPUs.
+# The supervisor can (InstanceSpec carries gpu_uuids), and the pool never sets
+# it, so every instance sees every device. With one engine awake at a time that
+# costs nothing for the awake model -- but sleepers all settle on the same
+# devices, so their residue accumulates there rather than spreading. It shows up
+# as a smaller warm set than the arithmetic suggests, not as a failure.
+resources:
+  - ../warmpool
+
+patches:
+  - path: warmpool-deployment.yaml
+    target:
+      kind: Deployment
+      name: llmsm-warm-pool

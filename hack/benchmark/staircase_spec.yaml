@@ -1,0 +1,63 @@
+# The next TTFT staircase: docs/plans/analyzers/ttft-staircase-repeat.md says why
+# each line is here. `whatif freeze` reads the prediction's half, staircase_freeze.py
+# the ladder's. Nothing here may change once the warm-up starts: the frozen file
+# carries this file's hash.
+operatingFraction: 0.85
+percentiles: [90, 95]
+# A target at least this far over the model's floor. PROPOSED, before results: M2's
+# bucket A sat 1.03x over its floor, where a rate cannot be read from a target.
+targetFloorMargin: 1.2
+# The spread the driver sends: uniform over +-10% of the mean.
+promptCV: 0.0577
+# Shares of the bucket's lower knee.
+steps: [0.40, 0.60, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00]
+holdSeconds: 600
+discardSeconds: 180
+# A step whose window cannot hold four relaxation times is lengthened to this, and
+# flagged if that still does not hold them.
+maxHoldSeconds: 1500
+# The frozen stop rule: client p90 above this many times the p90 target. maxInflight
+# is a safety stop, not a judgement: a step it cuts short reads as a bound.
+runawayFactor: 2
+maxInflight: 4000
+repeats: 3
+seedBase: 3000
+# Time a phase spends outside its steps: the EPP and controller restarts, the drain,
+# the copies. M2's bucket A phases spent about this, from its timeline; the others more.
+phaseOverheadSeconds: 240
+# The warm-up, as the run's fleet: seconds, then the load.
+warmup:
+  order: [line, sweep, busy, rest]
+  line: {driver: closed, schedule: "420:30:1000:1000,420:100:1000:1000,420:200:1000:1000,420:400:1000:1000,420:60:8000:200,420:120:8000:200,420:200:8000:200"}
+  sweep: {driver: open, schedule: "360:14:1000:32:1,360:10:2000:32:1,360:6:4000:32:1,360:4:6000:32:1,360:3:8000:32:1", seed: 11}
+  busy: {driver: closed, schedule: "660:96:8000:8"}
+  # Quiet at the end: the transfer a freeze reads ages out in 5 minutes.
+  rest: {driver: open, schedule: "360:3:8000:32:1", seed: 12}
+# fc lists the flow-control states a bucket runs in. gate: true buckets are the ones
+# the page names for a flag; the rest are held out of everything the model learned.
+buckets:
+- {name: A, prompt: 1000, output: 1000, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+- {name: B, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+- {name: C, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+# Above the prefill onset. Decode binds at N_d 2, so these double it: the ladder is in
+# shares of the prefill knee, which then is the lower knee.
+- {name: B-onset, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 4, fc: ["on"], gate: true, steps: [0.70, 0.85, 0.92, 0.96, 0.97, 1.00]}
+- {name: C-onset, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 4, fc: ["on"], gate: true, steps: [0.70, 0.85, 0.92, 0.96, 0.97, 1.00]}
+# Held out.
+- {name: H-3k, prompt: 3000, output: 500, ca2: 1, prefill: 2, decode: 2, fc: ["off"]}
+- {name: H-16k, prompt: 16000, output: 500, ca2: 1, prefill: 2, decode: 2, fc: ["off"]}
+- {name: H-pods, prompt: 8000, output: 200, ca2: 1, prefill: 3, decode: 3, fc: ["off"]}
+- {name: H-ca2, prompt: 8000, output: 200, ca2: 2, prefill: 2, decode: 2, fc: ["off"]}
+- {name: H-ca8, prompt: 8000, output: 200, ca2: 8, prefill: 2, decode: 2, fc: ["off"]}
+- {name: H-low, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 2, fc: ["off"], rates: [2, 4, 6, 8, 10]}
+# Set before results. The report says of each whether it held.
+falsifiers:
+  # Slope of the decode engine's TTFT on the client's TPOT, per bucket. M2, read by the
+  # report's code: 6.36 to 7.79.
+  itlSlope: [5.5, 9.0]
+  # The router hop, ms per 1000 prompt tokens, from the buckets' means. M2: about 1.
+  hopPerKiloToken: [0.5, 1.5]
+  # Client p90 of C over B, median over the steps. M2: 1.33 off and on, each step 1.14
+  # to 1.80, against 2.40 priced then and 2.09 now at the operating rate (#501). The top
+  # is M2's highest step, so a ratio at the model's price is out of band.
+  burstRatio: [1.0, 1.8]

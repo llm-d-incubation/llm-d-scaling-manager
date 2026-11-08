@@ -1,0 +1,7 @@
+knee            32.38 r/s   decode, batch cap binds at fill 0.612
+operating rate  27.52 r/s   0.85 x knee (scaleUpThreshold)
+mean TPOT       3.20 ms                      line held
+shape           IL 1003 OL 500 (measured, cycles 81-100)
+line check      ok at another shape (rows at KV 3000 a request, priced at 1253): median 1.9% off the rate read, line high; 0 of 20 rows past 15%, worst 5.4%, fill 0.49-0.57, cycles 32-95; left out 20 on a ramp, 0 above the band, 0 older than 30m0s
+flags: OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); HeldLine
+estimate from no readings of the line's own of a 226-cycle recording read to cycle 100, not a guarantee; see basis (-o json)

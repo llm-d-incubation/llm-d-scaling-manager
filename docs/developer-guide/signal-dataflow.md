@@ -1,0 +1,706 @@
+# Which component owns which number
+
+The chain from a metric scrape to a replica count, what each component is
+responsible for, and where every parameter in the arithmetic comes from.
+
+Two neighbours, deliberately not repeated here:
+
+- [The saturation analyzer](saturation-analyzer.md) — the formulas in the
+  analyzer's own terms, grouped by what they compute.
+- [Multi-analyzer pipeline](multi-analyzer-pipeline.md) — how analyzers are
+  registered, run and scored.
+
+This page is the one to read when the question is *"where did this number come
+from?"* rather than *"what does the analyzer do?"*.
+
+## The chain
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SOURCES (none of them ours)                                                 │
+│  vLLM / SGLang  /metrics .............. per-pod engine counters             │
+│  EPP inference scheduler .............. the router's own queue              │
+│  Kubernetes API ....................... Pods, Deployments/LWS, ScaledObjects│
+│  Deployment / LWS container args ...... the engine's launch flags           │
+│  scaling-manager-scaling-policy-config ConfigMap .. thresholds                          │
+│  ScaledObject trigger metadata ........ per-workload seeds                  │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │ scraped / listed / parsed once per cycle
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/collector                                                          │
+│   registration/*.go  the PromQL templates, per engine                       │
+│   extract.go         query results -> per-INSTANCE podMetricData            │
+│   pod_collapse.go    a pod's engines -> one replica (sum or weight, per field)│
+│                      (ranks behind one API server: folded in the PromQL)    │
+│   attribute.go       replica -> variant, + the not-Ready and uptime guards  │
+│   freshness.go       how old each driving metric is                         │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │ []domain.ReplicaMetrics
+                                │ *domain.SchedulerQueueMetrics
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/signals/*   stateless arithmetic, no opinions about scaling        │
+│   shape     ILeff, KVreq, and whether two shapes are the same shape         │
+│   itl       the ITL(k) line: Fit, ITLAt, Sequences, TokenRate               │
+│   capacity  EngineParams parsed from container args; the k2 history store    │
+│   fleet     one request-rate-weighted mean, for every caller                │
+│   floor     the throughput floor and the backlog projection                 │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │ called by
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/engines/analyzers/saturation    ONE cycle, eight stages            │
+│   newCycle ........... variant index; is decode saturated                   │
+│   observeFleetShape .. one (IL, OL, hitRate) for the fleet; shape tracker   │
+│   resolvePricing ..... the shape mu is priced at (both halves or neither)   │
+│   fitLines ........... one ITL(k) line per decode variant                   │
+│   priceReplicas ...... k1, k2, effective capacity, mu -- per replica        │
+│   settleShape ........ release the hold once the fleet measured itself      │
+│   priceDemand ........ variant + role totals, plus the router's queue       │
+│   applyFloorAndHolds . raise demand to what the load requires               │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │ *domain.AnalyzerResult
+                                │   TotalDemand, RoleDemand, VariantCapacities
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/engines/aggregation    supply, from the SAME per-replica capacity  │
+│   TotalSupply = SUM ReplicaCount x perReplica                               │
+│   TotalAnticipatedSupply = SUM (ReplicaCount + starting) x perReplica       │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/engines/steadystate   applyUniversalThreshold                      │
+│   RC = max(0, TotalDemand/scaleUp - TotalAnticipatedSupply)                 │
+│   SC = max(0, TotalSupply - TotalDemand/scaleDown)                          │
+│   The analyzer does NOT set these. It emits only the measured (D, P).       │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ internal/engines/allocation    the optimizer                                │
+│   per-role paired allocation, GPU budget / quota limiters, role ceilings    │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │ target replicas per variant
+                                ▼
+            KEDA external scaler  ->  ScaledObject  ->  Deployment / LWS
+```
+
+The one direction worth stating explicitly: **the analyzer never reads a
+target.** It measures demand and per-replica capacity; everything about what to
+do with them lives downstream. That is why a wrong decision is diagnosed by
+reading the analyzer's three log lines and then the optimizer's, in that order.
+
+## What each component is responsible for
+
+| component | owns | does NOT own |
+| --- | --- | --- |
+| `collector` | turning engine counters into one record per replica, and refusing readings it cannot trust (not-Ready pods, a latency longer than the pod's uptime, NaN) | any judgement about capacity |
+| `signals/shape` | `ILeff`, `KVreq`, shape equality | where the lengths came from |
+| `signals/itl` | the ITL(k) line and its validity bounds | which `k` to price at |
+| `signals/capacity` | parsing the engine's launch flags; persisting k2 history | the k2 *decision* |
+| `signals/fleet` | one weighted mean, with zero/range handled per caller | which field to average |
+| `signals/floor` | the throughput floor and the landing projection | whether the floor is allowed to order |
+| `signals/settle` | when each replica last started to settle (joined, back after more than its absence tolerance, restarted, lent, rolled out), its Ready time as first seen, its idle runs and returns of load, and a trace of its rows. The engine writes it once per model per cycle, at the top of `runAnalyzers`; readers take `settle.View` (the load-balance tracker today) | how long any reader waits: each applies its own policy window |
+| `analyzers/saturation` | demand `D`, per-replica capacity `P`, role attribution, and the holds | supply, `RC`, `SC`, targets |
+| `engines/aggregation` | supply and anticipated supply | thresholds |
+| `engines/steadystate` | `RC` / `SC` from one formula at every scope | per-role threshold overrides (there are none) |
+| `engines/allocation` | targets, budgets, ceilings | measurement |
+
+## The arithmetic, parameter by parameter
+
+Every formula the decision rests on, each followed by its own inputs: the unit,
+the component the value comes from, what the number means, and what moves if it
+is wrong. The parameters are here rather than in a catalogue of their own
+because most appear in more than one formula, and the second appearance is
+usually the one that surprises.
+
+Two conventions used throughout. `I` is a prompt length and `O` a generation
+length, both in tokens per request; `C` is a KV budget in tokens.
+
+And a value that an earlier formula produced is marked **-> produced above**
+with the section that produces it, rather than left for the reader to hunt.
+Those are the ones that carry an error furthest, because they are computed
+once and divided by everywhere.
+
+### The shape — `signals/shape`
+
+```
+hitRate = clamp(hitRate, 0, 1)        // NaN -> 0
+ILeff   = I x (1 - hitRate)
+D       = E[O^2] / O^2                // 1 with no histogram
+KVreq   = ILeff + D x O/2
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `I` = `AvgInputTokens` | tokens/request | collector, `request_prompt_tokens_sum/count` `[5m]` | the prompt length the fleet is serving |
+| `O` = `AvgOutputTokens` | tokens/request | collector, `request_generation_tokens_sum/count` `[5m]` | the generation length |
+| `E[O^2]` = `AvgOutputTokensSquared` | tokens^2/request | collector, the least `E[O^2]` that the output-length histogram `[5m]` (`request_generation_tokens_bucket`, SGLang `generation_tokens_histogram_bucket`) and `O` allow (`domain.SquaredMeanLowerBound`); `AvgOutputTokensSquaredKnown` says it was read | the spread of output lengths, `D` (issue #276) |
+| `hitRate` = `PrefixCacheHitRate` | fraction 0-1 | collector, `prefix_cache_hits / queries` | share of prompt tokens served from cache |
+
+`ILeff` is the prompt the engine must actually compute — a cached prefix costs
+nothing. `KVreq` is the KV footprint of **one resident request averaged over
+its life**: the prompt is held throughout, the generation grows from 0 to its
+length. With equal lengths it contributes its mean, `O/2`; with lengths that
+vary, a long request stays resident longer and the average resident request
+holds `D x O/2`. `D` is 1 when any generating replica lacks the histogram,
+while a shape change is outstanding (on every path), and with the replay
+switch `kv-per-request-output-dispersion` off. The slo analyzer prices `D` too,
+behind `slo-kv-per-request-output-dispersion`, and the throughput analyzer,
+behind `throughput-kv-per-request-output-dispersion` (#433), with the same
+shape-change hold; the slo analyzer has none.
+
+A hit saves KV only when another running request holds the block too, so the
+derived mu does not assume `ILeff` for memory where it can measure it (issue
+#277). It prices a resident request at the tokens in use over
+`RunningRequests`, across the fleet's Ready generating replicas inside the ITL
+band, clamped between `ILeff + D x O/2` and `IL + D x O/2`. With no reading
+(no replica in the band, a missing series, or fewer requests than the shape
+needs or than a cache filled to the band's edge holds at the shape's own
+`KVreq`) it keeps `ILeff + D x O/2`. The replay switch is
+`kv-per-request-hits-resident`
+([saturation-analyzer.md](saturation-analyzer.md#prefix-cache-hits-stay-resident)).
+
+`KVreq` is the most load-bearing quantity in the analyzer; everything that asks
+"how many requests fit" divides by it. `O` reaches the replica count through
+**four** independent paths — this formula, k2, the queue's price, and the
+derived mu's divisor — which is why an error in it is never small.
+
+`hitRate` is the one quantity whose **zero is a reading rather than an
+absence**: a fleet with caching off reports 0 on every replica. That is why
+`fleet.Mean` needs `ZeroIsAReading()` for it and must not use it for the
+lengths, where zero means "this replica has completed nothing".
+
+### Per-replica capacity — `analyzers/saturation`
+
+```
+k1        = floor(TotalKvCapacityTokens x kvCacheThreshold)
+N_steady  = min(B x O / (I + O), S)
+k2        = floor(N_steady x (I + O/2))
+effective = k2 if k2 < k1 else k1
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `TotalKvCapacityTokens` | tokens | collector, `cache_config_info`, else `NumGpuBlocks x BlockSize` | the replica's KV cache as a token count — the budget `C` |
+| `kvCacheThreshold` | fraction (0.80) | ConfigMap | the usable share; the rest is headroom |
+| `B` = `EffectiveMaxBatchedTokens` | tokens/step | **container args**, via `signals/capacity` | the engine's per-step token budget (`--max-num-batched-tokens`) |
+| `S` = `MaxNumSeqs` | requests | **container args** | hard admission cap (`--max-num-seqs`) |
+| `TotalKvTokensOverride` | tokens | container args | `C` when no live figure exists yet (a cold replica) |
+
+`k1` is the memory bound. The headroom is not caution: an engine driven to a
+full cache preempts and thrashes. Every capacity figure scales linearly with
+`TotalKvCapacityTokens`, so a wrong value sizes the whole fleet wrong by the
+same factor.
+
+`k2` is the compute bound. `N_steady` is how many requests a
+continuous-batching engine sustains: each step spends `B` token-slots, a request
+needs `I` of prefill once and `O` decode steps, so the decode share of its life
+is `O/(I+O)` and the batch holds `B·O/(I+O)` of them — capped by `S`.
+Multiplying by `(I + O/2)` converts a count of requests into the tokens they
+occupy, the same per-request footprint as `KVreq`.
+
+`B`, `S` and `TotalKvTokensOverride` are **parsed from container args, not
+scraped**. That is why editing a Deployment changes computed capacity with no
+metric moving, and why a k2 that disagrees with reality is often a stale parse
+rather than a bad measurement.
+
+`S` appears **twice** — here and in the derived mu — and the second is the one
+people forget: above a certain cache size, mu stops responding to capacity at
+all because `S` binds first.
+
+`B`, `S` and `TotalKvTokensOverride` bound **one engine**. A replica running
+several data-parallel ranks runs that many engines, so each is multiplied by
+the replica's `Ranks()` before it meets the replica's own figures: the derived
+k2, the derived mu's sequence cap and the SLO analyzer's batch cap. `k1` needs
+no scaling; `TotalKvCapacityTokens` is already the whole replica's. See
+[Data-parallel pods](#data-parallel-pods).
+
+`computeK2` has a priority order (observed, historical, derived, fallback) and
+`k2Source` in the log says which answered. The *observed* k2 is
+`TokensInUse` on a replica that is full and queued — a replica in that state is
+reporting its own ceiling. On a replica of several ranks both tests read the
+busiest rank, and the reading is `BusiestRankTokens()`: that rank's use scaled
+to the replica (see [Data-parallel pods](#data-parallel-pods)).
+
+### The ITL line — `signals/itl`
+
+```
+ITL(k)                 = A x k + B
+A                      = (n·SUM(k·itl) - SUM(k)·SUM(itl)) / (n·SUM(k²) - SUM(k)²)
+B                      = (SUM(itl) - A·SUM(k)) / n
+Sequences(k, C, KVreq) = k x C / KVreq
+TokenRate              = Sequences / ITL(k)
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `itl` = `AvgITL` | seconds/token | collector, `inter_token_latency_seconds_sum/count` | the gap between two generated tokens; on vLLM with speculative decoding, the gap between two engine steps, divided by `1 + SpecAcceptedPerStep` before the saturation analyzer's window reads it (issue #274) |
+| `SpecAcceptedPerStep` | tokens/step | collector, `rate(spec_decode_num_accepted_tokens_total[1m]) / rate(inter_token_latency_seconds_count[1m])`, vLLM only | the draft tokens a speculative step accepted beside its own token |
+| `k` = `KvUsageForITL()` | fraction 0-1 | collector, `kv_cache_usage_perc` **averaged over the ITL's minute** (`KvUsageMean`, `avg_over_time[1m]`); the instantaneous `KvUsageInstant` when that was not read | the occupancy over the minute the ITL was measured in |
+| `RunningRequests`, `PreemptionRate` | count, 1/s | collector, `num_requests_running` and `rate(num_preemptions_total[1m])` | whether a reading above `k` 0.80 is a replica at its sequence cap, which the window keeps (issue #287) |
+| `n` | count | the window | how many `(k, itl)` observations the fit is over; at least `DefaultMinSamples` |
+| `C` | tokens | **-> produced above**, [per-replica capacity](#per-replica-capacity--analyzerssaturation) | the replica's KV budget, `TotalKvCapacityTokens` or the override |
+| `KVreq` | tokens/request | **-> produced above**, [the shape](#the-shape--signalsshape) | what one resident request occupies |
+
+`KvUsageMean`, `KvUsageInstant` and `KvCacheUsage` are separate fields on
+purpose. `KvCacheUsage` is a **one-minute maximum**, used by the saturation
+test, where a mean would hide a replica that spent part of the minute full.
+`KvUsageInstant` is the point the replica is at now, which the idle test and
+the resident charge read. The line pairs each ITL, a `rate[1m]` mean, with the
+mean `k` over the same minute: the instant `k` against it, with the batch
+moving inside the minute, flattened the fitted slope and raised the remembered
+`B` (issue #393), and a one-minute max would fit it against the wrong `k`
+altogether.
+
+A fit is refused unless `A` and `B` are finite, `A > 1e-12` (a flat or falling
+line is not this physics) and `A·0.85 + B > 0`. A full fit needs
+`DefaultMinSamples` 10 readings spanning `DefaultMinKSpread` 0.30 of `k` —
+samples clustered at one `k` fix an intercept, not a slope. Short of the
+spread, with 10 readings, `itl.Tracker` fits the slope alone with the intercept
+pinned to the key's last full fit, or to `DefaultBaselineSec` before it has
+one: on a balanced fleet that is the normal case. The choice between the two is
+latched ([set, clear and dwell](saturation-analyzer.md#set-clear-and-dwell)).
+
+`GPSErrorPct` compares `TokenRate` against the observed `GenerationTokenRate`
+and **reports without acting**: a disagreement means the line is suspect, not
+that the fleet should move.
+
+### The service rate, decode — `analyzers/saturation`
+
+```
+kPrice   = clamp(kvCacheThreshold x scaleUpThreshold, analyzerTuning.itlBand.minObservableK, analyzerTuning.itlBand.maxObservableK)   # 0.15, 0.80 by default
+seqs     = min(Sequences(kPrice, C, KVreq), S)
+tokenSec = seqs / ITL(kPrice)
+mu       = tokenSec / avgOutput
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `kvCacheThreshold` | fraction (0.80) | ConfigMap | as above |
+| `scaleUpThreshold` | fraction (0.85) | ConfigMap | the utilisation above which capacity is required |
+| `C` | tokens | **-> produced above**, [per-replica capacity](#per-replica-capacity--analyzerssaturation) | the KV budget the sequences are drawn from |
+| `KVreq` | tokens/request | **-> produced above**, [the shape](#the-shape--signalsshape) | the per-request footprint `C` is divided by |
+| `S` = `MaxNumSeqs` | requests | **container args** | the admission cap; its SECOND appearance, after k2 |
+| `ITL(kPrice)` | seconds/token | **-> produced above**, [the ITL line](#the-itl-line--signalsitl) | the latency at the pricing occupancy |
+| `avgOutput` | tokens/request | the analyzer's `muDivisor`, resolved just below | the generation length mu is divided by |
+
+`kPrice` is **composed**: `0.80 x 0.85 = 0.68` with the shipped defaults, **not**
+the `0.85` that `k_sat` suggests. `k_sat` is only where the ITL line is
+validated; 0.68 is the occupancy the autoscaler actually targets. This
+composition is the single easiest thing here to get wrong.
+
+`mu` declines (and the floor then emits nothing for that role) when the model
+is unfitted, `avgOutput <= 0`, `KVreq <= 0`, `seqs <= 0`, `ITL(kPrice) <= 0`,
+or `kPrice` is outside `(0, 1]`.
+
+#### `avgOutput` and its partner, during a shape change
+
+```
+muDivisor = ExpectedOutputTokens(fleetOutput, stableOutput, defaultOutputTokens, 512)
+muInput   = fleetInput
+if shapeChangedWithin(window) and AvgOutputTokensRecent > 0:
+    muDivisor = AvgOutputTokensRecent
+    if AvgInputTokensRecent > 0:
+        muInput = AvgInputTokensRecent        // and KVreq is rebuilt from the pair
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `fleetOutput`, `fleetInput` | tokens/request | **-> produced above**, [the shape](#the-shape--signalsshape) | this cycle's `O` and `I`, the fleet's own `[5m]` reading |
+| `stableOutput` | tokens/request | the shape tracker | the last shape this fleet settled on, which carries across an idle period |
+| `AvgOutputTokensRecent` | tokens/request | collector, the same counters over `[1m]` | the generation length arriving now |
+| `AvgInputTokensRecent` | tokens/request | collector, `[1m]` | the prompt length arriving now |
+| `defaultOutputTokens` | tokens | **ScaledObject trigger metadata** | the seed used while no replica has measured one |
+| `window` | seconds | ConfigMap `shapeChangeHoldSeconds`, 5m cap | how long a declared change stays outstanding |
+
+These two `[1m]` fields exist as a **pair and are read only together**. A `[5m]`
+mean carries the departing shape's stragglers; a `[1m]` mean over *completed*
+requests reads low while a fleet ramps. Taking one without the other prices the
+arriving generation against the departing prompt, which is a request larger
+than either real shape — see
+[analyzer-evidence.md](analyzer-evidence.md) for the seven-replica overshoot
+that produced, and for why `max(recent, [5m])` is not the fix.
+
+`defaultOutputTokens` matters because `mu = tokenSec/avgOutput` divides by
+zero on a fleet that has completed nothing, so the derived mu reports not-ok and
+the floor emits nothing — in the one window the backlog projection exists for.
+A measurement always displaces it, so it is a seed and not a setting; `"0"`
+means unset.
+
+`shapeChangeHoldSeconds` has **two** consumers and conflating them was a bug:
+the fleet hold, and `shapeChangedWithin` above. `DisableShapeChangeHold` turns
+off only the first.
+
+### The service rate, prefill — `analyzers/saturation`
+
+```
+mu_prefill = PrefillComputedTokenRate / ILeff     preferred
+           = RequestRate                           no token counter
+           = (none)                                nothing observed
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `PrefillComputedTokenRate` | tokens/s, **summed** over a pod's engines | collector, `rate(request_prefill_kv_computed_tokens_sum)` | prompt tokens prefill actually computed |
+| `RequestRate` | requests/s | collector, `rate(request_success_total)` | the fallback, and the weight on every fleet average |
+
+Tokens rather than requests, and that is measured: on run PK, at 1, 2 and 10
+prefill replicas the request rate read 4.75, 4.62 and 4.50 req/s while the token
+rate went 138,875 -> 933,750. **A request rate under overload is the rate the
+fleet is being served at, not a capacity** — divide by it and the fleet is sized
+by its own current size. `ILeff` on the denominator because the counter already
+excludes cached tokens: one discount, applied to both sides.
+
+**Summed**, not averaged, across a pod's engines: each computes part of the
+prefill and their rates add. Averaging halved a multi-engine replica.
+
+`RequestRate`'s main job is elsewhere — it **weights every fleet average**, so
+the replica serving most of the traffic decides the fleet's shape. A replica
+with no completions has rate 0 and cannot drag the mean.
+
+The ITL-derived mu is **decode-only**, so prefill cannot be priced for a shape
+it has never saturated under. See [Prefill, specifically](#prefill-specifically).
+
+### Demand — `analyzers/saturation`
+
+```
+replicaDemand  = residentCharge(TokensInUse)          // instant KV for an unqueued pod idle now beside one busy now
+               + waitingQueueDemand(role)            // in full, whatever the replica's siblings are doing
+inputTokensRaw = max(QueueBytes / BytesPerToken, QueueSize x avgInput)
+prefill charge = inputTokensRaw x (1 - prefillHitRate)
+decode charge  = QueueSize x avgOutput            // split fleet
+                 inputTokens + outputTokens       // single role
+TotalDemand    = SUM vc.TotalDemand + queue charge
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `TokensInUse` | tokens | collector, `kv_cache_usage x capacity` | the cache a replica is occupying now |
+| `QueueLength` | requests, 1m max | collector, `num_requests_waiting` | requests the engine accepted and has not started; on decode of a P/D model, replaced by `saturation.decodeCapacityView` before pricing |
+| `CapacityQueueLength` | requests, 1m max | collector, `num_requests_waiting_by_reason{reason="capacity"}` (vLLM v0.20.0+, `CapacityQueueKnown`) | the part of `QueueLength` waiting for scheduling capacity, not for KV from prefill |
+| `QueueSize` | requests | **EPP scheduler** | requests the router holds that **no pod has started** |
+| `QueueBytes` | bytes | EPP scheduler | an independent estimate of the same queue |
+| `BytesPerToken` | 4 | constant | the bytes-to-tokens conversion |
+| `prefillHitRate` | fraction | collector, prefill replicas only | prefill's **own** hit rate, not the fleet mean |
+| `avgInput`, `avgOutput` | tokens/request | **-> produced above**, [the shape](#the-shape--signalsshape), with the seed folded in | what one queued request is priced at |
+| `vc.TotalDemand` | tokens | per variant, from `aggregateByVariant` | each variant's own demand, summed to the model's |
+
+The router's queue is charged separately from a replica's own because the
+distinction is real: `QueueLength` is demand a pod already holds, `QueueSize` is
+demand nothing is working on. The larger of the two queue estimates wins, so a
+queue of unusually long prompts is not under-priced by a stale average.
+
+`prefillHitRate` is prefill's own because the prefix cache lives on the prefill
+side; using the fleet mean charges prefill at a discount it does not get.
+
+### Supply, and RC/SC — `engines/aggregation` and `engines/steadystate`
+
+```
+perReplica             = vc.PerReplicaCapacity        (0 if non-positive or +Inf)
+TotalSupply            = SUM ReplicaCount x perReplica
+TotalAnticipatedSupply = SUM (ReplicaCount + starting) x perReplica
+
+RC = max(0, TotalDemand / scaleUp   - TotalAnticipatedSupply)
+SC = max(0, TotalSupply  - TotalDemand / scaleDown)
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `perReplica` = `vc.PerReplicaCapacity` | tokens | **-> produced above**, [per-replica capacity](#per-replica-capacity--analyzerssaturation) | the `effective` bound, aggregated per variant; 0 if non-positive or `+Inf` |
+| `ReplicaCount` = `CurrentReplicas` | count | Kubernetes, Deployment/LWS status | ready replicas |
+| `starting` = `PendingReplicas` | count | Kubernetes | replicas on their way |
+| `scaleUp` = `scaleUpThreshold` | fraction (0.85) | ConfigMap | as above |
+| `scaleDown` = `scaleDownBoundary` | fraction (0.70) | ConfigMap | the utilisation below which capacity is spare |
+
+The asymmetry is deliberate: starting replicas count toward supply, so the
+engine does not double-order while pods launch, but **not** toward removable
+capacity. Between `scaleDown x supply` and `scaleUp x anticipated` the engine
+neither orders nor releases — and the two demand holds work by clamping a
+role's demand *into* that band. The edge of the band does not always give
+exactly zero in floating point: `0.7 x (21 x 24576) / 0.7` comes back
+`5.8e-11` above `21 x 24576`. So for a role in `HeldRoleDemand`,
+`settleHeldRoles` sets SC to 0, and RC to 0 when it is within `1e-9` of
+anticipated supply. RC is not zeroed outright, because a hold is a floor on
+the way up.
+
+`atLeastZero` rejects NaN and `+Inf` explicitly, because demand is deliberately
+not sanitised on the way in and this is where a non-finite figure must fail
+closed. `v < 0` would not do it.
+
+**The analyzer does not set RC or SC.** It emits only the measured demand and
+per-replica capacity; these are recalibrated downstream from one formula at
+every scope, with no per-role overrides.
+
+### The throughput floor — `signals/floor`
+
+```
+cost     = median over the role's replicas of (P / mu)
+mu       = median over the role's mus
+horizon  = max(drainSeconds, startSeconds[role])
+b        = max(0, backlog + lambda·T - mu·(ready·T + credit))
+credit   = SUM startingCredit(T, pending, ages)        // pending x T/2 with no ages
+rate     = lambda + b / horizon
+floor    = rate x cost
+implied  = rate / mu
+```
+
+| in | unit | from | what it is |
+| --- | --- | --- | --- |
+| `lambda` | requests/s | the analyzer's `offeredArrivalRate` | the arrival rate the model is offered |
+| `backlog` | requests | EPP `QueueSize`, charged to prefill on a split fleet | the queue a new replica would land into |
+| `T` = `startSeconds` | seconds | Kubernetes Pod status, else trigger `replicaStartSeconds` | how long a replica takes to become Ready |
+| `drainSeconds` | 60 | `BacklogDrainSeconds` | the horizon a backlog is priced to drain over |
+| `ready` | count | Kubernetes | replicas already serving |
+| `pending`, `ages` | count, seconds | Kubernetes `PendingReplicas`/`PendingAges` | replicas starting, and how far in |
+| `P` | tokens | **-> produced above**, the analyzer's per-replica capacity | `effective` from above |
+| `mu` | requests/s | **-> produced above**, the service rate for this role | what ONE saturated replica completes; the floor divides by it four times below |
+
+Medians, not maxima: one replica draining a batch must not set the role's price.
+
+The projection is what makes a backlog an **order** rather than a residency. A
+replica ordered now lands in `T` seconds; by then the queue has grown by
+`lambda·T` and the ready fleet has served `mu·ready·T`. A replica already
+starting is credited for the part of `T` it has left — with no per-replica age,
+`pending x T/2`.
+
+`T` matters more than it looks: too small and the floor under-orders during
+exactly the window it exists for, which is why `replicaStartSeconds` is
+settable per workload for the case where no start has yet been observed.
+
+Two hold rules gate ordering, both measured rather than reasoned:
+`MinThroughputSamplesToOrder` = 2 readings a `ThroughputSampleSpacing` (1m)
+apart, so the second cannot come from the same drain as the first; and a
+**derived** mu may order immediately, because it is priced for the shape that
+changed to.
+
+### Keys — what a reading is filed under
+
+```
+throughput key: (model, namespace, variant, accelerator, gpus, role, outBucket, queueThreshold)
+  outBucket = classifyOutputLength(O)      decode
+            = "noout"                       prefill
+  keyInput  = ILeff                         prefill
+```
+
+| in | from | why it is in the key |
+| --- | --- | --- |
+| `AcceleratorName` | Kubernetes node labels, via discovery | capacity is a property of the hardware; pooling two GPU products under one key is the `k1 <-> k2` oscillation of PR #40 |
+| `GPUsPerReplica` | the scale target's pod spec | the same reading means something different at a different GPU count |
+| `Role` | variant labels, via discovery | prefill and decode do different work |
+| `queueLengthThreshold` | ConfigMap (5) | it defines saturation, so changing it re-buckets history |
+| `O` | **-> produced above**, [the shape](#the-shape--signalsshape) | `classifyOutputLength(O)` picks decode's bucket from the table below |
+| `ILeff` | **-> produced above**, [the shape](#the-shape--signalsshape) | prefill's input axis, so a cached prefix does not inflate the key |
+| `model`, `namespace`, `variant` | the analyzer input | identity; a reading belongs to one variant of one model |
+
+Output buckets: short 100, medium 500, long 1500, extra long 3000, very long
+6000 tokens. Prefill is keyed `"noout"` because it emits about one token per
+request, so output length is not a property of its work.
+
+### Readings the collector refuses
+
+Not a formula, but it changes every number above, and both guards fail **open**:
+
+| guard | from | what it drops |
+| --- | --- | --- |
+| `Ready` | Kubernetes Pod status | a not-Ready pod's `AvgITL`, `AvgServiceTime` and `AvgTTFT` — a loading replica's latencies are not the fleet's |
+| uptime bound | Pod `StartSeconds` | any latency longer than the pod has existed |
+| NaN/Inf | `extract.go`, per value | `rate()` over a window with no completions is 0/0, so NaN is ordinary here |
+| `FromWarmPool` | the bridge resolver | a borrowed replica contributes demand but **not** supply |
+
+Failing open is the point: a bound that cannot be established must not delete a
+reading it is unable to judge, or one unreadable Pod listing empties the
+namespace.
+
+Two fields are collected and consumed by **nothing** today: `AvgTTFT` (the
+input to the proposed prefill TTFT model) and `AvgServiceTime` (kept for
+diagnostics; the Little's-law floor built on it was retired, because service
+time is `ITL x O` and ITL grows with the batch, so it priced the same load
+differently at every fleet size and oscillated).
+
+### Data-parallel pods
+
+A `domain.ReplicaMetrics` row is one pod, however many vLLM engine ranks it
+runs. Ranks reach the collector in two layouts, and both end as one row with
+the same figures:
+
+- **One API server per rank.** Each rank is its own scrape target, so the
+  collector sees one instance per port (`pod:port`) and
+  `collector.collapseToPods` merges them.
+- **Several ranks behind one API server.** vLLM exports every series once per
+  rank from one target, told apart by the `engine` label
+  (`vllm/v1/metrics/loggers.py`). The per-pod queries in
+  `collector/registration` drop `engine` and fold the ranks by the merge's
+  rules, so the row arrives already whole.
+
+The rules, the same in both:
+
+| field | rule |
+| --- | --- |
+| KV capacity (`NumGpuBlocks`, `TotalKvCapacityTokens`) | the sum over the ranks. vLLM's API server already sums its engines' blocks into the `num_gpu_blocks` label of `vllm:cache_config_info`, so that label is read as is and never multiplied |
+| `EngineRanks` | the sum: the merge adds rows, the query counts the `cache_config_info` series (one per rank). `Ranks()` reads an unknown count as 1 |
+| `KvCacheUsage`, `KvUsageInstant`, `KvUsageMean` | used tokens over total capacity: the merge weighs by each row's capacity, the query takes the mean over ranks (ranks of a pod are alike), after a max per rank so a second scrape or a per-process copy of a rank's gauge counts once |
+| `QueueLength`, `RunningRequests`, `RequestRate`, `GenerationTokenRate`, `PrefillComputedTokenRate`, `PreemptionRate` | the sum, after a max per rank in the query, so a target scraped twice (two PodMonitors on one pod) counts each rank once. Summed straight, a second scrape doubled the three rates: the generation-token rate is the measured mu's numerator and the derived line's check |
+| `PreemptionRateKnown` | set only when every rank reported a preemption rate |
+| `MaxRankQueueLength`, `MaxRankKvCacheUsage` | the max: the busiest rank's queue and use. The merge takes the max over rows, the queries a max over ranks |
+| token lengths, `AvgTTFT`, `AvgServiceTime` | weighted by each rank's requests |
+| `AvgITL` | weighted by each rank's generated tokens |
+| `PrefixCacheHitRate` | weighted by each rank's prompt tokens |
+
+Latency is a weighted mean and not the busiest rank's, which is what the queries
+took before issue #150. The ranks share a frontend that sends each request to
+its least-loaded rank, so the pod's latency is what its average request sees,
+and the line is fitted against the pod's mean utilization and priced on its
+whole capacity. One hot rank's backlog is still counted: the queue is summed
+into demand, and the saturation guards read the busiest rank (below). On an
+expert-parallel pod the ranks step together, so their latencies barely differ
+anyway.
+
+The sum and the mean price demand and utilization. The saturation guards read
+the busiest rank instead, because `queueLengthThreshold` and
+`kvCacheThreshold` describe one engine: `ReplicaMetrics.BusiestRankQueue()`
+and `BusiestRankTokens()` (the busiest rank's use times the replica's KV
+capacity) feed the P1 reading in `computeK2`, `roleSaturated`, `kvFull` and
+`busiestQueueLoadByVariant`. Read on the sum, eight ranks with one request
+waiting each passed a threshold of five and recorded the pod's 30% use as
+its k2, and a k2 recorded as the pod's tokens at one full rank was one
+rank's worth; nothing raises such a k2 later. On a row of one rank the
+methods return `QueueLength` and `TokensInUse`. Without a busiest-rank
+reading they fall back to the mean, the least the busiest rank holds.
+
+`saturation.holdHotRanks` keeps a replica whose busiest rank is full
+(`kvFull`) from being released on its mean: the variant's demand is raised to
+its other replicas' demand plus `scaleDown x PerReplicaCapacity` for each such
+replica. The spare the engine then computes is the other replicas' spare. The
+raise is capped under the scale-up threshold on the supply the engine reads
+(replicas capped at the scale target, as `clampReplicaCountToScaleTarget`
+caps them), and lands on that cap in the engine's own arithmetic, so it never
+orders. It is reported in `AnalyzerResult.HotRankDemand`, not in
+`HeldRoleDemand`: a held role's spare is zeroed (`settleHeldRoles`) and the
+utilization-share optimizer gives nothing from it, where a hot replica keeps
+only its own capacity. Once held, a replica stays held until its busiest rank
+falls below `kvCacheThreshold - 0.05` (`hotRankReleaseMargin`, remembered per
+model in `hotRankHeld`). Only rows of more than one rank are judged. Prefill
+is judged only while decode is not saturated; while it is, `holdPrefillDemand`
+decides prefill. The log line is `hot-rank-hold`.
+
+`hack/check-collector-queries.sh` evaluates the queries with promtool on a
+fixture of eight ranks behind one API server, an ordinary pod, a pod of two
+ranks scraped twice and a pod of two ranks with per-process (`pid`) copies of
+its gauges (`collector/registration/testdata/per-pod-queries.test.yaml`), and
+`TestCollectReplicaMetrics_DPLayoutsAgree` checks that the two layouts give
+the same row.
+
+Not covered: SGLang's per-pod queries are unchanged, and an LWS group whose
+data-parallel ranks run one API server per node is still its leader's row, so
+the workers' ranks are not counted.
+
+## Prefill, specifically
+
+Prefill is priced by the same machinery as decode and from different numbers,
+and the asymmetry is worth stating in one place because it is spread across
+four files in the code.
+
+**Its capacity bounds are the same.** `k1` and `k2` are computed identically;
+prefill is a replica with a KV cache like any other.
+
+**Its throughput key is not.** The output axis is the constant
+`prefillOutputBucket = "noout"`, because prefill emits about one token per
+request — its work is the prompt, so output length is not a property of it. The
+input axis is `ILeff`, not the raw prompt, so a cached prefix does not inflate
+the key.
+
+**Its service rate is measured, never derived.** Three tiers, in order:
+
+```
+mu_prefill = PrefillComputedTokenRate / ILeff     preferred
+           = RequestRate                           no token counter (SGLang, older vLLM)
+           = (none)                                nothing observed
+```
+
+Tokens rather than requests, and this is measured rather than assumed. On run
+PK, at 1, 2 and 10 prefill replicas the request rate read 4.75, 4.62 and
+4.50 req/s while the token rate went 138,875 -> 933,750. **A request rate under
+overload is the rate the fleet is being served at, not a capacity** — dividing
+by it sizes the fleet by its own current size. `ILeff` on the bottom for the
+same reason the counter excludes cached tokens: one discount, applied to both
+sides of the division.
+
+**The ITL-derived mu is decode-only.** `fitLines` populates `itlModels` for
+`RoleDecode` alone, and `priceReplicas` guards the `deriveMu` call on the same
+condition. ITL is the gap between two *generated* tokens, so `tokenSec/O` does
+not describe a replica that emits one token and hands the KV on. The
+consequence is the real gap: decode can be priced for a shape it has never
+saturated under, and **prefill cannot** — its mu needs an observed saturated
+cycle, and a fleet over-provisioned for the shape it just moved to never
+provides one.
+
+**Its demand** is its own resident KV and waiting queue, plus its share of the
+router's queue, `inputTokensRaw x (1 - prefillHitRate)` — discounted at
+**prefill's own** hit rate rather than the fleet mean, because the prefix cache
+lives on the prefill side.
+
+**It owns the router queue on a split fleet.** `queueOwner = RolePrefill`, so
+the EPP backlog is charged to prefill alone rather than to every role. On a
+single-role fleet it goes to the one role there is.
+
+**Two gates exist only for prefill**, both because a prefill request completes
+only when decode admits it:
+
+1. While decode is saturated, prefill's occupancy and completion rate are
+   discarded as *readings* — they are decode's backlog seen from upstream, not
+   a measurement of prefill (`downstreamSaturated`).
+2. And its *demand* is clamped into the band where the engine neither orders
+   nor releases (`holdPrefillDemand`) — except the router-queue share, which is
+   exempt, because no pod has started those requests and prefill is what they
+   are waiting for whatever decode is doing.
+
+**A role at its ceiling does not block its partner.** `roleAtCeiling`
+distinguishes a role finished at `maxReplicas` from one blocked by GPU
+scarcity: the first is dropped from the allocation pass so its partner still
+commits, the second ends the pass. Measured: decode at 9 of max 9 left prefill
+ordered 1 -> 1 in every cycle while prefill held a queue of 1119 and its own
+floor asked for five.
+
+**What is collected and not used:** `AvgTTFT`. Prefill has no fitted
+throughput ceiling today. The earlier [TTFT model](../proposals/prefill-ttft-model.md)
+(fit `TTFT(T) = A·T + B`, take `1/A` as the ceiling) was built and removed:
+queue wait landed in the intercept. [What-if capacity](../proposals/slo-capacity-planner-ttft.md#prefill-capacity)
+supersedes it with a prefill throughput `V_P` read from busy minutes, or a
+lower bound when there are none, which
+the floor could later use for the limitation above.
+
+## What crosses each boundary
+
+The contracts worth knowing, because each has been broken at least once:
+
+| boundary | carries | the failure it has had |
+| --- | --- | --- |
+| engine → collector | per-pod counters | a wrong metric name returns no series, the field stays 0, and the consumer silently falls back |
+| collector → analyzer | `[]ReplicaMetrics` | a NaN admitted by a `<= 0` guard poisons a fleet average and every figure priced from it |
+| analyzer → aggregation | `VariantCapacities`, `TotalDemand`, `RoleDemand` | a role at its ceiling treated as *blocking* starved its partner at one replica through a 1119-deep queue |
+| aggregation → steadystate | supply, anticipated supply | — |
+| steadystate → allocation | `RC`, `SC` | a non-finite demand walked into `RC` before `atLeastZero` rejected NaN explicitly |
+| allocation → KEDA | targets | — |
+
+## Reading one decision
+
+Three log lines, in this order. The first two are per replica, at
+`logging.VERBOSE` (`--v=3`); the third is at Info:
+
+1. `derived-mu` — every term of the service rate, because the result alone
+   cannot be attributed to one of them. `kvReqPerSeq` is the priced shape,
+   `kvReqFleet` the fleet's own; `outputDispersion` the spread of output
+   lengths priced into it; `residentKVPerSeq`, `residentRunning` and
+   `residentKVBound` the KV the running requests were measured to hold, over
+   how many, and which bound applied (`residentKVBoundFleet` for
+   `kvReqFleet`);
+   `muShortWindow` says whether the pair moved.
+2. `replica-capacity-decision` — `k1MemoryBound`, `k2ComputeBound`,
+   `k2Source`, `boundBy`, `saturatedThroughput`.
+3. `throughput-demand-floor` — `arrivalRate`, `backlogRequests`,
+   `saturatedThroughput`, `perReplicaCapacity`, `replicasImplied`,
+   `heldAtFleet`, `heldWhy`.
+
+None of these is a metric today; [publishing them is
+proposed](../proposals/signals-as-metrics.md), with the names and label keys.

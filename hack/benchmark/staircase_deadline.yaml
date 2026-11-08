@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: staircase-deadline
+  namespace: __NS__
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: staircase-deadline
+  namespace: __NS__
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["staircase-lease"]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "daemonsets"]
+  verbs: ["list", "delete", "deletecollection"]
+- apiGroups: ["leaderworkerset.x-k8s.io"]
+  resources: ["leaderworkersets"]
+  verbs: ["list", "delete", "deletecollection"]
+- apiGroups: ["keda.sh"]
+  resources: ["scaledobjects"]
+  verbs: ["list", "delete", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: staircase-deadline
+  namespace: __NS__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: staircase-deadline
+subjects:
+- kind: ServiceAccount
+  name: staircase-deadline
+  namespace: __NS__
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: staircase-deadline
+  namespace: __NS__
+spec:
+  # This Job is what frees the GPUs if the runner is dead: it must not give up. Its
+  # own retries are bounded (DELETE_BOUND), and a run's teardown deletes it.
+  backoffLimit: 1000
+  template:
+    spec:
+      serviceAccountName: staircase-deadline
+      restartPolicy: OnFailure
+      containers:
+      - name: deadline
+        image: __IMAGE__
+        imagePullPolicy: IfNotPresent
+        command: ["python3", "-u", "/deadline/staircase_deadline.py"]
+        env:
+        - name: DEADLINE_EPOCH
+          value: "__DEADLINE_EPOCH__"
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {memory: 256Mi}
+        volumeMounts:
+        - {name: deadline, mountPath: /deadline, readOnly: true}
+      volumes:
+      - name: deadline
+        configMap: {name: staircase-deadline}

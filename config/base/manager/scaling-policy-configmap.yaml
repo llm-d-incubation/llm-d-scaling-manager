@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: ConfigMap
+# This ConfigMap defines saturation-based scaling thresholds for model variants.
+# Saturation scaling uses KV cache utilization and queue length metrics to determine
+# when replicas are saturated and when to scale up.
+#
+# Configuration structure:
+# - 'default' entry: Global default thresholds applied to all variants
+# - Override entries: Per-model/namespace custom thresholds (must include model_id and namespace)
+metadata:
+  name: scaling-policy-config
+  labels:
+    # Required: the controller cache filters ConfigMaps by this label in cluster-scoped mode
+    # (cmd/main.go). Without it, watch events are silently dropped and config changes
+    # are never picked up at runtime.
+    app.kubernetes.io/name: scaling-manager
+data:
+  # Global defaults applied to all variants unless overridden.
+  #
+  # The `analyzers` section selects the token/capacity-based saturation analyzer,
+  # which is also what an empty `analyzerName` gets. It is the only one there is:
+  # the percentage-based analyzer this used to choose between was removed, so
+  # deleting the section opts out of nothing and only drops your thresholds.
+  # See docs/reference/scaling-policy.md.
+  #
+  # Each analyzer accepts the ScalingPolicy plugin envelope (proposal #1245):
+  #   analyzers:
+  #     - type: saturation            # plugin type; `name:` still works as an alias
+  #       parameters: { scaleUpThreshold: 0.90 }
+  # Well-known parameters (scaleUpThreshold, scaleDownBoundary, score, enabled)
+  # are equivalent to the corresponding top-level/typed fields.
+  default: |
+    analyzers:
+      - name: saturation
+        score: 1.0
+    # V2-only thresholds:
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    # Size each replica's capacity: usable KV is the physical budget scaled by
+    # kvCacheThreshold, and queueLengthThreshold gates the compute-bound estimate.
+    kvCacheThreshold: 0.80
+    queueLengthThreshold: 5
+    # What bounds scaling. The list is the whole answer: declaring a limiter is
+    # what turns limiting on, and declaring none — as shipped — means nothing is
+    # limited. There is no separate enable flag and no implicit default limiter.
+    #
+    # Ships empty deliberately. Declaring gpu-inventory makes the optimizer
+    # GPU-aware, and a GPU-aware optimizer can only allocate to a variant whose
+    # accelerator it can resolve: a workload with no GPU nodeSelector/nodeAffinity,
+    # and no running pods to observe it from, is charged to no accelerator pool,
+    # so it receives no budget and never scales up. Turning that
+    # on by default would break exactly the workloads that are least carefully
+    # configured, and it would do it silently.
+    #
+    # So declare a limiter once the fleet's accelerators resolve — the scaling manager emits an
+    # AcceleratorNotResolved warning event per variant that does not. See the
+    # limiters section below for both forms. The trade-off to know: with no
+    # limiter, a scale-from-zero wake is published with NO capacity check, so a
+    # variant can be woken onto an accelerator that is already full.
+    #
+    # Enable priority-weighted rescale: under GPU contention the V2 optimizer
+    # redistributes the whole budget by priority x demand, reclaiming from
+    # lower-priority models so higher-priority work can run. Off by default.
+    # Budget-scope flag (read only from this `default` entry): the value here
+    # governs the cluster budget; a namespace-local config's `default` governs
+    # that namespace's quota budget. Has no effect without a same-scope GPU budget
+    # (requires a declared limiter and a matching cluster/namespace budget).
+    enableRescale: false
+  #
+  # ---------------------------------------------------------------------------
+  # ScalingPolicy schema (Phase 1) — additional fields, shown here as examples.
+  # An override entry is identified by its BODY: set model_id and namespace inside
+  # it. Its ConfigMap data key is yours to choose — pick something readable.
+  #
+  # The key cannot contain the model ID: a ConfigMap data key admits only
+  # [-._a-zA-Z0-9], which excludes both the "/" in a namespaced model ID and "#".
+  # informational only.
+  # ---------------------------------------------------------------------------
+  #
+  # Per-model override using the plugin envelope + inline scale-to-zero:
+  #
+  # granite-premium-prod: |
+  #   model_id: granite-premium
+  #   namespace: production
+  #   priority: 2.0
+  #   # scaleToZero is the only per-model surface for it: enabled + retentionPeriod,
+  #   # inherited from the `default` entry unless set here. Time to zero is
+  #   # retentionPeriod + KEDA's cooldownPeriod on the ScaledObject, in sequence.
+  #   scaleToZero: { enabled: false }
+  #   analyzers:
+  #     - type: saturation
+  #       parameters: { scaleUpThreshold: 0.95 }
+  #
+  # ---------------------------------------------------------------------------
+  # Named scaling policies (tiers) — docs/reference/scaling-policy.md#3-named-policy-tiers
+  # ---------------------------------------------------------------------------
+  #
+  # A policy is a reusable TIER, not a per-model entry: it carries no model_id and
+  # no namespace. A variant selects one with `scalingPolicy` in its ScaledObject
+  # trigger metadata, so one tier serves many models and retuning it is a single
+  # edit rather than an edit per model.
+  #
+  # Three kinds of entry:
+  #   default                 this cluster default entry (the key "default")
+  #   a per-model override    any key whose entry sets model_id and namespace;
+  #                           matched on those two fields, never on the key
+  #   anything else           a named policy tier
+  #
+  # Resolution, most specific winning:
+  #   default entry → named policy tier → per-model override
+  #
+  # Policies may set thresholds, priority and analyzer selection. scaleToZero is
+  # NOT read from a tier a variant names: parking reads the `default` entry (and
+  # the tier its defaultPolicy names) or a per-model override.
+  # They may NOT set limiters or quotas — those are cluster-scope and read only
+  # from the `default` entry, so a tenant cannot grant themselves capacity by
+  # naming a policy.
+  #
+  # A variant naming a tier that does not exist scales under the `default` entry
+  # and the scaling manager logs it. Set `defaultPolicy:` on the `default` entry above to give
+  # variants that name none a fleet-wide fallback tier.
+  #
+  # interactive: |
+  #   scaleUpThreshold: 0.60      # scale out sooner; latency over cost
+  #   scaleDownBoundary: 0.45
+  #   priority: 2.0
+  #
+  # batch: |
+  #   scaleUpThreshold: 0.95      # pack hard; throughput over latency
+  #   priority: 0.5
+  #
+  # ...selected from the workload's ScaledObject:
+  #
+  #   triggers:
+  #     - type: external
+  #       metadata:
+  #         scalerAddress: scaling-manager-external-scaler.scaling-manager-system:9090
+  #         modelID: meta/llama-70b
+  #         scalingPolicy: interactive
+  #
+  # Cluster GPU limiter — the sole source that selects the limiter, applied live
+  # (no restart) and honored ONLY on this `default` entry (a cluster-budget scope,
+  # like enableRescale). Zero or more entries, per the ScalingPolicy schema
+  # (docs/reference/scaling-policy.md).
+  #
+  #   NONE      declare nothing, or an empty list: scaling is unconstrained. Both
+  #             the optimizer budget and the scale-from-zero capacity check are
+  #             off. The scaling manager logs this at startup.
+  #   ALL OF    every entry is built, and scaling must fit all of them: the
+  #             forms below combine, (a) and (b) together bounding by the GPUs
+  #             that exist AND the declared caps. One physical limiter is
+  #             built; a second gpu-inventory entry is ignored with a warning.
+  #
+  #   # (a) physical-capacity limiter:
+  #   limiters:
+  #     - type: gpu-inventory
+  #
+  #   # (b) operator-declared quota limiter (same schema as QuotaLimiterConfig).
+  #   # A quota is charged ONLY for the GPUs the scaling manager's own variants hold, so it does
+  #   # not bound the cluster — see docs/reference/quota-limiter.md.
+  #   limiters:
+  #     - type: quota
+  #       name: cluster-h100
+  #       scope: cluster
+  #       quotas: { H100: 32 }

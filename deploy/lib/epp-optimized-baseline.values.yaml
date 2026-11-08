@@ -1,0 +1,48 @@
+## optimized-baseline guide overrides for the llm-d router.
+## Layer on top of: epp-base.values.yaml
+##
+## Vendored from llm-d/llm-d@v0.8.1 guides/optimized-baseline/router/optimized-baseline.values.yaml.
+## Update alongside LLM_D_ROUTER_VERSION when the chart schema changes.
+
+router:
+  extraServicePorts:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: 8081
+
+  epp:
+    pluginsConfigFile: "optimized-baseline-plugins.yaml"
+    pluginsCustomConfig:
+      optimized-baseline-plugins.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+        - type: queue-scorer
+        - type: kv-cache-utilization-scorer
+        - type: prefix-cache-scorer
+        - type: no-hit-lru-scorer
+        # prefix-cache-scorer outranks queue-scorer and
+        # kv-cache-utilization-scorer here, which is right for a workload with
+        # shared prefixes and wrong for one without: the scorer that spreads
+        # load is outvoted by one whose hit ratio is 0.000, and the fleet
+        # serves from a single replica while the rest sit idle. Measured on the
+        # shape-swap benchmark at nine replicas Ready and one serving.
+        # Check llm_d_epp_prefix_indexer_hit_ratio before trusting these
+        # weights on a new workload -- see docs/guides/benchmarking/README.md,
+        # "Check the router spreads load before trusting a latency number".
+        schedulingProfiles:
+        - name: default
+          plugins:
+          - pluginRef: queue-scorer
+            weight: 2
+          - pluginRef: kv-cache-utilization-scorer
+            weight: 2
+          - pluginRef: prefix-cache-scorer
+            weight: 3
+          - pluginRef: no-hit-lru-scorer
+            weight: 2
+
+  modelServers:
+    matchLabels:
+      llm-d.ai/guide: "optimized-baseline"

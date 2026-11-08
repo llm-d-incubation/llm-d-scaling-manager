@@ -1,0 +1,82 @@
+# A ScaledObject template for LLMSM_DEFAULT_SO_TEMPLATE.
+#
+# The installer substitutes the placeholders below for every llm-d model server it
+# finds, so a fleet with house conventions — a fallback policy, stabilization
+# windows, labels its tooling expects — gets those instead of the shipped shape it
+# would otherwise have to edit back afterwards.
+#
+# Substitution is literal text replacement, which means this file is also a valid
+# manifest as written: apply it by hand with the placeholders filled in to check
+# the shape before letting the installer fill it in everywhere.
+#
+#   {{NAMESPACE}}       the workload's namespace
+#   {{NAME}}            the workload's name (Deployment or LeaderWorkerSet)
+#   {{KIND}}            Deployment | LeaderWorkerSet
+#   {{APIVERSION}}      apps/v1 | leaderworkerset.x-k8s.io/v1
+#   {{MODEL_ID}}        read from --served-model-name, else --model
+#   {{SCALER_ADDRESS}}  the scaling manager's external-scaler service, host:port
+#   {{MIN}} {{MAX}}     the entry's replica bounds
+#   {{VARIANT_COST}}    the entry's variantCost, or 10.0 where it set none
+#   {{SCALING_POLICY}}  the entry's scalingPolicy; empty means the cluster default
+#
+# Usage:
+#   make scaledobjects-apply LLMSM_DEFAULT_SO_TEMPLATE=$PWD/this-file.yaml
+#
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{NAME}}-llmsm
+  namespace: {{NAMESPACE}}
+  labels:
+    app.kubernetes.io/managed-by: llm-d-scaling-manager
+spec:
+  scaleTargetRef:
+    apiVersion: {{APIVERSION}}
+    kind: {{KIND}}
+    name: {{NAME}}
+  pollingInterval: 5
+  cooldownPeriod: 30
+  minReplicaCount: {{MIN}}
+  maxReplicaCount: {{MAX}}
+  # No fallback here, deliberately. A template OWNS its fallback -- the installer
+  # adds none to a templated object -- and one template is rendered for every
+  # entry, including scale-to-zero ones whose {{MIN}} is 0. `replicas: {{MIN}}`
+  # then renders fallback.replicas 0 on minReplicaCount 0, which KEDA scales to
+  # zero on ANY trigger error once cooldownPeriod passes (its RequestScale treats
+  # an erroring trigger as inactive), so the installer refuses that render.
+  #
+  # The fallback covers a scaling manager controller that is down or unreachable; before its
+  # first decision after a restart scaling manager answers the current replica count and no
+  # fallback is involved. To keep one, use it only where every entry has a floor
+  # of at least 1, or write a fixed replicas of at least 1 instead of {{MIN}}.
+  # behavior needs KEDA 2.17 or later: an older KEDA drops the field and the
+  # fallback becomes static, forcing replicas whatever the fleet is running.
+  #
+  # fallback:
+  #   failureThreshold: 3
+  #   replicas: {{MIN}}
+  #   behavior: currentReplicasIfHigher
+  advanced:
+    restoreToOriginalReplicaCount: true
+  triggers:
+    - type: external-push
+      name: scaling-manager-external-scaler
+      # A replica count: keep AverageValue (the default), never Value.
+      metricType: AverageValue
+      metadata:
+        scalerAddress: {{SCALER_ADDRESS}}
+        modelID: "{{MODEL_ID}}"
+        # The relative price of one replica of this variant. Only the ratio
+        # between variants of one model matters.
+        variantCost: "{{VARIANT_COST}}"
+        # A named policy tier from the scaling-policy ConfigMap. Empty is the
+        # normal value: it means "whatever the cluster's default entry says",
+        # which an admin can then change for every workload at once.
+        scalingPolicy: "{{SCALING_POLICY}}"
+        # How many tokens one request generates. Optional, and a SEED only: the
+        # fleet's own measurement replaces it as soon as one exists, so a figure
+        # of the right order is what matters. Set it when generations are much
+        # longer than a chat completion -- until a replica has completed one
+        # there is no reading to price a queued request with, and the built-in
+        # fallback is 512 tokens.
+        # defaultOutputTokens: "6000"

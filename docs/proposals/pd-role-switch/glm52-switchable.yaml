@@ -1,0 +1,195 @@
+# EXPERIMENTAL, not supported: needs a vLLM that serves POST /switch_pd_role,
+# which no released vLLM does. Not run end to end; see README.md.
+#
+# GLM-5.2-FP8 on llm-d, with replicas that can change P/D role in place.
+#
+# One replica is one LeaderWorkerSet group: two pods of 8 GPUs, EP=16, the
+# topology the switch was measured on. The leader serves the API (ranks 0-7);
+# the worker is headless (ranks 8-15). The prefill:decode RATIO is which leader
+# pods carry which llm-d.ai/role label; `replicas` only sets total capacity.
+#
+# llm-d.ai/role is in no selector. LeaderWorkerSet's StatefulSets select on its
+# own leaderworkerset.sigs.k8s.io/* labels, so the role stays an ordinary
+# mutable pod label. (A Deployment that puts the role in its selector orphans a
+# relabelled pod -- see check-label-semantics.sh. The LWS case is not yet
+# checked by that script.)
+#
+# Needs the LeaderWorkerSet CRD. Adapt to your cluster: the image, the RDMA
+# device resource (rdma/ib here), any fabric env your NVSHMEM needs, and the
+# hostPath weight cache.
+#
+#   kubectl apply -n "$NAMESPACE" -f glm52-switchable.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: glm52-switchable
+---
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: glm52-switchable
+spec:
+  replicas: 2
+  leaderWorkerTemplate:
+    size: 2
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          # Only the leader carries llm-d.ai/guide, so only the leader (the pod
+          # that serves HTTP) is in the InferencePool.
+          llm-d.ai/guide: glm52-switchable
+          llm-d.ai/model: GLM-5.2-FP8
+          llm-d.ai/engine-type: vllm
+          llm-d.ai/accelerator-vendor: nvidia
+          llm-d.ai/accelerator-variant: gpu
+          llm-d.ai/role: prefill        # starting role only; mutable from here
+      spec:
+        serviceAccountName: glm52-switchable
+        containers:
+          - name: modelserver
+            # A stock image does NOT serve /switch_pd_role. Use an image built
+            # from the vLLM fork, or a stock one with the injection from step 1b
+            # of https://github.com/ev-shindin/vllm-conf/blob/feat/pd-role-switch/tools/pd_role_switch/README.md
+            image: registry.example.com/vllm-pd-role-switch:REPLACE_ME
+            command: ["vllm", "serve"]
+            args:
+              - zai-org/GLM-5.2-FP8
+              - --trust-remote-code
+              - --port=8000
+              - --data-parallel-size=16
+              - --data-parallel-size-local=8
+              - --data-parallel-address=$(LWS_LEADER_ADDRESS)
+              - --data-parallel-rpc-port=5555
+              - --enable-expert-parallel
+              - --tensor-parallel-size=1
+              - --all2all-backend=deepep_v2
+              - --block-size=64
+              - --kv-cache-dtype=fp8
+              - --max-model-len=8192
+              - --gpu-memory-utilization=0.90
+              - --max-num-seqs=128
+              # Boot at the PREFILL budget. This figure also sizes the input
+              # buffers, the compile range and the attention workspace at init,
+              # so a switch may LOWER it but must never raise it past launch.
+              - --max-num-batched-tokens=2048
+              # kv_both covers both directions, which is what a switchable
+              # engine needs, and it is what llm-d sets on both roles. The
+              # switch leaves it alone.
+              - --kv-transfer-config
+              - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+            env: &engine-env
+              # Must be the pod's own IP: the peer dials this for the KV handshake.
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom: { fieldRef: { fieldPath: status.podIP } }
+              # /switch_pd_role is a development route. Without this the engine
+              # serves normally and every switch returns 404 -- which reads as
+              # a 6 ms switch, not as a missing route.
+              - { name: VLLM_SERVER_DEV_MODE, value: "1" }
+              # 0 across nodes, 1 on a single node. The value inverts.
+              - { name: VLLM_DEEPEP_V2_ALLOW_HYBRID_MODE, value: "0" }
+              # deepep_v2 pads its layout; deep_gemm derives the expert count
+              # from the padded tensor and asserts.
+              - { name: VLLM_USE_DEEP_GEMM, value: "0" }
+              # Park the outgoing buffer: keeps captured CUDA graphs valid and
+              # makes the return switch a reuse rather than a rebuild.
+              - { name: VLLM_PD_KEEP_PREVIOUS, value: "1" }
+              - { name: VLLM_ENGINE_READY_TIMEOUT_S, value: "3600" }
+              - { name: HF_HOME, value: /hf-cache }
+            ports:
+              - { containerPort: 8000, name: modelserver }
+              - { containerPort: 5600, name: nixl }
+            resources: &engine-resources
+              limits: { nvidia.com/gpu: "8", rdma/ib: "8", cpu: "64", memory: 1200Gi }
+              requests: { nvidia.com/gpu: "8", rdma/ib: "8", cpu: "64", memory: 1200Gi }
+            securityContext: &engine-security
+              capabilities: { add: ["IPC_LOCK"] }
+            livenessProbe:
+              httpGet: { path: /health, port: modelserver }
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+            readinessProbe:
+              httpGet: { path: /v1/models, port: modelserver }
+              periodSeconds: 5
+              timeoutSeconds: 2
+              failureThreshold: 3
+            startupProbe:
+              # About 700 GiB of weights. 120 x 30s = 60 min before giving up.
+              httpGet: { path: /v1/models, port: modelserver }
+              initialDelaySeconds: 15
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 120
+            volumeMounts: &engine-mounts
+              - { name: hf, mountPath: /hf-cache }
+              - { name: shm, mountPath: /dev/shm }
+        volumes: &engine-volumes
+          # Node-local weight cache. Replace the path with where your nodes keep it.
+          - name: hf
+            hostPath: { path: /path/to/node-local/hf-cache, type: Directory }
+          - name: shm
+            emptyDir: { medium: Memory, sizeLimit: 200Gi }
+    workerTemplate:
+      metadata:
+        labels:
+          # No llm-d.ai/guide and no role: the worker serves no HTTP and must
+          # not be in the pool. It follows its leader's role.
+          app.kubernetes.io/name: glm52-switchable-worker
+      spec:
+        serviceAccountName: glm52-switchable
+        containers:
+          - name: modelserver
+            image: registry.example.com/vllm-pd-role-switch:REPLACE_ME
+            command: ["vllm", "serve"]
+            # The leader's arguments, plus the two that make this ranks 8-15.
+            args:
+              - zai-org/GLM-5.2-FP8
+              - --trust-remote-code
+              - --data-parallel-size=16
+              - --data-parallel-size-local=8
+              - --data-parallel-address=$(LWS_LEADER_ADDRESS)
+              - --data-parallel-rpc-port=5555
+              - --data-parallel-start-rank=8
+              - --headless
+              - --enable-expert-parallel
+              - --tensor-parallel-size=1
+              - --all2all-backend=deepep_v2
+              - --block-size=64
+              - --kv-cache-dtype=fp8
+              - --max-model-len=8192
+              - --gpu-memory-utilization=0.90
+              - --max-num-seqs=128
+              - --max-num-batched-tokens=2048
+              - --kv-transfer-config
+              - '{"kv_connector":"NixlConnector","kv_role":"kv_both"}'
+            env: *engine-env
+            ports:
+              - { containerPort: 5600, name: nixl }
+            resources: *engine-resources
+            securityContext: *engine-security
+            volumeMounts: *engine-mounts
+        volumes: *engine-volumes
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: glm52-switchable
+spec:
+  appProtocol: http
+  # Membership keys on the guide label, which never changes and only leaders
+  # carry -- so a role switch never ejects a replica from the pool.
+  selector:
+    matchLabels:
+      llm-d.ai/guide: glm52-switchable
+  targetPorts:
+    - number: 8000
+  # The endpoint picker is not in this file; deploy it as an llm-d guide does,
+  # with P/D enabled, under this Service name.
+  endpointPickerRef:
+    group: ""
+    kind: Service
+    name: glm52-switchable-epp
+    port:
+      number: 9002
+    failureMode: FailOpen

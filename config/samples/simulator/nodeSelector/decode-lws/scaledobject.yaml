@@ -1,0 +1,43 @@
+# Registers this simulated LWS decode variant with the scaling manager.
+#
+# This replaces the HPA the sample used to ship. That HPA read
+# llmsm_desired_replicas through prometheus-adapter and carried llm-d.ai/managed,
+# model-id and variant-cost annotations — a discovery path that no longer
+# exists. Worse, it actively broke the sample: KEDA's admission webhook refuses
+# a ScaledObject for a workload an HPA already manages, so applying the sample
+# and then `make scaledobjects-apply` left the workload registered with nothing.
+#
+# The scaling manager has no watch and no listing. This object IS the registration, and the
+# trigger metadata is the whole per-variant configuration surface. See
+# ../../../keda/external-scaler/scaledobject.yaml for the fully annotated form.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: dev-model-decode-lws-llmsm
+  namespace: llm-d-sim
+spec:
+  scaleTargetRef:
+    apiVersion: leaderworkerset.x-k8s.io/v1
+    kind: LeaderWorkerSet
+    name: dev-model-decode-lws
+  pollingInterval: 5
+  cooldownPeriod: 30
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  advanced:
+    restoreToOriginalReplicaCount: true
+  triggers:
+    - type: external-push
+      name: scaling-manager-external-scaler
+      metadata:
+        # The deploy overlays apply namePrefix: scaling-manager-, so the Service that routes
+        # to the controller's gRPC port resolves to this name.
+        scalerAddress: scaling-manager-external-scaler.scaling-manager-system.svc:9090
+        # Must match what the container actually serves (--model test-model), and
+        # it is the grouping key: variants sharing a modelID are optimized
+        # together.
+        modelID: test-model
+        variantCost: "30.0"
+      authenticationRef:      # TLS, the default. Plaintext install: ...svc.cluster.local:9090 and no authenticationRef
+        name: scaling-manager-external-scaler-scaling-manager-system
+        kind: ClusterTriggerAuthentication

@@ -1,0 +1,36 @@
+# The warm-pool proxy: the sidecar that gives a pool Pod a stable serving port
+# and points it at whichever engine in that Pod is awake.
+#
+# Separate from the manager's Dockerfile because it ships in a different Pod --
+# the pool's, next to the GPU-holding supervisor -- and has no reason to carry
+# the controller binary.
+#
+# The builder is pinned by tag, as in the manager's Dockerfile: quay.io deletes
+# superseded golang digests, so a digest pin breaks every uncached build. The
+# runtime stage stays digest-pinned.
+FROM quay.io/projectquay/golang:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/warmpool-proxy/ cmd/warmpool-proxy/
+COPY internal/warmpool/proxy/ internal/warmpool/proxy/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a -o warmpool-proxy cmd/warmpool-proxy/main.go
+
+FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
+
+LABEL org.opencontainers.image.source="https://github.com/llm-d/llm-d-workload-variant-autoscaler"
+LABEL org.opencontainers.image.description="Warm-pool proxy - forwards a pool Pod's serving port to the model currently awake in it"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+WORKDIR /
+COPY --from=builder /workspace/warmpool-proxy .
+USER 65532:65532
+
+ENTRYPOINT ["/warmpool-proxy"]

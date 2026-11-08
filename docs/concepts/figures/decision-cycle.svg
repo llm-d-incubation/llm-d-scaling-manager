@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" width="960" height="500" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <rect width="960" height="500" rx="12" fill="#ffffff"/>
+  <text x="20" y="30" font-size="12" fill="#0969da" font-weight="600">ONE CYCLE OF THE STEADY-STATE ENGINE: every 15 s, on the leader replica, for every model</text>
+
+  <rect x="20" y="45" width="172" height="170" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="106" y="70" text-anchor="middle" font-weight="700">1  Collect</text>
+  <text x="106" y="94" text-anchor="middle" font-size="12">from Prometheus, per</text>
+  <text x="106" y="111" text-anchor="middle" font-size="12">replica: KV cache, running</text>
+  <text x="106" y="128" text-anchor="middle" font-size="12">and waiting requests,</text>
+  <text x="106" y="145" text-anchor="middle" font-size="12">token rates; per model:</text>
+  <text x="106" y="162" text-anchor="middle" font-size="12">the router (EPP) queue</text>
+  <text x="106" y="179" text-anchor="middle" font-size="12">and arrival rate</text>
+  <line x1="192" y1="130" x2="206" y2="130" stroke="#0969da" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="208" y="45" width="172" height="170" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="294" y="70" text-anchor="middle" font-weight="700">2  Analyze</text>
+  <text x="294" y="94" text-anchor="middle" font-size="12">the saturation analyzer:</text>
+  <text x="294" y="111" text-anchor="middle" font-size="12">how full each replica is,</text>
+  <text x="294" y="128" text-anchor="middle" font-size="12">and the capacity the</text>
+  <text x="294" y="145" text-anchor="middle" font-size="12">model needs for its load</text>
+  <text x="294" y="170" text-anchor="middle" font-size="11" fill="#57606a">throughput and custom</text>
+  <text x="294" y="185" text-anchor="middle" font-size="11" fill="#57606a">analyzers, if enabled,</text>
+  <text x="294" y="200" text-anchor="middle" font-size="11" fill="#57606a">only report metrics</text>
+  <line x1="380" y1="130" x2="394" y2="130" stroke="#0969da" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="396" y="45" width="188" height="170" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="490" y="70" text-anchor="middle" font-weight="700">3  Decide</text>
+  <text x="490" y="94" text-anchor="middle" font-size="12">split that capacity across</text>
+  <text x="490" y="110" text-anchor="middle" font-size="12">the variants, lowest cost</text>
+  <text x="490" y="126" text-anchor="middle" font-size="12">per unit of capacity first;</text>
+  <text x="490" y="142" text-anchor="middle" font-size="12">with a limiter, by score</text>
+  <text x="490" y="158" text-anchor="middle" font-size="12">inside the cycle's budget</text>
+  <text x="490" y="187" text-anchor="middle" font-size="11" fill="#57606a">utilization share, if on,</text>
+  <text x="490" y="202" text-anchor="middle" font-size="11" fill="#57606a">then moves GPUs between models</text>
+  <line x1="584" y1="130" x2="598" y2="130" stroke="#0969da" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="600" y="45" width="164" height="170" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="682" y="70" text-anchor="middle" font-weight="700">4  Scale to zero</text>
+  <text x="682" y="94" text-anchor="middle" font-size="12">if enabled: a model</text>
+  <text x="682" y="111" text-anchor="middle" font-size="12">with no requests for</text>
+  <text x="682" y="128" text-anchor="middle" font-size="12">its retention period</text>
+  <text x="682" y="145" text-anchor="middle" font-size="12">is set to zero</text>
+  <line x1="764" y1="130" x2="778" y2="130" stroke="#0969da" stroke-width="2" marker-end="url(#a)"/>
+
+  <rect x="780" y="45" width="160" height="170" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <text x="860" y="70" text-anchor="middle" font-weight="700">5  Publish</text>
+  <text x="860" y="94" text-anchor="middle" font-size="12">each ScaledObject's</text>
+  <text x="860" y="111" text-anchor="middle" font-size="12">replica count, kept in</text>
+  <text x="860" y="128" text-anchor="middle" font-size="12">memory for KEDA;</text>
+  <text x="860" y="145" text-anchor="middle" font-size="12">an Event when it</text>
+  <text x="860" y="162" text-anchor="middle" font-size="12">changes; metrics</text>
+
+  <!-- the GPU budget input -->
+  <rect x="396" y="245" width="188" height="64" rx="8" fill="#f6f8fa" stroke="#57606a" stroke-dasharray="5 4"/>
+  <text x="490" y="268" text-anchor="middle" font-size="12" font-weight="600">GPU budget (optional limiter)</text>
+  <text x="490" y="287" text-anchor="middle" font-size="11">free GPUs, a quota, or Kueue</text>
+  <text x="490" y="301" text-anchor="middle" font-size="11">quotas: an input to step 3</text>
+  <line x1="490" y1="245" x2="490" y2="219" stroke="#57606a" stroke-width="2" marker-end="url(#g)"/>
+
+  <!-- how KEDA gets it -->
+  <rect x="620" y="245" width="320" height="110" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="640" y="270" font-weight="700" font-size="13">How KEDA gets the number</text>
+  <text x="640" y="292" font-size="12">The HPA KEDA made reads it with GetMetrics on its</text>
+  <text x="640" y="309" font-size="12">own sync period (target 1, so replicas = the count).</text>
+  <text x="640" y="326" font-size="12">The push stream (StreamIsActive) carries only</text>
+  <text x="640" y="343" font-size="12">active or not: it is what takes a model off zero.</text>
+  <line x1="860" y1="215" x2="860" y2="241" stroke="#57606a" stroke-width="2" marker-end="url(#g)"/>
+
+  <!-- scale from zero -->
+  <rect x="20" y="380" width="920" height="80" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="40" y="404" font-weight="700" font-size="13">Beside it: the scale-from-zero engine (every 100 ms)</text>
+  <text x="40" y="426" font-size="12">For a model at zero replicas it reads the EPP queue directly from the EPP (Prometheus only if that fails). If requests are</text>
+  <text x="40" y="443" font-size="12">waiting and the GPU budget allows, it sets one replica, and the push stream wakes KEDA at once instead of on its next poll.</text>
+
+  <text x="20" y="487" font-size="12" fill="#57606a">Thresholds, tiers and limiters come from the scaling-policy ConfigMap, re-read live. The cycle interval needs a restart.</text>
+</svg>

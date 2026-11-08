@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Admits the KEDA external scaler port (:9090) only from KEDA's namespace,
+# keeping metrics (:8443) and probes (:8081) open. Part of every shipped
+# overlay; listed BEFORE components/openshift there, so that component can
+# point it at openshift-keda.
+#
+# deploy/install.sh rewrites the KEDA namespace to the one it finds KEDA in, and
+# drops this component's policy with LLMSM_SCALER_NETWORKPOLICY=false. Applying
+# an overlay by hand with KEDA anywhere but keda-system (or openshift-keda on
+# OpenShift) needs the namespaceSelector in external-scaler-networkpolicy.yaml
+# edited, or every external-scaler call is refused.
+resources:
+- external-scaler-networkpolicy.yaml

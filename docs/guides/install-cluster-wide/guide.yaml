@@ -1,0 +1,31 @@
+name: install-cluster-wide
+
+prerequisites:
+  check:
+    note: Read-only. Reports what the install would need.
+    run: make check-prereqs SCOPE=cluster
+
+deploy:
+  all:
+    run: make deploy-scaling-manager SCOPE=cluster
+  register:
+    note: Plan and apply ScaledObjects in every namespace with model servers. Keep SCOPE=cluster.
+    run: |
+      make scaledobjects-plan SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+      # edit scaling-manager-plan.yaml: apply: yes|no|adopt, the modelID, the replica bounds
+      make scaledobjects-apply SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+
+verify:
+  objects:
+    run: kubectl get scaledobject,hpa -A
+
+troubleshoot:
+  repoint:
+    note: Point ScaledObjects at the running install's scaler.
+    run: make scaledobjects-repoint
+
+cleanup:
+  uninstall:
+    run: make undeploy-scaling-manager SCOPE=cluster
+  model:
+    run: make benchmark-teardown BENCHMARK_NAMESPACE=<the model namespace>

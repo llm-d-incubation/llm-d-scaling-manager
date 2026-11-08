@@ -1,0 +1,232 @@
+# promtool unit tests for the Kueue borrowing alerts. hack/check-alert-rules.sh
+# copies the shipped PrometheusRule groups, annotations stripped, to rules.yaml
+# beside this file and runs promtool test rules on it.
+#
+# The series carry the labels they have once scraped: the model namespace as
+# exported_namespace, and pod for the controller pod.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. A failed Kueue read freezes every namespace of the entry: one
+  #    LLMSMKueueReaderStale for entry kq, not one page per namespace, and no
+  #    per-namespace alert. A stale namespace of entry other, alone there,
+  #    is named on its own.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-a",accelerator="H100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-b",accelerator="H100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-c",accelerator="A100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="other",exported_namespace="team-d",accelerator="H100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LLMSMKueueReaderStale
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStale
+        exp_alerts:
+          - exp_labels: {severity: warning, limiter_name: kq}
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStaleNamespace
+        exp_alerts:
+          - exp_labels: {severity: warning, limiter_name: other, exported_namespace: team-d}
+      - eval_time: 10m
+        alertname: LLMSMKueueControllerDown
+        exp_alerts: []
+
+  # 1b. The per-namespace alert waits until the namespace is the entry's only
+  #     stale one: team-b recovers after 3 minutes (its series deleted, so a
+  #     stale marker), and team-a, alone from then, fires 5 minutes later.
+  #     The entry-wide alert never reaches 5 minutes with two.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-a",accelerator="H100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-b",accelerator="H100",reason="stale",pod="scaling-manager-a"}'
+        values: '1x3 stale'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LLMSMKueueReaderStaleNamespace
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LLMSMKueueReaderStaleNamespace
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStaleNamespace
+        exp_alerts:
+          - exp_labels: {severity: warning, limiter_name: kq, exported_namespace: team-a}
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStale
+        exp_alerts: []
+
+  # 2. Kueue controller down: one alert per quota entry, however many
+  #    namespaces it freezes.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-a",accelerator="H100",reason="kueue-controller-down",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-b",accelerator="H100",reason="kueue-controller-down",pod="scaling-manager-a"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLMSMKueueControllerDown
+        exp_alerts:
+          - exp_labels: {severity: warning, limiter_name: kq}
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStale
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: LLMSMKueueReaderStaleNamespace
+        exp_alerts: []
+
+  # 3. LLMSMKueueVersionUnknown names the controller instance that cannot read
+  #    the version; the one that can stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_kueue_controller_version_known{controller_instance="east",pod="scaling-manager-a"}'
+        values: '1x20'
+      - series: 'llmsm_kueue_controller_version_known{controller_instance="west",pod="scaling-manager-b"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LLMSMKueueVersionUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, controller_instance: west}
+
+  # 3b. A Deployment that cannot be read sets the version gauge to 0 and
+  #     freezes borrowing as kueue-controller-down. Instance west pages once,
+  #     as LLMSMKueueControllerDown; instance east, version 0 with Kueue up (a
+  #     digest-only image), still pages LLMSMKueueVersionUnknown.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_kueue_controller_version_known{controller_instance="east",pod="scaling-manager-a"}'
+        values: '0x20'
+      - series: 'llmsm_kueue_controller_version_known{controller_instance="west",pod="scaling-manager-b"}'
+        values: '0x20'
+      - series: 'llmsm_quota_borrow_withheld{controller_instance="west",limiter_name="kq",exported_namespace="team-a",accelerator="H100",reason="kueue-controller-down",pod="scaling-manager-b"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LLMSMKueueVersionUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, controller_instance: east}
+      - eval_time: 15m
+        alertname: LLMSMKueueControllerDown
+        exp_alerts:
+          - exp_labels: {severity: warning, limiter_name: kq}
+
+  # 4. An untested Kueue release is said, at info, after 30 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_quota_borrow_withheld{limiter_name="kq",exported_namespace="team-a",accelerator="H100",reason="kueue-version-untested",pod="scaling-manager-a"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMKueueVersionUntested
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: LLMSMKueueVersionUntested
+        exp_alerts:
+          - exp_labels: {severity: info, limiter_name: kq}
+
+  # 5. LLMSMKueueBorrowThrashing. Both counters start at 0 (the controller
+  #    creates them on the first cycle that counts borrowing), so every loss
+  #    is an increase. Scraped every 50s, so the rule (every minute) runs
+  #    between two samples, as it does on a real cluster. Model m: releases
+  #    at 67.5m and 73.3m, a preemption at 75.8m, another at 82.5m. increase()
+  #    extrapolates to the end of the hour and reads the first three losses
+  #    as about 3.03: at 79m "> 3" paged on three, "> 3.5" does not; after the
+  #    fourth it fires. Model p is only ever preempted (59.2m to 66.7m) and
+  #    has no release series: four preemptions still fire. Model g, where no
+  #    borrowing is counted, has five replicas released at Kueue's gate
+  #    (cause kueue-gate): no borrowed capacity lost, so it never fires.
+  - interval: 50s
+    input_series:
+      - series: 'llmsm_borrow_releases_total{exported_namespace="a",model_name="m",cause="placement-timeout",pod="scaling-manager-a"}'
+        values: '0x80 1x6 2x60'
+      - series: 'llmsm_borrow_releases_total{exported_namespace="a",model_name="g",cause="kueue-gate",pod="scaling-manager-a"}'
+        values: '0x70 1x2 2x2 3x2 4x2 5x80'
+      - series: 'llmsm_kueue_preempted_pods_total{exported_namespace="a",model_name="m",pod="scaling-manager-a"}'
+        values: '0x90 1x7 2x60'
+      - series: 'llmsm_kueue_preempted_pods_total{exported_namespace="a",model_name="p",pod="scaling-manager-a"}'
+        values: '0x70 1x2 2x2 3x2 4x80'
+    alert_rule_test:
+      - eval_time: 79m
+        alertname: LLMSMKueueBorrowThrashing
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: a, model_name: p}
+      - eval_time: 86m
+        alertname: LLMSMKueueBorrowThrashing
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: a, model_name: m}
+          - exp_labels: {severity: warning, exported_namespace: a, model_name: p}
+
+  # 6. LLMSMKueueLenderWaitingPastCooldown without releaseToNonReclaimingLenders:
+  #    no release-latency gauge, so the threshold is the 600s cooldown alone.
+  #    The lender waits past it from minute 11 and pages two minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_kueue_lender_waiting_seconds{cohort="c",cluster_queue="lender",pod="scaling-manager-a"}'
+        values: '0+60x30'
+      - series: 'llmsm_kueue_borrow_cooldown_seconds{pod="scaling-manager-a"}'
+        values: '600x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLMSMKueueLenderWaitingPastCooldown
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: LLMSMKueueLenderWaitingPastCooldown
+        exp_alerts:
+          - exp_labels: {severity: warning, cohort: c, cluster_queue: lender}
+
+  # 6b. With releaseToNonReclaimingLenders a release lands only after the
+  #     scale-down of the models it lowers: cohort c's 360s latency is added
+  #     to the wait of c's lender alone, so it is quiet at 14 minutes and
+  #     pages once past 960s (minute 17) for two minutes. Cohort any, whose
+  #     lender Kueue reclaims for, publishes no latency: its threshold stays
+  #     the cooldown alone, and it pages at 14 minutes as in case 6 (PR #203
+  #     review SF2: one tenant's latency must not delay every cohort's page).
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_kueue_lender_waiting_seconds{cohort="c",cluster_queue="lender",pod="scaling-manager-a"}'
+        values: '0+60x30'
+      - series: 'llmsm_kueue_lender_waiting_seconds{cohort="any",cluster_queue="team",pod="scaling-manager-a"}'
+        values: '0+60x30'
+      - series: 'llmsm_kueue_borrow_cooldown_seconds{pod="scaling-manager-a"}'
+        values: '600x30'
+      - series: 'llmsm_kueue_borrow_release_latency_seconds{cohort="c",pod="scaling-manager-a"}'
+        values: '360x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LLMSMKueueLenderWaitingPastCooldown
+        exp_alerts:
+          - exp_labels: {severity: warning, cohort: any, cluster_queue: team}
+      - eval_time: 18m
+        alertname: LLMSMKueueLenderWaitingPastCooldown
+        exp_alerts:
+          - exp_labels: {severity: warning, cohort: any, cluster_queue: team}
+      - eval_time: 20m
+        alertname: LLMSMKueueLenderWaitingPastCooldown
+        exp_alerts:
+          - exp_labels: {severity: warning, cohort: any, cluster_queue: team}
+          - exp_labels: {severity: warning, cohort: c, cluster_queue: lender}
+
+  # 7. A release to a waiting lender is capacity handed back on purpose, not
+  #    a loss: four of them in an hour (cause lender-waiting) do not page
+  #    LLMSMKueueBorrowThrashing (PR #203 review, SF minor); four placement-
+  #    timeout releases of another model in the same hour do.
+  - interval: 50s
+    input_series:
+      - series: 'llmsm_borrow_releases_total{exported_namespace="a",model_name="r",cause="lender-waiting",pod="scaling-manager-a"}'
+        values: '0x70 1x2 2x2 3x2 4x80'
+      - series: 'llmsm_borrow_releases_total{exported_namespace="a",model_name="t",cause="placement-timeout",pod="scaling-manager-a"}'
+        values: '0x70 1x2 2x2 3x2 4x80'
+    alert_rule_test:
+      - eval_time: 79m
+        alertname: LLMSMKueueBorrowThrashing
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: a, model_name: t}

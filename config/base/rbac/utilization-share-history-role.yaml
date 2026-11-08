@@ -1,0 +1,32 @@
+# The utilization-share optimizer stores each group's need history in one
+# ConfigMap in the controller's own namespace, so a restart does not forget the
+# models' peaks (docs/reference/scaling-policy.md, utilizationShare). Without
+# this Role the controller logs the failure and starts every ledger without
+# history, as it did before the store existed.
+#
+# A namespaced Role, so it installs in both scopes: a namespace admin may create
+# it in the namespace they install into. get and update are limited to the one
+# ConfigMap by name; create cannot be, because the name of an object that does
+# not exist yet is not known to the authorizer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: scaling-manager
+  name: utilization-share-history-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  resourceNames:
+  - scaling-manager-utilization-share-history
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create

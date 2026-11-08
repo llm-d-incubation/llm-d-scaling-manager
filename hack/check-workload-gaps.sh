@@ -1,0 +1,3342 @@
+#!/usr/bin/env bash
+#
+# Executes the workload-readiness path in deploy/lib/scaledobject.sh against
+# fixture pod specs.
+#
+# It exists because `bash -n` is the only check these libraries had, and every
+# defect it pins down parses cleanly: an engine chosen by name that landed on a
+# routing proxy, a preStop check that counted hooks pod-wide, a "weights persist"
+# test satisfied by a PVC mounted anywhere, and an unreadable object reported as
+# healthy. None are syntax errors and all silently answer wrongly about a running
+# workload.
+#
+# WRITING A CASE HERE: every case needs at least one POSITIVE assertion. An
+# earlier version of this file was mutation-tested by deleting the library
+# outright, and 10 of its 25 cases still printed `ok` -- `assert_not_contains`
+# and `[ -z "$out" ]` are both satisfied by a function that does not exist. Where
+# a case is about an absence, anchor it to something that must be PRESENT in the
+# same output.
+#
+# kubectl is stubbed, so the assertions are about what the functions CONCLUDE.
+
+set -u
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Sourced through a CR-stripped copy. These files are LF in git, but a Windows
+# checkout with core.autocrlf writes them CRLF, and bash then reports
+# `$'\r': command not found` and stops at the first function definition -- which
+# looks exactly like every function being missing. Same reason the repo verifies
+# gofmt against an LF-normalised copy rather than the working tree.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+for lib in common.sh scaledobject.sh; do
+    tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$WORK/$lib"
+done
+# common.sh's header says it plainly: "Requires vars: BLUE, GREEN, YELLOW, RED,
+# NC." install.sh defines them; a harness that sources the library directly has
+# to as well, or the first log_warning dies on an unbound variable under `set -u`
+# -- which inside a command substitution kills only the subshell, so it surfaces
+# as one test silently returning nothing rather than as an error.
+BLUE='' GREEN='' YELLOW='' RED='' NC=''
+# shellcheck source=/dev/null
+source "$WORK/common.sh"
+# shellcheck source=/dev/null
+source "$WORK/scaledobject.sh"
+
+# yq is not optional. The library cannot index or trim a patch document without
+# it, and skipping those cases meant the run stayed green on a machine where the
+# feature could not work at all.
+for tool in jq yq; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        printf 'FATAL: %s is required to run these checks.\n' "$tool" >&2
+        exit 1
+    }
+done
+
+FIXTURE=""        # JSON for `kubectl get <kind> <name>`
+FIXTURE_RC=0      # or the failure it returns instead
+LIST_FIXTURE=''   # JSON for `kubectl get <kind> -n <ns>`
+LIST_RC=0
+LIST_FIXTURE_LWS=''  # the leaderworkersets listing, when it differs from LIST_FIXTURE
+CRD_RC=1          # no LeaderWorkerSet CRD unless a case says otherwise
+PATCH_CALLS=0
+PATCH_RC=0
+PATCH_BODY=""     # the last --patch-file content kubectl was handed
+PATCH_ARGS=""     # ...and the arguments it was called with
+PVC_FIXTURE='{"items":[]}'   # JSON for `kubectl get pvc -n <ns>`
+PVC_RC=0
+DS_FIXTURE=""     # JSON for `kubectl get daemonset <name>`; empty: none
+DS_RC=0           # or the failure the read returns instead
+PODS_FIXTURE=''   # JSON for `kubectl get pods -n <ns> -l <sel>`; empty: none
+PODS_RC=0
+PODS_ERR=""
+RS_FIXTURE=''     # JSON for `kubectl get replicasets -n <ns> -l <sel>`; empty: none
+KUBECTL_TRACE=""  # a file the pods and logs reads are appended to: they run
+                  # inside command substitutions, so a variable set there is lost
+LOGS_FIXTURE=''   # the text `kubectl logs <pod>` prints
+LOGS_RC=0
+LOGS_ERR=""
+# Per-NAME object fixtures, for the cases about a namespace holding more than
+# one workload. A single FIXTURE cannot express "this one is readable and that
+# one is not", nor tell two patch documents apart. "__RC1__" means the read
+# fails for that name.
+declare -A FIXTURE_MAP=()
+
+kubectl() {
+    local a f
+    case "${1:-}" in
+        get)
+            case "${2:-}" in
+                crd) return "$CRD_RC" ;;
+                pvc|persistentvolumeclaims)
+                    [ "$PVC_RC" -eq 0 ] || return "$PVC_RC"
+                    # `get pvc -n <ns>` is the listing; `get pvc <name> -n <ns>`
+                    # is one claim, and the real client answers NotFound (rc 1)
+                    # for a name the listing does not carry. The stub used to
+                    # print the listing for both, so "does this claim exist?"
+                    # was yes for every name -- and a patch that asked it
+                    # reported a claim that was never created as reused.
+                    case "${3:-}" in ""|-*) : ;; *)
+                        # ...and with -o json it is that one object, as the
+                        # real client prints it, not the listing.
+                        printf '%s' "$PVC_FIXTURE" \
+                            | jq -e --arg n "$3" '[.items[]? | select(.metadata.name == $n)] | length > 0' >/dev/null 2>&1 \
+                            || return 1
+                        printf '%s' "$PVC_FIXTURE" | jq -c --arg n "$3" '[.items[] | select(.metadata.name == $n)] | first'
+                        return 0 ;;
+                    esac
+                    printf '%s' "$PVC_FIXTURE"
+                    ;;
+                daemonset|daemonsets|ds)
+                    # --ignore-not-found semantics: an absent object is empty
+                    # output with rc 0; DS_RC is any other failure (Forbidden,
+                    # a timeout), which the library must not read as absent.
+                    [ "$DS_RC" -eq 0 ] || return "$DS_RC"
+                    printf '%s' "$DS_FIXTURE"
+                    ;;
+                deployments|leaderworkersets)
+                    # `get <kind> -n <ns>` is a listing; `get <kind> <name> …` is
+                    # one object. The stub has to tell them apart or a case can
+                    # pass on a response the real client would never give.
+                    if [ "${3:-}" = "-n" ]; then
+                        [ "$LIST_RC" -eq 0 ] || return "$LIST_RC"
+                        if [ "$2" = "leaderworkersets" ] && [ -n "$LIST_FIXTURE_LWS" ]; then
+                            printf '%s' "$LIST_FIXTURE_LWS"
+                            return 0
+                        fi
+                        printf '%s' "$LIST_FIXTURE"
+                    elif [ "${#FIXTURE_MAP[@]}" -gt 0 ] \
+                         && [ -n "${FIXTURE_MAP[${3:-}]+set}" ]; then
+                        [ "${FIXTURE_MAP[${3:-}]}" = "__RC1__" ] && return 1
+                        printf '%s' "${FIXTURE_MAP[${3:-}]}"
+                    else
+                        [ "$FIXTURE_RC" -eq 0 ] || return "$FIXTURE_RC"
+                        printf '%s' "$FIXTURE"
+                    fi
+                    ;;
+                replicasets)
+                    printf '%s' "$RS_FIXTURE"
+                    ;;
+                pods)
+                    # `get pods -n <ns> -l <selector> -o json`: the replicas
+                    # the KV-bytes proposal reads a log from.
+                    [ -z "$KUBECTL_TRACE" ] || printf '%s\n' "$*" >> "$KUBECTL_TRACE"
+                    [ "$PODS_RC" -eq 0 ] || { printf '%s\n' "$PODS_ERR" >&2; return "$PODS_RC"; }
+                    printf '%s' "$PODS_FIXTURE"
+                    ;;
+                *) return 0 ;;
+            esac
+            ;;
+        logs)
+            [ -z "$KUBECTL_TRACE" ] || printf '%s\n' "$*" >> "$KUBECTL_TRACE"
+            [ "$LOGS_RC" -eq 0 ] || { printf '%s\n' "$LOGS_ERR" >&2; return "$LOGS_RC"; }
+            printf '%s' "$LOGS_FIXTURE"
+            ;;
+        patch)
+            PATCH_CALLS=$((PATCH_CALLS + 1))
+            PATCH_ARGS="$*"
+            for a in "$@"; do
+                case "$a" in
+                    --patch-file=*) f="${a#--patch-file=}"
+                                    PATCH_BODY="$(cat "$f" 2>/dev/null)" ;;
+                esac
+            done
+            return "$PATCH_RC"
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+POD_DEPLOY='["spec","template"]'
+POD_LWS='["spec","leaderWorkerTemplate","leaderTemplate"]'
+FAILED=0
+CASE=""
+RAN=0
+# Counted from the file rather than hand-maintained, so adding a case cannot
+# leave the tally stale. It is the number of `CASE=` labels with a name; the
+# tally at the bottom checks that every one of them reached an `ok`.
+EXPECT_CASES="$(grep -c '^CASE="[^"]' "${BASH_SOURCE[0]}")"
+
+fail() {
+    printf 'FAIL  %s\n      %s\n' "$CASE" "$1" >&2
+    FAILED=$((FAILED + 1))
+}
+
+ok() { RAN=$((RAN + 1)); printf 'ok    %s\n' "$CASE"; }
+
+# gaps_field reads one field the way PRODUCTION reads it: `IFS read`, not `cut`.
+# The difference is the whole point of one of the cases below -- `cut` is
+# line-oriented and re-emits a delimiterless line whole, so it cannot see the
+# truncation that `read` suffers when a field still contains newlines.
+gaps_field() {
+    local idx="$1" gaps f1 f2 f3 f4 f5 f6 f7 f8 f9
+    gaps="$(so_workload_gaps ns deployments w "$POD_DEPLOY")" || return 1
+    IFS=$'\037' read -r f1 f2 f3 f4 f5 f6 f7 f8 f9 <<< "$gaps"
+    case "$idx" in
+        1) printf '%s' "$f1" ;; 2) printf '%s' "$f2" ;; 3) printf '%s' "$f3" ;;
+        4) printf '%s' "$f4" ;; 5) printf '%s' "$f5" ;; 6) printf '%s' "$f6" ;;
+        7) printf '%s' "$f7" ;; 8) printf '%s' "$f8" ;; 9) printf '%s' "$f9" ;;
+    esac
+}
+
+assert_field() {
+    local idx="$1" want="$2" got
+    if ! got="$(gaps_field "$idx")"; then
+        fail "so_workload_gaps returned non-zero"
+        return
+    fi
+    [ "$got" = "$want" ] || fail "field $idx: want '$want', got '$got'"
+}
+
+assert_contains() {
+    case "$1" in
+        *"$2"*) : ;;
+        *) fail "expected to contain: $2" ;;
+    esac
+}
+
+assert_not_contains() {
+    case "$1" in
+        *"$2"*) fail "expected NOT to contain: $2" ;;
+        *) : ;;
+    esac
+}
+
+assert_eq() { [ "$1" = "$2" ] || fail "${3:-value}: want '$2', got '$1'"; }
+
+# --- fixtures ---------------------------------------------------------------
+
+f_vllm_plain() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+f_sglang_proxy_has_hook() {
+    # The engine is called `server` and the container that HAS a preStop hook is
+    # the proxy. A name regex picks the proxy; counting hooks pod-wide reports
+    # this pod as already draining.
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "containers":[
+          {"name":"routing-proxy","image":"quay.io/x/proxy:1",
+           "lifecycle":{"preStop":{"exec":{"command":["sleep","10"]}}}},
+          {"name":"server","image":"lmsysorg/sglang:latest",
+           "args":["python3","-m","sglang.launch_server","--model-path","meta-llama/Llama-3.1-8B"]}]}}}}'
+}
+
+f_mount_without_hf_home() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                       "command":["/bin/sh","-c"],
+                       "args":["vllm serve Qwen/Qwen3-0.6B --port 8000"]}]}}}}'
+}
+
+# Nothing wrong with it: drains, weights on the claim, and the engine caches
+# on it too (a second cache half is the same claim under another directory,
+# which is the layout the benchmark harness uses), Python bytecode included.
+f_cached_properly() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                              {"name":"VLLM_CACHE_ROOT","value":"/model-cache/engine-cache/vllm"},
+                              {"name":"PYTHONPYCACHEPREFIX","value":"/model-cache/engine-cache/pycache/5f8fcd7456cd"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# A PVC mounted at one path while the engine downloads to another. This is the
+# misconfiguration the weights check exists to catch, and the one a `startswith`
+# predicate that compared a value with itself reported as solved.
+f_cache_mounted_elsewhere() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/root/.cache/huggingface"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/workspace"}],
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# --download-dir overrides HF_HOME, and HF_HUB_CACHE is read alongside it.
+f_download_dir_on_volume() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HUB_CACHE","value":"/root/.cache"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B","--download-dir","/model-cache/dl"]}]}}}}'
+}
+
+f_local_path() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "command":["/bin/sh","-c"],
+                       "args":["vllm serve /models/qwen3-0.6b"]}]}}}}'
+}
+
+f_long_grace() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":300,
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+f_no_engine() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "containers":[{"name":"sidecar","image":"quay.io/x/proxy:1","args":["--listen",":80"]}]}}}}'
+}
+
+# An LWS-shaped object: the pod template lives under leaderWorkerTemplate. A
+# Deployment body read through the LWS path yields {} and lands on the "no engine"
+# branch, so a case using one proves nothing about the LWS skip.
+f_lws() {
+    FIXTURE='{"spec":{"leaderWorkerTemplate":{"leaderTemplate":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "containers":[{"name":"vllm","image":"vllm/vllm-openai:glm52",
+                       "args":["vllm","serve","zai-org/GLM-4.5"]}]}}}}}'
+}
+
+# Copied from a running llm-d deployment on OpenShift (modelservice chart,
+# uriProtocol: pvc). Two things about it broke assumptions the invented fixtures
+# could not: the command is a multi-line block scalar, and the weights are served
+# FROM the volume by local path while --served-model-name advertises a repo id.
+f_llmd_real() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}},
+                   {"name":"dshm"},{"name":"shared-config"}],
+        "containers":[{"name":"vllm","image":"docker.io/vllm/vllm-openai:v0.26.0",
+                       "env":[{"name":"HF_HOME","value":"/tmp/huggingface"}],
+                       "volumeMounts":[{"name":"dshm","mountPath":"/dev/shm"},
+                                       {"name":"shared-config","mountPath":"/shared-config"},
+                                       {"name":"model-storage","mountPath":"/model-cache"}],
+                       "command":["/bin/bash","-c"],
+                       "args":["/bin/true ; vllm serve /model-cache/models/Qwen/Qwen3-0.6B \\\n  --host 0.0.0.0 \\\n  --served-model-name Qwen/Qwen3-0.6B \\\n  --port 8000\n"]}]}}}}'
+}
+
+# The same block-scalar shape, genuinely fetching from the Hub.
+f_llmd_real_downloads() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"dshm"}],
+        "containers":[{"name":"vllm","image":"docker.io/vllm/vllm-openai:v0.26.0",
+                       "env":[{"name":"HF_HOME","value":"/tmp/huggingface"}],
+                       "volumeMounts":[{"name":"dshm","mountPath":"/dev/shm"}],
+                       "command":["/bin/bash","-c"],
+                       "args":["/bin/true ; vllm serve Qwen/Qwen3-0.6B \\\n  --host 0.0.0.0 \\\n  --served-model-name my-alias \\\n  --port 8000\n"]}]}}}}'
+}
+
+f_unreadable() { FIXTURE=""; FIXTURE_RC=1; }
+
+reset() {
+    FIXTURE=""; FIXTURE_RC=0; LIST_FIXTURE=''; LIST_FIXTURE_LWS=''; LIST_RC=0; CRD_RC=1
+    PATCH_CALLS=0; PATCH_RC=0; PATCH_BODY=""; PATCH_ARGS=""
+    PVC_FIXTURE='{"items":[]}'; PVC_RC=0; DS_FIXTURE=""; DS_RC=0
+    PODS_FIXTURE=''; PODS_RC=0; PODS_ERR=""; RS_FIXTURE=''; LOGS_FIXTURE=''; LOGS_RC=0; LOGS_ERR=""; KUBECTL_TRACE=""
+    FIXTURE_MAP=()
+}
+
+# --- canary -----------------------------------------------------------------
+#
+# Proves the harness can report a failure at all. Without it, a bookkeeping
+# mistake that suppressed every `fail` would look exactly like a clean run.
+CASE="the harness itself reports failures (canary)"
+before=$FAILED
+# stderr is dropped for this one call: the assertion is MEANT to fail, and
+# printing its FAIL line would train a reader to ignore FAIL lines.
+assert_eq "left" "right" "canary" 2>/dev/null
+if [ "$FAILED" -eq $((before + 1)) ]; then
+    FAILED="$before"      # expected; un-count it
+    ok
+else
+    FAILED=$((before + 1))
+    printf 'FAIL  %s\n      assert_eq did not register a failure\n' "$CASE" >&2
+fi
+
+# --- detection --------------------------------------------------------------
+
+CASE="plain vLLM: engine, no hook, default grace, nothing cached"
+reset; f_vllm_plain
+before=$FAILED
+assert_field 1 "vllm"
+assert_field 2 "0"
+assert_field 3 "30"
+assert_field 5 "0"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="SGLang: engine is 'server' by image, not the proxy that has the hook"
+reset; f_sglang_proxy_has_hook
+before=$FAILED
+assert_field 1 "server"
+assert_field 2 "0"      # the ENGINE's hook count, which is what decides
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="llm-d inference simulator: an engine for the drain half, no cache halves"
+reset
+FIXTURE='{"spec":{"template":{"spec":{"containers":[
+  {"name":"vllm","image":"ghcr.io/llm-d/llm-d-inference-sim:v0.9.0",
+   "args":["--model","model-a","--port","8000"]}]}}}}'
+before=$FAILED
+assert_field 1 "vllm"   # it was skipped as no engine at all
+assert_field 2 "0"
+assert_field 6 ""       # no argv: it fetches no weights
+assert_field 7 ""       # not vLLM: no compile caches
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"
+assert_not_contains "$doc" "HF_HOME"
+assert_not_contains "$doc" "VLLM_CACHE_ROOT"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a PVC mounted with no HF_HOME does not make weights persist"
+reset; f_mount_without_hf_home
+before=$FAILED
+assert_field 4 "1"      # a PVC is present...
+assert_field 5 "0"      # ...and the engine still downloads outside it
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="HF_HOME under a mounted volume counts as cached"
+reset; f_cached_properly
+before=$FAILED
+assert_field 5 "1"
+assert_field 2 "1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a PVC mounted somewhere ELSE does not count as cached"
+reset; f_cache_mounted_elsewhere
+before=$FAILED
+# The predicate must compare the download dir against each MOUNT. Comparing it
+# with itself -- `$dldir | startswith(.)` -- is true for every mount, and made
+# this exact misconfiguration report as solved.
+assert_field 5 "0"
+assert_field 4 "1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="--download-dir overrides HF_HUB_CACHE and is matched against the mounts"
+reset; f_download_dir_on_volume
+before=$FAILED
+assert_field 5 "1"      # /model-cache/dl is under the /model-cache mount
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="unreadable object returns non-zero and prints nothing"
+reset; f_unreadable
+before=$FAILED
+out="$(so_workload_gaps ns deployments w "$POD_DEPLOY")" && fail "expected non-zero"
+[ -z "$out" ] || fail "expected no output, got: $out"
+# Positive anchor: the SAME call on a readable object must produce a record, so
+# a deleted function cannot satisfy this case.
+reset; f_vllm_plain
+assert_contains "$(so_workload_gaps ns deployments w "$POD_DEPLOY")" "vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a multi-line block scalar keeps its later flags (read stops at newline 1)"
+reset; f_llmd_real
+before=$FAILED
+argv="$(gaps_field 6)" || fail "so_workload_gaps returned non-zero"
+assert_contains "$argv" "--served-model-name"
+assert_contains "$argv" "--port"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the model source -------------------------------------------------------
+
+CASE="so_model_source reads the source, not the advertised name"
+before=$FAILED
+assert_eq "$(so_model_source 'vllm serve /model-cache/models/Qwen --served-model-name Qwen/Qwen3-0.6B')" \
+          "/model-cache/models/Qwen" "served-model-name must not win"
+assert_eq "$(so_model_source 'vllm serve Qwen/Qwen3-0.6B')" "Qwen/Qwen3-0.6B" "positional"
+assert_eq "$(so_model_source 'vllm --model=Qwen/Qwen3-0.6B')" "Qwen/Qwen3-0.6B" "--model="
+# SGLang. Omitting --model-path gave every SGLang engine a silent pass.
+assert_eq "$(so_model_source 'python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B')" \
+          "meta-llama/Llama-3.1-8B" "--model-path"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="so_model_source does not glob against the working directory"
+before=$FAILED
+# `for tok in $args` splits AND globs. Run from a directory with files in it and
+# a bare glob inside someone else's entrypoint becomes the answer.
+tmpd="$(mktemp -d)"; : > "$tmpd/decoy.log"
+assert_eq "$(cd "$tmpd" && so_model_source 'sh -c rm -f *.log ; vllm serve Qwen/Qwen3-0.6B')" \
+          "Qwen/Qwen3-0.6B" "glob leaked into the parse"
+rm -rf "$tmpd"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- notes ------------------------------------------------------------------
+
+CASE="drain note fires for the proxy-has-a-hook pod"
+reset; f_sglang_proxy_has_hook
+before=$FAILED
+assert_contains "$(so_drain_note ns deployments w "$POD_DEPLOY")" "server declares no preStop hook"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="drain note is silent when the engine has a hook"
+reset; f_cached_properly
+before=$FAILED
+note="$(so_drain_note ns deployments w "$POD_DEPLOY")"
+[ -z "$note" ] || fail "expected silence, got: $note"
+# Anchor: the same function must still speak for a pod that needs it.
+reset; f_vllm_plain
+assert_contains "$(so_drain_note ns deployments w "$POD_DEPLOY")" "no preStop hook"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="weights note fires for the sh -c form (used to match on /bin/sh)"
+reset; f_mount_without_hf_home
+before=$FAILED
+assert_contains "$(so_weights_note ns deployments w "$POD_DEPLOY")" "Weights do not persist"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="weights note fires for an SGLang engine launched by --model-path"
+reset; f_sglang_proxy_has_hook
+before=$FAILED
+assert_contains "$(so_weights_note ns deployments w "$POD_DEPLOY")" "meta-llama/Llama-3.1-8B"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="weights note is silent for a local model path"
+reset; f_local_path
+before=$FAILED
+note="$(so_weights_note ns deployments w "$POD_DEPLOY")"
+[ -z "$note" ] || fail "expected silence, got: $note"
+reset; f_mount_without_hf_home
+assert_contains "$(so_weights_note ns deployments w "$POD_DEPLOY")" "Weights do not persist"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an unreadable object is reported as unknown, never as healthy"
+reset; f_unreadable
+before=$FAILED
+note="$(so_drain_note ns deployments w "$POD_DEPLOY")"
+assert_contains "$note" "unknown"
+assert_not_contains "$note" "no preStop hook"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- emitted patch ----------------------------------------------------------
+
+CASE="patch names the engine container, both halves, HF_HOME with the mount"
+reset; f_mount_without_hf_home
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "- name: vllm"
+assert_contains "$doc" "preStop"
+assert_contains "$doc" "HF_HOME"
+assert_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="patch never lowers an existing longer grace period"
+reset; f_long_grace
+before=$FAILED
+assert_contains "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" \
+    "terminationGracePeriodSeconds: 300"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="weights served BY LOCAL PATH need no cache, whatever name is advertised"
+reset; f_llmd_real
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"          # the drain half is still owed
+assert_not_contains "$doc" "claimName: model-pvc"    # ...but not a second cache
+assert_not_contains "$doc" "HF_HOME"
+assert_not_contains "$doc" "#   cache:"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a re-downloading workload is warned about ON THE CONSOLE, not just in the file"
+reset; f_llmd_real_downloads
+before=$FAILED
+# The emitted file always carried this; the console said only "1 workload(s)
+# need something". A cost that only shows up the moment a replica is added, and
+# reads as the autoscaler being slow, has to be said where someone will see it.
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "RE-DOWNLOADS ITS WEIGHTS"
+assert_contains "$warn" "Qwen/Qwen3-0.6B"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a workload whose weights DO persist is not warned about"
+reset; f_cached_properly
+before=$FAILED
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_not_contains "$warn" "RE-DOWNLOADS"
+# Anchor, so a silenced warning cannot pass this pair by never firing at all.
+reset; f_llmd_real_downloads
+assert_contains "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)" "RE-DOWNLOADS"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the emitted file carries a PVC to fill in, and still parses"
+reset; f_llmd_real_downloads
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "kind: PersistentVolumeClaim"
+assert_contains "$doc" "ReadWriteMany"
+# Commented, not a live document: a claim with a placeholder size would be
+# rejected, and a claim we guessed could break scale-up outright.
+d2="$(mktemp)"; printf '%s\n' "$doc" > "$d2"
+yq eval '.' "$d2" >/dev/null 2>&1 || fail "the emitted file no longer parses as YAML"
+assert_eq "$(yq eval-all '[.] | length' "$d2" 2>/dev/null | tail -1)" "1" "documents in the file"
+rm -f "$d2"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the same shape genuinely downloading from the Hub does get a cache"
+reset; f_llmd_real_downloads
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName"
+assert_contains "$doc" "HF_HOME"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="patch emits no cache half for a local model path"
+reset; f_local_path
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"          # anchor: a document was produced
+assert_not_contains "$doc" "claimName: model-pvc"
+assert_not_contains "$doc" "HF_HOME"
+assert_not_contains "$doc" "#   cache:"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="nothing is emitted for a workload that is already fine"
+reset; f_cached_properly
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+[ -z "$doc" ] || fail "expected no document, got: $doc"
+reset; f_vllm_plain
+assert_contains "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" "apiVersion"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="no identifiable engine is skipped (rc 2), not patched at container 0"
+reset; f_no_engine
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" || doc_rc=$?
+assert_eq "$doc_rc" "2" "return code"
+[ -z "$doc" ] || fail "expected no document, got: $doc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LeaderWorkerSet: the cache halves are written, the drain half is not"
+reset; f_lws
+before=$FAILED
+# The detector must be able to READ this object -- otherwise the case would pass
+# through the "no engine" branch and prove nothing about the LWS path.
+assert_contains "$(so_workload_gaps ns leaderworkersets w "$POD_LWS")" "vllm"
+doc_rc=0
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")" || doc_rc=$?
+assert_eq "$doc_rc" "0" "return code"
+assert_contains "$doc" "kind: LeaderWorkerSet"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"
+assert_not_contains "$doc" "lifecycle:"
+assert_not_contains "$doc" "terminationGracePeriodSeconds:"
+assert_contains "$(cat "$WORK/lws.err")" "no drain half"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an unreadable object emits nothing and returns rc 3"
+reset; f_unreadable
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" || doc_rc=$?
+assert_eq "$doc_rc" "3" "return code"
+[ -z "$doc" ] || fail "expected no document, got: $doc"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the patch index --------------------------------------------------------
+
+CASE="the index lists every document as three readable fields"
+before=$FAILED
+multi="$(mktemp)"
+cat > "$multi" <<'YAML'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a
+  namespace: ns1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: b
+  namespace: ns2
+YAML
+# Counting lines is not enough. yq does not decode a  escape the way jq
+# does, and emitted one unsplittable field per line -- two lines, correct count,
+# and `read -r ns name` left the name EMPTY, so the apply loop ran zero times.
+# The kind is the third field: a Deployment and a LeaderWorkerSet may share a
+# name in one namespace.
+pairs=""
+while read -r i_ns i_name i_kind; do
+    [ -n "$i_name" ] || fail "index line did not split into three fields"
+    pairs="$pairs[$i_ns/$i_name/$i_kind]"
+done < <(so_workload_patch_index "$multi")
+assert_eq "$pairs" "[ns1/a/Deployment][ns2/b/Deployment]" "index pairs"
+rm -f "$multi"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- dropping the weights half ----------------------------------------------
+
+CASE="drop_cache keeps the drain half and removes the weights half"
+before=$FAILED
+d="$(mktemp)"
+cat > "$d" <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: w, namespace: ns1}
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: vllm
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 45"]
+        env:
+        - name: HF_HOME
+          value: /model-cache/huggingface
+        volumeMounts:
+        - name: model-storage
+          mountPath: /model-cache
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-pvc
+YAML
+so_workload_patch_drop_cache "$d" || fail "expected the drain half to survive"
+left="$(cat "$d")"
+assert_contains "$left" "terminationGracePeriodSeconds: 120"
+assert_contains "$left" "preStop"
+assert_not_contains "$left" "claimName"
+assert_not_contains "$left" "HF_HOME"
+assert_not_contains "$left" "volumeMounts"
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a cache-only document is skipped, not applied as an empty patch"
+before=$FAILED
+d="$(mktemp)"
+cat > "$d" <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: w, namespace: ns1}
+spec:
+  template:
+    spec:
+      containers:
+      - name: vllm
+        env:
+        - name: HF_HOME
+          value: /model-cache/huggingface
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-pvc
+YAML
+drop_rc=0
+so_workload_patch_drop_cache "$d" || drop_rc=$?
+# EXACTLY 1, not merely non-zero. A function that does not exist returns 127,
+# and this case passed against a zero-byte library on `&& fail` alone.
+assert_eq "$drop_rc" "1" "return code"
+assert_contains "$(cat "$d")" "HF_HOME"   # anchor: the file was left intact
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- which claim the patch names --------------------------------------------
+#
+# A namespace that already has a shared cache under another name would otherwise
+# be told to use `model-pvc`, and the obvious response is to provision a SECOND
+# terabyte for weights that are already on the cluster.
+
+pvc_list() {
+    # $1..$n: "<name>:<accessMode>[:<phase>]"
+    local items="" spec name mode phase
+    for spec in "$@"; do
+        name="${spec%%:*}"; mode="${spec#*:}"; phase="Bound"
+        case "$mode" in *:*) phase="${mode#*:}"; mode="${mode%%:*}" ;; esac
+        items="${items:+$items,}{\"metadata\":{\"name\":\"$name\"},\"spec\":{\"accessModes\":[\"$mode\"]},\"status\":{\"phase\":\"$phase\"}}"
+    done
+    printf '{"items":[%s]}' "$items"
+}
+
+CASE="an existing shared claim is reused instead of proposing a second one"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list llm-d-model-cache:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: llm-d-model-cache"
+assert_contains "$doc" "already exists in ns"
+assert_not_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the only RWX claim is not assumed to be a model cache"
+reset; f_llmd_real_downloads
+before=$FAILED
+# A benchmark namespace has exactly one RWX claim and it is the RESULTS volume.
+# Mounting that at /model-cache with HF_HOME inside it is wrong, and with the
+# weights opt-in it is wrong on a live workload. One candidate is not the same
+# as one candidate that is a model cache.
+PVC_FIXTURE="$(pvc_list llm-d-benchmark-results:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_not_contains "$doc" "llm-d-benchmark-results"
+assert_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a ReadOnlyMany claim is not proposed for a path we write to"
+reset; f_llmd_real_downloads
+before=$FAILED
+# The emitted patch points HF_HOME INTO the mount. A ROX volume mounts
+# read-only, so reusing one turns a re-download into a crash on first write.
+PVC_FIXTURE="$(pvc_list shared-model-datasets:ReadOnlyMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_not_contains "$doc" "shared-model-datasets"
+assert_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a discovered claim is never followed by instructions to create one"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list llm-d-model-cache:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: llm-d-model-cache"
+# The emitted file used to mount the discovered claim and then tell the reader
+# to create `model-pvc` -- the second claim this feature exists to prevent, and
+# not even the one the patch mounts.
+assert_not_contains "$doc" "kind: PersistentVolumeClaim"
+assert_not_contains "$doc" "make model-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a ReadWriteOnce claim is not proposed as a shared cache"
+reset; f_llmd_real_downloads
+before=$FAILED
+# RWO binds to one node, so reusing it would produce replicas that cannot
+# schedule -- the failure this whole area exists to avoid.
+PVC_FIXTURE="$(pvc_list scratch:ReadWriteOnce)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: model-pvc"
+assert_contains "$doc" "does NOT exist yet"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="two candidate claims are ambiguous, so neither is guessed"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list alpha:ReadWriteMany beta:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="among several, exactly one named for the job is taken"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list results:ReadWriteMany model-cache:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: model-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an unbound claim is not reused"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list somewhere:ReadWriteMany:Pending)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an explicit LLMSM_MODEL_PVC_NAME beats anything discovered"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list llm-d-model-cache:ReadWriteMany)"
+doc="$(LLMSM_MODEL_PVC_NAME=mine so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: mine"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a forbidden PVC listing falls back rather than claiming none exist"
+reset; f_llmd_real_downloads
+before=$FAILED
+PVC_RC=1
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: model-pvc"
+assert_contains "$doc" "preStop"    # anchor: a document was still produced
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- plan notes -------------------------------------------------------------
+#
+# A workload usually has more than one thing wrong with it, and the notes used to
+# be joined into a single run-on sentence -- so the second problem, often the
+# expensive one, sat mid-paragraph where nobody reads.
+
+CASE="one plan note renders as one line"
+before=$FAILED
+# The case that caught the real bug: `printf '%s' | while read` never runs its
+# body for a final line with no terminator, so a SINGLE note produced no output
+# at all. Both counts have to be asserted; only the pair is meaningful.
+n="$(so_plan_entry yes ns Deployment w model 1 10 10 "" "" "" "only note" | grep -c '# note:')"
+assert_eq "$n" "1" "note lines"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="two plan notes render as two lines, not one paragraph"
+before=$FAILED
+two="first note"$'\036'"second note"
+out="$(so_plan_entry yes ns Deployment w model 1 10 10 "" "" "" "$two")"
+assert_eq "$(printf '%s' "$out" | grep -c '# note:')" "2" "note lines"
+assert_contains "$out" "# note: first note"
+assert_contains "$out" "# note: second note"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an entry with no note renders none"
+before=$FAILED
+assert_eq "$(so_plan_entry yes ns Deployment w model 1 10 10 "" "" "" "" | grep -c '# note:')" "0" "note lines"
+# Anchor: the entry itself must still be produced.
+assert_contains "$(so_plan_entry yes ns Deployment w model 1 10 10 "" "" "" "")" "namespace: ns"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the verify-* health checks ----------------------------------------------
+#
+# These report on a live cluster and are the kind of code that passes review by
+# inspection and fails in the field: every branch is a printf and a counter, and
+# the interesting ones are the branches nobody has on their cluster.
+
+# The stub is SAVED and restored below rather than retyped: a hand-written copy
+# silently dropped the per-name FIXTURE_MAP branch and broke a later case.
+orig_kubectl="$(declare -f kubectl)"
+
+CASE="verify-fma: a namespace that cannot be listed is not an empty one"
+reset
+before=$FAILED
+# Piping a failed `kubectl get` into `wc -l` yields 0, which read as "no launcher
+# pods here" -- so a Forbidden listing was reported as nothing to check and the
+# run still exited 0.
+kubectl() {
+    case "${1:-}${2:-}" in
+        getpods) return 1 ;;          # the listing is refused
+        *) return 0 ;;
+    esac
+}
+out=""; rc=0
+out="$(LLMSM_DEFAULT_SO_NS=ns1 so_verify_fma 2>&1)" || rc=$?
+assert_contains "$out" "UNREADABLE"
+assert_contains "$out" "NOT a report that they are scraped"
+assert_eq "$rc" "1" "return code"
+assert_not_contains "$out" "0          -"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="verify-fma: a genuinely empty namespace is reported as such, and passes"
+reset
+before=$FAILED
+kubectl() {
+    case "${1:-}${2:-}" in
+        getpods) printf '' ;;         # listing succeeds, no launchers
+        *) return 0 ;;
+    esac
+}
+out=""; rc=0
+out="$(LLMSM_DEFAULT_SO_NS=ns1 so_verify_fma 2>&1)" || rc=$?
+assert_eq "$rc" "0" "return code"
+assert_contains "$out" "with no launcher pods"
+assert_not_contains "$out" "UNREADABLE"
+[ "$FAILED" -eq "$before" ] && ok
+
+# Restore the fixture stub for anything after this.
+unset -f kubectl
+eval "$orig_kubectl"
+
+# --- the driver -------------------------------------------------------------
+#
+# llmsm_workload_patch's return code is load-bearing: benchmark-standup runs it as
+# `... || echo WARNING`, and an earlier version returned 0 on every path, so the
+# warning could not fire for the failure it named.
+
+DRIVER_RC=0; DRIVER_OUT=""; DRIVER_LOG=""
+
+serving_list() {
+    printf '%s' '{"items":[{"metadata":{"name":"w","labels":{"llm-d.ai/role":"decode"}}}]}'
+}
+
+run_driver() {
+    local dir; dir="$(mktemp -d)"
+    DRIVER_OUT="$dir/patch.yaml"; DRIVER_LOG="$dir/log"
+    DRIVER_RC=0
+    LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$DRIVER_OUT" \
+        llmsm_workload_patch >"$DRIVER_LOG" 2>&1 || DRIVER_RC=$?
+}
+
+CASE="a namespace that cannot be listed returns 1, not 'all clean'"
+reset; LIST_RC=1
+before=$FAILED
+run_driver
+assert_eq "$DRIVER_RC" "1" "return code"
+[ -f "$DRIVER_OUT" ] && fail "wrote a patch file for a namespace it could not read"
+assert_contains "$(cat "$DRIVER_LOG")" "not being reported as clean"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an object that cannot be READ is not reported as healthy"
+reset; LIST_FIXTURE="$(serving_list)"; FIXTURE_RC=1
+before=$FAILED
+run_driver
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$DRIVER_LOG")" "NOT a report that they are healthy"
+assert_not_contains "$(cat "$DRIVER_LOG")" "already drain on scale-down"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an empty namespace says nothing was checked, not that all is well"
+reset; LIST_FIXTURE='{"items":[]}'
+before=$FAILED
+run_driver
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$DRIVER_LOG")" "No model servers found in scope"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a converged workload reports the all-clear and clears its own stale file"
+reset; LIST_FIXTURE="$(serving_list)"; f_cached_properly
+before=$FAILED
+stale="$(mktemp)"; so_workload_patch_header > "$stale"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$stale" llmsm_workload_patch >/dev/null 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+[ -f "$stale" ] && { fail "a file this tool wrote should have been removed"; rm -f "$stale"; }
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a file this tool did NOT write is never deleted"
+reset; LIST_FIXTURE="$(serving_list)"; f_cached_properly
+before=$FAILED
+mine="$(mktemp)"; printf 'hand written, do not delete\n' > "$mine"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$mine" \
+    llmsm_workload_patch >"$WORK/nd.log" 2>&1 || true
+# Anchor: the tool must have REACHED the decision and said so. Without it a
+# library that does not run at all also leaves the file untouched -- this case
+# printed `ok` against a zero-byte library.
+assert_contains "$(cat "$WORK/nd.log")" "was not written by this tool"
+assert_contains "$(cat "$mine" 2>/dev/null || echo GONE)" "hand written"
+rm -f "$mine"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="one workload with gaps is written, with the do-not-apply header"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+run_driver
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$DRIVER_OUT" 2>/dev/null)" "name: w"
+assert_contains "$(cat "$DRIVER_OUT" 2>/dev/null)" "scaling-manager-workload-patch: generated"
+assert_contains "$(cat "$DRIVER_OUT" 2>/dev/null)" "Do NOT \`kubectl apply -f\`"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- apply mode -------------------------------------------------------------
+
+CASE="apply patches the drain half and never sends a volume"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "preStop"
+# A strategic merge cannot replace a volume of the same name; sending one gets
+# the WHOLE object rejected, drain half included.
+assert_not_contains "$PATCH_BODY" "persistentVolumeClaim"
+assert_not_contains "$PATCH_BODY" "volumeMounts"
+# ...while the emitted file still carries it, for whoever owns the storage.
+assert_contains "$(cat "$dir/p.yaml")" "claimName: model-pvc"
+assert_contains "$(cat "$dir/log")" "REPLACES PODS"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a rejected patch is counted as a failure and makes the run non-zero"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain; PATCH_RC=1
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "were NOT patched"
+assert_not_contains "$(cat "$dir/log")" "Patched 1 of 1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a workload needing only the weights volume is deferred, not failed"
+reset; LIST_FIXTURE="$(serving_list)"; f_cache_mounted_elsewhere
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+# It already has a preStop hook? No -- it has none, so it gets the drain half.
+# What matters is that the emitted document keeps the weights half and the patch
+# sent to the API server does not.
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: model-pvc"
+assert_not_contains "$PATCH_BODY" "claimName"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a missing tool is reported, not silently treated as nothing-to-do"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+# `command` is a builtin, but a function of the same name shadows it for the
+# unqualified call the library makes -- which is the only way to simulate an
+# absent binary from inside a harness that needs those binaries itself.
+command() {
+    if [ "${1:-}" = "-v" ] && [ "${2:-}" = "yq" ]; then return 1; fi
+    builtin command "$@"
+}
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+unset -f command
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "yq is not installed"
+# The silence this replaces: yq missing meant an empty index, zero patch calls,
+# and a [SUCCESS] line.
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- applying the weights half ----------------------------------------------
+#
+# Its own opt-in, separate from APPLY: adding a hook cannot conflict with
+# anything, while mounting storage can be refused by the API server outright and
+# changes where an engine reads its weights from.
+
+apply_weights_run() {
+    local dir; dir="$(mktemp -d)"
+    DRIVER_RC=0; DRIVER_LOG="$dir/log"; DRIVER_OUT="$dir/p.yaml"
+    LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true \
+        LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS=true LLMSM_WORKLOAD_PATCH_FILE="$DRIVER_OUT" \
+        llmsm_workload_patch >"$DRIVER_LOG" 2>&1 || DRIVER_RC=$?
+}
+
+CASE="with the opt-in and no collision, the weights volume IS applied"
+reset; LIST_FIXTURE="$(serving_list)"; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list model-pvc:ReadWriteMany)"
+apply_weights_run
+assert_contains "$PATCH_BODY" "claimName"
+assert_contains "$PATCH_BODY" "preStop"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a volume of the same name blocks the weights half, NOT the drain half"
+reset; LIST_FIXTURE="$(serving_list)"
+before=$FAILED
+# The 422 that made this unconditional once: `volumes` merges with retainKeys,
+# which `kubectl patch --type=strategic` does not generate, so a same-named
+# volume gets the WHOLE object rejected -- drain hook included.
+FIXTURE='{"spec":{"template":{"spec":{
+    "terminationGracePeriodSeconds":30,
+    "volumes":[{"name":"model-storage","emptyDir":{}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                   "env":[{"name":"HF_HOME","value":"/root/.cache/huggingface"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+PVC_FIXTURE="$(pvc_list model-pvc:ReadWriteMany)"
+apply_weights_run
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "claimName"
+assert_contains "$(cat "$DRIVER_LOG")" "already exists"
+# ...and the emitted file still carries it, for whoever owns the chart.
+assert_contains "$(cat "$DRIVER_OUT")" "claimName"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a missing claim blocks the weights half rather than stranding pods Pending"
+reset; LIST_FIXTURE="$(serving_list)"; f_llmd_real_downloads
+before=$FAILED
+PVC_RC=1     # the claim cannot be read
+apply_weights_run
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "claimName"
+assert_contains "$(cat "$DRIVER_LOG")" "does not exist"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="without the opt-in the weights half is never applied, claim or no claim"
+reset; LIST_FIXTURE="$(serving_list)"; f_llmd_real_downloads
+before=$FAILED
+PVC_FIXTURE="$(pvc_list model-pvc:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "claimName"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="candidate StorageClasses are ranked by observed RWX use"
+before=$FAILED
+PVC_FIXTURE='{"items":[
+  {"spec":{"accessModes":["ReadWriteMany"],"storageClassName":"shared-fs"},"status":{"phase":"Bound"}},
+  {"spec":{"accessModes":["ReadWriteMany"],"storageClassName":"shared-fs"},"status":{"phase":"Bound"}},
+  {"spec":{"accessModes":["ReadWriteMany"],"storageClassName":"other-fs"},"status":{"phase":"Bound"}},
+  {"spec":{"accessModes":["ReadWriteOnce"],"storageClassName":"block"},"status":{"phase":"Bound"}},
+  {"spec":{"accessModes":["ReadWriteMany"],"storageClassName":"unbound-fs"},"status":{"phase":"Pending"}}]}'
+out="$(so_model_cache_classes)"
+assert_contains "$out" "shared-fs (2 bound RWX claim(s))"
+assert_contains "$out" "other-fs (1 bound RWX claim(s))"
+# A class only ever seen backing RWO is not evidence that it can do RWX.
+assert_not_contains "$out" "block"
+assert_not_contains "$out" "unbound-fs"
+assert_eq "$(printf '%s' "$out" | head -1)" "shared-fs (2 bound RWX claim(s))" "most-used first"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an unwritable destination keeps the patch instead of deleting it"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE=/nonexistent-dir/p.yaml \
+    llmsm_workload_patch >"$WORK/uw.log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$WORK/uw.log")" "kept at"
+kept="$(sed -n 's/.*kept at \([^ ]*\).*/\1/p' "$WORK/uw.log" | tail -1)"
+[ -n "$kept" ] && [ -s "$kept" ] || fail "the patch it says it kept is not there"
+[ -n "$kept" ] && rm -f "$kept"
+[ "$FAILED" -eq "$before" ] && ok
+
+
+# --- ADDED BY MUTATION TESTING ------------------------------------------------
+
+# The engine identified by IMAGE alone -- the command is a wrapper script.
+f_engine_by_image_only() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "containers":[
+          {"name":"routing-proxy","image":"quay.io/x/proxy:1","args":["--listen",":80"]},
+          {"name":"server","image":"quay.io/x/vllm-openai:v0.11",
+           "command":["/opt/entrypoint.sh"]}]}}}}'
+}
+
+# The engine identified by COMMAND alone -- the image name says nothing.
+f_engine_by_command_only() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "containers":[
+          {"name":"routing-proxy","image":"quay.io/x/proxy:1","args":["--listen",":80"]},
+          {"name":"engine","image":"registry.example.com/ai/runtime:1.2",
+           "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# The SIDECAR mounts the cache; the engine does not.
+f_sidecar_mounts_cache() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":30,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[
+          {"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+           "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"}],
+           "args":["vllm","serve","Qwen/Qwen3-0.6B"]},
+          {"name":"sidecar","image":"quay.io/x/proxy:1",
+           "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}]}]}}}}'
+}
+
+# An engine that already drains but re-downloads -- the DEFERRAL shape.
+f_hooked_but_downloads() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+CASE="the engine is found by IMAGE when the command is a wrapper script"
+reset; f_engine_by_image_only
+before=$FAILED
+assert_field 1 "server"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the engine is found by COMMAND when the image name says nothing"
+reset; f_engine_by_command_only
+before=$FAILED
+assert_field 1 "engine"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a cache the SIDECAR mounts is not a cache the engine can use"
+reset; f_sidecar_mounts_cache
+before=$FAILED
+assert_field 1 "vllm"
+assert_field 5 "0"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the weights note is silent when the download dir IS on a mount"
+reset; f_cached_properly
+before=$FAILED
+note="$(so_weights_note ns deployments w "$POD_DEPLOY")"
+[ -z "$note" ] || fail "expected silence, got: $note"
+reset; f_cache_mounted_elsewhere
+assert_contains "$(so_weights_note ns deployments w "$POD_DEPLOY")" "Weights do not persist"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="hasPVC counts PVC-backed volumes, not every volume"
+reset; f_llmd_real
+before=$FAILED
+assert_field 1 "vllm"
+assert_field 4 "1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a bare glob as the model argument does not become the answer"
+before=$FAILED
+tmpd="$(mktemp -d)"; : > "$tmpd/decoy.log"
+assert_eq "$(cd "$tmpd" && so_model_source 'vllm serve * --port 8000')" "*" "glob after serve"
+assert_eq "$(cd "$tmpd" && so_model_source 'vllm --model *')" "*" "glob as --model"
+rm -rf "$tmpd"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the emitted preStop is a shell sleep of the configured length"
+reset; f_vllm_plain
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" 'command: ["/bin/sh", "-c", "sleep 45"]'
+assert_contains "$(LLMSM_DRAIN_SLEEP_SECONDS=90 so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" \
+    '"sleep 90"'
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a workload that already drains but re-downloads is deferred, not patched"
+reset; LIST_FIXTURE="$(serving_list)"; f_hooked_but_downloads
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$dir/log")" "need only a volume"
+assert_not_contains "$(cat "$dir/log")" "were NOT patched"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: model-pvc"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="each workload is patched with ITS OWN document, not the whole file"
+reset
+LIST_FIXTURE='{"items":[{"metadata":{"name":"w1","labels":{"llm-d.ai/role":"decode"}}},
+                        {"metadata":{"name":"w2","labels":{"llm-d.ai/role":"decode"}}}]}'
+before=$FAILED
+f_vllm_plain
+FIXTURE_MAP=([w1]="$FIXTURE" [w2]="$FIXTURE")
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "2" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "name: w2"
+assert_not_contains "$PATCH_BODY" "name: w1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a file IS written for the readable half, and the run is still non-zero"
+reset
+LIST_FIXTURE='{"items":[{"metadata":{"name":"good","labels":{"llm-d.ai/role":"decode"}}},
+                        {"metadata":{"name":"bad","labels":{"llm-d.ai/role":"decode"}}}]}'
+before=$FAILED
+f_vllm_plain
+FIXTURE_MAP=([good]="$FIXTURE" [bad]="__RC1__")
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_contains "$(cat "$dir/p.yaml" 2>/dev/null)" "name: good"
+assert_eq "$DRIVER_RC" "1" "return code"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a listing that cannot be PARSED is not an empty namespace"
+reset; LIST_FIXTURE='{"items":['
+before=$FAILED
+run_driver
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$DRIVER_LOG")" "not being reported as clean"
+assert_not_contains "$(cat "$DRIVER_LOG")" "No model servers found in scope"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="an index that reads back empty is a failure, not nothing-to-do"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+so_index_orig="$(declare -f so_workload_patch_index)"
+so_workload_patch_index() { :; }
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+unset -f so_workload_patch_index
+[ -n "$so_index_orig" ] && eval "$so_index_orig"
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "NOTHING was applied"
+assert_contains "$(cat "$dir/log")" "were NOT patched"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LeaderWorkerSets are looked at only where the CRD exists"
+reset; LIST_FIXTURE="$(serving_list)"; f_lws; CRD_RC=1
+before=$FAILED
+run_driver
+assert_not_contains "$(cat "$DRIVER_LOG")" "LeaderWorkerSet ns1/w"
+reset; LIST_FIXTURE="$(serving_list)"; f_lws; CRD_RC=0
+run_driver
+assert_contains "$(cat "$DRIVER_LOG")" "LeaderWorkerSet ns1/w: no drain half"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the engine-cache half --------------------------------------------------
+#
+# The same question as the weights, one layer down: vLLM keeps its compile
+# caches under VLLM_CACHE_ROOT, and a replica that does not find them warm
+# compiles from nothing -- measured, 14 s of torch.compile against 3 s. The
+# detector answers where the caches LAND, as the weights one does: unset is
+# /tmp, an emptyDir dies with the pod, and only a claim or a hostPath counts.
+
+f_engine_cache_on_claim() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}},
+                   {"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                              {"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"},
+                              {"name":"PYTHONPYCACHEPREFIX","value":"/engine-cache/pycache/5f8fcd7456cd"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"},
+                                       {"name":"engine-cache","mountPath":"/engine-cache"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# The cache variable set, and pointing at an emptyDir: every llm-d pod mounts
+# one at /dev/shm, and a cache there is a cache for one replica, which is none.
+f_engine_cache_on_emptydir() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"dshm","emptyDir":{"medium":"Memory"}},
+                   {"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                              {"name":"VLLM_CACHE_ROOT","value":"/dev/shm/vllm-cache"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"},
+                                       {"name":"dshm","mountPath":"/dev/shm"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# A hostPath counts: it is the node's disk, and it outlives the pod.
+f_engine_cache_on_hostpath() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"local","hostPath":{"path":"/mnt/local/caches"}},
+                   {"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                              {"name":"VLLM_CACHE_ROOT","value":"/mnt/caches/vllm"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"},
+                                       {"name":"local","mountPath":"/mnt/caches"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+# Drains, weights on a volume, no cache variable at all: the engine-cache half
+# and nothing else.
+f_engine_cache_only_gap() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+}
+
+CASE="engine cache: unset VLLM_CACHE_ROOT is reported as unset"
+reset; f_vllm_plain
+before=$FAILED
+assert_field 7 "unset"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: on a claim the engine mounts counts as on a volume"
+reset; f_engine_cache_on_claim
+before=$FAILED
+assert_field 7 "volume:/engine-cache/vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: on a hostPath counts as on a volume"
+reset; f_engine_cache_on_hostpath
+before=$FAILED
+assert_field 7 "volume:/mnt/caches/vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: on an emptyDir is ephemeral, not a volume"
+reset; f_engine_cache_on_emptydir
+before=$FAILED
+assert_field 7 "ephemeral:/dev/shm/vllm-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a name listed twice in env resolves to its LAST value, as the kubelet does"
+reset
+before=$FAILED
+# Seen live on the benchmark stand: the harness lists VLLM_CACHE_ROOT twice,
+# its default /tmp/vllm and then the mount. The kubelet takes the last; a
+# detector reading the first reported every harness engine as cold.
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","value":"/tmp/vllm"},
+                          {"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"}],
+                   "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "volume:/engine-cache/vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a claim the SIDECAR mounts is not one the engine can use"
+reset
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}}],
+    "containers":[
+      {"name":"routing-proxy","image":"quay.io/x/proxy:1",
+       "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"}]},
+      {"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+       "env":[{"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"}],
+       "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "ephemeral:/engine-cache/vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: SGLang has no such variable, so the field is empty (no opinion)"
+reset; f_sglang_proxy_has_hook
+before=$FAILED
+assert_field 1 "server"      # anchor: the engine was found
+assert_field 7 ""
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"                  # anchor: a document was produced
+# No vLLM variable and no engine-cache header: only the bytecode, which is
+# any Python engine's (its own cases are below).
+assert_not_contains "$doc" "- name: VLLM_CACHE_ROOT"
+assert_not_contains "$doc" "#   engine-cache:"
+assert_contains "$doc" "PYTHONPYCACHEPREFIX"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: nine fields, argv and cachevol where they were, image and bytecode after"
+reset; f_vllm_plain
+before=$FAILED
+gaps="$(so_workload_gaps ns deployments w "$POD_DEPLOY")"
+IFS=$'\037' read -r e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 <<< "$gaps"
+assert_eq "$e6" "vllm serve Qwen/Qwen3-0.6B" "argv (field 6)"
+assert_eq "$e7" "unset" "cachevol (field 7)"
+assert_eq "$e8" "quay.io/x/vllm-openai:v0.11" "image (field 8)"
+assert_eq "$e9" "unset" "bytecode (field 9)"
+assert_eq "$e10" "" "a tenth field"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the patch carries the three variables, the mount and the claim"
+reset; f_engine_cache_only_gap
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "#   engine-cache:"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"
+assert_contains "$doc" "value: /engine-cache/vllm"
+assert_contains "$doc" "- name: FLASHINFER_WORKSPACE_DIR"
+assert_contains "$doc" "- name: TRITON_CACHE_DIR"
+assert_contains "$doc" "mountPath: /engine-cache"
+assert_contains "$doc" "claimName: engine-cache"
+# ...and only that half: no drain, no weights.
+assert_not_contains "$doc" "preStop"
+assert_not_contains "$doc" "HF_HOME"
+assert_not_contains "$doc" "#   cache:"
+# The guard travels with it: the command belongs to the chart, so the patch
+# cannot add it, and without it a read-only cache directory is a lost replica.
+assert_contains "$doc" 'unset $v'
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: with the weights half too, env/volumeMounts/volumes are each ONE list"
+reset; f_vllm_plain
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "HF_HOME"
+assert_contains "$doc" "VLLM_CACHE_ROOT"
+assert_contains "$doc" "preStop"
+assert_eq "$(printf '%s\n' "$doc" | grep -c '^        env:$')" "1" "env lists"
+assert_eq "$(printf '%s\n' "$doc" | grep -c '^        volumeMounts:$')" "1" "volumeMounts lists"
+assert_eq "$(printf '%s\n' "$doc" | grep -c '^      volumes:$')" "1" "volumes lists"
+# ...and the document is YAML yq reads back with BOTH volumes in it, which a
+# second `volumes:` key would silently have replaced.
+d="$(mktemp)"; printf '%s\n' "$doc" > "$d"
+assert_eq "$(yq eval '.spec.template.spec.volumes | length' "$d" 2>/dev/null)" "2" "volumes read back"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env | length' "$d" 2>/dev/null)" "5" "env read back (HF_HOME, the three vLLM caches, PYTHONPYCACHEPREFIX)"
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: an ephemeral cache is warned about ON THE CONSOLE, with its path"
+reset; f_engine_cache_on_emptydir
+before=$FAILED
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "COMPILES FROM NOTHING"
+assert_contains "$warn" "/dev/shm/vllm-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a cache on a claim is not warned about, and gets no half"
+reset; f_engine_cache_on_claim
+before=$FAILED
+out="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)"
+[ -z "$out" ] || fail "expected nothing, got: $out"
+reset; f_engine_cache_only_gap    # anchor: the same call does produce one here
+assert_contains "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" "engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a missing claim is said to be missing, with what a node directory must be"
+reset; f_engine_cache_only_gap
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "engine-cache does NOT exist yet in ns"
+assert_contains "$doc" "make engine-cache NAMESPACE=ns ENGINE_CACHE_PATH=<node dir>"
+assert_contains "$doc" "ENGINE_CACHE_SEED_CLAIM"      # the seed is part of the same instruction
+assert_contains "$doc" "at least two components"
+assert_contains "$doc" "not the node's own"
+assert_contains "$doc" "one directory per trust domain"
+assert_contains "$doc" "PersistentVolumes"
+assert_contains "$doc" "WEIGHTS_NODE_SELECTOR"
+# ...and the way to do without one.
+assert_contains "$doc" "Without a node directory"
+assert_contains "$doc" "LLMSM_ENGINE_CACHE_CLAIM"
+assert_not_contains "$doc" "already exists"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: an existing claim is reused, not followed by instructions to create one"
+reset; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "engine-cache already exists in ns"
+assert_contains "$doc" "engine-cache-status"
+assert_not_contains "$doc" "does NOT exist"
+assert_not_contains "$doc" "ENGINE_CACHE_PATH"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: LLMSM_ENGINE_CACHE_CLAIM names a shared claim, with its subPath"
+reset; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list shared-cache:ReadWriteMany)"
+doc="$(LLMSM_ENGINE_CACHE_CLAIM=shared-cache:caches so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: shared-cache"
+assert_contains "$doc" "subPath: caches"
+assert_contains "$doc" "shared-cache already exists in ns"
+assert_not_contains "$doc" "claimName: engine-cache"
+# ...and the document parses with the subPath on the mount, not the volume.
+d="$(mktemp)"; printf '%s\n' "$doc" > "$d"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].volumeMounts[0].subPath' "$d" 2>/dev/null)" "caches" "subPath read back"
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the plan note fires for an unset cache and names the fix"
+reset; f_vllm_plain
+before=$FAILED
+note="$(so_enginecache_note ns deployments w "$POD_DEPLOY")"
+assert_contains "$note" "compiles from nothing"
+assert_contains "$note" "VLLM_CACHE_ROOT is unset"
+assert_contains "$note" "make workload-patch"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the plan note is silent on a claim, speaks only of bytecode on SGLang, and is silent on an unreadable spec"
+reset; f_engine_cache_on_claim
+before=$FAILED
+assert_eq "$(so_enginecache_note ns deployments w "$POD_DEPLOY")" "" "note for a cache on a claim"
+reset; f_sglang_proxy_has_hook
+note="$(so_enginecache_note ns deployments w "$POD_DEPLOY")"
+assert_contains "$note" "recompiles its Python bytecode"
+assert_not_contains "$note" "VLLM_CACHE_ROOT"
+reset; f_unreadable
+assert_eq "$(so_enginecache_note ns deployments w "$POD_DEPLOY")" "" "note for an unreadable spec (the drain note says so)"
+assert_contains "$(so_drain_note ns deployments w "$POD_DEPLOY")" "unknown"   # anchor
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the summary counts the workloads that compile from nothing"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$dir/log")" "1 model server(s) COMPILE FROM NOTHING"
+assert_not_contains "$(cat "$dir/log")" "RE-DOWNLOAD"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: without its opt-in the half is emitted, never applied"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "VLLM_CACHE_ROOT"
+assert_not_contains "$PATCH_BODY" "engine-cache"
+assert_not_contains "$PATCH_BODY" "env:"
+assert_contains "$(cat "$dir/log")" "engine-cache half is emitted only"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: with its opt-in and the claim, the half IS applied -- and the weights half is not"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$PATCH_BODY" "preStop"
+assert_contains "$PATCH_BODY" "VLLM_CACHE_ROOT"
+assert_contains "$PATCH_BODY" "claimName: engine-cache"
+assert_not_contains "$PATCH_BODY" "HF_HOME"
+assert_not_contains "$PATCH_BODY" "claimName: model-pvc"
+assert_not_contains "$PATCH_BODY" "model-storage"
+# The body is a document the API server would take: one env list of four.
+d="$(mktemp)"; printf '%s\n' "$PATCH_BODY" > "$d"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env | length' "$d" 2>/dev/null)" "4" "env read back (the three vLLM caches and PYTHONPYCACHEPREFIX)"
+assert_eq "$(yq eval '.spec.template.spec.volumes | length' "$d" 2>/dev/null)" "1" "volumes read back"
+rm -f "$d"
+# ...and the guard's absence is said at the time.
+assert_contains "$(cat "$dir/log")" "guard is NOT applied"
+assert_contains "$(cat "$dir/log")" "WITHOUT the guard"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: both opt-ins keep both halves"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$PATCH_BODY" "claimName: engine-cache"
+assert_contains "$PATCH_BODY" "claimName: model-pvc"
+assert_contains "$PATCH_BODY" "HF_HOME"
+assert_contains "$PATCH_BODY" "TRITON_CACHE_DIR"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a missing claim blocks the half rather than stranding pods Pending"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"        # nothing left to send
+assert_contains "$(cat "$dir/log")" "does not exist"
+assert_contains "$(cat "$dir/log")" "need only a volume"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a mount already at /engine-cache blocks the half, NOT the drain half"
+reset; LIST_FIXTURE="$(serving_list)"
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "terminationGracePeriodSeconds":30,
+    "volumes":[{"name":"scratch","emptyDir":{}},
+               {"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"}],
+                   "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"},
+                                   {"name":"scratch","mountPath":"/engine-cache"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "engine-cache"
+assert_contains "$(cat "$dir/log")" "already mounted at /engine-cache"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a workload with everything on a volume reports the all-clear"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_on_claim
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$dir/log")" "no vLLM among them compiles from nothing"
+[ -f "$dir/p.yaml" ] && fail "no file should be written for a converged workload"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="trim: the weights half can be kept while the engine-cache half goes, and back"
+before=$FAILED
+mk_both() {
+cat > "$1" <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: w, namespace: ns1}
+spec:
+  template:
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: vllm
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 45"]
+        env:
+        - name: HF_HOME
+          value: /model-cache/huggingface
+        - name: VLLM_CACHE_ROOT
+          value: /engine-cache/vllm
+        - name: FLASHINFER_WORKSPACE_DIR
+          value: /engine-cache/flashinfer
+        - name: TRITON_CACHE_DIR
+          value: /engine-cache/triton
+        volumeMounts:
+        - name: model-storage
+          mountPath: /model-cache
+        - name: engine-cache
+          mountPath: /engine-cache
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-pvc
+      - name: engine-cache
+        persistentVolumeClaim:
+          claimName: engine-cache
+YAML
+}
+d="$(mktemp)"; mk_both "$d"
+so_workload_patch_trim "$d" 1 0 || fail "expected the weights half to survive"
+left="$(cat "$d")"
+assert_contains "$left" "HF_HOME"
+assert_contains "$left" "claimName: model-pvc"
+assert_contains "$left" "preStop"
+assert_not_contains "$left" "VLLM_CACHE_ROOT"
+assert_not_contains "$left" "engine-cache"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env | length' "$d")" "1" "env left"
+assert_eq "$(yq eval '.spec.template.spec.volumes | length' "$d")" "1" "volumes left"
+mk_both "$d"
+so_workload_patch_trim "$d" 0 1 || fail "expected the engine-cache half to survive"
+left="$(cat "$d")"
+assert_contains "$left" "claimName: engine-cache"
+assert_contains "$left" "TRITON_CACHE_DIR"
+assert_not_contains "$left" "HF_HOME"
+assert_not_contains "$left" "model-storage"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env | length' "$d")" "3" "env left"
+mk_both "$d"
+so_workload_patch_trim "$d" 0 0 || fail "expected the drain half to survive"
+left="$(cat "$d")"
+assert_not_contains "$left" "env:"
+assert_not_contains "$left" "volumes:"
+assert_contains "$left" "preStop"
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="trim: a document with only the two storage halves and neither kept is skipped (rc 1)"
+before=$FAILED
+d="$(mktemp)"
+cat > "$d" <<'YAML'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: w, namespace: ns1}
+spec:
+  template:
+    spec:
+      containers:
+      - name: vllm
+        env:
+        - name: HF_HOME
+          value: /model-cache/huggingface
+        - name: VLLM_CACHE_ROOT
+          value: /engine-cache/vllm
+        volumeMounts:
+        - name: model-storage
+          mountPath: /model-cache
+        - name: engine-cache
+          mountPath: /engine-cache
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-pvc
+      - name: engine-cache
+        persistentVolumeClaim:
+          claimName: engine-cache
+YAML
+trim_rc=0
+so_workload_patch_trim "$d" 0 0 || trim_rc=$?
+assert_eq "$trim_rc" "1" "return code"
+assert_contains "$(cat "$d")" "VLLM_CACHE_ROOT"   # anchor: the file was left intact
+# ...while keeping one half makes it worth sending.
+so_workload_patch_trim "$d" 0 1 || fail "expected the engine-cache half to be worth sending"
+assert_contains "$(cat "$d")" "claimName: engine-cache"
+rm -f "$d"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- review round: the detector's edges, the claim's kind, the preparer ------
+
+CASE="engine cache: a value from a ConfigMap or Secret is no opinion, never unset"
+reset
+before=$FAILED
+# A strategic merge of `value` into an env entry that has `valueFrom` is
+# rejected by the API server -- the whole document, drain hook included -- so
+# a detector that called this "unset" and emitted the half took the drain
+# half down with it on apply.
+FIXTURE='{"spec":{"template":{"spec":{
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 1 "vllm"      # anchor: the engine was found
+assert_field 7 ""
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"
+assert_not_contains "$doc" "- name: VLLM_CACHE_ROOT"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: an empty value is unset, not a cache at ''"
+reset
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","value":""}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "unset"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a mount is matched by path component, not string prefix"
+reset
+before=$FAILED
+# /engine-cache2/vllm is not under a claim mounted at /engine-cache; a prefix
+# test said it was, and gave an emptyDir cache a clean bill.
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}},
+               {"name":"scratch","emptyDir":{}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","value":"/engine-cache2/vllm"}],
+                   "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"},
+                                   {"name":"scratch","mountPath":"/engine-cache2"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "ephemeral:/engine-cache2/vllm"
+# ...and the same rule for the weights: HF_HOME=/model-cache2/hf is not on
+# the claim at /model-cache.
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"HF_HOME","value":"/model-cache2/hf"}],
+                   "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 5 "0"
+# ...while the mount path itself, and a path under it, still count.
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","value":"/engine-cache"}],
+                   "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "volume:/engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: an inline nfs volume outlives the pod and counts"
+reset
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "volumes":[{"name":"nas","nfs":{"server":"filer","path":"/export/caches"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"VLLM_CACHE_ROOT","value":"/cache/vllm"}],
+                   "volumeMounts":[{"name":"nas","mountPath":"/cache"}],
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 7 "volume:/cache/vllm"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a NAMED claim that is missing is not answered with make engine-cache"
+reset; f_engine_cache_only_gap
+before=$FAILED
+# `make engine-cache` creates a claim called engine-cache, never the one the
+# operator named, so that remedy would leave every pod Pending on the name the
+# patch above actually mounts -- the same defect the weights half once had.
+doc="$(LLMSM_ENGINE_CACHE_CLAIM=my-rwx so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "claimName: my-rwx"
+assert_contains "$doc" "my-rwx (LLMSM_ENGINE_CACHE_CLAIM) does NOT exist in ns"
+assert_contains "$doc" "drop LLMSM_ENGINE_CACHE_CLAIM"
+assert_not_contains "$doc" "ENGINE_CACHE_PATH="
+assert_not_contains "$doc" "make engine-cache NAMESPACE"
+# ...and what it asks of that claim is said: the trust it takes.
+assert_contains "$doc" "runs code in every"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the shared-claim alternative states what it must be trusted as"
+reset; f_engine_cache_only_gap
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "Without a node directory"
+assert_contains "$doc" "runs code in every engine, on every node at"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the all-clear does not vouch for an engine the detector has no opinion on"
+reset; LIST_FIXTURE="$(serving_list)"
+before=$FAILED
+# An SGLang server that drains and keeps its weights: the all-clear must not
+# say its compile caches are on a volume, because nothing looked.
+FIXTURE='{"spec":{"template":{"spec":{
+    "terminationGracePeriodSeconds":120,
+    "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+    "containers":[{"name":"server","image":"lmsysorg/sglang:latest",
+                   "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                          {"name":"PYTHONPYCACHEPREFIX","value":"/model-cache/pycache/596e0fdddd36"}],
+                   "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                   "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                   "args":["python3","-m","sglang.launch_server","--model-path","meta-llama/Llama-3.1-8B"]}]}}}}'
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$(cat "$dir/log")" "already drain on scale-down"
+assert_contains "$(cat "$dir/log")" "no vLLM among them compiles from nothing"
+assert_not_contains "$(cat "$dir/log")" "compile caches on a volume"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a claim that is not Bound blocks the half, with its phase"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany:Pending)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$dir/log")" "is not Bound (Pending)"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: engine-cache"   # anchor: emitted still
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a ReadWriteOnce claim blocks the half: it binds to one node"
+reset; LIST_FIXTURE="$(serving_list)"; f_llmd_real_downloads
+before=$FAILED
+# The weights half shares the check, so the second replica of a workload
+# whose cache is RWO is refused there too.
+PVC_FIXTURE="$(pvc_list model-pvc:ReadWriteOnce)"
+apply_weights_run
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "claimName"
+assert_contains "$(cat "$DRIVER_LOG")" "not ReadWriteMany"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: an unprepared node blocks the half, and is counted"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE='{"status":{"desiredNumberScheduled":16,"numberReady":14}}'
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$dir/log")" "2 of 16 accelerator node(s) are not prepared"
+assert_contains "$(cat "$dir/log")" "engine-cache-status"
+# ...and with every node prepared the same run applies it.
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE='{"status":{"desiredNumberScheduled":16,"numberReady":16}}'
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "claimName: engine-cache"
+assert_contains "$(cat "$dir/log")" "WITHOUT the guard"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="a volume or claim name that is not a DNS-1123 label is refused at entry"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_ENGINE_CACHE_VOLUME_NAME='engine"cache' LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "LLMSM_ENGINE_CACHE_VOLUME_NAME must be a DNS-1123 label"
+[ -f "$dir/p.yaml" ] && fail "nothing should be written"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_ENGINE_CACHE_CLAIM='shared:../etc' LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "is not a subPath"
+# ...and a well-formed one passes the gate (anchor).
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_ENGINE_CACHE_CLAIM='shared-cache:engine-cache' LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$dir/p.yaml")" "claimName: shared-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- review round 4: the preparer gate, and the names -----------------------
+
+engine_apply_run() {  # the engine-cache opt-in against $FIXTURE, results in DRIVER_*
+    DRIVER_OUT="$(mktemp -d)/p.yaml"; DRIVER_LOG="$(mktemp)"; DRIVER_RC=0
+    LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+        LLMSM_WORKLOAD_PATCH_FILE="$DRIVER_OUT" llmsm_workload_patch >"$DRIVER_LOG" 2>&1 || DRIVER_RC=$?
+}
+
+CASE="engine cache: a preparer that cannot be READ refuses the half (Forbidden is not absent)"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_RC=1                      # a token that may not list DaemonSets, or a timeout
+engine_apply_run
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$DRIVER_LOG")" "preparer DaemonSet could not be read"
+assert_contains "$(cat "$DRIVER_OUT")" "claimName: engine-cache"   # emitted still
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: no preparer at all (NotFound) is not a refusal -- the claim was checked"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE=""; DS_RC=0       # --ignore-not-found: empty, rc 0
+engine_apply_run
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "claimName: engine-cache"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: a preparer with no status yet (0 of 0) is not 'every node prepared'"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE='{"status":{}}'
+engine_apply_run
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$DRIVER_LOG")" "0 of 0 accelerator node(s) are not prepared"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="engine cache: the gate is for the claim make engine-cache makes, not a namesake DaemonSet"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+before=$FAILED
+PVC_FIXTURE="$(pvc_list my-rwx:ReadWriteMany)"
+DS_FIXTURE='{"status":{"desiredNumberScheduled":3,"numberReady":2}}'   # an unrelated DaemonSet called my-rwx
+LLMSM_ENGINE_CACHE_CLAIM=my-rwx engine_apply_run
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "claimName: my-rwx"
+assert_not_contains "$(cat "$DRIVER_LOG")" "not prepared"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the two volume names may not be the same"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+dir="$(mktemp -d)"; DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_ENGINE_CACHE_VOLUME_NAME=model-storage LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_contains "$(cat "$dir/log")" "the two volumes need two names"
+[ -f "$dir/p.yaml" ] && fail "nothing should be written"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="the claim reference is checked as claim and subPath, each by its own rule"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+dir="$(mktemp -d)"
+run_ref() { DRIVER_RC=0; LLMSM_DEFAULT_SO_NS=ns1 LLMSM_ENGINE_CACHE_CLAIM="$1" LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?; rm -f "$dir/p.yaml"; }
+# refused: a slash, an underscore, upper case or a leading dot in the CLAIM part
+for bad in a/b a_b Shared .a a..b; do
+    run_ref "$bad"; assert_eq "$DRIVER_RC" "1" "rc for claim '$bad'"; assert_contains "$(cat "$dir/log")" "is not a claim name"
+done
+# refused: an absolute, empty or escaping SUBPATH
+for bad in shared:/abs shared: shared:.. shared:../x shared:a/../b; do
+    run_ref "$bad"; assert_eq "$DRIVER_RC" "1" "rc for '$bad'"; assert_contains "$(cat "$dir/log")" "is not a subPath"
+done
+# accepted: a dotted claim, a mixed-case and nested subPath (what --seed-claim takes too)
+for good in shared-cache shared.cache:engine-cache shared-cache:Models/qwen_3; do
+    run_ref "$good"; assert_eq "$DRIVER_RC" "0" "rc for '$good'"
+done
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- Python bytecode ----------------------------------------------------------
+#
+# Engine images ship almost no .pyc, so every container compiles its imports
+# again: measured on vLLM v0.26.0, ~11 s of every start. PYTHONPYCACHEPREFIX
+# under the engine cache keeps them, one directory per image, because a .pyc
+# is checked against its source's mtime and size only.
+
+KEY_VLLM="$(so_pycache_key "quay.io/x/vllm-openai:v0.11")"
+KEY_SGLANG="$(so_pycache_key "lmsysorg/sglang:latest")"
+
+# The vLLM caches already on a claim; only the bytecode is missing.
+f_engine_cache_on_claim_no_pyc() {
+    f_engine_cache_on_claim
+    FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env |= map(select(.name != "PYTHONPYCACHEPREFIX"))')"
+}
+
+# SGLang that drains and keeps its weights, with nothing for the bytecode.
+f_sglang_no_pyc() {
+    FIXTURE='{"spec":{"template":{"spec":{
+        "terminationGracePeriodSeconds":120,
+        "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+        "containers":[{"name":"server","image":"lmsysorg/sglang:latest",
+                       "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"}],
+                       "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                       "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                       "args":["python3","-m","sglang.launch_server","--model-path","meta-llama/Llama-3.1-8B"]}]}}}}'
+}
+
+CASE="bytecode: the vLLM engine-cache half carries PYTHONPYCACHEPREFIX, keyed by the image"
+reset; f_engine_cache_only_gap
+before=$FAILED
+assert_field 9 "unset"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "#   bytecode:"
+assert_contains "$doc" "- name: PYTHONPYCACHEPREFIX"
+assert_contains "$doc" "value: /engine-cache/pycache/${KEY_VLLM}"
+assert_contains "$doc" "image reference quay.io/x/vllm-openai:v0.11"
+assert_eq "${#KEY_VLLM}" "12" "key length"
+d="$(mktemp)"; printf '%s\n' "$doc" > "$d"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env[] | select(.name == "PYTHONPYCACHEPREFIX") | .value' "$d" 2>/dev/null)" \
+    "/engine-cache/pycache/${KEY_VLLM}" "PYTHONPYCACHEPREFIX read back"
+assert_eq "$(yq eval '.spec.template.spec.volumes | length' "$d" 2>/dev/null)" "1" "one volume: the bytecode shares the vLLM half's"
+rm -f "$d"
+# ...and the console says so with the vLLM warning, not a second one.
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "COMPILES FROM NOTHING"
+assert_contains "$warn" "Python bytecode in the container"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: two images get two keys, and a digest is part of the key"
+reset
+before=$FAILED
+k1="$(so_pycache_key "quay.io/x/vllm-openai:v0.11")"
+k2="$(so_pycache_key "quay.io/x/vllm-openai:v0.12")"
+k3="$(so_pycache_key "quay.io/x/vllm-openai:v0.11@sha256:0000000000000000000000000000000000000000000000000000000000000000")"
+# Pinned: the first 12 hex digits of the SHA-256 of the exact string, as
+# the fixtures above write it; and the shasum branch (macOS) gives the same.
+assert_eq "$k1" "5f8fcd7456cd" "key of the exact string"
+assert_eq "$KEY_SGLANG" "596e0fdddd36" "SGLang key"
+SUMS="$(mktemp -d)"
+if command -v shasum >/dev/null 2>&1; then
+    ln -s "$(command -v shasum)" "$SUMS/shasum"
+    assert_eq "$(PATH="$SUMS" so_pycache_key "quay.io/x/vllm-openai:v0.11")" "5f8fcd7456cd" "key through shasum"
+else
+    fail "shasum is not installed, so the macOS branch of so_pycache_key was not run"
+fi
+assert_eq "$(PATH="$SUMS/none" so_pycache_key "quay.io/x/vllm-openai:v0.11"; echo "rc=$?")" "rc=1" "no hash tool: no key"
+rm -rf "$SUMS"
+[ -n "$k2" ] && [ "$k1" != "$k2" ] || fail "two tags gave one key: '$k1' '$k2'"
+[ -n "$k3" ] && [ "$k1" != "$k3" ] || fail "a digest did not change the key: '$k1' '$k3'"
+so_pycache_key "" >/dev/null && fail "an empty image must give no key"
+# ...and through the patch: the same pod spec on another image, another path.
+f_engine_cache_only_gap
+doc1="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+FIXTURE="${FIXTURE//vllm-openai:v0.11/vllm-openai:v0.12}"
+doc2="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc1" "/engine-cache/pycache/${k1}"
+assert_contains "$doc2" "/engine-cache/pycache/${k2}"
+assert_not_contains "$doc2" "/engine-cache/pycache/${k1}"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: a PYTHONPYCACHEPREFIX the workload sets is respected, value or valueFrom"
+reset
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "terminationGracePeriodSeconds":120,
+    "volumes":[{"name":"model-storage","persistentVolumeClaim":{"claimName":"model-pvc"}}],
+    "containers":[{"name":"vllm","image":"quay.io/x/vllm-openai:v0.11",
+                   "env":[{"name":"HF_HOME","value":"/model-cache/huggingface"},
+                          {"name":"PYTHONPYCACHEPREFIX","value":"/opt/my-pyc"}],
+                   "volumeMounts":[{"name":"model-storage","mountPath":"/model-cache"}],
+                   "lifecycle":{"preStop":{"exec":{"command":["sleep","45"]}}},
+                   "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 9 "set:/opt/my-pyc"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"          # anchor: the vLLM half is still written
+assert_not_contains "$doc" "- name: PYTHONPYCACHEPREFIX"
+assert_not_contains "$doc" "#   bytecode:"
+assert_not_contains "$doc" "Python bytecode"
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env[1] = {"name":"PYTHONPYCACHEPREFIX","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}')"
+assert_field 9 "set:"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"
+assert_not_contains "$doc" "- name: PYTHONPYCACHEPREFIX"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: a prefix keyed for another image is warned about, and left as set"
+reset; f_engine_cache_on_claim
+before=$FAILED
+FIXTURE="${FIXTURE//pycache\/${KEY_VLLM}/pycache\/aaaaaaaaaaaa}"
+assert_field 9 "set:/engine-cache/pycache/aaaaaaaaaaaa"
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "keyed for another image"
+assert_contains "$warn" ".../pycache/${KEY_VLLM}"
+assert_eq "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" "" "document"
+# ...while the right key is silent (anchor: the warning is about the key).
+reset; f_engine_cache_on_claim
+assert_eq "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)" "" "output for the right key"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: a vLLM cache already on a claim gets the prefix under that mount, env only"
+reset; f_engine_cache_on_claim_no_pyc
+before=$FAILED
+assert_field 7 "volume:/engine-cache/vllm"
+assert_field 9 "mount:/engine-cache"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "#   bytecode:"
+assert_contains "$doc" "value: /engine-cache/pycache/${KEY_VLLM}"
+assert_not_contains "$doc" "#   engine-cache:"
+assert_not_contains "$doc" "volumes:"
+assert_not_contains "$doc" "volumeMounts:"
+assert_not_contains "$doc" "- name: VLLM_CACHE_ROOT"
+d="$(mktemp)"; printf '%s\n' "$doc" > "$d"
+assert_eq "$(yq eval '.spec.template.spec.containers[0].env | length' "$d" 2>/dev/null)" "1" "env read back"
+rm -f "$d"
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "RECOMPILES ITS PYTHON BYTECODE"
+# A hostPath counts the same way, under its own mount.
+reset; f_engine_cache_on_hostpath
+assert_field 9 "mount:/mnt/caches"
+assert_contains "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" "value: /mnt/caches/pycache/${KEY_VLLM}"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: SGLang gets the engine-cache volume for the bytecode alone, with the guard"
+reset; f_sglang_no_pyc
+before=$FAILED
+assert_field 1 "server"
+assert_field 7 ""
+assert_field 9 "unset"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "#   bytecode:"
+assert_contains "$doc" "value: /engine-cache/pycache/${KEY_SGLANG}"
+assert_contains "$doc" "mountPath: /engine-cache"
+assert_contains "$doc" "claimName: engine-cache"
+assert_contains "$doc" "engine-cache does NOT exist yet in ns"   # the claim note travels with the volume
+# The guard travels with it: an unwritable prefix is slower than none.
+assert_contains "$doc" "for v in VLLM_CACHE_ROOT FLASHINFER_WORKSPACE_DIR TRITON_CACHE_DIR PYTHONPYCACHEPREFIX; do"
+assert_not_contains "$doc" "- name: VLLM_CACHE_ROOT"
+assert_not_contains "$doc" "preStop"                             # it drains already
+# ...and a mount already at the engine-cache path is used, with no new volume.
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.volumes += [{"name":"ec","persistentVolumeClaim":{"claimName":"engine-cache"}}]
+    | .spec.template.spec.containers[0].volumeMounts += [{"name":"ec","mountPath":"/engine-cache"}]')"
+assert_field 9 "mount:/engine-cache"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "value: /engine-cache/pycache/${KEY_SGLANG}"
+assert_not_contains "$doc" "volumes:"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: the simulator is not a Python engine"
+reset
+before=$FAILED
+FIXTURE='{"spec":{"template":{"spec":{
+    "containers":[{"name":"sim","image":"ghcr.io/llm-d/llm-d-inference-sim:v0.9.0",
+                   "args":["--model","Qwen/Qwen3-0.6B"]}]}}}}'
+assert_field 1 "sim"           # anchor: found, as an engine for the drain half
+assert_field 9 ""
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "preStop"
+assert_not_contains "$doc" "PYTHONPYCACHEPREFIX"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: the summary counts it, and an env-only half is emitted, never applied"
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_on_claim_no_pyc
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+dir="$(mktemp -d)"
+DRIVER_RC=0
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || DRIVER_RC=$?
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$dir/log")" "1 model server(s) RECOMPILE THEIR PYTHON BYTECODE"
+assert_not_contains "$(cat "$dir/log")" "COMPILE FROM NOTHING"
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$dir/log")" "need only a volume or a cache variable"
+assert_contains "$(cat "$dir/p.yaml")" "value: /engine-cache/pycache/${KEY_VLLM}"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: without the engine-cache opt-in the prefix is trimmed with the half; with it, kept"
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+dir="$(mktemp -d)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" \
+    llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$PATCH_BODY" "preStop"
+assert_not_contains "$PATCH_BODY" "PYTHONPYCACHEPREFIX"
+assert_contains "$(cat "$dir/p.yaml")" "PYTHONPYCACHEPREFIX"     # emitted still
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_APPLY=true LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true \
+    LLMSM_WORKLOAD_PATCH_FILE="$dir/p.yaml" llmsm_workload_patch >"$dir/log" 2>&1 || true
+assert_contains "$PATCH_BODY" "value: /engine-cache/pycache/${KEY_VLLM}"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: a bytecode-only half is applied with its opt-in, and its missing guard is named for what it costs"
+reset; LIST_FIXTURE="$(serving_list)"; f_sglang_no_pyc
+before=$FAILED
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE='{"status":{"desiredNumberScheduled":2,"numberReady":2}}'
+engine_apply_run
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" "value: /engine-cache/pycache/${KEY_SGLANG}"
+assert_contains "$PATCH_BODY" "claimName: engine-cache"
+assert_contains "$(cat "$DRIVER_LOG")" "starts slower than with no PYTHONPYCACHEPREFIX"
+assert_not_contains "$(cat "$DRIVER_LOG")" "loses the replica"
+# ...while the vLLM half warns of the replica (anchor).
+reset; LIST_FIXTURE="$(serving_list)"; f_engine_cache_only_gap
+PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany)"
+DS_FIXTURE='{"status":{"desiredNumberScheduled":2,"numberReady":2}}'
+engine_apply_run
+assert_contains "$(cat "$DRIVER_LOG")" "loses the replica"
+[ "$FAILED" -eq "$before" ] && ok
+
+# The guard is emitted as text for the chart's command. Run that text, as
+# written in the patch, against real directories: a writable prefix is kept,
+# an unwritable one is unset with one log line.
+guard_from() {   # $1 the emitted document; prints the guard as a script
+    printf '%s\n' "$1" | sed -n '/^#     for v in /,/^#     done$/p' | sed 's/^#     //'
+}
+
+CASE="bytecode: the emitted guard keeps a writable prefix and unsets an unwritable one"
+reset; f_sglang_no_pyc
+before=$FAILED
+G="$(mktemp -d)"
+guard_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+grep -q 'PYTHONPYCACHEPREFIX; do$' "$G/guard.sh" || fail "no guard extracted: $(cat "$G/guard.sh")"
+printf '%s\n' 'echo "PYC=${PYTHONPYCACHEPREFIX-unset}"' >> "$G/guard.sh"
+mkdir -p "$G/ok" "$G/ro"
+out="$(PYTHONPYCACHEPREFIX="$G/ok/pycache/k" sh "$G/guard.sh" 2>&1)"
+assert_contains "$out" "PYC=$G/ok/pycache/k"
+assert_not_contains "$out" "not writable"
+if [ "$(id -u)" = 0 ]; then
+    ok_note="(the unwritable half needs a non-root check runner)"
+    assert_contains "$ok_note" "non-root"
+else
+    chmod 555 "$G/ro"
+    out="$(PYTHONPYCACHEPREFIX="$G/ro/pycache/k" sh "$G/guard.sh" 2>&1)"
+    chmod 755 "$G/ro"
+    assert_contains "$out" "PYC=unset"
+    assert_contains "$out" "engine cache PYTHONPYCACHEPREFIX=$G/ro/pycache/k is not writable"
+    assert_eq "$(printf '%s\n' "$out" | grep -c 'not writable')" "1" "log lines"
+fi
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the guard reads the installed engine -------------------------------------
+#
+# The rest of the guard decides from the installed package, never the image
+# tag: the vLLM version in its dist-info METADATA (VLLM_USE_MEGA_AOT_ARTIFACT
+# on 0.26 only) and whether the engine package ships its bytecode (the prefix
+# then only costs, so it is unset). Run the emitted text, as written, under
+# every POSIX shell here, against fake site-packages trees found through the
+# real python3 of the runner.
+guard_all_from() {   # $1 the emitted document; prints the whole guard as a script
+    printf '%s\n' "$1" | awk '/^#     for v in /{on=1} on && !/^#     /{exit} on{sub(/^#     /, ""); print}'
+}
+command -v python3 >/dev/null 2>&1 || { printf 'FATAL: python3 is required to run the guard cases.\n' >&2; exit 1; }
+PYTAG="$(python3 -S -c 'import sys; print(sys.implementation.cache_tag)')"
+GUARD_SHELLS="sh"
+command -v dash >/dev/null 2>&1 && GUARD_SHELLS="$GUARD_SHELLS dash"
+GUARD_SHELLS="$GUARD_SHELLS bash"
+# fake_engine <site-packages> <pkg> <version> <pyc: none|all|init>: the engine
+# package, its dist-info, and (once per tree) a torch package with the same
+# bytecode, since the guard asks both.
+fake_engine() {
+    local sp="$1" pkg="$2" ver="$3" pyc="$4" f
+    fake_dist "$sp" "$pkg" "$ver"
+    fake_pkg "$sp" "$pkg" "$pyc"
+    [ -d "$sp/torch" ] || fake_pkg "$sp" torch "$pyc"
+}
+fake_dist() {   # <site-packages> <name> <version>: a dist-info alone
+    mkdir -p "$1/$2-$3.dist-info"
+    printf 'Metadata-Version: 2.1\nName: %s\nVersion: %s\n\nVersion: 9.9.9 in the body is not the version\n' "$2" "$3" \
+        > "$1/$2-$3.dist-info/METADATA"
+}
+fake_pkg() {    # <dir> <pkg> <pyc: none|all|init>: a package alone
+    local f
+    mkdir -p "$1/$2/__pycache__"
+    for f in __init__ envs logger scripts; do : > "$1/$2/$f.py"; done
+    case "$3" in
+        all)  for f in __init__ envs logger scripts; do : > "$1/$2/__pycache__/$f.$PYTAG.pyc"; done ;;
+        init) : > "$1/$2/__pycache__/__init__.$PYTAG.pyc" ;;
+    esac
+}
+# run_guard <shell> <guard> <site-packages> [VAR=value ...]: the guard, then what it left
+run_guard() {
+    local shell="$1" g="$2" sp="$3"
+    shift 3
+    env -u VLLM_USE_MEGA_AOT_ARTIFACT -u PYTHONPYCACHEPREFIX -u VLLM_CACHE_ROOT \
+        PYTHONPATH="$sp" "$@" "$shell" -c ". \"$g\"; echo \"AOT=\${VLLM_USE_MEGA_AOT_ARTIFACT-unset} PYC=\${PYTHONPYCACHEPREFIX-unset}\"" 2>&1
+}
+
+CASE="guard: VLLM_USE_MEGA_AOT_ARTIFACT=1 on an installed vLLM 0.26 only, never over a user value"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+guard_all_from "$doc" > "$G/guard.sh"
+grep -q 'PYTHONPYCACHEPREFIX; do$' "$G/guard.sh" || fail "no guard extracted: $(cat "$G/guard.sh")"
+assert_contains "$(cat "$G/guard.sh")" "export VLLM_USE_MEGA_AOT_ARTIFACT=1"
+fake_engine "$G/v26" vllm 0.26.0 none
+fake_engine "$G/v27" vllm 0.27.0 none
+fake_engine "$G/v25" vllm 0.25.1 none
+mkdir -p "$G/c"
+for sh_ in $GUARD_SHELLS; do
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v26" VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "AOT=1 PYC=$G/c/pyc"
+    assert_contains "$out" "engine cache: vLLM 0.26.0, VLLM_USE_MEGA_AOT_ARTIFACT=1"
+    # 0.27 and later: the default there, so not set.
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v27" VLLM_CACHE_ROOT="$G/c/vllm")"
+    assert_contains "$out" "AOT=unset"
+    # Below 0.26 it was never measured.
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v25" VLLM_CACHE_ROOT="$G/c/vllm")"
+    assert_contains "$out" "AOT=unset"
+    # A value the user set, even empty, is theirs.
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v26" VLLM_CACHE_ROOT="$G/c/vllm" VLLM_USE_MEGA_AOT_ARTIFACT=0)"
+    assert_contains "$out" "AOT=0 "
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v26" VLLM_CACHE_ROOT="$G/c/vllm" VLLM_USE_MEGA_AOT_ARTIFACT=)"
+    assert_contains "$out" "AOT= "
+    # No cache root left (the loop unset it, or none was set): nothing to load from.
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v26")"
+    assert_contains "$out" "AOT=unset"
+done
+# LLMSM_ENGINE_CACHE_AOT=false leaves the block out of the text.
+doc="$(LLMSM_ENGINE_CACHE_AOT=false so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "PYTHONPYCACHEPREFIX; do"                     # anchor: the guard is there
+assert_not_contains "$doc" "VLLM_USE_MEGA_AOT_ARTIFACT"
+guard_all_from "$doc" > "$G/noaot.sh"
+out="$(run_guard sh "$G/noaot.sh" "$G/v26" VLLM_CACHE_ROOT="$G/c/vllm")"
+assert_contains "$out" "AOT=unset"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: a prefix is unset when the installed package ships its bytecode, kept when it does not"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+fake_engine "$G/v32" vllm 0.32.0 all
+fake_engine "$G/v31" vllm 0.31.0 none
+fake_engine "$G/part" vllm 0.31.0 init     # a build-time import compiled __init__ only
+mkdir -p "$G/c"
+for sh_ in $GUARD_SHELLS; do
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v32" VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "AOT=unset PYC=unset"
+    assert_contains "$out" "engine cache PYTHONPYCACHEPREFIX: $G/v32/vllm ships its bytecode; using that instead"
+    assert_eq "$(printf '%s\n' "$out" | grep -c 'ships its bytecode')" "1" "log lines ($sh_)"
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/v31" VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=$G/c/pyc"
+    assert_not_contains "$out" "ships its bytecode"
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/part" VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=$G/c/pyc"
+done
+# Bytecode for ANOTHER interpreter is not bytecode this one can use.
+mv "$G/v32/vllm/__pycache__/envs.$PYTAG.pyc" "$G/v32/vllm/__pycache__/envs.cpython-20.pyc"
+out="$(run_guard sh "$G/guard.sh" "$G/v32" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+assert_contains "$out" "PYC=$G/c/pyc"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: found through the site-packages of a venv interpreter, with no PYTHONPATH"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+# A venv by hand, as `python -m venv` lays one out: pyvenv.cfg beside bin/.
+PYREAL="$(python3 -S -c 'import sys, os; print(os.path.realpath(sys.executable))')"
+PYVER="$(python3 -S -c 'import sys; print("python%d.%d" % sys.version_info[:2])')"
+mkdir -p "$G/venv/bin" "$G/c"
+printf 'home = %s\ninclude-system-site-packages = false\n' "$(dirname "$PYREAL")" > "$G/venv/pyvenv.cfg"
+ln -s "$PYREAL" "$G/venv/bin/python3"
+fake_engine "$G/venv/lib/$PYVER/site-packages" vllm 0.26.0 all
+for sh_ in $GUARD_SHELLS; do
+    out="$(env -u VLLM_USE_MEGA_AOT_ARTIFACT -u PYTHONPATH PATH="$G/venv/bin:$PATH" \
+        VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc" \
+        "$sh_" -c ". \"$G/guard.sh\"; echo \"AOT=\${VLLM_USE_MEGA_AOT_ARTIFACT-unset} PYC=\${PYTHONPYCACHEPREFIX-unset}\"" 2>&1)"
+    assert_contains "$out" "AOT=1 PYC=unset"
+done
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: SGLang gets the bytecode check on its own package, and no AOT block"
+reset; f_sglang_no_pyc
+before=$FAILED
+G="$(mktemp -d)"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "ships its bytecode"
+assert_not_contains "$doc" "VLLM_USE_MEGA_AOT_ARTIFACT"
+guard_all_from "$doc" > "$G/guard.sh"
+fake_engine "$G/sg" sglang 0.5.9 all
+fake_engine "$G/sgno" sglang 0.5.9 none
+mkdir -p "$G/c"
+for sh_ in $GUARD_SHELLS; do
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/sg" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=unset"
+    assert_contains "$out" "$G/sg/sglang ships its bytecode"
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/sgno" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=$G/c/pyc"
+done
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: the version is the one installed beside the package, not a stale dist-info earlier on the path"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+fake_dist "$G/stale" vllm 0.27.0                  # a dist-info left behind, no package
+fake_engine "$G/real" vllm 0.26.0 none
+# ...and one installed as editable: the package in a source tree, its dist-info elsewhere.
+fake_pkg "$G/src" vllm none
+fake_dist "$G/sp" vllm 0.26.0
+mkdir -p "$G/c"
+for sh_ in $GUARD_SHELLS; do
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/stale:$G/real" VLLM_CACHE_ROOT="$G/c/vllm")"
+    assert_contains "$out" "engine cache: vLLM 0.26.0, VLLM_USE_MEGA_AOT_ARTIFACT=1"
+    assert_contains "$out" "AOT=1"
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/src:$G/sp" VLLM_CACHE_ROOT="$G/c/vllm")"
+    assert_contains "$out" "AOT=1"
+done
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: AOT for a released 0.26.x only -- a +local build yes, dev, rc, unparsable or empty no"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+mkdir -p "$G/c"
+i=0
+for v in "0.26.0+cu129:1" "0.26.12:1" "0.26.1.dev1:unset" "0.26.0rc1:unset" "0.26.0a1:unset" "banana:unset" ":unset"; do
+    i=$((i + 1))
+    fake_engine "$G/t$i" vllm "${v%:*}" none
+    for sh_ in $GUARD_SHELLS; do
+        out="$(run_guard "$sh_" "$G/guard.sh" "$G/t$i" VLLM_CACHE_ROOT="$G/c/vllm")"
+        assert_contains "$out" "AOT=${v##*:} "
+        assert_not_contains "$out" "rror"
+    done
+done
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: torch must ship its bytecode too, and nullglob does not read an empty glob as shipped"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+fake_engine "$G/notorch" vllm 0.32.0 all
+rm -f "$G/notorch/torch/__pycache__/"*.pyc     # vllm shipped, torch not
+fake_engine "$G/ok" vllm 0.32.0 all
+# A package with no .py at the top (a compiled __init__): nothing to judge.
+EXT="$(python3 -S -c 'import importlib.machinery as m; print(m.EXTENSION_SUFFIXES[0])')"
+mkdir -p "$G/so/vllm/__pycache__"
+: > "$G/so/vllm/__init__$EXT"
+fake_dist "$G/so" vllm 0.32.0
+fake_pkg "$G/so" torch all
+mkdir -p "$G/c"
+for sh_ in $GUARD_SHELLS; do
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/notorch" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=$G/c/pyc"
+    out="$(run_guard "$sh_" "$G/guard.sh" "$G/ok" PYTHONPYCACHEPREFIX="$G/c/pyc")"
+    assert_contains "$out" "PYC=unset"                        # anchor
+done
+out="$(env -u PYTHONPYCACHEPREFIX PYTHONPATH="$G/so" PYTHONPYCACHEPREFIX="$G/c/pyc" \
+    bash -O nullglob -c ". \"$G/guard.sh\"; echo \"PYC=\${PYTHONPYCACHEPREFIX-unset}\"" 2>&1)"
+assert_contains "$out" "PYC=$G/c/pyc"
+assert_not_contains "$out" "ships its bytecode"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="guard: runs under set -eu, and with no python3 on PATH changes nothing"
+reset; f_engine_cache_only_gap
+before=$FAILED
+G="$(mktemp -d)"
+guard_all_from "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" > "$G/guard.sh"
+fake_engine "$G/v26" vllm 0.26.0 none
+fake_engine "$G/v32" vllm 0.32.0 all
+mkdir -p "$G/c" "$G/bin"
+for t in mkdir touch; do ln -s "$(command -v "$t")" "$G/bin/$t"; done
+for sh_ in $GUARD_SHELLS; do
+    shp="$(command -v "$sh_")"
+    # Only the guard variables set, everything else unset: -u must not trip.
+    out="$(env -u VLLM_USE_MEGA_AOT_ARTIFACT -u PYTHONPYCACHEPREFIX -u VLLM_CACHE_ROOT \
+        -u FLASHINFER_WORKSPACE_DIR -u TRITON_CACHE_DIR PYTHONPATH="$G/v26" VLLM_CACHE_ROOT="$G/c/vllm" \
+        "$sh_" -c "set -eu; . \"$G/guard.sh\"; echo \"AOT=\${VLLM_USE_MEGA_AOT_ARTIFACT-unset} done\"" 2>&1)"
+    assert_contains "$out" "AOT=1 done"
+    out="$(env -u VLLM_USE_MEGA_AOT_ARTIFACT -u FLASHINFER_WORKSPACE_DIR -u TRITON_CACHE_DIR \
+        PYTHONPATH="$G/v32" PATH="$G/bin" VLLM_CACHE_ROOT="$G/c/vllm" PYTHONPYCACHEPREFIX="$G/c/pyc" \
+        "$shp" -c "set -eu; . \"$G/guard.sh\"; echo \"AOT=\${VLLM_USE_MEGA_AOT_ARTIFACT-unset} PYC=\${PYTHONPYCACHEPREFIX-unset} done\"" 2>&1)"
+    assert_contains "$out" "AOT=unset PYC=$G/c/pyc done"
+done
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- the KV-bytes proposal ----------------------------------------------------
+#
+# Model Runner V2 profiles memory with a full CUDA-graph capture; a fixed
+# --kv-cache-memory-bytes skips it. The value comes from the log of a Ready
+# replica and is PROPOSED -- in a comment and on the console -- never applied.
+f_kv_deploy() {   # the engine-cache gap, with a selector and a TP=2 vLLM 0.32
+    f_engine_cache_only_gap
+    FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.selector = {"matchLabels":{"app":"w"}}
+        | .spec.template.spec.containers[0].image = "quay.io/x/vllm-openai:v0.32.0"')"
+    PODS_FIXTURE='{"items":[
+      {"metadata":{"name":"w-0"},"status":{"phase":"Pending","conditions":[{"type":"Ready","status":"False"}]}},
+      {"metadata":{"name":"w-2"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},
+      {"metadata":{"name":"w-1","deletionTimestamp":"2026-10-27T00:00:00Z"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}]}'
+}
+# The lines vLLM 0.32 prints at start (vllm/v1/worker/gpu_worker.py), one per rank.
+KV_LOG_V2='(APIServer pid=1) INFO 10-18 13:30:55 [utils.py:253] non-default args: {"model": "Qwen/Qwen3-32B", "tensor_parallel_size": 2}
+(Worker_TP0 pid=210) INFO 10-18 13:31:02 [gpu_worker.py:518] Using V2 Model Runner
+(Worker_TP1 pid=211) INFO 10-18 13:31:02 [gpu_worker.py:518] Using V2 Model Runner
+(Worker_TP0 pid=210) INFO 10-18 13:31:20 [gpu_worker.py:760] Available KV cache memory: 60.24 GiB
+(Worker_TP1 pid=211) INFO 10-18 13:31:20 [gpu_worker.py:760] Available KV cache memory: 60.3 GiB
+(EngineCore pid=150) INFO 10-18 13:31:21 [kv_cache_utils.py:1311] GPU KV cache size: 493,472 tokens'
+KV_LOG_V1='(EngineCore_DP0 pid=150) INFO 10-18 11:52:30 [gpu_worker.py:561] Available KV cache memory: 63.08 GiB
+(EngineCore_DP0 pid=150) INFO 10-18 11:52:30 [kv_cache_utils.py:1287] GPU KV cache size: 258,352 tokens'
+
+CASE="kv bytes: a Ready V2 replica gets the flag PROPOSED in a comment and on the console, never as an arg"
+reset; f_kv_deploy
+before=$FAILED
+LOGS_FIXTURE="$KV_LOG_V2"
+G="$(mktemp -d)"
+# 60.24 GiB, less the 0.005 rounding, floored to the MiB: 61680 MiB (TP1 logged
+# 60.3; the smaller rank decides).
+KUBECTL_TRACE="$G/trace"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/doc")" "#   kv-cache-memory: PROPOSED, NOT APPLIED. w-2 runs Model Runner V2"
+assert_contains "$(cat "$G/doc")" "--kv-cache-memory-bytes=64676167680"
+assert_contains "$(cat "$G/doc")" "Available KV cache memory:"
+assert_contains "$(cat "$G/doc")" "Derive it again after ANY change of vLLM version, model, GPU"
+assert_contains "$(cat "$G/log")" "PROPOSED, not applied: --kv-cache-memory-bytes=64676167680"
+assert_contains "$(cat "$G/log")" "~8 s of every start"
+assert_contains "$(cat "$G/trace")" "get pods -n ns -l app=w -o json"
+assert_contains "$(cat "$G/trace")" "logs w-2 -n ns -c vllm"
+# Only ever a comment: no line of the document outside a comment names it.
+assert_eq "$(grep -v '^[[:space:]]*#' "$G/doc" | grep -c 'kv-cache-memory')" "0" "uncommented mentions"
+assert_contains "$(grep -v '^[[:space:]]*#' "$G/doc")" "- name: VLLM_CACHE_ROOT"   # anchor: the half itself
+assert_eq "$(yq eval '.spec.template.spec.containers[0] | has("args")' "$G/doc" 2>/dev/null)" "false" "args in the document"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="kv bytes: V1, no Ready pod, no log line, or the flag already set -- said, and nothing proposed"
+reset; f_kv_deploy
+before=$FAILED
+G="$(mktemp -d)"
+LOGS_FIXTURE="$KV_LOG_V1"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: w-2 runs the V1 model runner"
+assert_contains "$(cat "$G/doc")" "- name: VLLM_CACHE_ROOT"           # anchor: a document was written
+assert_not_contains "$(cat "$G/doc")" "kv-cache-memory"
+LOGS_FIXTURE='(APIServer pid=1) INFO 10-18 13:30:55 [api_server.py:1] Starting'
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: w-2 logged no \"Available KV cache memory\" line"
+assert_not_contains "$(cat "$G/doc")" "kv-cache-memory"
+LOGS_FIXTURE="$KV_LOG_V2"
+PODS_FIXTURE="$(printf '%s' "$PODS_FIXTURE" | jq -c '.items |= map(select(.metadata.name != "w-2"))')"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: no Ready pod to read its KV cache size from"
+assert_not_contains "$(cat "$G/doc")" "kv-cache-memory"
+# ...and a workload with nothing to fix is not told about it at all.
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"VLLM_CACHE_ROOT","value":"/model-cache/vllm"},{"name":"PYTHONPYCACHEPREFIX","value":"/model-cache/pyc"}]')"
+assert_field 7 "volume:/model-cache/vllm"                           # anchor: no gap left
+assert_eq "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)" "" "output for a workload with nothing to fix"
+reset; f_kv_deploy
+LOGS_FIXTURE="$KV_LOG_V2"
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].args += ["--kv-cache-memory-bytes","1000"]')"
+KUBECTL_TRACE="$G/trace2"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/doc")" "- name: VLLM_CACHE_ROOT"
+assert_not_contains "$(cat "$G/doc")" "PROPOSED"
+assert_not_contains "$(cat "$G/log")" "PROPOSED"
+assert_eq "$(cat "$G/trace2" 2>/dev/null)" "" "kubectl reads for a workload that sets the flag"
+# SGLang is not asked at all.
+reset; f_sglang_no_pyc
+LOGS_FIXTURE="$KV_LOG_V2"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/doc")" "#   bytecode:"
+assert_not_contains "$(cat "$G/log")" "KV cache"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="kv bytes: a failed read is said as a failure, with its reason, not as no pod or a rotated log"
+reset; f_kv_deploy
+before=$FAILED
+G="$(mktemp -d)"
+LOGS_FIXTURE="$KV_LOG_V2"
+LOGS_RC=1 LOGS_ERR='Error from server (Forbidden): pods "w-2" is forbidden: User "u" cannot get resource "pods/log"'
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: could not read the logs of w-2 (Error from server (Forbidden): pods"
+assert_not_contains "$(cat "$G/log")" "rotated"
+assert_contains "$(cat "$G/doc")" "- name: VLLM_CACHE_ROOT"           # anchor: the document is still written
+LOGS_RC=0 PODS_RC=1 PODS_ERR='Error from server (Forbidden): pods is forbidden'
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: could not list its pods (Error from server (Forbidden): pods is forbidden)"
+assert_not_contains "$(cat "$G/log")" "no Ready pod"
+PODS_RC=0
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.selector = {"matchExpressions":[{"key":"app","operator":"In","values":["w"]}]}')"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/log")" "ns/w: its selector has no matchLabels"
+assert_not_contains "$(cat "$G/log")" "no Ready pod"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="kv bytes: the newest Ready pod of the current ReplicaSet is read, not the first by name"
+reset; f_kv_deploy
+before=$FAILED
+G="$(mktemp -d)"
+LOGS_FIXTURE="$KV_LOG_V2"
+RS_FIXTURE='{"items":[
+  {"metadata":{"name":"w-old","labels":{"pod-template-hash":"old"},"annotations":{"deployment.kubernetes.io/revision":"9"},
+   "ownerReferences":[{"kind":"Deployment","name":"w"}]}},
+  {"metadata":{"name":"w-new","labels":{"pod-template-hash":"new"},"annotations":{"deployment.kubernetes.io/revision":"10"},
+   "ownerReferences":[{"kind":"Deployment","name":"w"}]}},
+  {"metadata":{"name":"x-rs","labels":{"pod-template-hash":"x"},"annotations":{"deployment.kubernetes.io/revision":"99"},
+   "ownerReferences":[{"kind":"Deployment","name":"x"}]}}]}'
+READY='"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}'
+PODS_FIXTURE="{\"items\":[
+  {\"metadata\":{\"name\":\"w-a\",\"creationTimestamp\":\"2026-10-27T09:00:00Z\",\"labels\":{\"pod-template-hash\":\"old\"}},$READY},
+  {\"metadata\":{\"name\":\"w-c\",\"creationTimestamp\":\"2026-10-27T08:00:00Z\",\"labels\":{\"pod-template-hash\":\"new\"}},$READY},
+  {\"metadata\":{\"name\":\"w-d\",\"creationTimestamp\":\"2026-10-27T08:30:00Z\",\"labels\":{\"pod-template-hash\":\"new\"}},$READY},
+  {\"metadata\":{\"name\":\"w-x\",\"creationTimestamp\":\"2026-10-27T10:00:00Z\",\"labels\":{\"pod-template-hash\":\"x\"}},$READY}]}"
+KUBECTL_TRACE="$G/trace"
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/trace")" "logs w-d -n ns -c vllm"
+assert_contains "$(cat "$G/doc")" "PROPOSED, NOT APPLIED. w-d runs Model Runner V2"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="kv bytes: an engine restarted inside the log is read at its last start, and .5 parses"
+reset; f_kv_deploy
+before=$FAILED
+G="$(mktemp -d)"
+LOGS_FIXTURE='(EngineCore pid=150) INFO 10-18 13:31:02 [gpu_worker.py:518] Using V2 Model Runner
+(EngineCore pid=150) INFO 10-18 13:31:20 [gpu_worker.py:760] Available KV cache memory: 50.0 GiB
+(EngineCore pid=480) INFO 10-18 14:02:11 [gpu_worker.py:518] Using V2 Model Runner
+(EngineCore pid=480) INFO 10-18 14:02:30 [gpu_worker.py:760] Available KV cache memory: 60.24 GiB'
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/doc")" "--kv-cache-memory-bytes=64676167680"
+assert_not_contains "$(cat "$G/doc")" "50.0 GiB"
+# (0.5 - 0.005) GiB floored to the MiB: 506 MiB.
+LOGS_FIXTURE='(EngineCore pid=150) INFO 10-18 13:31:02 [gpu_worker.py:518] Using V2 Model Runner
+(EngineCore pid=150) INFO 10-18 13:31:20 [gpu_worker.py:760] Available KV cache memory: .5 GiB'
+so_workload_patch_doc ns deployments w "$POD_DEPLOY" >"$G/doc" 2>"$G/log"
+assert_contains "$(cat "$G/doc")" "--kv-cache-memory-bytes=530579456"
+rm -rf "$G"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: an env-only half carries the guard too, and the re-prepare note"
+reset; f_engine_cache_on_claim_no_pyc
+before=$FAILED
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "PYTHONPYCACHEPREFIX; do"
+assert_contains "$doc" "run \`make engine-cache\` again first"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: PYTHONDONTWRITEBYTECODE in the pod spec means no prefix is written"
+reset; f_engine_cache_only_gap
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"PYTHONDONTWRITEBYTECODE","value":"1"}]')"
+assert_field 9 "dontwrite"
+doc="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"           # anchor: the vLLM half is still written
+assert_not_contains "$doc" "- name: PYTHONPYCACHEPREFIX"
+assert_not_contains "$doc" "#   bytecode:"
+# ...and SGLang with it gets no half at all.
+reset; f_sglang_no_pyc
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"PYTHONDONTWRITEBYTECODE","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}]')"
+assert_field 9 "dontwrite"
+assert_eq "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)" "" "SGLang output"
+# An empty value is unset, as Python reads it (anchor).
+reset; f_sglang_no_pyc
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"PYTHONDONTWRITEBYTECODE","value":""}]')"
+assert_field 9 "unset"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: VLLM_CACHE_ROOT from a ConfigMap is reported, with no volume proposed"
+reset; f_engine_cache_only_gap
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"VLLM_CACHE_ROOT","valueFrom":{"configMapKeyRef":{"name":"c","key":"k"}}}]')"
+assert_field 7 ""
+assert_field 9 "rootfrom"
+out="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1)"
+assert_contains "$out" "RECOMPILES ITS PYTHON BYTECODE"
+assert_contains "$out" "PYTHONPYCACHEPREFIX=<your cache volume>/pycache/${KEY_VLLM}"
+assert_not_contains "$out" "claimName: engine-cache"
+assert_not_contains "$out" "- name: PYTHONPYCACHEPREFIX"
+assert_not_contains "$out" "apiVersion:"            # nothing else is wanted: no document at all
+assert_contains "$(so_enginecache_note ns deployments w "$POD_DEPLOY")" "no volume is proposed"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: a tag and a digest of one image get two keys through the patch"
+reset; f_engine_cache_only_gap
+before=$FAILED
+doc1="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+DIGEST="quay.io/x/vllm-openai:v0.11@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+FIXTURE="${FIXTURE//quay.io\/x\/vllm-openai:v0.11/$DIGEST}"
+assert_field 8 "$DIGEST"
+doc2="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)"
+assert_contains "$doc1" "/engine-cache/pycache/${KEY_VLLM}"
+assert_contains "$doc2" "/engine-cache/pycache/$(so_pycache_key "$DIGEST")"
+assert_not_contains "$doc2" "/engine-cache/pycache/${KEY_VLLM}"
+assert_contains "$doc2" "image reference ${DIGEST}"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="bytecode: SGLang with a prefix keyed for another image is warned about too"
+reset; f_sglang_no_pyc
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.template.spec.containers[0].env += [{"name":"PYTHONPYCACHEPREFIX","value":"/engine-cache/pycache/bbbbbbbbbbbb"}]')"
+warn="$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>&1 >/dev/null)"
+assert_contains "$warn" "keyed for another image"
+assert_contains "$warn" ".../pycache/${KEY_SGLANG}"
+assert_eq "$(so_workload_patch_doc ns deployments w "$POD_DEPLOY" 2>/dev/null)" "" "document"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- LeaderWorkerSets: the cache halves, per template ----------------------
+#
+# A LeaderWorkerSet keeps two pod templates, and each is judged as a
+# Deployment's would be: its own engine container, its own image and so its own
+# bytecode key. There is no drain half -- a worker that stops first aborts the
+# leader's generations whatever hook either pod has -- and that is said, not
+# papered over with a preStop on each pod. Applied, the document goes as a JSON
+# patch: the API server refuses a strategic merge on a custom resource.
+
+LWS_LEADER_IMAGE="quay.io/x/vllm-openai:v0.11"
+LWS_WORKER_IMAGE="quay.io/x/vllm-openai:v0.11-ray"
+KEY_LEADER="$(so_pycache_key "$LWS_LEADER_IMAGE")"
+KEY_WORKER="$(so_pycache_key "$LWS_WORKER_IMAGE")"
+
+# Leader serves the API; the worker joins it over Ray and names no model. No
+# env, volumeMounts or volumes anywhere: every list is absent.
+f_lws_two() {
+    FIXTURE='{"metadata":{"name":"w","resourceVersion":"7"},"spec":{"leaderWorkerTemplate":{
+        "leaderTemplate":{"spec":{"containers":[{"name":"vllm-leader","image":"'"$LWS_LEADER_IMAGE"'",
+            "command":["/bin/sh","-c"],"args":["vllm serve Qwen/Qwen3-0.6B --tensor-parallel-size 2"]}]}},
+        "workerTemplate":{"spec":{"containers":[{"name":"vllm-worker","image":"'"$LWS_WORKER_IMAGE"'",
+            "command":["/bin/sh","-c"],"args":["ray start --block --address=$(LWS_LEADER_ADDRESS):6379"]}]}}}}}'
+}
+
+# No leaderTemplate: the LWS controller builds the leader from workerTemplate.
+f_lws_worker_only() {
+    FIXTURE='{"metadata":{"name":"w","resourceVersion":"7"},"spec":{"leaderWorkerTemplate":{
+        "workerTemplate":{"spec":{"containers":[{"name":"vllm","image":"'"$LWS_LEADER_IMAGE"'",
+            "args":["vllm","serve","Qwen/Qwen3-0.6B"]}]}}}}}'
+}
+
+# Every list present: a sidecar ahead of the engine, env, mounts and a volume
+# in each template, and the leader keeps VLLM_CACHE_ROOT under /tmp.
+f_lws_lists_present() {
+    FIXTURE='{"metadata":{"name":"w","resourceVersion":"7"},"spec":{"leaderWorkerTemplate":{
+        "leaderTemplate":{"spec":{
+            "volumes":[{"name":"dshm","emptyDir":{"medium":"Memory"}}],
+            "containers":[{"name":"proxy","image":"quay.io/x/proxy:1"},
+                          {"name":"vllm-leader","image":"'"$LWS_LEADER_IMAGE"'",
+                           "env":[{"name":"HF_HOME","value":"/tmp/hf"},{"name":"VLLM_CACHE_ROOT","value":"/tmp/vllm"}],
+                           "volumeMounts":[{"name":"dshm","mountPath":"/dev/shm"}],
+                           "args":["vllm","serve","/models/qwen"]}]}},
+        "workerTemplate":{"spec":{
+            "volumes":[{"name":"dshm","emptyDir":{"medium":"Memory"}}],
+            "containers":[{"name":"vllm-worker","image":"'"$LWS_WORKER_IMAGE"'",
+                           "env":[{"name":"NCCL_DEBUG","value":"WARN"}],
+                           "volumeMounts":[{"name":"dshm","mountPath":"/dev/shm"}],
+                           "command":["/bin/sh","-c"],"args":["ray start --block"]}]}}}}}'
+}
+
+# Nothing missing in either template.
+f_lws_converged() {
+    FIXTURE='{"metadata":{"name":"w","resourceVersion":"7"},"spec":{"leaderWorkerTemplate":{
+        "leaderTemplate":{"spec":{
+            "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}}],
+            "containers":[{"name":"vllm","image":"'"$LWS_LEADER_IMAGE"'",
+                           "env":[{"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"},
+                                  {"name":"PYTHONPYCACHEPREFIX","value":"/engine-cache/pycache/'"$KEY_LEADER"'"}],
+                           "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"}],
+                           "args":["vllm","serve","/models/qwen"]}]}},
+        "workerTemplate":{"spec":{
+            "volumes":[{"name":"engine-cache","persistentVolumeClaim":{"claimName":"engine-cache"}}],
+            "containers":[{"name":"vllm","image":"'"$LWS_LEADER_IMAGE"'",
+                           "env":[{"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"},
+                                  {"name":"PYTHONPYCACHEPREFIX","value":"/engine-cache/pycache/'"$KEY_LEADER"'"}],
+                           "volumeMounts":[{"name":"engine-cache","mountPath":"/engine-cache"}],
+                           "args":["vllm","serve","/models/qwen","--headless"]}]}}}}}'
+}
+
+# lws_get <doc> <yq expression>: one value from an emitted document.
+lws_get() { printf '%s\n' "$1" | yq eval "$2" - 2>/dev/null; }
+
+# json_patch_apply <live json> <ops json>: applies add, replace and test the way
+# RFC 6902 does, so a case can check the object the API server would hold
+# rather than the text of the operations. Exits non-zero on a failed test op or
+# an add into a parent that does not exist.
+json_patch_apply() {
+    jq -c --argjson ops "$2" '
+        def toks: ltrimstr("/") | split("/") | map(gsub("~1"; "/") | gsub("~0"; "~"));
+        def resolve($doc):
+            reduce .[] as $k ([];
+                . as $acc
+                | ($doc | getpath($acc)) as $here
+                | . + [ if ($here | type) == "array" and $k != "-" then ($k | tonumber) else $k end ]);
+        reduce $ops[] as $o (.;
+            . as $doc
+            | ($o.path | toks | resolve($doc)) as $p
+            | ($p[:-1]) as $parent
+            | if ($doc | getpath($parent)) == null then error("no parent for \($o.path)")
+              elif $o.op == "test" then (if getpath($p) == $o.value then . else error("test failed at \($o.path)") end)
+              elif $o.op == "replace" then (if getpath($p) == null then error("nothing to replace at \($o.path)") else setpath($p; $o.value) end)
+              elif $o.op == "add" and $p[-1] == "-" then setpath($parent; getpath($parent) + [$o.value])
+              elif $o.op == "add" then setpath($p; $o.value)
+              else error("unexpected op \($o.op)") end)' <<< "$1"
+}
+
+lws_driver() {   # $1 APPLY, $2 APPLY_ENGINE_CACHE, $3 APPLY_WEIGHTS (each true or false); results in DRIVER_*
+    local dir; dir="$(mktemp -d)"
+    DRIVER_OUT="$dir/p.yaml"; DRIVER_LOG="$dir/log"; DRIVER_RC=0
+    LLMSM_DEFAULT_SO_NS=ns1 LLMSM_WORKLOAD_PATCH_FILE="$DRIVER_OUT"         LLMSM_WORKLOAD_PATCH_APPLY="${1:-false}" LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE="${2:-false}"         LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS="${3:-false}"         llmsm_workload_patch >"$DRIVER_LOG" 2>&1 || DRIVER_RC=$?
+}
+
+lws_scene() {   # an LWS-only namespace, CRD present, the claim and preparer ready
+    LIST_FIXTURE='{"items":[]}'; LIST_FIXTURE_LWS="$(serving_list)"; CRD_RC=0
+    PVC_FIXTURE="$(pvc_list engine-cache:ReadWriteMany model-pvc:ReadWriteMany)"
+    DS_FIXTURE='{"status":{"desiredNumberScheduled":2,"numberReady":2}}'
+}
+
+CASE="LWS: leader and worker each get the engine-cache half at their own template path"
+reset; f_lws_two
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")" || doc_rc=$?
+assert_eq "$doc_rc" "0" "return code"
+for t in leaderTemplate workerTemplate; do
+    assert_eq "$(lws_get "$doc" ".spec.leaderWorkerTemplate.$t.spec.volumes[] | select(.name == \"engine-cache\") | .persistentVolumeClaim.claimName")" "engine-cache" "$t engine-cache claim"
+    assert_eq "$(lws_get "$doc" ".spec.leaderWorkerTemplate.$t.spec.containers[0].volumeMounts[] | select(.name == \"engine-cache\") | .mountPath")" "/engine-cache" "$t mount"
+    assert_eq "$(lws_get "$doc" ".spec.leaderWorkerTemplate.$t.spec.containers[0].env[] | select(.name == \"VLLM_CACHE_ROOT\") | .value")" "/engine-cache/vllm" "$t VLLM_CACHE_ROOT"
+    assert_eq "$(lws_get "$doc" ".spec.leaderWorkerTemplate.$t.spec.containers[0].env[] | select(.name == \"TRITON_CACHE_DIR\") | .value")" "/engine-cache/triton" "$t TRITON_CACHE_DIR"
+done
+# Each template names ITS engine container, not the other one.
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[0].name')" "vllm-leader" "leader container"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].name')" "vllm-worker" "worker container"
+assert_eq "$(lws_get "$doc" '.apiVersion + " " + .kind')" "leaderworkerset.x-k8s.io/v1 LeaderWorkerSet" "kind"
+assert_eq "$(lws_get "$doc" '.spec.template // "none"')" "none" "a Deployment-shaped field"
+assert_contains "$doc" "PYTHONPYCACHEPREFIX; do"                  # the guard
+assert_contains "$doc" "leader command AND the worker"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a leader and a worker on different images get two bytecode keys"
+reset; f_lws_two
+before=$FAILED
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>/dev/null)"
+[ "$KEY_LEADER" != "$KEY_WORKER" ] || fail "the two fixture images hash alike"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[0].env[] | select(.name == "PYTHONPYCACHEPREFIX") | .value')" "/engine-cache/pycache/$KEY_LEADER" "leader key"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == "PYTHONPYCACHEPREFIX") | .value')" "/engine-cache/pycache/$KEY_WORKER" "worker key"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a Ray worker that names no model takes the leader's for the weights half"
+reset; f_lws_two
+before=$FAILED
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == "HF_HOME") | .value')" "/model-cache/huggingface" "worker HF_HOME"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.leaderTemplate.spec.volumes[] | select(.name == "model-storage") | .persistentVolumeClaim.claimName')" "model-pvc" "leader weights claim"
+assert_contains "$(cat "$WORK/lws.err")" "ns/w (workerTemplate) RE-DOWNLOADS ITS WEIGHTS"
+# One reason line per DOCUMENT: the summary counts them as model servers.
+assert_eq "$(printf '%s\n' "$doc" | grep -c '^#   cache:')" "1" "cache reason lines"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: without a leaderTemplate there is one template, workerTemplate"
+reset; f_lws_worker_only
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>/dev/null)" || doc_rc=$?
+assert_eq "$doc_rc" "0" "return code"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate | keys | join(",")')" "workerTemplate" "templates"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == "PYTHONPYCACHEPREFIX") | .value')" "/engine-cache/pycache/$KEY_LEADER" "key"
+assert_contains "$doc" "workerTemplate (leader and workers), engine container vllm: weights, engine-cache, bytecode"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: without a leaderTemplate the plan notes read workerTemplate"
+reset; f_lws_worker_only
+before=$FAILED
+assert_contains "$(so_workload_gaps ns leaderworkersets w "$POD_LWS")" "vllm"
+assert_contains "$(so_weights_note ns leaderworkersets w "$POD_LWS")" "Weights do not persist"
+assert_contains "$(so_enginecache_note ns leaderworkersets w "$POD_LWS")" "Every start compiles from nothing"
+assert_contains "$(so_drain_note ns leaderworkersets w "$POD_LWS")" "Scale-down will cut in-flight requests"
+# A leaderTemplate that IS there is still the one read (anchor: its own container).
+reset; f_lws_two
+assert_contains "$(so_workload_gaps ns leaderworkersets w "$POD_LWS")" "vllm-leader"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a template with no engine container is skipped; the other still gets its halves"
+reset; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0] |= (.image = "quay.io/x/proxy:1" | .args = ["--listen", ":80"])')"
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")"
+assert_contains "$(cat "$WORK/lws.err")" "No vLLM or SGLang container found in the workerTemplate"
+assert_eq "$(lws_get "$doc" '.spec.leaderWorkerTemplate | keys | join(",")')" "leaderTemplate" "templates"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: drain is still skipped -- no hook emitted, the reason printed once, and rc 0 with nothing else to do"
+reset; f_lws_converged
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")" || doc_rc=$?
+assert_eq "$doc_rc" "0" "return code"
+assert_eq "$doc" "" "document"
+assert_eq "$(grep -c 'no drain half' "$WORK/lws.err")" "1" "drain reason lines"
+assert_contains "$(cat "$WORK/lws.err")" "a worker that stops first aborts the leader"
+reset; f_lws_two
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>/dev/null)"
+assert_contains "$doc" "kind: LeaderWorkerSet"                    # anchor
+assert_eq "$(lws_get "$doc" '[.. | select(has("lifecycle") or has("terminationGracePeriodSeconds"))] | length')" "0" "drain fields"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: flags off write the file and patch nothing; APPLY alone defers it"
+reset; lws_scene; f_lws_two
+before=$FAILED
+lws_driver
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$DRIVER_OUT" 2>/dev/null)" "kind: LeaderWorkerSet"
+assert_contains "$(cat "$DRIVER_LOG")" "1 model server(s) COMPILE FROM NOTHING"
+lws_driver true
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls with APPLY alone"
+assert_contains "$(cat "$DRIVER_LOG")" "ns1/w needs only a volume or a cache variable -- emitted, not applied"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: absent lists are created whole, by a JSON patch, at both templates"
+reset; lws_scene; f_lws_two
+before=$FAILED
+lws_driver true true
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_ARGS" "patch leaderworkersets w -n ns1 --type=json"
+assert_eq "$(jq -r '[.[] | select(.path | endswith("/-"))] | length' <<< "$PATCH_BODY")" "0" "appends into absent lists"
+assert_eq "$(jq -r '[.[] | select(.op == "add" and (.path | endswith("/spec/volumes")))] | length' <<< "$PATCH_BODY")" "2" "volumes created"
+after="$(json_patch_apply "$FIXTURE" "$PATCH_BODY")" || fail "the patch does not apply: $PATCH_BODY"
+for t in leaderTemplate workerTemplate; do
+    assert_eq "$(jq -r ".spec.leaderWorkerTemplate.$t.spec.containers[0].env | map(.name) | join(\",\")" <<< "$after")" "VLLM_CACHE_ROOT,FLASHINFER_WORKSPACE_DIR,TRITON_CACHE_DIR,PYTHONPYCACHEPREFIX" "$t env"
+    assert_eq "$(jq -r ".spec.leaderWorkerTemplate.$t.spec.volumes[0].persistentVolumeClaim.claimName" <<< "$after")" "engine-cache" "$t volume"
+done
+# The weights half had no opt-in, so neither its volume nor HF_HOME went.
+assert_not_contains "$PATCH_BODY" "HF_HOME"
+assert_not_contains "$PATCH_BODY" "model-storage"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: present lists are appended to, an env entry of the same name replaced, the sidecar untouched"
+reset; lws_scene; f_lws_lists_present
+before=$FAILED
+lws_driver true true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$PATCH_BODY" '"path":"/spec/leaderWorkerTemplate/leaderTemplate/spec/containers/1/name"'   # the test op, by name
+after="$(json_patch_apply "$FIXTURE" "$PATCH_BODY")" || fail "the patch does not apply: $PATCH_BODY"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[1].env | map(.name + "=" + .value) | join(",")' <<< "$after")" \
+    "HF_HOME=/tmp/hf,VLLM_CACHE_ROOT=/engine-cache/vllm,FLASHINFER_WORKSPACE_DIR=/engine-cache/flashinfer,TRITON_CACHE_DIR=/engine-cache/triton,PYTHONPYCACHEPREFIX=/engine-cache/pycache/$KEY_LEADER" "leader env"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.leaderTemplate.spec.volumes | map(.name) | join(",")' <<< "$after")" "dshm,engine-cache" "leader volumes"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[1].volumeMounts | map(.name) | join(",")' <<< "$after")" "dshm,engine-cache" "leader mounts"
+assert_eq "$(jq -c '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[0]' <<< "$after")" '{"name":"proxy","image":"quay.io/x/proxy:1"}' "sidecar"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env | map(.name) | join(",")' <<< "$after")" \
+    "NCCL_DEBUG,VLLM_CACHE_ROOT,FLASHINFER_WORKSPACE_DIR,TRITON_CACHE_DIR,PYTHONPYCACHEPREFIX" "worker env"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: a volume name taken in either template refuses that half for the whole LWS"
+reset; lws_scene; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.leaderWorkerTemplate.workerTemplate.spec.volumes = [{"name":"engine-cache","emptyDir":{}}]')"
+lws_driver true true true
+assert_contains "$(cat "$DRIVER_LOG")" "the engine-cache volume is emitted, NOT applied -- a volume named engine-cache already exists"
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls (the weights half still goes)"
+assert_contains "$PATCH_BODY" "model-storage"
+assert_not_contains "$PATCH_BODY" "VLLM_CACHE_ROOT"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: a rejected JSON patch is a failure, and the run is non-zero"
+reset; lws_scene; f_lws_two; PATCH_RC=1
+before=$FAILED
+lws_driver true true
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_contains "$(cat "$DRIVER_LOG")" "1 of 1 workload(s) were NOT patched"
+[ "$FAILED" -eq "$before" ] && ok
+
+# --- LeaderWorkerSets: review round -----------------------------------------
+
+# f_lws_hooked: converged caches, and a preStop on leader and worker; $1 the
+# leader grace, $2 the worker grace.
+f_lws_hooked() {
+    f_lws_converged
+    FIXTURE="$(printf '%s' "$FIXTURE" | jq -c --argjson lg "$1" --argjson wg "$2" '
+        .spec.leaderWorkerTemplate.leaderTemplate.spec.terminationGracePeriodSeconds = $lg
+        | .spec.leaderWorkerTemplate.workerTemplate.spec.terminationGracePeriodSeconds = $wg
+        | .spec.leaderWorkerTemplate[].spec.containers[0].lifecycle = {"preStop":{"exec":{"command":["sleep","45"]}}}')"
+}
+
+CASE="LWS: the drain line is quiet once both templates hook and the worker outlasts the leader"
+reset; f_lws_hooked 120 120
+before=$FAILED
+doc_rc=0
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")" || doc_rc=$?
+assert_eq "$doc_rc" "0" "return code"
+assert_eq "$(grep -c 'no drain half' "$WORK/lws.err")" "0" "drain reason lines"
+# A worker that leaves before the leader still cuts the group: the line, with the action.
+reset; f_lws_hooked 600 120
+so_workload_patch_doc ns leaderworkersets w "$POD_LWS" >/dev/null 2>"$WORK/lws.err"
+assert_contains "$(cat "$WORK/lws.err")" "Add a preStop to the leader AND the worker, with the worker terminationGracePeriodSeconds at least the leader one"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a healthy LWS beside a healthy Deployment is an all-clear, nothing skipped"
+reset
+before=$FAILED
+LIST_FIXTURE='{"items":[{"metadata":{"name":"w","labels":{"llm-d.ai/role":"decode"}}}]}'
+LIST_FIXTURE_LWS='{"items":[{"metadata":{"name":"l","labels":{"llm-d.ai/role":"decode"}}}]}'
+CRD_RC=0
+f_cached_properly; FIXTURE_MAP[w]="$FIXTURE"
+f_lws_hooked 120 120; FIXTURE_MAP[l]="$FIXTURE"
+run_driver
+assert_eq "$DRIVER_RC" "0" "return code"
+assert_contains "$(cat "$DRIVER_LOG")" "2 model server(s) already drain on scale-down"
+assert_not_contains "$(cat "$DRIVER_LOG")" "skipped"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a worker-only LWS marked serving on its pod labels is found"
+reset
+before=$FAILED
+CRD_RC=0; LIST_FIXTURE='{"items":[]}'
+f_lws_worker_only
+# The marker only on the workerTemplate pod labels, none on the object.
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.metadata.name = "l" | .spec.leaderWorkerTemplate.workerTemplate.metadata = {"labels":{"llm-d.ai/role":"decode"}}')"
+LIST_FIXTURE_LWS="$(printf '%s' "$FIXTURE" | jq -c '{items: [.]}')"
+run_driver
+assert_contains "$(cat "$DRIVER_OUT" 2>/dev/null)" "leaderworkersets/l in ns1"
+# The cluster-wide namespace walk reads the same labels.
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '{items: [.metadata.namespace = "ns9"]}')"
+assert_eq "$(so_namespaces_of leaderworkersets "$POD_LWS")" "ns9" "namespaces"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS: a model passed in a variable is reported, and no weights half is guessed"
+reset; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.leaderWorkerTemplate.leaderTemplate.spec.containers[0].args = ["vllm serve $(MODEL) --tensor-parallel-size 2"]')"
+doc="$(so_workload_patch_doc ns leaderworkersets w "$POD_LWS" 2>"$WORK/lws.err")"
+assert_contains "$(cat "$WORK/lws.err")" "ns/w (leaderTemplate): the model could not be identified"
+assert_contains "$(cat "$WORK/lws.err")" "ns/w (workerTemplate): the model could not be identified"
+assert_contains "$doc" "- name: VLLM_CACHE_ROOT"                 # anchor: the engine cache still goes
+assert_not_contains "$doc" "HF_HOME"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: a controller-owned LWS is emitted, not applied, and the owner is named"
+reset; lws_scene; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.metadata.ownerReferences = [{"kind":"ModelService","name":"glm","controller":true}]')"
+lws_driver true true
+# Asked to apply and refused: the run says so in its exit code, as a failure does.
+assert_eq "$DRIVER_RC" "1" "return code"
+assert_eq "$PATCH_CALLS" "0" "kubectl patch calls"
+assert_contains "$(cat "$DRIVER_LOG")" "NOT applied -- it is controlled by ModelService/glm"
+# Refused before any half is judged: no line says a volume is being applied.
+assert_not_contains "$(cat "$DRIVER_LOG")" "applying the engine-cache volume too"
+assert_contains "$(cat "$DRIVER_LOG")" "1 workload(s) were NOT applied because a controller owns them"
+assert_contains "$(cat "$DRIVER_OUT")" "kind: LeaderWorkerSet"
+# An owner that is not the controller (a garbage-collection parent) does not refuse.
+reset; lws_scene; f_lws_two
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.metadata.ownerReferences = [{"kind":"ConfigMap","name":"x"}]')"
+lws_driver true true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls without a controller"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: the patch tests the resourceVersion it was built from, and a changed object takes none of it"
+reset; lws_scene; f_lws_two
+before=$FAILED
+lws_driver true true
+assert_eq "$(jq -c '.[0]' <<< "$PATCH_BODY")" '{"op":"test","path":"/metadata/resourceVersion","value":"7"}' "first op"
+moved="$(printf '%s' "$FIXTURE" | jq -c '.metadata.resourceVersion = "8"')"
+json_patch_apply "$moved" "$PATCH_BODY" >/dev/null 2>&1 && fail "the patch applied to a changed object"
+# What the operator reads when the API server refuses it.
+reset; lws_scene; f_lws_two; PATCH_RC=1
+lws_driver true true
+assert_contains "$(cat "$DRIVER_LOG")" "the API server refused the JSON patch, so NOTHING was applied"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: an env entry is replaced only after a test of its name at that index"
+reset; lws_scene; f_lws_lists_present
+before=$FAILED
+lws_driver true true
+assert_eq "$(jq -c '[.[] | select(.path | test("/containers/1/env/1"))]' <<< "$PATCH_BODY")" \
+    '[{"op":"test","path":"/spec/leaderWorkerTemplate/leaderTemplate/spec/containers/1/env/1/name","value":"VLLM_CACHE_ROOT"},{"op":"replace","path":"/spec/leaderWorkerTemplate/leaderTemplate/spec/containers/1/env/1","value":{"name":"VLLM_CACHE_ROOT","value":"/engine-cache/vllm"}}]' "ops at env/1"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: the warning names the groups it replaces (replicas 1, and 3 of size 4)"
+reset; lws_scene; f_lws_two
+before=$FAILED
+lws_driver true true
+assert_contains "$(cat "$DRIVER_LOG")" "this REPLACES THE GROUP (replicas: 1, size: 1)"
+assert_contains "$(cat "$DRIVER_LOG")" "the model serves nothing for one multi-node start"
+reset; lws_scene; f_lws_two
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.replicas = 3 | .spec.leaderWorkerTemplate.size = 4')"
+lws_driver true true
+assert_contains "$(cat "$DRIVER_LOG")" "this REPLACES EVERY GROUP (replicas: 3, size: 4)"
+assert_contains "$(cat "$DRIVER_LOG")" "up to 1 at a time (maxUnavailable: 1, maxSurge: 0)"
+after="$(json_patch_apply "$FIXTURE" "$PATCH_BODY")" || fail "the patch does not apply at size 4"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.size' <<< "$after")" "4" "size kept"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.workerTemplate.spec.volumes[0].name' <<< "$after")" "engine-cache" "worker volume at size 4"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: a worker-only LWS is patched at workerTemplate alone"
+reset; lws_scene; f_lws_worker_only
+before=$FAILED
+lws_driver true true
+assert_eq "$PATCH_CALLS" "1" "kubectl patch calls"
+assert_eq "$(jq -r '[.[] | select(.path | contains("leaderTemplate"))] | length' <<< "$PATCH_BODY")" "0" "leaderTemplate ops"
+after="$(json_patch_apply "$FIXTURE" "$PATCH_BODY")" || fail "the patch does not apply: $PATCH_BODY"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env | map(.name) | join(",")' <<< "$after")" \
+    "VLLM_CACHE_ROOT,FLASHINFER_WORKSPACE_DIR,TRITON_CACHE_DIR,PYTHONPYCACHEPREFIX" "worker env"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate | has("leaderTemplate")' <<< "$after")" "false" "no leaderTemplate created"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: two containers in one template -- only the engine is touched"
+reset; lws_scene; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.leaderWorkerTemplate.workerTemplate.spec.containers += [{"name":"metrics","image":"quay.io/x/exporter:1","env":[{"name":"PORT","value":"9400"}]}]')"
+lws_driver true true
+after="$(json_patch_apply "$FIXTURE" "$PATCH_BODY")" || fail "the patch does not apply: $PATCH_BODY"
+assert_eq "$(jq -c '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[1]' <<< "$after")" \
+    '{"name":"metrics","image":"quay.io/x/exporter:1","env":[{"name":"PORT","value":"9400"}]}' "sidecar"
+assert_eq "$(jq -r '.spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env | map(.name) | join(",")' <<< "$after")" \
+    "VLLM_CACHE_ROOT,FLASHINFER_WORKSPACE_DIR,TRITON_CACHE_DIR,PYTHONPYCACHEPREFIX" "engine env"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: the warning reads the rollout strategy the LWS declares"
+reset; lws_scene; f_lws_two
+before=$FAILED
+FIXTURE="$(printf '%s' "$FIXTURE" | jq -c '.spec.rolloutStrategy = {"type":"RollingUpdate","rollingUpdateConfiguration":{"maxUnavailable":0,"maxSurge":1}}')"
+lws_driver true true
+assert_contains "$(cat "$DRIVER_LOG")" "with maxSurge: 1 (maxUnavailable: 0) it starts the new group first"
+assert_not_contains "$(cat "$DRIVER_LOG")" "serves nothing"
+[ "$FAILED" -eq "$before" ] && ok
+
+CASE="LWS apply: an LWS-only run does not describe a Deployment rollout"
+reset; lws_scene; f_lws_two
+before=$FAILED
+lws_driver true true
+assert_contains "$(cat "$DRIVER_LOG")" "this REPLACES THE GROUP"          # anchor
+assert_not_contains "$(cat "$DRIVER_LOG")" "the new pod must schedule before the old one goes"
+# ...while a Deployment run still does.
+reset; LIST_FIXTURE="$(serving_list)"; f_vllm_plain
+lws_driver true
+assert_contains "$(cat "$DRIVER_LOG")" "the new pod must schedule before the old one goes"
+[ "$FAILED" -eq "$before" ] && ok
+
+# The two serving-workload counters outside this library read the pod template
+# the same way, so a worker-only LWS counts there too. Loaded one function at a
+# time: their libraries need more than this harness sources.
+load_fn() { eval "$(tr -d '' < "$ROOT/deploy/lib/$1" | sed -n "/^$2() {/,/^}/p")"; }
+load_fn infra_monitoring.sh llmsm_serving_workload_count
+load_fn prereqs.sh llmsm_model_server_count
+
+CASE="LWS: a worker-only LWS marked on its pod labels is counted by both counters"
+reset
+before=$FAILED
+LIST_FIXTURE='{"items":[]}'
+f_lws_worker_only
+LIST_FIXTURE_LWS="$(printf '%s' "$FIXTURE" | jq -c '{items: [.spec.leaderWorkerTemplate.workerTemplate.metadata = {"labels":{"llm-d.ai/role":"decode"}}]}')"
+assert_eq "$(llmsm_serving_workload_count ns1)" "1" "llmsm_serving_workload_count"
+assert_eq "$(llmsm_model_server_count ns1)" "1" "llmsm_model_server_count"
+[ "$FAILED" -eq "$before" ] && ok
+
+# ----------------------------------------------------------------------------
+
+if [ "$FAILED" -gt 0 ]; then
+    printf '\n%d workload-readiness assertion(s) failed.\n' "$FAILED" >&2
+    exit 1
+fi
+# Every `ok` above increments RAN. A run that ends early -- a library that
+# aborts, a case whose command substitution dies under `set -u`, a case deleted
+# by accident -- otherwise exits 0 having checked less than it claims.
+if [ "$RAN" -ne "$EXPECT_CASES" ]; then
+    printf '\n%d case(s) reported ok, %d expected -- the run did not finish.\n' \
+        "$RAN" "$EXPECT_CASES" >&2
+    exit 1
+fi
+printf '\nWorkload readiness checks passed.\n'

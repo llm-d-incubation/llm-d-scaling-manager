@@ -1,0 +1,895 @@
+package allocation
+
+import (
+	"context"
+	"maps"
+	"math"
+	"slices"
+	"sort"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/accelerator"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
+)
+
+// rolesOf returns the distinct roles among the given variants, sorted for
+// determinism. A variant with no role is the synthetic RoleBoth.
+func rolesOf(vcs []variantRecord) []string {
+	set := make(map[string]struct{}, len(vcs))
+	for _, vc := range vcs {
+		r := vc.Role
+		if r == "" {
+			r = domain.RoleBoth
+		}
+		set[r] = struct{}{}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
+// Sentinel VariantCapacity.Reason values that indicate a variant carries no
+// usable capacity signal (see domain.VariantCapacity.Reason doc). Analyzers
+// that skip a variant entirely on failure (e.g. throughput's ITL-model
+// resolution) never emit these — the variant is simply absent from
+// VariantCapacities, which ResultIsInformative also treats as uninformative.
+//
+// These are the single source of truth for the no-data/error sentinels:
+// producer packages (e.g. saturation) reference them rather than
+// re-declaring the literals, so ResultIsInformative and the producers cannot
+// drift apart.
+const (
+	// ReasonNoData marks a variant for which the analyzer had no usable input
+	// (no live replicas and no store record).
+	ReasonNoData = domain.ReasonNoData
+	// ReasonError marks a variant whose capacity could not be resolved due to
+	// an internal analyzer error.
+	ReasonError = domain.ReasonError
+)
+
+// ResultIsInformative reports whether nr carries a usable capacity signal:
+// a non-nil Result with at least one VariantCapacity whose Reason is not a
+// no-data/error sentinel. Used by the engine to decide whether to refresh
+// the analyzer's last-good-analysis timestamp for the liveness gate.
+func ResultIsInformative(nr NamedAnalyzerResult) bool {
+	if nr.Result == nil {
+		return false
+	}
+	for _, vc := range nr.Result.VariantCapacities {
+		if vc.Reason != ReasonNoData && vc.Reason != ReasonError {
+			return true
+		}
+	}
+	return false
+}
+
+// applyAllocation subtracts the capacity provided by n replicas of variant v
+// from the entry's Remaining counter. Clamps to 0. Result.RequiredCapacity is
+// never mutated.
+//
+// Contract: Remaining/Spare are engine-calibrated on entry (via the universal
+// threshold post-step). Helpers do not read or mutate PendingReplicas.
+func applyAllocation(e *NamedAnalyzerResult, v string, n int) {
+	if e.Result == nil {
+		return
+	}
+	prc := prcForVariant(e.Result, v)
+	if prc <= 0 {
+		return
+	}
+	e.Remaining -= float64(n) * prc
+	if e.Remaining < 0 {
+		e.Remaining = 0
+	}
+}
+
+// prcForVariant returns the PerReplicaCapacity for variant v in result r.
+// Returns 0 if the variant is not present.
+func prcForVariant(r *domain.AnalyzerResult, v string) float64 {
+	for _, vc := range r.VariantCapacities {
+		if vc.VariantName == v {
+			return vc.PerReplicaCapacity
+		}
+	}
+	return 0
+}
+
+// =============================================================================
+// Paired helpers — disaggregated (P/D) models
+// =============================================================================
+
+// releaseTargetUtilization is the utilisation a release aims to leave the fleet
+// at: one QUARTER of the way up the hysteresis band, not the middle of it.
+//
+// It is derived, not configured -- scaleUpThreshold and scaleDownBoundary are
+// already validated against each other (config enforces up > down), and a third
+// knob whose only sane value is between them would be a knob nobody can set
+// correctly.
+//
+// The quarter rather than the half, because the distance left between a released
+// fleet and the scale-up threshold IS the anti-flap margin, and the midpoint
+// spends too much of it. Worst case -- a release that lands exactly on the
+// target -- leaves demand this much room before the replica is re-ordered:
+//
+//	boundary (old behaviour)  0.7000   +21.4 %
+//	quarter  (this)           0.7375   +15.3 %
+//	midpoint                  0.7750    +9.7 %
+//
+// Two couplings make a narrow margin worse than it looks. sticky.go's
+// HoldPublishedScaleDown releases the hold precisely when demand at that count
+// would reach the scale-up threshold, so the mechanism that protects a descent
+// steps aside exactly at the line this target creates; and KEDA's HPA takes the
+// MAX over a 300 s window on the way down, so one re-ordered replica in twenty
+// cycles pins the fleet for the rest of the window and the release is worth
+// nothing.
+//
+// The quarter costs nothing measurable: on run T's figures it releases the same
+// single replica the midpoint did (budget 1,075,155 against a per-replica
+// 930,508) and stops at the same eight.
+//
+// It falls back to scaleDownBoundary -- the previous behaviour exactly -- when
+// either threshold is missing or inverted, so a malformed configuration loses
+// the improvement rather than gaining a release it cannot justify.
+func (e NamedAnalyzerResult) releaseTargetUtilization() float64 {
+	if e.ScaleUpThreshold > 0 && e.ScaleDownBoundary > 0 &&
+		e.ScaleUpThreshold > e.ScaleDownBoundary {
+		return e.ScaleDownBoundary + (e.ScaleUpThreshold-e.ScaleDownBoundary)/4
+	}
+	return e.ScaleDownBoundary
+}
+
+// ReleaseTargetUtilization is the utilization a release sheds down to: a
+// quarter of the way from the scale-down boundary to the scale-up threshold,
+// or the boundary when the band is unusable. The composite bounds every
+// frame's release at it.
+func (e NamedAnalyzerResult) ReleaseTargetUtilization() float64 {
+	return e.releaseTargetUtilization()
+}
+
+// OtherFrameDemand is role's demand, in its own units, by the analyzers
+// other than the one it is priced in, for an optimizer sizing at
+// utilization u (OtherFrames.Demand); 0 when no other analyzer sizes it.
+func (e NamedAnalyzerResult) OtherFrameDemand(role string, u float64) float64 {
+	return e.OtherFrames[role].Demand(u)
+}
+
+// releasableFor is supply minus the supply the role would need to sit at the
+// release target. Zero when the target is unusable or demand is unknown, which
+// leaves the caller on RoleSpare and therefore on the old behaviour.
+func releasableFor(supply, demand, target float64) float64 {
+	if !(target > 0) || !(supply > 0) {
+		return 0
+	}
+	// Written as !(v > 0) rather than v <= 0 on purpose: every comparison
+	// against NaN is false, so v <= 0 ADMITS a NaN, and a NaN budget divided by
+	// prc yields a NaN that int(math.Floor(NaN)) turns into a huge negative --
+	// or, worse on another platform, a huge positive release.
+	v := supply - demand/target
+	if !(v > 0) {
+		return 0
+	}
+	return v
+}
+
+// initRoleState initialises picker-local role state for one model's allocation pass.
+// It unifies disaggregated and non-disaggregated models into one (model, role) view:
+//
+//   - Disaggregated (RoleCapacities != nil): roles = sorted keys of RoleCapacities;
+//     per-role RC → pickerState[role]; per-role SC → e.RoleSpare[role].
+//   - Non-disaggregated (RoleCapacities == nil): one synthetic role "both" using
+//     the engine-calibrated model-level RC/SC (via the Remaining/Spare working
+//     copies). No re-aggregation — the engine already summed all variants into
+//     those scalars.
+//
+// Returns the list of active roles and the picker-local RolePairedState.
+// Remaining/Spare scalars on NamedAnalyzerResult are read-only after this call;
+// all dynamic bookkeeping moves to pickerState (scale-up) and RoleSpare (scale-down).
+//
+// # Role-visibility contract
+//
+// Roles are derived exclusively from the composite result's own RoleCapacities map keys.
+// A role that exists in discovery but has no analyzer-attributed capacity entry is
+// permanently invisible to scale-up until the analyzer starts emitting demand for it.
+//
+// This is NOT a complete gap: for disaggregated models, saturation's
+// estimateSchedulerQueueDemand (internal/engines/analyzers/saturation/analyzer.go)
+// provides a purpose-built demand estimate for zero-replica roles from EPP queue-depth
+// signals, producing a real nonzero RequiredCapacity that does trigger scale-up for that
+// role before any replica of it exists — covering the ordinary cold-start case.
+//
+// The remaining, narrower gap has two cases:
+//   (a) No EPP queue signal (SchedulerQueue == nil or empty): the estimator returns
+//       all-zeros, and scale-up for the missing role cannot be triggered.
+//   (b) The role is absent from VariantStates/VariantCapacities entirely (discovery-side
+//       omission): neither the capacity store nor the queue estimator can help, since both
+//       are iterated from the same variant list that is already missing the entry.
+//
+// Mixed-P/D+"both" models (disaggregated roles AND a "both" role simultaneously) are not
+// supported today: initRoleState assigns a model to exactly one of the two branches above.
+// This is a shallow implementation choice — no deep type constraint prevents lifting it —
+// and is explicitly deferred as a future requirement.
+
+func initRoleState(e *NamedAnalyzerResult) (roles []string, pickerState RolePairedState) {
+	pickerState = make(RolePairedState)
+	roleSet := make(map[string]struct{})
+
+	if e.Result == nil {
+		return nil, pickerState
+	}
+	if e.RoleCapacities != nil {
+		// Disaggregated: per-role RC/SC from engine-calibrated RoleCapacities.
+		if e.RoleSpare == nil {
+			e.RoleSpare = make(map[string]float64, len(e.RoleCapacities))
+		}
+		if e.RoleReleasable == nil {
+			e.RoleReleasable = make(map[string]float64, len(e.RoleCapacities))
+		}
+		target := e.releaseTargetUtilization()
+		for role, rc := range e.RoleCapacities {
+			pickerState[role] = rc.RequiredCapacity
+			e.RoleSpare[role] = rc.SpareCapacity
+			// Recorded only when the supply figure is real. An absent key means
+			// "no release budget was computed", which safeRemovalReplicasForRole
+			// reads as "use RoleSpare" -- the previous behaviour. A present zero
+			// means "computed, and it is nothing", which it must honour.
+			if rc.TotalSupply > 0 {
+				e.RoleReleasable[role] = releasableFor(rc.TotalSupply, rc.TotalDemand, target)
+				if b, ok := e.ReleaseBound[role]; ok {
+					e.RoleReleasable[role] = min(e.RoleReleasable[role], b)
+				}
+			}
+			roleSet[role] = struct{}{}
+		}
+	} else {
+		// Non-disaggregated: synthesize a single "both" role from model-level scalars.
+		pickerState[domain.RoleBoth] = e.Remaining
+		if e.RoleSpare == nil {
+			e.RoleSpare = make(map[string]float64, 1)
+		}
+		e.RoleSpare[domain.RoleBoth] = e.Spare
+		if e.RoleReleasable == nil {
+			e.RoleReleasable = make(map[string]float64, 1)
+		}
+		if e.Result != nil && e.TotalSupply > 0 {
+			e.RoleReleasable[domain.RoleBoth] = releasableFor(
+				e.TotalSupply, e.Result.TotalDemand, e.releaseTargetUtilization())
+			if b, ok := e.ReleaseBound[domain.RoleBoth]; ok {
+				e.RoleReleasable[domain.RoleBoth] = min(e.RoleReleasable[domain.RoleBoth], b)
+			}
+		}
+		roleSet[domain.RoleBoth] = struct{}{}
+	}
+
+	roles = make([]string, 0, len(roleSet))
+	for role := range roleSet {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	return roles, pickerState
+}
+
+// =============================================================================
+// Paired helpers — role-generic scale-up and scale-down
+// =============================================================================
+//
+// Design § Architecture/D: (model, role) is the unit of allocation math.
+// Per-role sizing is independent, scoped to each role's picker-local demand.
+// The joint-commit step bounds by the min-util role (the coupling constraint).
+//
+// RolePairedState holds picker-local per-role demand tracked during one
+// model's allocation pass. Maps role → remaining demand (in that role's own
+// capacity units). Initialized from RoleCapacities[role].RC; decremented per
+// joint commit. Lives only inside the allocation loop — not stored on
+// NamedAnalyzerResult (per design A10).
+type RolePairedState map[string]float64
+
+// roleBottleneckReplicas returns ceil(state[role] / PRC[v]) for the single
+// entry, via replicasForDemand, the one shared rounding rule. Returns 0 if
+// the entry has no result or PRC ≤ 0.
+func roleBottleneckReplicas(e NamedAnalyzerResult, state RolePairedState, role, v string) int {
+	if e.Result == nil {
+		return 0
+	}
+	return replicasForDemand(state[role], prcForVariant(e.Result, v))
+}
+
+// roleAggRemaining returns the remaining demand for role from the picker state.
+func roleAggRemaining(state RolePairedState, role string) float64 {
+	return state[role]
+}
+
+// anyRoleNeedsScaleUp is the per-role scale-up gate for the unified dispatcher.
+// Returns true when any role has remaining demand > 0.
+func anyRoleNeedsScaleUp(state RolePairedState, roles []string) bool {
+	for _, role := range roles {
+		if state[role] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// variantsForRole returns the capacities whose role matches role exactly,
+// canonicalizing an empty Role to domain.RoleBoth.
+func variantsForRole(vcs []variantRecord, role string) []variantRecord {
+	out := make([]variantRecord, 0, len(vcs))
+	for _, vc := range vcs {
+		r := vc.Role
+		if r == "" {
+			r = domain.RoleBoth
+		}
+		if r == role {
+			out = append(out, vc)
+		}
+	}
+	return out
+}
+
+// safeRemovalReplicasForRole returns the number of replicas of variant v that
+// can safely be removed: floor(budget / PRC[v]), where budget is the LARGER of
+// RoleSpare[role] and RoleReleasable[role] -- the boundary-measured budget and
+// the release-target one. Returns 0 if the entry is not live, has no
+// Result/RoleSpare, PRC <= 0, or the budget is not positive.
+func safeRemovalReplicasForRole(e NamedAnalyzerResult, v, role string) int {
+	if !e.Live {
+		return 0 // non-live: no current basis to constrain removal
+	}
+	if e.Result == nil || e.RoleSpare == nil {
+		return 0
+	}
+	prc := prcForVariant(e.Result, v)
+	if prc <= 0 {
+		return 0
+	}
+	// Measured against the release target, not the boundary. RoleSpare has
+	// already decided that this role MAY release (needsScaleDownForRole); this
+	// decides how many, and asking it against the bottom of the band is what
+	// pinned run T at nine replicas it did not need.
+	//
+	// Falls back to RoleSpare when RoleReleasable was never populated, so an
+	// optimizer path that does not call initRoleState behaves as before rather
+	// than releasing nothing.
+	//
+	// The LARGER of the two, never the smaller. This change exists to widen a
+	// release the boundary-measured budget was refusing, so it must only ever
+	// ADD permission -- taking the release target unconditionally would shrink
+	// the budget wherever RoleSpare was derived from something other than this
+	// supply figure, and silently withdraw a scale-down that works today.
+	//
+	// Because it is a max, an absent entry and a present zero behave alike here.
+	// The comma-ok is kept so that this reads the same way as the write side,
+	// which does have to tell them apart -- see applyDeallocationForRole.
+	budget := e.RoleSpare[role]
+	if rel, ok := e.RoleReleasable[role]; ok && rel > budget {
+		budget = rel
+	}
+	return safeReplicasForSpare(budget, prc)
+}
+
+// applyDeallocationForRole charges n replicas of variant v against this role's
+// budgets -- RoleSpare and, when one was computed, RoleReleasable -- by
+// n x PRC[v]. Clamps both to 0. Never mutates Result.
+func applyDeallocationForRole(e *NamedAnalyzerResult, v, role string, n int) {
+	if e.Result == nil || e.RoleSpare == nil {
+		return
+	}
+	prc := prcForVariant(e.Result, v)
+	if prc <= 0 {
+		return
+	}
+	e.RoleSpare[role] -= float64(n) * prc
+	if e.RoleSpare[role] < 0 {
+		e.RoleSpare[role] = 0
+	}
+	// Both budgets move together. RoleReleasable is what bounds the NEXT
+	// variant of this role, so leaving it untouched would let a two-variant
+	// role release the same capacity twice.
+	//
+	// Charged only where a budget EXISTS. `m[k] -= x` on an absent key creates
+	// it at -x, clamped here to 0 -- which converts "no budget was computed for
+	// this role" into "computed, and it is nothing", the one distinction the
+	// read side documents. It is harmless while the read takes a max, and
+	// becomes a role that releases nothing after its first variant the moment
+	// that max is replaced.
+	if cur, ok := e.RoleReleasable[role]; ok {
+		cur -= float64(n) * prc
+		if cur < 0 {
+			cur = 0
+		}
+		e.RoleReleasable[role] = cur
+	}
+}
+
+// needsScaleDownForRole reports whether the single live entry agrees this role
+// has spare capacity. Returns false if the entry is not live, has no
+// Result/RoleSpare, or RoleSpare[role] ≤ 0. Safety floor: a non-live entry
+// means no current basis to scale down.
+func needsScaleDownForRole(e NamedAnalyzerResult, role string) bool {
+	if !e.Live {
+		return false // non-live: no current basis to scale down
+	}
+	if e.Result == nil || e.RoleSpare == nil || e.RoleSpare[role] <= 0 {
+		return false
+	}
+	return true
+}
+
+// roleAtCeiling reports whether every usable variant of role has reached its
+// own MaxReplicas, so the role cannot grow again in this pass no matter what
+// the cluster does.
+//
+// It exists because a RolePickFn reports both of its failures the same way --
+// ("", 0) -- and allocateForModelPaired must tell them apart: a role held back
+// by the GPU budget keeps its partner paired with it, while a role at its
+// administrative ceiling must not block its partner at all. Checked
+// independently of the picker rather than by extending RolePickFn, so both
+// pickers get the distinction without either having to report it.
+//
+// A variant with no MaxReplicas, or one set to zero, is unbounded and means the
+// role is not at a ceiling. A role with no usable variant is not "at a ceiling"
+// either -- there is nothing to be at the ceiling of -- so it stays on the
+// scarcity path, which ends the pass rather than spinning on it.
+func roleAtCeiling(
+	role string,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	targets map[string]int,
+) bool {
+	usable := false
+	for _, vc := range variantsForRole(variants, role) {
+		if vc.PerReplicaCapacity <= 0 {
+			continue
+		}
+		usable = true
+		state := stateMap[vc.VariantName]
+		if state.MaxReplicas == nil || *state.MaxReplicas <= 0 {
+			return false
+		}
+		if targets[vc.VariantName] < *state.MaxReplicas {
+			return false
+		}
+	}
+	return usable
+}
+
+// fitPairToBudget scales one iteration's per-role replica counts (kByRole) down
+// until the roles that draw on one accelerator budget fit it TOGETHER, and
+// reports false when not even one replica of each such role does, in which case
+// nothing may be committed.
+//
+// The pick sizes every role against the whole budget, as if it were alone, and
+// the budget is debited only after the joint commit. Two roles on one
+// accelerator therefore each saw all of it: a budget of 8 GPUs with an 8-GPU
+// prefill and an 8-GPU decode replica ordered 8+8. Each role's accelerator
+// resolves to a budget key (budgetKey), and every key that covers it
+// (accelerator.Covers: the key itself, a spelling that differs only in case,
+// the family key of a product) bounds the roles under it TOGETHER. A merged
+// budget can hold a family and its products -- a physical pool of {H100: 8}
+// beside a quota of {NVIDIA-H100-80GB-HBM3: 8, NVIDIA-H100-SXM5-80GB: 8}: a
+// prefill on the one product and a decode on the other both draw on the H100
+// key, while each product key bounds its own role alone. Roles on different
+// accelerators are checked against their own pools. A role whose key the
+// budget does not hold has none. available is the effective budget the caller
+// passes -- in the greedy optimizer already the tighter of the cluster and
+// namespace budgets -- so fitting it fits both. A nil budget (unconstrained) or
+// an unbounded one (math.MaxInt) fits anything.
+//
+// The scale-down only approximates the ratio the k computation chose: every
+// role in a group is scaled by the same factor, rounded down and never below
+// one replica, so a role with few replicas keeps a larger share than its
+// partner; then the role holding the most GPUs gives one replica at a time
+// until the group fits, which can move the ratio further. A role whose k is
+// already 0 stays 0.
+//
+// Then, with a node view (fit.nodes, built when a physical limiter bounds the
+// cycle), the roles must also fit the NODES together (fitPairToNodes): a pool
+// of 16 free GPUs as 4+4+8 holds one 8-GPU replica, not a prefill and a decode.
+// That applies to a single role too. Not even one replica of each placing is
+// scarcity, as above; what places is debited from the view.
+func fitPairToBudget(
+	picked []string,
+	kByRole map[string]int,
+	variantByRole map[string]string,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	available map[string]int,
+	fit nodeFit,
+) bool {
+	if !fitPairToPools(picked, kByRole, variantByRole, variants, stateMap, available) {
+		return false
+	}
+	return fitPairToNodes(picked, kByRole, variantByRole, variants, stateMap, fit)
+}
+
+// fitPairToPools is fitPairToBudget's pool half: the roles that draw on one
+// budget key fit it together.
+func fitPairToPools(
+	picked []string,
+	kByRole map[string]int,
+	variantByRole map[string]string,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	available map[string]int,
+) bool {
+	if available == nil || len(picked) < 2 {
+		return true
+	}
+	roleKey := make(map[string]string, len(picked))
+	keySet := make(map[string]bool, len(available)+len(picked))
+	for key := range available {
+		keySet[key] = true
+	}
+	for _, role := range picked {
+		if kByRole[role] <= 0 {
+			continue
+		}
+		key := budgetKey(available, accFromVCs(variants, variantByRole[role]))
+		roleKey[role] = key
+		keySet[key] = true
+	}
+	// Sorted, so the scale-down does not depend on map order.
+	keys := slices.Sorted(maps.Keys(keySet))
+	groups := make(map[string][]string, len(keys))
+	for _, key := range keys {
+		for _, role := range picked {
+			if rk, ok := roleKey[role]; ok && accelerator.Covers(key, rk) {
+				groups[key] = append(groups[key], role)
+			}
+		}
+	}
+	gpus := func(role string) int {
+		return gpusPerReplicaFromState(stateMap, variantByRole[role])
+	}
+	for _, key := range keys {
+		roles := groups[key]
+		budget, bounded := available[key]
+		if bounded && budget == math.MaxInt {
+			continue
+		}
+		budget = max(budget, 0)
+		sum := 0
+		for _, role := range roles {
+			sum += kByRole[role] * gpus(role)
+		}
+		if sum <= budget {
+			continue
+		}
+		for _, role := range roles {
+			kByRole[role] = max(1, kByRole[role]*budget/sum)
+		}
+		for {
+			sum = 0
+			largest := ""
+			for _, role := range roles {
+				sum += kByRole[role] * gpus(role)
+				if kByRole[role] > 1 && (largest == "" || kByRole[role]*gpus(role) > kByRole[largest]*gpus(largest)) {
+					largest = role
+				}
+			}
+			if sum <= budget {
+				break
+			}
+			if largest == "" {
+				return false // one replica of each does not fit together
+			}
+			kByRole[largest]--
+		}
+	}
+	return true
+}
+
+// nodeFit is what fitting replicas to nodes needs: the cycle's node view, nil
+// when no physical limiter bounds the cycle, the namespace of the model being
+// placed (for its variants' log key), and the model's limit tracker, which
+// records a cut the nodes made as node fit's (markNodeFit).
+type nodeFit struct {
+	nodes     *NodeView
+	namespace string
+	limited   gpuLimitTracker
+}
+
+// replica is one replica of variant v as the view places it: its pods
+// (NodeView.replicaPods), tolerations, topology key, and its pod templates'
+// nodeSelector and required node affinity (WN3).
+func (f nodeFit) replica(variants []variantRecord, stateMap map[string]domain.VariantReplicaState, v string) replicaFit {
+	st := stateMap[v]
+	return f.nodes.fitOf(ReplicaShape{Variant: f.namespace + "/" + v, Accelerator: accFromVCs(variants, v),
+		PodGPUs: st.PodGPUs, GPUs: gpusPerReplicaFromState(stateMap, v), Tolerations: st.Tolerations, DomainKey: st.TopologyKey,
+		Placements: st.Placements})
+}
+
+// fitPairToNodes places the picked roles' replicas on a copy of the node view,
+// a replica of the role furthest behind its share of kByRole at a time, until
+// every role has its k or one does not place. kByRole is lowered to what
+// placed, and the copy's debits are committed to the view. Reports false, and
+// commits nothing, when some role with k > 0 placed no replica: a P/D pair
+// needs both of its roles placed. A role the nodes held back is marked as
+// held back by node fit.
+//
+// Stopping at the first role that does not place keeps the pair's ratio
+// roughly: the other role is not grown alone into holes its partner cannot
+// follow into.
+func fitPairToNodes(
+	picked []string,
+	kByRole map[string]int,
+	variantByRole map[string]string,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	fit nodeFit,
+) bool {
+	if fit.nodes == nil {
+		return true
+	}
+	trial := fit.nodes.Clone()
+	reps := make(map[string]replicaFit, len(picked))
+	for _, role := range picked {
+		reps[role] = fit.replica(variants, stateMap, variantByRole[role])
+	}
+	placed := make(map[string]int, len(picked))
+	short := ""
+	for {
+		next := ""
+		for _, role := range picked {
+			k := kByRole[role]
+			if placed[role] >= k {
+				continue
+			}
+			// The role with the smallest placed/k fraction, compared exactly.
+			if next == "" || placed[role]*kByRole[next] < placed[next]*k {
+				next = role
+			}
+		}
+		if next == "" {
+			break
+		}
+		if !trial.place(reps[next]) {
+			short = next
+			break
+		}
+		placed[next]++
+	}
+	if short != "" {
+		// The pools held this role's k; the nodes did not.
+		fit.limited.markNodeFit(variantByRole[short])
+	}
+	for _, role := range picked {
+		if kByRole[role] > 0 && placed[role] == 0 {
+			return false
+		}
+	}
+	for _, role := range picked {
+		kByRole[role] = placed[role]
+	}
+	fit.nodes.adopt(trial)
+	return true
+}
+
+// RolePickFn is the role-generic optimizer variant selector for the unified
+// allocateForModelPaired loop. Called once per role per iteration; returns the
+// chosen variant and its resource cap. Returning ("", 0) signals no variant
+// is available for this role.
+type RolePickFn func(
+	role string,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	available map[string]int,
+	targets map[string]int,
+) (variant string, capN int)
+
+// allocateForModelPaired is the Phase-3 role-generic scale-up loop.
+// Handles any set of roles (including the arity-1 "both" single-role case).
+// Per iteration: pick one variant per role, size independently, compute
+// Δ_util = min_role util_role, trim to matched joint commit.
+// Arity-1 (roles = ["both"]) reduces to plain per-variant allocation.
+//
+// The commit is joint so a P/D fleet keeps its ratio, and Δ_util is the minimum
+// across roles so no role is over-ordered relative to its partner. But a role
+// with no headroom left -- every variant of it at its own maxReplicas -- is
+// finished, not blocking: it is dropped from the iteration, its unservable
+// remainder is zeroed so the loop can terminate, and the remaining roles are
+// committed without it. Treating it as blocking is what left prefill pinned at
+// one replica through a 1119-deep queue while decode sat at its ceiling
+// (docs/proposals/prefill-starved-by-exhausted-role.md).
+//
+// It fits pools only; allocateForModelPairedOn fits nodes too and returns what
+// was spent.
+func allocateForModelPaired(
+	ctx context.Context,
+	e *NamedAnalyzerResult,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	available map[string]int,
+	targets map[string]int,
+	pick RolePickFn,
+	pickerState RolePairedState,
+	roles []string,
+) {
+	allocateForModelPairedOn(ctx, e, variants, stateMap, available, targets, pick, pickerState, roles, nodeFit{}, nil)
+}
+
+// allocateForModelPairedOn is allocateForModelPaired fitting every commit to
+// the nodes as well (fit.nodes, see fitPairToBudget); a zero nodeFit fits
+// pools only.
+//
+// With a placer (a pass that counts cohort borrowing), each iteration's commit
+// is placed replica by replica before it is committed: against the namespace's
+// guaranteed budget, then the cohort's shared pools, and on the nodes of
+// fit.nodes (modelPlacer.placeUnit). The flat budget alone cannot say that a
+// borrowed replica must land whole on one flavor's nodes. The placer then owns
+// the node fit for the commit, so the view is debited once; a unit that does
+// not place is trimmed at its shape, and one that cannot place one replica of
+// each role ends the pass, as scarcity does. A nil placer is node fit through
+// fitPairToBudget exactly.
+//
+// It returns the GPUs it spent per key of available, as debited -- once per
+// spend, under the key the pick read. A caller that reconciles another budget
+// must use these rather than the change in available: debitBudget also draws
+// down every key that covers the one spent, so the per-key change counts a GPU
+// spent under a long spelling again under its short name.
+func allocateForModelPairedOn(
+	ctx context.Context,
+	e *NamedAnalyzerResult,
+	variants []variantRecord,
+	stateMap map[string]domain.VariantReplicaState,
+	available map[string]int,
+	targets map[string]int,
+	pick RolePickFn,
+	pickerState RolePairedState,
+	roles []string,
+	fit nodeFit,
+	placer *modelPlacer,
+) map[string]int {
+	logger := ctrl.LoggerFrom(ctx)
+	spent := map[string]int{}
+	for anyRoleNeedsScaleUp(pickerState, roles) {
+		variantByRole := make(map[string]string, len(roles))
+		capByRole := make(map[string]int, len(roles))
+		prcByRole := make(map[string]float64, len(roles))
+		// picked is the roles this iteration can actually commit to, in the
+		// caller's order.
+		//
+		// A pick can fail for two reasons, and they are not the same thing.
+		//
+		// SCARCITY -- the GPU budget could not fit a replica. The role would
+		// grow if the cluster allowed it, so the pair is kept intact and the
+		// pass ends: spending the last GPUs on one side of a P/D fleet whose
+		// other side cannot follow buys no throughput. That is the behaviour
+		// "should handle GPU exhaustion for one role without affecting the
+		// other" pins down, and it is deliberate.
+		//
+		// CEILING -- every variant of the role is at its own maxReplicas. The
+		// role is FINISHED, not blocking, and will never grow however long the
+		// pass waits. Vetoing its partner is then permanent starvation, not
+		// ratio-preservation. Measured: decode at 9/9 of max 9 left prefill
+		// ordered 1 -> 1 in every cycle of a run while prefill held a queue of
+		// 1119 and its demand floor asked for five replicas, with nine
+		// replicas of prefill headroom unused.
+		// See docs/proposals/prefill-starved-by-exhausted-role.md.
+		//
+		// NO DEMAND -- the role needs nothing this pass. It would commit k = 0
+		// in the joint commit below, so the only thing picking it could do is
+		// veto: an empty GPU pool on its accelerator aborted the pass for a
+		// partner that needed capacity and had GPUs to take it, and the picker
+		// marked the idle role GPU-limited. It is skipped before the pick, so
+		// it neither vetoes nor gets the blame.
+		picked := make([]string, 0, len(roles))
+		allPicked := true
+		for _, role := range roles {
+			if !(roleAggRemaining(pickerState, role) > 0) {
+				continue
+			}
+			v, capN := pick(role, variants, stateMap, available, targets)
+			if v == "" {
+				if roleAtCeiling(role, variants, stateMap, targets) {
+					// Drop its unservable remainder too, or
+					// anyRoleNeedsScaleUp stays true on it forever and this
+					// loop spins.
+					pickerState[role] = 0
+					continue
+				}
+				allPicked = false
+				break
+			}
+			variantByRole[role] = v
+			capByRole[role] = capN
+			prcByRole[role] = prcFromVCs(variants, v)
+			picked = append(picked, role)
+		}
+		if !allPicked || len(picked) == 0 {
+			break
+		}
+
+		// Every loop below iterates `picked`, never `roles`. An unpicked role
+		// has no entry in prcByRole, so its utilByRole would compute as 0 and
+		// deltaUtil <= 0 would break the loop -- the same starvation by
+		// another route.
+		nByRole := make(map[string]int, len(picked))
+		utilByRole := make(map[string]float64, len(picked))
+		for _, role := range picked {
+			prc := prcByRole[role]
+			n := min(roleBottleneckReplicas(*e, pickerState, role, variantByRole[role]), capByRole[role])
+			nByRole[role] = n
+			demand := roleAggRemaining(pickerState, role)
+			if demand <= 0 {
+				utilByRole[role] = 1.0
+			} else {
+				utilByRole[role] = float64(n) * prc / demand
+			}
+		}
+
+		deltaUtil := math.MaxFloat64
+		for _, role := range picked {
+			if utilByRole[role] < deltaUtil {
+				deltaUtil = utilByRole[role]
+			}
+		}
+		if deltaUtil <= 0 {
+			break
+		}
+
+		kByRole := make(map[string]int, len(picked))
+		anyPositive := false
+		for _, role := range picked {
+			demand := roleAggRemaining(pickerState, role)
+			prc := prcByRole[role]
+			n := nByRole[role]
+			k := 0
+			if prc > 0 && demand > 0 {
+				k = max(int(math.Floor(deltaUtil*demand/prc)), min(1, n))
+			}
+			kByRole[role] = k
+			if k > 0 {
+				anyPositive = true
+			}
+		}
+		if !anyPositive {
+			break
+		}
+		// Each role was sized against the whole budget on its own; the pair
+		// must fit it together. Not even one replica of each fitting together
+		// is SCARCITY, and ends the pass the same way.
+		//
+		// With a placer the placer fits the nodes, replica by replica, and
+		// the budget check fits the pools only: the view is debited once.
+		pairFit := fit
+		if placer != nil {
+			pairFit.nodes = nil
+		}
+		if !fitPairToBudget(picked, kByRole, variantByRole, variants, stateMap, available, pairFit) {
+			break
+		}
+		if placer != nil && !placer.placeUnit(picked, kByRole, variantByRole, variants, stateMap) {
+			break
+		}
+
+		for _, role := range picked {
+			v := variantByRole[role]
+			k := kByRole[role]
+			prc := prcByRole[role]
+			targets[v] += k
+			pickerState[role] = math.Max(0, pickerState[role]-float64(k)*prc)
+			if available != nil {
+				// Debit the key the pick read the budget from, which is the
+				// pool's spelling of the variant's accelerator, not necessarily
+				// the variant's own -- and, through debitBudget, every key that
+				// covers it, so the other role of a pair spelled differently
+				// sees the GPUs this one took.
+				key := budgetKey(available, accFromVCs(variants, v))
+				n := k * gpusPerReplicaFromState(stateMap, v)
+				debitBudget(available, key, n)
+				spent[key] += n
+			}
+		}
+		// Update model-level Remaining via the P-anchor role so fairShareValue
+		// reflects committed capacity. For "both" (non-disaggregated) use the
+		// single role; for P/D prefer "prefill".
+		for _, anchor := range []string{"prefill", domain.RoleBoth} {
+			if v, ok := variantByRole[anchor]; ok {
+				applyAllocation(e, v, kByRole[anchor])
+				break
+			}
+		}
+		logger.V(logging.DEBUG).Info("scale-up: joint role commit", "deltaUtil", deltaUtil)
+	}
+	return spent
+}

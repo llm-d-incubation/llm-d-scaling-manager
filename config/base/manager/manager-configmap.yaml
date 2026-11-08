@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: manager-config
+  labels:
+    # Required: the controller cache filters ConfigMaps by this label in cluster-scoped mode
+    # (cmd/main.go). Without it, watch events are silently dropped and config changes
+    # are never picked up at runtime.
+    app.kubernetes.io/name: scaling-manager
+data:
+  # The main configuration is stored as a single YAML file (config.yaml) that is
+  # volume-mounted into the controller container at /etc/scaling-manager/config.yaml.
+  #
+  # Precedence: CLI flags > environment variables > config file > defaults
+  #
+  # For more information see:
+  # docs/reference/configuration.md
+  config.yaml: |
+    # Prometheus Configuration (REQUIRED)
+    # Base URL for Prometheus API (must use HTTPS). The default points at a
+    # kube-prometheus-stack install in the scaling-manager-monitoring
+    # namespace; override in your overlay (e.g. OpenShift -> Thanos Querier).
+    PROMETHEUS_BASE_URL: "https://kube-prometheus-stack-prometheus.scaling-manager-monitoring.svc.cluster.local:9090"
+    # Whether to skip TLS certificate verification when connecting to Prometheus.
+    # Verified by default: the controller sends its ServiceAccount token as a
+    # bearer header, and an unverified endpoint is one anybody on the path can
+    # impersonate to collect it. Set PROMETHEUS_CA_CERT_PATH to the CA that signed
+    # the Prometheus certificate. deploy/install.sh turns this off on Kubernetes,
+    # with a warning, because it has no CA for the self-signed stack it deploys.
+    PROMETHEUS_TLS_INSECURE_SKIP_VERIFY: "false"
+
+    # Optimization
+    # Global optimization loop interval for autoscaling decisions.
+    # Requires a duration unit and must be at least 1s; anything else is logged
+    # and falls back to 15s. Applied at startup — changing it requires a
+    # controller restart.
+    GLOBAL_OPT_INTERVAL: "15s"
+
+    # Feature Flags
+    # Enables scale-to-zero behavior across managed workloads.
+    LLMSM_SCALE_TO_ZERO: "false"
+    # Passive mode: compute, log and publish everything, change no replica
+    # count. A scaling-policy entry's passive key overrides it per namespace,
+    # tier or model. Read at startup. make deploy-scaling-manager keeps the live value
+    # unless LLMSM_PASSIVE is passed.
+    LLMSM_PASSIVE: "false"
+
+    # Prometheus Metrics Cache
+    # Time-to-live for cached Prometheus metric responses.
+    PROMETHEUS_METRICS_CACHE_TTL: "30s"
+    # Interval for cleaning up expired entries from the metrics cache.
+    PROMETHEUS_METRICS_CACHE_CLEANUP_INTERVAL: "1m"
+    # Interval for background refresh of metrics cache entries.
+    PROMETHEUS_METRICS_CACHE_FETCH_INTERVAL: "30s"
+    # Maximum age for metrics to be considered fresh.
+    PROMETHEUS_METRICS_CACHE_FRESH_THRESHOLD: "1m"
+    # Maximum age for metrics to be considered stale (before unavailable).
+    PROMETHEUS_METRICS_CACHE_STALE_THRESHOLD: "2m"
+    # Maximum age for metrics before they are considered unavailable.
+    PROMETHEUS_METRICS_CACHE_UNAVAILABLE_THRESHOLD: "5m"

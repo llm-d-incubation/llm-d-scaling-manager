@@ -1,0 +1,123 @@
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: ssh-gateway
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ssh-gateway-auth-and-metrics
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+  - apiGroups: [ "metrics.k8s.io", "custom.metrics.k8s.io", "external.metrics.k8s.io", "monitoring.coreos.com" ]
+    resources:
+      - "*"
+    verbs: [ "get", "list", "watch" ]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: ssh-gateway-anyuid
+subjects:
+  - kind: ServiceAccount
+    name: ssh-gateway
+    namespace: debugging # NOTE: change to your namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+    name: ssh-gateway-cluster-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: ssh-gateway
+    namespace: debugging # NOTE: change to your namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ssh-gateway-auth-and-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ssh-gateway-auth-and-metrics
+subjects:
+  - kind: ServiceAccount
+    name: ssh-gateway
+    namespace: debugging # NOTE: change to your namespace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ssh-gateway
+  labels:
+    app: ssh-gateway
+spec:
+  selector:
+    app: ssh-gateway
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 2222
+    - name: metrics
+      port: 8443
+      targetPort: 8443
+    # The external-scaler gRPC port, for a ScaledObject whose scalerAddress
+    # points at the local controller through the tunnel.
+    - name: scaler
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ssh-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ssh-gateway
+  template:
+    metadata:
+      labels:
+        app: ssh-gateway
+    spec:
+      serviceAccountName: ssh-gateway
+      containers:
+        - name: ssh
+          image: linuxserver/openssh-server:latest
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "0"
+            - name: TZ
+              value: "UTC"
+            - name: DOCKER_MODS
+              value: "linuxserver/mods:openssh-server-ssh-tunnel"
+            - name: PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  key: id_ed25519.pub
+                  name: ssh-key
+          ports:
+            - containerPort: 2222
+          readinessProbe:
+            tcpSocket:
+              port: 2222
+            initialDelaySeconds: 5
+            periodSeconds: 10

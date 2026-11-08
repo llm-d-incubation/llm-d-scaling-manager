@@ -1,0 +1,71 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: fma-launcher-metrics
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: fma-launcher-metrics
+spec:
+  selector:
+    matchLabels:
+      # FMA's own marker for a server-providing pod. Paired with the expression
+      # below rather than used alone: app.kubernetes.io/component is a generic
+      # key that any workload may set, and scraping an unrelated pod on a port
+      # that means something else there is worse than not scraping it.
+      app.kubernetes.io/component: launcher
+    matchExpressions:
+      - key: dual-pods.llm-d.ai/launcher-config-name
+        operator: Exists
+  podMetricsEndpoints:
+    - path: /metrics
+      # 10s, like every other engine scrape this repo sets up: the scale-up
+      # signal is a queue at the engine and moves only when Prometheus holds
+      # a sample showing it, so the interval is jitter on every decision.
+      interval: 10s
+      relabelings:
+        # A launcher pod runs two containers; only the one hosting vLLM serves
+        # engine metrics.
+        - sourceLabels: [__meta_kubernetes_pod_container_name]
+          action: keep
+          regex: inference-server
+
+        # Drop launchers with no bound instance, BEFORE building an address for
+        # them. FMA writes the server-port annotation only while a pair is bound,
+        # so its absence means there is nothing to scrape.
+        #
+        # This rule is load-bearing and was added after measuring: without it,
+        # Prometheus still generates a target for every unbound launcher — the
+        # address rewrite below simply does not match, the default address is
+        # used, and the scrape fails. A 14-launcher namespace produced nine
+        # permanently-DOWN targets, which is alert noise and reads as broken
+        # monitoring rather than as an idle warm pool.
+        #
+        # Dropping them also keeps warm spares out of the metrics entirely, so
+        # they can never appear to the scaling manager as idle replicas that dilute utilization
+        # and suppress scale-up.
+        - sourceLabels: [__meta_kubernetes_pod_annotation_dual_pods_llm_d_ai_server_port]
+          action: keep
+          regex: .+
+
+        # Build the scrape address from the port FMA records on the pod, rather
+        # than hardcoding one.
+        #
+        # A launcher declares NO container ports, so a PodMonitor that selects an
+        # endpoint by port name resolves nothing and generates no target at all —
+        # not a failing target, no target. That is why launcher metrics are
+        # missing by default, and why this file exists.
+        #
+        # The upstream FMA PodMonitor rewrites the address to a fixed :8000. This
+        # reads dual-pods.llm-d.ai/server-port instead, so it follows FMA if the
+        # port ever differs, and — paired with the keep rule above — scrapes only
+        # launchers that actually have an instance bound.
+        #
+        # Annotation keys reach relabeling with dots and slashes replaced by
+        # underscores: dual-pods.llm-d.ai/server-port becomes the label below.
+        - sourceLabels:
+            - __meta_kubernetes_pod_ip
+            - __meta_kubernetes_pod_annotation_dual_pods_llm_d_ai_server_port
+          regex: (.+);(.+)
+          replacement: $1:$2
+          targetLabel: __address__
+          action: replace

@@ -1,0 +1,18 @@
+# See the OWNERS docs: https://git.k8s.io/community/contributors/guide/owners.md
+#
+# This file is prow's list for THIS repository: /lgtm and /approve answer to
+# the people listed here, who review and maintain it.
+#
+# It confers no GitHub access. Being assignable as a reviewer, or pushing a
+# branch under main's protection, comes from collaborator permissions in
+# repository settings and is configured separately.
+
+# List of usernames who may use /lgtm
+reviewers:
+  - ev-shindin
+  - deanlorenz
+
+# List of usernames who may use /approve
+approvers:
+  - ev-shindin
+  - deanlorenz

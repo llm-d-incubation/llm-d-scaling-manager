@@ -1,0 +1,106 @@
+package steadystate
+
+import (
+	"strings"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils"
+)
+
+// blockedModelRef is the identity needed to delete a model's
+// llmsm_model_scaling_blocked series once the model is gone, plus the reasons last
+// published for it so a change can be logged without repeating on every cycle.
+type blockedModelRef struct {
+	namespace string
+	modelID   string
+	// reasons is the last published set, joined, purely for comparison.
+	reasons string
+	// forbiddenBy is the tiers last logged as disabling scale-to-zero, joined.
+	forbiddenBy string
+}
+
+// recordBlockedModel notes that this engine has published reasons for a model,
+// so pruneBlockedModels can find the series again after the model disappears,
+// and reports whether the set CHANGED since the previous cycle.
+//
+// The bookkeeping doubles as the transition state deliberately. A separate map
+// would need its own eviction, on a process that runs for weeks and would
+// otherwise retain an entry for every model it has ever seen; sharing this one
+// means prune and evict already cover it.
+func (e *Engine) recordBlockedModel(namespace, modelID string, reasons []string) (changed bool) {
+	if e.lastBlockedModels == nil {
+		e.lastBlockedModels = make(map[string]blockedModelRef)
+	}
+	key := utils.GetNamespacedKey(namespace, modelID)
+	joined := strings.Join(reasons, ",")
+
+	prev, seen := e.lastBlockedModels[key]
+	// A model observed for the first time is a change only if something is
+	// actually blocking it — otherwise every restart would log a line per healthy
+	// model to say nothing is wrong.
+	changed = joined != prev.reasons || (!seen && joined != "")
+
+	prev.namespace, prev.modelID, prev.reasons = namespace, modelID, joined
+	e.lastBlockedModels[key] = prev
+	return changed
+}
+
+// recordForbiddenBy notes which of a model's tiers disable scale-to-zero while
+// that is what blocks it, and reports whether the set changed. It shares
+// recordBlockedModel's bookkeeping, so prune and evict cover it too; call it
+// after recordBlockedModel.
+func (e *Engine) recordForbiddenBy(namespace, modelID string, tiers []string) (changed bool) {
+	if e.lastBlockedModels == nil {
+		e.lastBlockedModels = make(map[string]blockedModelRef)
+	}
+	key := utils.GetNamespacedKey(namespace, modelID)
+	joined := strings.Join(tiers, ",")
+	prev := e.lastBlockedModels[key]
+	changed = joined != prev.forbiddenBy
+	prev.namespace, prev.modelID, prev.forbiddenBy = namespace, modelID, joined
+	e.lastBlockedModels[key] = prev
+	return changed
+}
+
+// forgetForbiddenBy clears the tiers recorded as disabling scale-to-zero for
+// every model not in evaluated. A cycle that skips a model does not resolve its
+// policy, so the record no longer reflects the last evaluation; kept, it would
+// keep an unchanged line quiet after the gap.
+func (e *Engine) forgetForbiddenBy(evaluated map[string]bool) {
+	for key, ref := range e.lastBlockedModels {
+		if !evaluated[key] && ref.forbiddenBy != "" {
+			ref.forbiddenBy = ""
+			e.lastBlockedModels[key] = ref
+		}
+	}
+}
+
+// pruneBlockedModels drops every reason series for a model that is no longer
+// active, and forgets its bookkeeping.
+//
+// An empty activeKeys is a no-op, mirroring pruneAnalyzerSeries: a cycle that
+// enumerates no models is usually transient — a collector hiccup, config not
+// loaded yet — and must not be read as "every model went away". The genuinely
+// empty fleet is handled by evictAllBlockedModels, on the path that has already
+// proved the list succeeded.
+func (e *Engine) pruneBlockedModels(activeKeys map[string]bool) {
+	if len(activeKeys) == 0 || e.lastBlockedModels == nil {
+		return
+	}
+	for modelKey, ref := range e.lastBlockedModels {
+		if !activeKeys[modelKey] {
+			metrics.ClearModelScalingBlocked(ref.namespace, ref.modelID)
+			delete(e.lastBlockedModels, modelKey)
+		}
+	}
+}
+
+// evictAllBlockedModels removes every reason series this engine has published.
+// Used when a cycle finds no active models at all, where the per-model prune has
+// nothing to compare against. Idempotent — it empties its own bookkeeping.
+func (e *Engine) evictAllBlockedModels() {
+	for modelKey, ref := range e.lastBlockedModels {
+		metrics.ClearModelScalingBlocked(ref.namespace, ref.modelID)
+		delete(e.lastBlockedModels, modelKey)
+	}
+}

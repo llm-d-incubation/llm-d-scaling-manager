@@ -1,0 +1,729 @@
+#!/usr/bin/env bash
+# What `deploy/warmpool.sh create` actually EMITS.
+#
+# `bash -n` parses this script happily in every state it has been broken in, and
+# every one of those states shipped:
+#
+#   - one container in the Pod, with the proxy image as `inference-server`, so
+#     every pool was inert;
+#   - the ScaledObject dropped by a refactor, so pools were created and never
+#     discovered -- a pool is DECLARED by its trigger, so without it the
+#     Deployment holds accelerators nobody can borrow;
+#   - workers running the proxy, so a group never became Ready and held GPUs
+#     while reporting pods=0;
+#   - `log_error` inside `$( )`, which exits only the subshell and applied a
+#     Deployment with no containers at all.
+#
+# None of these is visible without rendering the manifests and looking. That is
+# all this does: --dry-run, then assert the shape. It needs no cluster.
+set -u
+
+SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/deploy/warmpool.sh"
+FAILED=0
+
+# Every case reports ok or FAIL exactly once. A run that ends early, or a case
+# that silently stops running, otherwise passes having checked less than it
+# says. Change this deliberately with the cases.
+EXPECT_CASES=67
+CASES=0
+ok()   { CASES=$((CASES + 1)); printf 'ok    %s\n' "$1"; }
+fail() { CASES=$((CASES + 1)); printf 'FAIL  %s\n' "$1"; FAILED=1; }
+
+# render prints the manifests for a pool, or nothing if the script failed.
+render() {
+  bash "$SCRIPT" create -n tenant --name pool \
+    --proxy-image example.invalid/proxy:v1 --scaling-manager-namespace scaling-manager-system \
+    --models 2 --model-size 8B --accelerator NVIDIA-H100-80GB-HBM3 \
+    --dry-run "$@" 2>/dev/null
+}
+
+# count_kind counts documents of one kind. `kind:` at column 0 is only ever a
+# top-level document field here; nested ones are indented.
+count_kind() {
+  printf '%s\n' "$1" | grep -c "^kind: $2\$"
+}
+
+# --- a single-Pod pool ------------------------------------------------------
+POOL="$(render)"
+
+if [ -z "$POOL" ]; then
+  fail "create --dry-run produced nothing at all"
+  exit 1
+fi
+ok "create --dry-run produces manifests"
+
+# Parseable. A rendering bug usually shows up here first, and as a YAML error
+# rather than as anything about pools.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+  if printf '%s\n' "$POOL" | python3 -c '
+import sys, yaml
+docs = list(yaml.safe_load_all(sys.stdin))
+sys.exit(0 if all(d for d in docs) else 1)
+' 2>/dev/null; then
+    ok "every rendered document parses as YAML"
+  else
+    fail "a rendered document does not parse as YAML"
+  fi
+else
+  fail "python3 with PyYAML is required for this check; install it (pip install pyyaml)"
+fi
+
+[ "$(count_kind "$POOL" Deployment)" = 1 ] \
+  && ok "one Deployment" || fail "expected exactly one Deployment"
+
+# The pod-write grant. The controller's ClusterRole only READS pods, and lending
+# a pool Pod is a patch -- so the pool brings the write with it, for this
+# namespace alone, and before the ScaledObject that makes the controller look.
+# Without python3 (and PyYAML) this cannot be asserted, and that is a failure:
+# a grant check that skips itself passes on a pool that grants nothing.
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import yaml' 2>/dev/null; then
+  fail "python3 with PyYAML is required to check the pod-write grant; install it (pip install pyyaml)"
+else
+  grant="$(printf '%s\n' "$POOL" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+kinds = [d["kind"] for d in docs]
+role = [d for d in docs if d["kind"] == "Role" and d["metadata"]["name"] == "scaling-manager-pod-writer"]
+rb = [d for d in docs if d["kind"] == "RoleBinding" and d.get("roleRef", {}).get("name") == "scaling-manager-pod-writer"]
+ok = (len(role) == 1 and role[0]["metadata"]["namespace"] == "tenant"
+      and role[0]["rules"] == [{"apiGroups": [""], "resources": ["pods"], "verbs": ["patch"]}]
+      and len(rb) == 1 and rb[0]["metadata"]["namespace"] == "tenant"
+      and rb[0]["subjects"] == [{"kind": "ServiceAccount", "name": "scaling-manager-controller-manager", "namespace": "scaling-manager-system"}]
+      and "ScaledObject" in kinds and kinds.index("RoleBinding") < kinds.index("ScaledObject"))
+print("yes" if ok else "no")
+' 2>/dev/null)"
+  [ "$grant" = yes ] \
+    && ok "grants the controller patch on pods in the pool namespace only, before the ScaledObject" \
+    || fail "expected Role scaling-manager-pod-writer (patch pods, namespace tenant) bound to scaling-manager-system/scaling-manager-controller-manager, ahead of the ScaledObject"
+fi
+
+# THE OTHER ONE THAT SHIPPED BROKEN, and the one nothing else could see. Every
+# embedded Python program -- the preStop drain hook and both probes -- must
+# still be the program the manifest says, after passing through an UNQUOTED
+# heredoc.
+#
+# It was not. PyYAML folds a long double-quoted scalar by ending the line with a
+# backslash, bash read that as a line continuation and swallowed the newline and
+# the next line's indentation, and those spaces landed inside a string literal:
+# `inst.get("          options")`. The hook found no instances, exited 0, and
+# every pool Pod this script created was killed with its engine awake and
+# requests in flight -- the one thing the hook exists to prevent.
+#
+# Nothing caught it. The YAML still parsed, `make warmpool-check` still found
+# the rendered text identical to what the generator produced, the `preStop`
+# assertion below still passed, and a drain that drains nothing says nothing. So
+# this compares the DELIVERED program with the manifest's, character for
+# character, which is the only comparison that could have failed.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+  if printf '%s\n' "$POOL" | python3 -c '
+import ast, sys, yaml
+
+MANIFEST = "config/warmpool/warmpool-deployment.yaml"
+
+
+def programs(spec):
+    """Every python3 -c program in a Pod spec, keyed by where it came from."""
+    found = {}
+    for c in spec.get("containers", []):
+        places = {
+            "preStop": (c.get("lifecycle") or {}).get("preStop") or {},
+            "readinessProbe": c.get("readinessProbe") or {},
+            "livenessProbe": c.get("livenessProbe") or {},
+        }
+        for name, place in places.items():
+            cmd = (place.get("exec") or {}).get("command") or []
+            if "python3" in cmd and "-c" in cmd:
+                found["%s/%s" % (c["name"], name)] = cmd[-1]
+    return found
+
+
+want = {}
+with open(MANIFEST) as fh:
+    for doc in yaml.safe_load_all(fh):
+        if doc and doc.get("kind") == "Deployment":
+            want = programs(doc["spec"]["template"]["spec"])
+
+got = {}
+for doc in yaml.safe_load_all(sys.stdin):
+    if doc and doc.get("kind") == "Deployment":
+        got.update(programs(doc["spec"]["template"]["spec"]))
+
+if not want or not got:
+    print("no embedded programs found to compare", file=sys.stderr)
+    sys.exit(1)
+
+for where, program in sorted(got.items()):
+    try:
+        ast.parse(program)
+    except SyntaxError as err:
+        print("%s does not parse as Python: %s" % (where, err), file=sys.stderr)
+        sys.exit(1)
+    if where in want and program != want[where]:
+        print("%s differs from the manifest" % where, file=sys.stderr)
+        sys.exit(1)
+'; then
+    ok "the drain hook and probes survive the heredoc intact"
+  else
+    fail "an embedded python program was corrupted in rendering, or no longer matches the manifest"
+  fi
+else
+  fail "python3 with PyYAML is required for this check; install it (pip install pyyaml)"
+fi
+
+# THE ONE THAT SHIPPED BROKEN. A pool with no ScaledObject is not a pool: it is
+# a Deployment holding accelerators that scaling manager reports as undeclared.
+[ "$(count_kind "$POOL" ScaledObject)" = 1 ] \
+  && ok "the ScaledObject that declares the pool" \
+  || fail "no ScaledObject: the pool would be created and never discovered"
+
+printf '%s\n' "$POOL" | grep -q 'warmPoolName: pool' \
+  && ok "the trigger names the pool" \
+  || fail "the trigger carries no warmPoolName, so nothing declares this pool"
+
+# TWO containers, and the right images on each. The proxy is the traffic gate;
+# the supervisor is the thing that holds the engines. One without the other is a
+# Pod that either serves nothing or gates nothing.
+[ "$(printf '%s\n' "$POOL" | grep -c '^      - name: inference-server$')" = 1 ] \
+  && ok "the supervisor container" || fail "no inference-server container"
+[ "$(printf '%s\n' "$POOL" | grep -c '^      - name: proxy$')" = 1 ] \
+  && ok "the proxy container" || fail "no proxy container"
+
+# The images must not be the same one. The bug was not a missing container but
+# the proxy image running under the supervisor's NAME, which looks correct in
+# every listing and answers nothing on :8001.
+if printf '%s\n' "$POOL" | grep -A3 '^      - name: inference-server$' | grep -q 'example.invalid/proxy'; then
+  fail "the supervisor container is running the proxy image"
+else
+  ok "the supervisor is not running the proxy image"
+fi
+
+# A pool Pod that dies while a model is awake must DRAIN first. Without the hook
+# the launcher takes SIGTERM and every in-flight response is cut -- the failure
+# the warm pool exists to avoid, arriving by a different route (the pool shrinks,
+# a node is drained, the Deployment rolls).
+printf '%s' "$POOL" | grep -q 'preStop'   && ok "the drain hook" || fail "no preStop hook: a removed Pod cuts its in-flight requests"
+
+# And the grace period has to outlast that drain, or the kubelet SIGKILLs in the
+# middle of it and the hook bought nothing.
+printf '%s' "$POOL" | grep -q 'terminationGracePeriodSeconds'   && ok "a grace period sized for the drain"   || fail "no terminationGracePeriodSeconds: the default 30s cuts a slow generation"
+
+# The boundary. Its absence leaves :8001 -- caller-supplied argv in a container
+# mounting the shared model cache read-write -- open to anything that can route
+# to the Pod IP.
+[ "$(count_kind "$POOL" NetworkPolicy)" = 1 ] \
+  && ok "the NetworkPolicy" || fail "no NetworkPolicy: :8001 would be open to the cluster"
+
+printf '%s\n' "$POOL" | grep -q 'kubernetes.io/metadata.name: scaling-manager-system' \
+  && ok "the policy admits the scaling manager namespace it was given" \
+  || fail "the policy does not name --scaling-manager-namespace, so the controller is denied"
+
+# Opting out must actually opt out, and must not disturb anything else.
+OPTED="$(render --no-network-policy)"
+[ "$(count_kind "$OPTED" NetworkPolicy)" = 0 ] \
+  && ok "--no-network-policy omits it" || fail "--no-network-policy still emitted a policy"
+[ "$(count_kind "$OPTED" Deployment)" = 1 ] \
+  && ok "--no-network-policy leaves the Deployment alone" \
+  || fail "--no-network-policy changed more than the policy"
+
+# --- a pool of groups -------------------------------------------------------
+# --launcher-image is REQUIRED for a group: the stock launcher runs every rank
+# through vLLM's API server, which has no follower path, so an engine spanning
+# Pods can never form. Rendering one without it is refused, and that refusal is
+# asserted below.
+GROUP="$(render --group-size 2 --launcher-image example.invalid/launcher:headless)"
+
+[ "$(count_kind "$GROUP" LeaderWorkerSet)" = 1 ] \
+  && ok "a group pool is a LeaderWorkerSet" || fail "--group-size did not produce a LeaderWorkerSet"
+
+# The ScaledObject has to target the right KIND. KEDA scales what the ref names,
+# and a group pool whose ref says Deployment silently scales nothing.
+printf '%s\n' "$GROUP" | grep -q 'kind: LeaderWorkerSet' \
+  && ok "the group's ScaledObject targets a LeaderWorkerSet" \
+  || fail "the group's scaleTargetRef does not name LeaderWorkerSet"
+
+# WORKERS DO NOT RUN THE PROXY. A worker with a proxy never passes its readiness
+# probe, so the group never counts as a member and holds its GPUs reporting
+# pods=0 -- which reads as a pool that is simply too small.
+WORKER_SECTION="$(printf '%s\n' "$GROUP" | sed -n '/workerTemplate:/,$p')"
+[ "$(printf '%s\n' "$WORKER_SECTION" | grep -c 'name: proxy')" = 0 ] \
+  && ok "workers run no proxy" \
+  || fail "a worker template carries the proxy: the group would never become Ready"
+
+# And the other half of the same invariant. Warming a group asks EVERY rank to
+# create its own instance, at that rank's own Pod IP -- so a worker with nothing
+# listening on :8001 makes the fan-out unreachable, and the admission fails
+# half-done while the group holds all its GPUs. The e2e fixture had exactly this
+# shape (workers running `sleep infinity`) and could not exercise the fan-out at
+# all, which is how it went untested.
+[ "$(printf '%s\n' "$WORKER_SECTION" | grep -c 'name: inference-server')" = 1 ] \
+  && ok "workers run the supervisor, which is what the fan-out talks to" \
+  || fail "a worker template has no supervisor: warming the group cannot reach its ranks"
+
+# A GROUP on the stock launcher is refused outright. It would schedule, go
+# Ready, hold every accelerator and never form an engine -- the silent failure
+# this script exists to keep operators out of.
+if render --group-size 2 >/dev/null 2>&1; then
+  fail "a group pool was accepted without --launcher-image: it could never form an engine"
+else
+  ok "a group pool without --launcher-image is refused"
+fi
+
+# --- guardrails -------------------------------------------------------------
+# A ceiling at or below the reserve makes the admission budget zero forever: the
+# pool holds accelerators and warms nothing, silently. It must refuse.
+if render --max 2 --reserve 2 >/dev/null 2>&1; then
+  fail "--max equal to --reserve was accepted: the pool could never admit anything"
+else
+  ok "--max at or below --reserve is refused"
+fi
+
+# --- scraping a lent Pod ----------------------------------------------------
+# A bridge serves a variant's traffic. Unscraped, that load is invisible to the
+# analyzer, so the variant's measured demand FALLS while the pool is covering its
+# shortfall and reappears when the Pod goes back -- which reads as a spike
+# arriving rather than capacity leaving. Nothing about that is visible on the
+# cluster: the pool works, the model serves, and the number is quietly wrong.
+MON="$(render --monitoring-namespace observability)"
+
+[ "$(count_kind "$MON" PodMonitor)" = 1 ]   && ok "a monitoring namespace creates the pool scrape config"   || fail "no PodMonitor: a lent Pod would be scraped by nothing and its load would be invisible"
+
+printf '%s
+' "$MON" | grep -q '__meta_kubernetes_pod_ready'   && ok "only READY pool Pods become scrape targets"   || fail "the PodMonitor targets every pool Pod: a sleeping one has no engine behind its proxy, so an idle pool becomes a wall of DOWN targets"
+
+printf '%s
+' "$MON" | grep -q 'kubernetes.io/metadata.name: observability'   && ok "the monitoring namespace is admitted to the serving port"   || fail "the NetworkPolicy does not admit the scraper: the PodMonitor exists and every scrape is dropped"
+
+# ...and NEITHER appears without one. Guessing a monitoring namespace would open
+# the serving port to the wrong one, which is worse than leaving it shut: it
+# reads as monitoring that is configured.
+[ "$(count_kind "$POOL" PodMonitor)" = 0 ]   && ok "no scrape config without a monitoring namespace"   || fail "a PodMonitor was created for a pool that named no monitoring namespace"
+
+printf '%s
+' "$POOL" | grep -q 'kubernetes.io/metadata.name: observability'   && fail "a monitoring namespace was admitted though none was named"   || ok "no monitoring peer without a monitoring namespace"
+
+# --- the default proxy image ------------------------------------------------
+# --proxy-image is optional: the default comes from config/warmpool, emitted into
+# the script by `make warmpool-render` so the two cannot disagree about which
+# image a pool runs. A default that drifted from the manifest would give the
+# scripted and the hand-applied pool different proxies.
+DEFAULTED="$(bash "$SCRIPT" create -n tenant --name pool --scaling-manager-namespace scaling-manager-system   --accelerator NVIDIA-H100-80GB-HBM3 --dry-run 2>/dev/null)"
+
+if [ -z "$DEFAULTED" ]; then
+  fail "create without --proxy-image produced nothing: the flag is still required"
+else
+  ok "create works without --proxy-image"
+  # -A12, and asserted non-empty. It was -A2, and `image:` sits NINE lines below
+  # `name: proxy` -- so MANIFEST_IMG was always the empty string, `grep -qF ""`
+  # always matched, and this case printed ok unconditionally. Vacuous on Linux
+  # and on Windows alike; it was never comparing anything.
+  MANIFEST_IMG="$(grep -A12 'name: proxy[[:space:]]*$' "$(dirname "$0")/../config/warmpool/warmpool-deployment.yaml"     | grep -m1 'image:' | sed 's/.*image: //' | tr -d '')"
+  if [ -z "$MANIFEST_IMG" ]; then
+    fail "could not read the proxy image out of config/warmpool/warmpool-deployment.yaml; the comparison below would pass on an empty string"
+  fi
+  if printf '%s
+' "$DEFAULTED" | grep -qF "$MANIFEST_IMG"; then
+    ok "the default proxy image is the one config/warmpool pins"
+  else
+    fail "the default proxy image is not the manifest's ($MANIFEST_IMG): the scripted and hand-applied pools would run different proxies"
+  fi
+fi
+
+# --- the RuntimeClass ------------------------------------------------------
+# NONE by default, and that is the correct default: most GPU clusters need none,
+# because the operator makes the NVIDIA runtime the default. Nothing else in this
+# repo sets one. It was hardcoded to the name ONE cluster installs, so every
+# other cluster was refused on first use -- a name the cluster lacks fails
+# ADMISSION, so the Deployment exists and no Pod ever appears.
+printf '%s
+' "$POOL" | grep -q 'runtimeClassName:'   && fail "a pool names a RuntimeClass nobody asked for: on a cluster without it every Pod fails admission"   || ok "no RuntimeClass unless one is asked for"
+
+printf '%s
+' "$(render --runtime-class none)" | grep -q 'runtimeClassName:'   && fail "--runtime-class none still names one"   || ok "--runtime-class none names none"
+
+printf '%s
+' "$(render --runtime-class nvidia)" | grep -q 'runtimeClassName: nvidia$'   && ok "--runtime-class names the one given"   || fail "--runtime-class did not reach the Pod spec"
+
+# --- the default proxy image ------------------------------------------------
+# --proxy-image is optional: the default comes from config/warmpool, emitted into
+# the script by `make warmpool-render` so the two cannot disagree about which
+# image a pool runs. A default that drifted from the manifest would give the
+# scripted and the hand-applied pool different proxies.
+DEFAULTED="$(bash "$SCRIPT" create -n tenant --name pool --scaling-manager-namespace scaling-manager-system   --accelerator NVIDIA-H100-80GB-HBM3 --dry-run 2>/dev/null)"
+
+if [ -z "$DEFAULTED" ]; then
+  fail "create without --proxy-image produced nothing: the flag is still required"
+else
+  ok "create works without --proxy-image"
+  # -A12, and asserted non-empty. It was -A2, and `image:` sits NINE lines below
+  # `name: proxy` -- so MANIFEST_IMG was always the empty string, `grep -qF ""`
+  # always matched, and this case printed ok unconditionally. Vacuous on Linux
+  # and on Windows alike; it was never comparing anything.
+  MANIFEST_IMG="$(grep -A12 'name: proxy[[:space:]]*$' "$(dirname "$0")/../config/warmpool/warmpool-deployment.yaml"     | grep -m1 'image:' | sed 's/.*image: //' | tr -d '')"
+  if [ -z "$MANIFEST_IMG" ]; then
+    fail "could not read the proxy image out of config/warmpool/warmpool-deployment.yaml; the comparison below would pass on an empty string"
+  fi
+  if printf '%s
+' "$DEFAULTED" | grep -qF "$MANIFEST_IMG"; then
+    ok "the default proxy image is the one config/warmpool pins"
+  else
+    fail "the default proxy image is not the manifest's ($MANIFEST_IMG): the scripted and hand-applied pools would run different proxies"
+  fi
+fi
+
+# The SHIPPED manifests name no monitoring namespace at all.
+#
+# Only the install knows where Prometheus runs, and it passes it -- see
+# so_apply_warmpools. A manifest carrying a default would ship a rule admitting
+# somebody ELSE's namespace on the serving port, and would read as monitoring
+# that is configured while every scrape was dropped.
+#
+# The SERVING rule specifically: the control rule below it names a namespace on
+# purpose, and must go on doing so.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' 2>/dev/null; then
+  if python3 -c '
+import sys, yaml
+
+POLICY = "config/warmpool/warmpool-networkpolicy.yaml"
+with open(POLICY) as fh:
+    policy = yaml.safe_load(fh)
+
+for rule in policy["spec"]["ingress"]:
+    ports = [p.get("port") for p in rule.get("ports", [])]
+    if 8000 not in ports:
+        continue
+    for peer in rule.get("from", []):
+        if "namespaceSelector" in peer:
+            print("the serving rule admits %r" % peer["namespaceSelector"], file=sys.stderr)
+            sys.exit(1)
+sys.exit(0)
+'; then
+    ok "the shipped NetworkPolicy guesses no monitoring namespace"
+  else
+    fail "the shipped NetworkPolicy admits a namespace on the serving port; only the installer knows which one"
+  fi
+else
+  fail "python3 with PyYAML is required for this check; install it (pip install pyyaml)"
+fi
+
+# --- the e2e suite must not leave the policy behind ------------------------
+# The shipped policy restricts :8001, :8002 and the engine range to the scaling manager
+# namespace, and it selects EVERY warm pool Pod in the namespace -- not just the
+# Pods of the spec that applied it. A spec that leaves it behind therefore breaks
+# every LATER spec that reaches a supervisor through the API server pod proxy,
+# whose packets match no `from:` rule and are dropped.
+#
+# It fails as `dial tcp <ip>:8001: i/o timeout` inside a 503, which reads as a
+# Pod that never came up. Two specs shipped without the cleanup and cost a CI red
+# on exactly that: the spec that failed had applied no policy of its own.
+for f in "$(dirname "$0")/../test/e2e"/*_test.go; do
+  grep -q "ApplyWarmPoolNetworkPolicy" "$f" || continue
+  if grep -q "DeleteWarmPoolNetworkPolicy" "$f"; then
+    ok "$(basename "$f") removes the network policy it applies"
+  else
+    fail "$(basename "$f") applies the warm pool NetworkPolicy and never deletes it: every later spec that talks to a supervisor through the pod proxy will time out"
+  fi
+done
+
+# --- monitor and plan, which talk to a cluster --------------------------------
+# Only the argument handling is checked here; the cluster behaviour is verified
+# by hand. Both subcommands died SILENTLY in their first form -- a failing
+# command substitution in a bare assignment aborts the script under errexit, and
+# `kubectl get leaderworkersets` fails on every cluster without that CRD -- so
+# `plan` printed its plan and simply stopped, looking like it had nothing to say.
+if bash "$SCRIPT" monitor -n tenant --name pool 2>&1 | grep -qi "monitoring-namespace"; then
+  ok "monitor requires a monitoring namespace"
+else
+  fail "monitor accepted no --monitoring-namespace: it would create a scrape config nothing could reach"
+fi
+
+if grep -q 'for kind in deployments leaderworkersets' "$SCRIPT" &&
+   grep -q '|| names=""' "$SCRIPT"; then
+  ok "the undeclared-pool report survives a cluster with no LeaderWorkerSet CRD"
+else
+  fail "the undeclared-pool report reads both kinds without tolerating a missing CRD; it will abort on most clusters"
+fi
+
+# --- pool type: bridge or retained ------------------------------------------
+# Until --type existed, the ONLY way to make a pool retained was to hand-patch
+# warmPoolRetained into the ScaledObject trigger after create, which meant the
+# pool ran as a bridge for however long that took and nothing in the create
+# output said which kind you had. These assert the choice reaches the object.
+TRIGGER_KEYS() {
+  printf '%s\n' "$1" | yq ea 'select(.kind == "ScaledObject") | .spec.triggers[0].metadata | keys | .[]' - 2>/dev/null
+}
+TRIGGER_GET() {
+  printf '%s\n' "$1" | yq ea "select(.kind == \"ScaledObject\") | .spec.triggers[0].metadata.$2 // \"absent\"" - 2>/dev/null
+}
+
+RETAINED_POOL="$(render --type retained)"
+if [ "$(TRIGGER_GET "$RETAINED_POOL" warmPoolRetained)" = "true" ]; then
+  ok "--type retained reaches the trigger as warmPoolRetained: true"
+else
+  fail "--type retained did not emit warmPoolRetained; the pool would run as a bridge and reclaim its Pod on the hold timeout"
+fi
+
+BRIDGE_POOL="$(render --type bridge --max-hold 5m)"
+if [ "$(TRIGGER_GET "$BRIDGE_POOL" warmPoolRetained)" = "false" ] &&
+   [ "$(TRIGGER_GET "$BRIDGE_POOL" warmPoolMaxHold)" = "5m" ]; then
+  ok "--type bridge --max-hold reaches the trigger as both keys"
+else
+  fail "--type bridge --max-hold did not emit both keys: $(TRIGGER_KEYS "$BRIDGE_POOL" | tr '\n' ' ')"
+fi
+
+# Absent, NOT defaulted. A value written here would be a second copy of the
+# controller's default, free to drift from it; an absent key cannot.
+PLAIN_POOL="$(render)"
+if [ "$(TRIGGER_GET "$PLAIN_POOL" warmPoolRetained)" = "absent" ] &&
+   [ "$(TRIGGER_GET "$PLAIN_POOL" warmPoolMaxHold)" = "absent" ]; then
+  ok "naming neither emits neither, leaving the controller default in force"
+else
+  fail "create wrote a pool-type key nobody asked for, which is a second copy of a default that can drift"
+fi
+
+# The group pool is a separate heredoc and has been missed by exactly this kind
+# of change before.
+GROUP_RETAINED="$(render --group-size 2 --launcher-image example.invalid/launcher:v1 --type retained)"
+if [ "$(TRIGGER_GET "$GROUP_RETAINED" warmPoolRetained)" = "true" ]; then
+  ok "a LeaderWorkerSet pool carries the type too"
+else
+  fail "--type retained is dropped on the group path: the two ScaledObject heredocs disagree"
+fi
+
+# Refusals. Each is a config that would otherwise be accepted and then ignored.
+#
+# The expected WORDS are checked, not just a non-zero exit: a script that does
+# not know these options at all refuses them too, with "unknown option", so a
+# case satisfied by that would pass on the very version the flags are MISSING
+# from. The negative control caught exactly that.
+check_refusal() {
+  local want="$1"; shift
+  local out
+  out="$(bash "$SCRIPT" create -n tenant --name pool --scaling-manager-namespace scaling-manager-system \
+           --models 1 --model-size 8B --dry-run "$@" 2>&1 >/dev/null)"
+  case "$out" in
+    *"$want"*) ok "create refuses '$*' and says why" ;;
+    *)         fail "create did not refuse '$*' with '$want'; it said: ${out:-<nothing>}" ;;
+  esac
+}
+check_refusal "--type must be" --type nonsense
+check_refusal "number+unit pairs" --max-hold garbage
+# ParseDuration ACCEPTS these two, which is what makes them dangerous: a zero or
+# negative hold expires on its first evaluation, so every lend is reclaimed at
+# once and the pool reads as broken rather than misconfigured.
+check_refusal "greater than zero" --max-hold 0s
+check_refusal "number+unit pairs" --max-hold -5m
+# ParseDuration REJECTS this one; the suffix glob that stood here accepted it,
+# producing the silent fallback the check was added to prevent.
+check_refusal "number+unit pairs" --max-hold 5x5m
+
+# ACCEPTED, and it has to be: `1h30m` is a perfectly good ParseDuration value,
+# and the first anchored form of the guard refused it -- trading a silent
+# misconfiguration for a loud refusal of a correct one.
+COMPOUND="$(render --type bridge --max-hold 1h30m)"
+if [ "$(TRIGGER_GET "$COMPOUND" warmPoolMaxHold)" = "1h30m" ]; then
+  ok "a compound Go duration (1h30m) is accepted and reaches the trigger"
+else
+  fail "--max-hold 1h30m was refused or mangled; ParseDuration accepts it"
+fi
+check_refusal "meaningless with --type retained" --type retained --max-hold 5m
+# --min-hold ON ITS OWN, without --max-hold. The validation block was nested
+# inside --max-hold's by an indentation slip, so the most natural way of
+# setting the flag skipped every check on it: `--min-hold 5x5m` rendered
+# `warmPoolMinHold: "5x5m"` unchallenged and the pool ran on its fallback
+# config. Both refusals below passed only when --max-hold was ALSO given.
+check_refusal "number+unit pairs" --type bridge --min-hold 5x5m
+check_refusal "meaningless with --type retained" --type retained --min-hold 90s
+FLOOR_ONLY="$(render --type bridge --min-hold 90s)"
+if [ "$(TRIGGER_GET "$FLOOR_ONLY" warmPoolMinHold)" = "90s" ]; then
+  ok "--min-hold on its own is validated and reaches the trigger"
+else
+  fail "--min-hold 90s alone was refused or mangled"
+fi
+
+# --- a re-run of create keeps the trigger keys set on the pool by hand --------
+# `kubectl apply` of a ScaledObject replaces its triggers list, so re-running
+# create dropped every switch knob set on the pool afterwards
+# (warmPoolSwitchSpareThreshold, warmPoolMinSwitchInterval, warmPoolPreloadTop,
+# warmPoolGPUMemoryUtilization) and the pool went back to controller defaults in
+# silence. --dry-run never reads the cluster, so these run a REAL create against
+# a stub kubectl on PATH and read what it was asked to apply.
+WP_STUB="$(mktemp -d)"
+cat > "$WP_STUB/kubectl" <<'STUB'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "get scaledobject")
+    if [ -n "${STUB_SO_FORBIDDEN:-}" ]; then
+      echo 'Error from server (Forbidden): scaledobjects.keda.sh "x" is forbidden' >&2; exit 1
+    fi
+    if [ -n "${STUB_SO:-}" ]; then printf '%s\n' "$STUB_SO"; exit 0; fi
+    echo 'Error from server (NotFound): scaledobjects.keda.sh "x" not found' >&2; exit 1 ;;
+  "get deployment"|"get leaderworkerset")
+    echo 'Error from server (NotFound): not found' >&2; exit 1 ;;
+  # May the controller already patch pods? STUB_CANI: yes, no, or denied
+  # (this user may not impersonate it, so kubectl cannot ask).
+  "auth can-i")
+    case "${STUB_CANI:-no}" in
+      yes) echo yes; exit 0 ;;
+      no)  echo no; exit 1 ;;
+      *)   echo 'Error from server (Forbidden): users "u" is forbidden: User "u" cannot impersonate resource "serviceaccounts"' >&2; exit 1 ;;
+    esac ;;
+  "get rolebinding")
+    echo 'Error from server (NotFound): rolebindings.rbac.authorization.k8s.io "x" not found' >&2; exit 1 ;;
+  "apply -f")
+    body="$(cat)"
+    if [ -n "${STUB_ROLE_FORBIDDEN:-}" ] && printf '%s\n' "$body" | grep -q '^kind: Role$'; then
+      echo 'Error from server (Forbidden): roles.rbac.authorization.k8s.io "scaling-manager-pod-writer" is forbidden: User "u" cannot create resource "roles"' >&2
+      exit 1
+    fi
+    # One marker per apply, so a case can tell one apply from two.
+    printf '# APPLY\n%s\n' "$body" >> "$STUB_DIR/applied"; exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$WP_STUB/kubectl"
+
+LIVE_POOL_SO='{"metadata":{"name":"llmsm-warm-pool-pool"},"spec":{"triggers":[{"type":"external-push","metadata":{"scalerAddress":"scaling-manager-external-scaler.old.svc.cluster.local:9090","warmPoolName":"pool","warmPoolSleepMinSize":"1","warmPoolMinHold":"2m","warmPoolSwitchSpareThreshold":"0.3","warmPoolMinSwitchInterval":"10m","warmPoolPreloadTop":"2","warmPoolGPUMemoryUtilization":"0.85"}}]}}'
+
+# create_live [VAR=value...] -- run create against the stub, echo what it applied.
+# Its exit status is left in $WP_STUB/rc.
+create_live() {
+  : > "$WP_STUB/applied"
+  env PATH="$WP_STUB:$PATH" STUB_DIR="$WP_STUB" "$@" bash "$SCRIPT" create -n tenant --name pool \
+    --proxy-image example.invalid/proxy:v1 --scaling-manager-namespace scaling-manager-system \
+    --models 2 --model-size 8B --accelerator NVIDIA-H100-80GB-HBM3 \
+    --runtime-class none --reserve 3 >"$WP_STUB/out" 2>&1
+  echo "$?" > "$WP_STUB/rc"
+  cat "$WP_STUB/applied"
+}
+
+# --- the pod-write grant, applied on its own and first ------------------------
+#
+# It used to be the first document of the pool's own apply, so a user who may
+# not create Roles got a raw Forbidden with the pool half-applied behind it.
+
+# first_apply / later_applies split what the stub recorded at its markers.
+first_apply()   { printf '%s\n' "$1" | awk '/^# APPLY$/ {n++; next} n == 1'; }
+later_applies() { printf '%s\n' "$1" | awk '/^# APPLY$/ {n++; next} n > 1'; }
+
+GRANTED="$(create_live STUB_CANI=no)"
+if [ "$(cat "$WP_STUB/rc")" = 0 ] \
+   && [ "$(count_kind "$(first_apply "$GRANTED")" Role)" = 1 ] \
+   && [ "$(count_kind "$(first_apply "$GRANTED")" ScaledObject)" = 0 ] \
+   && [ "$(count_kind "$(later_applies "$GRANTED")" ScaledObject)" = 1 ] \
+   && [ "$(count_kind "$(later_applies "$GRANTED")" Role)" = 0 ]; then
+  ok "the grant is its own apply, made before the pool's"
+else
+  fail "expected the Role in a first apply of its own, and the pool in a later one"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+
+DENIED_GRANT="$(create_live STUB_CANI=no STUB_ROLE_FORBIDDEN=1)"
+if [ "$(cat "$WP_STUB/rc")" != 0 ] \
+   && [ "$(printf '%s\n' "$DENIED_GRANT" | grep -c '^kind:')" = 0 ] \
+   && grep -q 'Nothing was created' "$WP_STUB/out" \
+   && grep -q 'create on roles and rolebindings in tenant' "$WP_STUB/out" \
+   && grep -q 'pod_writer.sh tenant scaling-manager-system | kubectl apply -f -' "$WP_STUB/out"; then
+  ok "a refused grant stops before the pool, and says what to ask an admin for"
+else
+  fail "a refused grant must apply nothing and name what to ask an admin for (rc=$(cat "$WP_STUB/rc"))"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+
+ALREADY="$(create_live STUB_CANI=yes)"
+if [ "$(cat "$WP_STUB/rc")" = 0 ] && [ "$(count_kind "$ALREADY" Role)" = 0 ] \
+   && [ "$(count_kind "$ALREADY" ScaledObject)" = 1 ] && grep -q 'can already patch pods' "$WP_STUB/out"; then
+  ok "no grant when the controller can already patch pods there"
+else
+  fail "a controller that can already patch pods must get no second grant"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+
+UNASKABLE="$(create_live STUB_CANI=denied)"
+if [ "$(cat "$WP_STUB/rc")" = 0 ] && [ "$(count_kind "$(first_apply "$UNASKABLE")" Role)" = 1 ]; then
+  ok "when the check itself is not allowed, the grant is tried"
+else
+  fail "a can-i that cannot be asked must lead to trying the grant, not to skipping it"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+
+KEPT_POOL="$(create_live STUB_SO="$LIVE_POOL_SO")"
+kept_ok=1
+for kv in warmPoolSwitchSpareThreshold=0.3 warmPoolMinSwitchInterval=10m warmPoolPreloadTop=2 warmPoolGPUMemoryUtilization=0.85 warmPoolMinHold=2m; do
+  [ "$(TRIGGER_GET "$KEPT_POOL" "${kv%%=*}")" = "${kv#*=}" ] || { kept_ok=0; echo "    lost ${kv%%=*}"; }
+done
+if [ "$kept_ok" = 1 ]; then
+  ok "re-running create keeps every hand-set trigger key it does not write"
+else
+  fail "re-running create dropped hand-set trigger keys from the pool ScaledObject"
+fi
+if [ "$(TRIGGER_GET "$KEPT_POOL" warmPoolSleepMinSize)" = "3" ] \
+   && [ "$(TRIGGER_GET "$KEPT_POOL" scalerAddress)" = "scaling-manager-external-scaler.scaling-manager-system.svc.cluster.local:9090" ]; then
+  ok "the keys create does write still take this run's values (reserve, scaler address)"
+else
+  fail "a key create writes kept the live value instead of this run's"
+fi
+NEW_HOLD="$(PATH="$WP_STUB:$PATH" STUB_DIR="$WP_STUB" STUB_SO="$LIVE_POOL_SO" bash -c ': > "$STUB_DIR/applied"; bash "$0" create -n tenant --name pool --proxy-image example.invalid/proxy:v1 --scaling-manager-namespace scaling-manager-system --models 2 --model-size 8B --accelerator NVIDIA-H100-80GB-HBM3 --runtime-class none --type bridge --min-hold 45s >/dev/null 2>&1; cat "$STUB_DIR/applied"' "$SCRIPT")"
+if [ "$(TRIGGER_GET "$NEW_HOLD" warmPoolMinHold)" = "45s" ]; then
+  ok "a flag given on this run (--min-hold) replaces the live value rather than being kept"
+else
+  fail "--min-hold on a re-run did not replace the live warmPoolMinHold"
+fi
+FIRST_POOL="$(create_live)"
+if [ "$(TRIGGER_GET "$FIRST_POOL" warmPoolSwitchSpareThreshold)" = "absent" ] && [ "$(cat "$WP_STUB/rc")" = 0 ]; then
+  ok "a first create (no live ScaledObject) adds no kept keys"
+else
+  fail "a first create failed, or invented trigger keys"
+fi
+DENIED_POOL="$(create_live STUB_SO_FORBIDDEN=1)"
+if [ "$(cat "$WP_STUB/rc")" != 0 ] &&[ "$(printf '%s\n' "$DENIED_POOL" | grep -c 'kind:')" = "0" ]; then
+  ok "an unreadable live ScaledObject is a refusal, and nothing is applied"
+else
+  fail "create replaced a pool ScaledObject it could not read, dropping whatever was set on it"
+fi
+
+# With neither sha256sum nor shasum the binding cannot be named. It used to
+# come out as `scaling-manager-pod-writer-`, one name for every controller, with exit 0.
+BASH_BIN="$(command -v bash)"
+NOHASH="$(env PATH=/nonexistent "$BASH_BIN" -c '. "$1"; llmsm_pod_writer_manifest tenant scaling-manager-system' _ \
+  "$(dirname "$SCRIPT")/lib/pod_writer.sh" 2>&1)"
+NOHASH_RC=$?
+if [ "$NOHASH_RC" -ne 0 ] && ! printf '%s\n' "$NOHASH" | grep -q 'name: scaling-manager-pod-writer-$' \
+   && printf '%s\n' "$NOHASH" | grep -q 'neither sha256sum nor shasum'; then
+  ok "no sha256sum or shasum: the grant is refused, not named scaling-manager-pod-writer-"
+else
+  fail "with no hashing tool the grant must be refused (rc=$NOHASH_RC)"
+  printf '%s\n' "$NOHASH" | sed 's/^/    /'
+fi
+
+# delete keeps the grant and prints how to remove it: THIS controller's binding
+# by its exact name, never every scaling-manager-pod-writer-* binding in the namespace, and
+# nothing GNU-only (xargs -r).
+LLMSM_SUFFIX="$(printf '%s' scaling-manager-system | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+PATH="$WP_STUB:$PATH" STUB_DIR="$WP_STUB" bash "$SCRIPT" delete -n tenant --name pool \
+  --scaling-manager-namespace scaling-manager-system >"$WP_STUB/out" 2>&1
+if grep -q "kubectl delete rolebinding scaling-manager-pod-writer-${LLMSM_SUFFIX} -n tenant" "$WP_STUB/out" \
+   && ! grep -q 'xargs' "$WP_STUB/out"; then
+  ok "delete names this controller's binding exactly (scaling-manager-pod-writer-${LLMSM_SUFFIX}), with no xargs -r"
+else
+  fail "delete must print a removal for this controller's binding only, without xargs -r"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+# A warning, not an info line: the grant outlives the pool.
+if grep -q 'WARNING.*Kept role/scaling-manager-pod-writer' "$WP_STUB/out"; then
+  ok "delete warns that the pod-write grant is kept"
+else
+  fail "delete must WARN that role/scaling-manager-pod-writer is kept"
+  sed 's/^/    /' "$WP_STUB/out"
+fi
+rm -rf "$WP_STUB"
+
+if [ "$CASES" -ne "$EXPECT_CASES" ]; then
+  echo "FAIL  $CASES case(s) ran, $EXPECT_CASES expected -- the run did not finish, or a case was added without updating EXPECT_CASES"
+  FAILED=1
+fi
+if [ "$FAILED" -eq 0 ]; then
+  echo "Warm pool manifest checks passed."
+else
+  echo "Warm pool manifest checks FAILED."
+fi
+exit "$FAILED"

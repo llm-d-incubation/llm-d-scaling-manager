@@ -1,0 +1,55 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-scaler
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: external-scaler
+spec:
+  # The KEDA external scaler on :9090 has no authentication of its own unless
+  # --external-scaler-client-ca is set. Every call registers the workload it
+  # names with the caller's trigger metadata, and GetMetrics answers any
+  # variant's decision, so anything that can reach :9090 can rewrite another
+  # tenant's scaler metadata and read every decision. Only KEDA's operator
+  # calls it, so only KEDA's namespace is admitted to it.
+  #
+  # Selecting the controller Pod makes EVERY port not listed below unreachable,
+  # so the other two are admitted explicitly, from anywhere:
+  #
+  #   :8443  metrics. Authenticated and authorized by the server itself
+  #          (TokenReview + SubjectAccessReview), and scraped by a Prometheus
+  #          whose namespace this file cannot know.
+  #   :8081  health and readiness. Kubelet probes come from the NODE, which no
+  #          `from:` selector can name; a rule with no `from:` admits every
+  #          source, the node included, whatever the CNI. The endpoints answer
+  #          ok/not-ok and nothing else.
+  #
+  # `kubectl port-forward` enters the Pod's own network namespace and is not
+  # subject to this policy.
+  podSelector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: scaling-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 8081
+    # The KEDA operator is what dials external scalers (the metrics adapter
+    # asks the operator, not the scaler). The namespace below is a DEFAULT:
+    # components/openshift rewrites it to openshift-keda, and deploy/install.sh
+    # to the namespace it finds KEDA running in (or KEDA_NAMESPACE). A wrong
+    # namespace fails CLOSED -- KEDA is refused, its ScaledObjects go
+    # not-Ready, and nothing scales -- never open.
+    - ports:
+        - protocol: TCP
+          port: 9090
+      from:
+        # Set automatically by the API server on every namespace, so naming
+        # one needs no labelling step.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda-system

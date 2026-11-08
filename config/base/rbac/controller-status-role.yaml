@@ -1,0 +1,33 @@
+# The controller publishes what it has read and decided -- the policy
+# ConfigMap version it loaded, whether it was accepted, the limiter and the
+# utilization-share mode in force -- in one ConfigMap in its own namespace,
+# scaling-manager-controller-status, so tools can confirm a policy write without reading
+# its log. Without this Role the controller logs the failure and keeps scaling;
+# only the status is missing.
+#
+# A namespaced Role, so it installs in both scopes: a namespace admin may create
+# it in the namespace they install into. get and update are limited to the one
+# ConfigMap by name; create cannot be, because the name of an object that does
+# not exist yet is not known to the authorizer.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: scaling-manager
+  name: controller-status-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  resourceNames:
+  - scaling-manager-controller-status
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create

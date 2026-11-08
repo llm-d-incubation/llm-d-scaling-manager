@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+# External analyzers, declared on the cluster "default" scaling entry.
+# Each key under analyzerDefinitions is an analyzer NAME; its value is the
+# definition. An external analyzer is
+# essentially a KEDA Prometheus scaler expressed as config — a demand query (D)
+# and a per-replica target (threshold P), such that desired = ceil(D / threshold).
+#
+# A named policy tier references an analyzer by name (analyzers: [{name: ttft-slo}]);
+# the name resolves against the built-in Go registry first, then this catalog.
+# Adding, changing, or removing an entry takes effect on the next optimize cycle
+# — no controller restart is needed.
+#
+# UNITS: `query` returns the model's TOTAL demand D — every series it returns is
+# summed into one number — and `threshold` is what ONE scale-target replica can
+# serve: one pod, or one LWS group, the same replica the Deployment/ScaledObject
+# counts. It is NOT one engine instance; a data-parallel pod runs several, and
+# the threshold is the whole pod's figure.
+#
+# A `sum(...)`-shaped query needs nothing more, whatever granularity the metric
+# has: summing across a pod's DP ranks and summing across pods give the same
+# total. Queries whose value depends on how MANY series exist do need care —
+# `count()` counts DP ranks and `avg()` averages over them, so both measure in
+# instances while the threshold is in pods. Collapse them first:
+#
+#     count(count by (pod) (...))
+#     avg(avg by (pod) (...))
+#
+# The controller cannot fix this up for you: unlike the built-in analyzers,
+# these queries run straight against Prometheus and never pass through the
+# collector's per-pod merge.
+#
+# SECURITY: the query body is trusted config, run as-is (like a KEDA ScaledObject
+# query). The trust boundary is RBAC on the SYSTEM-NAMESPACE scaling ConfigMap —
+# treat editing it as a privileged operation. Definitions are cluster-scope for
+# this reason: a policy tier selects and weights analyzers by name, but cannot
+# define one (docs/reference/scaling-policy.md#external-analyzers-analyzerdefinitions). The interpolated {{.modelID}}/{{.namespace}} are escaped
+# by the controller before substitution.
+#
+# A query that FAILS is an error: the analyzer reports nothing that cycle, and
+# for up to three cycles the roles it covers (every role, when it reports none)
+# do not scale down. A query that returns NO SERIES reads as zero demand, a
+# real reading: listed alone, the analyzer then lets the model scale down.
+# Treating an empty result as missing is planned (issue #344).
+metadata:
+  name: scaling-policy-config
+  # Definitions are cluster-scope: they must live in the controller's namespace.
+  # (A per-namespace scaling manager install reads its OWN namespace as the system one, so it
+  # declares analyzers here too.)
+  namespace: scaling-manager-system
+  labels:
+    # Required: the controller cache filters ConfigMaps by this label. Without it,
+    # watch events are silently dropped and changes are never picked up.
+    app.kubernetes.io/name: scaling-manager
+data:
+  default: |
+    analyzerDefinitions:
+      # ── Per-engine analyzer: a TTFT-SLO signal with a constant per-replica target.
+      # The query body is selected by each variant's inference engine (vllm/sglang),
+      # mirroring how the built-in analyzers register per-engine queries. An analyzer
+      # is a CONCEPT — a policy enables `ttft-slo`, never `ttft-slo-vllm`.
+      ttft-slo:
+        engines:
+          vllm:
+            query: sum(max_over_time(vllm:time_to_first_token_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))
+            threshold: "0.5"
+          sglang:
+            query: sum(max_over_time(sglang:time_to_first_token_seconds_sum{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))
+            threshold: "0.5"
+
+      # ── Engine-agnostic analyzer: one body (no `engines:` map), used for any engine.
+      # Suitable for signals built on EPP/GIE metrics that do not vary by engine.
+      pool-queue:
+        query: sum(max_over_time(inference_pool_average_queue_size{namespace="{{.namespace}}",model_name="{{.modelID}}"}[1m]))
+        threshold: "5"
+
+  # A policy tier SELECTS and weights them by name. It cannot define one.
+  interactive: |
+    scaleUpThreshold: 0.60
+    scaleDownBoundary: 0.45
+    priority: 2.0
+    analyzers:
+      - name: saturation      # built-in Go analyzer
+        enabled: true
+        score: 1.0
+      - name: ttft-slo        # external, declared above
+        enabled: true
+        score: 0.5

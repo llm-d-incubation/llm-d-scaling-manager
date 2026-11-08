@@ -1,0 +1,41 @@
+# Grafana + its image renderer, provisioned with THIS repo's benchmark dashboard
+# and a datasource pointing at the snapshot shim on the host.
+#
+# Anonymous admin access on purpose: this stack lives for the length of one
+# render, serves data from a file, and is torn down by render.sh's trap. It is
+# never exposed beyond localhost.
+services:
+  grafana:
+    image: docker.io/grafana/grafana:11.6.0
+    ports:
+      - "${PORT_GRAFANA:-3011}:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: snapshot
+      # Rendering is done by the sidecar below, reached by service name.
+      GF_RENDERING_SERVER_URL: http://renderer:8081/render
+      GF_RENDERING_CALLBACK_URL: http://grafana:3000/
+      GF_LOG_FILTERS: rendering:debug
+      # Grafana 11.6 ships with grafana-lokiexplore-app preinstalled, and it
+      # fails to load in the renderer's browser -- "404 loading react/jsx-runtime
+      # ... SystemJS Error#7", then a browser uncaught exception on every page.
+      # Nothing here needs it, so it is not installed at all.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      # The shim runs on the host; this is how the container reaches it.
+      SHIM_URL: "http://host.docker.internal:${PORT_SHIM:-9099}"
+    extra_hosts:
+      # Linux docker has no host.docker.internal by default; this supplies it,
+      # and is harmless on Docker Desktop where it already resolves.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ${DASHBOARD_FILE}:/var/lib/grafana/dashboards/benchmark-dashboard.json:ro
+    depends_on:
+      - renderer
+
+  renderer:
+    image: docker.io/grafana/grafana-image-renderer:3.11.6
+    environment:
+      ENABLE_METRICS: "false"

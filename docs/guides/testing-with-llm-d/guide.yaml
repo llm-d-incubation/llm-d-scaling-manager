@@ -1,0 +1,32 @@
+name: testing-with-llm-d
+
+env:
+  static:
+    cluster:
+      run: export CLUSTER_GPU_TYPE=nvidia-mix CLUSTER_NODES=3 CLUSTER_GPUS=4
+
+prerequisites:
+  cluster:
+    run: make create-kind-cluster
+
+deploy:
+  stack:
+    run: make deploy-e2e-infra SCALER_BACKEND=keda USE_SIMULATOR=true SCALE_TO_ZERO_ENABLED=true
+  workload:
+    run: kubectl apply -k config/samples/simulator/nodeSelector/decode/
+  repoint:
+    note: Point the sample at the running install (it names the default controller namespace).
+    run: make scaledobjects-repoint
+
+verify:
+  chain:
+    note: The controller and the workload both run in llm-d-sim.
+    run: |
+      kubectl get scaledobject,hpa -n llm-d-sim
+      kubectl logs -n llm-d-sim deploy/scaling-manager-controller-manager --tail=-1 | grep scaling-decision
+  suite:
+    run: make test-e2e-smoke
+
+cleanup:
+  cluster:
+    run: make destroy-kind-cluster

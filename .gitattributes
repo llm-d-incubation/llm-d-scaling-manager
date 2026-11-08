@@ -1,0 +1,7 @@
+.github/workflows/*.lock.yml linguist-generated=true merge=ours
+
+.github/workflows/*.campaign.g.md linguist-generated=true merge=ours
+# Shell scripts must use LF so they execute on Linux/WSL even when a
+# contributor has core.autocrlf=true (Windows). Blobs are already LF; this
+# forces the working-tree checkout to LF too.
+*.sh text eol=lf

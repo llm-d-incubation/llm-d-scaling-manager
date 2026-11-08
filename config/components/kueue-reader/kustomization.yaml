@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Grants the controller the cluster-scoped Kueue reads that a quota entry with
+# `kueue.enabled` requires, and nothing else: those, plus get on Namespaces so a
+# ClusterQueue namespaceSelector can be evaluated before its grant is counted.
+#
+# ClusterQueues carry the nominal quotas and ResourceFlavors name the
+# accelerator behind each flavor; Cohorts tell a flat cohort from a nested one
+# for borrowing. All three are cluster-scoped, so no Role can reach them. The
+# reader gets and lists them on demand — no watch, no write.
+#
+# Cohort borrowing also reads Workloads (get, list, watch) and LocalQueues (get,
+# list) in EVERY namespace: a lender waiting in another namespace must stop new
+# borrowing. That read reaches every tenant's Workloads, pod templates
+# included, so it is NOT granted here. The installer grants it as its own
+# ClusterRole (scaling-manager-kueue-borrow-reader-role-<suffix>) only when a limiter
+# policy of the install counts borrowing, and revokes it when none does
+# (pl_grant_kueue_borrow_read). Denied, borrowing is withheld as
+# lenders-unreadable; the nominal bound is unaffected.
+#
+# Part of the namespace-scoped overlays and, like node-reader, created by the
+# PREREQS phase: it is cluster-scoped RBAC, an admin's to grant. Kustomize
+# cannot make a component conditional, so the installer drops it from the
+# render when the install sets LLMSM_LIMITER=none and no policy the controller
+# reads uses Kueue (llmsm_append_kueue_reader_delete). Harmless on a
+# cluster without Kueue: a rule naming an unserved API group grants nothing,
+# and the reader reports "not served" rather than an empty quota if enabled
+# there. A cluster-scoped install does not need it: its manager ClusterRole
+# already carries these rules.
+#
+# Counting Kueue borrowing also reads the kueue-controller-manager Deployment
+# (the version) and its leader-election Lease (liveness) in the Kueue
+# namespace, get by name only. That grant is a Role in the Kueue namespace, so
+# it cannot live here: an overlay moves every namespaced object into the
+# install namespace. The prereqs phase and `make enable-physical-limiter`
+# create it (deploy/lib/physical_limiter.sh, pl_grant_kueue_controller_read);
+# without it borrowing freezes as kueue-controller-down.
+resources:
+- kueue-reader-clusterrole.yaml
+- kueue-reader-clusterrolebinding.yaml

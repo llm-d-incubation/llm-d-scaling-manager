@@ -1,0 +1,258 @@
+package itl
+
+import (
+	"math"
+	"time"
+)
+
+// DefaultSteadyFor is how long a replica's k must have held still before its
+// (k, ITL) pair may teach the full fit.
+//
+// The two halves of a pair are not taken at the same moment. ITL is a
+// histogram mean over rate[1m] (collector/registration/queueing_model.go); k
+// is the KV fill averaged over the same minute (issue #393), or the instant
+// fill where that was not read. On a replica whose load just changed, the
+// minute holds both levels, and a line through such pairs is not ITL(k) at all.
+// Two minutes covers the rate window and a couple of scrapes after it.
+// It is the default of the policy key analyzerTuning.steadyGate.steadyFor
+// (Steadiness.For).
+const DefaultSteadyFor = 2 * time.Minute
+
+// DefaultMaxKDrift is how far a replica's k may have moved within
+// DefaultSteadyFor and its reading still count as steady.
+//
+// Well under DefaultMinKSpread, so the spread the full fit requires cannot be
+// supplied by drift within one load level: it has to come from two levels the
+// replicas each settled at.
+// It is the default of analyzerTuning.steadyGate.maxKDrift.
+const DefaultMaxKDrift = 0.10
+
+// DefaultSteadyCarry is how long a steady reading may outlive the oldest
+// reading of the key's main window.
+//
+// The main window holds the latest DefaultWindowMaxSize readings, steady or
+// not, and a load step fills it with unsteady ones: every replica is held out
+// for DefaultSteadyFor, so N replicas add 8N unsteady rows at 15s cycles, the
+// whole window once N >= 3. Trimmed to that window, the steady window lost the
+// old level's readings before any reading of the new level was steady, the two
+// levels were never in it together, and no fleet of two or more replicas ever
+// had the spread a full fit needs: B stayed DefaultBaselineSec on every
+// multi-replica cycle of the issue #270 rerun (0 of 294 Ready), while one
+// replica learned it from the same step.
+//
+// Five minutes is DefaultSteadyFor for the new level to settle, up to two more
+// for the load to get there, and a cycle or two of margin. The old level is
+// kept that long and no longer, so a fit never rests on a level the fleet left
+// more than a few minutes before the main window's oldest reading.
+// It is the default of analyzerTuning.steadyGate.carry.
+const DefaultSteadyCarry = 5 * time.Minute
+
+// Steadiness is the steady-state gate's tuning: what Observe's full fit and
+// pinned fit read as steady. A zero field takes its default (DefaultSteadyFor,
+// DefaultMaxKDrift, DefaultSteadyCarry, idleRows, DefaultMinSettledSamples).
+type Steadiness struct {
+	// For is how long a replica's k must have held still (DefaultSteadyFor).
+	For time.Duration
+	// MaxKDrift is how far k may move within For and still be steady
+	// (DefaultMaxKDrift).
+	MaxKDrift float64
+	// Carry is how long a steady reading may outlive the main window's oldest
+	// (DefaultSteadyCarry).
+	Carry time.Duration
+	// IdleRows is how many rows in a row with neither an ITL nor a k make a
+	// replica idle (idleRows).
+	IdleRows int
+	// MinSettledSamples is the fewest settled readings the pinned fit takes
+	// (DefaultMinSettledSamples).
+	MinSettledSamples int
+}
+
+// DefaultSteadiness is the gate Observe applies when Admission.Steady is zero.
+func DefaultSteadiness() Steadiness {
+	return Steadiness{
+		For: DefaultSteadyFor, MaxKDrift: DefaultMaxKDrift, Carry: DefaultSteadyCarry,
+		IdleRows: idleRows, MinSettledSamples: DefaultMinSettledSamples,
+	}
+}
+
+// withDefaults returns s with every zero field at its default.
+func (s Steadiness) withDefaults() Steadiness {
+	d := DefaultSteadiness()
+	if s.For <= 0 {
+		s.For = d.For
+	}
+	if !(s.MaxKDrift > 0) {
+		s.MaxKDrift = d.MaxKDrift
+	}
+	if s.Carry <= 0 {
+		s.Carry = d.Carry
+	}
+	if s.IdleRows <= 0 {
+		s.IdleRows = d.IdleRows
+	}
+	if s.MinSettledSamples <= 0 {
+		s.MinSettledSamples = d.MinSettledSamples
+	}
+	return s
+}
+
+// DefaultSteadyWindowMaxSize is how many steady readings a key keeps: twice
+// the main window, so the old level's readings are not all displaced by the
+// new level's first steady cycle on a fleet of up to about 30 replicas.
+const DefaultSteadyWindowMaxSize = 2 * DefaultWindowMaxSize
+
+// kSample is one replica's k at one Observe.
+type kSample struct {
+	at time.Time
+	k  float64
+}
+
+// replicaTrace is what a key remembers of one replica's recent k.
+type replicaTrace struct {
+	// since is when the replica was first seen under the key.
+	since time.Time
+	// joined is set when the replica appeared after the key's first Observe:
+	// it is new, not merely new to this process.
+	joined bool
+	// restartWait is set when joined is only the controller restart's
+	// (Admission.WaitsAfterRestart): the replica was serving on the key's
+	// first Observe. The above-band window does not take that stamp
+	// (Tracker.Observe). Read on the key's own trace only: on the settle
+	// tracker, settlingOnTracker reports the restart's wait itself.
+	restartWait bool
+	samples     []kSample
+	// idle counts the replica's latest rows in a row that carried neither an
+	// ITL nor a k: no tokens in the rate window and nothing in the cache, so
+	// nothing was served.
+	idle int
+	// lastSeen is the replica's last row under the key, and missed is set
+	// once a cycle of the key went without it: what
+	// Admission.KeepsThroughMissingRow judges an absence by. A gap between
+	// two of the key's cycles is no absence of the replica's.
+	lastSeen time.Time
+	missed   bool
+	// settleStart is the settle tracker's start the key last read for the
+	// replica, and settleSeen the cycle it first read it (Admission.Settle,
+	// settlingOnTracker).
+	settleStart, settleSeen time.Time
+	// idleReturn is the last time the key's own idle rule saw load return
+	// (countIdle), read on the tracker only with Admission.IdleOnEvidence
+	// off.
+	idleReturn time.Time
+}
+
+// idleRows is how many rows in a row with neither an ITL nor a k make a
+// replica idle rather than one that missed a scrape.
+//
+// An idle replica leaves nothing in its trace -- vLLM reports a KV fill of 0
+// with nothing running, and a k of 0 is not traced -- so when the load comes
+// back, its first reading had nothing to be judged against and was steady.
+// That reading carries the warm-up ITL: on a two-namespace run, about 0.46 of
+// k at 435 to 496 ms against a line near 0.09. It reached the full fit, and on
+// a load step that gives an idle replica its first reading the full fit
+// learned B = 77 ms against a true 12 ms and pinned it into every fit after.
+// Two rows, so that one scrape that read nothing on a replica serving either
+// side of it does not hold that replica out for DefaultSteadyFor.
+// It is the default of analyzerTuning.steadyGate.idleRows.
+const idleRows = 2
+
+// serving notes whether this row of the replica carried an ITL, and whether
+// it carried a traceable k. A replica that comes back with an ITL after
+// idleRows or more rows with neither starts its trace over as a joiner: it
+// waits out DefaultSteadyFor, and its trace begins at now.
+//
+// A row with a k and no ITL is not idle: the replica has work in its cache,
+// and its ITL was not read. The collector drops a whole query's values when
+// the query errors, so an avg_itl query that failed on two cycles running,
+// with kv_usage_instant read on both, restarted every replica of a busy fleet
+// and cost it DefaultSteadyFor of steady readings. Such a row leaves the count
+// as it was: it neither idles the replica nor says it served.
+func (rt *replicaTrace) serving(hasITL, hasK bool, now time.Time, s Steadiness) {
+	if !hasITL {
+		if !hasK {
+			rt.idle++
+		}
+		return
+	}
+	if rt.idle >= s.IdleRows {
+		rt.since, rt.joined, rt.restartWait, rt.samples = now, true, false, rt.samples[:0]
+	}
+	rt.idle = 0
+}
+
+// keyTraces is every replica a key is tracing, and when it began.
+type keyTraces struct {
+	since    time.Time
+	replicas map[string]*replicaTrace
+}
+
+// still reports whether k has moved by no more than s.MaxKDrift from any of
+// the replica's readings within s.For before now. A reading of k taken now is
+// a steady-state pair when its replica is not settling and it is still,
+// judged from what was seen BEFORE now: a replica offered several rows in one
+// Observe is not unsteady against itself.
+//
+// On the key's own trace, a replica present when the key was first observed
+// has no history to judge by and is taken as settled, unless
+// Admission.WaitsAfterRestart says a controller restart is a settle: then it
+// waits out DefaultSteadyFor, as one that joined later does -- a pod just
+// started, or back from a rollout, whose ITL covers its own warm-up. So does
+// one the load came back to after it idled: see idleRows. On the settle
+// tracker the same rules are read from the tracker (settlingOnTracker).
+func (rt *replicaTrace) still(k float64, now time.Time, s Steadiness) bool {
+	cutoff := now.Add(-s.For)
+	for _, sm := range rt.samples {
+		if !sm.at.Before(now) || sm.at.Before(cutoff) {
+			continue
+		}
+		if math.Abs(sm.k-k) > s.MaxKDrift {
+			return false
+		}
+	}
+	return true
+}
+
+// settling reports whether the replica is still inside its settle: it joined
+// after the key was first observed, or the load came back to it after it
+// idled, less than DefaultSteadyFor ago. Its ITL still covers its warm-up --
+// on a two-namespace run, a first reading about 0.46 of k at 435 to 496 ms
+// against a line near 0.09 -- and nothing about its k says so.
+func (rt *replicaTrace) settling(now time.Time, s Steadiness) bool {
+	return rt.joined && now.Sub(rt.since) < s.For
+}
+
+// note records k at now and forgets what is older than s.For.
+func (rt *replicaTrace) note(k float64, now time.Time, s Steadiness) {
+	cutoff := now.Add(-s.For)
+	kept := rt.samples[:0]
+	for _, sm := range rt.samples {
+		if !sm.at.Before(cutoff) {
+			kept = append(kept, sm)
+		}
+	}
+	kept = append(kept, kSample{at: now, k: k})
+	rt.samples = kept
+}
+
+// dropBefore removes the observations taken before cutoff.
+func (w *Window) dropBefore(cutoff time.Time) {
+	i := 0
+	for i < len(w.observations) && w.observations[i].Timestamp.Before(cutoff) {
+		i++
+	}
+	w.observations = w.observations[i:]
+}
+
+// traceable is whether a row's k says anything about the replica's load: a
+// finite k above zero.
+//
+// Zero is what the collector leaves in the row's k when it read none for
+// the replica, and Observe already counts it as NoK. Traced as a reading, one
+// missed scrape put a k of 0 into the trace and held the replica out of the
+// steady readings for DefaultSteadyFor against it. A row without a k neither
+// judges the replica nor restarts its trace; one that is not Ready, is lent by
+// the warm pool, or is missing from the cycle restarts it, and so does load
+// coming back after idleRows rows with neither an ITL nor a k.
+func traceable(k float64) bool {
+	return k > 0 && !math.IsInf(k, 0)
+}
