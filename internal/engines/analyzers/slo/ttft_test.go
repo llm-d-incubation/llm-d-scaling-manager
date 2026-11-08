@@ -1556,6 +1556,56 @@ func TestTTFT_TheDecodeTermSwitchOnALine(t *testing.T) {
 	assert.Greater(t, on.Predicted, off.Predicted)
 }
 
+// The processor-sharing switch, on the fleet ttftFleet builds: on, the fleet
+// prices its prefill pods and KV pull as processor-sharing stages, and the TTFT
+// at the rate moves; off, the first-come queue as before.
+func TestTTFT_TheProcessorSharingSwitch(t *testing.T) {
+	in := ttftInputsAt(1, 0)
+	in.decode = testDecode()
+	in.transfer = 2.5e-6
+	in.processorSharing = true
+	fl, _ := ttftFleet(in, 1)
+	assert.True(t, fl.ProcessorSharing)
+	on := priceTTFT(in, 0.1, ttftTarget)
+	require.NotNil(t, on.at)
+	assert.Positive(t, on.at.Parts.KVPullWait, "the pull is a stage")
+
+	in.processorSharing = false
+	fl, _ = ttftFleet(in, 1)
+	assert.False(t, fl.ProcessorSharing)
+	off := priceTTFT(in, 0.1, ttftTarget)
+	require.NotNil(t, off.at)
+	assert.Zero(t, off.at.Parts.KVPullWait)
+	assert.Positive(t, off.at.WaitScale, "the first-come wait")
+	assert.NotEqual(t, on.at.Seconds, off.at.Seconds)
+}
+
+// The switch through Analyze on a decode line that prices: on and off publish
+// different figures, and on publishes what the switch's fleet prices.
+func TestTTFT_TheProcessorSharingSwitchOnALine(t *testing.T) {
+	read := func(on bool) metrics.SLOTTFTReading {
+		rows := func(i int) []domain.ReplicaMetrics {
+			return append(prefillRows("pre", 4000), cycleRows("dec", i)...)
+		}
+		r := newTTFTRig(ttftEstimate(), rows(0))
+		r.a.store = capacity.NewStore()
+		r.a.store.Update("ns", "m", "dec", capacity.Record{EngineParams: &capacity.EngineParams{MaxNumSeqs: 64}}, ttftNow)
+		r.in.VariantStates = append(r.in.VariantStates, decState)
+		require.NoError(t, r.a.SetSwitchesForReplay(map[string]bool{SwitchTTFTProcessorSharing: on}))
+		require.Equal(t, on, r.a.ttftProcessorSharing)
+		var got metrics.SLOTTFTReading
+		for i := range 13 {
+			r.now = r.now.Add(time.Minute)
+			r.in.ReplicaMetrics = rows(i)
+			got = r.one(t)
+		}
+		require.False(t, math.IsNaN(got.Predicted), got.Reason)
+		return got
+	}
+	on, off := read(true), read(false)
+	assert.NotEqual(t, on.Predicted, off.Predicted)
+}
+
 // The judge runs first, so the router's mean of the cycle reaches the window
 // the cycle's pricing reads.
 func TestTTFT_TheRouterMeanReachesTheWindow(t *testing.T) {

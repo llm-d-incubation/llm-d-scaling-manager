@@ -47,6 +47,18 @@ const SwitchTTFTPrice = "slo-ttft-price"
 // with ITL clamped to the band.
 const SwitchTTFTDecodeTerm = "slo-ttft-decode-term"
 
+// SwitchTTFTProcessorSharing is the replay switch for how the prefill pod and
+// the KV pull are priced: on, each is a processor-sharing stage
+// (whatif.TTFTFleet.ProcessorSharing), a prompt sharing its prefill pod and a
+// pull sharing its decode pod, D's per-token part net of the pull; off, as
+// before, a first-come queue on the busiest prefill pod and the pull at its
+// unloaded time inside D. The staircase measured prefill queue time 0 ms at
+// every step and both stages stretching as S/(1 - rho); the old shape read
+// p90 11 % short at bucket B's operating rate and promised 1.15-1.22 times
+// the rate the client held (docs/proposals/slo-capacity-planner-ttft.md, "As
+// built: processor sharing").
+const SwitchTTFTProcessorSharing = "slo-ttft-processor-sharing"
+
 // SwitchTTFTMeasuredSpread is the replay switch for the measured prompt
 // spread: on, the pricing reads cv from the rows' computed-token histogram
 // where they carry one, over the variant's prompt window
@@ -385,6 +397,7 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 			transfer: a.transferPerToken(transfer, decodeRows, prompt), decode: decode, decodeVariant: decodeVariant,
 			transferHeld: a.ttftMeasuredTransfer && a.ttftQuietTransfer && transfer.Held,
 			decodeTTFT:   measured, term: term, legacyDecodeSum: !a.ttftDecodeTerm, flow: flow, mismatch: mismatch,
+			processorSharing: a.ttftProcessorSharing,
 		}
 		in.outputSpreadUnread = a.outputSpreadUnread(fleet)
 		p := gateOrPrice(&in, fresh, arrival, target)

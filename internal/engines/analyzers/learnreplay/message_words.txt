@@ -2091,6 +2091,7 @@ providersSkipped
 published
 publishedSeconds
 publishes
+pull
 python3
 q
 quadratic
@@ -2332,6 +2333,7 @@ saturated-throughput-yields-to-siblings
 saturatedReplicas
 saturatedThroughput
 saturatedThroughputBucket
+saturates
 saturation
 saturation-holds-role
 saturation-itl-clears-on-a-new-revision
@@ -2514,6 +2516,7 @@ slo-ttft-decode-term
 slo-ttft-measured-spread
 slo-ttft-measured-transfer
 slo-ttft-price
+slo-ttft-processor-sharing
 slo-ttft-quiet-transfer
 slo-ttft-variant
 slo-variant

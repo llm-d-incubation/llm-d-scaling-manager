@@ -69,17 +69,17 @@ func TestFreeze_PricesTheBucketAndNamesWhatIsAssumed(t *testing.T) {
 }
 
 func TestFreeze_AMarginAboveThePricedFigureRaisesTheTarget(t *testing.T) {
-	high := strings.Replace(freezeSpecText, "targetFloorMargin: 1.2", "targetFloorMargin: 1.9", 1)
+	high := strings.Replace(freezeSpecText, "targetFloorMargin: 1.2", "targetFloorMargin: 3", 1)
 	out, err := runCLI(freezeArgs(writeSpec(t, high))...)
 	require.NoError(t, err)
 	var f frozenFile
 	require.NoError(t, json.Unmarshal([]byte(out), &f))
 	raised := 0
 	for _, tg := range f.Buckets[0].Targets {
-		assert.GreaterOrEqual(t, tg.Seconds, 1.9*tg.Floor)
+		assert.GreaterOrEqual(t, tg.Seconds, 3*tg.Floor)
 		if tg.Source == "floor margin" {
 			raised++
-			assert.InDelta(t, 1.9*tg.Floor, tg.Seconds, 1e-12)
+			assert.InDelta(t, 3*tg.Floor, tg.Seconds, 1e-12)
 		}
 	}
 	assert.Positive(t, raised, "the case must exercise the margin")

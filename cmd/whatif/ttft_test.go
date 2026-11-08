@@ -31,6 +31,14 @@ const (
 	saturatedRun = "../../internal/engines/analyzers/learnreplay/testdata/goldens/ttft-saturated/recording.jsonl.gz"
 )
 
+// firstCome prices the rest of the test on the first-come model
+// (processorSharing off), as the CLI did before processor sharing.
+func firstCome(t *testing.T) {
+	t.Helper()
+	processorSharing = false
+	t.Cleanup(func() { processorSharing = true })
+}
+
 // workedTTFT is the page's worked example with its TTFT flags.
 func workedTTFT(args ...string) []string {
 	return slices.Concat(args, []string{"--recording", olsSweep, "--model", "model-02", "--prefill", "1", "--decode", "1",
@@ -216,6 +224,8 @@ func TestTTFT_TheWorkedExampleFromTheRecording(t *testing.T) {
 	assert.True(t, fl.DecodeTerm.EngineOmitted)
 	assert.True(t, fl.DecodeTerm.HopAssumed)
 	fl.DecodeTerm, fl.LegacyDecodeSum = nil, true
+	// And the page's first-come wait.
+	fl.ProcessorSharing = false
 
 	got, ok := whatif.TTFTAt(fl, 11.32, 0.9).(whatif.TTFT)
 	require.True(t, ok)
@@ -289,6 +299,7 @@ func TestTTFT_TheAssumedRouterHop(t *testing.T) {
 // so 4.752942 s, and the floor a + q90(O) + D is 0.454275 s. The agreement is
 // the arithmetic's: it says nothing of a real pod.
 func TestTTFT_HandComputedAtCV2(t *testing.T) {
+	firstCome(t)
 	out, code := runCmd(t, "replicas-to-slo", "--recording", shortRun, "--assume-vp", "130000", "-o", "json")
 	require.Equal(t, 3, code, out)
 	w := decodeOutput(t, out)

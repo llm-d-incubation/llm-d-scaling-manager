@@ -4,7 +4,9 @@
 2026-11-04: [as built](#as-built-p3)), UNVALIDATED and on no switch; in the
 tree only the what-if CLI calls it
 ([TTFT, as built](slo-capacity-planner.md#ttft-as-built)). Repeat 1 of the
-staircase ran, and every flag stays ([as built, M2](#as-built-m2)). The companion to
+staircase ran, and every flag stays ([as built, M2](#as-built-m2)). The second
+staircase's first repeat failed bucket B on the shape of the prefill side, which
+is now priced as processor sharing ([as built](#as-built-processor-sharing)). The companion to
 [what-if capacity](slo-capacity-planner.md), which owns the questions, the
 decode model, the CLI and the PR plan. This page owns the TTFT model: what it
 is made of, the router's flow-control queue, how the parts combine into a
@@ -36,9 +38,9 @@ are the old sum, which stands only as a flagged fall-back.
 | Term | What it is | Model |
 | --- | --- | --- |
 | `W_router` | EPP flow-control queue: requests held before dispatch | Almost always 0 below the gate's onset. Above the prefill onset it has no formula of its own: the per-pod wait covers `W_router + W_engine` together. Above the decode onset, not priced ([the router queue](#the-router-queue-flow-control)) |
-| `W_engine` | The prefill pod's own queue | [Per pod, with the imbalance `f`](#the-engine-queue) |
+| `W_engine` | The prefill pod's own queue | [Per pod, with the imbalance `f`](#the-engine-queue). As built, the pod shares itself between its prompts instead, and `W_engine` is the stretch ([processor sharing](#as-built-processor-sharing)) |
 | `own_prefill` | `a + I/V_P`, this request's own prefill | [Prefill capacity](#prefill-capacity) |
-| `T_xfer` | KV transfer to decode (P/D) | `I·κ/BW` once `nixl_xfer_time_seconds` is collected; omitted and flagged until then |
+| `T_xfer` | KV transfer to decode (P/D) | `I·κ/BW` once `nixl_xfer_time_seconds` is collected; omitted and flagged until then. As built, a processor-sharing stage on the decode pod, out of `D` ([processor sharing](#as-built-processor-sharing)) |
 | `W_decode` | Waiting for a decode slot | [The birth-death chain](#decode-admission) |
 | `ITL(k_d)` | Decode's first step, which streams the first token (P/D) | The decode line at its fill |
 | `D(I, ITL)` | The decode engine's TTFT: the KV pull and the steps a request waits on (P/D) | `base + perToken·I + perStep·ITL`, learned per variant |
@@ -225,6 +227,11 @@ question 4](#open-questions).
 measured; every answer built on it is flagged ASSUMED.
 
 ## The engine queue
+
+The design below is a first-come queue. The staircase showed a prefill pod
+under chunked prefill does not queue at all: it shares itself between its
+prompts, and the model now prices that ([processor sharing](#as-built-processor-sharing)).
+The first-come queue stands with the switch off.
 
 The router sends each request to one pod, which queues it. One run measured
 439 waiting with 3 of 4 prefill pods idle: the prefill profile had one usable
@@ -1576,6 +1583,140 @@ rate is 0, since the driver's prompts share no prefix.
 **Not checked.** `staircase.sh` has run only against stubs and a local fake API: no
 cluster has run this tree. M2 ran its scratch form, and changing replicas between phases, which M2 never
 did, has not run at all.
+
+## As built: processor sharing
+
+Repeat 1 of the second staircase (frozen at 0.85 of each bucket's knee) failed
+the gate on bucket B: the model promised 28.3 r/s where the client held its
+p90 and p95 targets at 23.2 to 24.7 r/s, a ratio of 1.15 to 1.22. The mean
+TTFT agreed to 3 %, but only because three wrong inputs cancelled: the p90 read
+11 % short at the operating rate. The model's shape was wrong, not a figure.
+
+**What the run showed.** The vLLM histograms per pod, over each step:
+
+- The prefill pod never queues. Its queue time was 0 ms at every step. Under
+  chunked prefill the pod admits every prompt and splits each step between
+  them, so a prompt's prefill time stretches while the pod is shared, as
+  `S/(1 − ρ)` with `S` 24.9 to 26.0 ms at 8000 tokens. That is processor sharing,
+  not a first-come queue.
+- The decode pod's queue time is its KV pull, and it stretches the same way,
+  `S/(1 − ρ)` with `S` 27 to 29 ms.
+
+The model priced the first as a first-come (Kingman) wait on the busiest pod,
+with near-constant work (`Cs²` 0.0034), and the second as a fixed `I·κ` inside
+`D`. A first-come queue of near-constant work has a thin tail; processor
+sharing does not. A tandem processor-sharing simulation calibrated on B's first
+step reproduced the client's mean, p50, p90 and p95 at all 8 of B's steps
+within about 2 %; the first-come shape read p90 18 % short.
+
+**What changed.** Behind `TTFTFleet.ProcessorSharing`, on with the replay
+switch `slo.SwitchTTFTProcessorSharing` (`slo-ttft-processor-sharing`) and
+always in the CLI:
+
+    TTFT = a + T_P(I) + T_X(I) + I·(perToken − κ) + R + D_rest(ITL) + W_decode
+
+- `T_P` is the prefill pod as an M/G/1 processor-sharing stage. The busiest pod
+  takes `f/N_p` of the arrivals and the others share the rest evenly; a request
+  is on one or the other by those shares. There is no prefill wait: the stretch
+  is the wait.
+- `T_X` is the KV pull, work `I·κ`, as a processor-sharing stage on the decode
+  pod it lands on, the `N_d` pods sharing the arrivals evenly. A pull that
+  saturates its pods is refused (`Saturated`).
+- `D`'s per-token part comes net of the pull, since `D` was fitted with the pull
+  inside it. On the staircase's warm-up that is 5.616e-6 less 2.541e-6, 3.074e-6
+  s a token: at 8000 tokens `D`'s per-token part falls from 44.9 to 24.6 ms, and
+  the 20.3 ms of pull work moves into `T_X`, where it stretches with load (28.5
+  ms at B's operating rate). A held `D` with no per-token part gives the pull up
+  from its fixed part. The step term and `R` are not touched.
+- The parts: `engineWait` is the prefill pods' mean stretch (the busiest pod's
+  and the others' by their shares), the new `kvPullWait` the pull's, and
+  `waitScale` and `waitOffset`, which describe a first-come wait, are 0. The
+  CLI's JSON is `schemaVersion` 3 for this.
+
+**How the percentile is priced.** For one stage at utilization `ρ` and a request
+of work `x`, the time past its work, `E = T(x) − x`:
+
+| | Value | Exact where |
+| --- | --- | --- |
+| `P(E = 0)` | `(1 − ρ)·e^(−λx)`: the pod was empty and nothing arrived while it ran | Poisson arrivals |
+| `E[E]` | `x·sρ/(1 − ρ)`, `s = (1 + Ca²)/2` | `Ca²` 1, any work: the M/G/1-PS sojourn `x/(1 − ρ)` |
+| `Var[E]` | `2sρ/(1 − ρ)²·(xk/(1 − ρ) − k²(1 − e^(−(1 − ρ)x/k))/(1 − ρ)²)`, `k = E[S]·(Ca² + max(1, Cs²))/2` | `Ca²` 1 and exponential work: the M/M/1-PS conditional variance. Any work: its small-`x` limit `ρx²/(1 − ρ)²` |
+
+Given `E > 0`, `E` is a gamma of those moments. Each stage then has two outcomes
+(alone or shared), the two stages four, independent given the prompt. The
+prompt is a gamma, and the prefill work, the pull and `D`'s per-token rest all
+scale with it, so each outcome's first two moments over the prompt have a
+closed form: every term is `c·u^n·e^(−a·u)`, `u` the prompt over its mean. Each
+outcome is priced as a gamma of those moments, mixed by its weight and by the
+pod's share: at most eight gammas. The decode admission wait joins it as before,
+by the optimised union bound. `s` for `Ca²` above 1 is an interpolation (the PS
+mean's insensitivity to the work in place of Kingman's `Cs²`), not derived.
+
+**Checked against a simulation** of the same tandem stages
+(`TestPS_AgainstATandemSimulation`, 180,000 requests a point, `V_P` unmargined):
+
+| Bucket | Steps | Mean | p90 | p95 |
+| --- | --- | --- | --- | --- |
+| B, 2 + 2 | 13.3 to 31.6 r/s | within 0.1 % | 0.6 to 0.8 % short | 3.3 to 4.4 % short |
+| B-onset, 2 + 4 | 39.1 to 53.6 r/s | 0.4 to 2.2 % short | −1.8 to +2.4 % | 0.7 to 2.1 % short |
+| C, `Ca²` 4 | 13.3 to 31.6 r/s | 7 to 9 % high | +1 to +6 % | −7.5 to +10 % |
+
+At no load the stages are the old own time to the bit; toward the knee they
+run away as `1/(1 − ρ)`; the TTFT never falls as the rate rises
+(`TestPS_AtNoLoadIsTheOwnWork`, `TestPS_DivergesAtTheKnee`,
+`TestPS_MonotoneInTheRate`).
+
+**Against the staircase.** `TestStaircaseR1_*` replays the frozen fleet (the
+frozen file's targets to 1e-9) against the client's ladder. Bucket B, both
+phases, the step's p90 and p95 against the client's:
+
+| Step, r/s | Client p90 / p95, ms | Processor sharing | First-come |
+| --- | --- | --- | --- |
+| 13.3 | 128.1 to 130.1 / 143.6 to 152.1 | +7.0 to +8.6 % / −1.9 to +3.9 % | +1.6 to +3.2 % / −7.9 to −2.5 % |
+| 20.0 | 160.0 to 161.3 / 180.4 to 180.9 | −0.9 to −0.1 % / −4.3 to −4.1 % | −9.8 to −9.0 % / −13.9 to −13.6 % |
+| 25.0 | 183.2 to 184.7 / 204.0 to 204.5 | −0.9 to −0.1 % / −2.5 to −2.3 % | −12.4 to −11.7 % / −14.7 to −14.5 % |
+| 26.6 | 190.6 to 196.9 / 213.7 to 218.9 | −1.5 to +1.7 % / −3.4 to −1.0 % | −13.6 to −10.7 % / −16.1 to −14.0 % |
+| 28.3, operating | 203.6 / 224.5 to 225.6 | +2.3 % / +0.8 to +1.2 % | −10.7 % / −13.0 to −12.5 % |
+| 30.0 | 213.9 to 214.7 / 239.1 to 239.9 | +7.3 to +7.7 % / +4.8 to +5.2 % | −6.5 to −6.2 % / −9.7 to −9.4 % |
+| 31.6 | 221.3 to 223.1 / 249.2 to 250.7 | +28 to +29 % / +31 to +32 % | +11.5 to +12.4 % / +12.9 to +13.6 % |
+
+At 31.6 r/s, 0.95 of the knee, the decode admission wait comes in (38.8 ms
+mean), and the union bound over it reads high on either shape. This change
+does not touch it.
+
+The gate, the predicted rate over the client's crossing of the target:
+
+| Phase | p90, first-come | p90, processor sharing | p95, first-come | p95, processor sharing |
+| --- | --- | --- | --- | --- |
+| A off | 1.016 | 1.008 | 1.072 | 1.066 |
+| A on | 1.033 | 1.025 | **1.616** | **1.609** |
+| B off | **1.162** | 0.974 | **1.217** | 0.989 |
+| B on | **1.147** | 0.976 | **1.212** | 0.993 |
+| B-onset on | 0.936 | 0.850 to 0.876 | 0.922 | 0.850 to 0.876 |
+| C off | 0.850 to 0.944 | 0.955 | 0.850 to 0.944 | 1.000 |
+
+Bold is out of the mark (0.75 to 1.10). Every phase is in it on the new shape
+but A on's p95, which a one-minute transient at its second step decides
+(64.6 ms between 52.9 and 56.4) on either shape.
+
+**Where it reads high.** At B-onset's operating rate, 47.5 r/s, the busiest
+prefill pod is at `ρ` 0.81 and the 5 % `V_P` margin is whole, which takes it to
+0.85. The stretch is `1/(1 − ρ)`, so the margin weighs more here than on the old
+shape: p90 449 ms against the client's 299 (+50 %), p95 557 against 356. Without
+the margin the model reads 356 and 432 ms, 0.90 and 0.88 on the gate. The
+target then sits past every step the client held, so the gate's ratio is the
+interval up to the knee, 0.85 to 0.88: inside the mark, on the side of
+under-promising. The margin is unchanged here; whether processor sharing still
+needs it is open.
+
+**What it does not change.** The flow-control onsets still read a first-come
+queue length on the prefill pods (`meanScore`). Under processor sharing the
+vLLM queue is near empty below saturation (the run's router queue peaked at 0
+at the B-onset step above the predicted onset), so the prefill onset is likely
+placed too low. Not addressed here.
+
+**Goldens.** No replay golden moves: no committed recording's cycle holds an
+`a`, so S1 stops before it prices a fleet. The CLI's TTFT goldens move.
 
 ## Open questions
 

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ttft-saturated/recording.jsonl.gz",
@@ -145,7 +145,7 @@
         },
         "ttft": {
           "answer": {
-            "value": 14.634239395210875,
+            "value": 11.095065114802047,
             "unit": "s",
             "basis": {
               "fill": 0,
@@ -164,10 +164,11 @@
               "AssumedA"
             ],
             "parts": {
-              "independent": 14.634239395210875,
-              "pooled": 14.185800739014844,
+              "independent": 11.095065114802047,
+              "pooled": 11.095065114802047,
               "decodeShare": 0,
-              "engineWait": 4.090153880101791,
+              "engineWait": 1.6360615520407165,
+              "kvPullWait": 0,
               "ownPrefill": 0.2997167444777735,
               "decodeWait": 0,
               "firstStep": 0,
@@ -175,15 +176,15 @@
               "routerHop": 0,
               "prefillUtilization": 0.85,
               "vpMarginApplied": 0.05,
-              "waitScale": 4.970782014649694,
+              "waitScale": 0,
               "waitOffset": 0,
               "decodeWaitProbability": 0,
               "prefillKnee": 3.4636023685040676,
               "decodeKnee": 0
             },
             "sensitivity": {
-              "lo": 7.423901727165208,
-              "hi": 14.634239395210875,
+              "lo": 5.559931908863635,
+              "hi": 11.095065114802047,
               "refused": "Saturated"
             }
           }

@@ -181,6 +181,13 @@ type TTFTFleet struct {
 	// LegacyDecodeSum prices T_xfer + ITL(k_d), with no flag, as the model did
 	// before the term: slo.SwitchTTFTDecodeTerm off, for a replay.
 	LegacyDecodeSum bool
+	// ProcessorSharing prices the prefill pod, and with a decode line the KV
+	// pull on the decode pod, as processor-sharing stages (ttft_ps.go): a
+	// prompt is never queued, it shares the pod, and its stretch is its
+	// wait. False is the first-come queue: a Kingman wait on the busiest
+	// prefill pod and the pull at its unloaded time. On with
+	// slo.SwitchTTFTProcessorSharing, and in the CLI.
+	ProcessorSharing bool
 	// DecodeTTFT is the decode engine's measured TTFT, read only when Decode
 	// is nil. On P/D the router's TTFT is the prefill engine's and then the
 	// decode engine's (the KV pull and decode's first step): P2 found the
@@ -255,7 +262,11 @@ type prefillPlan struct {
 	// is the own latency per prompt token, 1/V_P + kappa/BW, each at V_P
 	// less the margin applied.
 	work, ownRate float64
-	flags         []Flag
+	// pull is the part of ownRate, seconds per prompt token, that is the KV
+	// pull priced as a processor-sharing stage on the decode pods: kappa/BW
+	// with ProcessorSharing and a decode line, else 0.
+	pull  float64
+	flags []Flag
 }
 
 // withTransfer is the plan with its own latency at a transfer of x per token.
@@ -515,6 +526,8 @@ type ttftPlan struct {
 	fc     FlowControl
 	onsets Onsets
 	flags  []Flag
+	// ps is TTFTFleet.ProcessorSharing.
+	ps bool
 }
 
 // plan checks a fleet and places its flow-control onsets.
@@ -528,7 +541,12 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 			return ttftPlan{}, u
 		}
 	}
-	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl}
+	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing}
+	if fl.ProcessorSharing && fl.Decode != nil {
+		// The pull is its own stage on the decode pods. With no decode line
+		// there are no pods to share, and it stays in the own time.
+		pf.pull = pf.xfer
+	}
 	if fl.Decode != nil && !fl.LegacyDecodeSum {
 		t := DecodeTerm{EngineOmitted: true}
 		if fl.DecodeTerm != nil {
@@ -718,21 +736,48 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	pf := pl.pf.atRate(rate)
 	out.VPMarginApplied = pf.applied
 	rho := pf.utilization(rate)
-	theta := pf.waitScale(rho)
-	wait, tail := pf.engineWait(rho)
-	if rho > 0 && (!Finite(tail) || !(tail > 0)) {
-		u := refuse(Saturated, fmt.Sprintf("no finite wait tail at %g r/s (decay rate %g)", rate, tail))
-		return priced{u: &u}
-	}
 	own := pf.own()
 	a := pl.pf.p.FixedLatency
-	b1 := block{wait: wait, own: own}
-	out.PrefillUtilization, out.WaitScale = rho, 1/tail
-	if len(wait.s) > 0 {
-		out.WaitOffset = wait.s[0]
-	}
-	out.Parts.EngineWait = rho * theta
+	out.PrefillUtilization = rho
 	out.Parts.OwnPrefill = a + own.mean
+	// side is block 1 for a plan's own time: the worst pod's wait and the own
+	// time, or the PS stages; pooled, the pods pooled with no imbalance.
+	var side func(p prefillPlan, pooled bool) quantiler
+	var wait waitTail
+	if pl.ps {
+		_, parts, u := pf.psMix(rate, pl.decodePods(), false)
+		if u != nil {
+			return priced{u: u}
+		}
+		out.Parts.EngineWait, out.Parts.KVPullWait = parts.prefill, parts.pull
+		side = func(p prefillPlan, pooled bool) quantiler {
+			m, _, _ := p.psMix(rate, pl.decodePods(), pooled)
+			return m
+		}
+	} else {
+		theta := pf.waitScale(rho)
+		var tail float64
+		wait, tail = pf.engineWait(rho)
+		if rho > 0 && (!Finite(tail) || !(tail > 0)) {
+			u := refuse(Saturated, fmt.Sprintf("no finite wait tail at %g r/s (decay rate %g)", rate, tail))
+			return priced{u: &u}
+		}
+		out.WaitScale = 1 / tail
+		if len(wait.s) > 0 {
+			out.WaitOffset = wait.s[0]
+		}
+		out.Parts.EngineWait = rho * theta
+		side = func(p prefillPlan, pooled bool) quantiler {
+			if pooled {
+				return block{wait: pf.pooledWait(rate), own: p.own()}
+			}
+			return block{wait: wait, own: p.own()}
+		}
+	}
+	// stretch is the mean of the waits on the prefill side, the KV pull's
+	// stretch with them.
+	stretch := out.Parts.EngineWait + out.Parts.KVPullWait
+	b1 := side(pf, false)
 
 	var dec waitTail
 	var first, floorStep float64
@@ -815,8 +860,8 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	if pl.term != nil {
 		oldOwn = pf.withTransfer(pl.term.oldTransfer).own()
 		oldOwnZero = pl.pf.withTransfer(pl.term.oldTransfer).own()
-		mean := out.Parts.EngineWait + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
-		if excess := out.Parts.EngineWait + a + oldOwn.mean + out.Parts.DecodeWait + oldFirst - mean; excess > 0 {
+		mean := stretch + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
+		if excess := stretch + a + oldOwn.mean + out.Parts.DecodeWait + oldFirst - mean; excess > 0 {
 			out.Parts.DecodeEngine += excess
 		}
 	}
@@ -837,8 +882,8 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	}
 
 	if q == 0 {
-		mean := out.Parts.EngineWait + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
-		oldMean := out.Parts.EngineWait + a + oldOwn.mean + out.Parts.DecodeWait + oldFirst
+		mean := stretch + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
+		oldMean := stretch + a + oldOwn.mean + out.Parts.DecodeWait + oldFirst
 		oldMeanFloor := func() float64 {
 			noteOldFloor()
 			return a + oldOwnZero.mean + oldFloorStep
@@ -850,9 +895,10 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 		}
 		out.Seconds, out.Independent = mean, mean
 		if extras {
-			out.Pooled = pf.pooledWait(rate).mean() + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
+			pooledWait := pl.pooledMeanWait(pf, rate)
+			out.Pooled = pooledWait + out.Parts.OwnPrefill + out.Parts.DecodeWait + first
 			if pl.term != nil {
-				out.Pooled = max(out.Pooled, pf.pooledWait(rate).mean()+a+oldOwn.mean+out.Parts.DecodeWait+oldFirst)
+				out.Pooled = max(out.Pooled, pooledWait+a+oldOwn.mean+out.Parts.DecodeWait+oldFirst)
 			}
 		}
 		return priced{out: out}
@@ -873,7 +919,7 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 	// old sum's, the old sum cannot stand over it, in any figure below.
 	oldCounts := pl.term != nil && (first < oldFirst || pf.xfer < pl.term.oldTransfer)
 	if oldCounts {
-		oldV, oldBeta := split(block{wait: wait, own: oldOwn}, dec, q)
+		oldV, oldBeta := split(side(pf.withTransfer(pl.term.oldTransfer), false), dec, q)
 		oldSeconds = a + oldV + oldFirst
 		if oldSeconds > out.Seconds {
 			out.DecodeShare = oldBeta
@@ -891,17 +937,23 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 		// stands for the independent figure, which it never undercuts. Each
 		// figure takes the old sum's floor on its own, so each stays under
 		// the headline, which takes it too.
-		if both, ok := b1.wait.sum(dec); ok && len(dec.w) > 0 {
+		if mix, ok := b1.(psMix); ok && len(dec.w) > 0 {
+			// Each part's own time behind the decode wait, independent.
+			out.Independent = a + mix.withWait(dec).quantile(1-q) + first
+			if oldCounts {
+				old := side(pf.withTransfer(pl.term.oldTransfer), false).(psMix)
+				out.Independent = max(out.Independent, a+old.withWait(dec).quantile(1-q)+oldFirst)
+			}
+		} else if both, ok := wait.sum(dec); ok && len(dec.w) > 0 && !pl.ps {
 			out.Independent = a + block{wait: both, own: own}.quantile(1-q) + first
 			if oldCounts {
 				out.Independent = max(out.Independent, a+block{wait: both, own: oldOwn}.quantile(1-q)+oldFirst)
 			}
 		}
-		pooled := pf.pooledWait(rate)
-		pv, _ := split(block{wait: pooled, own: own}, dec, q)
+		pv, _ := split(side(pf, true), dec, q)
 		out.Pooled = a + pv + first
 		if oldCounts {
-			oldPv, _ := split(block{wait: pooled, own: oldOwn}, dec, q)
+			oldPv, _ := split(side(pf.withTransfer(pl.term.oldTransfer), true), dec, q)
 			out.Pooled = max(out.Pooled, a+oldPv+oldFirst)
 		}
 		// Allen-Cunneen decays at Kingman's rate. Below cv 1 that is slower than
@@ -910,6 +962,28 @@ func (pl ttftPlan) price(rate, q float64, withDecodeWait, extras bool) priced {
 		out.Pooled = min(out.Pooled, out.Seconds)
 	}
 	return priced{out: out}
+}
+
+// decodePods is N_d, or 0 with no decode line.
+func (pl ttftPlan) decodePods() int {
+	if pl.d == nil {
+		return 0
+	}
+	return pl.d.Replicas
+}
+
+// pooledMeanWait is the optimistic side's mean wait at rate: the pooled
+// queue's (pooledWait), or under processor sharing the PS stages' stretch
+// with every prefill pod at the mean share.
+func (pl ttftPlan) pooledMeanWait(pf prefillPlan, rate float64) float64 {
+	if !pl.ps {
+		return pf.pooledWait(rate).mean()
+	}
+	m, _, u := pf.psMix(rate, pl.decodePods(), true)
+	if u != nil {
+		return math.Inf(1)
+	}
+	return m.mean() - pf.own().mean
 }
 
 // pooledWait is the optimistic wait: the N_p pods as one M/G/N_p queue with

@@ -1,8 +1,8 @@
 role     est. rate at SLO   bound by                                 basis
-prefill  2.65 r/s           TTFT p90                                 UNVALIDATED; V_P ASSUMED [1.74 .. 3.67] at V_P +-15%
+prefill  4.91 r/s           TTFT p90                                 UNVALIDATED; V_P ASSUMED [3.71 .. 6.13] at V_P +-15%
          inputs V_P 130000 ASSUMED; a 11.58 ms learned; f 1 (one pod); N_p 1 (recording); prompt 15975 tokens (measured, cycles 83-102); decode engine TTFT 73.9 ms at 16608 tokens, measured
          assumed V_P 130000 tok/s (--assume-vp); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
-fleet    2.65 r/s           TTFT p90, end to end                     UNVALIDATED; V_P ASSUMED [1.74 .. 3.67] at V_P +-15%
+fleet    4.91 r/s           TTFT p90, end to end                     UNVALIDATED; V_P ASSUMED [3.71 .. 6.13] at V_P +-15%
 flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; DecodeEngineMeasured; FlowControlInferredOff; AssumedPoissonArrivals
 estimate from no readings of the line's own of a 105-cycle recording, not a guarantee; see basis (-o json)
 TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. V_P ASSUMED.

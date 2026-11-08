@@ -1,9 +1,9 @@
 decode          refused: NoLine (no ITL line learned by cycle 193)
 shape           IL 36661 OL 16 (measured, cycles 171-190), output spread D 1.000 (measured)
 prefill knee    3.46 r/s    [2.94 .. 3.98]   N_p 1 x V_P 134775 x (1 - 0.05 margin) / (f 1 x 36966 tokens); UNVALIDATED; a ASSUMED
-TTFT p95        14634.2 ms  [7423.9 .. Saturated] end to end; UNVALIDATED; a ASSUMED
+TTFT p95        11095.1 ms  [5559.9 .. Saturated] end to end; UNVALIDATED; a ASSUMED
                 (bands: V_P +-15%, a sweep, not a confidence interval)
-                (floor 1550.0 ms, pooled 14185.8 ms, worst pod utilization 0.850)
+                (floor 1550.0 ms, pooled 11095.1 ms, worst pod utilization 0.850)
 ttft inputs     V_P 134775 learned (busy-minutes, at 31816 tokens); a 11.00 ms ASSUMED; f 1 (one pod); N_p 1 (recording); prompt 36966 tokens (measured, cycles 170-189); decode engine TTFT 211.2 ms at 36925 tokens, measured
 assumed         a 11ms (--assume-a); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
 flags: UnvalidatedTTFT; AssumedPromptSpread; DecodeEngineMeasured; FlowControlInferredOff; AssumedPoissonArrivals; AssumedA

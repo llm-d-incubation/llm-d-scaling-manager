@@ -191,7 +191,8 @@ type TTFT struct {
 	Independent float64
 	// Pooled is the optimistic figure: the union bound with the prefill
 	// pods pooled into one M/G/N_p queue (Allen-Cunneen) and no imbalance,
-	// in place of the worst pod's M/G/1. Never above Seconds. It describes a
+	// in place of the worst pod's M/G/1 (with TTFTFleet.ProcessorSharing,
+	// every prefill pod shared at the mean share). Never above Seconds. It describes a
 	// router that holds requests and sends each to the first free pod, which
 	// is what flow control does only above the prefill onset; below it, each
 	// pod queues for itself and Pooled is a bound, not an estimate.
@@ -220,7 +221,8 @@ type TTFT struct {
 	// tail is rho_w * exp(-r (t - s)) from s on, and rho_w before it
 	// (engineWait: s is 0 except under the Lundberg bound, at cv < 1). The
 	// mean wait in Parts is Pollaczek-Khinchine's (Kingman's) rho_w * theta,
-	// not this tail's mean.
+	// not this tail's mean. Both are 0 with TTFTFleet.ProcessorSharing,
+	// which has no first-come wait.
 	WaitScale, WaitOffset float64
 	// DecodeWaitProbability is the share of requests that wait for a decode
 	// slot; 0 with no decode side.
@@ -252,8 +254,16 @@ type TTFTParts struct {
 	// (Pollaczek-Khinchine at Poisson arrivals, Kingman otherwise). W_router
 	// is 0 below the onsets and is not priced apart above the prefill onset.
 	// It is the worst pod's mean, not the fleet's: the mean TTFT (Seconds at
-	// q = 0) is the mean a request on the busiest pod sees.
+	// q = 0) is the mean a request on the busiest pod sees. With
+	// TTFTFleet.ProcessorSharing it is the prefill pods' mean stretch over
+	// the requests, the busiest pod's and the others' by their shares: the
+	// time a prompt shares its pod beyond its own work.
 	EngineWait float64
+	// KVPullWait is the KV pull's mean stretch on the decode pod, the time
+	// the pull shares the pod beyond its own work: 0 unless
+	// TTFTFleet.ProcessorSharing prices it, with a decode line. The pull's
+	// own work is in OwnPrefill.
+	KVPullWait float64
 	// OwnPrefill is a + E[I_eff]/V_P, plus the part of decode's term that
 	// goes with the prompt: T_xfer on the old sum, the per-token parts of D
 	// and R with a DecodeTerm. It follows the prompt's quantile.

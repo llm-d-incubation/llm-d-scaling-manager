@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "slo-to-rate",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -144,16 +144,16 @@
           "no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread",
           "flow control off (no queue series)",
           "Poisson arrivals",
-          "an assumed decode term moves this answer from 1.187 to 0.2506"
+          "an assumed decode term moves this answer from 4.663 to 1.472"
         ]
       },
       "results": {
         "rate": {
           "answer": {
-            "value": 0.25063609988609226,
+            "value": 1.4721167745167496,
             "unit": "r/s",
             "basis": {
-              "fill": 0.004523186773091,
+              "fill": 0.028348222029073313,
               "kneeRate": 13.313632625239457,
               "floor": 0.19460685106698072,
               "uncapped": 0,
@@ -161,7 +161,7 @@
                 "TTFT"
               ],
               "tier": "ols",
-              "prefillOnlyRate": 0.25063609988609226
+              "prefillOnlyRate": 1.4721167745167496
             },
             "flags": [
               "UnvalidatedTTFT",
@@ -177,8 +177,8 @@
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {
-              "lo": 0.25063609988609226,
-              "hi": 1.6396930872300244,
+              "lo": 1.4721167745167496,
+              "hi": 6.025530507985611,
               "refused": "TargetBelowFloor"
             }
           }
@@ -191,7 +191,7 @@
       "results": {
         "rate": {
           "answer": {
-            "value": 0.25063609988609226,
+            "value": 1.4721167745167496,
             "unit": "r/s",
             "basis": {
               "fill": 0,
@@ -217,8 +217,8 @@
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {
-              "lo": 0.25063609988609226,
-              "hi": 1.6396930872300244,
+              "lo": 1.4721167745167496,
+              "hi": 6.025530507985611,
               "refused": "TargetBelowFloor"
             }
           }

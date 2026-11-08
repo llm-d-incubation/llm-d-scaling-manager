@@ -344,6 +344,11 @@ func (f *answerFlags) nameStatedInputs(pf *pricedFleet) {
 	pf.refused = &r
 }
 
+// processorSharing is how the CLI prices the prefill side: as
+// slo.SwitchTTFTProcessorSharing on. The CLI has no switch; a test that holds
+// the first-come arithmetic turns it off (firstCome).
+var processorSharing = true
+
 // readFleet is fleetFor before a refusal names the stated inputs.
 func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillState, q ttftQuestion, pv *pricedVariant) *pricedFleet {
 	pf := &pricedFleet{pv: pv, q: q.q, flags: []whatif.Flag{assumedPoisson},
@@ -366,6 +371,7 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 		return pf
 	}
 	pf.fleet.Prefill = p
+	pf.fleet.ProcessorSharing = processorSharing
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop

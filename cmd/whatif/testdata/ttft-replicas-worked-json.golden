@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -219,7 +219,7 @@
         },
         "ttft": {
           "answer": {
-            "value": 0.37340232418569225,
+            "value": 0.25030104646197077,
             "unit": "s",
             "basis": {
               "fill": 0,
@@ -242,10 +242,11 @@
               "OutputSpreadUnread"
             ],
             "parts": {
-              "independent": 0.3434393200155779,
-              "pooled": 0.33143853287278646,
+              "independent": 0.22552321574114012,
+              "pooled": 0.25030104646197077,
               "decodeShare": 0.031774930977097736,
-              "engineWait": 0.05047520035773935,
+              "engineWait": 0.020190080143095743,
+              "kvPullWait": 0,
               "ownPrefill": 0.044368837498301734,
               "decodeWait": 0.01591097479879894,
               "firstStep": 0.0036607509947803553,
@@ -253,15 +254,15 @@
               "routerHop": 0.02,
               "prefillUtilization": 0.37721959104845126,
               "vpMarginApplied": 0,
-              "waitScale": 0.1615335863923104,
+              "waitScale": 0,
               "waitOffset": 0,
               "decodeWaitProbability": 0.03177493097709786,
               "prefillKnee": 30,
               "decodeKnee": 13.313632625239457
             },
             "sensitivity": {
-              "lo": 0.3025852532584969,
-              "hi": 0.4891439530276733
+              "lo": 0.20587120828510252,
+              "hi": 0.3242256092497439
             }
           }
         }
