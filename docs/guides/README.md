@@ -17,6 +17,7 @@ source docs/guides/env.sh
 | [Install a small llm-d model](install-small-model/) | **first, if nothing is serving yet.** One 0.6B model on ONE GPU — llm-d's own guides start at 16 |
 | [Install the scaling manager in a namespace](install-in-namespace/) | **start here** when llm-d already serves. One team, one namespace |
 | [Install the scaling manager for the whole cluster](install-cluster-wide/) | one controller for every namespace |
+| [Try the scaling manager in passive mode](try-in-passive-mode/) | next to what scales your models today: it reports what it would order and changes nothing, then takes over one model at a time |
 
 ## Cluster administration
 

@@ -193,6 +193,7 @@ ResourceQuota on the namespace
 | --- | --- |
 | Share a quota, step by step | [utilization-share guide](docs/guides/utilization-share/) |
 | Models in several namespaces, one budget | [cluster-wide](docs/guides/utilization-share-cluster-wide/) or [namespace-scoped](docs/guides/utilization-share-namespaced/) |
+| Try it first without letting it scale | [passive mode](docs/guides/try-in-passive-mode/) |
 | Pick another scenario; each links its guide | [well-lit paths](docs/well-lit-paths/) |
 | Full install guide | [deploy/](deploy/) |
 | Run it day to day | [operations.md](docs/reference/operations.md) |
