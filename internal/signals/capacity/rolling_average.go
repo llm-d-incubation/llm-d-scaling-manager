@@ -1,0 +1,384 @@
+package capacity
+
+import (
+	"slices"
+	"time"
+)
+
+const (
+	// RollingAverageWindowSize is the number of samples retained for compute
+	// capacity (k2) history per workload bucket, and for the saturated
+	// completion-rate (mu) windows recorded beside it.
+	RollingAverageWindowSize = 10
+
+	// EpisodeGap is how long without a WRITE before the next observation is
+	// treated as the start of a new episode rather than another sample of the
+	// current one. The producers ask WriteGapExceedsAt and reset the window
+	// instead of adding to it, so a figure from before a long quiet period is
+	// never averaged in at 1/N weight with today's.
+	//
+	// Its own constant, and not an alias, because the alternative was one
+	// value answering three unrelated questions -- this, the per-variant
+	// liveness horizon below, and the per-model memo horizon -- which is
+	// exactly the collapse the two clocks on RollingAverage were just split
+	// apart to undo. Tuning "when do two saturation episodes count as
+	// separate" must not silently move when a learned ITL baseline is
+	// deleted; that second one is the change this project has recorded as
+	// collapsing a fleet (itl.DefaultBaselineSec). They start at the same
+	// number and are free to diverge.
+	EpisodeGap = 24 * time.Hour
+
+	// HistoryEvictionTimeout is how long PER-VARIANT learned state is kept
+	// after the variant was last reported, or last found to exist (active or
+	// parked at zero) -- the ITL window and baseline, the
+	// start estimate and its outlier counter, and the per-model memos that
+	// key nothing. See the saturation analyzer's variantSeenAt.
+	//
+	// It is NOT a trust horizon, and an earlier revision of this comment said
+	// it was. No read refuses a window on age: see HistoryRetention for why
+	// that would be the wrong thing to do.
+	HistoryEvictionTimeout = 24 * time.Hour
+
+	// HistoryRetention is how long a bucket-keyed window is KEPT after it was
+	// last READ. Seven times the episode gap, and the reason is not symmetry:
+	//
+	// A retained measurement is the LOWEST capacity figure available for its
+	// bucket, so keeping it is how a fleet avoids being repriced upward by a
+	// formula. Since effectiveCapacity = min(k1, k2), a measured k2 can only
+	// pull capacity below k1; dropping it hands the decision to the derived
+	// estimate or to k1 itself, and k1 is the largest value that expression
+	// can take. An intermediate revision refused measurements past 24h and
+	// fell to k1 for them; measured across k1 regimes that cost between 1.8x
+	// and 18x the replicas, so the refusal is gone and only retention remains.
+	//
+	// (The derived figure is NOT bounded below by a measurement, which an
+	// earlier version of this comment implied. When --max-num-seqs binds,
+	// derived lands at (I + O/2)/(I + O) of the engine's physical occupancy
+	// ceiling -- 57% at I=1000, O=6000 -- so a saturated measurement can
+	// exceed it. k1 is the bound that always holds; derived is not.)
+	//
+	// Seven days also matches the capacity store's EvictionTimeout, for the
+	// reason that constant gives: a variant may be quiet over a weekend and
+	// come back on Monday.
+	HistoryRetention = 7 * 24 * time.Hour
+)
+
+// Horizons is the three ages the saturation analyzer's learned state is kept
+// on. One struct rather than three arguments because they are the same shape
+// and were transposed once already; a field name at the call site is the only
+// thing that catches that.
+//
+// Configurable because none of it can otherwise be tested on a cluster. The
+// shortest horizon here is a day and the longest a week, so neither CI nor a
+// kind run reaches the behaviour at all -- every claim about what the sweep
+// does rests on unit tests with an injected clock. A reviewer asked for this
+// for a different reason (72h, to clear a long weekend) and both reasons are
+// good.
+type Horizons struct {
+	// EpisodeGap is how long without a WRITE before the next observation
+	// starts a new window instead of joining this one.
+	EpisodeGap time.Duration
+	// VariantTimeout is how long per-variant learned state is kept after the
+	// variant was last reported, or last found to exist (active or parked at
+	// zero).
+	VariantTimeout time.Duration
+	// BucketRetention is how long a bucket-keyed window, and the memos that
+	// resolve its key, are kept after the window was last read.
+	BucketRetention time.Duration
+}
+
+// DefaultHorizons is what the controller runs without configuration.
+func DefaultHorizons() Horizons {
+	return Horizons{
+		EpisodeGap:      EpisodeGap,
+		VariantTimeout:  HistoryEvictionTimeout,
+		BucketRetention: HistoryRetention,
+	}
+}
+
+// MinHorizon is the floor for every field. A horizon at or below the optimize
+// cadence would evict state the current cycle is still assembling, so the
+// shortest useful value is "longer than a cycle" -- a minute leaves room for
+// the slowest shipped cadence without pretending to validate against it.
+const MinHorizon = time.Minute
+
+// Sanitized returns h with every zero, negative or below-floor field replaced
+// by its default, and the names of the fields it rejected.
+//
+// A zero field is unset -- config reads an absent LEARNED_STATE_* variable as
+// 0 -- so it takes its default and is NOT named: naming it made every
+// controller started with default settings log an error about settings
+// nobody had made. Only a value someone actually set and that is unusable
+// (negative, or positive but below MinHorizon) is named. A value that was set
+// and reads as 0 (unparseable, or a literal 0) arrives here as 0 too; the
+// config loader reports that one, where the value as written is still known.
+//
+// The names are the point, not a convenience: after flooring, the surviving
+// value IS the default, so no amount of logging the result can distinguish a
+// horizon an operator set deliberately from one that was rejected. Callers
+// must report this list -- NewEngine does.
+//
+// It does not refuse. An unusable horizon is a misconfiguration, not a reason
+// to decline to start, and the same judgement is already made for
+// GLOBAL_OPT_INTERVAL. It also does NOT enforce an ordering between the
+// fields: BucketRetention shorter than VariantTimeout is strange but coherent
+// (bucket windows would simply go first), and refusing it would be inventing a
+// constraint the code does not have.
+func (h Horizons) Sanitized() (Horizons, []string) {
+	var fixed []string
+	d := DefaultHorizons()
+	h.EpisodeGap = sanitizeHorizon(h.EpisodeGap, d.EpisodeGap, "episodeGap", &fixed)
+	h.VariantTimeout = sanitizeHorizon(h.VariantTimeout, d.VariantTimeout, "variantTimeout", &fixed)
+	h.BucketRetention = sanitizeHorizon(h.BucketRetention, d.BucketRetention, "bucketRetention", &fixed)
+	return h, fixed
+}
+
+// sanitizeHorizon returns v when it is usable and def otherwise, appending name
+// to fixed only when v was set (non-zero) and rejected.
+func sanitizeHorizon(v, def time.Duration, name string, fixed *[]string) time.Duration {
+	switch {
+	case v == 0:
+		return def
+	case v < MinHorizon:
+		*fixed = append(*fixed, name)
+		return def
+	default:
+		return v
+	}
+}
+
+// RollingAverage maintains a fixed-size sliding window of float64 values.
+// The saturation analyzer keeps one per history key for two readings: the
+// compute-bound capacity (k2), read through Average, and the saturated
+// throughput (mu) the demand floor prices from, read through Median. Each
+// read's own doc says why it is the right one for what that window holds.
+//
+// Not safe for concurrent use: the owner serialises access (the saturation
+// analyzer holds its own mutex around every window).
+// TWO timestamps, because three different questions were being asked of one
+// and they do not have the same answer:
+//
+//	lastUsed    -- when a decision last READ this window. Governs retention:
+//	               a window nothing reads is what the sweep is for.
+//	lastWritten -- when a value was last PUT IN. Governs whether a new
+//	               observation joins this window or starts a fresh one.
+//
+// Collapsing them is a live defect, found in review. The windows the analyzer
+// keeps are written only on a saturated queue but READ every cycle, so one
+// field made every read look like a write: the write path's "a long gap means
+// a new episode, so reset rather than blend" check could never fire for any
+// bucket still being queried. Two saturation episodes weeks apart then blended
+// into one rolling average, and a stale high reading held capacity up against
+// today's lower, truer one.
+type RollingAverage struct {
+	values      []float64
+	maxSize     int
+	lastUsed    time.Time
+	lastWritten time.Time
+	// restored is set by RestoreRollingAverage and cleared by the first
+	// write: the window holds what a snapshot carried and nothing admitted
+	// since. Never stored: a window restored twice with no write between is
+	// restored both times, and one written before the export is not.
+	restored bool
+}
+
+// NewRollingAverage creates a RollingAverage with the given window size, used
+// and written as of now.
+//
+// No method of this type reads the wall clock: every stamp and every age is
+// taken against the now its caller passes, so a caller that keeps its own
+// clock -- the analyzers pin one reading per cycle -- ages the window on that
+// clock alone.
+func NewRollingAverage(maxSize int, now time.Time) *RollingAverage {
+	return &RollingAverage{
+		values:      make([]float64, 0, maxSize),
+		maxSize:     maxSize,
+		lastUsed:    now,
+		lastWritten: now,
+	}
+}
+
+// AddAt appends a value written at now, evicting the oldest entry if the
+// window is full.
+func (r *RollingAverage) AddAt(value float64, now time.Time) {
+	if len(r.values) >= r.maxSize {
+		r.values = r.values[1:]
+	}
+	r.values = append(r.values, value)
+	r.lastUsed = now
+	r.lastWritten = now
+	r.restored = false
+}
+
+// Average returns the arithmetic mean of all stored values, or 0 if empty.
+func (r *RollingAverage) Average() float64 {
+	if len(r.values) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range r.values {
+		sum += v
+	}
+	return sum / float64(len(r.values))
+}
+
+// TouchAt marks the window as USED at t, without adding to it and without
+// counting as a write. A decision that reads a window is still depending on
+// it, which is what retention asks about -- but reading cannot make the data
+// newer, so TouchAt deliberately leaves lastWritten alone. Writers call
+// ObservedAt.
+func (r *RollingAverage) TouchAt(t time.Time) {
+	r.lastUsed = t
+}
+
+// ObservedAt records that the window's own producer saw its reading again at t
+// without a new value to store -- the same sample across a spacing boundary,
+// or a repeat. It is a write for gap purposes even though nothing is appended:
+// the producer only runs while the condition it measures holds, so seeing the
+// same reading again is evidence the episode is still going.
+func (r *RollingAverage) ObservedAt(t time.Time) {
+	r.lastUsed = t
+	r.lastWritten = t
+	r.restored = false
+}
+
+// RaiseLastAt lifts the most recent value to v when v is higher, and counts as
+// a write at now either way. A reading that belongs to the last sample's
+// window is folded into that sample this way rather than counted or dropped.
+func (r *RollingAverage) RaiseLastAt(v float64, now time.Time) {
+	if n := len(r.values); n > 0 && v > r.values[n-1] {
+		r.values[n-1] = v
+	}
+	r.ObservedAt(now)
+}
+
+// SetLastAt replaces the most recent value with v, and counts as a write at
+// now. A sample folded from several sources is re-formed this way each time
+// one of them reads again. An empty window is left empty.
+func (r *RollingAverage) SetLastAt(v float64, now time.Time) {
+	if n := len(r.values); n > 0 {
+		r.values[n-1] = v
+	}
+	r.ObservedAt(now)
+}
+
+// Restored reports whether the window came from a snapshot and has not been
+// written since: LastWritten is still the restored stamp. TouchAt leaves it
+// set, because reading a window cannot make it this process's own.
+func (r *RollingAverage) Restored() bool {
+	return r.restored
+}
+
+// Last returns the most recent value, or 0 if empty. No production caller;
+// the tests read it.
+func (r *RollingAverage) Last() float64 {
+	if n := len(r.values); n > 0 {
+		return r.values[n-1]
+	}
+	return 0
+}
+
+// Len returns the number of values currently stored.
+func (r *RollingAverage) Len() int {
+	return len(r.values)
+}
+
+// Max returns the largest stored value, or 0 if empty.
+//
+// The saturated throughput window used to read this, on the argument that a
+// COMPLETION rate under saturation under-reads while the replica is full, so
+// the largest reading is the best estimate of what it sustains. That argument
+// did not survive the move to a token rate, which bursts rather than
+// under-reads; the window reads Median. See "The mu window reads the median,
+// not the maximum" in docs/developer-guide/analyzer-evidence.md.
+func (r *RollingAverage) Max() float64 {
+	if len(r.values) == 0 {
+		return 0
+	}
+	return slices.Max(r.values)
+}
+
+// Median returns the middle value of the window, the lower of the two middle
+// values on an even count, or 0 when the window is empty.
+//
+// Where Max is the right read for a figure whose error is one-sided -- a
+// saturated COMPLETION rate under-reads while a replica fills, so the largest
+// reading is the best estimate of what it sustains -- Median is the right read
+// for one that bursts, and a generation-token rate is the latter. Read with
+// Max, the window ratcheted to a mu that asked for a fifth of the replicas the
+// fleet needed; see "The mu window reads the median, not the maximum" in
+// docs/developer-guide/analyzer-evidence.md.
+func (r *RollingAverage) Median() float64 {
+	if len(r.values) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(r.values))
+	copy(sorted, r.values)
+	slices.Sort(sorted)
+	return sorted[(len(sorted)-1)/2]
+}
+
+// StaleAt reports whether nothing has USED the window within the timeout, as
+// of now: creation, AddAt, RaiseLastAt, ObservedAt and TouchAt all count, so a
+// window created and never added to is fresh for one timeout. This is the
+// retention question, and the sweep is its caller. For "has a long gap passed
+// since anything was written", which is a different question with a different
+// answer, see WriteGapExceedsAt.
+//
+// The saturation analyzer's EvictStaleHistory sweeps whole entries on the same
+// measure, once per cycle from steadystate.evictStaleLearnedState. Readers
+// check it anyway: a window can go stale between sweeps, and a read that
+// depended on the sweep having run would give two answers for one state. An
+// average carried over a long gap is worse than no average, because it looks
+// like data and is weighted like data.
+//
+// Which makes WHAT counts as a touch load-bearing. A window whose only writer
+// is a saturated-queue path ages on "last saturated" unless its readers touch
+// it, and a fleet that is coping does not saturate -- so both the k2 history
+// and the mu windows touch on the read, and age on last USE. See the Priority
+// 2 read in the analyzer's replica_capacity.go for what that cost when they
+// did not.
+//
+// now is the caller's clock, the one TouchAt was stamped with: measuring the
+// stamp against another clock mixes two, which only agree when the caller's
+// clock IS that clock.
+func (r *RollingAverage) StaleAt(now time.Time, timeout time.Duration) bool {
+	return now.Sub(r.lastUsed) > timeout
+}
+
+// WriteGapExceedsAt reports whether more than the given gap has passed, as of
+// now, since a value was last written to this window. Reads do not count, by
+// design.
+//
+// It answers the producer's question: is this new reading a continuation of
+// what the window already holds, or the first of a new episode? The windows
+// the analyzer keeps are written only while the condition they measure holds
+// -- a saturated queue -- so a long write gap means the fleet stopped
+// saturating and has started again, and the figures either side of the gap
+// describe different eras. Blending them is worse than either, because a
+// rolling average weights the old readings like evidence. The producers reset
+// the window on this rather than adding to it.
+//
+// Asking StaleAt instead is the defect this method exists to prevent: StaleAt
+// tracks USE, every cycle reads these windows, so it never reports a gap for
+// any bucket the fleet is still serving.
+func (r *RollingAverage) WriteGapExceedsAt(now time.Time, gap time.Duration) bool {
+	return now.Sub(r.lastWritten) > gap
+}
+
+// WriteAgeAt is how long before now a value was last written to this window.
+//
+// For the log line, not for a decision. Since the read no longer refuses a
+// window on age, nothing else distinguishes a measurement taken an hour ago
+// from one taken last Tuesday -- the k2-decision line reported them
+// identically, and the age has no ceiling any more. A reader chasing a replica
+// count needs to know which it is looking at.
+func (r *RollingAverage) WriteAgeAt(now time.Time) time.Duration {
+	return now.Sub(r.lastWritten)
+}
+
+// LastWritten is when a value was last put in: the same window, not written
+// since, keeps the same LastWritten wherever it is moved.
+func (r *RollingAverage) LastWritten() time.Time {
+	return r.lastWritten
+}

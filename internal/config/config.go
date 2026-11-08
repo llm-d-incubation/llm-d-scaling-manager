@@ -1,0 +1,1099 @@
+package config
+
+import (
+	"maps"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+)
+
+// Config is the unified configuration structure for the scaling manager controller.
+// All fields are private and accessed via thread-safe getter methods.
+type Config struct {
+	mu         sync.RWMutex // Single mutex for all mutable fields
+	configSync configSyncState
+
+	infrastructure infrastructureConfig
+	tls            tlsConfig
+	prometheus     prometheusConfig
+	// epp            eppConfig
+	features   featureFlagsConfig
+	saturation scalingPolicyConfig // namespace-aware
+}
+
+// LimiterType names one kind of GPU limiter allocation.NewLimiterFromConfig can
+// build. A policy declares a SET of them (Config.EffectiveLimiterTypes): a
+// physical entry and quota entries compose, and a decision must fit every one
+// (bounding by min(physical, quota), issue #1003). LimiterTypeNone is the empty
+// set, not a member of one: it never appears in a LimiterTypes, and "none" is
+// only how logs and the controller status spell an empty set
+// (LimiterTypes.String).
+type LimiterType string
+
+const (
+	// LimiterTypeNone means no limiter is configured: the limiters list is absent
+	// or empty. Scaling is then unconstrained — the optimizer allocates without a
+	// GPU budget and a scale-from-zero wake is published without a capacity check.
+	//
+	// This is the ScalingPolicy schema's own semantics, where limiters is "zero or
+	// more" (docs/reference/scaling-policy.md). Declaring a limiter is
+	// what turns limiting on; there is no separate enable flag, and no implicit
+	// default limiter for an operator who declared none.
+	LimiterTypeNone LimiterType = "none"
+
+	// LimiterTypeInventory builds the TypeInventory-backed limiter
+	// (physical GPU discovery via the GPU operator).
+	LimiterTypeInventory LimiterType = "inventory"
+
+	// LimiterTypeQuota builds one QuotaInventory-backed limiter per inline
+	// quota entry. They are grouped with the physical limiter, when one is
+	// declared, in a CompositeLimiter whose constraints are intersected.
+	LimiterTypeQuota LimiterType = "quota"
+)
+
+// configSyncState tracks configuration sync state used for startup/readiness checks.
+type configSyncState struct {
+	configMapsBootstrapComplete bool
+	lastConfigMapsSyncAt        time.Time
+	lastConfigMapsSyncError     string
+}
+
+// infrastructureConfig holds server/controller infrastructure settings
+type infrastructureConfig struct {
+	metricsAddr          string
+	probeAddr            string
+	enableLeaderElection bool
+	leaderElectionID     string
+	leaseDuration        time.Duration
+	renewDeadline        time.Duration
+	retryPeriod          time.Duration
+	restTimeout          time.Duration
+	secureMetrics        bool
+	watchNamespace       string
+	// unreadableNamespaces are watched namespaces found unreadable at startup.
+	unreadableNamespaces []string
+	loggerVerbosity      int
+	optimizationInterval time.Duration
+	// How long the saturation analyzer keeps what it has learned. Three
+	// plain durations rather than a capacity.Horizons so this package does
+	// not have to import signals/capacity; the engine assembles the struct.
+	// Zero means "not configured", which the analyzer reads as the default.
+	learnedEpisodeGap      time.Duration
+	learnedVariantTimeout  time.Duration
+	learnedBucketRetention time.Duration
+	// learnedStateSnapshot carries what the saturation analyzer learned across
+	// a controller restart, in a ConfigMap (LEARNED_STATE_SNAPSHOT). Off by
+	// default; see docs/proposals/learned-state-snapshot.md.
+	learnedStateSnapshot bool
+}
+
+// tlsConfig holds TLS certificate paths
+type tlsConfig struct {
+	webhookCertPath string
+	webhookCertName string
+	webhookCertKey  string
+	metricsCertPath string
+	metricsCertName string
+	metricsCertKey  string
+}
+
+// // eppConfig holds EPP (Endpoint Pool) integration configuration
+// type eppConfig struct {
+// 	// Reserved for future EPP-specific configuration
+// }
+
+// featureFlagsConfig holds feature flags
+type featureFlagsConfig struct {
+	scaleToZeroEnabled          bool
+	stickyScaleDownEnabled      bool
+	limitedModeEnabled          bool
+	scaleFromZeroMaxConcurrency int
+	passive                     bool
+}
+
+// ScalingPolicySet represents saturation scaling configuration
+// for all models. Maps model ID (or "default" key) to its configuration.
+type ScalingPolicySet map[string]ScalingPolicy
+
+// scalingPolicyConfig holds saturation scaling configuration (namespace-aware)
+type scalingPolicyConfig struct {
+	// Global default configuration
+	global ScalingPolicySet
+
+	// Namespace-local configuration overrides (keyed by namespace name)
+	namespaceConfigs map[string]ScalingPolicySet
+
+	// clusterPolicy holds the limiters and quotas read from PolicyNamespace when
+	// that differs from the controller's own namespace. It is kept apart from
+	// `global` rather than merged into it because the whole point is that the two
+	// have different owners: `global` is whoever can write the controller's
+	// namespace — for a namespace-scoped install, the tenant — while this comes
+	// from a namespace the cluster admin holds. Merging would let the tenant's
+	// ConfigMap raise the tenant's own quota.
+	//
+	// Nil when policy is not separated, which is the default and the
+	// cluster-scoped case; the limiter accessors then read `global` as before.
+	clusterPolicy *ScalingPolicy
+
+	// policyNamespace is the namespace cluster policy is read from, resolved once
+	// at startup against the live cluster (the well-known namespace only wins if
+	// it actually exists). policySource records which rule chose it.
+	policyNamespace string
+	policySource    PolicySource
+}
+
+// // StaticConfig holds configuration that is immutable after startup.
+// // These settings are loaded once at startup and cannot be changed at runtime.
+// // EPPConfig holds EPP (Endpoint Pool) integration configuration.
+// type EPPConfig struct {
+// 	// Reserved for future EPP-specific static configuration
+// }
+
+// ============================================================================
+// Infrastructure Getters (thread-safe)
+// ============================================================================
+
+// MetricsAddr returns the metrics bind address.
+// Thread-safe.
+func (c *Config) MetricsAddr() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.metricsAddr
+}
+
+// ProbeAddr returns the health probe bind address.
+// Thread-safe.
+func (c *Config) ProbeAddr() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.probeAddr
+}
+
+// EnableLeaderElection returns whether leader election is enabled.
+// Thread-safe.
+func (c *Config) EnableLeaderElection() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.enableLeaderElection
+}
+
+// LeaderElectionID returns the leader election ID.
+// Thread-safe.
+func (c *Config) LeaderElectionID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.leaderElectionID
+}
+
+// LeaseDuration returns the leader election lease duration.
+// Thread-safe.
+func (c *Config) LeaseDuration() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.leaseDuration
+}
+
+// RenewDeadline returns the leader election renew deadline.
+// Thread-safe.
+func (c *Config) RenewDeadline() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.renewDeadline
+}
+
+// RetryPeriod returns the leader election retry period.
+// Thread-safe.
+func (c *Config) RetryPeriod() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.retryPeriod
+}
+
+// RestTimeout returns the REST client timeout.
+// Thread-safe.
+func (c *Config) RestTimeout() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.restTimeout
+}
+
+// SecureMetrics returns whether metrics endpoint uses HTTPS.
+// Thread-safe.
+func (c *Config) SecureMetrics() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.secureMetrics
+}
+
+// WatchNamespace returns --watch-namespace as given: empty for every
+// namespace, else one namespace or a comma-separated list. Callers that act on
+// each namespace use WatchNamespaces; this form is for "is the controller
+// namespace-scoped" tests and for logging. Thread-safe.
+func (c *Config) WatchNamespace() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.watchNamespace
+}
+
+// WatchNamespaces returns the namespaces this controller manages, in the order
+// given, without blanks or repeats: nil for a cluster-scoped controller.
+// Thread-safe.
+func (c *Config) WatchNamespaces() []string {
+	return ParseWatchNamespaces(c.WatchNamespace())
+}
+
+// Watches reports whether namespace is one this namespace-scoped controller
+// manages. False for every namespace on a cluster-scoped controller, which
+// manages them all by other rules. Thread-safe.
+func (c *Config) Watches(namespace string) bool {
+	return namespace != "" && slices.Contains(c.WatchNamespaces(), namespace)
+}
+
+// NormalizeWatchNamespace is the parsed list of raw joined by commas: "" for
+// a value that names no namespace (blank, spaces, only commas).
+func NormalizeWatchNamespace(raw string) string {
+	return strings.Join(ParseWatchNamespaces(raw), ",")
+}
+
+// SetUnreadableNamespaces records the watched namespaces this controller may
+// not read, found at startup: they stay in WatchNamespaces (the controller is
+// still namespace-scoped, and still bound to them), and Unreadable reports
+// them so a read that would fail is not made. Thread-safe.
+func (c *Config) SetUnreadableNamespaces(namespaces []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infrastructure.unreadableNamespaces = slices.Clone(namespaces)
+}
+
+// Unreadable reports whether namespace is a watched namespace found
+// unreadable at startup. Thread-safe.
+func (c *Config) Unreadable(namespace string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return slices.Contains(c.infrastructure.unreadableNamespaces, namespace)
+}
+
+// ParseWatchNamespaces splits a --watch-namespace value on commas, trimming
+// spaces and dropping blanks and repeats. Empty in, nil out.
+func ParseWatchNamespaces(raw string) []string {
+	var out []string
+	for _, ns := range strings.Split(raw, ",") {
+		ns = strings.TrimSpace(ns)
+		if ns != "" && !slices.Contains(out, ns) {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
+// LoggerVerbosity returns the logger verbosity level.
+// Thread-safe.
+func (c *Config) LoggerVerbosity() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.loggerVerbosity
+}
+
+// ============================================================================
+// TLS Getters (thread-safe)
+// ============================================================================
+
+// WebhookCertPath returns the webhook certificate path.
+// Thread-safe.
+func (c *Config) WebhookCertPath() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.webhookCertPath
+}
+
+// WebhookCertName returns the webhook certificate name.
+// Thread-safe.
+func (c *Config) WebhookCertName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.webhookCertName
+}
+
+// WebhookCertKey returns the webhook certificate key.
+// Thread-safe.
+func (c *Config) WebhookCertKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.webhookCertKey
+}
+
+// MetricsCertPath returns the metrics certificate path.
+// Thread-safe.
+func (c *Config) MetricsCertPath() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.metricsCertPath
+}
+
+// MetricsCertName returns the metrics certificate name.
+// Thread-safe.
+func (c *Config) MetricsCertName() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.metricsCertName
+}
+
+// MetricsCertKey returns the metrics certificate key.
+// Thread-safe.
+func (c *Config) MetricsCertKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tls.metricsCertKey
+}
+
+// ============================================================================
+// Optimization Getters (thread-safe)
+// ============================================================================
+
+// OptimizationInterval returns the current optimization interval.
+// Thread-safe.
+func (c *Config) OptimizationInterval() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.optimizationInterval
+}
+
+// LearnedStateHorizons returns the three ages the saturation analyzer
+// keeps learned state on: the episode gap, the per-variant timeout and the
+// bucket retention, in that order. A zero means the operator set nothing
+// and the analyzer should use its own default.
+//
+// Returned as three values rather than a struct to keep signals/capacity
+// out of this package's imports; the engine builds capacity.Horizons.
+// Thread-safe.
+func (c *Config) LearnedStateHorizons() (episodeGap, variantTimeout, bucketRetention time.Duration) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.learnedEpisodeGap,
+		c.infrastructure.learnedVariantTimeout,
+		c.infrastructure.learnedBucketRetention
+}
+
+// LearnedStateSnapshotEnabled reports whether learned state is carried across a
+// controller restart in a ConfigMap (LEARNED_STATE_SNAPSHOT). Thread-safe.
+func (c *Config) LearnedStateSnapshotEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.learnedStateSnapshot
+}
+
+// ============================================================================
+// Feature Flags Getters (thread-safe)
+// ============================================================================
+
+// ScaleToZeroEnabled returns whether scale-to-zero is enabled.
+// Thread-safe.
+func (c *Config) ScaleToZeroEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.features.scaleToZeroEnabled
+}
+
+// StickyScaleDownEnabled reports whether a published scale-down is held
+// against demand noise until the scale-UP threshold says otherwise
+// (LLMSM_STICKY_SCALE_DOWN, default on; see scalingpolicy.HoldPublishedScaleDown).
+// The switch exists to turn the hold OFF for a comparison, not to turn it
+// on: off, a model idling near the scale-down boundary keeps a replica for
+// as long as its demand noise lasts. Thread-safe.
+func (c *Config) StickyScaleDownEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.features.stickyScaleDownEnabled
+}
+
+// PassiveDefault reports the controller-wide passive switch (LLMSM_PASSIVE): the
+// value a model's passive mode takes when no scaling-policy entry sets
+// `passive` (ResolvePassive). Read at start. Thread-safe.
+func (c *Config) PassiveDefault() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.features.passive
+}
+
+// LimitedModeEnabled returns whether limited mode is enabled.
+// Thread-safe.
+func (c *Config) LimitedModeEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.features.limitedModeEnabled
+}
+
+// throughputAnalyzerName is the analyzer name used by the throughput
+// analyzer's saturation-config entry. Duplicated as a literal (rather than
+// importing internal/engines/analyzers/throughput.AnalyzerName) because
+// internal/config is a lower layer than the analyzers package.
+const throughputAnalyzerName = "throughput"
+
+// ThroughputAnalyzerEnabled reports whether any saturation config entry lists
+// the throughput analyzer with Enabled nil-or-true. Startup-time gate: when
+// no entry enables throughput anywhere, the analyzer is never registered, so
+// it cannot participate in scaling decisions and cannot veto scale-down.
+//
+// This is independent of the per-cycle effectiveEnabled opt-in check in the
+// saturation engine, which governs participation per namespace/model once
+// the analyzer is registered. Runtime enablement after controller start
+// requires a restart because RegisterAnalyzer is frozen after
+// StartOptimizeLoop (cmd/main.go); the ConfigMapReconciler uses this method
+// to detect that kind of live-config divergence from the frozen decision.
+// Thread-safe (ScalingPolicyConfig acquires its own lock).
+func (c *Config) ThroughputAnalyzerEnabled() bool {
+	for _, sc := range c.ScalingPolicyConfig() {
+		for _, aw := range sc.Analyzers {
+			if aw.EffectiveType() == throughputAnalyzerName && (aw.Enabled == nil || *aw.Enabled) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ScaleFromZeroMaxConcurrency returns the scale-from-zero max concurrency.
+// Thread-safe.
+func (c *Config) ScaleFromZeroMaxConcurrency() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.features.scaleFromZeroMaxConcurrency
+}
+
+// ScalingPolicyConfig returns the current global saturation scaling configuration.
+// Thread-safe. Returns a copy to prevent external modifications.
+// For namespace-aware lookups, use ScalingPolicyConfigForNamespace instead.
+func (c *Config) ScalingPolicyConfig() map[string]ScalingPolicy {
+	return c.ScalingPolicyConfigForNamespace("")
+}
+
+// resolveScalingPolicy resolves saturation config for a namespace (namespace-local > global).
+// Must be called while holding at least a read lock.
+func (c *Config) resolveScalingPolicyConfigMap(namespace string) map[string]ScalingPolicy {
+	// Check namespace-local first (if namespace is provided)
+	if namespace != "" {
+		if nsConfig, exists := c.saturation.namespaceConfigs[namespace]; exists {
+			if len(nsConfig) > 0 {
+				return nsConfig
+			}
+		}
+	}
+
+	// Fall back to global
+	if len(c.saturation.global) > 0 {
+		return c.saturation.global
+	}
+
+	return nil
+}
+
+// ScalingPolicyConfigForNamespace returns the saturation scaling configuration for the given namespace.
+// Resolution order: namespace-local > global
+// Thread-safe. Returns a copy to prevent external modifications.
+// If namespace is empty, returns global config.
+func (c *Config) ScalingPolicyConfigForNamespace(namespace string) map[string]ScalingPolicy {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	sourceConfig := c.resolveScalingPolicyConfigMap(namespace)
+	return copyScalingPolicyConfig(sourceConfig)
+}
+
+// RescaleEnabledForNamespaceLocal reports the EnableRescale flag from a namespace's
+// OWN saturation config `default` entry, and whether that namespace has its own
+// (non-global) config. It intentionally does NOT fall back to the global config: the
+// scope-coupled rescale flag for a namespace quota is governed only by that
+// namespace's own config, so the cluster (global) flag never leaks onto it.
+func (c *Config) RescaleEnabledForNamespaceLocal(namespace string) (enabled bool, hasLocal bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if namespace == "" {
+		return false, false
+	}
+	nsCfg, ok := c.saturation.namespaceConfigs[namespace]
+	if !ok || len(nsCfg) == 0 {
+		return false, false
+	}
+	return nsCfg["default"].EnableRescale, true
+}
+
+// RescaleEnabledCluster reports the EnableRescale flag from the global saturation
+// config `default` entry — the cluster-budget scope.
+func (c *Config) RescaleEnabledCluster() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.saturation.global["default"].EnableRescale
+}
+
+// copyScalingPolicyConfig creates a deep copy of the saturation config map.
+func copyScalingPolicyConfig(src map[string]ScalingPolicy) map[string]ScalingPolicy {
+	if src == nil {
+		return make(map[string]ScalingPolicy)
+	}
+	result := make(map[string]ScalingPolicy, len(src))
+	for k, v := range src {
+		result[k] = v
+	}
+	return result
+}
+
+// UpdateScalingPolicyConfig updates the global saturation scaling configuration.
+// Thread-safe. Takes a copy of the provided map to prevent external modifications.
+// For namespace-local updates, use UpdateScalingPolicyConfigForNamespace instead.
+func (c *Config) UpdateScalingPolicyConfig(config map[string]ScalingPolicy) {
+	c.UpdateScalingPolicyConfigForNamespace("", config)
+}
+
+// UpdateScalingPolicyConfigForNamespace updates the saturation scaling configuration for the given namespace.
+// If namespace is empty, updates global config.
+// Thread-safe. Takes a copy of the provided map to prevent external modifications.
+func (c *Config) UpdateScalingPolicyConfigForNamespace(namespace string, config map[string]ScalingPolicy) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Make a copy to prevent external modifications
+	newConfig := make(map[string]ScalingPolicy, len(config))
+	maps.Copy(newConfig, config)
+
+	var oldCount int
+	if namespace == "" {
+		// Update global
+		oldCount = len(c.saturation.global)
+		c.saturation.global = newConfig
+		newCount := len(c.saturation.global)
+		if oldCount != newCount {
+			ctrl.Log.Info("Updated global saturation config", "oldEntries", oldCount, "newEntries", newCount)
+		}
+	} else {
+		// Update namespace-local
+		if c.saturation.namespaceConfigs == nil {
+			c.saturation.namespaceConfigs = make(map[string]ScalingPolicySet)
+		}
+		oldCount = len(c.saturation.namespaceConfigs[namespace])
+		c.saturation.namespaceConfigs[namespace] = newConfig
+		newCount := len(c.saturation.namespaceConfigs[namespace])
+		if oldCount != newCount {
+			ctrl.Log.Info("Updated namespace-local saturation config", "namespace", namespace, "oldEntries", oldCount, "newEntries", newCount)
+		}
+	}
+
+}
+
+// RemoveNamespaceConfig removes the namespace-local configuration for the given namespace.
+// This is called when a namespace-local ConfigMap is deleted, allowing fallback to global config.
+// Thread-safe.
+func (c *Config) RemoveNamespaceConfig(namespace string) {
+	if namespace == "" {
+		return // Don't remove global config
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	removed := false
+	if c.saturation.namespaceConfigs != nil {
+		if _, exists := c.saturation.namespaceConfigs[namespace]; exists {
+			delete(c.saturation.namespaceConfigs, namespace)
+			removed = true
+		}
+	}
+	if removed {
+		ctrl.Log.Info("Removed namespace-local config", "namespace", namespace)
+	}
+}
+
+// UpdatePrometheusCacheConfig updates the Prometheus cache configuration.
+// Thread-safe.
+func (c *Config) UpdatePrometheusCacheConfig(cacheConfig *CacheConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cacheConfig == nil {
+		c.prometheus.cache = nil
+	} else {
+		// Make a copy
+		cp := *cacheConfig
+		c.prometheus.cache = &cp
+	}
+}
+
+// NewTestConfig creates a minimal Config for testing purposes.
+// It provides sensible defaults for all required fields.
+// This helper is intended for use in unit tests, integration tests, and e2e tests
+// where a valid Config instance is needed but full configuration is not required.
+// NOTE: This function is exported for testing purposes only and should not be used in production code.
+func NewTestConfig() *Config {
+	cfg := &Config{
+		infrastructure: infrastructureConfig{
+			metricsAddr:          "0",
+			probeAddr:            ":8081",
+			enableLeaderElection: false,
+			leaderElectionID:     "test-election-id",
+			leaseDuration:        60 * time.Second,
+			renewDeadline:        50 * time.Second,
+			retryPeriod:          10 * time.Second,
+			restTimeout:          60 * time.Second,
+			secureMetrics:        false,
+			watchNamespace:       "",
+			loggerVerbosity:      0,
+			optimizationInterval: 15 * time.Second,
+		},
+		tls: tlsConfig{
+			webhookCertName: "tls.crt",
+			webhookCertKey:  "tls.key",
+			metricsCertName: "tls.crt",
+			metricsCertKey:  "tls.key",
+		},
+		features: featureFlagsConfig{
+			scaleToZeroEnabled:          false,
+			limitedModeEnabled:          false,
+			scaleFromZeroMaxConcurrency: 10,
+			stickyScaleDownEnabled:      true,
+		},
+		saturation: scalingPolicyConfig{
+			global:           make(ScalingPolicySet),
+			namespaceConfigs: make(map[string]ScalingPolicySet),
+		},
+	}
+	return cfg
+}
+
+// setPrometheusBaseURLForTesting sets the Prometheus base URL for testing purposes only.
+// This is internal and can only be used by tests in the config package.
+//
+//nolint:unused // Used by tests in config_test.go
+func (c *Config) setPrometheusBaseURLForTesting(baseURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.prometheus.baseURL = baseURL
+}
+
+// SetWatchNamespaceForTest overrides the watched namespace on a test Config.
+// Load() takes it from WATCH_NAMESPACE, which is not settable per-case without
+// mutating process env for tests that must vary it. Not for production use.
+func SetWatchNamespaceForTest(c *Config, ns string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infrastructure.watchNamespace = NormalizeWatchNamespace(ns)
+}
+
+// SetOptimizationIntervalForTest overrides the optimization interval on a test
+// Config, including to a non-positive value — Load() always sanitizes it to at
+// least MinOptimizationInterval, so this is the only way to exercise a caller's
+// handling of a Config that (however it got there) reports a non-positive
+// interval. Not for production use.
+func SetOptimizationIntervalForTest(c *Config, interval time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infrastructure.optimizationInterval = interval
+}
+
+// SetLearnedStateHorizonsForTest overrides the learned-state horizons on a test
+// Config, including to unusable values — the floor lives in
+// capacity.Horizons.Sanitized, so a caller's handling of a value an operator
+// could actually write ("24", meaning 24ns to viper) is only reachable this
+// way. Zero means "not configured". Not for production use.
+func SetLearnedStateHorizonsForTest(c *Config, episodeGap, variantTimeout, bucketRetention time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infrastructure.learnedEpisodeGap = episodeGap
+	c.infrastructure.learnedVariantTimeout = variantTimeout
+	c.infrastructure.learnedBucketRetention = bucketRetention
+}
+
+// SetPassiveDefaultForTest sets the LLMSM_PASSIVE controller flag on a test
+// Config. Not for production use.
+func SetPassiveDefaultForTest(c *Config, on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.features.passive = on
+}
+
+// SetLearnedStateSnapshotForTest turns the learned-state snapshot on or off on a
+// test Config. Not for production use.
+func SetLearnedStateSnapshotForTest(c *Config, on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.infrastructure.learnedStateSnapshot = on
+}
+
+// --- Bootstrap State Management ---
+
+// ConfigMapsBootstrapComplete returns true once the initial ConfigMap bootstrap has completed.
+// Thread-safe.
+func (c *Config) ConfigMapsBootstrapComplete() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.configSync.configMapsBootstrapComplete
+}
+
+// ConfigMapsBootstrapSyncStatus returns the bootstrap state for ConfigMap synchronization.
+// Thread-safe.
+func (c *Config) ConfigMapsBootstrapSyncStatus() (bool, time.Time, string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.configSync.configMapsBootstrapComplete, c.configSync.lastConfigMapsSyncAt, c.configSync.lastConfigMapsSyncError
+}
+
+// MarkConfigMapsBootstrapComplete marks initial ConfigMap bootstrap as completed successfully.
+// Thread-safe.
+func (c *Config) MarkConfigMapsBootstrapComplete() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.configSync.configMapsBootstrapComplete = true
+	c.configSync.lastConfigMapsSyncAt = time.Now()
+	c.configSync.lastConfigMapsSyncError = ""
+}
+
+// MarkConfigMapsBootstrapFailed marks initial ConfigMap bootstrap as failed.
+// Thread-safe.
+func (c *Config) MarkConfigMapsBootstrapFailed(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.configSync.configMapsBootstrapComplete = false
+	c.configSync.lastConfigMapsSyncAt = time.Now()
+	if err != nil {
+		c.configSync.lastConfigMapsSyncError = err.Error()
+		return
+	}
+	c.configSync.lastConfigMapsSyncError = ""
+}
+
+// EffectiveLimiterTypes returns the set of GPU limiter kinds to construct, in a
+// fixed order: LimiterTypeInventory first when a gpu-inventory/inventory entry
+// is declared, then LimiterTypeQuota when any quota entry is. Empty when no
+// limiter is declared. The limiters: list on the global saturation "default"
+// entry is the SOLE source.
+//
+// It is a set because the limiters compose: a policy that declares both a
+// physical entry and quota entries is bounded by both. It used to collapse to
+// one mode, quota winning, and the physical limiter a policy declared was then
+// never built -- the operator read the list as "bounded by real GPUs as well"
+// while nothing consulted physical capacity.
+//
+// The list carries the whole intent -- declaring a limiter is what turns
+// limiting on. There is no separate enable flag: enableLimiter used to gate the
+// saturation optimizer independently, so quota entries could be declared and
+// silently not enforced, while the scale-from-zero path consulted a limiter the
+// operator never asked for. Both halves now follow this one value.
+//
+// Because it reads the live saturation config, the value changes without a
+// restart when the ConfigMap changes. A caller asking more than one question of
+// the set (is a physical limiter declared, is a quota, how to log it) takes ONE
+// snapshot and asks it, so a ConfigMap edit between two reads cannot give it
+// answers about two different policies.
+// Thread-safe.
+func (c *Config) EffectiveLimiterTypes() LimiterTypes {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return limiterTypesOf(c.effectiveLimitersLocked())
+}
+
+// HasPhysicalLimiter reports whether a gpu-inventory (or inventory) entry is
+// declared, alone or beside quota entries: EffectiveLimiterTypes().HasPhysical(),
+// for callers with that one question.
+// Thread-safe.
+func (c *Config) HasPhysicalLimiter() bool {
+	return c.EffectiveLimiterTypes().HasPhysical()
+}
+
+// LimiterTypes is a declared limiter set, in the order EffectiveLimiterTypes
+// documents. Empty means no limiter is declared.
+type LimiterTypes []LimiterType
+
+// Declared reports whether any limiter is declared, which is what turns
+// limiting on.
+func (t LimiterTypes) Declared() bool { return len(t) > 0 }
+
+// HasPhysical reports whether the physical (gpu-inventory) limiter is in the set.
+func (t LimiterTypes) HasPhysical() bool { return slices.Contains(t, LimiterTypeInventory) }
+
+// HasQuota reports whether quota limiters are in the set.
+func (t LimiterTypes) HasQuota() bool { return slices.Contains(t, LimiterTypeQuota) }
+
+// String renders the set for logs and the controller status: the types joined
+// by "+" ("inventory", "quota", "inventory+quota"), or LimiterTypeNone for the
+// empty set.
+func (t LimiterTypes) String() string {
+	if len(t) == 0 {
+		return string(LimiterTypeNone)
+	}
+	kinds := make([]string, 0, len(t))
+	for _, k := range t {
+		kinds = append(kinds, string(k))
+	}
+	return strings.Join(kinds, "+")
+}
+
+// isPhysicalLimiterType reports whether an inline limiters: type selects the
+// physical limiter, under either spelling.
+func isPhysicalLimiterType(t string) bool {
+	return t == limiterTypeGPUInventory || t == string(LimiterTypeInventory)
+}
+
+// limiterTypesOf is the limiter set a limiters: list selects, in the order
+// EffectiveLimiterTypes documents.
+func limiterTypesOf(limiters []QuotaLimiterConfig) LimiterTypes {
+	var physical, quota bool
+	for _, l := range limiters {
+		switch {
+		case isPhysicalLimiterType(l.Type):
+			physical = true
+		case l.Type == string(LimiterTypeQuota):
+			quota = true
+		}
+	}
+	var types LimiterTypes
+	if physical {
+		types = append(types, LimiterTypeInventory)
+	}
+	if quota {
+		types = append(types, LimiterTypeQuota)
+	}
+	return types
+}
+
+// IgnoredPhysicalLimiters returns the indexes of the physical entries in the
+// effective limiters list beyond the first, which are not built (see
+// ScalingPolicy.IgnoredPhysicalLimiters). Callers log IgnoredPhysicalLimitersMessage.
+// Thread-safe.
+func (c *Config) IgnoredPhysicalLimiters() []int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return ScalingPolicy{Limiters: c.effectiveLimitersLocked()}.IgnoredPhysicalLimiters()
+}
+
+// EffectiveLimiterSummary describes the limiters in force as
+// "<types>/<names>": the types EffectiveLimiterTypes selects (LimiterTypes.String)
+// and, comma-separated in declared order, the name of every entry -- an unnamed
+// physical entry by its type. "quota/install-quota", say, or
+// "inventory+quota/gpu,tenant-quota" for a composed set, or "none" when no
+// limiter is declared. Every declared entry is built, so every one is named.
+// Thread-safe.
+func (c *Config) EffectiveLimiterSummary() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	limiters := c.effectiveLimitersLocked()
+	types := limiterTypesOf(limiters)
+	if !types.Declared() {
+		return types.String()
+	}
+	names := make([]string, 0, len(limiters))
+	for _, l := range limiters {
+		name := l.Name
+		if name == "" {
+			name = l.Type
+		}
+		names = append(names, name)
+	}
+	return types.String() + "/" + strings.Join(names, ",")
+}
+
+// EffectiveLimiterWarnings returns the non-fatal findings about the limiters
+// in force, which still apply as written (ScalingPolicy.LimiterWarnings): for
+// example a namespace a quota excludes that no limit bounds. Empty when none.
+// Thread-safe.
+func (c *Config) EffectiveLimiterWarnings() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return ScalingPolicy{Limiters: c.effectiveLimitersLocked()}.LimiterWarnings()
+}
+
+// EffectiveQuotaEntries returns the quota entries the quota limiter should
+// enforce, taken from the inline quota entries on the global saturation "default"
+// entry (each deep-copied). Empty when none are declared. Reads the live config,
+// so changes take effect without a restart.
+// Thread-safe.
+func (c *Config) EffectiveQuotaEntries() []QuotaLimiterConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var inline []QuotaLimiterConfig
+	for _, l := range c.effectiveLimitersLocked() {
+		if l.Type == string(LimiterTypeQuota) {
+			inline = append(inline, l.clone())
+		}
+	}
+	return inline
+}
+
+// HasClusterQuota reports whether an enforced limiter entry is a quota with
+// cluster scope: a budget over every namespace. A namespace-scoped quota bounds
+// only the namespaces it caps, so a list of those alone has no cluster budget,
+// and a namespace it excludes is bound by no quota at all.
+//
+// It answers the same with or without a physical limiter beside the quotas:
+// beside one, a namespace-scoped quota still bounds namespaces, not the
+// cluster, so the cluster-wide figure is the physical one; a cluster-scoped
+// quota is a closed allowlist over the whole cluster, so the cluster budget is
+// a quota even with the physical limiter beside it.
+// Thread-safe.
+func (c *Config) HasClusterQuota() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	// Only a quota entry carries a scope that counts; the physical inventory
+	// (gpu-inventory) has none.
+	return slices.ContainsFunc(c.effectiveLimitersLocked(), func(l QuotaLimiterConfig) bool {
+		return l.Type == string(LimiterTypeQuota) && l.Scope == QuotaScopeCluster
+	})
+}
+
+// ClusterQuotaPerController reports whether this controller is
+// namespace-scoped (one namespace or a listed few) and enforces a quota entry of scope: cluster. Such a quota is
+// charged what THIS controller's variants hold, so N namespace-scoped
+// controllers reading one shared cluster quota of Q may together hold N x Q:
+// the cap is per controller, not per cluster. Callers log
+// ClusterQuotaPerControllerMessage and publish it. Thread-safe.
+func (c *Config) ClusterQuotaPerController() bool {
+	return c.WatchNamespace() != "" && c.HasClusterQuota()
+}
+
+// ClusterQuotaPerControllerMessage is the warning for ClusterQuotaPerController.
+const ClusterQuotaPerControllerMessage = "This namespace-scoped controller enforces a scope: cluster quota. " +
+	"It is charged only what its own variants hold, so the quota caps this controller, not the cluster. " +
+	"If it is the only controller reading this policy, that is the same cap. " +
+	"If other namespace-scoped controllers read it, each may spend all of it: bound tenants with a " +
+	"scope: namespace quota, or run one cluster-scoped controller for a cluster-wide cap."
+
+// KueueCountsBorrowable reports whether some quota entry counts Kueue
+// borrowing. Thread-safe.
+func (c *Config) KueueCountsBorrowable() bool {
+	for _, e := range c.EffectiveQuotaEntries() {
+		if e.KueueCountsBorrowable() {
+			return true
+		}
+	}
+	return false
+}
+
+// KueueReleasesToNonReclaiming reports whether some quota entry counts, and
+// hands back, what lenders Kueue does not reclaim for lend
+// (releaseToNonReclaimingLenders). Thread-safe.
+func (c *Config) KueueReleasesToNonReclaiming() bool {
+	for _, e := range c.EffectiveQuotaEntries() {
+		if e.KueueReleasesToNonReclaiming() {
+			return true
+		}
+	}
+	return false
+}
+
+// KueueBorrowTimings returns the borrowing timings of the first quota entry that
+// counts Kueue borrowing, or the defaults when none does.
+// Thread-safe.
+func (c *Config) KueueBorrowTimings() KueueBorrowTimings {
+	for _, e := range c.EffectiveQuotaEntries() {
+		if e.KueueCountsBorrowable() {
+			return e.BorrowTimings()
+		}
+	}
+	return QuotaLimiterConfig{}.BorrowTimings()
+}
+
+// effectiveLimitersLocked returns the limiters that actually bound this cluster.
+//
+// One place decides where they come from, so the limiter TYPES and the quota
+// ENTRIES can never disagree about it — a split that would be invisible in the
+// logs and would show up only as a quota limiter enforcing nothing. Callers must
+// hold at least the read lock.
+func (c *Config) effectiveLimitersLocked() []QuotaLimiterConfig {
+	if c.saturation.clusterPolicy != nil {
+		return c.saturation.clusterPolicy.Limiters
+	}
+	return c.saturation.global["default"].Limiters
+}
+
+// SetPolicyNamespace records the resolved cluster-policy namespace and the rule
+// that chose it. Called once at startup, before the manager runs.
+// Thread-safe.
+func (c *Config) SetPolicyNamespace(ns string, source PolicySource) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.saturation.policyNamespace = ns
+	c.saturation.policySource = source
+}
+
+// PolicyNamespace returns the namespace cluster policy is read from. Empty before
+// resolution, in which case callers fall back to the controller's own namespace.
+// Thread-safe.
+func (c *Config) PolicyNamespace() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.saturation.policyNamespace == "" {
+		return SystemNamespace()
+	}
+	return c.saturation.policyNamespace
+}
+
+// PolicySource returns the rule that chose the policy namespace.
+// Thread-safe.
+func (c *Config) PolicySource() PolicySource {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.saturation.policySource == "" {
+		return PolicySourceLocal
+	}
+	return c.saturation.policySource
+}
+
+// PolicyNamespaceIsSeparate reports whether cluster policy comes from a namespace
+// other than the controller's own. When it does, the ConfigMap in the controller's
+// namespace loses its authority over limiters and quotas.
+// Thread-safe.
+func (c *Config) PolicyNamespaceIsSeparate() bool {
+	return c.PolicyNamespace() != SystemNamespace()
+}
+
+// ScalingPolicyEntry returns the entry stored under key in one namespace's own
+// scaling-policy set, or in the global set when namespace is empty. Unlike
+// ScalingPolicyConfigForNamespace it never falls back from a namespace to the
+// global set: it answers what that ConfigMap last put in force.
+// Thread-safe.
+func (c *Config) ScalingPolicyEntry(namespace, key string) (ScalingPolicy, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	set := c.saturation.global
+	if namespace != "" {
+		set = c.saturation.namespaceConfigs[namespace]
+	}
+	p, ok := set[key]
+	return p, ok
+}
+
+// ClusterPolicy returns the policy read from the policy namespace, and false
+// when none is separated (UpdateClusterPolicy(nil) or never set).
+// Thread-safe.
+func (c *Config) ClusterPolicy() (ScalingPolicy, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.saturation.clusterPolicy == nil {
+		return ScalingPolicy{}, false
+	}
+	return *c.saturation.clusterPolicy, true
+}
+
+// UpdateClusterPolicy replaces the limiters and quotas read from the policy
+// namespace. Passing a nil policy clears the separation, restoring the global
+// entry as the source.
+// Thread-safe.
+func (c *Config) UpdateClusterPolicy(policy *ScalingPolicy) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if policy == nil {
+		c.saturation.clusterPolicy = nil
+		return
+	}
+	cloned := *policy
+	cloned.Limiters = make([]QuotaLimiterConfig, 0, len(policy.Limiters))
+	for _, l := range policy.Limiters {
+		cloned.Limiters = append(cloned.Limiters, l.clone())
+	}
+	c.saturation.clusterPolicy = &cloned
+}
+
+// ClusterPolicyIsSeparate reports whether limiters and quotas are being read from
+// a namespace other than the controller's own.
+// Thread-safe.
+func (c *Config) ClusterPolicyIsSeparate() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.saturation.clusterPolicy != nil
+}

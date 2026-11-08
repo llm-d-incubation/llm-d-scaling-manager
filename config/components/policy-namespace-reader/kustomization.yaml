@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Grants the controller `get` on Namespaces, which is how it finds the cluster
+# policy it must obey: the well-known `scaling-manager-policy` namespace, and a
+# `scaling-manager.llmd.ai/policy-namespace` label on the namespace it manages
+# (internal/controller/policy_namespace.go).
+#
+# Namespaces are cluster-scoped, so the tenant Role cannot reach them. Without
+# this a namespace-scoped controller on Kubernetes could never see `scaling-manager-policy`,
+# and ran on its own ConfigMap while `make enable-physical-limiter` reported the
+# cluster bounded. (OpenShift's cluster-monitoring-view happened to grant the
+# read; Kubernetes has no such binding.) The controller still starts without
+# it, on its own ConfigMap, but reports llmsm_policy_namespace_unverified=1.
+#
+# get only: no list, no watch. Part of the namespace-scoped overlays and, like
+# node-reader, created by the PREREQS phase. A cluster-scoped install does not
+# need it: its manager ClusterRole already reads namespaces.
+resources:
+- policy-namespace-reader-clusterrole.yaml
+- policy-namespace-reader-clusterrolebinding.yaml

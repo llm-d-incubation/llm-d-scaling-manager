@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-manager-scaling-policy-config
+  labels:
+    app.kubernetes.io/instance: llm-d-scaling-manager
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/managed-by: kustomize
+data:
+  default: |
+    analyzerName: saturation
+    scaleUpThreshold: 0.85
+    scaleDownBoundary: 0.70
+    kvCacheThreshold: 0.80
+    queueLengthThreshold: 5

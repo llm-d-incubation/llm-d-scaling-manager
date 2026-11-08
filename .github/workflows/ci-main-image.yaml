@@ -1,0 +1,129 @@
+name: CI - Main - Docker Container Image
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+  # Build any branch on demand. A cluster can only run what a registry can serve,
+  # so testing an unmerged branch on a REMOTE cluster needs a published image —
+  # there is no `kind load` for one. Without this the only images that exist are
+  # of main, and an OpenShift install of a branch dies on the flags its own
+  # manifests pass ("unknown flag: --external-scaler-bind-address").
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (default: the branch name, sanitised)'
+        required: false
+        default: ''
+      platforms:
+        description: 'Buildx platforms'
+        required: false
+        default: 'linux/amd64'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-main-image
+  cancel-in-progress: true
+
+jobs:
+  docker-build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # Nothing after this needs git credentials; do not leave the token in
+          # .git/config beside a docker build context.
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The built-in token only, as in ci-release.yaml. `permissions: packages:
+      # write` above scopes it to this repository's own packages, for this run.
+      # The package must grant this repository Write access (Package settings ->
+      # Manage Actions access); see docs/developer-guide/release-process.md.
+      - name: Log in to GitHub Container Registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Resolve image and tag
+        id: img
+        # The dispatch inputs arrive through env, never spliced into the script:
+        # `TAG='${{ inputs.tag }}'` let a quote in the input end the string and
+        # run the rest as shell, in a job holding packages: write.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          # Owner-derived: the image goes to the namespace of whoever owns this
+          # repository (ghcr.io/ev-shindin/llm-scaling-manager here), the only
+          # one its token may write to.
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${GITHUB_REPOSITORY##*/}
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG=main
+            PLATFORMS=linux/amd64,linux/arm64
+          else
+            TAG="$INPUT_TAG"
+            # A branch name is not a legal tag: refs/heads/feat/x has slashes.
+            [ -n "$TAG" ] || TAG=$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr -cd '[:alnum:]._-' | cut -c1-100)
+            PLATFORMS="${INPUT_PLATFORMS:-linux/amd64}"
+            # An on-demand build must not overwrite what users install: latest
+            # and release tags come from ci-release.yaml, main from a push to main.
+            case "$TAG" in
+              latest|main|v[0-9]*)
+                echo "::error::tag $TAG is reserved (latest, main and v<digit>... are published by the push and release workflows); pass another tag"
+                exit 1 ;;
+            esac
+          fi
+          # The OCI tag grammar, and a comma-separated list of os/arch[/variant].
+          # Matched with [[ =~ ]], whose ^ and $ anchor the whole value: grep
+          # tests each line, so "foo", a newline, "tag=latest" passed and wrote a
+          # second tag line into GITHUB_OUTPUT.
+          if ! [[ "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::not a valid image tag: $TAG"; exit 1
+          fi
+          if ! [[ "$PLATFORMS" =~ ^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?(,[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?)*$ ]]; then
+            echo "::error::not a valid platform list: $PLATFORMS"; exit 1
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
+          echo "Building $IMAGE:$TAG for $PLATFORMS"
+
+      - name: Build and push image
+        run: |
+          docker buildx build \
+            --platform ${{ steps.img.outputs.platforms }} \
+            --push \
+            --annotation "index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.description=llm-d-scaling-manager - GPU-aware autoscaler for LLM inference workloads" \
+            --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
+            --annotation "index:org.opencontainers.image.revision=${{ github.sha }}" \
+            --build-arg "IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}" \
+            --build-arg "GIT_COMMIT=${{ github.sha }}" \
+            -t ${{ steps.img.outputs.image }}:${{ steps.img.outputs.tag }} .
+
+      - name: Summarise
+        run: |
+          echo "Pushed \`${{ steps.img.outputs.image }}:${{ steps.img.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Install with it:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "make deploy-scaling-manager-namespace-on-openshift LLMSM_NS=<ns> IMG=${{ steps.img.outputs.image }}:${{ steps.img.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Trivy scan
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: ${{ steps.img.outputs.image }}:${{ steps.img.outputs.tag }}

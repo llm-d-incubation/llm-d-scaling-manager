@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dev-model-lws-monitor
+  namespace: scaling-manager-monitoring
+  labels:
+    app: dev-model-decode-lws
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: dev-model-decode-lws
+  namespaceSelector:
+    matchNames:
+      - llm-d-sim
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s

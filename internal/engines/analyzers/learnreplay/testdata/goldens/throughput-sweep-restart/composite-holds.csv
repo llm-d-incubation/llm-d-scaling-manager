@@ -1,0 +1,13 @@
+kind,now,group,item,data
+engine.Composite,2026-11-05T21:53:48.866505456Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:53:48.866505456Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:54:03.921933162Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:54:03.921933162Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:17:50.835918205Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:17:50.835918205Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:18:05.856815741Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:18:05.856815741Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:23:06.211852306Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:23:06.211852306Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:23:21.226846764Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T22:23:21.226846764Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"

@@ -1,0 +1,5 @@
+kind,now,group,item,data
+engine.Composite,2026-11-05T21:30:58.678148212Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:30:58.678148212Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:31:13.694760072Z,ns-01/model-02,decode,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"
+engine.Composite,2026-11-05T21:31:13.694760072Z,ns-01/model-02,prefill,"{""Hold"":{""NoScaleUp"":false,""NoScaleDown"":true},""Reasons"":[""analyzer-in-grace:throughput""]}"

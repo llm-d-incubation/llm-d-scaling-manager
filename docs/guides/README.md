@@ -1,0 +1,75 @@
+# Guides
+
+Each guide takes you from nothing to a working install. Follow one; you do not
+need to combine them.
+
+Deciding which scenario to run (what it buys, what it costs, the evidence it
+works)? See **[the well-lit paths](../well-lit-paths/)**.
+
+```bash
+source docs/guides/env.sh
+```
+
+## Installing
+
+| guide | for |
+| --- | --- |
+| [Install a small llm-d model](install-small-model/) | **first, if nothing is serving yet.** One 0.6B model on ONE GPU — llm-d's own guides start at 16 |
+| [Install the scaling manager in a namespace](install-in-namespace/) | **start here** when llm-d already serves. One team, one namespace |
+| [Install the scaling manager for the whole cluster](install-cluster-wide/) | one controller for every namespace |
+
+## Cluster administration
+
+| guide | for |
+| --- | --- |
+| [Cluster-admin setup for a namespace](admin-cluster-setup/) | let a namespace's owner install the scaling manager themselves |
+| [Bound every install by real GPUs](admin-gpu-bounding/) | scaling is otherwise bounded only by `maxReplicaCount` |
+
+## Advanced
+
+| guide | for |
+| --- | --- |
+| [Scale a model to zero, and get it back](scale-to-zero/) | release an idle model's accelerators — and check it can wake before it parks |
+| [Test against a full llm-d stack](testing-with-llm-d/) | llm-d + the scaling manager on kind, emulated GPUs, no hardware |
+| [Benchmark the scaling manager](benchmarking/) | drive load through a real stack and compare runs |
+| [Bridge a scale-up with a warm pool](warm-pool/) | hold models loaded and asleep so a scale-up serves while its replica starts |
+| [Let models borrow from a Kueue cohort](kueue-borrowing/) | a Kueue-bounded quota that grows into GPUs its cohort leaves idle: prerequisites, pilot, reasons, turning it off (experimental) |
+| [Turn on the utilization-share optimizer, safely](utilization-share/) | share one quota between models by weight: shadow first, then active, and how to back out (experimental) |
+| [Share GPUs between models in different namespaces](utilization-share-cluster-wide/) | llm-d already serves in several namespaces: one cluster-wide install, one budget, GPUs moving between namespaces (experimental) |
+| [Share GPUs between namespaces with a namespace-scoped install](utilization-share-namespaced/) | the same, with no cluster-wide rights on workloads: the scaling manager manages only the llm-d namespaces, a Role in each, one quota (experimental) |
+
+## Reference
+
+| page | covers |
+| --- | --- |
+| [Configuration](../reference/configuration.md) | every variable the installer reads |
+| [After the install](../reference/operations.md) | verifying the install, first-line troubleshooting |
+| [Watching what the scaling manager decides](../reference/monitoring.md) | the dashboard, the metrics, the logs |
+| [Preparing a workload](../reference/workload-preparation.md) | the model cache, draining, `make workload-patch`, the start path (`make prepull`, `make weights`) |
+| [Install methods](../reference/install-methods.md) | GitOps, direct Kustomize, what the script does |
+| [The GPU limiter](../reference/gpu-limiter.md) | where policy lives, and the accelerator precondition |
+
+## Checking it works, last
+
+```bash
+make benchmark-smoke NAMESPACE=<namespace>
+```
+
+Five minutes of 1024-in/1024-out load at 15 req/s against what you already
+installed, then a dashboard snapshot of that window. It stands nothing up and
+needs no benchmark CLI. It first checks KEDA, a controller managing *this*
+namespace, model servers, an EPP and a ScaledObject, and names every gap at
+once. Runs on plain Kubernetes and OpenShift.
+
+## Editing a guide
+
+Bash blocks between `<!-- guide:… start -->` markers are generated from
+`guide.yaml`. Edit the YAML, then:
+
+```bash
+make guides-render     # rewrite the blocks
+make guides-check      # CI: fail if a README has drifted
+```
+
+Prose outside the markers is preserved. The commands a reader copies are the
+commands the YAML declares, so a guide cannot drift from what it documents.

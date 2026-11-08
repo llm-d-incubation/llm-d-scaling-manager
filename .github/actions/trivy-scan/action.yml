@@ -1,0 +1,28 @@
+name: Trivy Scan
+description: Scan container image with Trivy
+inputs:
+  image:
+    required: true
+  severity:
+    description: Comma-separated severities to report.
+    required: false
+    default: "HIGH,CRITICAL"
+  exit-code:
+    description: Exit code when a vulnerability at the given severity is found. "0" reports without failing.
+    required: false
+    default: "0"
+  ignore-unfixed:
+    description: Report only vulnerabilities that have a fixed version.
+    required: false
+    default: "false"
+runs:
+  using: "composite"
+  steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+      with:
+        image-ref: ${{ inputs.image }}
+        format: "table"
+        severity: ${{ inputs.severity }}
+        exit-code: ${{ inputs.exit-code }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}

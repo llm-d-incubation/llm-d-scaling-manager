@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Grants the controller the cluster-scoped node read that the gpu-inventory
+# limiter requires, without granting anything else back.
+#
+# Nodes are the one thing a namespace-scoped scaling manager genuinely cannot do for itself:
+# a Node is a cluster-scoped object, so no Role can reach it. Without this the
+# limiter resolves no accelerator, charges every variant to no pool, and the
+# workloads never scale up — which is why the controller's readiness gate now
+# refuses to serve that combination rather than running blind.
+#
+# Part of the namespace-scoped overlays, and created by the PREREQS phase — it is
+# cluster-scoped RBAC, so it is an admin's to grant, once, for one namespace's
+# controller. A cluster-scoped install does not need it: its manager ClusterRole
+# already reads nodes.
+resources:
+- node-reader-clusterrole.yaml
+- node-reader-clusterrolebinding.yaml

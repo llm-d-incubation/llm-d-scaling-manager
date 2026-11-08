@@ -1,0 +1,449 @@
+#!/usr/bin/env bash
+#
+# Undeploy and cleanup helpers for deploy/install.sh.
+# Requires vars: KEDA_NAMESPACE, MONITORING_NAMESPACE, NAMESPACE, LLMSM_NS, LLMSM_PROJECT.
+# Requires funcs: containsElement(),
+# undeploy_prometheus_stack(), delete_namespaces(), undeploy_epp(), log_*().
+#
+
+# llmsm_scaledobjects_calling_us echoes `namespace/name` for every ScaledObject with
+# a trigger pointing at this install's external scaler. Extra args are passed to
+# kubectl, so a caller can narrow it with a label selector.
+#
+# Cluster-wide first, then this namespace: a namespace admin may not list across
+# the cluster, and a denied list is not an empty cluster. Folding the two together
+# would report "nothing points at the scaler you removed" to precisely the person
+# whose own namespace is full of objects that do.
+llmsm_scaledobjects_calling_us() {
+    local tmpl='{{range .items}}{{$ns := .metadata.namespace}}{{$n := .metadata.name}}{{range .spec.triggers}}{{if .metadata.scalerAddress}}{{$ns}}/{{$n}} {{.metadata.scalerAddress}}{{"\n"}}{{end}}{{end}}{{end}}'
+    local out
+    if ! out=$(kubectl get scaledobject -A "$@" -o go-template="$tmpl" 2>/dev/null); then
+        out=$(kubectl get scaledobject -n "$LLMSM_NS" "$@" -o go-template="$tmpl" 2>/dev/null) || return 0
+    fi
+    # llmsm_names_scaler (common.sh) says which addresses name this scaler.
+    local obj addr
+    printf '%s\n' "$out" | while read -r obj addr _; do
+        [ -n "$addr" ] && llmsm_names_scaler "$LLMSM_NS" "$addr" && printf '%s\n' "$obj"
+    done | sort -u || true
+}
+
+undeploy_keda() {
+    if [ "$ENVIRONMENT" = "openshift" ]; then
+        log_info "OpenShift: skipping KEDA uninstall (platform-managed)"
+        return
+    fi
+    if [ "$ENVIRONMENT" = "kubernetes" ] && [ "${KEDA_HELM_INSTALL:-false}" != "true" ]; then
+        log_info "Kubernetes: skipping KEDA uninstall (cluster-managed; set KEDA_HELM_INSTALL=true if this script installed KEDA)"
+        return
+    fi
+    log_info "Uninstalling KEDA..."
+    helm uninstall "$KEDA_RELEASE_NAME" -n "$KEDA_NAMESPACE" 2>/dev/null || \
+        log_warning "KEDA not found or already uninstalled"
+    kubectl delete namespace "$KEDA_NAMESPACE" --ignore-not-found --timeout=120s 2>/dev/null || true
+    log_success "KEDA uninstalled"
+}
+
+# llmsm_undeploy_watch_namespace_rbac removes the Role and RoleBinding an
+# admin-owned controller was given in the namespace it managed.
+#
+# The namespace is read from the live Deployment rather than from LLMSM_WATCH_NS,
+# because an uninstall is typically run without the variables the install had —
+# and RBAC granted in someone else's namespace is the last thing that should
+# depend on the operator remembering to repeat a flag. Called before the
+# Deployment is deleted, while it can still be asked.
+llmsm_undeploy_watch_namespace_rbac() {
+    local watched role binding
+    watched="$(kubectl get deploy -n "$LLMSM_NS" -l app.kubernetes.io/name=scaling-manager \
+        -o jsonpath='{.items[0].spec.template.spec.containers[0].env[?(@.name=="LLMSM_WATCH_NAMESPACE")].value}' 2>/dev/null || true)"
+    # The base leaves this as the literal $(POD_NAMESPACE) — Kubernetes expands it
+    # inside the container, so the value ON THE OBJECT is the placeholder, and it
+    # means "the controller's own namespace". Only an install with LLMSM_WATCH_NS
+    # patches a real name in.
+    #
+    # Without this, the placeholder is non-empty and unequal to LLMSM_NS, so both
+    # guards below pass: an ordinary self-managing install ran two deletes against
+    # a namespace literally called $(POD_NAMESPACE) and then reported "Removed the
+    # controller's permissions in $(POD_NAMESPACE)". Harmless — nothing of that
+    # name exists — but it read like a bug in the uninstall, which is a poor thing
+    # to be wondering about while uninstalling. Same normalization as
+    # pl_policy_ns_for in physical_limiter.sh.
+    case "$watched" in
+        ''|'$(POD_NAMESPACE)') return 0 ;;
+    esac
+    [ "$watched" != "$LLMSM_NS" ] || return 0
+
+    # The rest of the uninstall (the monitors, the pod-write grants) acts on
+    # what this controller managed, so it learns it here, from the Deployment,
+    # when the caller did not repeat it.
+    case "${LLMSM_WATCH_NS:-}" in
+        ''|auto) LLMSM_WATCH_NS="$watched"; export LLMSM_WATCH_NS ;;
+    esac
+
+    read -r role binding <<< "$(llmsm_watch_rbac_names)"
+    local one all granted=""
+    # Every namespace this install ever set up, found by its label, and every
+    # namespace the Deployment lists now: a namespace dropped from the list by
+    # an earlier install, and not pruned, is not left holding the grant.
+    if declare -F llmsm_granted_namespaces >/dev/null; then
+        granted="$(llmsm_granted_namespaces 2>/dev/null || true)"
+    fi
+    all="$(printf '%s\n%s\n' "$(printf '%s' "$watched" | tr ',' '\n')" "$granted" | grep -v '^$' | sort -u)"
+    case "$watched" in
+        *,*) ;;
+        *) [ "$(printf '%s\n' "$all" | grep -c .)" -gt 1 ] || all="" ;;
+    esac
+    if [ -n "$all" ]; then
+        for one in $all; do
+            [ "$one" != "$LLMSM_NS" ] || continue
+            kubectl delete rolebinding "$binding" -n "$one" --ignore-not-found > /dev/null 2>&1 || true
+            kubectl delete role "$role" -n "$one" --ignore-not-found > /dev/null 2>&1 || true
+            if declare -F llmsm_revoke_namespace >/dev/null; then llmsm_revoke_namespace "$one"; fi
+            log_info "Removed the controller's permissions in $one (Role/$role, RoleBinding/$binding)"
+        done
+        LLMSM_WATCH_NS="$(printf '%s\n' "$all" | grep -vxF -- "$LLMSM_NS" | paste -sd, -)"
+        export LLMSM_WATCH_NS
+        return 0
+    fi
+    kubectl delete rolebinding "$binding" -n "$watched" --ignore-not-found > /dev/null 2>&1 || true
+    kubectl delete role "$role" -n "$watched" --ignore-not-found > /dev/null 2>&1 || true
+    log_info "Removed the controller's permissions in $watched (Role/$role, RoleBinding/$binding)"
+}
+
+undeploy_scaling_manager_controller() {
+    log_info "Uninstalling llm-d-scaling-manager..."
+    llmsm_undeploy_watch_namespace_rbac
+    if declare -F llmsm_revoke_pod_list_grant >/dev/null && [ "$(llmsm_install_scope)" = namespace ]; then
+        llmsm_revoke_pod_list_grant
+    fi
+
+    local kustomize_overlay
+    kustomize_overlay="$(llmsm_overlay_dir)"
+
+    local tmp_overlay
+    tmp_overlay=$(mktemp -d)
+    # The SAME base the install built, not a bare symlink to the overlay. A bare
+    # symlink skips the LLMSM_ADMIN_GRANTS re-render, so the undeploy did not know
+    # about the node-reader ClusterRole and Binding the install had created and
+    # left both behind — found on a real cluster, by counting what survived.
+    # Third time this file has paid for deploy and undeploy building the overlay
+    # differently; there is now one function and both call it.
+    llmsm_prepare_overlay_base "$tmp_overlay"
+    cat > "$tmp_overlay/kustomization.yaml" <<EOF
+namespace: $LLMSM_NS
+resources:
+- ./base
+EOF
+
+    # The SAME rename the install applied. Without it, `delete -k` resolves the
+    # FIXED binding names and removes whichever install currently owns them — so
+    # uninstalling one scaling manager stripped a different, healthy one of its permissions —
+    # while leaking this install's own suffixed bindings. Found by installing and
+    # uninstalling side by side on kind.
+    llmsm_append_crb_name_patches "$tmp_overlay/kustomization.yaml" "$LLMSM_NS"
+
+    # Render and FILTER, rather than `kubectl delete -k`. One kind in the rendered
+    # set does not belong to this install and must survive it:
+    #
+    #   Namespace    the overlay carries one, renamed to $LLMSM_NS. Deleting it
+    #                cascades to everything inside — and a namespace-scoped install
+    #                is deliberately placed IN the namespace holding the model
+    #                servers, so `delete -k` took the tenant's workloads with it
+    #                while the summary said "Namespaces preserved".
+    #
+    # ClusterRoles used to be filtered out too, because they were shared under
+    # fixed names and deleting them left every other scaling manager's binding pointing at
+    # nothing. They are now suffixed per install (LLMSM_OWNED_CLUSTER_ROLES), so each
+    # install owns its own and can take them with it. An install made before that
+    # change has unsuffixed roles: the render names only suffixed ones, so this
+    # leaves those alone rather than deleting something another install may bind —
+    # a leak, which is the safe direction.
+    #
+    # The suffixed ClusterRoles and ClusterRoleBindings, ServiceAccounts,
+    # ConfigMaps, Services, Deployment and ServiceMonitor are this install's own.
+    # Forbidden is not "already gone". A namespace owner can delete the controller
+    # and everything beside it, and cannot delete the cluster-scoped RBAC an admin
+    # created for them — so this delete partially fails for exactly the person the
+    # tenant install is written for. Reporting that as "not found or already
+    # removed" told them the uninstall was complete while cluster-scoped objects
+    # carrying their namespace's name stayed on the cluster, with nothing said and
+    # no admin command offered.
+    local delete_err
+    delete_err="$(kubectl kustomize "$tmp_overlay" 2>/dev/null \
+        | yq 'select(.kind != "Namespace")' \
+        | kubectl delete -f - --ignore-not-found 2>&1 >/dev/null)" && delete_err=""
+    if [ -n "$delete_err" ]; then
+        if printf '%s' "$delete_err" | grep -qi 'forbidden'; then
+            log_warning "Some objects could not be removed because you are not allowed to delete them:"
+            printf '%s\n' "$delete_err" | grep -i forbidden | sed 's/^/    /'
+            log_warning "  Everything you CAN delete was deleted. The rest are the admin-owned ones — ask a cluster admin to run this uninstall for $LLMSM_NS."
+        else
+            log_warning "Some llm-d-scaling-manager resources were not removed:"
+            printf '%s\n' "$delete_err" | sed 's/^/    /'
+        fi
+    fi
+    rm -rf "$tmp_overlay"
+
+    # The external scaler certificates (LLMSM_SCALER_TLS) are written beside the
+    # overlay, not rendered by it; only the ones carrying the installer's label.
+    if declare -F llmsm_scaler_tls_undeploy >/dev/null; then
+        llmsm_scaler_tls_undeploy
+    fi
+
+    # The Prometheus CA copy (llmsm_sync_prometheus_ca), likewise written beside
+    # the overlay; only when this installer made it.
+    if [ "$(kubectl get secret scaling-manager-prometheus-ca -n "$LLMSM_NS" \
+        -o 'jsonpath={.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)" = "scaling-manager-installer" ]; then
+        kubectl delete secret scaling-manager-prometheus-ca -n "$LLMSM_NS" --ignore-not-found >/dev/null 2>&1 \
+            || log_warning "Could not delete Secret scaling-manager-prometheus-ca in $LLMSM_NS (the Prometheus CA copy)."
+    fi
+
+    # The pod-write grant deploy/warmpool.sh, utilization-share activate and
+    # an upgrade made in workload namespaces. Not rendered, so the delete
+    # above never names it. See lib/pod_writer.sh. Removed after that delete,
+    # and only once the controller's Deployment is gone: a delete that failed
+    # leaves a running controller, whose warm pools and optimizer still need it.
+    if kc_capture get deployment scaling-manager-controller-manager -n "$LLMSM_NS" -o name; then
+        log_warning "The controller Deployment is still in $LLMSM_NS, so its patch on pods (role/${LLMSM_POD_WRITER_ROLE}) was kept. Re-run the uninstall once the Deployment is gone."
+    elif ! kc_not_found "$KC_ERR"; then
+        log_warning "Could not tell whether the controller Deployment in $LLMSM_NS is gone ($KC_ERR), so its patch on pods (role/${LLMSM_POD_WRITER_ROLE}) was kept. Re-run the uninstall once it is."
+    elif [ "$(llmsm_install_scope)" = "namespace" ]; then
+        # shellcheck disable=SC2046 # one word per managed namespace
+        llmsm_remove_pod_writers "$LLMSM_NS" "$LLMSM_NS" $(printf '%s' "${LLMSM_WATCH_NS:-}" | tr ',' ' ')
+    else
+        llmsm_remove_pod_writers "$LLMSM_NS"
+    fi
+
+    # The Kueue controller read lives in the Kueue namespace, outside the
+    # overlay (pl_grant_kueue_controller_read), so the filtered delete above
+    # never names it. Found by its label, wherever KUEUE_NAMESPACE put it at
+    # install time.
+    local kueue_err
+    if ! kueue_err="$(pl_revoke_kueue_controller_read "$LLMSM_NS")"; then
+        log_warning "Could not remove the Kueue controller read (Role/RoleBinding scaling-manager-kueue-controller-reader-$(llmsm_ns_suffix "$LLMSM_NS")): $kueue_err"
+        log_warning "  A cluster admin removes it with: kubectl delete role,rolebinding -A -l ${LLMSM_KUEUE_CONTROLLER_READER_LABEL}=$(llmsm_ns_suffix "$LLMSM_NS")"
+    fi
+    # The cluster-wide Kueue borrowing read is granted by the installer, not
+    # rendered (pl_grant_kueue_borrow_read), so the delete above never names it.
+    if ! kueue_err="$(pl_revoke_kueue_borrow_read "$LLMSM_NS")"; then
+        log_warning "Could not remove the Kueue borrowing read: $kueue_err"
+    fi
+
+    # The utilization-share need history is written by the controller, not
+    # rendered, so the filtered delete above never names it. Left behind, a
+    # reinstall would restore peaks recorded before the uninstall. Deleted
+    # after the delete above, so a controller pod that is gone cannot write
+    # it back. When that delete failed and the Deployment is still there (the
+    # pod-write grant was kept, above), a running controller may write it
+    # again; the re-run that warning asks for removes it then.
+    local history_cm=scaling-manager-utilization-share-history history_err
+    history_err="$(kubectl delete configmap "$history_cm" -n "$LLMSM_NS" --ignore-not-found 2>&1 >/dev/null)" && history_err=""
+    if [ -n "$history_err" ]; then
+        log_warning "The utilization-share need history ConfigMap $history_cm in $LLMSM_NS was not removed:"
+        printf '%s\n' "$history_err" | sed 's/^/    /'
+    fi
+    # The learned-state snapshot (LEARNED_STATE_SNAPSHOT), for the same reason:
+    # a reinstall would restore capacities measured before the uninstall.
+    local learned_cm=scaling-manager-learned-state learned_err
+    learned_err="$(kubectl delete configmap "$learned_cm" -n "$LLMSM_NS" --ignore-not-found 2>&1 >/dev/null)" && learned_err=""
+    if [ -n "$learned_err" ]; then
+        log_warning "The learned-state ConfigMap $learned_cm in $LLMSM_NS was not removed:"
+        printf '%s\n' "$learned_err" | sed 's/^/    /'
+    fi
+
+    # The controller-status ConfigMap is written by the controller too. Left
+    # behind, it would report a policy version and modes no controller is
+    # running with.
+    local status_cm=scaling-manager-controller-status status_err
+    status_err="$(kubectl delete configmap "$status_cm" -n "$LLMSM_NS" --ignore-not-found 2>&1 >/dev/null)" && status_err=""
+    if [ -n "$status_err" ]; then
+        log_warning "The controller-status ConfigMap $status_cm in $LLMSM_NS was not removed:"
+        printf '%s\n' "$status_err" | sed 's/^/    /'
+    fi
+
+    log_info "Left in place: namespace $LLMSM_NS. Delete it yourself if you want it gone."
+
+    # ScaledObjects outlive the controller, and that is a trap rather than a
+    # convenience: their trigger points at scaling-manager-external-scaler.$LLMSM_NS, which no
+    # longer exists. KEDA keeps the HPA and keeps calling a scaler that is gone.
+    #
+    # For a workload parked at zero — and scale-to-zero is ON by default — nothing
+    # can wake it: activation only ever arrives from the scaler. That is a silent
+    # outage that SURVIVES the uninstall, so it is worth a loud, specific list
+    # rather than a general warning.
+    # What we created, we remove. What we only pointed at the scaling manager, we report: an
+    # `apply: adopt` object belongs to whoever wrote it — it may be GitOps-managed
+    # or hand-tuned, and deleting it would take a workload's autoscaling away
+    # entirely rather than just taking the scaling manager out of it. So the split is by who made
+    # the object, not by who it currently calls.
+    # The managed-by value moved from scaling-manager to
+    # llm-d-scaling-manager with the rename, so this selector accepts BOTH:
+    # a ScaledObject created by an earlier install still carries the old
+    # value, and matching only the new one would classify it as hand-written
+    # and silently leave it behind on uninstall. Set-based rather than two
+    # queries so the result stays one sorted list. The old value can be
+    # dropped once no install older than the rename is in the field.
+    local orphans ours theirs
+    orphans=$(llmsm_scaledobjects_calling_us)
+    ours=$(llmsm_scaledobjects_calling_us \
+        -l 'app.kubernetes.io/managed-by in (llm-d-scaling-manager,scaling-manager),app.kubernetes.io/component=default-scaledobject')
+    theirs=$(comm -13 <(printf '%s\n' $ours | sort -u) <(printf '%s\n' $orphans | sort -u) | grep -v '^$' || true)
+
+    if [ -n "$ours" ] && [ "${UNDEPLOY_SCALEDOBJECTS:-true}" = "true" ]; then
+        log_info "Removing the ScaledObjects this installer created:"
+        local so ns name
+        for so in $ours; do
+            ns="${so%%/*}"; name="${so#*/}"
+            if kubectl delete scaledobject "$name" -n "$ns" --ignore-not-found > /dev/null 2>&1; then
+                log_success "  $so removed"
+            else
+                log_warning "  $so could not be removed — delete it by hand, or its HPA will keep calling a scaler that is gone"
+            fi
+        done
+        # Worth saying out loud: these carry restoreToOriginalReplicaCount, so KEDA
+        # puts each workload back to the count it had before it was autoscaled. An
+        # uninstall that quietly resizes running workloads is a surprise; an
+        # uninstall that says it is doing so is just an uninstall.
+        log_info "  KEDA restores each workload to its pre-autoscaling replica count as these go."
+    elif [ -n "$ours" ]; then
+        log_warning "Kept the ScaledObjects this installer created (UNDEPLOY_SCALEDOBJECTS=false). Their HPAs now call a scaler that is gone."
+        printf '    %s\n' $ours
+    fi
+
+    # Whatever is left calls our scaler but was not ours to make.
+    if [ -n "$theirs" ]; then
+        log_warning "These ScaledObjects were not created by this installer, and still point at the external scaler you just removed:"
+        printf '    %s\n' $theirs
+        log_warning "  KEDA will keep their HPAs and keep calling a scaler that is gone. Any of them parked at zero CANNOT BE WOKEN — activation only comes from the scaler."
+        log_warning "  Repoint their trigger at another scaling manager, or at whatever scaled them before, or delete them. They are not this installer's to remove."
+    fi
+
+    rm -f "$PROM_CA_CERT_PATH"
+
+    log_success "the scaling manager uninstalled"
+}
+
+cleanup() {
+    log_info "Starting undeployment process..."
+    log_info "======================================"
+    echo ""
+
+    # Shared infrastructure — Prometheus, KEDA, llm-d's EPP — is left alone unless
+    # you ask for it, and this default is not symmetry with the install.
+    #
+    # It used to key off DEPLOY_PROMETHEUS / SCALER_BACKEND, whose defaults say what
+    # a FRESH install would deploy, not what THIS install actually did. So
+    # `make undeploy-scaling-manager-on-k8s LLMSM_NS=mine` on a cluster that already had them tore
+    # down the cluster's Prometheus, KEDA and EPP — infrastructure the install never
+    # touched and other things depend on. Reproduced here: an undeploy of a scratch
+    # namespace emptied the monitoring namespace, and every scaling manager on the cluster lost
+    # its metrics backend.
+    #
+    # Removing the scaling manager is the job. Removing what the scaling manager was pointed AT is a separate
+    # decision, and now an explicit one.
+    if [ "${UNDEPLOY_SHARED:-false}" = "true" ]; then
+        log_warning "UNDEPLOY_SHARED=true: also removing Prometheus, the scaler backend and EPP. Anything else on this cluster using them will lose them."
+        if [ "$DEPLOY_PROMETHEUS" = "true" ]; then
+            undeploy_prometheus_stack
+        fi
+        if [ "$SCALER_BACKEND" = "keda" ]; then
+            undeploy_keda
+        elif [ "$SCALER_BACKEND" = "none" ]; then
+            log_info "Skipping scaler backend undeployment (SCALER_BACKEND=none)"
+        else
+            log_warning "Unsupported SCALER_BACKEND: $SCALER_BACKEND (supported: keda, none); skipping scaler backend undeployment — any installed backend may be left behind"
+        fi
+        undeploy_epp
+    else
+        log_info "Leaving Prometheus, the scaler backend and EPP in place — they are shared and this install may not have created them. Pass UNDEPLOY_SHARED=true to remove them too."
+    fi
+
+    if [ "$DEPLOY_SCALING_MANAGER" = "true" ]; then
+        undeploy_scaling_manager_controller
+        # The monitors setup added in the llm-d namespaces, by their mark only:
+        # a monitor someone applied themselves carries none and stays.
+        if declare -F llmsm_remove_llmd_monitors >/dev/null; then
+            llmsm_remove_llmd_monitors
+        fi
+        # The EPP /metrics authentication bindings setup made, by their labels.
+        if declare -F llmsm_remove_epp_metrics_auth >/dev/null; then
+            llmsm_remove_epp_metrics_auth
+        fi
+        # After the ScaledObjects are gone, so nothing dials the old address.
+        if declare -F llmsm_scaler_keda_restart_after_undeploy >/dev/null; then
+            llmsm_scaler_keda_restart_after_undeploy
+        fi
+    fi
+
+    # Delete namespaces if requested
+    if [ "$DELETE_NAMESPACES" = "true" ] || [ "$DELETE_CLUSTER" = "true" ]; then
+        delete_namespaces
+    else
+        log_info "Keeping namespaces (use --delete-namespaces or set DELETE_NAMESPACES=true to remove)"
+    fi
+
+    echo ""
+    log_success "Undeployment complete!"
+    echo ""
+    echo "=========================================="
+    echo " Undeployment Summary for $ENVIRONMENT"
+    echo "=========================================="
+    echo ""
+    # Report what was actually removed. These lines used to key off
+    # SCALER_BACKEND / DEPLOY_PROMETHEUS, which describe what an INSTALL would
+    # deploy — so on the default path, twenty lines after saying "Leaving
+    # Prometheus, the scaler backend and EPP in place", the summary claimed it had
+    # removed them.
+    # Where KEDA actually runs, as the install reads it: KEDA_NAMESPACE when
+    # given, else the namespace serving the external-metrics APIService. The
+    # keda-system default named a namespace KEDA does not use where the platform
+    # runs it elsewhere (openshift-keda).
+    local keda_ns=""
+    if [ "$SCALER_BACKEND" = "keda" ]; then
+        if declare -F llmsm_scaler_keda_run_ns >/dev/null; then
+            llmsm_scaler_keda_run_ns
+            keda_ns="$LLMSM_SCALER_KEDA_RUN_NS"
+        else
+            keda_ns="$KEDA_NAMESPACE"
+        fi
+    fi
+    echo "Removed components:"
+    [ "$DEPLOY_SCALING_MANAGER" = "true" ] && echo "✓ the scaling manager Controller (its namespaced objects, and the ClusterRoles and ClusterRoleBindings suffixed for $LLMSM_NS)"
+    [ "$DEPLOY_SCALING_MANAGER" = "true" ] && echo "✓ The monitors setup added in the llm-d namespaces (label ${LLMSM_LLMD_MONITOR_MARK:-llm-d.ai/applied-by=scaling-manager-setup-prereqs})"
+    if [ "${UNDEPLOY_SHARED:-false}" = "true" ]; then
+        [ "$SCALER_BACKEND" = "keda" ] && echo "✓ KEDA"
+        [ "$DEPLOY_PROMETHEUS" = "true" ] && echo "✓ Prometheus Stack"
+        echo "✓ EPP"
+    else
+        echo ""
+        echo "Left in place (shared; pass UNDEPLOY_SHARED=true to remove):"
+        echo "  - Prometheus, the scaler backend (KEDA${keda_ns:+, in $keda_ns}), EPP"
+    fi
+
+    if [ "$DELETE_NAMESPACES" = "true" ]; then
+        echo "✓ Namespaces"
+    else
+        # Only the ones that are actually there. This used to print a fixed list,
+        # so an uninstall claimed to have "preserved" namespaces that had never
+        # existed on that cluster — which reads as "I found these and left them".
+        local ns preserved=()
+        for ns in "$NAMESPACE" "$LLMSM_NS" "$MONITORING_NAMESPACE" $keda_ns; do
+            [ -n "$ns" ] || continue
+            # Deduped: in a namespace-scoped install NAMESPACE and LLMSM_NS are the
+            # same namespace, so the list printed it twice and read as though two
+            # things had been left behind.
+            local seen=""
+            for already in ${preserved[@]+"${preserved[@]}"}; do
+                [ "$already" = "$ns" ] && { seen=yes; break; }
+            done
+            [ -n "$seen" ] && continue
+            kubectl get namespace "$ns" >/dev/null 2>&1 && preserved+=("$ns")
+        done
+        if [ ${#preserved[@]} -ne 0 ]; then
+            echo ""
+            echo "Namespaces preserved:"
+            printf '  - %s\n' "${preserved[@]}"
+        fi
+    fi
+    echo ""
+    echo "=========================================="
+}

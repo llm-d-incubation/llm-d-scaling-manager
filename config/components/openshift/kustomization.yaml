@@ -1,0 +1,134 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+# Grant the scaling manager controller cluster-monitoring-view so it can query Thanos
+# Querier with its own SA token.
+- manager-cluster-monitoring-view-clusterrolebinding.yaml
+# NOT a binding for the user-workload Prometheus SA. There was one here, granting
+# it cluster-monitoring-view "so it can scrape the controller's secure /metrics
+# endpoint". It did not do that, and could not: cluster-monitoring-view carries
+# `namespaces get` and `prometheuses/api` and NO nonResourceURLs rule, so it
+# cannot authorize a /metrics scrape under any configuration.
+#
+# What actually makes the scrape work, and none of it is an RBAC grant to
+# Prometheus:
+#   the bearerTokenSecret patch    authenticates the scrape as metrics-scraper
+#   the metrics-reader repoint     gives that SA nonResourceURLs: /metrics
+#   UWM's own discovery            with enableUserWorkload: true it scrapes
+#                                  ServiceMonitors in user-defined projects
+#                                  without being told to
+#
+# NOT the user-monitoring label patched onto the Namespace below. In NAMESPACE
+# scope that patch reaches nothing: components/tenant-installable deletes the
+# Namespace object, so the label never lands on the install's namespace at all.
+# It survives only in cluster scope, where the overlay keeps its own Namespace.
+#
+# So the binding handed the UWM Prometheus SA unrestricted platform-API read --
+# every namespace's series -- from a scaling manager install, for no effect.
+# The scrape identity and its long-lived token, referenced by the
+# ServiceMonitor's bearerTokenSecret. A ServiceAccount of its own, never the
+# controller's: a non-expiring token for the controller SA handed its whole
+# identity to anyone who could read Secrets here, and to every Prometheus admin.
+- metrics-scraper-serviceaccount.yaml
+- metrics-scraper-token-secret.yaml
+# Service-ca CA bundle used by the ServiceMonitor to verify the controller's
+# metrics serving certificate (replaces insecureSkipVerify).
+- metrics-server-ca-configmap.yaml
+
+patches:
+# Point the scaling manager at the in-cluster Thanos Querier (OpenShift's user-workload-monitoring
+# stack) and tighten TLS verification — the Service CA certificate is mounted
+# from /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt by the
+# deployment patch below.
+- path: configmap-patch.yaml
+  target:
+    kind: ConfigMap
+    name: manager-config
+- path: deployment-patch.yaml
+  target:
+    kind: Deployment
+    name: controller-manager
+# Append the metrics cert path arg (JSON patch to avoid replacing the args list).
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/args/-
+      value: --metrics-cert-path=/etc/k8s-metrics-server/serving-certs
+  target:
+    kind: Deployment
+    name: controller-manager
+# Request a service-ca serving cert for the metrics Service (metrics-server-cert Secret).
+- patch: |-
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: controller-manager-metrics-service
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: metrics-server-cert
+# Grant the scrape identity read access to the controller's /metrics endpoint
+# so the ServiceMonitor can scrape it.
+- patch: |-
+    - op: replace
+      path: /subjects/0
+      value:
+        kind: ServiceAccount
+        name: metrics-scraper
+  target:
+    kind: ClusterRoleBinding
+    name: metrics-reader-rolebinding
+# Label the scaling manager namespace so OCP user-workload-monitoring Prometheus discovers
+# ServiceMonitors inside it (required for UWM to watch the namespace).
+- patch: |-
+    - op: add
+      path: /metadata/labels/openshift.io~1user-monitoring
+      value: "true"
+  target:
+    kind: Namespace
+# Configure the ServiceMonitor to authenticate using the metrics-scraper token
+# Secret, which is granted metrics-reader access via the patch above.
+- patch: |-
+    - op: add
+      path: /spec/endpoints/0/bearerTokenSecret
+      value:
+        name: metrics-scraper-token
+        key: token
+    - op: remove
+      path: /spec/endpoints/0/bearerTokenFile
+    # Enable TLS verification of the metrics serving cert.
+    - op: replace
+      path: /spec/endpoints/0/tlsConfig/insecureSkipVerify
+      value: false
+    # The namespace here is a PLACEHOLDER. `namespace:` rewrites namespace
+    # fields, not a literal inside a patch value, so this string would keep
+    # saying scaling-manager-system in every other namespace — and Prometheus would reject
+    # the serving cert with "tls: bad certificate" on every scrape, silently,
+    # because the SAN is the real service DNS name. The replacement below puts
+    # the install's own namespace here. Found by installing into a namespace
+    # that is not scaling-manager-system and reading the controller log.
+    - op: add
+      path: /spec/endpoints/0/tlsConfig/serverName
+      value: scaling-manager-controller-manager-metrics-service.PLACEHOLDER-NAMESPACE.svc
+    - op: add
+      path: /spec/endpoints/0/tlsConfig/ca
+      value:
+        configMap:
+          name: scaling-manager-metrics-server-ca
+          key: service-ca.crt
+  target:
+    kind: ServiceMonitor
+    name: controller-manager-metrics-monitor
+# OpenShift's KEDA is the Custom Metrics Autoscaler operator, whose operand runs
+# in openshift-keda, not keda-system. Matches nothing, harmlessly, when the
+# overlay leaves components/external-scaler-networkpolicy out. The `test` makes
+# a changed default fail the build rather than be silently overwritten.
+- patch: |-
+    - op: test
+      path: /spec/ingress/1/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+      value: keda-system
+    - op: replace
+      path: /spec/ingress/1/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+      value: openshift-keda
+  target:
+    group: networking.k8s.io
+    kind: NetworkPolicy
+    name: external-scaler

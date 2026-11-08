@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "question": "slo-to-rate",
+  "source": {
+    "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ttft-open-loop-short/recording.jsonl.gz",
+    "namespace": "ns-01",
+    "model": "model-02",
+    "firstCycle": 1,
+    "lastCycle": 105,
+    "totalCycles": 105,
+    "firstAt": "2026-11-05T08:25:14.87542831Z",
+    "lastAt": "2026-11-05T08:51:16.951628748Z"
+  },
+  "bands": {
+    "method": "block bootstrap",
+    "blockCycles": 4,
+    "resamples": 200,
+    "seed": 1,
+    "loPercent": 10,
+    "hiPercent": 90
+  },
+  "roles": [
+    {
+      "role": "prefill",
+      "variant": "variant-02",
+      "ttft": {
+        "decodeVariant": "variant-01",
+        "targetSeconds": 1,
+        "assumed": []
+      },
+      "results": {
+        "rate": {
+          "refused": {
+            "reason": "NoPrefillCapacity",
+            "detail": "P1 refused V_P of variant-02: NoPrefillCapacity; pass --assume-vp for a flagged answer"
+          }
+        }
+      }
+    },
+    {
+      "role": "fleet",
+      "variant": "variant-01",
+      "results": {
+        "rate": {
+          "refused": {
+            "reason": "NoPrefillCapacity",
+            "detail": "P1 refused V_P of variant-02: NoPrefillCapacity; pass --assume-vp for a flagged answer"
+          }
+        }
+      }
+    }
+  ],
+  "exitCode": 3,
+  "note": "estimate from no readings of the line's own of a 105-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it."
+}

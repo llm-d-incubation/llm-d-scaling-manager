@@ -1,0 +1,123 @@
+package scaletarget
+
+import (
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/resources"
+)
+
+type deploymentAccessor struct {
+	deployment *appsv1.Deployment
+}
+
+func NewDeploymentAccessor(deploy *appsv1.Deployment) ScaleTargetAccessor {
+	if deploy == nil {
+		return nil
+	}
+	accessor := deploymentAccessor{
+		deployment: deploy,
+	}
+	return &accessor
+}
+
+// LabelSelector is a Deployment scale target's spec.selector, which selects
+// the pods of every ReplicaSet generation; nil for any other target.
+func LabelSelector(acc ScaleTargetAccessor) *v1.LabelSelector {
+	if d, ok := acc.(*deploymentAccessor); ok {
+		return d.deployment.Spec.Selector
+	}
+	return nil
+}
+
+// OwnedByDeployment reports whether a pod is controlled by a ReplicaSet of the
+// named Deployment. A Deployment names each ReplicaSet
+// <deployment>-<pod-template-hash> and stamps that hash on the ReplicaSet's
+// pods, so the pod's own label names the one owner that counts. Labels alone
+// cannot answer this: any pod may copy a Deployment's labels.
+func OwnedByDeployment(p *corev1.Pod, deployment string) bool {
+	hash := p.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
+	if hash == "" {
+		return false
+	}
+	for _, o := range p.OwnerReferences {
+		if o.Controller != nil && *o.Controller && o.Kind == constants.ReplicaSetKind && o.Name == deployment+"-"+hash {
+			return true
+		}
+	}
+	return false
+}
+
+// Annotations is the scale target's own metadata annotations -- the
+// Deployment's or the LeaderWorkerSet's, not its pod template's, so setting
+// one rolls nothing. Nil for an unknown kind.
+func Annotations(acc ScaleTargetAccessor) map[string]string {
+	switch t := acc.(type) {
+	case *deploymentAccessor:
+		return t.deployment.GetAnnotations()
+	case *lwsAccessor:
+		return t.lws.GetAnnotations()
+	}
+	return nil
+}
+
+func (r *deploymentAccessor) GetReplicas() *int32 {
+	// r.deployment is always not nil
+	return r.deployment.Spec.Replicas
+}
+
+func (r *deploymentAccessor) GetStatusReplicas() int32 {
+	// r.deployment is always not nil
+	return r.deployment.Status.Replicas
+}
+
+func (r *deploymentAccessor) GetStatusReadyReplicas() int32 {
+	// r.deployment is always not nil
+	return r.deployment.Status.ReadyReplicas
+}
+
+func (r *deploymentAccessor) GetTotalGPUsPerReplica() int {
+	// r.deployment is always not nil
+	total := resources.GetContainersGPUs(r.deployment.Spec.Template.Spec.Containers)
+	// Default to 1 GPU if no explicit requests found
+	// (common for inference workloads that may not have resource requests)
+	if total == 0 {
+		return 1
+	}
+	return total
+}
+
+func (r *deploymentAccessor) GetDeletionTimestamp() *v1.Time {
+	// r.deployment is always not nil
+	return r.deployment.DeletionTimestamp
+}
+
+func (r *deploymentAccessor) GetUID() types.UID {
+	return r.deployment.UID
+}
+
+func (r *deploymentAccessor) GetLeaderPodTemplateSpec() *corev1.PodTemplateSpec {
+	// r.deployment is always not nil
+	return &r.deployment.Spec.Template
+}
+
+func (r *deploymentAccessor) GetWorkerPodTemplateSpec() *corev1.PodTemplateSpec {
+	return r.GetLeaderPodTemplateSpec()
+}
+
+func (r *deploymentAccessor) GetGroupSize() int32 {
+	return 1
+}
+
+func (r *deploymentAccessor) GetName() string {
+	// r.deployment is always not nil
+	return r.deployment.Name
+}
+
+func (r *deploymentAccessor) GetNamespace() string {
+	// r.deployment is always not nil
+	return r.deployment.Namespace
+}

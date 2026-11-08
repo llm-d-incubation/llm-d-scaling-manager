@@ -1,0 +1,185 @@
+name: kueue-borrowing
+
+prerequisites:
+  kueue:
+    note: Kueue runs and its image carries a version tag; then each ClusterQueue's cohort and preemption.
+    run: |
+      kubectl get deploy kueue-controller-manager -n <kueue-ns> \
+        -o jsonpath='{.status.readyReplicas} ready, image {.spec.template.spec.containers[*].image}{"\n"}'
+      kubectl get clusterqueue -o custom-columns='NAME:.metadata.name,COHORT:.spec.cohortName,RECLAIM:.spec.preemption.reclaimWithinCohort,BORROW_WITHIN:.spec.preemption.borrowWithinCohort'
+  rbac:
+    note: >-
+      Check what the controller may read. Every line must print yes.
+    run: |
+      SA=system:serviceaccount:<scaling-manager-namespace>:scaling-manager-controller-manager
+      kubectl auth can-i list workloads.kueue.x-k8s.io --all-namespaces --as="$SA"
+      kubectl auth can-i list cohorts.kueue.x-k8s.io --as="$SA"
+      kubectl auth can-i get deployments/kueue-controller-manager -n <kueue-ns> --as="$SA"
+      kubectl auth can-i get leases.coordination.k8s.io/c1f6bfd2.kueue.x-k8s.io -n <kueue-ns> --as="$SA"
+      kubectl auth can-i list resourcequotas -n <namespace> --as="$SA"
+  grant:
+    note: (cluster admin) Any no above. Re-run the admin phase with the limiter the install declares.
+    run: |
+      KUEUE_NAMESPACE=<kueue-ns> NAMESPACE=<namespace> make setup-prereqs \
+        LLMSM_LIMITER=gpu-inventory,quota LLMSM_QUOTAS='<accelerator>=-1' LLMSM_QUOTA_KUEUE=true
+  grantcluster:
+    note: >-
+      (cluster admin) A cluster-scoped install instead: re-apply its manifests. Its
+      manager ClusterRole carries every read above.
+    run: |
+      make setup-prereqs SCOPE=cluster LLMSM_NS=<scaling-manager-namespace>
+  bound:
+    note: >-
+      Borrowing needs a GPU bound. Print the queue's nominal and borrowingLimit per
+      flavor, then the namespace's ResourceQuotas: a GPU ResourceQuota must be at most
+      nominal plus borrowingLimit.
+    run: |
+      kubectl get clusterqueue <cluster-queue> \
+        -o jsonpath='{range .spec.resourceGroups[*].flavors[*]}{.name}{":"}{range .resources[*]}{" "}{.name}{" nominal="}{.nominalQuota}{" borrowingLimit="}{.borrowingLimit}{end}{"\n"}{end}'
+      kubectl get resourcequota -n <namespace> -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.hard}{"\n"}{end}'
+  kueueconfig:
+    note: >-
+      Kueue settings borrowing does not support. Expect no fairSharing block, and no
+      waitForPodsReady; if waitForPodsReady is there, its timeout must exceed your
+      slowest replica start.
+    run: |
+      kubectl get configmap kueue-manager-config -n <kueue-ns> \
+        -o jsonpath='{.data.controller_manager_config\.yaml}' | grep -A4 -E 'fairSharing|waitForPodsReady'
+  managed:
+    note: >-
+      Every GPU pod in the namespace is Kueue-managed: one Workload per replica (or
+      replica group), with quota reserved. Tenants must not write Workloads: expect no.
+    run: |
+      kubectl get workloads.kueue.x-k8s.io -n <namespace> \
+        -o custom-columns='NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind,RESERVED:.status.conditions[?(@.type=="QuotaReserved")].status'
+      kubectl auth can-i create workloads.kueue.x-k8s.io -n <namespace> --as=<tenant>
+  drain:
+    note: >-
+      Serving pods drain on a preemption. The first command writes the drain patch and
+      shows it; the second applies it, restarting the model servers.
+    run: |
+      make workload-patch NAMESPACE=<namespace>
+      make workload-patch NAMESPACE=<namespace> LLMSM_WORKLOAD_PATCH_APPLY=true
+
+deploy:
+  enable:
+    note: Namespace owner. A GPU bound plus a Kueue-backed quota; -1 lets Kueue set the figure.
+    run: |
+      make deploy-scaling-manager NAMESPACE=<namespace> \
+        LLMSM_LIMITER=gpu-inventory,quota LLMSM_QUOTAS='<accelerator>=-1' LLMSM_QUOTA_KUEUE=true
+  cluster:
+    note: >-
+      Or, cluster admin: the same quota in the cluster policy every controller reads.
+      A gpu-inventory entry already published there is kept.
+    run: |
+      make enable-physical-limiter LLMSM_LIMITER_TYPE=quota LLMSM_QUOTAS='<accelerator>=-1' LLMSM_QUOTA_KUEUE=true
+
+verify:
+  log:
+    note: The effective caps, then the borrowing figures. Both are logged when they change.
+    run: |
+      kubectl logs -n <scaling-manager-namespace> deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep -E 'quota entry bounded by external caps|Kueue borrowing applied|borrowing frozen at the last figures|external quota source' | tail -5
+  budgets:
+    note: >-
+      Per namespace and accelerator: guaranteed, borrowable, used, and the reason
+      borrowable is 0. No reason and borrowable above 0: borrowing is counted.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n <scaling-manager-namespace> -o jsonpath='{.data.limiterBudgets}' \
+        | jq -c '.entries[] | {namespace, accelerator, guaranteed, borrowable, used, reason}'
+
+pilot:
+  set:
+    note: >-
+      Count borrowing only in the namespaces listed. Find the policy ConfigMap the
+      controller reads, then set borrowNamespaces on the Kueue-backed quota entry.
+    run: |
+      STATUS=$(kubectl get cm scaling-manager-controller-status -n <scaling-manager-namespace> -o json)
+      POLICY_NS=$(printf '%s' "$STATUS" | jq -r '.data.policyNamespace // empty')
+      POLICY_NS=${POLICY_NS:-<scaling-manager-namespace>}
+      POLICY_CM=$(printf '%s' "$STATUS" | jq -r '.data.policyConfigMap // empty')
+      POLICY_CM=${POLICY_CM:-scaling-manager-scaling-policy-config}
+      kubectl get configmap "$POLICY_CM" -n "$POLICY_NS" -o jsonpath='{.data.default}' \
+        | yq '(.limiters[] | select(.type == "quota" and .kueue.enabled == true) | .kueue.borrowNamespaces) = ["<namespace>"]' \
+        > policy-default.yaml
+      kubectl patch configmap "$POLICY_CM" -n "$POLICY_NS" --type=merge \
+        -p "$(jq -n --rawfile d policy-default.yaml '{data: {default: $d}}')"
+  check:
+    note: Every namespace left out now reads not-selected.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n <scaling-manager-namespace> -o jsonpath='{.data.limiterBudgets}' \
+        | jq -c '.entries[] | select(.reason == "not-selected") | {namespace, accelerator}'
+
+lenders:
+  set:
+    note: >-
+      Opt in (experimental): count what lenders Kueue does not reclaim for lend, and
+      give it back when they wait. Same policy ConfigMap as the pilot; entries with
+      countBorrowable false are left alone (validation refuses the key there).
+    run: |
+      STATUS=$(kubectl get cm scaling-manager-controller-status -n <scaling-manager-namespace> -o json)
+      POLICY_NS=$(printf '%s' "$STATUS" | jq -r '.data.policyNamespace // empty')
+      POLICY_NS=${POLICY_NS:-<scaling-manager-namespace>}
+      POLICY_CM=$(printf '%s' "$STATUS" | jq -r '.data.policyConfigMap // empty')
+      POLICY_CM=${POLICY_CM:-scaling-manager-scaling-policy-config}
+      kubectl get configmap "$POLICY_CM" -n "$POLICY_NS" -o jsonpath='{.data.default}' \
+        | yq '(.limiters[] | select(.type == "quota" and .kueue.enabled == true and .kueue.countBorrowable != false) | .kueue.releaseToNonReclaimingLenders) = true' \
+        > policy-default.yaml
+      kubectl patch configmap "$POLICY_CM" -n "$POLICY_NS" --type=merge \
+        -p "$(jq -n --rawfile d policy-default.yaml '{data: {default: $d}}')"
+  check:
+    note: >-
+      No namespace reads lender-cannot-reclaim any more; each release to a waiting
+      lender is logged, and recorded on the model's scale target.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n <scaling-manager-namespace> -o jsonpath='{.data.limiterBudgets}' \
+        | jq -c '.entries[] | select(.reason == "lender-cannot-reclaim") | {namespace, accelerator}'
+      kubectl logs -n <scaling-manager-namespace> deploy/scaling-manager-controller-manager --tail=-1 \
+        | grep 'Releasing borrowed capacity' | grep 'lender-waiting' | tail -5
+      kubectl get events -n <namespace> --field-selector reason=BorrowedCapacityReleased
+      kubectl get events -n <namespace> --field-selector reason=LenderReleaseBlocked
+  unset:
+    note: >-
+      Turn it off. First cap each borrowing model at what its guaranteed figure
+      holds: what it borrowed from a lender Kueue never reclaims for stays borrowed
+      once the setting is off. Raise maxReplicaCount again once it is off.
+    run: |
+      kubectl patch scaledobject <scaledobject> -n <namespace> --type=merge \
+        -p '{"spec":{"maxReplicaCount":<guaranteed-replicas>}}'
+      STATUS=$(kubectl get cm scaling-manager-controller-status -n <scaling-manager-namespace> -o json)
+      POLICY_NS=$(printf '%s' "$STATUS" | jq -r '.data.policyNamespace // empty')
+      POLICY_NS=${POLICY_NS:-<scaling-manager-namespace>}
+      POLICY_CM=$(printf '%s' "$STATUS" | jq -r '.data.policyConfigMap // empty')
+      POLICY_CM=${POLICY_CM:-scaling-manager-scaling-policy-config}
+      kubectl get configmap "$POLICY_CM" -n "$POLICY_NS" -o jsonpath='{.data.default}' \
+        | yq 'del(.limiters[].kueue.releaseToNonReclaimingLenders)' \
+        > policy-default.yaml
+      kubectl patch configmap "$POLICY_CM" -n "$POLICY_NS" --type=merge \
+        -p "$(jq -n --rawfile d policy-default.yaml '{data: {default: $d}}')"
+
+reasons:
+  read:
+    note: Every namespace and accelerator whose borrowing is withheld, frozen, or counted at 0, with its reason.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n <scaling-manager-namespace> -o jsonpath='{.data.limiterBudgets}' \
+        | jq -c '.entries[] | select(.reason) | {namespace, accelerator, reason}'
+
+cleanup:
+  stop:
+    note: >-
+      Stop counting borrowing; the Kueue cap stays, at nominal. Nothing is evicted.
+      The rest of the entry's kueue block, borrowNamespaces included, is kept.
+    run: |
+      make deploy-scaling-manager NAMESPACE=<namespace> \
+        LLMSM_LIMITER=gpu-inventory,quota LLMSM_QUOTAS='<accelerator>=-1' LLMSM_QUOTA_KUEUE=true LLMSM_QUOTA_KUEUE_BORROW=false
+      # the cluster policy instead:
+      # make enable-physical-limiter LLMSM_LIMITER_TYPE=quota LLMSM_QUOTAS='<accelerator>=-1' LLMSM_QUOTA_KUEUE=true LLMSM_QUOTA_KUEUE_BORROW=false
+  drain:
+    note: >-
+      Models move back under the cap only as they scale down. Lists the ones still
+      above it, then how many entries the list left out (truncated); done when both
+      are empty and 0.
+    run: |
+      BUDGETS=$(kubectl get configmap scaling-manager-controller-status -n <scaling-manager-namespace> -o jsonpath='{.data.limiterBudgets}')
+      printf '%s' "$BUDGETS" | jq -c '.entries[] | select(.guaranteed >= 0 and .used > .guaranteed) | {namespace, accelerator, guaranteed, used}'
+      printf '%s' "$BUDGETS" | jq '.truncated // 0'

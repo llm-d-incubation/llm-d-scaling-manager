@@ -1,0 +1,112 @@
+# External-scaler the scaling manager discovery — no the old CRD, no prometheus-adapter.
+#
+# The scaling manager computes the desired replicas with its capacity model. Instead of publishing
+# a metric for KEDA to read, the scaling manager implements KEDA's external-scaler gRPC contract
+# and returns the decision directly. KEDA/HPA actuate.
+#
+# Discovery is the call itself: KEDA naming this scaler in a trigger is what makes
+# the workload scaling manager's to manage, and the trigger `metadata` below is the whole
+# per-variant configuration surface. There are no llm-d.ai/* annotations — the scaling manager no
+# longer looks for the workloads it manages, so there is nothing for an opt-in
+# annotation to opt into (docs/plans/engine/keda-driven-discovery.md).
+#
+# Requires the external-scaler Service that routes to the scaling manager controller's
+# gRPC port (config/base/manager/external-scaler-service.yaml). With the deploy
+# overlay's namePrefix (scaling-manager-) it resolves to
+#   scaling-manager-external-scaler.scaling-manager-system.svc:9090
+#
+# The trigger is `external-push`, so KEDA holds a StreamIsActive stream open and
+# the scaling manager pushes activation the moment a decision lands. That is what makes
+# scale-from-zero react in ~the detection interval instead of waiting up to
+# pollingInterval: with minReplicaCount: 0, a workload parked at zero is woken by
+# the push, not by the next poll. A `type: external` trigger also works — KEDA
+# then polls IsActive instead — but scale-from-zero is correspondingly slower.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: sample-deployment-scaler
+  namespace: llm-d-sim
+  labels:
+    app: sample-deployment
+    scaler: keda-llm-d-scaling-manager
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-deployment
+  pollingInterval: 5
+  # KEDA's own timers, and they are NOT the whole story. cooldownPeriod runs only
+  # AFTER the scaling manager has already decided to park, because the external scaler reports the
+  # trigger active until then — so the time from the last request to zero is
+  # scaleToZero.retentionPeriod (the scaling manager, default 10m) PLUS this, in sequence.
+  #
+  # Both gate the DEACTIVATION step only -- the drop to minReplicaCount once the
+  # trigger reports inactive. An ordinary scale-down while active goes through the
+  # HPA and is not held by either. initialCooldownPeriod is measured from
+  # ScaledObject creation and consulted only while a trigger has never once been
+  # active, so it does nothing for an adopted object, whose creationTimestamp is
+  # older than the adoption.
+  cooldownPeriod: 30
+  initialCooldownPeriod: 30
+  # Park the workload at zero when the scaling manager decides it needs no replicas; activation
+  # arrives over the push stream.
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  # No fallback, because the floor is 0. KEDA treats a trigger error as
+  # "inactive": with no fallback that only marks the trigger as failing, but
+  # with fallback.replicas 0 it parks the workload once cooldownPeriod passes.
+  # A non-zero replicas avoids that but raises a running fleet to at least that
+  # many for as long as the scaler fails, which a floor of 0 did not ask for.
+  # Before the scaling manager's first decision after a restart the scaler answers the current
+  # replica count, so a restart needs no fallback either way. With a floor of
+  # 1 or more, add one -- it covers a controller that is down:
+  #   fallback: {failureThreshold: 3, replicas: <the floor>, behavior: currentReplicasIfHigher}
+  # (behavior needs KEDA 2.17 or later.)
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      name: scaling-manager-keda-hpa-sample-deployment
+      # The same behavior the installer writes for every ScaledObject it
+      # generates (render_default_scaledobject in deploy/lib/scaledobject.sh,
+      # with its defaults); hack/check-install-defaults.sh keeps the two equal.
+      #
+      # Scale-down waits for 300s of sustained low demand. With a 0s window, as
+      # this sample used to have, one low reading removed replicas at once.
+      # Before the scaling manager's first decision for a variant the scaler answers the
+      # target's current replica count, so that window is not what holds a
+      # fresh ScaledObject; it guards the first decisions a new leader makes.
+      # Scale-up acts on the current recommendation: the wait is already paid
+      # in cold start.
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 5
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 120
+  triggers:
+  - type: external-push
+    name: scaling-manager-external-scaler
+    # The scaler answers a replica count, which only AverageValue (KEDA's
+    # default) keeps a count; under Value the HPA multiplies it by the
+    # current replicas.
+    metricType: AverageValue
+    metadata:
+      # The scaling manager controller's external-scaler gRPC service (host:port).
+      scalerAddress: scaling-manager-external-scaler.scaling-manager-system.svc:9090
+      # The model this variant serves. Required: it is the grouping key for every
+      # multi-variant decision.
+      modelID: default/default
+      # Per-replica cost for cost-aware optimization. Optional; defaults to "10.0".
+      variantCost: "10.0"
+      # The scale target is NOT set here. It is read from this ScaledObject's own
+      # spec.scaleTargetRef, so the two cannot disagree.
+    authenticationRef:      # TLS, the default. Plaintext install: ...svc.cluster.local:9090 and no authenticationRef
+      name: scaling-manager-external-scaler-scaling-manager-system
+      kind: ClusterTriggerAuthentication

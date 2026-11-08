@@ -1,0 +1,87 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Serves metrics WITHOUT the authn/authz filter.
+#
+# Split out from namespace RBAC because the two are separable, and on OpenShift
+# they must be: the metrics endpoint's filter issues TokenReviews and
+# SubjectAccessReviews, which are cluster-scoped APIs, so a tenant installing
+# alone cannot have it — but a CLUSTER ADMIN installing the same namespace-scoped
+# the scaling manager can, and should not lose authenticated metrics for a limitation that does
+# not apply to them.
+#
+# Not part of any shipped overlay. The install has a prereqs phase now, so the
+# cluster-scoped RBAC for authenticated metrics is created once by an admin and a
+# namespace-scoped controller keeps them.
+#
+# Add this component by hand for the one case that remains: a cluster where no
+# admin will ever run that phase, and a namespace admin needs an overlay with no
+# cluster-scoped object in it at all. test/e2e/testdata/secondary-controller uses
+# it for that reason — a second controller in a test must leave no cluster-wide
+# trace it could take from the first.
+patches:
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: metrics-auth-role
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: metrics-auth-rolebinding
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: metrics-reader
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: metrics-reader-rolebinding
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: epp-metrics-reader-role
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: epp-metrics-reader-role-binding
+# The `test` op is load-bearing, not decoration. A bare positional `replace` into
+# an args array silently rewrites whatever happens to sit at that index the day
+# someone inserts a flag above it.
+- patch: |-
+    - op: test
+      path: /spec/template/spec/containers/0/args/4
+      value: "--metrics-secure=true"
+    - op: replace
+      path: /spec/template/spec/containers/0/args/4
+      value: "--metrics-secure=false"
+  target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: controller-manager
+# The ServiceMonitor has to agree with the endpoint it scrapes. Left on https it
+# would scrape a plain-HTTP port over TLS and collect nothing.
+- patch: |-
+    - op: replace
+      path: /spec/endpoints/0/scheme
+      value: http
+    - op: remove
+      path: /spec/endpoints/0/tlsConfig
+    - op: remove
+      path: /spec/endpoints/0/bearerTokenFile
+  target:
+    group: monitoring.coreos.com
+    kind: ServiceMonitor
+    name: controller-manager-metrics-monitor

@@ -1,0 +1,209 @@
+package saturation
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"regexp"
+	"sort"
+	"strconv"
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/require"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
+)
+
+// "A signal in one of those three log lines and absent from the metric
+// registry is a failure" -- docs/proposals/signals-as-metrics.md, "Making it
+// not rot". Scoped to derived-mu, the line stage 3 publishes from; the other
+// two (replica-capacity-decision, throughput-demand-floor) join this table
+// when their families are built.
+//
+// derived-mu is logged per POD and the metrics are per VARIANT, so a mapping
+// here says the field's variant-level counterpart is published, not that the
+// two numbers are equal: rate on one pod is one reading of the median
+// llmsm_service_rate_per_replica publishes.
+//
+// Every key of the log call must appear below, either mapped to a metric that
+// InitMetrics registers or excluded with its reason. A key added to the log
+// with no entry fails, and so does an entry for a key the log no longer has.
+type derivedMuField struct {
+	metric   string // the metric carrying the field's variant-level counterpart
+	excluded string // or why no metric carries it
+}
+
+var derivedMuMetricFields = map[string]derivedMuField{
+	"variant":         {metric: constants.LLMSMServiceRatePerReplica}, // the variant_name label every series carries
+	"namespace":       {metric: constants.LLMSMServiceRatePerReplica}, // the namespace label every series carries
+	"ok":              {metric: constants.LLMSMServiceRatePerReplica}, // a derived rate in use shows as source=derived or borrowed-line; ok=true alone does not mean it was used (an own measured window can win)
+	"rate":            {metric: constants.LLMSMServiceRatePerReplica},
+	"kPrice":          {metric: constants.LLMSMPricingK},
+	"itlAtKPrice":     {metric: constants.LLMSMITLSecondsAtPricingK},
+	"itlA":            {metric: constants.LLMSMITLLineSlope},
+	"itlB":            {metric: constants.LLMSMITLLineIntercept},
+	"itlZero":         {metric: constants.LLMSMITLLineSamples},        // no line is the slope's absence; the count explains it
+	"maxNumSeqs":      {metric: constants.LLMSMEngineConfig},          // the max_num_seqs label
+	"replicaKvTokens": {metric: constants.LLMSMKvCacheTokensCapacity}, // summed over the variant's pods
+
+	"pod":                  {excluded: "per-pod is the log's granularity; a pod label scales the series with the fleet being autoscaled"},
+	"seqs":                 {excluded: "per-pod intermediate of rate (k*C/KVreq capped at maxNumSeqs); rate carries the result"},
+	"tokenSec":             {excluded: "per-pod intermediate of rate (rate = tokenSec / muDivisor)"},
+	"maxNumActiveSeqs":     {excluded: "llmsm_engine_config has no max_num_active_seqs label; the field shows the cap that lowers maxNumSeqs when it binds (issue #335)"},
+	"batchCap":             {excluded: "the cap per rank seqs was capped at (issue #420): maxNumSeqs's figure where the flags state it, else the declared or learned cap, which no engine-config label carries"},
+	"batchCapSource":       {excluded: "a diagnostic: where batchCap came from (flags, declared, learned, default), the k2-decision line's batchCapSource for the same cap"},
+	"engineRanks":          {excluded: "per-pod: the data-parallel ranks the row reports, which scale maxNumSeqs; the configured size is the data_parallel_size label of llmsm_engine_config"},
+	"lineBorrowed":         {metric: constants.LLMSMServiceRatePerReplica}, // source=borrowed-line
+	"lineBorrowedFrom":     {excluded: "a lender variant name: a label value that changes with the lender, published as donor on llmsm_learned_state_borrowed (PR #152), not here"},
+	"lineHeld":             {excluded: "a diagnostic: the line is the variant's own last slope, held for want of readings (issue #284); its rate is the one llmsm_service_rate_per_replica publishes"},
+	"avgOutputTokens":      {excluded: "the shape family (stage 1, llmsm_shape_output_tokens), not built yet"},
+	"muDivisor":            {excluded: "the shape family (stage 1, llmsm_shape_output_tokens{window}), not built yet"},
+	"avgInputTokens":       {excluded: "the shape family (stage 1, llmsm_shape_input_tokens), not built yet"},
+	"muInputTokens":        {excluded: "the shape family (stage 1, llmsm_shape_input_tokens{window}), not built yet"},
+	"muShortWindow":        {excluded: "the shape family (stage 1, the window label), not built yet"},
+	"kvReqPerSeq":          {excluded: "the shape family (stage 1, llmsm_shape_kv_tokens_per_request{basis=priced}), not built yet"},
+	"kvReqFleet":           {excluded: "the shape family (stage 1, llmsm_shape_kv_tokens_per_request{basis=fleet}), not built yet"},
+	"outputDispersion":     {excluded: "a term of kvReqPerSeq (#276), and published with it: the shape family (stage 1), not built yet"},
+	"residentKVPerSeq":     {excluded: "the measured KV per running request (#277), which kvReqPerSeq is that reading held to its bounds: the shape family (stage 1), not built yet"},
+	"residentRunning":      {excluded: "how many running requests residentKVPerSeq was measured over (#277): a term of kvReqPerSeq, published with it"},
+	"reportOnly":           {excluded: "an aggregated line's figure is reported, not priced (#432); llmsm_service_rate_per_replica publishes it as source=derived-report-only"},
+	"residentKVBound":      {excluded: "which bound kvReqPerSeq held residentKVPerSeq to (#277), a label, not a figure: the shape family (stage 1), not built yet"},
+	"residentKVBoundFleet": {excluded: "which bound kvReqFleet held residentKVPerSeq to (#277), a label, not a figure: the shape family (stage 1), not built yet"},
+	"shapeG":               {excluded: "an aggregated line's shape now (#275): a term of the price, logged to diagnose it; llmsm_service_rate_per_replica publishes the rate"},
+	"lineShapeG":           {excluded: "the shape an aggregated line was fitted at (#275): a term of the price, logged to diagnose it"},
+	"priceCase":            {excluded: "which case priced an aggregated line (#275), a label, not a figure"},
+	"pricedA":              {excluded: "the slope an aggregated line priced (#275): itlA moved by the shape term; llmsm_itl_line_slope publishes the line's own"},
+	"shapeTermC":           {excluded: "the prefill cost per token of an aggregated line (#275): a term of the price, logged to diagnose it"},
+	"shapeTermIdentified":  {excluded: "whether shapeTermC is identified (#275), a flag, not a figure"},
+	"prefillStepsPerToken": {excluded: "the prefill steps per prompt token of an aggregated variant (#275): a term of the occupancy correction"},
+	"prefillKnown":         {excluded: "whether prefillStepsPerToken is read (#275), a flag, not a figure"},
+	"prefillRefused":       {excluded: "the prefill readings an aggregated variant has had refused (#275): residence under the output's own steps, a diagnostic"},
+	"occupancy":            {excluded: "the share of an aggregated replica's steps that emit a token (#275), already in rate"},
+	"gpsMedianErrPct":      {excluded: "the last comparable cycle's median GPS error of an aggregated figure (#275), a diagnostic of the lift"},
+	"gpsMedianErrOK":       {excluded: "whether gpsMedianErrPct is a reading (#275), a flag, not a figure"},
+	"agreeCycles":          {excluded: "the agreeing cycles behind an aggregated variant's lift (#275), a counter of the lift"},
+	"liftReason":           {excluded: "why an aggregated figure sizes or not (#275), a label, not a figure"},
+	"lifted":               {excluded: "an aggregated figure sizes (#275); llmsm_service_rate_per_replica says it by its source"},
+}
+
+// derivedMuLogKeys parses analyze.go and returns the string-literal keys of
+// the Info("derived-mu", ...) call.
+func derivedMuLogKeys(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "analyze.go", nil, 0)
+	require.NoError(t, err)
+
+	var calls int
+	var keys []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Info" {
+			return true
+		}
+		if msg, ok := stringLit(call.Args[0]); !ok || msg != "derived-mu" {
+			return true
+		}
+		calls++
+		// Keys and values alternate after the message. A non-literal key is a
+		// key this test cannot check, so it fails rather than being skipped.
+		for i := 1; i < len(call.Args); i += 2 {
+			key, ok := stringLit(call.Args[i])
+			require.True(t, ok, "derived-mu argument %d is not a string-literal key at %s",
+				i, fset.Position(call.Args[i].Pos()))
+			keys = append(keys, key)
+		}
+		return true
+	})
+	require.Equal(t, 1, calls, "expected exactly one Info(\"derived-mu\", ...) call in analyze.go")
+	// An empty extraction would compare clean against anything.
+	require.NotEmpty(t, keys, "found the derived-mu call but extracted no keys")
+	return keys
+}
+
+func stringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	return s, err == nil
+}
+
+// namesRegistry records the fully-qualified name of every metric registered
+// through it.
+type namesRegistry struct {
+	names map[string]bool
+}
+
+var fqNamePattern = regexp.MustCompile(`fqName: "([^"]+)"`)
+
+func (r *namesRegistry) Register(c prometheus.Collector) error {
+	ch := make(chan *prometheus.Desc, 64)
+	go func() {
+		c.Describe(ch)
+		close(ch)
+	}()
+	for d := range ch {
+		// Desc exposes its name only through String().
+		if m := fqNamePattern.FindStringSubmatch(d.String()); m != nil {
+			r.names[m[1]] = true
+		}
+	}
+	return nil
+}
+
+func (r *namesRegistry) MustRegister(cs ...prometheus.Collector) {
+	for _, c := range cs {
+		_ = r.Register(c)
+	}
+}
+
+func (r *namesRegistry) Unregister(prometheus.Collector) bool { return false }
+
+func TestDerivedMuFieldsArePublished(t *testing.T) {
+	keys := derivedMuLogKeys(t)
+
+	reg := &namesRegistry{names: map[string]bool{}}
+	require.NoError(t, metrics.InitMetrics(reg))
+	// The pattern match must find names at all, or every mapping below would
+	// fail for the wrong reason -- and an exclusion-only table would pass.
+	require.True(t, reg.names[constants.LLMSMAnalyzerTarget],
+		"the registry recorder read no names; the Desc format may have changed")
+
+	inLog := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		inLog[key] = true
+		f, ok := derivedMuMetricFields[key]
+		if !ok {
+			t.Errorf("derived-mu logs %q, which no metric publishes and no exclusion names: "+
+				"publish it, or add it to derivedMuMetricFields with the reason it is not", key)
+			continue
+		}
+		switch {
+		case f.metric != "" && f.excluded != "":
+			t.Errorf("%q is both mapped to %s and excluded", key, f.metric)
+		case f.metric != "":
+			if !reg.names[f.metric] {
+				t.Errorf("derived-mu field %q maps to %s, which InitMetrics does not register", key, f.metric)
+			}
+		case f.excluded == "":
+			t.Errorf("%q has neither a metric nor a reason", key)
+		}
+	}
+
+	var stale []string
+	for key := range derivedMuMetricFields {
+		if !inLog[key] {
+			stale = append(stale, key)
+		}
+	}
+	sort.Strings(stale)
+	require.Empty(t, stale, "derivedMuMetricFields names keys derived-mu no longer logs")
+}

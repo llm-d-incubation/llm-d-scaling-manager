@@ -1,0 +1,93 @@
+name: admin-cluster-setup
+
+prerequisites:
+  namespace:
+    note: The namespace you are preparing. It must already run llm-d.
+    run: export NAMESPACE=team-a
+  check:
+    note: Read-only. Checks the namespace, monitoring and the EPP.
+    run: make check-prereqs
+
+deploy:
+  prereqs:
+    run: make setup-prereqs
+  out_of_reach:
+    note: Run the controller in scaling-manager-NAMESPACE, which you own, managing NAMESPACE.
+    run: |
+      make setup-prereqs   LLMSM_NS=scaling-manager-${NAMESPACE} LLMSM_WATCH_NS=${NAMESPACE}
+      make deploy-scaling-manager      LLMSM_NS=scaling-manager-${NAMESPACE} LLMSM_WATCH_NS=${NAMESPACE}
+  gpu_quota:
+    note: Cap the namespace's GPUs at admission. Size it to the tenant's entitlement.
+    run: |
+      kubectl -n ${NAMESPACE} create quota scaling-manager-gpus --hard=requests.nvidia.com/gpu=8
+      kubectl -n ${NAMESPACE} describe quota scaling-manager-gpus
+  namespace_read:
+    note: Grant the Namespace read and the scaling-manager-policy read by hand, then restart the controller.
+    run: |
+      kubectl apply -f - <<EOF
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: scaling-manager-namespace-reader-${NAMESPACE}
+      rules:
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        resourceNames: ["${NAMESPACE}", "scaling-manager-policy"]
+        verbs: ["get"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: scaling-manager-namespace-reader-${NAMESPACE}
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: scaling-manager-namespace-reader-${NAMESPACE}
+      subjects:
+      - kind: ServiceAccount
+        name: scaling-manager-controller-manager
+        namespace: ${NAMESPACE}
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: scaling-manager-policy-reader
+        namespace: scaling-manager-policy
+      rules:
+      - apiGroups: [""]
+        resources: ["configmaps"]
+        verbs: ["get", "list", "watch"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: scaling-manager-policy-reader-${NAMESPACE}
+        namespace: scaling-manager-policy
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: scaling-manager-policy-reader
+      subjects:
+      - kind: ServiceAccount
+        name: scaling-manager-controller-manager
+        namespace: ${NAMESPACE}
+      EOF
+      kubectl -n ${NAMESPACE} rollout restart deploy/scaling-manager-controller-manager
+
+verify:
+  no_cluster_install:
+    note: List every controller. A line without --watch-namespace in ARGS is cluster-scoped.
+    run: |
+      kubectl get deploy -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager \
+        -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,ARGS:.spec.template.spec.containers[0].args
+  objects:
+    note: Show this install's ServiceMonitor and hashed cluster RBAC (shasum -a 256 on macOS).
+    run: |
+      kubectl get servicemonitor -n ${NAMESPACE}
+      kubectl get clusterrole,clusterrolebinding | grep "$(printf '%s' "${NAMESPACE}" | sha256sum | cut -c1-8)"
+
+cleanup:
+  undo:
+    run: make undeploy-scaling-manager LLMSM_NS=${NAMESPACE}
+  out_of_reach:
+    run: make undeploy-scaling-manager LLMSM_NS=scaling-manager-${NAMESPACE}

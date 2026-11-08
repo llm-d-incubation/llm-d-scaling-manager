@@ -1,0 +1,26 @@
+metadata:
+  labels:
+    name: prefill-heavy
+    description: |
+      Stress-tests prefill (prompt processing) with long input, short output.
+spec:
+  backend:
+    kind: openai_http
+    target: REPLACE_ENV_LLMDBENCH_HARNESS_STACK_ENDPOINT_URL
+    model: REPLACE_ENV_LLMDBENCH_DEPLOY_CURRENT_MODEL
+    request_format: /v1/completions
+  profile:
+    kind: poisson
+    # Substituted from REQUEST_RATE (default 10, halved from the old fixed 20).
+    # Not a REPLACE_ENV_* token: those resolve from a registry inside
+    # llm-d-benchmark, which is a pinned clone that benchmark-install re-checks
+    # out, so a token added there would be reverted on the next install. This one
+    # is ours and is substituted before the file reaches the harness.
+    rate: __REQUEST_RATE__
+  data:
+  - kind: synthetic_text
+    prompt_tokens: 4000
+    output_tokens: 1000
+  constraints:
+  - kind: max_duration
+    seconds: 600

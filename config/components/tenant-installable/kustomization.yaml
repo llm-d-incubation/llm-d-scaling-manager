@@ -1,0 +1,66 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Makes the scaling manager installable by a NAMESPACE ADMIN — someone with full rights inside one
+# namespace and none outside it.
+#
+# Both other scopes create cluster-scoped RBAC, so both need a cluster admin, and
+# `LLMSM_SCOPE=namespace` only narrows what the controller READS. That is a real
+# limitation but not a necessary one: nearly everything the scaling manager reads is a NAMESPACED
+# resource, so a plain Role covers it. This component drops every cluster-scoped
+# object and grants the same access through a Role instead.
+#
+# What you give up, and why each one goes:
+#
+#   the gpu-inventory limiter    it discovers GPUs from nodes, and nodes are
+#                                cluster-scoped. Use LLMSM_LIMITER=none (unbounded)
+#                                or quota (bounds declared in config, no node
+#                                reads). A ResourceQuota on the namespace is the
+#                                right companion here — see gpu-limiter.md.
+#   cross-namespace management   by construction: the Role reaches one namespace.
+#   authenticated metrics        see components/unauthenticated-metrics, which a
+#                                self-service install also needs. A cluster admin
+#                                installing this same overlay keeps them.
+#   EPP metrics                  reading them needs nonResourceURLs:/metrics,
+#                                which cannot be expressed in a Role at all.
+#
+# Use it with the namespace-scoped overlay, which restricts the cache to match:
+#
+#   components:
+#   - ../../../components/namespace-scoped/
+#   - ../../../components/tenant-installable/
+#
+# It does NOT make every overlay tenant-installable. It subtracts what the BASE
+# creates; a component listed before it can add cluster-scoped objects back, and
+# components/openshift does exactly that with the monitoring bindings — which is
+# why namespace scope on OpenShift still needs a cluster admin. What an overlay
+# actually renders is the only answer; `deploy/install.sh --check` reads it.
+resources:
+- manager-role.yaml
+- manager-rolebinding.yaml
+
+# Remove every cluster-scoped object the base creates. `$patch: delete` is the
+# only way a Component can subtract from its base, and subtracting is the whole
+# point: a tenant cannot create these, so leaving them in means `kubectl apply`
+# fails on the first one and installs nothing.
+patches:
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: manager-role
+- patch: |-
+    $patch: delete
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: manager-rolebinding
+# The Namespace object too: a tenant is installing INTO a namespace that already
+# exists and is not theirs to create.
+- patch: |-
+    $patch: delete
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: system

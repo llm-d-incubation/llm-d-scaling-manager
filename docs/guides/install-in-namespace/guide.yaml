@@ -1,0 +1,45 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here — see hack/render-guides.py — so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: install-in-namespace
+
+prerequisites:
+  namespace:
+    note: The namespace your model servers run in.
+    run: export NAMESPACE=<your-namespace>
+  check:
+    note: Read-only. Reports the namespace, its model servers and the Prometheus it found.
+    run: make check-prereqs
+
+deploy:
+  prereqs:
+    run: make setup-prereqs
+  controller:
+    run: make deploy-scaling-manager
+  readiness:
+    note: Report what the model servers still need. Changes nothing.
+    run: make workload-patch NAMESPACE=${NAMESPACE}
+  register:
+    run: |
+      make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+      # edit scaling-manager-plan.yaml: apply: yes|no|adopt, the modelID, the replica bounds
+      make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+
+verify:
+  objects:
+    run: kubectl get scaledobject,hpa -n ${NAMESPACE}
+  decisions:
+    note: Needs read access to the controller's logs.
+    run: kubectl logs -n ${NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 | grep scaling-decision
+
+visualize:
+  dashboard:
+    run: make dashboard
+  smoke:
+    run: make benchmark-smoke NAMESPACE=${NAMESPACE}
+
+cleanup:
+  uninstall:
+    run: make undeploy-scaling-manager
+  model:
+    run: make benchmark-teardown BENCHMARK_NAMESPACE=${NAMESPACE}

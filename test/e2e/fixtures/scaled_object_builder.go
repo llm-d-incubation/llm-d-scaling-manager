@@ -1,0 +1,547 @@
+package fixtures
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
+
+	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/registry"
+)
+
+const (
+	scaledObjectSuffix = "-so"
+
+	kindLeaderWorkerSet = "LeaderWorkerSet"
+	kindDeployment      = "Deployment"
+	apiVersionLWS       = "leaderworkerset.x-k8s.io/v1"
+	apiVersionAppsV1    = "apps/v1"
+)
+
+// ScaledObjectOption configures a KEDA ScaledObject before it is applied.
+type ScaledObjectOption func(*kedav1alpha1.ScaledObject)
+
+// WithScaledObjectScaleTargetKind sets the Kind and APIVersion on the ScaledObject's ScaleTargetRef.
+func WithScaledObjectScaleTargetKind(kind string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Spec.ScaleTargetRef == nil {
+			return
+		}
+		so.Spec.ScaleTargetRef.Kind = kind
+		switch kind {
+		case kindLeaderWorkerSet:
+			so.Spec.ScaleTargetRef.APIVersion = apiVersionLWS
+		case kindDeployment:
+			so.Spec.ScaleTargetRef.APIVersion = apiVersionAppsV1
+		default:
+			// Keep existing APIVersion for unknown kinds
+		}
+	}
+}
+
+// WithScaledObjectScaleDownStabilizationWindow sets the HPA scale-down stabilization window via
+// KEDA's Advanced config. The default (300 s) is too long for e2e tests; pass a shorter value
+// (e.g. 30 s) to make scale-down assertions complete within a reasonable test timeout.
+func WithScaledObjectScaleDownStabilizationWindow(seconds int32) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Spec.Advanced == nil {
+			so.Spec.Advanced = &kedav1alpha1.AdvancedConfig{}
+		}
+		if so.Spec.Advanced.HorizontalPodAutoscalerConfig == nil {
+			so.Spec.Advanced.HorizontalPodAutoscalerConfig = &kedav1alpha1.HorizontalPodAutoscalerConfig{}
+		}
+		if so.Spec.Advanced.HorizontalPodAutoscalerConfig.Behavior == nil {
+			so.Spec.Advanced.HorizontalPodAutoscalerConfig.Behavior = &autoscalingv2.HorizontalPodAutoscalerBehavior{}
+		}
+		so.Spec.Advanced.HorizontalPodAutoscalerConfig.Behavior.ScaleDown = &autoscalingv2.HPAScalingRules{
+			StabilizationWindowSeconds: ptr.To(seconds),
+		}
+	}
+}
+
+// WithScalingManagerTriggerMetadata puts the scaling manager's per-variant configuration into the trigger
+// metadata of the ScaledObject. KEDA delivers that map verbatim as scalerMetadata
+// on every external-scaler call, and the call is what registers the workload with
+// the scaling manager — so this is both the configuration and, indirectly, the discovery.
+//
+// The values are stashed on the object and moved into every trigger's metadata
+// after all options have run — see applyScalingManagerTriggerMetadata. They cannot be
+// written to the triggers here, because the trigger options replace
+// spec.triggers wholesale and callers pass the options in either order.
+func WithScalingManagerTriggerMetadata(modelID, cost string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[pendingModelIDKey] = modelID
+		so.Annotations[pendingVariantCostKey] = cost
+	}
+}
+
+// WithScalingPolicy names the scaling policy TIER this workload belongs to, the
+// way a real one does: as trigger metadata, resolved against a ConfigMap entry of
+// that name. The tier carries no identity, so naming it here is the only thing
+// that binds this workload to it.
+//
+// Deferred like WithScalingManagerTriggerMetadata, and for the same reason — the trigger
+// options replace spec.triggers wholesale and callers pass options in any order.
+func WithScalingPolicy(policy string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[pendingScalingPolicyKey] = policy
+	}
+}
+
+// WithReplicaStartSeconds seeds how long one replica of this workload takes
+// to become Ready (the trigger's replicaStartSeconds), as a real workload
+// with a known long start does. Deferred like WithScalingManagerTriggerMetadata.
+func WithReplicaStartSeconds(seconds string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[pendingReplicaStartKey] = seconds
+	}
+}
+
+// externalScalerAddr is the scaling manager external-scaler service every fixture points KEDA
+// at by default. Set once from the suite (SetExternalScalerAddress).
+var externalScalerAddr string
+
+// SetExternalScalerAddress configures the default trigger's target. Call it once
+// in suite setup, before building any ScaledObject.
+//
+// It exists because the default HAS to be the external scaler now. A `prometheus`
+// trigger never contacts the scaling manager at all — KEDA reads the llmsm_desired_replicas gauge
+// out of Prometheus instead — so under call-driven discovery a workload scaled
+// that way is never registered, never discovered, and the scaling manager never publishes the
+// gauge KEDA is waiting for. A fixture that forgot the trigger option would not
+// fail loudly; it would sit at its replica count until the spec timed out.
+func SetExternalScalerAddress(addr string) { externalScalerAddr = addr }
+
+// externalScalerTLS is how fixtures reach a scaler served over the installer's
+// mutual TLS (SetExternalScalerTLS); zero when it serves plaintext.
+var externalScalerTLS struct{ plainAddr, tlsAddr, authName string }
+
+// SetExternalScalerTLS makes every fixture trigger on plainAddr use tlsAddr and
+// the ClusterTriggerAuthentication authName instead, as the installer's own
+// ScaledObjects do. KEDA keeps one connection per scalerAddress, so the TLS
+// address is a different string for the same Service.
+func SetExternalScalerTLS(plainAddr, tlsAddr, authName string) {
+	externalScalerTLS.plainAddr = plainAddr
+	externalScalerTLS.tlsAddr = tlsAddr
+	externalScalerTLS.authName = authName
+}
+
+// applyExternalScalerTLS moves the triggers naming the plaintext scaler address
+// to the TLS one, with KEDA's authenticationRef. A trigger that already carries
+// an authenticationRef is left as it is.
+func applyExternalScalerTLS(so *kedav1alpha1.ScaledObject) {
+	if _, plain := so.Annotations[plaintextScalerKey]; plain {
+		delete(so.Annotations, plaintextScalerKey)
+		return
+	}
+	if externalScalerTLS.authName == "" {
+		return
+	}
+	for i := range so.Spec.Triggers {
+		t := &so.Spec.Triggers[i]
+		if t.Metadata[registry.ScalerAddressKey] != externalScalerTLS.plainAddr || t.AuthenticationRef != nil {
+			continue
+		}
+		t.Metadata[registry.ScalerAddressKey] = externalScalerTLS.tlsAddr
+		t.AuthenticationRef = &kedav1alpha1.AuthenticationRef{
+			Name: externalScalerTLS.authName,
+			Kind: "ClusterTriggerAuthentication",
+		}
+	}
+}
+
+// WithPlaintextScalerTrigger keeps the trigger on the plaintext scaler address
+// with no authenticationRef, even when the suite reaches the scaler over TLS:
+// for a spec that checks the scaler refuses a client without KEDA's certificate.
+func WithPlaintextScalerTrigger() ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[plaintextScalerKey] = defaultLabelValueTrue
+	}
+}
+
+// plaintextScalerKey marks, while a fixture is built, a ScaledObject that must
+// stay on the plaintext scaler address. Removed before the object is applied.
+const plaintextScalerKey = "e2e.llm-d.ai/plaintext-scaler"
+
+// Private carrier keys for the deferred trigger metadata. They never reach the
+// cluster: applyScalingManagerTriggerMetadata removes them.
+const (
+	pendingModelIDKey       = "e2e.llm-d.ai/pending-model-id"
+	pendingVariantCostKey   = "e2e.llm-d.ai/pending-variant-cost"
+	pendingScalingPolicyKey = "e2e.llm-d.ai/pending-scaling-policy"
+	pendingWarmPoolKey      = "e2e.llm-d.ai/pending-warm-pool"
+	pendingBorrowPoolKey    = "e2e.llm-d.ai/pending-borrow-pool"
+	pendingWarmCopiesKey    = "e2e.llm-d.ai/pending-warm-copies"
+	pendingReplicaStartKey  = "e2e.llm-d.ai/pending-replica-start-seconds"
+)
+
+// WithWarmPoolSelection names the pool this MODEL may borrow from.
+//
+// The mirror image of WithWarmPoolTrigger, and easy to confuse with it: that one
+// declares a pool, this one lets a variant use one. A variant without it is never
+// considered for a borrow however many warm Pods sit next to it, so this is the
+// whole difference between a pool that lends and a pool that merely holds
+// accelerators.
+//
+// Composes with WithScalingManagerTriggerMetadata rather than replacing it -- a borrowing
+// workload still scales a model, and still needs its modelID.
+//
+// copies is the number of warm copies to hold, and passing it is what makes a
+// spec DETERMINISTIC. Left out, the variant has to earn its place in the warm
+// set through parking, popularity or repeated misses -- all of which depend on
+// what else the suite happens to be running, so a spec relying on them would
+// pass or fail according to its neighbours. Naming a count admits it outright.
+func WithWarmPoolSelection(poolName string, copies ...int) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		so.Annotations[pendingBorrowPoolKey] = poolName
+		if len(copies) > 0 {
+			so.Annotations[pendingWarmCopiesKey] = strconv.Itoa(copies[0])
+		}
+	}
+}
+
+// WithWarmPoolTrigger makes this ScaledObject DECLARE a warm pool rather than
+// scale a model.
+//
+// A pool is declared by its trigger, so this is what brings one into existence
+// as far as the scaling manager is concerned -- a pool Deployment with no such trigger holds
+// accelerators nothing will use. tuning carries the warmPool* keys; nil takes
+// the controller's defaults.
+//
+// Deliberately exclusive with WithScalingManagerTriggerMetadata: a trigger names a model or
+// a pool, never both, and ParsePoolMeta would reject the mixture anyway.
+func WithWarmPoolTrigger(poolName string, tuning map[string]string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		if so.Annotations == nil {
+			so.Annotations = make(map[string]string)
+		}
+		payload := map[string]string{registry.WarmPoolNameKey: poolName}
+		for k, v := range tuning {
+			payload[k] = v
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			// A map[string]string cannot fail to marshal; panicking here would
+			// be noise in a fixture.
+			return
+		}
+		so.Annotations[pendingWarmPoolKey] = string(encoded)
+	}
+}
+
+// applyScalingManagerTriggerMetadata moves the stashed scaling manager configuration into every trigger.
+//
+// Trigger metadata is how the scaling manager is configured now: KEDA delivers it verbatim as
+// scalerMetadata on every external-scaler call, and that call is what registers
+// the workload. The llm-d.ai/* annotations that used to carry this are gone.
+func applyScalingManagerTriggerMetadata(so *kedav1alpha1.ScaledObject) {
+	// A POOL trigger first: it carries no modelID, so the model path below
+	// would return early and leave the ScaledObject declaring nothing.
+	if raw, isPool := so.Annotations[pendingWarmPoolKey]; isPool {
+		delete(so.Annotations, pendingWarmPoolKey)
+		payload := map[string]string{}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return
+		}
+		for i := range so.Spec.Triggers {
+			if so.Spec.Triggers[i].Metadata == nil {
+				so.Spec.Triggers[i].Metadata = make(map[string]string)
+			}
+			for k, v := range payload {
+				so.Spec.Triggers[i].Metadata[k] = v
+			}
+		}
+		return
+	}
+
+	modelID, ok := so.Annotations[pendingModelIDKey]
+	if !ok {
+		return
+	}
+	cost := so.Annotations[pendingVariantCostKey]
+	policy := so.Annotations[pendingScalingPolicyKey]
+	borrowFrom := so.Annotations[pendingBorrowPoolKey]
+	warmCopies := so.Annotations[pendingWarmCopiesKey]
+	replicaStart := so.Annotations[pendingReplicaStartKey]
+	delete(so.Annotations, pendingModelIDKey)
+	delete(so.Annotations, pendingVariantCostKey)
+	delete(so.Annotations, pendingScalingPolicyKey)
+	delete(so.Annotations, pendingBorrowPoolKey)
+	delete(so.Annotations, pendingWarmCopiesKey)
+	delete(so.Annotations, pendingReplicaStartKey)
+
+	for i := range so.Spec.Triggers {
+		if so.Spec.Triggers[i].Metadata == nil {
+			so.Spec.Triggers[i].Metadata = make(map[string]string)
+		}
+		so.Spec.Triggers[i].Metadata[registry.ModelIDKey] = modelID
+		if cost != "" {
+			so.Spec.Triggers[i].Metadata[registry.VariantCostKey] = cost
+		}
+		if policy != "" {
+			so.Spec.Triggers[i].Metadata[registry.ScalingPolicyKey] = policy
+		}
+		if borrowFrom != "" {
+			so.Spec.Triggers[i].Metadata[registry.WarmPoolKey] = borrowFrom
+		}
+		if warmCopies != "" {
+			so.Spec.Triggers[i].Metadata[registry.WarmPoolCopiesKey] = warmCopies
+		}
+		if replicaStart != "" {
+			so.Spec.Triggers[i].Metadata[registry.ReplicaStartSecondsKey] = replicaStart
+		}
+	}
+}
+
+// defaultTriggers returns the trigger every fixture gets unless an option
+// replaces it: KEDA calling the scaling manager's external scaler over gRPC.
+//
+// The prometheus fallback below is only reachable when no address has been set,
+// which in a configured suite means a programming error rather than a supported
+// mode — it is kept so a fixture built outside the suite still produces a valid
+// object rather than one the CRD rejects for having no triggers.
+func defaultTriggers(prometheusURL, query string) []kedav1alpha1.ScaleTriggers {
+	if externalScalerAddr != "" {
+		return []kedav1alpha1.ScaleTriggers{{
+			Type: "external",
+			Name: "scaling-manager-external-scaler",
+			Metadata: map[string]string{
+				"scalerAddress": externalScalerAddr,
+			},
+		}}
+	}
+	return []kedav1alpha1.ScaleTriggers{{
+		Type: "prometheus",
+		Name: "scaling-manager-desired-replicas",
+		Metadata: map[string]string{
+			"serverAddress":       prometheusURL,
+			"query":               query,
+			"threshold":           "1",
+			"activationThreshold": "0",
+			"metricType":          "Value", // desired replicas is an absolute gauge; use value directly, not per-pod average
+			"unsafeSsl":           "true",
+		},
+	}}
+}
+
+// WithExternalScalerTrigger replaces the ScaledObject's triggers with a single
+// KEDA external trigger pointing at the scaling manager's external-scaler gRPC service, so KEDA
+// receives the scaling manager's decision directly (over gRPC) instead of reading the
+// llmsm_desired_replicas gauge from Prometheus. scalerAddress is host:port, e.g.
+// "scaling-manager-external-scaler.<scaling-manager-namespace>.svc.cluster.local:9090".
+func WithExternalScalerTrigger(scalerAddress string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		so.Spec.Triggers = []kedav1alpha1.ScaleTriggers{
+			{
+				Type: "external",
+				Name: "scaling-manager-external-scaler",
+				Metadata: map[string]string{
+					"scalerAddress": scalerAddress,
+				},
+			},
+		}
+	}
+}
+
+// WithExternalScalerPushTrigger is WithExternalScalerTrigger's push variant: a
+// `external-push` trigger, which makes KEDA hold a StreamIsActive stream open so
+// the scaling manager pushes activation instead of KEDA polling for it.
+//
+// Scale-from-zero needs this one. A workload parked at 0 replicas is woken only
+// by the activation signal, and the scaling manager no longer patches the scale subresource
+// itself — KEDA is the sole writer — so the push stream is what carries
+// "requests are queued, wake up" from the scale-from-zero engine to KEDA.
+func WithExternalScalerPushTrigger(scalerAddress string) ScaledObjectOption {
+	return func(so *kedav1alpha1.ScaledObject) {
+		so.Spec.Triggers = []kedav1alpha1.ScaleTriggers{
+			{
+				Type: "external-push",
+				Name: "scaling-manager-external-scaler",
+				Metadata: map[string]string{
+					"scalerAddress": scalerAddress,
+				},
+			},
+		}
+	}
+}
+
+// CreateScaledObject creates a KEDA ScaledObject for the scaling manager. Fails if it already exists.
+func CreateScaledObject(
+	ctx context.Context,
+	crClient client.Client,
+	namespace, name, scaleTargetName, variantName string,
+	minReplicas, maxReplicas int32,
+	monitoringNamespace string,
+	opts ...ScaledObjectOption,
+) error {
+	return crClient.Create(ctx, buildScaledObject(namespace, name, scaleTargetName, variantName, minReplicas, maxReplicas, monitoringNamespace, opts...))
+}
+
+// scaledObjectRef returns a minimal typed object for ScaledObject identity (Get/Delete).
+// name is the base name; the ScaledObject resource name is name + scaledObjectSuffix.
+func scaledObjectRef(namespace, name string) *kedav1alpha1.ScaledObject {
+	return &kedav1alpha1.ScaledObject{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name + scaledObjectSuffix,
+		},
+	}
+}
+
+// DeleteScaledObject deletes the ScaledObject. Idempotent; ignores NotFound.
+func DeleteScaledObject(ctx context.Context, crClient client.Client, namespace, name string) error {
+	err := crClient.Delete(ctx, scaledObjectRef(namespace, name))
+	if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete ScaledObject %s: %w", name+scaledObjectSuffix, err)
+	}
+	return nil
+}
+
+// RecreateScaledObject deletes the ScaledObject, waits for KEDA to finalize
+// it, and creates it again with the same spec, labels and annotations. KEDA
+// derives an HPA's metrics only when it reconciles a ScaledObject whose spec
+// changed, so this is the one way to make it ask the external scaler for the
+// metric spec again.
+func RecreateScaledObject(ctx context.Context, crClient client.Client, namespace, name string) error {
+	old := scaledObjectRef(namespace, name)
+	if err := crClient.Get(ctx, client.ObjectKeyFromObject(old), old); err != nil {
+		return fmt.Errorf("get ScaledObject %s: %w", old.Name, err)
+	}
+	// Foreground: the object is gone only once its HPA is. In the background the
+	// old keda-hpa can outlive it, be adopted by the new ScaledObject and then
+	// collected, and read as wired for a moment in between.
+	if err := crClient.Delete(ctx, old, client.PropagationPolicy(metav1.DeletePropagationForeground)); err != nil &&
+		!errors.IsNotFound(err) {
+		return fmt.Errorf("delete ScaledObject %s: %w", old.Name, err)
+	}
+	gone := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		err := crClient.Get(ctx, client.ObjectKeyFromObject(old), scaledObjectRef(namespace, name))
+		return errors.IsNotFound(err), nil
+	})
+	if gone != nil {
+		return fmt.Errorf("ScaledObject %s was not finalized: %w", old.Name, gone)
+	}
+	fresh := &kedav1alpha1.ScaledObject{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   old.Namespace,
+			Name:        old.Name,
+			Labels:      old.Labels,
+			Annotations: old.Annotations,
+		},
+		Spec: old.Spec,
+	}
+	if err := crClient.Create(ctx, fresh); err != nil {
+		return fmt.Errorf("create ScaledObject %s: %w", old.Name, err)
+	}
+	return nil
+}
+
+// EnsureScaledObject creates or replaces the ScaledObject (idempotent for test setup).
+func EnsureScaledObject(
+	ctx context.Context,
+	crClient client.Client,
+	namespace, name, scaleTargetName, variantName string,
+	minReplicas, maxReplicas int32,
+	monitoringNamespace string,
+	opts ...ScaledObjectOption,
+) error {
+	obj := buildScaledObject(namespace, name, scaleTargetName, variantName, minReplicas, maxReplicas, monitoringNamespace, opts...)
+	existing := scaledObjectRef(namespace, name)
+	key := client.ObjectKey{Namespace: namespace, Name: obj.GetName()}
+	err := crClient.Get(ctx, key, existing)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return fmt.Errorf("check existing ScaledObject %s: %w", obj.GetName(), err)
+		}
+	} else {
+		deleteErr := crClient.Delete(ctx, existing)
+		if deleteErr != nil && !errors.IsNotFound(deleteErr) {
+			return fmt.Errorf("delete existing ScaledObject %s: %w", obj.GetName(), deleteErr)
+		}
+		waitErr := wait.PollUntilContextTimeout(ctx, 1*time.Second, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+			check := scaledObjectRef(namespace, name)
+			getErr := crClient.Get(ctx, key, check)
+			return errors.IsNotFound(getErr), nil
+		})
+		if waitErr != nil {
+			return fmt.Errorf("timeout waiting for ScaledObject %s deletion: %w", obj.GetName(), waitErr)
+		}
+	}
+	return crClient.Create(ctx, obj)
+}
+
+func buildScaledObject(namespace, name, scaleTargetName, variantName string, minReplicas, maxReplicas int32, monitoringNamespace string, opts ...ScaledObjectOption) *kedav1alpha1.ScaledObject {
+	objName := name + scaledObjectSuffix
+	prometheusURL := "https://kube-prometheus-stack-prometheus." + monitoringNamespace + ".svc.cluster.local:9090"
+	// Prometheus renames the metric's namespace label to exported_namespace when the scrape
+	// target's namespace (scaling-manager-system) differs from the label value
+	// (the workload namespace, e.g. llm-d-sim). Use exported_namespace to match what
+	// Prometheus actually stores.
+	query := fmt.Sprintf("llmsm_desired_replicas{variant_name=%q,exported_namespace=%q}", variantName, namespace)
+
+	spec := kedav1alpha1.ScaledObjectSpec{
+		ScaleTargetRef: &kedav1alpha1.ScaleTarget{
+			APIVersion: apiVersionAppsV1,
+			Kind:       kindDeployment,
+			Name:       scaleTargetName,
+		},
+		PollingInterval: ptr.To(int32(5)),
+		CooldownPeriod:  ptr.To(int32(30)),
+		MinReplicaCount: ptr.To(minReplicas),
+		MaxReplicaCount: ptr.To(maxReplicas),
+		Triggers:        defaultTriggers(prometheusURL, query),
+	}
+	so := &kedav1alpha1.ScaledObject{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      objName,
+			Namespace: namespace,
+			Labels:    map[string]string{"test-resource": defaultTestResourceLabelValue},
+		},
+		Spec: spec,
+	}
+	for _, opt := range opts {
+		opt(so)
+	}
+	// After the options, so it lands on whatever triggers they left behind.
+	applyScalingManagerTriggerMetadata(so)
+	// After the metadata, so a foreign trigger does not get a modelID.
+	applyPendingTriggers(so)
+	applyExternalScalerTLS(so)
+	return so
+}
+
+// ScaledObjectNameFor returns the ScaledObject resource name these fixtures
+// create for a base name.
+//
+// Exported because it is a variant's IDENTITY, not a naming detail. The scaling manager keys a
+// variant by the ScaledObject KEDA calls it about, so a spec asserting anything
+// about attribution has to use this name and not the base it passed in --
+// getting that wrong reads as "the bridge was attributed to the wrong variant"
+// when nothing is wrong at all.
+func ScaledObjectNameFor(name string) string {
+	return name + scaledObjectSuffix
+}

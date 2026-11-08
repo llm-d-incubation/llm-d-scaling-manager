@@ -1,0 +1,1229 @@
+package throughput
+
+import (
+	"context"
+	"maps"
+	"math"
+	"slices"
+	"sync"
+	"time"
+
+	"k8s.io/utils/clock"
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/aggregation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/settle"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
+)
+
+// ThroughputAnalyzer accumulates per-variant workload shape and ITL observations
+// across reconcile cycles and computes a μ_dec supply vs λ_dec demand scaling signal.
+// It implements domain.Analyzer.
+//
+// State is tracked per variant (keyed by "namespace|modelID|variantName") because
+// different variants may run on different hardware with different ITL coefficients,
+// and all replicas of the same variant are expected to share OL, IL, and KV_max.
+type ThroughputAnalyzer struct {
+	mu            sync.Mutex
+	variantStates map[string]*variantState
+	// clock is what Analyze stamps observations and ages variant state
+	// on: the engine's cycle clock (WithClock), the wall clock by default.
+	clock clock.PassiveClock
+	// rec records every call the engine makes, with what it returned
+	// (recording.go); nil when recording is off.
+	rec *learnrec.Recorder
+
+	// What the ITL line's admission reads (admission.go), each set by its
+	// builder before the analyzer is used: the engine's settle tracker
+	// (WithSettleView), the controller's optimize interval
+	// (WithOptimizationInterval), how long a fitted slope may be held
+	// (WithSlopeHoldFor), and the capacity store, read for each variant's
+	// engine parameters and never written (WithCapacityStore). Nil or zero
+	// when unset.
+	settle         settle.View
+	settleInterval time.Duration
+	slopeHoldFor   time.Duration
+	store          *capacity.Store
+
+	// lines is the ITL line's tracker, the analyzer's own (itl_line.go):
+	// one key per variant, as the window was.
+	lines *itl.Tracker
+	// itlLogged is what learner-write last logged of each variant's line.
+	itlLogged map[string]itlLogged
+	// itlSteadyGate and itlKeepsOnGPSMismatch are the replay switches of
+	// learner PR 4b-1 (itl_line.go): SwitchITLSteadyGate and
+	// SwitchITLKeepsWindowOnGPSMismatch. On by the constructor.
+	itlSteadyGate, itlKeepsOnGPSMismatch bool
+	// itlReadsSettle, itlWaitsAfterRestart, itlKeepsSettle,
+	// itlRestartUnderName, itlIdleOnEvidence and itlFiniteOnly are the
+	// replay switches of learner PR 4b-2 (settle.go): the line's six settle
+	// changes. On by the constructor.
+	itlReadsSettle, itlWaitsAfterRestart, itlKeepsSettle  bool
+	itlRestartUnderName, itlIdleOnEvidence, itlFiniteOnly bool
+	// itlOwnBackdate is SwitchITLOwnSettleBackdates (issue
+	// #511, settle.go). On by the constructor.
+	itlOwnBackdate bool
+	// itlAdmitsAtCap is the replay switch of learner PR 4b-3 (admission.go):
+	// SwitchITLAdmitsAtSequenceCap. On by the constructor.
+	itlAdmitsAtCap bool
+	// itlKeepsPresent is SwitchITLKeepsPresentVariants (learner_reports.go).
+	// On by the constructor.
+	itlKeepsPresent bool
+	// itlFilesReports is SwitchITLFilesReports (learner_reports.go). On by
+	// the constructor. learnerReports is each model's reports of its last
+	// cycle, by namespace|model, and forgottenReports what was forgotten
+	// since the engine last took them.
+	itlFilesReports  bool
+	learnerReports   map[string][]learn.Report
+	forgottenReports []learn.Report
+	// itlRolloutGuard is SwitchITLRolloutGuard and itlForgetsOnNewArgs
+	// SwitchITLForgetsOnNewArguments (itl_line.go). On by the constructor.
+	itlRolloutGuard     bool
+	itlForgetsOnNewArgs bool
+	// itlForgetReachesLine is the replay switch of the forget (forget.go):
+	// SwitchITLForgetReachesTheLine. On by the constructor.
+	itlForgetReachesLine bool
+	// itlTierHysteresis is SwitchITLTierHysteresis (issue #495,
+	// itl_line.go): on, the line's tier is latched.
+	itlTierHysteresis bool
+	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue #433,
+	// kv_output_dispersion.go): on, KVreq prices the spread of output
+	// lengths. On by the constructor.
+	kvOutputDispersion bool
+	// capPinsDefaultB prices readings at the cap through the default B
+	// alone, as 4b-3 first built it (itl.Admission.OneSidedAboveKSat off),
+	// for the tests' negative controls only: set by withCapPinnedAtDefaultB,
+	// which only tests define.
+	capPinsDefaultB bool
+	// ownSettle is the settle tracker the analyzer observes itself when the
+	// engine gave it none (settle.go), and ownSettled when it last observed
+	// each model into it.
+	ownSettle  *settle.Tracker
+	ownSettled map[string]time.Time
+	// noAboveBandFallback turns the line's above-band fallback off
+	// (itl.Admission.AboveBandFallback), for the tests' negative controls
+	// only: set by withoutAboveBandFallback, which only tests define.
+	noAboveBandFallback bool
+	// aboveBandWaitsAfterRestart stamps the above-band readings with the
+	// restart's wait (itl.Admission.AboveBandWaitsAfterRestart), for the
+	// tests' negative controls only: set by withAboveBandRestartWait, which
+	// only tests define.
+	aboveBandWaitsAfterRestart bool
+	// paths counts the line's fits by path, for the replay (path_counts.go).
+	paths pathCounters
+}
+
+// variantState holds the cross-cycle calibration state for a single variant.
+type variantState struct {
+	shapeTracker      *shape.Tracker
+	observationWindow *itl.Window
+	// role is the P/D disaggregation role ("prefill", "decode", "both", "").
+	// Updated from VariantStates at the start of each Analyze call.
+	role             string
+	lastSanityReport SanityReport
+	lastObservedAt   time.Time
+	// lastFittedB is the B coefficient from the most recent successful Tier-1 OLS fit.
+	// It is used as the pinned baseline in Tier-2 instead of DefaultBaselineITLSec,
+	// because B reflects hardware/model characteristics rather than workload shape.
+	// A shape change clears the observation window but must NOT clear lastFittedB.
+	lastFittedB float64
+	hasFittedB  bool
+	// consecutiveGPSMismatches counts how many consecutive Analyze cycles have
+	// produced a GPS mismatch for this variant. The observation window is cleared
+	// when this reaches DefaultGPSMismatchClearThreshold. Always reset alongside
+	// observationWindow.Clear() so it is bound to the current window's lifetime.
+	consecutiveGPSMismatches int
+	// set by Analyze() for VariantState() snapshots
+	lastITLModel         itl.Model
+	lastPerReplicaSupply float64
+	lastTotalSupply      float64
+	lastDemand           float64
+	// reading is what the line's tracker read this cycle (itl_line.go),
+	// with SwitchITLSteadyGate on; hasReading is set when it read this
+	// cycle, and cleared on a cycle with no healthy row, which reads
+	// nothing: such a cycle has no line, not the last cycle's.
+	reading    itl.Reading
+	hasReading bool
+	// lineArgs is the engine arguments the line was learned under, "" when
+	// unknown (lineUnderArgsLocked). rollout is the variant rolling out, which
+	// names a silence (silenceCause); rolloutHeld is the line held on the old
+	// pods, no new pod serving (itl.RolloutSight.Held), and loggedRolloutHeld
+	// what the summary last said of it.
+	lineArgs                       string
+	rollout                        bool
+	rolloutHeld, loggedRolloutHeld bool
+	// shapeChanged is set by a shape change and cleared when the line is
+	// next live, and everLive once the line has been live: what names the
+	// cause of a silent line (silenceCause). SwitchITLSteadyGate only.
+	shapeChanged, everLive bool
+	// shapeChangedAt is when the shape tracker last declared a change, on
+	// every gate; zero before the first. The spread of output lengths is
+	// held at 1 within the policy's shape-change window of it (spreadHeld).
+	shapeChangedAt time.Time
+	// gpsMismatched is whether the variant's last GPS check found a
+	// mismatch, so its summary line logs only when that changes
+	// (SwitchITLKeepsWindowOnGPSMismatch).
+	gpsMismatched bool
+	// lineSilent is whether the variant's line was silent (no line) on the
+	// last cycle it was read, so its summary line logs only when that
+	// changes (SwitchITLSteadyGate).
+	lineSilent bool
+	// batchCap and batchCapSource are the sequence cap the line's
+	// admission read this cycle and where it came from
+	// (itl.Admission.MaxNumSeqs), for the line's summary only.
+	batchCap       int64
+	batchCapSource string
+	// summaryLogged is whether the line's summary has logged for the
+	// variant, and loggedAtCap and loggedCapSource what it last logged of
+	// the cap: whether readings were taken at it, and its source
+	// (noteLineSilence).
+	summaryLogged   bool
+	loggedAtCap     bool
+	loggedCapSource string
+}
+
+// NewThroughputAnalyzer creates a ThroughputAnalyzer with default configuration.
+func NewThroughputAnalyzer() *ThroughputAnalyzer {
+	return &ThroughputAnalyzer{
+		variantStates:         make(map[string]*variantState),
+		clock:                 clock.RealClock{},
+		lines:                 itl.NewTracker(),
+		itlLogged:             make(map[string]itlLogged),
+		itlSteadyGate:         true,
+		itlKeepsOnGPSMismatch: true,
+		itlReadsSettle:        true,
+		itlWaitsAfterRestart:  true,
+		itlKeepsSettle:        true,
+		itlRestartUnderName:   true,
+		itlIdleOnEvidence:     true,
+		itlFiniteOnly:         true,
+		itlOwnBackdate:        true,
+		itlRolloutGuard:       true,
+		itlFilesReports:       true,
+		itlKeepsPresent:       true,
+		learnerReports:        make(map[string][]learn.Report),
+		itlForgetsOnNewArgs:   true,
+		itlAdmitsAtCap:        true,
+		itlForgetReachesLine:  true,
+		itlTierHysteresis:     true,
+		kvOutputDispersion:    true,
+		ownSettle:             settle.NewTracker(),
+		ownSettled:            make(map[string]time.Time),
+	}
+}
+
+// WithClock sets the clock Analyze reads: the engine passes its cycle clock,
+// which holds one reading per cycle. Call it before the analyzer is used.
+func (a *ThroughputAnalyzer) WithClock(c clock.PassiveClock) *ThroughputAnalyzer {
+	a.clock = c
+	return a
+}
+
+// Name returns the canonical name for this analyzer.
+func (a *ThroughputAnalyzer) Name() string {
+	return AnalyzerName
+}
+
+// observeDefaultBand is observe over the default ITL band. It processes one
+// reconcile cycle for a model, grouping metrics by
+// VariantName, and for each variant:
+//  1. Runs sanity checks; skips the variant if any issue is found.
+//  2. Computes the variant-average IL, OL, and prefix hit rate.
+//  3. Updates the shape tracker; clears the observation window on shape change.
+//  4. Adds one (k, ITL) observation per replica to the window.
+//  5. Prunes observations older than DefaultObservationMaxAge.
+//
+// Returns a map of variantName → SanityReport for logging. An empty SanityReport
+// (report.OK() == true) means that variant's metrics were healthy this cycle.
+func (a *ThroughputAnalyzer) observeDefaultBand(
+	ctx context.Context,
+	now time.Time,
+	modelID, namespace string,
+	metrics []domain.ReplicaMetrics,
+) map[string]SanityReport {
+	return a.observe(ctx, now, modelID, namespace, metrics, func(string) (itl.Admission, bool) {
+		return itl.Admission{MinK: itl.DefaultMinObservableK, MaxK: itl.DefaultMaxObservableK}, false
+	})
+}
+
+// observe is Observe with each variant's admission and whether it is rolling
+// out (lineFor): the KV band [MinK, MaxK] a reading must fall in is the policy
+// band (analyzerTuning.itlBand), which Analyze passes, as the saturation and
+// slo analyzers read them. The parent's window (SwitchITLSteadyGate off) reads
+// only the band, and takes no capped replica above it; the line on
+// itl.Tracker reads the whole admission, the sequence cap included
+// (SwitchITLAdmitsAtSequenceCap), under the arguments the variant runs, and
+// is offered no rows mid-rollout (SwitchITLRolloutGuard).
+func (a *ThroughputAnalyzer) observe(
+	ctx context.Context,
+	now time.Time,
+	modelID, namespace string,
+	metrics []domain.ReplicaMetrics,
+	lineFor func(variant string) (itl.Admission, bool),
+) map[string]SanityReport {
+	if err := ctx.Err(); err != nil {
+		return nil
+	}
+	byVariant := groupByVariant(metrics)
+	reports := make(map[string]SanityReport, len(byVariant))
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for variantName, variantMetrics := range byVariant {
+		report := CheckModelMetrics(variantMetrics)
+		reports[variantName] = report
+
+		key := variantKey(namespace, modelID, variantName)
+		state := a.getOrCreateVariantState(key)
+		state.lastSanityReport = report
+		state.lastObservedAt = now
+		// Read again below, or not at all this cycle: a cycle that skips
+		// the variant keeps no reading from the last.
+		state.reading, state.hasReading = itl.Reading{}, false
+
+		if report.Has(SanityIssueNoReplicas) {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: no replicas, skipping variant",
+				"namespace", namespace,
+				"modelID", modelID,
+				"variant", variantName,
+			)
+			continue
+		}
+		if !report.OK() {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: sanity issues detected, some pods excluded",
+				"namespace", namespace,
+				"modelID", modelID,
+				"variant", variantName,
+				"issues", report.Issues,
+				"affectedPods", report.AffectedPods,
+			)
+		}
+
+		// Only healthy pods contribute to shape averaging and window observations.
+		// Pods with per-replica issues (cold start, stale metrics, missing KV) are
+		// excluded so one bad replica cannot block the entire variant.
+		healthyMetrics := filterHealthyForShape(variantMetrics)
+		if len(healthyMetrics) == 0 {
+			continue
+		}
+
+		// Compute variant-average shape metrics. All replicas of the same variant
+		// are expected to have the same OL and IL (same model, same config); the
+		// mean handles any minor per-pod variation.
+		il, ol, hitRate := averageShapeMetrics(healthyMetrics)
+
+		shape, changed := state.shapeTracker.Observe(il, ol, hitRate)
+		if changed {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: workload shape changed, clearing observation window",
+				"namespace", namespace,
+				"modelID", modelID,
+				"variant", variantName,
+				"newKVreq", shape.KVreq,
+				// The spread this cycle's rows read, which the KV per request
+				// does not price until the hold ends (spreadHeld).
+				"outputDispersionRead", variantOutputDispersion(healthyMetrics),
+			)
+			// Every gate: the spread's hold reads it (kv_output_dispersion.go).
+			state.shapeChangedAt = now
+			state.observationWindow.Clear()
+			state.consecutiveGPSMismatches = 0
+			if a.itlSteadyGate {
+				// The held slope goes with the window: a shape change moves
+				// A (shorter requests, a higher A), and the old shape's A,
+				// held until the new shape's readings fit, priced a lower
+				// ITL, so fewer replicas. Until the new shape fits, the line
+				// is the above-band fallback or silent.
+				a.lines.ClearWindow(key)
+				a.lines.ForgetSlope(key)
+				state.shapeChanged = true
+			}
+		}
+
+		adm, rolling := lineFor(variantName)
+		state.batchCap, state.batchCapSource = adm.MaxNumSeqs, adm.MaxNumSeqsSource
+		// On the shared tracker (SwitchITLSteadyGate, itl_line.go) the
+		// tracker judges each row; the window below is left as it was.
+		if a.itlSteadyGate {
+			rows := freshRows(variantMetrics)
+			state.rollout, state.rolloutHeld = rolling && a.itlRolloutGuard, false
+			if a.itlRolloutGuard {
+				sight := a.lines.RolloutRows(key, variantName, rows, rolling)
+				rows, state.rolloutHeld = sight.Rows, sight.Held
+			}
+			if state.rolloutHeld && state.lineArgs != "" {
+				adm.Args = state.lineArgs
+			} else {
+				a.lineUnderArgsLocked(key, state, adm.Args, namespace, modelID, variantName, now)
+			}
+			state.reading = a.lines.Observe(key, variantName, rows, adm, now)
+			a.paths.count(state.reading)
+			state.hasReading = true
+			continue
+		}
+
+		// Collect one (k*, ITL) observation per healthy replica. Per-replica variation
+		// in k* provides the k-spread needed for a reliable OLS fit.
+		lo, hi := adm.MinK, adm.MaxK
+		for _, m := range healthyMetrics {
+			// The k paired with the replica's ITL: the KV fill averaged over
+			// the minute its rate covers when the collector read that, the
+			// instant fill otherwise (issue #403, as #393 for itl.Tracker).
+			// The band and the reading judge that one figure.
+			k := m.KvUsageForITL()
+			// The window spans the whole cache; the band is applied here.
+			inBand := k >= lo && k <= hi
+			if dropped := !inBand || state.observationWindow.Add(k, m.AvgITL, now); dropped {
+				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: observation dropped (k out of range or ITL invalid)",
+					"namespace", namespace, "modelID", modelID, "variant", variantName,
+					"k", k, "itl", m.AvgITL)
+			}
+		}
+		state.observationWindow.Prune(now)
+	}
+
+	// Evict variant states not observed for longer than twice the observation
+	// max age. Prevents stale entries from deleted/recreated VAs from
+	// accumulating in memory and causing false shape-change signals on recreate.
+	for key, state := range a.variantStates {
+		if now.Sub(state.lastObservedAt) > 2*itl.DefaultObservationMaxAge {
+			delete(a.variantStates, key)
+			delete(a.itlLogged, key)
+			a.noteEvictedLocked(key)
+		}
+	}
+	a.evictOwnSettleLocked(now)
+	// The tracker's keys go with their variant state, as its window did. The
+	// tracker never calls back into the analyzer, so its lock under a.mu is
+	// safe.
+	if a.itlSteadyGate {
+		a.lines.Sweep(now, func(key string) bool {
+			_, live := a.variantStates[key]
+			return !live
+		})
+	}
+
+	return reports
+}
+
+// analyze is Analyze. It calls observe to update internal
+// state, then computes a supply vs demand scaling signal for each variant using
+// a two-tier ITL model resolution strategy:
+//
+//   - Tier 1 (OLS): observation window Ready — fit ITL(k) = A·k + B via OLS.
+//   - Tier 2 (constrained OLS): window not ready — fit A with B = DefaultBaselineITLSec
+//     using all replica (k*, ITL_obs) points: A = Σ((ITL_i−B)·k_i) / Σ(k_i²).
+//
+// Model-level decode demand is Λ_req × avgOL: the
+// model-level arrival rate (input.ArrivalRate, a single sum(rate(...)) query
+// with no per-pod labels — an all-or-nothing model-level signal) times avgOL, the RequestRate-weighted
+// average output length across all healthy replicas of the model. This is the
+// sole driver of TotalDemand's arrival component; it does not depend on
+// per-variant EPP attribution.
+//
+// Per-variant demand (populating VariantCapacity.TotalDemand/Utilization, for
+// introspection/VariantState() only — not summed into TotalDemand) is still
+// estimated in priority order:
+//  1. EPP primary: Σ ArrivalRate × AvgOutputTokens (when ArrivalRate > 0 on any replica).
+//  2. Engine-rate fallback: RequestRate × avgOL (when EPP absent but the engine completion rate is nonzero).
+//  3. k*-based local: Σ k_r* × KV_max_r / KVreq / ITL(k_r*) (scale-up only; no EPP needed).
+//
+// Scheduler queue demand (QueueSize / (DefaultQueueDrainFactor × ITL(k_sat))) is added
+// to model-level demand after all variants are processed (non-prefill roles only).
+//
+// TA publishes TotalSupply, TotalAnticipatedSupply, and TotalDemand on the
+// returned AnalyzerResult; RequiredCapacity and SpareCapacity are left zero.
+// The engine's universal threshold post-step writes RC/SC after Analyze returns.
+// PendingReplicas are included in TotalAnticipatedSupply to suppress redundant
+// scale-up while pods are starting. Both the arrival decode term and scheduler
+// queue demand are split across non-prefill roles via distributeDemandByRole.
+//
+// For P/D disaggregated models, RoleCapacities carries per-role Total* fields
+// (TotalSupply, TotalAnticipatedSupply, TotalDemand); RC/SC per role are also
+// left zero for the engine post-step. Prefill TotalDemand is negligible after
+// the OL guard in computeLocalDemand.
+func (a *ThroughputAnalyzer) analyze(
+	ctx context.Context,
+	input domain.AnalyzerInput,
+) (*domain.AnalyzerResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	now := a.clock.Now()
+
+	// Build lookup tables from VariantStates before taking any locks.
+	pendingByVariant := make(map[string]int, len(input.VariantStates))
+	for _, vs := range input.VariantStates {
+		pendingByVariant[vs.VariantName] = vs.PendingReplicas
+	}
+
+	// Analyze is assumed single-flight per model; concurrent VariantState() snapshots
+	// may observe partial state across the lock gaps below.
+	// Update variant roles so state.role is current when observe runs.
+	a.mu.Lock()
+	delete(a.learnerReports, reportModel(input.Namespace, input.ModelID))
+	for _, vs := range input.VariantStates {
+		key := variantKey(input.Namespace, input.ModelID, vs.VariantName)
+		state := a.getOrCreateVariantState(key)
+		state.role = vs.Role
+	}
+	a.mu.Unlock()
+
+	// P IS THIS VARIANT'S OWN REPLICAS. A BRIDGE IS NOT ONE OF THEM.
+	//
+	// A bridge is a warm pool Pod lent to the variant while it is short, and it
+	// reports metrics under the variant it serves -- correctly, because the
+	// traffic IS the variant's. But it is not part of the variant's scale target,
+	// and the capacity-build step counts replicas from that target, so a bridge
+	// left in here would price the fleet with a reading none of the counted
+	// replicas produced (supply = replicas x P). The pool also runs its engines at
+	// a lower --gpu-memory-utilization than the workload, so the bridge's reading
+	// is genuinely different, not merely another sample of the same thing.
+	//
+	// Excluded from Observe as well: the observation window teaches the ITL model
+	// what THIS variant's replicas do, and a differently-configured engine is not
+	// evidence about them.
+	//
+	// Demand is unaffected -- this analyzer takes demand from the model-level
+	// arrival rate, which already includes whatever a bridge is serving.
+	ownMetrics := ownReplicasOnly(input.ReplicaMetrics)
+
+	// With no engine view, the analyzer observes its own settle tracker,
+	// every row included, before the line reads it (settle.go).
+	a.observeOwnSettle(input, now)
+
+	// observe updates internal state (acquires/releases a.mu internally).
+	// The model's admission (admission), completed per variant from its
+	// engine parameters (lineAdmission), which are read from the capacity
+	// store here, before observe takes a.mu (engineOf).
+	adm := a.admission(itlPolicyOf(input.Config), input.Namespace, input.ModelID)
+	spreadHold := spreadHoldOf(input.Config)
+	engines := a.engineOf(input.Namespace, input.ModelID, ownMetrics)
+	a.observe(ctx, now, input.ModelID, input.Namespace, ownMetrics, func(variant string) (itl.Admission, bool) {
+		return a.lineAdmission(adm, input.Namespace, input.ModelID, engines[variant]), engines[variant].rollout
+	})
+
+	byVariant := groupByVariant(ownMetrics)
+
+	// EPP presence is now derived from the model-level arrival rate rather than
+	// per-replica ArrivalRate: a model-level sum(rate(...)) is all-or-nothing
+	// by design, so a single check here is equivalent and simpler.
+	//
+	// The per-replica ReplicaMetrics.RequestRate is deliberately NOT consulted here as
+	// a "broken arrival" cross-check (e.g. warn when arrival == 0 while ΣRequestRate > 0).
+	// RequestRate is a request completion rate, not an arrival rate: a draining engine
+	// keeps RequestRate > 0 after arrivals have legitimately fallen to zero, so that
+	// condition is a normal ramp-down state, not a fault — cross-checking it would warn
+	// constantly during scale-down. A genuine broken-arrival signal is temporal — supply
+	// live but demand never observed across a full staleness window — and is surfaced as
+	// an observability-only warning in the engine liveness path, not in this per-cycle
+	// demand math.
+	anyEPP := input.ArrivalRate > 0
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var (
+		anyGPSMismatch    bool
+		totalDecodeITLSat float64
+		totalDecodeOL     float64
+		totalDecodeKV     int // Σ nKV over non-prefill variants — avgOL replica-count weight
+		nDecodeVariants   int
+	)
+	variantCapacities := make([]domain.VariantCapacity, 0, len(byVariant))
+
+	// In variant order: the loop sums floats across variants and builds the
+	// capacities others sum in turn, and a map's random order would leave the
+	// last bit of each sum to chance.
+	for _, variantName := range slices.Sorted(maps.Keys(byVariant)) {
+		variantMetrics := byVariant[variantName]
+		key := variantKey(input.Namespace, input.ModelID, variantName)
+		state, ok := a.variantStates[key]
+		if !ok {
+			continue
+		}
+
+		shape, hasShape := state.shapeTracker.Current()
+		if !hasShape || shape.KVreq <= 0 {
+			continue
+		}
+
+		// TODO(#1261): skip variant when state.lastSanityReport is not OK — stale/invalid
+		// metrics from observe do not currently block demand computation here.
+		// Gating demand on the sanity report is deferred to the per-analyzer status-return
+		// PR; it requires the engine contract to accept an AnalyzerStatus opt-out signal.
+		//
+		// When that lands, gate PER REPLICA, not on the variant-level report.
+		// SanityReport is a union over the variant's pods, and the collector now
+		// zeroes AvgITL for any pod that has not passed its readiness probe, so
+		// SanityIssueITLNonPositive is present for the whole variant during every
+		// ordinary scale-up. Skipping the variant on that would stop demand
+		// computation precisely while the fleet is growing. filterHealthyForShape
+		// below already does the per-replica version of this correctly.
+
+		// Filter to healthy replicas for ITL model fitting and GPS verification.
+		// Stale replicas (cold-start, missing fields) bias the tier-2 OLS slope A
+		// upward → systematic under-provisioning. Supply counting (computeVariantSupply,
+		// computeDemand) uses the unfiltered variantMetrics to include booting replicas.
+		healthyMetrics := filterHealthyForShape(variantMetrics)
+		// The KV a resident request holds, with the spread of output lengths
+		// read from the rows the shape averages, and held at 1 while a shape
+		// change is recent (kv_output_dispersion.go).
+		if a.kvOutputDispersion && !spreadHeld(state, spreadHold, now) {
+			shape = shape.WithOutputDispersion(variantOutputDispersion(healthyMetrics))
+		}
+		var (
+			model  itl.Model
+			reason string
+		)
+		if a.itlSteadyGate {
+			model, reason, ok = a.lineModel(ctx, key, state, input.Namespace, input.ModelID, variantName, now)
+		} else {
+			model, reason, ok = a.resolveITLModel(ctx, state, healthyMetrics, input.Namespace, input.ModelID, variantName)
+		}
+		if !ok {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: no ITL model available, skipping variant",
+				"namespace", input.Namespace,
+				"modelID", input.ModelID,
+				"variant", variantName,
+			)
+			if a.itlKeepsOnGPSMismatch {
+				endGPSMismatch(ctx, state, input.Namespace, input.ModelID, variantName)
+			}
+			continue
+		}
+
+		itlSat := model.ITLAt(itl.DefaultKSat)
+		if itlSat <= 0 {
+			continue
+		}
+
+		supply, perReplicaSupply, nKV := computeVariantSupply(variantMetrics, shape, itlSat)
+		if supply == 0 {
+			continue
+		}
+
+		// anyEPP is derived model-level from input.ArrivalRate above; computeDemand's
+		// per-variant value is kept for VariantCapacity.TotalDemand/Utilization
+		// display and as the computeLocalDemand fallback trigger below.
+		demand := computeDemand(variantMetrics)
+		// k*-based local demand: when the engine completion rate is absent, or has
+		// yet to record anything (warm-up, no completions yet),
+		// derive demand from observed KV utilization so a busy replica is not
+		// mis-classified as idle and spuriously scaled down.
+		if demand == 0 {
+			demand = computeLocalDemand(variantMetrics, shape, model)
+		}
+
+		// Update state for VariantState() snapshots.
+		state.lastITLModel = model
+		state.lastPerReplicaSupply = perReplicaSupply
+		state.lastTotalSupply = supply
+		state.lastDemand = demand
+
+		pending := pendingByVariant[variantName]
+		// Track ITL(k_sat) and avgOL across non-prefill variants: ITL(k_sat) for
+		// queue demand estimation, avgOL for the model-level arrival decode term.
+		// avgOL uses each variant's tracked/smoothed shape.AvgOutputTokens (from
+		// state.shapeTracker, robust to a single warm-up cycle reporting
+		// AvgOutputTokens==0) rather than a fresh average over live
+		// input.ReplicaMetrics, which would zero out avgOL during EPP warm-up
+		// (ArrivalRate>0, no completions yet) and reintroduce the spurious-
+		// scale-down bug regression-tested by "EPP warm-up" below. Weighted by
+		// nKV (replica count) across variants: an unweighted mean-of-means would
+		// let every non-prefill variant contribute equally regardless of its
+		// share of replicas/traffic,
+		// diverging from the plan's specified RequestRate-weighted model-level
+		// average whenever 2+ non-prefill variants have different OL profiles.
+		if state.role != domain.RolePrefill {
+			totalDecodeITLSat += itlSat
+			totalDecodeOL += float64(nKV) * shape.AvgOutputTokens
+			totalDecodeKV += nKV
+			nDecodeVariants++
+		}
+
+		switch {
+		case a.itlKeepsOnGPSMismatch:
+			// A diagnostic only: the window keeps its readings (itl_line.go).
+			if a.noteGPSMismatch(ctx, state, healthyMetrics, shape, model, input.Namespace, input.ModelID, variantName) {
+				anyGPSMismatch = true
+			}
+		case checkVariantGPSMismatch(ctx, healthyMetrics, shape, model, input.Namespace, input.ModelID, variantName):
+			anyGPSMismatch = true
+			state.consecutiveGPSMismatches++
+			if state.consecutiveGPSMismatches >= DefaultGPSMismatchClearThreshold {
+				state.observationWindow.Clear()
+				if a.itlSteadyGate {
+					a.lines.ClearWindow(key)
+				}
+				state.consecutiveGPSMismatches = 0
+				ctrl.LoggerFrom(ctx).Info("throughput analyzer: GPS mismatch persisted, clearing observation window for recalibration",
+					"namespace", input.Namespace,
+					"modelID", input.ModelID,
+					"variant", variantName,
+					"threshold", DefaultGPSMismatchClearThreshold,
+				)
+			}
+		default:
+			state.consecutiveGPSMismatches = 0
+		}
+
+		// ReplicaCount is the count of KV-capable replicas (nKV), and TotalCapacity is the
+		// measured supply over exactly those replicas — so TotalSupply (which the engine uses
+		// for SpareCapacity) is not inflated by still-booting KV=0 replicas. Not-ready replicas
+		// are already reflected in PendingReplicas (currentReplicas − readyReplicas); they count
+		// toward TotalAnticipatedSupply and so still suppress RequiredCapacity during scale-out.
+		// This mirrors saturation (ReplicaCount = readyCount, PendingReplicas separate) and
+		// avoids double-counting booting replicas in both ReplicaCount and PendingReplicas.
+		// TotalCapacity is the product ReplicaCount × PerReplicaCapacity (the VariantCapacity
+		// contract, and what aggregation.SumTotalSupply recomputes); equals supply for nKV ≥ 1.
+		totalCapacity := float64(nKV) * perReplicaSupply
+		variantCapacities = append(variantCapacities, domain.VariantCapacity{
+			VariantName:        variantName,
+			Role:               state.role,
+			ReplicaCount:       nKV,
+			ObservedReplicas:   nKV,
+			PendingReplicas:    pending,
+			PerReplicaCapacity: perReplicaSupply,
+			TotalDemand:        demand,
+			Utilization:        safeDivide(demand, totalCapacity),
+			Reason:             reason,
+		})
+	}
+
+	// Decode demand is a model-level quantity: Λ_req × avgOL,
+	// computed once from the model-level arrival rate rather than summed from each
+	// variant's computeDemand result. This replaces the retired per-variant EPP
+	// arrival contribution to TotalDemand (per-variant VariantCapacity.TotalDemand
+	// above is unaffected — it still reflects computeDemand/computeLocalDemand for
+	// per-variant introspection). avgOL is the nKV-weighted mean of tracked
+	// shape.AvgOutputTokens across non-prefill variants (totalDecodeOL /
+	// totalDecodeKV, accumulated in the loop above) — weighted, not a plain
+	// mean-of-variant-means, so a variant with more replicas contributes
+	// proportionally more. Zero when no non-prefill variant
+	// currently has a resolved ITL model, matching avgDecodeITLSat's guard below.
+	var totalDemand, arrivalDecodeDemand float64
+	var arrivalDemandByRole map[string]float64
+	// Scheduler queue demand is decode-rate-denominated and not variant-attributed.
+	// Add to model-level demand and distribute across active non-prefill roles so
+	// per-role TotalDemand satisfies the linearity invariant.
+	var queueDemandByRole map[string]float64
+	// nDecodeVariants > 0 is guaranteed here: the loop above only increments it for
+	// variants that produced supply > 0 (itlSat > 0), so dividing by nDecodeVariants
+	// or totalDecodeKV (both guaranteed >= 1 in that case) is safe from
+	// division-by-zero.
+	if nDecodeVariants > 0 {
+		avgOL := totalDecodeOL / float64(totalDecodeKV)
+		// Arrival rate is the demand signal. When it is zero — EPP absent, or present
+		// but not yet scraped — arrivalDecodeDemand is legitimately zero and so is
+		// TotalDemand. Zero demand only ever permits scale-down (still governed by the
+		// multi-analyzer all-live-agree gate); it never forces a scale action and never
+		// drives scale-up. So a zero/absent arrival signal is safe here and is
+		// intentionally NOT floored to a served-rate proxy.
+		arrivalDecodeDemand = input.ArrivalRate * avgOL
+		totalDemand = arrivalDecodeDemand
+		arrivalDemandByRole = distributeDemandByRole(arrivalDecodeDemand, variantCapacities)
+
+		avgDecodeITLSat := totalDecodeITLSat / float64(nDecodeVariants)
+		queueDemand := estimateQueueDemand(input.SchedulerQueue, avgDecodeITLSat, DefaultQueueDrainFactor)
+		totalDemand += queueDemand
+		queueDemandByRole = distributeDemandByRole(queueDemand, variantCapacities)
+	}
+
+	// TA publishes raw Total* fields; RequiredCapacity and SpareCapacity are left
+	// zero — the engine's universal threshold post-step writes them after Analyze returns.
+	// The GPS/EPP gate that previously suppressed SpareCapacity is dropped here; without
+	// it, a missing SchedulerQueue (nil) causes TotalDemand to be under-estimated and the
+	// engine may compute SC > 0 when queued requests exist — a scale-down risk.
+	// Restoring the gate (conditioned on SchedulerQueue == nil || anyGPSMismatch) is
+	// tracked in issue #1261 and requires a per-analyzer status-return signal in the
+	// engine contract. anyEPP and anyGPSMismatch are retained as placeholders for that PR.
+	_ = anyEPP
+	_ = anyGPSMismatch
+
+	// Supply, utilization, and RoleCapacities are assembled downstream by the
+	// engine's capacity-build step; the analyzer emits only the measured (D, P)
+	// signal plus its per-role demand attribution.
+	return &domain.AnalyzerResult{
+		AnalyzerName:      AnalyzerName,
+		ModelID:           input.ModelID,
+		Namespace:         input.Namespace,
+		AnalyzedAt:        now,
+		VariantCapacities: variantCapacities,
+		TotalDemand:       totalDemand,
+		RoleDemand:        aggregateRoleDemand(variantCapacities, arrivalDemandByRole, queueDemandByRole),
+	}, nil
+}
+
+// VariantState returns a read-only snapshot of the per-variant calibration state.
+// Returns (zero ThroughputVariantState, false) if no data has been observed yet
+// for the given variant.
+func (a *ThroughputAnalyzer) VariantState(modelID, namespace, variantName string) (ThroughputVariantState, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	key := variantKey(namespace, modelID, variantName)
+	state, ok := a.variantStates[key]
+	if !ok {
+		return ThroughputVariantState{}, false
+	}
+
+	shape, _ := state.shapeTracker.Current()
+	if a.itlSteadyGate {
+		return a.lineVariantState(key, state, shape), true
+	}
+	return ThroughputVariantState{
+		Shape:            shape,
+		ObservationReady: state.observationWindow.Ready(),
+		KSpread:          state.observationWindow.KSpread(),
+		SampleCount:      state.observationWindow.Len(),
+		LastSanityReport: state.lastSanityReport,
+		ITLModel:         state.lastITLModel,
+		PerReplicaSupply: state.lastPerReplicaSupply,
+		TotalSupply:      state.lastTotalSupply,
+		Demand:           state.lastDemand,
+		Role:             state.role,
+		LastFittedB:      state.lastFittedB,
+		HasFittedB:       state.hasFittedB,
+	}, true
+}
+
+// --- helpers ---
+
+// variantKey builds the map key for a variant. The null-byte delimiter is safe
+// because neither Kubernetes resource names nor operator-provided model IDs can
+// contain a null byte.
+func variantKey(namespace, modelID, variantName string) string {
+	return modelKeyPrefix(namespace, modelID) + variantName
+}
+
+// modelKeyPrefix is what every variantKey of the model begins with.
+func modelKeyPrefix(namespace, modelID string) string {
+	return namespace + "\x00" + modelID + "\x00"
+}
+
+// getOrCreateVariantState returns the variantState for the given key, creating
+// it with default configuration if it does not exist yet.
+// Must be called with a.mu held.
+func (a *ThroughputAnalyzer) getOrCreateVariantState(key string) *variantState {
+	if state, ok := a.variantStates[key]; ok {
+		return state
+	}
+	state := &variantState{
+		shapeTracker: shape.NewTracker(shape.DefaultChangeTolerance),
+		observationWindow: itl.NewWindow(
+			itl.DefaultWindowMaxSize,
+			itl.DefaultObservationMaxAge,
+			itl.DefaultMinSamples,
+			itl.DefaultMinKSpread,
+			0, 1, // the band is the policy's, applied in observe
+		),
+	}
+	a.variantStates[key] = state
+	return state
+}
+
+// resolveITLModel returns the ITL model to use for a variant using a two-tier strategy:
+//
+//   - Tier 1: OLS fit from the observation window (when Ready).
+//   - Tier 2: constrained OLS with B pinned. B is taken from the last successful Tier-1 fit
+//     (state.lastFittedB) when one exists, because B reflects hardware/model characteristics
+//     that survive workload-shape changes. Falls back to DefaultBaselineITLSec when no
+//     prior fit exists. Only possible when at least one replica has k* > 0; replicas with
+//     k* = 0 (idle) carry no ITL signal and are excluded.
+//
+// When replicas are present but all are idle (k* = 0), both tiers fail and we return (zero, false).
+// A future tier-3 (knowledge store) path for the scale-from-zero case will be added once Analyze()
+// is extended to iterate variants with state but no current replica metrics.
+//
+// Must be called with a.mu held.
+func (a *ThroughputAnalyzer) resolveITLModel(ctx context.Context, state *variantState, metrics []domain.ReplicaMetrics, namespace, modelID, variantName string) (itl.Model, string, bool) {
+	// Tier 1: OLS fit.
+	if state.observationWindow.Ready() {
+		obs := state.observationWindow.Observations()
+		if model, ok := itl.Fit(obs); ok {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-1 OLS fit",
+				"namespace", namespace, "modelID", modelID, "variant", variantName,
+				"A", model.A, "B", model.B, "samples", len(obs),
+			)
+			state.lastFittedB = model.B
+			state.hasFittedB = true
+			return model, itlReasonT1OLS, true
+		}
+		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-1 OLS fit failed, trying tier-2",
+			"namespace", namespace, "modelID", modelID, "variant", variantName,
+			"samples", len(obs),
+		)
+	}
+
+	// Tier 2: constrained OLS with B pinned.
+	// Minimize Σ(ITL_i − A·k_i − B)² → A = Σ((ITL_i − B)·k_i) / Σ(k_i²).
+	// Using per-replica (k*, ITL) directly is better than collapsing to a centroid
+	// when replicas have spread k* values — it is the same least-squares criterion
+	// as tier-1 OLS but with B pinned instead of fitted.
+	baselineB := DefaultBaselineITLSec
+	tier2Label := itlReasonT2Default
+	if state.hasFittedB {
+		baselineB = state.lastFittedB
+		tier2Label = itlReasonT2Pinned
+	}
+	// Each replica's k is the one paired with its ITL in the window: the
+	// minute's mean fill when the collector read it, else the instant fill.
+	var numerator, sumK2 float64
+	var n float64
+	for _, m := range metrics {
+		if k := m.KvUsageForITL(); k > 0 && m.AvgITL > 0 {
+			numerator += (m.AvgITL - baselineB) * k
+			sumK2 += k * k
+			n++
+		}
+	}
+	if n > 0 && sumK2 > 0 {
+		A := numerator / sumK2
+		if itl.ValidModel(A, baselineB) {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: tier-2 constrained OLS fit",
+				"namespace", namespace, "modelID", modelID, "variant", variantName,
+				"A", A, "B", baselineB, "replicas", int(n),
+			)
+			return itl.Model{A: A, B: baselineB}, tier2Label, true
+		}
+	}
+	return itl.Model{}, itlReasonT2Failed, false
+}
+
+// computeDemand aggregates λ_dec (decode token demand in tokens/sec) across
+// replicas as Σ RequestRate_r × AvgOutputTokens_r.
+//
+// The per-replica product rather than sumRate × avgOL avoids averaging-the-averages:
+// replicas with higher throughput contribute proportionally more to λ_dec without
+// requiring raw histogram sums.
+//
+// It used to prefer a per-replica EPP arrival rate and treat this as the fallback.
+// That arrival rate is gone — it could never be attributed to a pod, see the note
+// above QueryModelArrivalRate — so the fallback is now the only path. The returned
+// λ_dec only feeds this variant's own VariantCapacity.TotalDemand/Utilization
+// (introspection); Analyze's model-level TotalDemand uses input.ArrivalRate ×
+// avgOL and derives anyEPP from that model-level rate.
+//
+// The one real loss is that completions undercount arrivals while a queue is
+// building. Returns 0 when nothing has completed, which is the caller's signal to
+// fall through to computeLocalDemand.
+func computeDemand(metrics []domain.ReplicaMetrics) float64 {
+	// Σ RequestRate_r × AvgOutputTokens_r — each replica's own output length
+	// weighted by its own completion rate.
+	var lambdaDec float64
+	for _, m := range metrics {
+		if m.RequestRate > 0 && m.AvgOutputTokens > 0 {
+			lambdaDec += m.RequestRate * m.AvgOutputTokens
+		}
+	}
+	return lambdaDec
+}
+
+// computeLocalDemand estimates decode token demand from per-replica k* observations
+// when the EPP ArrivalRate and the engine request rate are both unavailable.
+//
+//	λ_local = Σ_r (k_r* × KV_max_r / KVreq) / ITL(k_r*)
+//
+// Each replica's in-flight request count N_r = k_r* × KV_max_r / KVreq is divided
+// by ITL(k_r*) to approximate its current throughput. Replicas with k* = 0 or
+// KV_max = 0 are excluded (no meaningful signal at idle).
+// This path is scale-up only: k*-based demand may undercount arriving load
+// without EPP. The engine post-step determines SC from the published totals.
+func computeLocalDemand(metrics []domain.ReplicaMetrics, shape shape.Shape, model itl.Model) float64 {
+	if shape.KVreq <= 0 || shape.AvgOutputTokens <= DefaultMinDecodeOLForLocalDemand {
+		return 0
+	}
+	var total float64
+	for _, m := range metrics {
+		if math.IsNaN(m.KvUsageInstant) || m.KvUsageInstant <= 0 || m.TotalKvCapacityTokens <= 0 {
+			continue
+		}
+		// KvUsageInstant is a KV-utilization fraction; values > 1 indicate a bad/over-committed
+		// metric. Skip rather than clamp — a single over-range replica shouldn't inflate demand.
+		if m.KvUsageInstant > 1 {
+			continue
+		}
+		// itl.TokenRate is this arithmetic: Sequences(k, C, KVreq) / ITLAt(k),
+		// returning 0 for a non-positive or NaN ITL, which adds nothing to the
+		// sum exactly as the old `continue` did.
+		total += itl.TokenRate(model, m.KvUsageInstant, float64(m.TotalKvCapacityTokens), shape.KVreq)
+	}
+	return total
+}
+
+// estimateQueueDemand converts the scheduler queue depth into an equivalent
+// decode token demand rate (tokens/sec).
+//
+//	drain_time = QueueDrainFactor × ITL(k_sat) × avgOL
+//	λ_queue    = QueueSize × avgOL / drain_time
+//	           = QueueSize / (QueueDrainFactor × ITL(k_sat))   (avgOL cancels)
+//
+// ITL(k_sat) is used as the reference latency so that admitted queue demand
+// bounds per-request queueing time to ≤ QueueDrainFactor × ITL(k_sat) × avgOL.
+func estimateQueueDemand(sq *domain.SchedulerQueueMetrics, itlSat, drainFactor float64) float64 {
+	if sq == nil || sq.QueueSize <= 0 || itlSat <= 0 || drainFactor <= 0 {
+		return 0
+	}
+	return float64(sq.QueueSize) / (drainFactor * itlSat)
+}
+
+// computeVariantSupply computes the aggregate μ_dec_sat supply for a variant.
+//
+// Per replica: N_dec_sat = DefaultKSat × KV_max / KVreq; μ_dec_sat = N_dec_sat / itlSat.
+// Returns (totalSupply Σμ_dec_sat, perReplicaSupply mean(μ_dec_sat), nKV count of
+// KV-capable replicas). All are zero when no replica has KV capacity data.
+func computeVariantSupply(metrics []domain.ReplicaMetrics, shape shape.Shape, itlSat float64) (total, perReplica float64, nKV int) {
+	var sum float64
+	var n int
+	for _, m := range metrics {
+		if m.TotalKvCapacityTokens <= 0 {
+			continue
+		}
+		kvMax := float64(m.TotalKvCapacityTokens)
+		// itl.Sequences, rather than the same product written out again. It
+		// also returns 0 where KVreq is non-positive, where this divided by
+		// zero and carried +Inf into the supply.
+		nSat := itl.Sequences(itl.DefaultKSat, kvMax, shape.KVreq)
+		sum += nSat / itlSat
+		n++
+	}
+	if n == 0 {
+		return 0, 0, 0
+	}
+	return sum, sum / float64(n), n
+}
+
+// groupByVariant partitions a slice of ReplicaMetrics by VariantName.
+// ownReplicasOnly drops the rows that came from a BRIDGE, leaving the variant's
+// own replicas.
+//
+// See the call site for why: P must be measured over the same population the
+// capacity-build step counts, and a lent warm pool Pod is not part of the
+// variant's scale target.
+func ownReplicasOnly(metrics []domain.ReplicaMetrics) []domain.ReplicaMetrics {
+	own := make([]domain.ReplicaMetrics, 0, len(metrics))
+	for _, m := range metrics {
+		if m.FromWarmPool {
+			continue
+		}
+		own = append(own, m)
+	}
+	return own
+}
+
+func groupByVariant(metrics []domain.ReplicaMetrics) map[string][]domain.ReplicaMetrics {
+	groups := make(map[string][]domain.ReplicaMetrics)
+	for _, m := range metrics {
+		groups[m.VariantName] = append(groups[m.VariantName], m)
+	}
+	return groups
+}
+
+// averageShapeMetrics computes the RequestRate-weighted mean IL, OL, and
+// prefix hit rate across a slice of replica metrics. Replicas with zero or
+// negative IL or OL are excluded. When all eligible replicas have zero
+// RequestRate, falls back to an unweighted mean.
+func averageShapeMetrics(metrics []domain.ReplicaMetrics) (il, ol, hitRate float64) {
+	// One gate for all three, as before: a replica is in the mean only if it
+	// reports both a prompt and a generation length. Its hit rate then counts
+	// even at zero, which is why only that call admits a zero (shapeEligible).
+	il = fleet.Mean(metrics,
+		func(m domain.ReplicaMetrics) float64 { return m.AvgInputTokens }, shapeEligible)
+	ol = fleet.Mean(metrics,
+		func(m domain.ReplicaMetrics) float64 { return m.AvgOutputTokens }, shapeEligible)
+	hitRate = fleet.Mean(metrics,
+		func(m domain.ReplicaMetrics) float64 { return m.PrefixCacheHitRate }, shapeEligible,
+		fleet.ZeroIsAReading())
+	return il, ol, hitRate
+}
+
+// shapeEligible is whether a replica is in the variant's shape: it reports
+// both a prompt and a generation length (averageShapeMetrics,
+// variantOutputDispersion).
+func shapeEligible(m domain.ReplicaMetrics) bool {
+	return m.AvgInputTokens > DefaultMinTokensPerRequest &&
+		m.AvgOutputTokens > DefaultMinTokensPerRequest
+}
+
+// filterHealthyForShape returns only the replicas that pass all per-replica
+// sanity checks. Replicas with cold-start (ITL=0), stale metrics, or missing
+// KV capacity are excluded so a single bad pod cannot block the variant.
+func filterHealthyForShape(metrics []domain.ReplicaMetrics) []domain.ReplicaMetrics {
+	healthy := make([]domain.ReplicaMetrics, 0, len(metrics))
+	for _, m := range metrics {
+		if len(checkReplicaMetrics(m)) == 0 {
+			healthy = append(healthy, m)
+		}
+	}
+	return healthy
+}
+
+// safeDivide returns num/denom, or 0 when denom is zero.
+func safeDivide(num, denom float64) float64 {
+	if denom == 0 {
+		return 0
+	}
+	return num / denom
+}
+
+// checkVariantGPSMismatch compares each replica's observed GenerationTokenRate (GPS_obs,
+// i.e. μ_dec^obs) against the model-predicted decode rate μ_dec(k*) = N_dec(k*) / ITL(k*).
+// Returns true when any replica exceeds DefaultGPSMismatchThresholdPct at k* ≥
+// DefaultGPSMinKForVerification, indicating the ITL model may be wrong.
+//
+// When a mismatch is detected near saturation (k* ≥ DefaultKSat − DefaultNearKSatMargin),
+// additional diagnostics are logged to distinguish between two root causes:
+//   - ITL model drift / bad data points: observed AvgITL deviates from ITL(k*).
+//   - Shape mismatch: ITL fits well but GPS × AvgITL disagrees with KV-derived N_dec,
+//     suggesting IL, OL, or prefix-hit-rate parameters are wrong.
+func checkVariantGPSMismatch(
+	ctx context.Context,
+	metrics []domain.ReplicaMetrics,
+	shape shape.Shape,
+	model itl.Model,
+	namespace, modelID, variantName string,
+) bool {
+	if shape.KVreq <= 0 {
+		return false
+	}
+	mismatch := false
+	for _, m := range metrics {
+		if m.GenerationTokenRate <= 0 || m.KvUsageInstant < DefaultGPSMinKForVerification {
+			continue
+		}
+		if m.TotalKvCapacityTokens <= 0 {
+			continue
+		}
+		// One arithmetic, in one place. itl.TokenRate is k*C/KVreq over
+		// ITL(k) -- the three lines this block used to spell out -- and
+		// itl.GPSErrorPct is the comparison against it. The saturation
+		// analyzer gates a derived mu on the same call.
+		muDecModel := itl.TokenRate(model, m.KvUsageInstant,
+			float64(m.TotalKvCapacityTokens), shape.KVreq)
+		gpsErrPct, haveGPS := itl.GPSErrorPct(model, m.KvUsageInstant,
+			float64(m.TotalKvCapacityTokens), shape.KVreq, m.GenerationTokenRate)
+		if !haveGPS || gpsErrPct <= DefaultGPSMismatchThresholdPct {
+			continue
+		}
+		mismatch = true
+		ctrl.LoggerFrom(ctx).Info("throughput analyzer: GPS mismatch detected",
+			"namespace", namespace,
+			"modelID", modelID,
+			"variant", variantName,
+			"pod", m.PodName,
+			"k", m.KvUsageInstant,
+			"GPSObs", m.GenerationTokenRate,
+			"muDecModel", muDecModel,
+			"gpsErrPct", gpsErrPct,
+		)
+
+		// Near k_sat: run deeper diagnostics to identify root cause.
+		if m.KvUsageInstant < itl.DefaultKSat-DefaultNearKSatMargin || m.AvgITL <= 0 {
+			continue
+		}
+		// Recomputed here, where they are read. Both are positive on this
+		// path: itl.GPSErrorPct only reports a percentage when the predicted
+		// rate is positive, and it is Sequences/ITL(k).
+		itlAtK := model.ITLAt(m.KvUsageInstant)
+		nDec := itl.Sequences(m.KvUsageInstant,
+			float64(m.TotalKvCapacityTokens), shape.KVreq)
+		itlResidual := math.Abs(m.AvgITL-itlAtK) / m.AvgITL
+		if itlResidual > DefaultNearKSatITLResidualThreshold {
+			ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: near-k_sat ITL residual high (model drift or bad data)",
+				"namespace", namespace,
+				"modelID", modelID,
+				"variant", variantName,
+				"pod", m.PodName,
+				"k", m.KvUsageInstant,
+				"avgITLObs", m.AvgITL,
+				"itlModel", itlAtK,
+				"itlResidualPct", itlResidual*100,
+			)
+		} else {
+			// ITL model matches observed ITL but GPS disagrees: N_dec derivation
+			// (shape.KVreq via IL/OL/hit-rate) may be wrong.
+			nDecGPS := m.GenerationTokenRate * m.AvgITL
+			nDecErrPct := math.Abs(nDec-nDecGPS) / nDec * 100
+			if nDecErrPct > DefaultNearKSatNDecResidualThreshold*100 {
+				ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("throughput analyzer: near-k_sat N_dec mismatch (shape wrong?)",
+					"namespace", namespace,
+					"modelID", modelID,
+					"variant", variantName,
+					"pod", m.PodName,
+					"k", m.KvUsageInstant,
+					"nDecModel", nDec,
+					"nDecGPS", nDecGPS,
+					"nDecErrPct", nDecErrPct,
+					"hint", "check AvgInputTokens/AvgOutputTokens/PrefixCacheHitRate",
+				)
+			}
+		}
+	}
+	return mismatch
+}
+
+// distributeDemandByRole splits a model-level decode-rate-denominated demand
+// quantity evenly across active non-prefill roles derived from vcs. Used for
+// both the model-level arrival decode term (Λ_req × avgOL) and the scheduler
+// queue-drain term — both are decode-rate-denominated and role-agnostic at the
+// point they are computed, so prefill roles are excluded. Returns nil when
+// demand is zero or no non-prefill roles exist.
+func distributeDemandByRole(demand float64, vcs []domain.VariantCapacity) map[string]float64 {
+	if demand == 0 {
+		return nil
+	}
+	roles := make(map[string]struct{})
+	for _, vc := range vcs {
+		role := vc.Role
+		if role == "" {
+			role = domain.RoleBoth
+		}
+		if role != domain.RolePrefill {
+			roles[role] = struct{}{}
+		}
+	}
+	if len(roles) == 0 {
+		return nil
+	}
+	share := demand / float64(len(roles))
+	result := make(map[string]float64, len(roles))
+	for role := range roles {
+		result[role] = share
+	}
+	return result
+}
+
+// aggregateRoleDemand groups variant capacities by P/D role and returns the
+// analyzer's per-role demand attribution — the demand half of the (D, P)
+// contract. Demand per role is arrivalDemandByRole[role] + queueDemandByRole[role]
+// (either map nil is safe — treated as zero); it does not sum each role's
+// per-variant computeDemand results, since the model-level arrival decode term
+// replaced that path — see Analyze's arrivalDecodeDemand. Returns nil for
+// non-disaggregated models (all variants role "" or "both").
+//
+// Per-role supply is deliberately not computed here: the engine's capacity-build
+// step recomputes it from the same VariantCapacities and pairs it with this map.
+func aggregateRoleDemand(vcs []domain.VariantCapacity, arrivalDemandByRole, queueDemandByRole map[string]float64) map[string]float64 {
+	if !aggregation.IsDisaggregated(vcs) {
+		return nil
+	}
+
+	// DemandByRole is used for its key set, not its values: the per-variant demand
+	// sums are deliberately discarded here (see the doc comment above) and replaced
+	// by the model-level arrival term plus the queue term. Keying off the variant
+	// set means demand is only attributed to roles that have variants behind them.
+	result := make(map[string]float64)
+	for role := range aggregation.DemandByRole(vcs) {
+		result[role] = arrivalDemandByRole[role] + queueDemandByRole[role]
+	}
+	return result
+}

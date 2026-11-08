@@ -1,0 +1,7 @@
+knee            2.01 r/s    decode, band top binds at fill 0.797
+operating rate  1.71 r/s    0.85 x knee (scaleUpThreshold)
+mean TPOT       3.80 ms     [3.78 .. 3.84]   line ols, observed fill up to 0.50
+shape           IL 4569 OL 1855 (measured, cycles 204-223)
+line check      ok: median 3.0% off the rate read, line low; 0 of 10 rows past 15%, worst 4.4%, fill 0.52-0.55, cycles 122-131; left out 20 on a ramp, 0 above the band, 10 older than 30m0s
+flags: OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); ExtrapolatedFill (fill 0.797, 0.295 above the readings)
+estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json)

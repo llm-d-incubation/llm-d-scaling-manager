@@ -1,0 +1,3595 @@
+# Image URL to use all building/pushing image targets
+# The manifests pass --external-scaler-bind-address, a flag the images under
+# ghcr.io/llm-d do not have: they crash-loop on it with "unknown flag", and
+# the install has nothing to run. The default therefore points at a build of
+# THIS tree.
+IMAGE_TAG_BASE ?= ghcr.io/ev-shindin
+# `main`, built by ci-main-image on every push to main -- reproducible from a
+# commit and multi-arch, unlike a tag pushed by hand from a laptop. Rebuilt
+# automatically, so it cannot silently go stale the way a personal tag does.
+#
+# Read from config/base/manager/kustomization.yaml rather than repeated here, so
+# a release commit -- which pins newTag to its own tag (release-process.md) --
+# builds and installs that tag, and every other commit still gets `main`.
+ifeq ($(origin IMG_TAG),undefined)
+IMG_TAG := $(or $(shell awk '$$1 == "newTag:" {gsub(/["\r]/, "", $$2); print $$2; exit}' config/base/manager/kustomization.yaml 2>/dev/null),main)
+endif
+IMG ?= $(IMAGE_TAG_BASE)/llm-scaling-manager:$(IMG_TAG)
+# The warm-pool proxy ships as its own image because it runs in the pool's Pod,
+# not the controller's. Pin a digest in the manifest; this tag is for building.
+WARMPOOL_PROXY_IMG ?= $(IMAGE_TAG_BASE)/llm-scaling-manager/warmpool-proxy:$(IMG_TAG)
+KIND_ARGS ?= -t mix -n 3 -g 2   # Default: 3 nodes, 2 GPUs per node, mixed vendors
+# The kind cluster create-kind-cluster and destroy-kind-cluster act on: the
+# variable deploy/kind-emulator/install.sh already reads. Both targets ignored
+# it, so `make destroy-kind-cluster CLUSTER_NAME=mine` deleted the default
+# cluster instead.
+CLUSTER_NAME ?= kind-scaling-manager-gpu-cluster
+CLUSTER_GPU_TYPE ?= nvidia-mix
+CLUSTER_NODES ?= 3
+# 16 because the e2e's simulator pods now REQUEST a GPU each
+# (buildModelServiceResources), so fake GPUs are consumed rather than merely
+# advertised, and every workload is pinned to one product. Memory binds first at
+# roughly 15 replicas per node, so this keeps GPUs from being the tighter limit.
+# They cost nothing: the emulator patches node status, no device exists.
+CLUSTER_GPUS ?= 16
+KUBECONFIG ?= $(HOME)/.kube/config
+K8S_VERSION ?= v1.32.0
+
+# Install namespace. Any namespace works, at either scope: the install applies a
+# Kustomize namespace transform and the controller reads its own namespace from
+# POD_NAMESPACE, so ClusterRoleBinding subjects and the system-namespace lookups
+# follow.
+LLMSM_NS              ?= scaling-manager-system
+# One variable for where the controller runs. LLMSM_NS or CONTROLLER_NAMESPACE,
+# whichever is given, reaches every install, check, register, verify,
+# dashboard, utilization-share and uninstall target; given both, LLMSM_NS wins
+# (a recursive e2e make passes LLMSM_NS explicitly beside an inherited
+# CONTROLLER_NAMESPACE). Neither given: the LLMSM_NS default above.
+# CONTROLLER_NAMESPACE keeps its e2e default further down, which counts only
+# when it is given.
+llmsm_ns_given  = $(filter command line environment,$(origin LLMSM_NS))
+ctl_ns_given  = $(filter command line environment,$(origin CONTROLLER_NAMESPACE))
+# llmsm_ns_arg is the LLMSM_NS=<ns> the scripts get: the one given, else nothing
+# (the scripts default it).
+llmsm_ns_arg    = $(if $(llmsm_ns_given),LLMSM_NS=$(LLMSM_NS),$(if $(ctl_ns_given),LLMSM_NS=$(CONTROLLER_NAMESPACE),))
+# llmsm_ctl_ns is the controller namespace given by either name, else empty.
+llmsm_ctl_ns    = $(if $(llmsm_ns_given),$(LLMSM_NS),$(if $(ctl_ns_given),$(CONTROLLER_NAMESPACE),))
+# Where llm-d runs. NAMESPACE is llm-d's OWN variable — its well-lit path guides
+# say `export NAMESPACE=…` and pass `-n ${NAMESPACE}` to every command — so a
+# reader arriving from one already has it set, and this repo no longer invents a
+# second name for it. It used to: LLMD_NS, ours alone, now a deprecated alias
+# accepted by deploy/install.sh.
+NAMESPACE           ?= llm-d-optimized-baseline
+# Install scope: cluster | namespace. Empty means the historical default —
+# namespace on OpenShift, cluster elsewhere. See deploy/lib/common.sh.
+LLMSM_SCOPE           ?=
+# Declare GPU limiters at install: none | gpu-inventory | quota, or a list such as
+# gpu-inventory,quota -- every limiter in it bounds scaling. Unset keeps the
+# limiters the live policy already declares (a first install has none, matching the
+# shipped config); none removes them -- the default was none before, so every
+# re-install silently unbounded a bounded controller.
+# See docs/reference/gpu-limiter.md.
+# `quota` additionally REQUIRES LLMSM_QUOTAS, the per-accelerator budget
+# (LLMSM_QUOTAS='H200=8 A100=4'); there is no default, and an empty quota entry is
+# a budget of zero rather than unlimited. LLMSM_QUOTA_SCOPE is namespace|cluster.
+# LLMSM_QUOTA_KUEUE=true also reads Kueue: per namespace and accelerator type the
+# smaller of the Kueue grant and LLMSM_QUOTAS applies (name the types with -1 to
+# let Kueue set the figure) -- docs/well-lit-paths/kueue-bounded-quotas/. The
+# grant counts cohort borrowing where it is safe; LLMSM_QUOTA_KUEUE_BORROW=false
+# keeps it at nominal. Borrowing needs a GPU bound beside the quota: declare
+# gpu-inventory (LLMSM_LIMITER=gpu-inventory,quota) or a GPU ResourceQuota.
+LLMSM_LIMITER         ?=
+# A ScaledObject is how a workload registers with the scaling manager. LLMSM_DEFAULT_SO=true has the
+# installer create one per llm-d model server; LLMSM_DEFAULT_SO_NS picks the
+# namespace, or "all" for every namespace holding one (cluster-scoped installs).
+LLMSM_DEFAULT_SO      ?= false
+LLMSM_DEFAULT_SO_NS   ?=
+# Where the e2e controller runs -- and it is the namespace the models are in.
+#
+# A NAMESPACE-SCOPED controller manages the namespace it lives in, so the suite's
+# controller and its model servers belong together. They were split
+# (scaling-manager-system vs llm-d-sim), which only works cluster-
+# scoped: kind used to infer that scope, namespace is now the default everywhere,
+# and the split install could then neither watch nor read the workloads --
+#   scaledobjects.keda.sh "stz-rt-so" is forbidden
+# so an idle model was never evaluated and never parked.
+#
+# Aligned rather than given cluster scope, or split further with LLMSM_WATCH_NS:
+# namespace scope is the supported shape, cluster scope now warns that it is WIP,
+# and the suite should exercise what people actually run. One variable feeds both
+# the install (LLMSM_NS) and what the tests read (LLMSM_NAMESPACE), so they cannot
+# drift apart.
+CONTROLLER_NAMESPACE ?= $(E2E_EMULATED_LLMD_NAMESPACE)
+MONITORING_NAMESPACE ?= openshift-user-workload-monitoring
+LLMD_NAMESPACE       ?= llm-d-optimized-baseline
+GATEWAY_NAME         ?= # discovered automatically in e2es
+MODEL_ID             ?= e2e-scaling-manager/dummy-model
+DEPLOYMENT           ?= # discovered automatically in e2es
+REQUEST_RATE         ?= 10
+# How long a workload drives load for, substituted into __MAX_DURATION__ the
+# same way REQUEST_RATE is. A profile that hardcodes its seconds is unaffected.
+MAX_DURATION         ?= 600
+NUM_PROMPTS          ?= 3000
+
+# E2E test configuration (for test/e2e/ suite)
+ENVIRONMENT                 ?= kind-emulator
+USE_SIMULATOR               ?= true
+SCALE_TO_ZERO_ENABLED       ?= false
+# Sized for the DEFAULT run, which skips ~46 specs at runtime. Enabling the
+# gates (SCALE_TO_ZERO_ENABLED=true) adds inherently slow scale-from-zero
+# specs and 35m is not enough -- the suite panics with "test timed out"
+# mid-run, which looks like a hang rather than a budget.
+E2E_TIMEOUT                 ?= $(if $(filter true,$(SCALE_TO_ZERO_ENABLED)),120m,35m)
+# go test's timeout must be LARGER than ginkgo's, not equal to it.
+#
+# Ginkgo's own suite timeout defaults to one hour, so raising only go test's
+# limit bought nothing: a SCALE_TO_ZERO_ENABLED=true run died at exactly 3600s
+# with `FAIL! - Suite Timeout Elapsed`, 30 of 96 specs run.
+#
+# Setting them EQUAL was worse. go test won the race and panicked the binary, so
+# ginkgo never printed a summary at all -- 75 minutes of work and the only output
+# was a goroutine dump and `FAIL ... 4500.036s`. A run you cannot read is worth
+# less than one that stops early and says where it got to.
+#
+# So ginkgo gets E2E_TIMEOUT and go test gets a margin on top: ginkgo hits its
+# limit first, tears down cleanly, and reports which specs passed.
+#
+# 120m from measurement, not taste: the 75m run completed 56 specs in 4432s and
+# was still going, with individual scale-from-zero specs taking 720s, 605s and
+# 600s. Those are inherently slow -- they wait on real parking and waking.
+E2E_GO_TIMEOUT              ?= $(if $(filter true,$(SCALE_TO_ZERO_ENABLED)),130m,45m)
+# Passed to BOTH `go test -timeout` and `-ginkgo.timeout`. Ginkgo keeps its own
+# suite timeout, which defaults to ONE HOUR, so raising only go test's limit
+# bought nothing: a SCALE_TO_ZERO_ENABLED=true run died at exactly 3600s with
+# `FAIL! - Suite Timeout Elapsed`, 30 of 96 specs run and 66 never started --
+# which reads as eight product failures rather than a suite that was cut off.
+DEPLOY_ALERTING_RULES       ?= false
+SCALER_BACKEND              ?= keda  # keda (ScaledObject) or none (skip, use pre-installed backend)
+LLM_D_ROUTER_VERSION        ?= v0.9.0
+GAIE_VERSION                ?= v1.5.0
+SCALE_UP_THRESHOLD          ?=
+SCALE_DOWN_BOUNDARY         ?=
+E2E_MONITORING_NAMESPACE    ?= scaling-manager-monitoring
+E2E_EMULATED_LLMD_NAMESPACE ?= llm-d-sim
+E2E_KEDA_NAMESPACE          ?= keda-system
+# The KEDA_NAMESPACE deploy-e2e-infra hands the install: on kind, where the
+# installer Helm-installs KEDA itself, the namespace it installs it into. A
+# KEDA_NAMESPACE already in the environment wins, since deploy_keda uses it too.
+E2E_KEDA_NAMESPACE_ENV = $(if $(filter kind-emulator,$(ENVIRONMENT)),KEDA_NAMESPACE=$${KEDA_NAMESPACE:-$(E2E_KEDA_NAMESPACE)},)
+E2E_LLMSM_SECONDARY_OVERLAY_PATH ?= $(CURDIR)/test/e2e/testdata/secondary-controller
+# llm-d-benchmark CLI configuration
+# Ensure brew-installed tools (helm >=3.19) take precedence over Rancher Desktop.
+#
+# Scoped to the benchmark targets, which is what it was written for. It used to
+# be a plain `export PATH :=`, which applies to EVERY target -- so it also
+# outranked whatever the caller had put first. An operator working across two
+# clusters put a kubectl wrapper pinned to one of them at the front of PATH; this
+# line silently won, and `make check-prereqs` ran against the other cluster and
+# reapplied prerequisites there. A successful-looking preflight for the wrong
+# cluster is the worst possible failure mode for a command that mutates one.
+benchmark-%: export PATH := /opt/homebrew/bin:$(PATH)
+BENCHMARK_REPO_URL   ?= https://github.com/llm-d/llm-d-benchmark.git
+BENCHMARK_REPO_DIR   ?= $(CURDIR)/llm-d-benchmark
+BENCHMARK_DIRECT_KEDA ?= false
+# v0.7.8, not v0.7.0: guidellm moved to a nested profile schema
+# (spec.backend.kind, constraints[], data[]) and upstream converted its profiles
+# to match in 00e1516 "[Run] Update guidellm profiles (compatibility with
+# v0.7.3)". v0.7.0's profiles are still flat while the harness IMAGE it pulls is
+# v0.7.3, so every guidellm run from a v0.7.0 checkout dies with
+#   Error: Invalid value for '--backend' ...: Field required (at
+#   'backend.openai_http.target'); Extra inputs are not permitted (at 'target')
+# -- including on llm-d-benchmark's own shipped profiles.
+BENCHMARK_REPO_REF   ?= $(if $(filter true,$(BENCHMARK_DIRECT_KEDA)),main,v0.7.8)
+BENCHMARK_SPEC       ?= $(if $(filter true,$(BENCHMARK_DIRECT_KEDA)),guides/epp-keda-saturation,guides/workload-autoscaling)
+BENCHMARK_NAMESPACE  ?= # set via BENCHMARK_NAMESPACE=<namespace>
+BENCHMARK_GATEWAY_URL ?= http://infra-llmdbench-inference-gateway-istio.$(BENCHMARK_NAMESPACE).svc.cluster.local:80
+BENCHMARK_WORKSPACE  ?= $(CURDIR)
+BENCHMARK_HARNESS    ?= guidellm
+BENCHMARK_WORKLOAD   ?= prefill_heavy
+BENCHMARK_FORCE      ?= true
+BENCHMARK_MONITORING ?= true
+# Collect results by streaming a gzipped tar over exec instead of kubectl cp.
+# See the note on the benchmark-run recipe for why this defaults on.
+BENCHMARK_FAST_COLLECT ?= true
+# Where the replica sampler and the controller log tail write while a run is in
+# flight.
+#
+# Keyed by namespace AND by a per-invocation run id, so two runs can never share
+# a path. Sharing one was the whole original problem: two samplers appended to a
+# single array with no comma between them and the second overwrote the first
+# pidfile, leaving a sampler nothing could stop. Namespace alone was not enough --
+# two runs in the same namespace still collided, as did two sessions benchmarking
+# the same namespace on different clusters.
+#
+# `:=` is load-bearing. The id is expanded once when this file is read, so the
+# start, the stop and the copy step in one recipe all agree; a recursive `=`
+# would re-run `date` per use and the stop would look for a file that was never
+# written.
+BENCHMARK_CAPTURE_DIR ?= /tmp
+BENCHMARK_RUN_ID      := $(shell date -u +%Y%m%dT%H%M%S)-$(shell echo $$PPID)
+BENCHMARK_SAMPLES     ?= $(BENCHMARK_CAPTURE_DIR)/llmsm_replica_samples-$(BENCHMARK_NAMESPACE)-$(BENCHMARK_RUN_ID).json
+BENCHMARK_LLMSM_LOG     ?= $(BENCHMARK_CAPTURE_DIR)/llmsm_controller_tail-$(BENCHMARK_NAMESPACE)-$(BENCHMARK_RUN_ID).log
+# The learner recordings copied out of the controller (hack/benchmark/learner_recordings.sh).
+# They live in an emptyDir, so a teardown or a controller restart deletes them;
+# benchmark-run copies them during the run and files them under the results'
+# learner-recordings/, and benchmark-teardown and benchmark-restart-controller
+# copy once more before the Pod goes. The prefix is how a teardown finds an
+# interrupted run's copy and finishes it.
+BENCHMARK_RECORDINGS_PREFIX = $(BENCHMARK_CAPTURE_DIR)/llmsm_learner_recordings-$(BENCHMARK_NAMESPACE)-
+BENCHMARK_RECORDINGS  ?= $(BENCHMARK_RECORDINGS_PREFIX)$(BENCHMARK_RUN_ID)
+# Seconds between copies during a run. The final copy at the end is the one
+# that matters; these keep a recent one if the Pod dies first.
+BENCHMARK_RECORDINGS_INTERVAL ?= 300
+BENCHMARK_RECORDINGS_ENV = RECORDINGS_INTERVAL=$(BENCHMARK_RECORDINGS_INTERVAL) RECORDINGS_MAX_SECONDS=$$(( $(BENCHMARK_WAIT_TIMEOUT) + 3600 )) RECORDINGS_REQUEST_TIMEOUT=$(BENCHMARK_KUBECTL_TIMEOUT)
+# Passed to both captures so the cluster they watch is explicit rather than
+# inherited. Empty means "whatever KUBECONFIG says", which is the old behaviour.
+BENCHMARK_KUBE_CONTEXT ?=
+BENCHMARK_CAPTURE_CTX   = $(if $(BENCHMARK_KUBE_CONTEXT),--context "$(BENCHMARK_KUBE_CONTEXT)",)
+# Skip the chained smoketest after standup.
+#
+# For a MULTI-MODEL stack, which routes by PATH PREFIX. The smoketest's
+# model-readiness poll asks <gateway>/v1/models -- the gateway ROOT, which such a
+# stack does not route -- so it 404s and burns its whole 1800s timeout on a stack
+# where both models are already answering. Measured on a multi-node H200 cluster: the root 404s
+# while /qwen3-8b/v1/models returns 200 listing the model, at the same moment.
+#
+# Single-model runs should leave this false: there the smoketest is the only
+# thing that checks the stack serves at all before a benchmark is started.
+BENCHMARK_SKIP_SMOKETEST ?= false
+BENCHMARK_UV         ?= false
+BENCHMARK_SCENARIOS_DIR ?= $(CURDIR)/test/benchmark/scenarios
+# The model scaling manager is benchmarked against, forwarded to the benchmark CLI as `-m`,
+# which OVERRIDES the model the scenario names.
+#
+# Qwen3-0.6B by default, deliberately: what these runs measure is the scaling manager's scaling
+# behaviour, and that exercises the same path — discovery, the ScaledObject
+# plan, the scale decision, the report — whatever the model's size. The
+# scenario's own Qwen/Qwen3-32B pulls a far larger image and holds several GPUs
+# per replica for the whole run, which is a poor default on a shared cluster.
+# Pass MODEL_ID=Qwen/Qwen3-32B for the heavy run, or BENCHMARK_MODEL_ID= (empty)
+# to defer to whatever the scenario names.
+#
+# It must NOT fall back to MODEL_ID's own default, e2e-scaling-manager/dummy-model: that
+# model exists solely in the kind emulator, and defaulting to it meant the exact
+# command the benchmarking guide documents (BENCHMARK_NAMESPACE and IMG, no
+# MODEL_ID) benchmarked the emulator's dummy on a real GPU cluster. The
+# kind-emulator targets pass MODEL_ID= into their sub-makes, so origin reads
+# "command line" there and they keep the dummy.
+BENCHMARK_MODEL_ID   ?= $(if $(filter command line environment,$(origin MODEL_ID)),$(MODEL_ID),Qwen/Qwen3-0.6B)
+
+# The fraction of each GPU vLLM may use, substituted into the scenario.
+#
+# 0.90, not the scenarios' 0.95 and not a small-model special case.
+#
+# 0.95 is knife-edge on a SHARED card and was measured failing: gpu_memory_
+# utilization is a fraction of TOTAL, not of free, so vLLM budgets 75.2 of 79.18
+# GiB and leaves 4 GiB -- less than the memory an FMA launcher was already
+# holding on that node. Launchers request ZERO GPUs while running the engine, so
+# the scheduler cannot see that memory and places the model there anyway. Result:
+# `torch.OutOfMemoryError: tried to allocate 594MiB, 500MiB free`, and because it
+# only happens when a co-tenant is present it reads as flakiness. There are 23
+# such launcher pods on this cluster.
+#
+# 0.90 leaves 7.9 GiB, which absorbs that and more, and still gives a replica
+# 651k tokens of KV -- 41 requests at the full 16k context.
+#
+# Deliberately NOT lowered for small models, though that is what first stopped the
+# crash. Per-replica capacity IS the KV cache size (saturation_v2/analyzer.go:174,
+# k1 = TotalKvCapacityTokens x KvCacheThreshold), so shrinking KV to make a
+# benchmark scale sooner is doing the autoscaler's job in the wrong layer: it
+# throws away GPU you paid for to get an effect kvCacheThreshold produces for
+# free. Size the card for serving; tune when a replica counts as full in the
+# scaling policy.
+GPU_MEM_UTIL         ?= 0.90
+# Memory limit for the benchmark harness pod (inference-perf/guidellm), patched
+# into the llm-d-benchmark clone by benchmark-patch (hack/benchmark/patch_harness.sh
+# fix 6). The clone's stock value, 32Gi, OOMKilled a 60-minute/33k-request
+# inference-perf run with per_request logging disabled -- summary/per_stage
+# percentile bookkeeping alone was enough to exceed it.
+HARNESS_MEMORY       ?= 64Gi
+BENCHMARK_DECODE_REPLICAS ?= 1
+BENCHMARK_KEDA_MIN_REPLICAS ?= 1
+BENCHMARK_KEDA_MAX_REPLICAS ?= 10
+# How often each scaling POLICY may act. This is a rate-limit window, not a
+# delay: the scenario's policy is "Percent 100", so 5s permits doubling every
+# 5s. It cannot make scaling faster than the HPA control loop, which
+# re-evaluates on kube-controller-manager's sync period (15s by default) --
+# below that, a smaller number changes nothing.
+# The UID the benchmark harness pod runs as. 0 because its entrypoint writes to
+# /usr/local/bin; see the note beside the yq call in benchmark-standup.
+BENCHMARK_HARNESS_RUN_AS_USER ?= 0
+
+BENCHMARK_KEDA_SCALE_UP_PERIOD ?= 5
+BENCHMARK_KEDA_SCALE_DOWN_PERIOD ?= 120
+
+# The stabilization window is what actually delays a scale-up: HPA takes the
+# most conservative recommendation across it, so load must persist this long
+# before replicas are added. The scenario ships 120s, which dominates every
+# other latency in the loop -- KEDA polls every 5s, the scaling manager recomputes every 15s,
+# and a decode replica measured 61s to Ready on the shared GPU cluster. Benchmarking the scaling manager's
+# reaction with a 120s window measures the window.
+#
+# 0 is a VALID value here (unlike periodSeconds), meaning "act on the current
+# recommendation". Empty means "leave the scenario's own value alone".
+# Scale-down carries the conservatism, and it belongs in the STABILIZATION
+# window rather than the policy period: HPA takes the maximum recommendation
+# across this window, so 300s is what makes a replica survive a momentary dip.
+# The period is only a rate limit, and with "Percent 100" a single step may
+# remove everything anyway -- a long period there looks cautious and prevents
+# almost nothing, which is why these two are the way round they are.
+#
+# The asymmetry is deliberate: removing a replica too eagerly costs a 61s cold
+# start (measured on the shared GPU cluster) on the next request, while keeping one too
+# long only costs money.
+BENCHMARK_KEDA_SCALE_UP_STABILIZATION ?= 0
+BENCHMARK_KEDA_SCALE_DOWN_STABILIZATION ?= 300
+# the scaling manager under benchmark is installed from THIS repo, after standup, into the
+# benchmark namespace at namespace scope. It used to come from the published
+# Helm chart named in the scenario — a released binary, not the code under test,
+# and a chart this repo no longer has. BENCHMARK_LLMSM_DEPLOY=false runs the
+# scenario with no autoscaler; direct-KEDA mode skips it on its own.
+BENCHMARK_LLMSM_DEPLOY ?= true
+# The controller's --v for a benchmark install. 3, one above the shipped 2: the
+# per-replica capacity lines post_run_analyze.sh reads (k2-decision,
+# replica-capacity-decision, derived-mu) are logged there and nowhere lower,
+# and a run cannot be re-captured. Empty keeps the shipped verbosity.
+BENCHMARK_LLMSM_VERBOSITY ?= 3
+# Never install prometheus-adapter: it and KEDA both register the
+# external.metrics.k8s.io APIService, of which a cluster has exactly one, so it
+# would take that group away from the metrics server every ScaledObject's HPA
+# queries. It was there for the HPA path the external scaler replaced.
+BENCHMARK_SKIP_PROMETHEUS_ADAPTER ?= true
+
+# Standing a guide up over an EPP that is already serving replaces objects the
+# running stack depends on, and the damage is silent -- see benchmark-standup.
+# Set true to proceed anyway (re-rendering the same guide, or accepting it).
+BENCHMARK_ALLOW_EPP_REUSE ?= false
+# Where benchmark-deploy-scaling-manager writes its ScaledObject plan. A named file, not a
+# temp path, so a run that scaled something unexpected can be explained after it.
+BENCHMARK_SO_PLAN ?= $(CURDIR)/benchmark-scaledobject-plan.yaml
+# Which install target the benchmark reuses. ASKED OF THE CLUSTER, not inferred
+# from ENVIRONMENT, which defaults to kind-emulator and is left unset by anyone
+# running a benchmark against a real cluster.
+#
+# Inferring it picked deploy-scaling-manager-on-k8s on an OpenShift cluster, and the
+# Kubernetes overlay omits config/components/openshift/manager-cluster-monitoring
+# -view-clusterrolebinding.yaml. The controller then came up without
+# cluster-monitoring-view and crash-looped on
+#   Prometheus API validation failed ... "error": "client_error: client error: 403"
+# against thanos-querier:9091 -- a failure that says nothing about the overlay
+# that caused it. Evaluated inside the recipe so it costs one API call when a
+# benchmark runs, not on every make invocation.
+BENCHMARK_LLMSM_TARGET = $(if $(filter openshift,$(ENVIRONMENT)),deploy-scaling-manager-on-openshift,deploy-scaling-manager-on-k8s)
+BENCHMARK_LLMSM_UNDEPLOY_TARGET = $(if $(filter openshift,$(ENVIRONMENT)),undeploy-scaling-manager-on-openshift,undeploy-scaling-manager-on-k8s)
+# Where the installed scaling manager reads metrics. Empty lets deploy/install.sh detect the
+# cluster's existing Prometheus, which is the usual case for a benchmark cluster.
+BENCHMARK_PROMETHEUS_URL ?= $(PROMETHEUS_URL)
+
+# Flags for deploy/install.sh (e2e / CI-style cluster infra; no chart VA/HPA).
+CREATE_CLUSTER    ?= false
+DELETE_CLUSTER    ?= false
+DELETE_NAMESPACES ?= false
+
+
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+#
+# Guarded on go being installed. This block is evaluated for EVERY target, so
+# without the guard a machine with no Go on PATH prints
+# "make: go: No such file or directory" three times before running a target that
+# has nothing to do with Go — which is what the benchmark post-processing targets
+# did, making a plotting problem look like a broken toolchain.
+ifneq (,$(shell command -v go 2>/dev/null))
+ifeq (,$(shell go env GOBIN))
+GOBIN=$(shell go env GOPATH)/bin
+else
+GOBIN=$(shell go env GOBIN)
+endif
+endif
+
+# CONTAINER_TOOL defines the container tool to be used for building images.
+# Be aware that the target commands are only tested with Docker which is
+# scaffolded by default. However, you might want to replace it to use other
+# tools. (i.e. podman)
+CONTAINER_TOOL ?= docker
+
+# Setting SHELL to bash allows bash commands to be executed by recipes.
+# Options are set to exit when a recipe line exits non-zero or a piped command fails.
+SHELL = /usr/bin/env bash -o pipefail
+.SHELLFLAGS = -ec
+
+.PHONY: all
+all: build
+
+##@ General
+
+# The help target prints out all targets with their descriptions organized
+# beneath their categories. The categories are represented by '##@' and the
+# target descriptions by '##'. The awk command is responsible for reading the
+# entire set of makefiles included in this invocation, looking for lines of the
+# file as xyz: ## something, and then pretty-format the target and help. Then,
+# if there's a line with ##@ something, that gets pretty-printed as a category.
+# More info on the usage of ANSI control characters for terminal formatting:
+# https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
+# More info on the awk command:
+# http://linuxcommand.org/lc3_adv_awk.php
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+##@ Development
+
+.PHONY: manifests
+manifests: controller-gen ## Generate WebhookConfiguration and ClusterRole objects.
+	$(CONTROLLER_GEN) rbac:roleName=manager-role webhook paths="./..." \
+		output:rbac:artifacts:config=config/base/rbac
+	# controller-gen writes `role.yaml`; rename to match the
+	# (<app>-)?<kind>.yaml convention used under config/.
+	mv config/base/rbac/role.yaml config/base/rbac/manager-clusterrole.yaml
+
+.PHONY: generate
+generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+.PHONY: dashboards-check
+dashboards-check: ## Fail if a Grafana dashboard has overlapping panels, duplicate ids/titles or the wrong namespace label (CI).
+	python3 hack/check-dashboards.py
+
+.PHONY: check-import-direction
+check-import-direction: ## Fail on a pipeline package importing one above it (the engine-structure proposal, PR #87)
+	@bash hack/check-import-direction.sh
+
+.PHONY: check-doc-comment-owner
+check-doc-comment-owner: ## Fail on a doc comment describing a different declaration than it sits on
+	@python3 hack/check_doc_comment_owner_test.py
+	@python3 hack/check-doc-comment-owner.py
+
+# The per-package limit for make test. go test's default is 10 minutes, and
+# the learnreplay package, which replays every learner golden many times
+# (the golden check and its negative controls, the switch runs), measured
+# 503 s on a GitHub runner before the TTFT goldens: too close to 600. 60
+# minutes is about twice that package's time on a runner with the goldens:
+# 868 s before the TTFT staircase's four, and 1729 s with them, 96% of the 30
+# minutes this was. One -timeout covers every package of one go test, so it
+# cannot be scoped to learnreplay alone.
+TEST_TIMEOUT ?= 60m
+
+.PHONY: test
+test: manifests generate fmt vet setup-envtest helm check-import-direction check-doc-comment-owner ## Run tests.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH="$(LOCALBIN):$(PATH)" go test -timeout $(TEST_TIMEOUT) $$(go list ./... | grep -v /e2e | grep -v /benchmark) ./test/e2e/fixtures/ -coverprofile cover.out
+	@# The race detector on the packages whose concurrency spec only it can
+	@# check (a few seconds): without -race that spec proves no deadlock and
+	@# nothing more.
+	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/
+
+# The commit a build is made from, recorded in each learner recording's start
+# line (learnrec.BuildCommit), so a golden is added only at the commit that
+# recorded it.
+GIT_COMMIT ?= $(shell git rev-parse --verify -q HEAD 2>/dev/null || echo unknown)
+LEARNREC_LDFLAGS = -X github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec.BuildCommit=$(GIT_COMMIT)
+
+# The learner goldens (docs/developer-guide/testing.md, Learner Goldens). The
+# golden check itself is a test, TestGoldens_EveryCommittedGoldenReproduces,
+# so `make test` runs it; learner-goldens-check runs it alone.
+.PHONY: learner-golden-add
+learner-golden-add: ## Commit a raw learner recording as a golden: RECORDING=<file> NAME=<fixture> SOURCE="<scenario, build, policy>" [HEAD_LINES=N] [REPLACE=1]
+	@if [ -z "$(RECORDING)" ] || [ -z "$(NAME)" ] || [ -z "$(SOURCE)" ]; then echo 'usage: make learner-golden-add RECORDING=<raw .jsonl> NAME=<fixture> SOURCE="<scenario, build, policy>" [HEAD_LINES=N] [REPLACE=1]'; exit 1; fi
+	go run -ldflags "$(LEARNREC_LDFLAGS)" ./cmd/learnergolden add -in "$(RECORDING)" -name "$(NAME)" -source "$(SOURCE)" $(if $(HEAD_LINES),-head-lines $(HEAD_LINES)) $(if $(REPLACE),-replace)
+
+.PHONY: whatif
+whatif: ## Build the what-if command line (bin/whatif), with the commit a generated recording carries; not in the manager image
+	go build -ldflags "$(LEARNREC_LDFLAGS)" -o bin/whatif ./cmd/whatif
+
+.PHONY: learner-goldens
+learner-goldens: ## Rewrite every learner golden from a replay at this commit (only for a golden change the PR names)
+	go run -ldflags "$(LEARNREC_LDFLAGS)" ./cmd/learnergolden update
+
+.PHONY: learner-goldens-check
+learner-goldens-check: ## Replay every learner golden and fail when one no longer reproduces or the manifest disagrees with the directory
+	go run -ldflags "$(LEARNREC_LDFLAGS)" ./cmd/learnergolden check
+
+.PHONY: learner-message-words
+learner-message-words: ## Rewrite the words the learner export allows in a message, from the code's own string literals
+	LEARNREPLAY_WRITE_MESSAGE_WORDS=1 go test ./internal/engines/analyzers/learnreplay/ -run TestMessageWords_AreCurrent -count=1
+
+# Creates a multi-node Kind cluster
+# Adds emulated GPU labels and capacities per node
+.PHONY: create-kind-cluster
+create-kind-cluster:
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) && \
+		deploy/kind-emulator/setup.sh -c $(CLUSTER_NAME) -t $(CLUSTER_GPU_TYPE) -n $(CLUSTER_NODES) -g $(CLUSTER_GPUS)
+
+# Destroys the Kind cluster created by `create-kind-cluster`
+.PHONY: destroy-kind-cluster
+destroy-kind-cluster:
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) KIND_NAME=$(CLUSTER_NAME) && \
+        deploy/kind-emulator/teardown.sh
+
+
+##@ Guides
+
+.PHONY: guides-render
+guides-render: ## Regenerate the command blocks in docs/guides/*/README.md from their guide.yaml.
+	python3 hack/render-guides.py
+
+.PHONY: guides-check
+guides-check: ## Fail if any guide README is out of date with its guide.yaml, or a doc link is broken (CI).
+	python3 hack/render-guides.py --check
+	python3 hack/check-doc-links.py
+
+.PHONY: warmpool-render
+warmpool-render: ## Regenerate the pool Pod spec in deploy/warmpool.sh from config/warmpool.
+	python3 hack/render-warmpool-spec.py
+
+.PHONY: warmpool-check
+warmpool-check: ## Fail if deploy/warmpool.sh's Pod spec is out of date with config/warmpool (CI).
+	python3 hack/render-warmpool-spec.py --check
+
+.PHONY: docs-links-external
+docs-links-external: ## Resolve every external doc link over the network (not in CI: needs egress).
+	python3 hack/check-doc-links.py --external
+
+##@ Cluster-admin actions (advanced; they affect every scaling manager on the cluster)
+
+# Cluster policy is published in scaling-manager-policy, the namespace the controller reads
+# (fixed in the controller), and in every namespace a scaling-manager.llmd.ai/policy-namespace
+# label points a controller at. There is no setting for it: LLMSM_POLICY_NS, if
+# exported, must be scaling-manager-policy (deploy/lib/physical_limiter.sh refuses others).
+# gpu-inventory (bounded by GPUs actually free) or quota (bounded by declared caps).
+LLMSM_LIMITER_TYPE    ?= gpu-inventory
+# Namespaces whose controllers to grant. Empty = every controller on the cluster,
+# which is what you want: the hazard is the install you forgot.
+LLMSM_LIMITER_TARGETS ?=
+# What a labelled Deployment must run as, and from, to be granted. The label
+# alone is not identity: anyone who can create a Deployment can set it.
+LLMSM_CONTROLLER_SA          ?= scaling-manager-controller-manager
+# The repository of IMG, split the way the installer splits it (a registry
+# port is not a tag, a digest is not a tag). Recursive, so the shell runs only
+# for a target that reads it.
+LLMSM_IMAGE_REF_FIELDS = bash -c '. deploy/lib/cli.sh && llmsm_image_ref_fields "$$0"'
+IMG_REPO = $(firstword $(subst |, ,$(shell $(LLMSM_IMAGE_REF_FIELDS) '$(IMG)')))
+# A controller deployed from a custom IMG is a controller too: its repository is
+# appended when it is not the published one. Set this to replace the whole list.
+LLMSM_CONTROLLER_IMAGE_REPOS ?= $(strip $(IMAGE_TAG_BASE)/llm-scaling-manager $(filter-out $(IMAGE_TAG_BASE)/llm-scaling-manager,$(IMG_REPO)))
+
+.PHONY: enable-physical-limiter
+enable-physical-limiter: ## CLUSTER ADMIN: bound every scaling manager by real GPUs. Publishes cluster policy and grants each controller the node read it then requires. LLMSM_LIMITER_TYPE=gpu-inventory|quota (quota also needs LLMSM_QUOTAS), LLMSM_LIMITER_TARGETS.
+	@LLMSM_LIMITER_TYPE=$(LLMSM_LIMITER_TYPE) \
+		LLMSM_LIMITER_TARGETS="$(LLMSM_LIMITER_TARGETS)" \
+		LLMSM_CONTROLLER_SA='$(LLMSM_CONTROLLER_SA)' LLMSM_CONTROLLER_IMAGE_REPOS='$(LLMSM_CONTROLLER_IMAGE_REPOS)' \
+		LLMSM_QUOTAS='$(LLMSM_QUOTAS)' LLMSM_QUOTA_SCOPE=$(LLMSM_QUOTA_SCOPE) LLMSM_QUOTA_KUEUE=$(LLMSM_QUOTA_KUEUE) \
+		$(if $(LLMSM_QUOTA_KUEUE_BORROW),LLMSM_QUOTA_KUEUE_BORROW=$(LLMSM_QUOTA_KUEUE_BORROW),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/limiter_policy.sh; source deploy/lib/physical_limiter.sh; enable_physical_limiter'
+
+# Exit status: 0 when the kind was removed, or when no policy it reads declares
+# any limiter; non-zero (make prints "Error 1" and exits 2) when nothing was
+# removed while a limiter of the other kind stays -- the "undo my quota without
+# LLMSM_LIMITER_TYPE=quota" mistake. LLMSM_LIMITER_TYPE=all removes every limiter
+# and is the one to use when uninstalling.
+.PHONY: disable-limiter
+disable-limiter: ## CLUSTER ADMIN: remove the LLMSM_LIMITER_TYPE limiter (gpu-inventory by default, quota, or all) from cluster policy; a limiter of another kind stays.
+	@LLMSM_LIMITER_TYPE=$(LLMSM_LIMITER_TYPE) LLMSM_LIMITER_TARGETS="$(LLMSM_LIMITER_TARGETS)" \
+		LLMSM_CONTROLLER_SA='$(LLMSM_CONTROLLER_SA)' LLMSM_CONTROLLER_IMAGE_REPOS='$(LLMSM_CONTROLLER_IMAGE_REPOS)' \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/limiter_policy.sh; source deploy/lib/physical_limiter.sh; disable_physical_limiter'
+
+.PHONY: disable-physical-limiter
+disable-physical-limiter: disable-limiter ## CLUSTER ADMIN: the older name of disable-limiter.
+
+##@ Utilization share
+
+# One optimizer block in the scaling policy, managed through
+# deploy/utilization-share.sh: check, then shadow, then activate; off goes back
+# through shadow so the transfer marks are cleared first. NAMESPACE is the
+# models' namespace and must be given; the controller defaults to it
+# (CONTROLLER_NAMESPACE), and the policy to the namespace the controller logs
+# reading it from (POLICY_NAMESPACE overrides). PHYSICAL_GROUPS=true plans GPUs
+# bounded only by the physical inventory (a gpu-inventory limiter, no quota).
+# RESTART=1 restarts the controller when it logs no reload of a write, and then
+# requires the reload.
+# CONTROLLER_NAMESPACE has an e2e default above, so it counts only when given;
+# LLMSM_NS, the install's name for it, counts too (llmsm_ctl_ns).
+us_controller_ns_given = $(llmsm_ctl_ns)
+us_args = $(if $(prepull_namespace_given),-n "$(NAMESPACE)",) $(if $(us_controller_ns_given),--controller-namespace "$(llmsm_ctl_ns)",) \
+	$(if $(POLICY_NAMESPACE),--policy-namespace "$(POLICY_NAMESPACE)",) $(if $(filter 1 true,$(RESTART)),--restart,)
+# A controller that manages a list of namespaces is found by CONTROLLER_NAMESPACE
+# alone; the script then covers every namespace it manages.
+us_namespace_check = @test -n "$(prepull_namespace_given)$(us_controller_ns_given)" || { echo "$@: set NAMESPACE=<the models' namespace> (the Makefile default is not taken here), or CONTROLLER_NAMESPACE=<ns> for a controller that manages several" >&2; exit 1; }
+
+.PHONY: utilization-share-check
+utilization-share-check: ## Utilization share: is there a budget to share, and do the accelerators resolve. NAMESPACE=<ns> [POLICY_NAMESPACE=] [CONTROLLER_NAMESPACE=]
+	$(us_namespace_check)
+	@bash deploy/utilization-share.sh check $(us_args)
+
+.PHONY: utilization-share-shadow
+utilization-share-shadow: ## Utilization share: compute and report, move nothing. NAMESPACE=<ns> [PHYSICAL_GROUPS=true] [RESTART=1]
+	$(us_namespace_check)
+	@bash deploy/utilization-share.sh shadow $(us_args) $(if $(filter 1 true,$(PHYSICAL_GROUPS)),--physical-groups,)
+
+.PHONY: utilization-share-activate
+utilization-share-activate: ## Utilization share: act on what shadow reported. NAMESPACE=<ns> [GRANT_SHARED=true] [RESTART=1]
+	$(us_namespace_check)
+	@bash deploy/utilization-share.sh activate $(us_args) $(if $(filter 1 true,$(GRANT_SHARED)),--grant-shared,)
+
+.PHONY: utilization-share-status
+utilization-share-status: ## Utilization share: mode, recent decisions, transfers, warnings, marked pods. NAMESPACE=<ns>
+	$(us_namespace_check)
+	@bash deploy/utilization-share.sh status $(us_args)
+
+.PHONY: utilization-share-off
+utilization-share-off: ## Utilization share: back through shadow, wait for the marks to clear, remove the block. NAMESPACE=<ns> [RESTART=1]
+	$(us_namespace_check)
+	@bash deploy/utilization-share.sh off $(us_args)
+
+##@ Install, in three phases
+
+# SCOPE picks what the controller manages. NAMESPACE scope is the default because
+# it is the common case — one team, one namespace, and the only shape a namespace
+# admin can own. `SCOPE=cluster` gives one controller for every namespace.
+#
+# Only the make targets default this way; deploy/install.sh keeps its historical
+# platform default for anything calling it directly (the e2e does).
+SCOPE ?= $(if $(LLMSM_SCOPE),$(LLMSM_SCOPE),namespace)
+
+# The phases split where the PERMISSIONS split, so a namespace admin can own the
+# controller without holding cluster-scoped rights:
+#
+#   1. check-prereqs                 read-only. Renders the overlay this install
+#                                    would apply, asks whether you may create each
+#                                    kind in it, and reports the namespace and
+#                                    Prometheus it resolved.
+#   2. setup-prereqs                 CLUSTER ADMIN, once per namespace: the
+#                                    namespace, cluster-scoped RBAC, the
+#                                    ServiceMonitor, and Prometheus if the cluster
+#                                    has none. KEDA only with KEDA_HELM_INSTALL=true
+#                                    (Kubernetes); OpenShift uses the platform's.
+#
+# Phases 1 and 2 take the platform as ENVIRONMENT=kubernetes|openshift; only
+# phase 3 also has -on-k8s / -on-openshift spellings. This block used to write
+# all three as <phase>-on-<platform>, naming two targets that do not exist.
+#   3. deploy-scaling-manager-on-<platform>      everything (the default). Set
+#                                    INSTALL_PHASE=scaling-manager for the controller alone,
+#                                    which is what a namespace owner runs once an
+#                                    admin has done phase 2.
+#
+# The namespace comes from NAMESPACE — llm-d's own variable — or is found on the
+# cluster. See deploy/README.md.
+#
+# llmsm_phase: $(1)=phase $(2)=ENVIRONMENT
+define llmsm_phase
+	@echo "Phase '$(if $(1),$(1),auto)', $(SCOPE)-scoped$(if $(2), on $(2),)"
+	$(if $(filter prereqs,$(1)),,@echo "Image: $(IMG)")
+	$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) IMG=$(IMG) LLMSM_SCOPE=$(SCOPE) LLMSM_LIMITER=$(LLMSM_LIMITER) $(if $(LLMSM_QUOTAS),LLMSM_QUOTAS='$(LLMSM_QUOTAS)',) $(if $(LLMSM_QUOTA_SCOPE),LLMSM_QUOTA_SCOPE=$(LLMSM_QUOTA_SCOPE),) $(if $(LLMSM_QUOTA_KUEUE),LLMSM_QUOTA_KUEUE=$(LLMSM_QUOTA_KUEUE),) $(if $(LLMSM_QUOTA_KUEUE_BORROW),LLMSM_QUOTA_KUEUE_BORROW=$(LLMSM_QUOTA_KUEUE_BORROW),) $(if $(1),INSTALL_PHASE=$(1),) $(if $(2),ENVIRONMENT=$(2),) LLMSM_DEFAULT_SO=$(LLMSM_DEFAULT_SO) $(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) $(if $(PROMETHEUS_URL),PROMETHEUS_URL=$(PROMETHEUS_URL),) $(if $(RENDER),RENDER=$(RENDER),) ./deploy/install.sh
+endef
+
+# llmsm_check: $(1)=ENVIRONMENT
+define llmsm_check
+	$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) LLMSM_LIMITER=$(LLMSM_LIMITER) $(if $(1),ENVIRONMENT=$(1),) ./deploy/install.sh --check
+endef
+
+##@ Install and remove
+
+# INSTALL_PHASE=all is the default: one command does prerequisites and controller,
+# which is right when you are a cluster admin installing for yourself. A namespace
+# owner whose admin has already run setup-prereqs uses INSTALL_PHASE=scaling-manager, which
+# needs no cluster-scoped rights.
+INSTALL_PHASE ?= all
+# Empty unless the caller named a phase. An empty phase lets the install work out
+# which half is left to do — see llmsm_missing_prereqs — instead of the Makefile's
+# own default silently answering a question the cluster can answer.
+INSTALL_PHASE_ARG = $(if $(filter command line environment,$(origin INSTALL_PHASE)),$(INSTALL_PHASE),)
+
+# ENVIRONMENT picks the platform, the way llm-d's guides do it: a variable with
+# declared values feeding the path, rather than a target per platform
+# (INFRA_PROVIDER: {default: base, values: [base, gke]} is their equivalent).
+# The -on-k8s / -on-openshift targets below are thin aliases kept because CI, the
+# benchmark and existing docs name them.
+# Only when YOU set it. This Makefile's own ENVIRONMENT default is kind-emulator,
+# for the e2e config — leaking that into an install would point a real cluster's
+# deploy at the emulator. Unset, install.sh DETECTS OpenShift (API discovery,
+# which any authenticated user may read) and uses kubernetes otherwise.
+ENVIRONMENT_INSTALL = $(if $(filter command line environment,$(origin ENVIRONMENT)),$(ENVIRONMENT),)
+
+# The install targets apply the COMMITTED manifests. They used to depend on
+# `manifests kustomize`: a go install of controller-gen, a type-check of ./...,
+# and a rewrite of the tracked config/base/rbac/manager-clusterrole.yaml from
+# whatever checkout ran the install -- so an operator with kubectl, helm, yq and
+# jq passed check-prereqs and then failed on `go: command not found`, and the
+# downloaded kustomize was never used (the install runs `kubectl kustomize`).
+# Regenerating is a development step: `make manifests`.
+.PHONY: setup-prereqs
+setup-prereqs: ## Phase 2 (CLUSTER ADMIN). ENVIRONMENT=kubernetes|openshift, SCOPE=namespace|cluster. RENDER=<dir> writes it for an admin (admin.yaml, admin.sh) and applies nothing; needs read rights only.
+	$(call llmsm_phase,prereqs,$(ENVIRONMENT_INSTALL))
+
+.PHONY: deploy-scaling-manager
+deploy-scaling-manager: ## Install the scaling manager. ENVIRONMENT=kubernetes|openshift, SCOPE=namespace|cluster, INSTALL_PHASE=all|prereqs|scaling-manager, IMG=<your build>, LLMSM_LIMITER=none|gpu-inventory|quota|gpu-inventory,quota (quota needs LLMSM_QUOTAS).
+	$(call llmsm_phase,$(INSTALL_PHASE_ARG),$(ENVIRONMENT_INSTALL))
+
+.PHONY: undeploy-scaling-manager
+undeploy-scaling-manager: ## Remove the scaling manager. Pass the same ENVIRONMENT, SCOPE and namespace you installed with.
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) $(if $(ENVIRONMENT_INSTALL),ENVIRONMENT=$(ENVIRONMENT_INSTALL),) $(llmsm_ns_arg) LLMSM_SCOPE=$(SCOPE) && 		deploy/install.sh --undeploy
+
+.PHONY: deploy-scaling-manager-on-k8s
+deploy-scaling-manager-on-k8s: ## Install the scaling manager on Kubernetes. SCOPE=namespace|cluster, INSTALL_PHASE=all|prereqs|scaling-manager, IMG=<your build>, LLMSM_LIMITER (quota needs LLMSM_QUOTAS). Prometheus and the namespace are detected.
+	$(call llmsm_phase,$(INSTALL_PHASE_ARG),kubernetes)
+
+.PHONY: deploy-scaling-manager-on-openshift
+deploy-scaling-manager-on-openshift: ## Install the scaling manager on OpenShift. SCOPE=namespace|cluster, INSTALL_PHASE=all|prereqs|scaling-manager, IMG=<your build>, LLMSM_LIMITER=none|gpu-inventory|quota|gpu-inventory,quota (quota needs LLMSM_QUOTAS).
+	$(call llmsm_phase,$(INSTALL_PHASE_ARG),openshift)
+
+## Removing. Pass the SAME SCOPE and namespace you installed with — an uninstall
+## resolves the overlay exactly as the install did, so a mismatch leaves behind
+## precisely the resources the other overlay owns.
+.PHONY: undeploy-scaling-manager-on-k8s
+undeploy-scaling-manager-on-k8s: ## Remove the scaling manager from Kubernetes. Pass the same SCOPE and NAMESPACE/LLMSM_NS you installed with.
+	@echo ">>> Undeploying scaling-manager from Kubernetes"
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) ENVIRONMENT=kubernetes $(llmsm_ns_arg) LLMSM_SCOPE=$(SCOPE) && 		deploy/install.sh --undeploy
+
+.PHONY: undeploy-scaling-manager-on-openshift
+undeploy-scaling-manager-on-openshift: ## Remove the scaling manager from OpenShift. Pass the same SCOPE and NAMESPACE/LLMSM_NS you installed with.
+	@echo ">>> Undeploying scaling-manager from OpenShift"
+	export KIND=$(KIND) KUBECTL=$(KUBECTL) ENVIRONMENT=openshift $(llmsm_ns_arg) LLMSM_SCOPE=$(SCOPE) && 		deploy/install.sh --undeploy
+
+## Check that everything a deploy needs is present, without deploying anything.
+## Runs the SAME check the install runs (deploy/lib/prereqs.sh), so a pass here
+## and a prerequisite failure mid-install is not a reachable state.
+.PHONY: check-prereqs
+check-prereqs: ## Phase 1, read-only: tools, permissions, the namespace and the Prometheus it found. ENVIRONMENT=kubernetes|openshift, SCOPE=namespace|cluster.
+	$(call llmsm_check,$(ENVIRONMENT_INSTALL))
+
+## Health check: is the scaling manager controller running, and did model-server metrics
+## actually arrive? Runs the exact same check deploy-scaling-manager runs at the end of
+## every install (deploy/lib/verify.sh), exposed here to re-run any time with
+## no install attached. `kubectl rollout status` returns immediately when the
+## rollout is already complete, so this doesn't sit around waiting on a
+## controller that has been healthy for days.
+##
+## scaler_tls.sh is sourced too: without it the scaler TLS checks (KEDA's side,
+## its certificate's expiry, a rotated CA, stranded ScaledObjects) are skipped.
+## ENVIRONMENT, when not given, is detected only as far as "openshift", which
+## decides the CA KEDA must trust.
+.PHONY: verify-deployment
+verify-deployment: ## Is the controller running, and are metrics flowing? Read-only. LLMSM_NS=<ns>, NAMESPACE=<ns>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) $(if $(ENVIRONMENT_INSTALL),ENVIRONMENT=$(ENVIRONMENT_INSTALL),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/constants.sh; source deploy/lib/infra_monitoring.sh; source deploy/lib/verify.sh; source deploy/lib/scaler_tls.sh; source deploy/lib/epp_auth.sh; \
+			export DEPLOY_PROMETHEUS=$${DEPLOY_PROMETHEUS:-true}; export DEPLOY_OPERATIONAL_DASHBOARD=$${DEPLOY_OPERATIONAL_DASHBOARD:-true}; export SCALER_BACKEND=$${SCALER_BACKEND:-keda}; export MONITORING_NAMESPACE=$${MONITORING_NAMESPACE:-scaling-manager-monitoring}; \
+			KEDA_NAMESPACE_EXPLICIT=false; [ -z "$${KEDA_NAMESPACE:-}" ] || KEDA_NAMESPACE_EXPLICIT=true; \
+			[ -n "$${ENVIRONMENT:-}" ] || ! llmsm_is_openshift || ENVIRONMENT=openshift; \
+			llmsm_bootstrap_env; verify_deployment'
+
+## List the llm-d model servers the scaling manager would create ScaledObjects for, and stop.
+## Writes an editable YAML plan; nothing is applied. A ScaledObject is how a
+## workload REGISTERS with the scaling manager, so this is the step between "installed" and
+## "scaling". The plan documents its own fields in the comments it is written with.
+.PHONY: scaledobjects-plan
+scaledobjects-plan: ## List llm-d model servers and write an editable ScaledObject plan. LLMSM_DEFAULT_SO_NS=<ns>|scaling-manager|all, LLMSM_DEFAULT_SO_PLAN=<file>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) 		LLMSM_DEFAULT_SO=plan $(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) 		$(if $(LLMSM_DEFAULT_SO_PLAN),LLMSM_DEFAULT_SO_PLAN=$(LLMSM_DEFAULT_SO_PLAN),) 		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; install_default_scaledobjects'
+
+## Report the pod-spec settings that decide whether autoscaling a workload is
+## safe, as a patch you can apply where the pod spec is owned.
+## Create the shared weights cache the model servers read from.
+##
+## Deliberately asks for the two fields it will not guess. Size depends on how
+## many models share the claim and how large they are; the StorageClass must
+## support ReadWriteMany, because a claim that binds to one node leaves every
+## replica on any other node Pending -- autoscaling that cannot work, rather
+## than a cache that is merely slow. Run with neither and it lists the classes
+## this cluster is already serving RWX from.
+.PHONY: model-cache
+model-cache: ## Create the weights PVC. NAMESPACE=<ns> LLMSM_MODEL_PVC_SIZE=<size> LLMSM_MODEL_PVC_CLASS=<rwx-class>. With no size/class, lists candidate classes.
+	@# An explicit NAMESPACE wins, and is passed as the ARGUMENT rather than left to
+	@# llmsm_resolve_namespace, which only copies NAMESPACE into LLMSM_NS at namespace
+	@# scope -- so under SCOPE=cluster this created the claim in the controllers own
+	@# namespace while the operator watched it name theirs.
+	@#
+	@# These comments sit BEFORE the recipe, not inside it: a \ line placed after
+	@# a backslash continuation is not a recipe line at all, it is part of the
+	@# command, and the shell tried to run it -- "@#: command not found".
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) \
+		$(if $(LLMSM_MODEL_PVC_NAME),LLMSM_MODEL_PVC_NAME=$(LLMSM_MODEL_PVC_NAME),) \
+		$(if $(LLMSM_MODEL_PVC_SIZE),LLMSM_MODEL_PVC_SIZE=$(LLMSM_MODEL_PVC_SIZE),) \
+		$(if $(LLMSM_MODEL_PVC_CLASS),LLMSM_MODEL_PVC_CLASS=$(LLMSM_MODEL_PVC_CLASS),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; llmsm_model_cache "$(if $(filter command line environment,$(origin NAMESPACE)),$(NAMESPACE),$${LLMSM_NS})"'
+
+## Keep an engine image on every accelerator node, so a scale-up never starts
+## with a pull. One DaemonSet per image, holding the image open (no accelerator
+## requested, a few megabytes); `prepull-status` says per node whether the
+## kubelet has it. IMAGES is comma-separated and must name the image exactly as
+## the model server's pod spec does. deploy/prepull.sh --help has the rest.
+##
+## PREPULL_NODE_SELECTOR is empty by default: the holder then lands on every
+## node carrying any known GPU product label (deploy/lib/accelerator_nodes.sh),
+## which is what the model servers schedule to when they select on nothing.
+## Set it to KEY=VALUE when they select on something -- or to several pairs,
+## KEY=VALUE,KEY=VALUE, every one of which a node must carry (as in a
+## nodeSelector). An explicit selector replaces the default (nodes carrying a
+## known GPU product label); include the product label among the pairs to
+## stay on GPU nodes. A VALUE may be empty and then selects the nodes whose
+## label is empty (gpu.nvidia.com/model= is CoreWeave's CPU nodes, not its
+## GPU nodes). PREPULL_TOLERATIONS is a
+## comma list of taint keys beyond nvidia.com/gpu.
+##
+## NAMESPACE has a Makefile default (the install's), so these targets take it
+## only from the command line or an exported variable (the guides' `export
+## NAMESPACE=...` convention) -- a status of, or holders in, a namespace nobody
+## named is the wrong answer. Same idiom as model-cache and workload-patch.
+PREPULL_NODE_SELECTOR ?=
+PREPULL_TOLERATIONS ?=
+PREPULL_ARGS = $(if $(PREPULL_NODE_SELECTOR),--node-selector "$(PREPULL_NODE_SELECTOR)",) $(foreach t,$(subst $(comma), ,$(PREPULL_TOLERATIONS)),--toleration $(t))
+prepull_namespace_given = $(filter command line environment,$(origin NAMESPACE))
+comma := ,
+# benchmark-standup holds the harness's engine image on the accelerator nodes
+# before deploying it. false skips; IMAGES overrides what the clone pins.
+BENCHMARK_PREPULL ?= true
+BENCHMARK_PREPULL_IMAGES ?=
+# benchmark-standup puts the model's weights on every accelerator node's
+# local disk when this names a directory there (docs/reference/
+# workload-preparation.md, "Weights on the node's disk"): the harness binds
+# model-pvc to a hostPath volume and downloads the model on each node before
+# the engines start. Empty: the shared volume, as before. Needs leave to
+# create PersistentVolumes.
+BENCHMARK_MODEL_HOSTPATH ?=
+# ... and the engines' compile caches on the same disk (docs/reference/
+# workload-preparation.md, "Engine caches on the node's disk"): a claim the
+# scenarios' /engine-cache volume is repointed at, prepared on every
+# accelerator node before the engines start, so a start never depends on the
+# shared volume being writable and compiles once per node. Defaults to the
+# weights directory; set on its own to have the caches local and the weights
+# shared. Empty: the harness's workload PVC, as before.
+BENCHMARK_ENGINE_CACHE_HOSTPATH ?= $(BENCHMARK_MODEL_HOSTPATH)
+# What the node-local cache is seeded from: `auto` copies the harness's own
+# workload PVC's engine-cache directory (the shared home the caches had
+# before) onto each node when that claim already exists -- a re-standup in a
+# namespace with history -- so no node's first start compiles; `none` seeds
+# nothing; anything else is a claim[:subPath] in the namespace.
+BENCHMARK_ENGINE_CACHE_SEED ?= auto
+# Settings benchmark-standup applies to its scenario COPY, never to the tracked
+# file (hack/benchmark/scenario_overrides.sh). BENCHMARK_GATEWAY_SKIP_INSTALL=true
+# reuses the gateway control plane the cluster already runs, in
+# BENCHMARK_GATEWAY_PROVIDER_NAMESPACE, instead of installing istio-base over
+# it -- which fails on ownership metadata part-way through. BENCHMARK_DECODE_CPU
+# and BENCHMARK_DECODE_MEMORY set a decode Pod's request (and limit) for nodes
+# with less spare CPU than the scenario asks. BENCHMARK_RENDER_DRAIN renders the
+# drain hook and grace into every engine before it first starts, so the
+# workload patch after the standup finds nothing to roll and no model starts
+# twice; false leaves it to that patch, as before. BENCHMARK_DECODE_NODE pins
+# every engine role to one node (kubernetes.io/hostname); BENCHMARK_DECODE_NODES
+# (a comma list) allows any of several, by node affinity; and
+# BENCHMARK_DECODE_TOLERATIONS (a JSON list) gives those roles tolerations,
+# never by default. BENCHMARK_STACKS (a comma list) keeps only those stacks of
+# a multi-stack scenario: a three-model run on the four-stack n-model-share.
+BENCHMARK_GATEWAY_SKIP_INSTALL ?= false
+BENCHMARK_STACKS ?=
+BENCHMARK_GATEWAY_PROVIDER_NAMESPACE ?= istio-system
+BENCHMARK_DECODE_CPU ?=
+BENCHMARK_DECODE_MEMORY ?=
+BENCHMARK_DECODE_NODE ?=
+BENCHMARK_DECODE_NODES ?=
+BENCHMARK_DECODE_TOLERATIONS ?=
+BENCHMARK_RENDER_DRAIN ?= true
+# How long one kubectl request in a benchmark recipe may take before it fails
+# with a reason. kubectl has none by default, and a get of model-pvc hung for
+# 7.5 minutes on a stalled API server with nothing printed.
+BENCHMARK_KUBECTL_TIMEOUT ?= 30s
+.PHONY: prepull prepull-status prepull-delete
+prepull: ## Hold IMAGES=<img>[,<img>] on every accelerator node of NAMESPACE=<ns>. PREPULL_NODE_SELECTOR=<key=value>[,<key=value>] replaces the default (nodes carrying a known GPU product label) with the nodes carrying every pair -- include the product label to stay on GPU nodes; PREPULL_TOLERATIONS=<key>[,<key>] adds taints.
+	@test -n "$(IMAGES)" || { echo "prepull: set IMAGES=<image>[,<image>] to exactly what the model server's pod spec names" >&2; exit 1; }
+	@test -n "$(prepull_namespace_given)" || { echo "prepull: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/prepull.sh apply -n "$(NAMESPACE)" $(PREPULL_ARGS) $(foreach i,$(subst $(comma), ,$(IMAGES)),--image $(i))
+
+prepull-status: ## Per accelerator node: is each held image present, and what its holder is doing. NAMESPACE=<ns> [IMAGES=<img>]
+	@test -n "$(prepull_namespace_given)" || { echo "prepull-status: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/prepull.sh status -n "$(NAMESPACE)" $(if $(PREPULL_NODE_SELECTOR),--node-selector "$(PREPULL_NODE_SELECTOR)",) $(foreach i,$(subst $(comma), ,$(IMAGES)),--image $(i))
+
+prepull-delete: ## Stop holding IMAGES=<img>[,<img>] (or every held image with IMAGES unset) in NAMESPACE=<ns>.
+	@test -n "$(prepull_namespace_given)" || { echo "prepull-delete: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/prepull.sh delete -n "$(NAMESPACE)" $(if $(IMAGES),$(foreach i,$(subst $(comma), ,$(IMAGES)),--image $(i)),--all)
+
+## Keep a model's weights on every accelerator node's local disk, so a replica
+## reads them at the node's own speed instead of the shared volume's. One
+## static hostPath volume, one claim bound to it, one DaemonSet downloading
+## the model onto every accelerator node; `weights-status` says per node
+## whether the download finished. WEIGHTS_MODEL is the Hugging Face id,
+## WEIGHTS_PATH the directory on the node, WEIGHTS_IMAGE any image carrying
+## huggingface_hub (the engine image). The claim is printed by apply; model
+## servers mount pvc://<claim>/models/<id>. Needs leave to create
+## PersistentVolumes. deploy/weights.sh --help has the rest; the nodes are
+## picked as for prepull (WEIGHTS_NODE_SELECTOR / WEIGHTS_TOLERATIONS default
+## to the PREPULL_* values).
+WEIGHTS_MODEL ?=
+WEIGHTS_PATH ?=
+WEIGHTS_IMAGE ?=
+WEIGHTS_HF_TOKEN_SECRET ?=
+WEIGHTS_CAPACITY ?=
+# The memory limit of the downloader; empty keeps the default of deploy/weights.sh (16Gi, enough for an 8B model).
+WEIGHTS_MEMORY ?=
+WEIGHTS_NODE_SELECTOR ?= $(PREPULL_NODE_SELECTOR)
+WEIGHTS_TOLERATIONS ?= $(PREPULL_TOLERATIONS)
+WEIGHTS_ARGS = $(if $(WEIGHTS_NODE_SELECTOR),--node-selector "$(WEIGHTS_NODE_SELECTOR)",) $(foreach t,$(subst $(comma), ,$(WEIGHTS_TOLERATIONS)),--toleration $(t))
+.PHONY: weights weights-status weights-delete
+weights: ## Download WEIGHTS_MODEL=<hf id> under WEIGHTS_PATH=<node dir> on every accelerator node of NAMESPACE=<ns>, with WEIGHTS_IMAGE=<image>. [WEIGHTS_HF_TOKEN_SECRET=<secret>[/<key>]] [WEIGHTS_CAPACITY=<size>] [WEIGHTS_MEMORY=<size>]
+	@test -n "$(WEIGHTS_MODEL)" || { echo "weights: set WEIGHTS_MODEL=<hugging face id>" >&2; exit 1; }
+	@test -n "$(WEIGHTS_PATH)" || { echo "weights: set WEIGHTS_PATH=<absolute directory on the node>" >&2; exit 1; }
+	@test -n "$(WEIGHTS_IMAGE)" || { echo "weights: set WEIGHTS_IMAGE=<an image with huggingface_hub; the engine image>" >&2; exit 1; }
+	@test -n "$(prepull_namespace_given)" || { echo "weights: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/weights.sh apply -n "$(NAMESPACE)" --model "$(WEIGHTS_MODEL)" --path "$(WEIGHTS_PATH)" --image "$(WEIGHTS_IMAGE)" \
+		$(if $(WEIGHTS_HF_TOKEN_SECRET),--hf-token-secret "$(WEIGHTS_HF_TOKEN_SECRET)",) $(if $(WEIGHTS_CAPACITY),--capacity "$(WEIGHTS_CAPACITY)",) $(if $(WEIGHTS_MEMORY),--memory "$(WEIGHTS_MEMORY)",) $(WEIGHTS_ARGS)
+
+weights-status: ## Per accelerator node: does it hold the weights, or is the download still running. NAMESPACE=<ns> [WEIGHTS_MODEL=<hf id>]
+	@test -n "$(prepull_namespace_given)" || { echo "weights-status: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/weights.sh status -n "$(NAMESPACE)" $(if $(WEIGHTS_MODEL),--model "$(WEIGHTS_MODEL)",) $(if $(WEIGHTS_NODE_SELECTOR),--node-selector "$(WEIGHTS_NODE_SELECTOR)",)
+
+weights-delete: ## Drop the claim, volume and downloader for WEIGHTS_MODEL=<hf id> (or every model with it unset) in NAMESPACE=<ns>. The files on the nodes stay.
+	@test -n "$(prepull_namespace_given)" || { echo "weights-delete: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/weights.sh delete -n "$(NAMESPACE)" $(if $(WEIGHTS_MODEL),--model "$(WEIGHTS_MODEL)",--all)
+
+## Keep the engines' compile caches (torch.compile, FlashInfer autotune,
+## Triton JIT, Python bytecode) on every accelerator node's local disk, behind a claim named
+## engine-cache: a replica's start then never depends on a shared volume being
+## writable, and the caches are warm from the second start on a node. Measured:
+## a shared claim published read-only on some nodes cost every start there 25 s.
+## ENGINE_CACHE_PATH is the directory on the node (the caches land under
+## <dir>/engine-cache; defaults to WEIGHTS_PATH), ENGINE_CACHE_IMAGE any image
+## with /bin/sh (defaults to WEIGHTS_IMAGE; the engine image). Model servers
+## mount the claim read-write and point VLLM_CACHE_ROOT, FLASHINFER_WORKSPACE_DIR,
+## TRITON_CACHE_DIR and PYTHONPYCACHEPREFIX under it (`make workload-patch`
+## writes that half for a model server that lacks it). Needs leave to create PersistentVolumes. What
+## the node directory must be is in deploy/enginecache.sh --help; the nodes are
+## picked as for prepull (WEIGHTS_NODE_SELECTOR / WEIGHTS_TOLERATIONS).
+ENGINE_CACHE_PATH ?= $(WEIGHTS_PATH)
+ENGINE_CACHE_IMAGE ?= $(WEIGHTS_IMAGE)
+ENGINE_CACHE_CAPACITY ?=
+# A claim[:subPath] whose caches are copied onto each node as it is prepared
+# (the shared claim they lived on before), so no node's first start compiles.
+ENGINE_CACHE_SEED_CLAIM ?=
+.PHONY: engine-cache engine-cache-status engine-cache-delete engine-cache-publish
+engine-cache: ## Prepare ENGINE_CACHE_PATH=<node dir>/engine-cache on every accelerator node of NAMESPACE=<ns>, with ENGINE_CACHE_IMAGE=<image>; claim engine-cache. [ENGINE_CACHE_CAPACITY=<size>] [ENGINE_CACHE_SEED_CLAIM=<pvc>[:<subPath>]]
+	@test -n "$(ENGINE_CACHE_PATH)" || { echo "engine-cache: set ENGINE_CACHE_PATH=<absolute directory on the node> (or WEIGHTS_PATH)" >&2; exit 1; }
+	@test -n "$(ENGINE_CACHE_IMAGE)" || { echo "engine-cache: set ENGINE_CACHE_IMAGE=<an image with /bin/sh; the engine image> (or WEIGHTS_IMAGE)" >&2; exit 1; }
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/enginecache.sh apply -n "$(NAMESPACE)" --path "$(ENGINE_CACHE_PATH)" --image "$(ENGINE_CACHE_IMAGE)" \
+		$(if $(ENGINE_CACHE_CAPACITY),--capacity "$(ENGINE_CACHE_CAPACITY)",) $(if $(ENGINE_CACHE_SEED_CLAIM),--seed-claim "$(ENGINE_CACHE_SEED_CLAIM)",) $(WEIGHTS_ARGS)
+
+engine-cache-status: ## Per accelerator node: is the engine cache directory prepared and writable. NAMESPACE=<ns>
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache-status: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/enginecache.sh status -n "$(NAMESPACE)" $(if $(WEIGHTS_NODE_SELECTOR),--node-selector "$(WEIGHTS_NODE_SELECTOR)",)
+
+engine-cache-delete: ## Drop the engine-cache claim, volume and preparer in NAMESPACE=<ns>. The caches on the nodes stay.
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache-delete: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/enginecache.sh delete -n "$(NAMESPACE)"
+
+engine-cache-publish: ## Fill the seed claim from every prepared node, then re-seed every node, so no node starts an engine configuration cold. Run it once each configuration has started somewhere. NAMESPACE=<ns>
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache-publish: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@bash deploy/enginecache.sh publish -n "$(NAMESPACE)"
+
+## Check the cache without starting an engine a second time: start each engine
+## configuration once, print the key it compiled under with engine-cache-keys,
+## then engine-cache-verify reads that key on every usable node, through the
+## preparer pod there (kubectl exec; no GPU). It fails on a node that lacks a
+## key, a node with no Ready preparer, and a read that could not be made.
+ENGINE_CACHE_KEYS ?=
+ENGINE_CACHE_PODS ?=
+ENGINE_CACHE_UID ?=
+.PHONY: engine-cache-keys engine-cache-verify
+engine-cache-keys: ## Print the compile cache key(s) running engine pods used. NAMESPACE=<ns> ENGINE_CACHE_PODS='<pod> [<pod>...]'
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache-keys: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@test -n "$(ENGINE_CACHE_PODS)" || { echo "engine-cache-keys: set ENGINE_CACHE_PODS='<engine pod> [<engine pod>...]', one pod per engine configuration (prefill and decode differ)" >&2; exit 1; }
+	@bash deploy/enginecache.sh keys -n "$(NAMESPACE)" $(foreach p,$(ENGINE_CACHE_PODS),"$(p)")
+
+engine-cache-verify: ## Per usable accelerator node: is every compile cache key present and readable. NAMESPACE=<ns> ENGINE_CACHE_KEYS='<key>[,<key>]' [ENGINE_CACHE_UID=<uid the engines run as>]
+	@test -n "$(prepull_namespace_given)" || { echo "engine-cache-verify: set NAMESPACE=<ns> (the Makefile default is not taken here)" >&2; exit 1; }
+	@test -n "$(ENGINE_CACHE_KEYS)" || { echo "engine-cache-verify: set ENGINE_CACHE_KEYS='<key>[,<key>]' (make engine-cache-keys prints them)" >&2; exit 1; }
+	@$(if $(ENGINE_CACHE_UID),ENGINE_CACHE_UID="$(ENGINE_CACHE_UID)",) bash deploy/enginecache.sh verify -n "$(NAMESPACE)" --keys "$(ENGINE_CACHE_KEYS)" $(if $(WEIGHTS_NODE_SELECTOR),--node-selector "$(WEIGHTS_NODE_SELECTOR)",)
+
+.PHONY: workload-patch
+workload-patch: ## Write a patch for model servers that do not drain on scale-down, download weights outside every volume they mount, or compile their kernels on every start. NAMESPACE=<ns> scopes it; LLMSM_WORKLOAD_PATCH_APPLY=true applies the drain half live (add LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS=true for the weights volume, after `make model-cache`; LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE=true for the engine-cache volume, after `make engine-cache`).
+	@# NAMESPACE pins the SCAN, not just the connection. Without the
+	@# LLMSM_DEFAULT_SO_NS fallback below, `make workload-patch NAMESPACE=x` under a
+	@# cluster-scoped install still walked every namespace on the cluster:
+	@# so_target_namespaces reads LLMSM_DEFAULT_SO_NS, else the install scope, and
+	@# never NAMESPACE. With APPLY=true that is a rolling restart of every model
+	@# server on the cluster, from a command that reads as scoped to one.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) \
+			$(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),$(if $(filter command line environment,$(origin NAMESPACE)),LLMSM_DEFAULT_SO_NS=$(NAMESPACE),)) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; llmsm_workload_patch'
+
+## Apply a ScaledObject plan. With LLMSM_DEFAULT_SO_PLAN=<file> it applies exactly
+## that file, edits included, and needs no terminal. Without one it re-discovers
+## and applies everything found. Then it re-wires any ScaledObject KEDA left
+## on the CPU default, as scaledobjects-rewire does, and reports what is still
+## unwired: after a reinstall, KEDA's operator may still hold its old
+## connection, and only this step, the first to dial, can see it.
+.PHONY: scaledobjects-apply
+scaledobjects-apply: ## Apply a ScaledObject plan (this is what makes the scaling manager scale anything). Per entry: apply: yes|no|adopt. LLMSM_DEFAULT_SO_PLAN=<edited file>, LLMSM_DEFAULT_SO_TEMPLATE=<file>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) 		LLMSM_DEFAULT_SO=true $(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) 		$(if $(LLMSM_DEFAULT_SO_PLAN),LLMSM_DEFAULT_SO_PLAN=$(LLMSM_DEFAULT_SO_PLAN),) 		bash -c 'source deploy/lib/common.sh; source deploy/lib/constants.sh; source deploy/lib/scaledobject.sh; source deploy/lib/verify.sh; source deploy/lib/scaler_tls.sh; \
+			KEDA_NAMESPACE_EXPLICIT=false; [ -z "$${KEDA_NAMESPACE:-}" ] || KEDA_NAMESPACE_EXPLICIT=true; \
+			llmsm_bootstrap_env; install_default_scaledobjects; rc=$$?; DRY_RUN=false llmsm_rewire_scaledobjects || true; exit $$rc'
+
+## Re-wire ScaledObjects whose HPA KEDA left on the CPU default ("got empty
+## metric spec" in KEDA's log). KEDA asks the scaler for the metric spec only
+## when a ScaledObject's spec changes, and does not retry a failed call. This
+## changes trigger metadata scalingManagerRewire, which the scaler ignores, so KEDA asks
+## again. It never deletes or recreates a ScaledObject, and skips paused ones.
+## With every one wired it still names a KEDA operator restart when KEDA's
+## calls are refused (KEDA_RESTART=true restarts it). Exits 1 while one is
+## unwired or KEDA is refused, 2 when they cannot be listed or DRY_RUN is not
+## true or false, 3 when one could not be read, or when none names this scaler
+## but some name another scaling manager namespace and LLMSM_NS has no scaler Service or it
+## cannot be read (LLMSM_NS is wrong). With a scaler Service in LLMSM_NS those
+## belong to another install, and it exits 0. Same LLMSM_NS, NAMESPACE and SCOPE
+## as verify-deployment.
+.PHONY: scaledobjects-rewire
+scaledobjects-rewire: ## Re-wire ScaledObjects whose HPA KEDA left on the CPU default. DRY_RUN=true lists them and prints the commands. LLMSM_NS=<ns>, NAMESPACE=<ns>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) $(if $(DRY_RUN),DRY_RUN=$(DRY_RUN),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/constants.sh; source deploy/lib/verify.sh; source deploy/lib/scaler_tls.sh; \
+			KEDA_NAMESPACE_EXPLICIT=false; [ -z "$${KEDA_NAMESPACE:-}" ] || KEDA_NAMESPACE_EXPLICIT=true; \
+			llmsm_bootstrap_env; llmsm_rewire_scaledobjects'
+
+## CLUSTER ADMIN. Let the EPP of every InferencePool this install manages
+## authenticate scrapes of its /metrics. The EPP checks each scrape with a
+## TokenReview and a SubjectAccessReview made as its OWN ServiceAccount; when
+## that ServiceAccount may not create them, /metrics answers 500 to the scaling manager and to
+## Prometheus. Binds each such ServiceAccount to ClusterRole
+## scaling-manager-epp-metrics-auth (create tokenreviews and subjectaccessreviews only),
+## one labelled binding per ServiceAccount, which undeploy-scaling-manager removes. The
+## default ServiceAccount only with LLMSM_EPP_METRICS_AUTH_DEFAULT_SA=true.
+## setup-prereqs runs it too (LLMSM_EPP_METRICS_AUTH=false skips it there).
+## Exits 1 while one is left ungranted, 2 when the pools cannot be listed or
+## DRY_RUN is not true or false, 3 when one could not be checked. Same LLMSM_NS,
+## NAMESPACE and SCOPE as verify-deployment.
+.PHONY: epp-metrics-auth
+epp-metrics-auth: ## CLUSTER ADMIN: let the managed EPPs authenticate /metrics scrapes (fixes /metrics HTTP 500). DRY_RUN=true prints the plan and commands. LLMSM_NS=<ns>, NAMESPACE=<ns>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) $(if $(DRY_RUN),DRY_RUN=$(DRY_RUN),) $(if $(LLMSM_EPP_METRICS_AUTH_DEFAULT_SA),LLMSM_EPP_METRICS_AUTH_DEFAULT_SA=$(LLMSM_EPP_METRICS_AUTH_DEFAULT_SA),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/epp_auth.sh; \
+			llmsm_bootstrap_env; llmsm_grant_epp_metrics_auth'
+
+## Review the list in $EDITOR, then apply what you confirm. Needs a terminal;
+## use scaledobjects-plan + scaledobjects-apply where there is none.
+.PHONY: scaledobjects-edit
+scaledobjects-edit: ## Review the discovered model servers in $$EDITOR and apply what you confirm.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) 		LLMSM_DEFAULT_SO=edit $(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) 		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; install_default_scaledobjects'
+
+## Repair ScaledObjects that ask for the scaling manager by name but name a namespace where no
+## scaler is running -- what the samples do when you install anywhere other than
+## the namespace they hardcode. Only rewrites scalerAddress, and only when the
+## address it names resolves to nothing; one pointing at a second, live the scaling manager
+## install is deliberate and is left alone. Idempotent.
+##
+## Takes no arguments: it finds the running install and scans the cluster. Pass
+## LLMSM_NS=<ns> only to disambiguate several installs, LLMSM_DEFAULT_SO_NS=<ns> only
+## to narrow the scan.
+.PHONY: scaledobjects-repoint
+scaledobjects-repoint: ## Repoint ScaledObjects naming a missing scaling manager at the install that is running. Usually needs no arguments.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) \
+		$(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_repoint_stale'
+
+## Health check: does every registered ScaledObject's modelID still match what
+## its container actually serves? Catches a hand-changed serving model that
+## nothing re-syncs -- The scaling manager then silently applies zero decisions for that
+## workload, forever, with the HPA reading a healthy ratio the whole time.
+.PHONY: verify-scaledobjects
+verify-scaledobjects: ## Rescan model servers and check every ScaledObject's modelID for drift. Read-only.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) \
+		$(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_verify_scaledobjects'
+
+## Health check: is every FMA launcher pod actually being scraped? A launcher
+## declares no container ports, so a monitor that merely SELECTS one produces
+## no target -- and that variant's engine metrics never arrive while the HPA
+## still reads healthy. Reuses the same detection so_discover_fma_requesters
+## already runs while building a ScaledObject plan.
+.PHONY: verify-fma
+verify-fma: ## Check every FMA launcher pod has a scrape target. Read-only. LLMSM_NS=<ns>, NAMESPACE=<ns>.
+	@$(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) \
+		$(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_verify_fma'
+
+# The environment the so-* targets share. Same shape the scaledobjects-* targets
+# pass inline: LLMSM_NS and NAMESPACE only when the CALLER set them, so an unset
+# variable stays unset and the resolution in llmsm_bootstrap_env still runs.
+LLMSM_SO_ENV = $(llmsm_ns_arg) $(if $(filter command line environment,$(origin NAMESPACE)),NAMESPACE=$(NAMESPACE),) LLMSM_SCOPE=$(SCOPE) $(if $(LLMSM_DEFAULT_SO_NS),LLMSM_DEFAULT_SO_NS=$(LLMSM_DEFAULT_SO_NS),)
+
+## Parking a scaling-manager-managed workload, and putting it back.
+##
+## `kubectl scale --replicas=0` does NOT idle one: the HPA that KEDA owns enforces
+## minReplicaCount and restores it within seconds. maxReplicaCount=0 is not a valid
+## state either. And scaling the CONTROLLER down is worse than doing nothing --
+## KEDA cannot reach the scaler, falls back to a CPU metric, and keeps sizing the
+## workload by the wrong signal while everything reads healthy. The supported lever
+## is on the ScaledObject; the controller can stay up, it holds no GPU.
+##
+## All three ASK which ScaledObject, because picking the wrong one takes down a
+## workload that was meant to keep serving. SO=<name>[,<name>] or SO=all skips the
+## prompt, which is also what CI and any non-interactive caller must pass.
+.PHONY: so-list
+so-list: ## Show scaling-manager-managed workloads with their replicas, GPUs and park/freeze state.
+	@$(LLMSM_SO_ENV) bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_list'
+
+.PHONY: so-park
+so-park: ## Park workloads at 0 replicas and stop autoscaling, releasing their GPUs. PARK_REPLICAS=<n> to park at n. SO=<name>|all.
+	@$(LLMSM_SO_ENV) $(if $(PARK_REPLICAS),PARK_REPLICAS=$(PARK_REPLICAS),) $(if $(SO),SO=$(SO),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_park'
+
+.PHONY: so-freeze
+so-freeze: ## Stop autoscaling but hold the current replica count (keeps GPUs). For maintenance. SO=<name>|all.
+	@$(LLMSM_SO_ENV) $(if $(SO),SO=$(SO),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_freeze'
+
+.PHONY: so-resume
+so-resume: ## Undo so-park or so-freeze: The scaling manager sizes the workload again from live metrics. SO=<name>|all.
+	@$(LLMSM_SO_ENV) $(if $(SO),SO=$(SO),) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; llmsm_bootstrap_env; so_resume'
+
+## A private Grafana for one namespace, with the scaling manager's operational dashboard already
+## imported -- see deploy/lib/dashboard.sh for
+## the design this carries over (grafana-operator, the Thanos TENANCY port instead
+## of cluster-monitoring-view, a GrafanaDashboard CR as the import bridge).
+##
+## Idempotent: safe to re-run, and it prints the dashboard URL and the
+## password-retrieval command every time, not only on first creation.
+.PHONY: dashboard
+dashboard: ## OpenShift only: stand up (or re-report) a private Grafana + the scaling manager dashboard in NAMESPACE. Needs grafana-operator.
+	@$(LLMSM_SO_ENV) IMG=$(IMG) LLMSM_PROJECT=$(CURDIR) \
+		bash -c 'source deploy/lib/common.sh; source deploy/lib/scaledobject.sh; source deploy/lib/infra_monitoring.sh; source deploy/lib/dashboard.sh; llmsm_bootstrap_env; llmsm_dashboard'
+
+# E2E tests on Kind cluster for saturation-based autoscaling
+# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
+# Supports FOCUS and SKIP variables for ginkgo test filtering.
+# Setup options:
+# - CERT_MANAGER_INSTALL_SKIP=true: Skip certManager installation during test setup.
+# - IMAGE_BUILD_SKIP=true: Skip building the scaling manager docker image during test setup.
+# - INFRA_SETUP_SKIP=true: Skip setting up the llm-d and the scaling manager controller manager during test setup. Reload the docker image if necessary.
+# - INFRA_TEARDOWN_SKIP=true: Skip tearing down the Kind cluster during test teardown.
+
+# Consolidated e2e test targets (environment-agnostic)
+# These targets use the test/e2e/ suite that works on any Kubernetes cluster
+# Supports FOCUS and SKIP variables for ginkgo test filtering.
+
+# Deploys the scaling manager + monitoring + scaler (install.sh), then EPP (install-epp.sh). No model server or VA/HPA.
+# Works for all environments: kind-emulator (default), openshift, kubernetes.
+# For OpenShift/Kubernetes: ENVIRONMENT=openshift NAMESPACE=<your-ns> make deploy-e2e-infra
+# If IMG is set, builds the image locally first (unless SKIP_BUILD=true).
+.PHONY: deploy-e2e-infra
+deploy-e2e-infra: ## Deploy e2e test infrastructure (the scaling manager + EPP; no model server or VA/HPA). Works for kind-emulator, openshift, kubernetes.
+	@# CLUSTER-scoped, deliberately, even though the controller now lives with the
+	@# models. smoke_keda_test.go and limiter_test.go create ISOLATED NAMESPACES at
+	@# runtime, and a namespace-scoped controller cannot serve a ScaledObject in a
+	@# namespace that did not exist when it was installed -- KEDA reported the
+	@# ScaledObject Ready=False in smoke-keda-basic-fjr5d because nothing watched it.
+	@# kind used to INFER cluster scope; #24 made namespace the default everywhere and
+	@# nothing here said otherwise. Aligning LLMSM_NS with the model namespace stays:
+	@# it is the SCOPE that has to be cluster, not the controller's location.
+	@# Installed through `make deploy-scaling-manager` -- the target a USER runs -- not by
+	@# calling deploy/install.sh with a hand-assembled environment.
+	@#
+	@# The suite shared the script but not the invocation, so it never passed
+	@# LLMSM_SCOPE, NAMESPACE, LLMSM_LIMITER or INSTALL_PHASE. When the scope
+	@# default changed from platform-inferred to `namespace`, the e2e silently
+	@# changed shape and nothing in the suite covered the path users take: a
+	@# change to install semantics could land green here and break `make
+	@# deploy-scaling-manager`. Now the same macro serves both.
+	@#
+	@# LLMSM_NS and NAMESPACE are both PINNED. The suite puts model servers in
+	@# LLMD_NAMESPACE and the controller in CONTROLLER_NAMESPACE, so the namespace
+	@# the scaling manager MANAGES has to be named -- that is what LLMSM_WATCH_NS is for, and
+	@# llmsm_apply_watch_namespace_rbac renders the manager Role into it.
+	@#
+	@# Aligning them beats reaching for cluster scope: namespace scope is the
+	@# supported shape, cluster scope now warns that it is WIP, and the suite
+	@# should exercise what users run. Unset, the install watched only its own
+	@# namespace and took namespace-scoped RBAC with it:
+	@#   scaledobjects.keda.sh "stz-rt-so" is forbidden
+	@#   Could not read the ScaledObject for a registered workload
+	@# so the workload was never enriched and never parked.
+	@#
+	@# LLMSM_NS is PINNED. Without it the install lands wherever namespace discovery
+	@# points, and the suite builds scalerAddress from CONTROLLER_NAMESPACE -- so a
+	@# controller that moves is one KEDA can never reach.
+	@#
+	@# It moved when the scope default changed: llmsm_autoselect_namespace runs only
+	@# in NAMESPACE scope, which used to be inferred as `cluster` on kind, so it was
+	@# skipped. Now that namespace is the default everywhere it runs, finds the one
+	@# namespace with model servers (llm-d-sim) and installs the controller there.
+	@# Measured: the controller came up in llm-d-sim while every ScaledObject named
+	@# scaling-manager-external-scaler.scaling-manager-system, so no decision ever
+	@# reached KEDA and four specs sat at one replica for their full 600s.
+	@# KEDA_NAMESPACE is passed EXPLICITLY on kind (E2E_KEDA_NAMESPACE_ENV).
+	@# The install writes the external-scaler NetworkPolicy only when a source
+	@# it trusts says where KEDA runs, and on kind none does yet: KEDA is
+	@# Helm-installed into KEDA_NAMESPACE AFTER the controller, so no
+	@# external-metrics APIService exists when the policy is decided. Without
+	@# it, CI ran with :9090 open and never exercised the policy users get.
+	@# Other platforms bring their own KEDA, whose namespace this target does
+	@# not know, so they are left to the install's own resolution.
+	@echo "Deploying e2e test infrastructure..."
+	@if [ -n "$(IMG)" ]; then \
+		echo "IMG is set to '$(IMG)'"; \
+		if [ "$(SKIP_BUILD)" != "true" ]; then \
+			echo "Building local image (SKIP_BUILD not set)..."; \
+			$(MAKE) docker-build IMG=$(IMG); \
+		else \
+			echo "Skipping image build (SKIP_BUILD=true) - assuming image already exists"; \
+		fi; \
+		echo "Extracting image repo, tag and digest from IMG..."; \
+		IMG_FIELDS="$$($(LLMSM_IMAGE_REF_FIELDS) "$(IMG)")"; \
+		IMAGE_REPO="$${IMG_FIELDS%%|*}"; \
+		IMG_FIELDS="$${IMG_FIELDS#*|}"; \
+		IMAGE_TAG="$${IMG_FIELDS%%|*}"; \
+		IMAGE_DIGEST="$${IMG_FIELDS#*|}"; \
+		if [ -z "$$IMAGE_REPO" ]; then echo "Could not split IMG=$(IMG)" >&2; exit 1; fi; \
+		echo "Using local image: $$IMAGE_REPO:$$IMAGE_TAG$${IMAGE_DIGEST:+@$$IMAGE_DIGEST}"; \
+		SCALER_BACKEND=$(SCALER_BACKEND) \
+		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
+		DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+		$(E2E_KEDA_NAMESPACE_ENV) \
+		LLMSM_IMAGE_REPO=$$IMAGE_REPO \
+		LLMSM_IMAGE_TAG=$$IMAGE_TAG \
+		LLMSM_IMAGE_DIGEST=$$IMAGE_DIGEST \
+		LLMSM_IMAGE_PULL_POLICY=IfNotPresent \
+		$(MAKE) deploy-scaling-manager \
+			ENVIRONMENT=$(ENVIRONMENT) \
+			LLMSM_NS=$(CONTROLLER_NAMESPACE) \
+			NAMESPACE=$(CONTROLLER_NAMESPACE) \
+			SCOPE=cluster \
+			IMG=$(IMG); \
+	else \
+		echo "IMG not set - using default image from registry (latest)"; \
+		SCALER_BACKEND=$(SCALER_BACKEND) \
+		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
+		DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+		$(E2E_KEDA_NAMESPACE_ENV) \
+		$(MAKE) deploy-scaling-manager \
+			ENVIRONMENT=$(ENVIRONMENT) \
+			LLMSM_NS=$(CONTROLLER_NAMESPACE) \
+			NAMESPACE=$(CONTROLLER_NAMESPACE) \
+			SCOPE=cluster; \
+	fi
+	@ENVIRONMENT=$(ENVIRONMENT) \
+		LLM_D_ROUTER_VERSION=$(LLM_D_ROUTER_VERSION) \
+		GAIE_VERSION=$(GAIE_VERSION) \
+		NAMESPACE=$${NAMESPACE:-$(E2E_EMULATED_LLMD_NAMESPACE)} \
+		LLMSM_PROJECT=$(CURDIR) \
+		ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED) \
+		./deploy/install-epp.sh
+	@# The overrides go where the install above put the controller: it was given
+	@# LLMSM_NS=$(CONTROLLER_NAMESPACE), so reading LLMSM_NS (or its default) here
+	@# patched a ConfigMap in a namespace this install never wrote.
+	@NS=$(CONTROLLER_NAMESPACE); \
+	if [ -n "$(SCALE_UP_THRESHOLD)$(SCALE_DOWN_BOUNDARY)" ]; then \
+		echo "Applying optional the scaling manager scaling-band overrides (SCALE_UP_THRESHOLD / SCALE_DOWN_BOUNDARY)..."; \
+		cur=$$($(KUBECTL) get configmap scaling-manager-scaling-policy-config -n "$$NS" -o jsonpath="{.data.default}" 2>/dev/null); \
+		if [ -z "$$cur" ]; then \
+			echo "  ERROR: no scaling-manager-scaling-policy-config/default in $$NS. Install the scaling manager before overriding its thresholds."; \
+			exit 1; \
+		fi; \
+		if [ -n "$(SCALE_UP_THRESHOLD)" ]; then \
+			cur=$$(printf "%s" "$$cur" | sed "s|^scaleUpThreshold:.*|scaleUpThreshold: $(SCALE_UP_THRESHOLD)|"); \
+		fi; \
+		if [ -n "$(SCALE_DOWN_BOUNDARY)" ]; then \
+			cur=$$(printf "%s" "$$cur" | sed "s|^scaleDownBoundary:.*|scaleDownBoundary: $(SCALE_DOWN_BOUNDARY)|"); \
+		fi; \
+		$(KUBECTL) patch configmap scaling-manager-scaling-policy-config \
+			-n "$$NS" --type=merge \
+			-p "$$(jq -n --arg d "$$cur" "{data:{default:\$$d}}")"; \
+	fi
+
+
+# Runs the smoke subset of the e2e suite. KEDA is the only scaler backend.
+.PHONY: test-e2e-smoke
+test-e2e-smoke: ## Run smoke e2e tests
+	@echo "Running smoke e2e tests..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	@# The suite reaches Prometheus at https://localhost:9090
+	@# (utils.DefaultPrometheusURL) and creates no port-forward of its own, so
+	@# without one every Prometheus-dependent assertion calls Skip. Nothing else
+	@# created it either -- not CI, not this Makefile -- so in CI those assertions
+	@# have never run. The suite still goes green, because a Skip is not a failure:
+	@#
+	@#   [SKIPPED] Prometheus is not reachable from the test host: timed out
+	@#   waiting for the condition (port-forward svc/kube-prometheus-stack-prometheus
+	@#   9090:9090 for the metric assertions)
+	@#
+	@# 17 skip sites across the suite mention Prometheus. Started here rather than in
+	@# the workflow so a local run gets the same coverage as CI, and torn down after.
+	@# Absence is still a warning rather than an error: the assertion that proves
+	@# scale-to-zero -- the deployment reaching zero -- needs no Prometheus at all.
+	PF_PID=""; \
+	if kubectl get svc -n $(E2E_MONITORING_NAMESPACE) kube-prometheus-stack-prometheus >/dev/null 2>&1; then \
+		kubectl port-forward -n $(E2E_MONITORING_NAMESPACE) svc/kube-prometheus-stack-prometheus 9090:9090 >/dev/null 2>&1 & \
+		PF_PID=$$!; \
+		for i in $$(seq 1 20); do \
+			curl -sk --max-time 2 https://localhost:9090/-/ready >/dev/null 2>&1 && break; \
+			sleep 1; \
+		done; \
+		if curl -sk --max-time 2 https://localhost:9090/-/ready >/dev/null 2>&1; then \
+			echo "Prometheus port-forward ready on https://localhost:9090"; \
+		else \
+			echo "WARNING: Prometheus port-forward did not become ready -- metric assertions will Skip"; \
+		fi; \
+	else \
+		echo "WARNING: svc/kube-prometheus-stack-prometheus not found in $(E2E_MONITORING_NAMESPACE) -- metric assertions will Skip"; \
+	fi; \
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	LLMSM_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	LLMSM_E2E_SECONDARY_OVERLAY_PATH=$${LLMSM_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_LLMSM_SECONDARY_OVERLAY_PATH)} \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+	SCALER_BACKEND=keda \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/e2e/ -timeout $(E2E_GO_TIMEOUT) -v -ginkgo.v -ginkgo.timeout=$(E2E_TIMEOUT) \
+		-ginkgo.label-filter="smoke" $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	[ -n "$$PF_PID" ] && kill $$PF_PID 2>/dev/null || true; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Runs the complete e2e test suite (KEDA backend, excluding smoke and flaky tests).
+# The live-Kueue borrowing spec (kueue-borrow) and the passive-mode specs
+# (passive) are excluded too: each runs in a CI job of its own, through
+# test-e2e-kueue-borrow and test-e2e-passive. test-e2e-passive reuses this
+# recipe, for its Prometheus port-forward, by overriding the two variables below.
+E2E_FULL_LABEL_FILTER ?= full && !smoke && !flaky && !kueue-borrow && !passive
+E2E_FULL_GINKGO_ARGS  ?=
+.PHONY: test-e2e-full
+test-e2e-full: ## Run full e2e test suite
+	@echo "Running e2e specs matching: $(E2E_FULL_LABEL_FILTER)"
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	@# The suite reaches Prometheus at https://localhost:9090
+	@# (utils.DefaultPrometheusURL) and creates no port-forward of its own, so
+	@# without one every Prometheus-dependent assertion calls Skip. Nothing else
+	@# created it either -- not CI, not this Makefile -- so in CI those assertions
+	@# have never run. The suite still goes green, because a Skip is not a failure:
+	@#
+	@#   [SKIPPED] Prometheus is not reachable from the test host: timed out
+	@#   waiting for the condition (port-forward svc/kube-prometheus-stack-prometheus
+	@#   9090:9090 for the metric assertions)
+	@#
+	@# 17 skip sites across the suite mention Prometheus. Started here rather than in
+	@# the workflow so a local run gets the same coverage as CI, and torn down after.
+	@# Absence is still a warning rather than an error: the assertion that proves
+	@# scale-to-zero -- the deployment reaching zero -- needs no Prometheus at all.
+	PF_PID=""; \
+	if kubectl get svc -n $(E2E_MONITORING_NAMESPACE) kube-prometheus-stack-prometheus >/dev/null 2>&1; then \
+		kubectl port-forward -n $(E2E_MONITORING_NAMESPACE) svc/kube-prometheus-stack-prometheus 9090:9090 >/dev/null 2>&1 & \
+		PF_PID=$$!; \
+		for i in $$(seq 1 20); do \
+			curl -sk --max-time 2 https://localhost:9090/-/ready >/dev/null 2>&1 && break; \
+			sleep 1; \
+		done; \
+		if curl -sk --max-time 2 https://localhost:9090/-/ready >/dev/null 2>&1; then \
+			echo "Prometheus port-forward ready on https://localhost:9090"; \
+		else \
+			echo "WARNING: Prometheus port-forward did not become ready -- metric assertions will Skip"; \
+		fi; \
+	else \
+		echo "WARNING: svc/kube-prometheus-stack-prometheus not found in $(E2E_MONITORING_NAMESPACE) -- metric assertions will Skip"; \
+	fi; \
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	LLMSM_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMSM_E2E_SECONDARY_OVERLAY_PATH=$${LLMSM_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_LLMSM_SECONDARY_OVERLAY_PATH)} \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+	SCALER_BACKEND=keda \
+	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/e2e/ -timeout $(E2E_GO_TIMEOUT) -v -ginkgo.v -ginkgo.timeout=$(E2E_TIMEOUT) \
+		-ginkgo.label-filter="$(E2E_FULL_LABEL_FILTER)" $(E2E_FULL_GINKGO_ARGS) $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	[ -n "$$PF_PID" ] && kill $$PF_PID 2>/dev/null || true; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Convenience targets for local e2e testing
+
+# Convenience target that deploys KEDA infra + runs smoke tests.
+# It never deletes the cluster: DELETE_CLUSTER has no effect here. Remove it with
+# `make destroy-kind-cluster` (or `kind delete cluster`) when done.
+.PHONY: test-e2e-smoke-with-setup
+test-e2e-smoke-with-setup:
+	$(MAKE) deploy-e2e-infra DEPLOY_ALERTING_RULES=true SCALER_BACKEND=keda
+	$(MAKE) test-e2e-smoke DEPLOY_ALERTING_RULES=true
+
+# Runs only the multi-controller (dual namespace-scoped) e2e tests.
+.PHONY: test-e2e-multi-controller
+test-e2e-multi-controller: ## Run multi-controller e2e tests
+	@echo "Running multi-controller e2e tests..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	LLMSM_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	LLMSM_E2E_SECONDARY_OVERLAY_PATH=$${LLMSM_E2E_SECONDARY_OVERLAY_PATH:-$(E2E_LLMSM_SECONDARY_OVERLAY_PATH)} \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	DEPLOY_ALERTING_RULES=$(DEPLOY_ALERTING_RULES) \
+	SCALER_BACKEND=$(SCALER_BACKEND) \
+	MODEL_ID=$(MODEL_ID) \
+	go test ./test/e2e/ -timeout $(E2E_GO_TIMEOUT) -v -ginkgo.v -ginkgo.timeout=$(E2E_TIMEOUT) \
+		-ginkgo.label-filter="multi-controller" $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Convenience target that deploys infra + runs multi-controller tests.
+.PHONY: test-e2e-multi-controller-with-setup
+test-e2e-multi-controller-with-setup: deploy-e2e-infra test-e2e-multi-controller
+
+# Convenience target that deploys KEDA infra + runs full test suite.
+# It never deletes the cluster: DELETE_CLUSTER has no effect here. Remove it with
+# `make destroy-kind-cluster` (or `kind delete cluster`) when done.
+# LWS is installed because the full suite includes LeaderWorkerSet scale-from-zero tests.
+.PHONY: test-e2e-full-with-setup
+test-e2e-full-with-setup:
+	DEPLOY_LWS=true SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
+	@# Kueue, kind only: a shared cluster is not ours to install Kueue into.
+	@# The quota-reader spec (kueue_quota_test.go) needs only the three CRDs,
+	@# and passes against the controller too. The borrowing spec
+	@# (kueue_borrow_test.go) is not in this suite: it runs on its own,
+	@# test-e2e-kueue-borrow-with-setup. Nor are the passive-mode specs:
+	@# test-e2e-passive-with-setup.
+	@if [ "$(ENVIRONMENT)" = "kind-emulator" ]; then $(MAKE) install-kueue-e2e; fi
+	$(MAKE) test-e2e-full
+
+# Whether the kind e2e installs Kueue's controller (true) or only its CRDs.
+KUEUE_CONTROLLER ?= true
+# The namespace label Kueue's job webhooks are narrowed to on the kind e2e, so a
+# restarting Kueue cannot fail pod creation in the rest of the suite. Must match
+# fixtures.KueueE2ENamespaceLabel.
+KUEUE_WEBHOOK_NAMESPACE_LABEL ?= llm-d.ai/kueue-e2e
+
+# Installs Kueue onto the current (kind) cluster for the e2e: the controller
+# through deploy/ci-pr-checks/install-kueue.sh, or with KUEUE_CONTROLLER=false the
+# three CRDs alone through install-kueue-crds.sh. Both scripts pin a version and
+# refuse to change a Kueue somebody else installed.
+.PHONY: install-kueue-e2e
+install-kueue-e2e: ## Install Kueue (controller, or CRDs only with KUEUE_CONTROLLER=false) onto the kind e2e cluster
+	@if [ "$(KUEUE_CONTROLLER)" = "true" ]; then \
+		KUEUE_WEBHOOK_NAMESPACE_LABEL=$(KUEUE_WEBHOOK_NAMESPACE_LABEL) deploy/ci-pr-checks/install-kueue.sh; \
+	else \
+		deploy/ci-pr-checks/install-kueue-crds.sh; \
+	fi
+
+# Runs only the live-Kueue borrowing spec (label kueue-borrow), which the full
+# suite excludes. Needs the Kueue controller: `make install-kueue-e2e` on a
+# cluster from deploy-e2e-infra, or test-e2e-kueue-borrow-with-setup.
+# REQUIRE_KUEUE_E2E=true turns the spec's runtime skips (no Kueue, no GPUs, a
+# cluster too slow for the cooldown check) into failures; CI sets it.
+REQUIRE_KUEUE_E2E ?=
+.PHONY: test-e2e-kueue-borrow
+test-e2e-kueue-borrow: ## Run the live-Kueue cohort borrowing e2e spec
+	@echo "Running the live-Kueue borrowing e2e spec..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	LLMSM_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	SCALER_BACKEND=keda \
+	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
+	MODEL_ID=$(MODEL_ID) \
+	REQUIRE_KUEUE_E2E=$(REQUIRE_KUEUE_E2E) \
+	go test ./test/e2e/ -timeout $(E2E_GO_TIMEOUT) -v -ginkgo.v -ginkgo.timeout=$(E2E_TIMEOUT) \
+		-ginkgo.label-filter="kueue-borrow" -ginkgo.fail-on-empty $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+
+# Deploys the e2e infra on kind, installs the Kueue controller, and runs the
+# live-Kueue borrowing spec alone. It never deletes the cluster.
+.PHONY: test-e2e-kueue-borrow-with-setup
+test-e2e-kueue-borrow-with-setup: ## Deploy e2e infra + Kueue, then run the live-Kueue borrowing spec
+	SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
+	KUEUE_CONTROLLER=true $(MAKE) install-kueue-e2e
+	$(MAKE) test-e2e-kueue-borrow
+
+# Runs only the passive-mode specs (label passive), which the full suite
+# excludes. They need Prometheus (the full recipe port-forwards it), the
+# simulator's --fake-metrics (USE_SIMULATOR=true) and EPP flow control
+# (SCALE_TO_ZERO_ENABLED=true, on the infra deploy too), and skip without the
+# last two, so read the -v output. -ginkgo.fail-on-empty fails a filter that
+# matches nothing. 19 specs took 43 minutes on a 22-CPU kind host; the budget
+# allows a CI runner about 1.6 times that.
+E2E_PASSIVE_TIMEOUT    ?= 70m
+E2E_PASSIVE_GO_TIMEOUT ?= 75m
+.PHONY: test-e2e-passive
+test-e2e-passive: ## Run the passive-mode e2e specs
+	$(MAKE) test-e2e-full E2E_FULL_LABEL_FILTER="passive" E2E_FULL_GINKGO_ARGS="-ginkgo.fail-on-empty" \
+		E2E_TIMEOUT=$(E2E_PASSIVE_TIMEOUT) E2E_GO_TIMEOUT=$(E2E_PASSIVE_GO_TIMEOUT)
+
+# Deploys the e2e infra on kind and runs the passive-mode specs alone. It never
+# deletes the cluster. No LWS and no Kueue: no passive spec uses either.
+.PHONY: test-e2e-passive-with-setup
+test-e2e-passive-with-setup: ## Deploy e2e infra, then run the passive-mode specs
+	SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
+	$(MAKE) test-e2e-passive
+
+# The whole-node utilization-share specs (label utilization-share-wholenode): a
+# large model whose replica is one whole 8-GPU node, or a LeaderWorkerSet group
+# of two, beside 1-GPU models. They need up to five free schedulable nodes of
+# exactly 8 GPUs of one product, which the default kind cluster (one product
+# per 16-GPU node) does not have, so they are outside the full tier and run
+# here. docs/developer-guide/testing.md lists them.
+# REQUIRE_WHOLENODE_E2E=true (the default here) turns their skips -- no such
+# nodes, no Prometheus, no Kueue -- into failures. About 70 minutes on a 22-CPU box.
+USHARE_WHOLENODE_CLUSTER_GPU_TYPE ?= nvidia
+USHARE_WHOLENODE_CLUSTER_GPUS     ?= 8
+USHARE_WHOLENODE_CLUSTER_NODES    ?= 6
+REQUIRE_WHOLENODE_E2E             ?= true
+USHARE_WHOLENODE_TIMEOUT          ?= 200m
+USHARE_WHOLENODE_GO_TIMEOUT       ?= 210m
+.PHONY: test-e2e-ushare-wholenode
+test-e2e-ushare-wholenode: ## Run the whole-node utilization-share e2e specs (8-GPU nodes)
+	@echo "Running the whole-node utilization-share e2e specs..."
+	$(eval FOCUS_ARGS := $(if $(FOCUS),-ginkgo.focus="$(FOCUS)",))
+	$(eval SKIP_ARGS := $(if $(SKIP),-ginkgo.skip="$(SKIP)",))
+	PF_PID=""; \
+	if kubectl get svc -n $(E2E_MONITORING_NAMESPACE) kube-prometheus-stack-prometheus >/dev/null 2>&1; then \
+		kubectl port-forward -n $(E2E_MONITORING_NAMESPACE) svc/kube-prometheus-stack-prometheus 9090:9090 >/dev/null 2>&1 & \
+		PF_PID=$$!; \
+		for i in $$(seq 1 20); do \
+			curl -sk --max-time 2 https://localhost:9090/-/ready >/dev/null 2>&1 && break; \
+			sleep 1; \
+		done; \
+	else \
+		echo "WARNING: svc/kube-prometheus-stack-prometheus not found in $(E2E_MONITORING_NAMESPACE)"; \
+	fi; \
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	LLMSM_NAMESPACE=$(CONTROLLER_NAMESPACE) \
+	LLMD_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) \
+	MONITORING_NAMESPACE=$(E2E_MONITORING_NAMESPACE) \
+	USE_SIMULATOR=$(USE_SIMULATOR) \
+	SCALE_TO_ZERO_ENABLED=$(SCALE_TO_ZERO_ENABLED) \
+	SCALER_BACKEND=keda \
+	KEDA_NAMESPACE=$(E2E_KEDA_NAMESPACE) \
+	MODEL_ID=$(MODEL_ID) \
+	REQUIRE_WHOLENODE_E2E=$(REQUIRE_WHOLENODE_E2E) \
+	go test ./test/e2e/ -timeout $(USHARE_WHOLENODE_GO_TIMEOUT) -v -ginkgo.v -ginkgo.timeout=$(USHARE_WHOLENODE_TIMEOUT) \
+		-ginkgo.label-filter="utilization-share-wholenode" -ginkgo.fail-on-empty $(FOCUS_ARGS) $(SKIP_ARGS); \
+	TEST_EXIT_CODE=$$?; \
+	[ -n "$$PF_PID" ] && kill $$PF_PID 2>/dev/null || true; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
+# Creates the whole-node kind cluster (CREATE_CLUSTER=true, five 8-GPU workers
+# of one product), deploys the e2e infra with LeaderWorkerSet and Kueue's
+# controller, and runs the whole-node specs. It never deletes the cluster.
+.PHONY: test-e2e-ushare-wholenode-with-setup
+test-e2e-ushare-wholenode-with-setup: ## Create an 8-GPU-node kind cluster, deploy infra + Kueue, run the whole-node share specs
+	CLUSTER_GPU_TYPE=$(USHARE_WHOLENODE_CLUSTER_GPU_TYPE) CLUSTER_GPUS=$(USHARE_WHOLENODE_CLUSTER_GPUS) \
+		CLUSTER_NODES=$(USHARE_WHOLENODE_CLUSTER_NODES) DEPLOY_LWS=true SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
+	KUEUE_CONTROLLER=true $(MAKE) install-kueue-e2e
+	$(MAKE) test-e2e-ushare-wholenode
+
+##@ llm-d-benchmark CLI (standup / run / teardown)
+
+# llmdbenchmark binary from the benchmark repo venv
+BENCHMARK_VENV       = $(BENCHMARK_REPO_DIR)/.venv
+LLMDBENCHMARK        = $(shell command -v llmdbenchmark 2>/dev/null || echo $(BENCHMARK_VENV)/bin/llmdbenchmark)
+
+# Common llmdbenchmark flags (spec + workspace + base dir for config resolution)
+BENCHMARK_CLI_FLAGS = --spec $(BENCHMARK_SPEC) --workspace $(BENCHMARK_WORKSPACE) --base-dir $(BENCHMARK_REPO_DIR)
+
+# A FLOOR UNDER transformers, or a fresh clone cannot bootstrap at all.
+#
+# llm-d-benchmark leaves `transformers` unpinned. Resolving it on Python 3.12
+# backtracks to transformers 4.12.2 (2021), which requires tokenizers 0.10.3 --
+# a version whose newest wheels are cp39, so pip builds it from source and dies
+# on "error: can't find Rust compiler". Measured on WSL/Python 3.12.3 against
+# v0.7.8: the venv step failed, the Makefile fell through to llm-d-benchmark's
+# own install.sh, and that died on `sudo: a password is required`, which reads
+# like a permissions problem and is not one.
+#
+# Any reasonably recent transformers ships wheels and resolves cleanly. This is
+# a floor, not a pin: uv is still free to pick something newer.
+BENCHMARK_TRANSFORMERS_FLOOR ?= "transformers>=4.44"
+
+.PHONY: benchmark-install
+benchmark-install: ## Clone llm-d-benchmark at BENCHMARK_REPO_REF (default v0.7.8) and install the llmdbenchmark CLI
+	@if [ ! -d "$(BENCHMARK_REPO_DIR)" ]; then \
+		echo "Cloning llm-d-benchmark @ $(BENCHMARK_REPO_REF)..."; \
+		git clone --branch $(BENCHMARK_REPO_REF) $(BENCHMARK_REPO_URL) $(BENCHMARK_REPO_DIR); \
+	else \
+		echo "llm-d-benchmark already cloned at $(BENCHMARK_REPO_DIR); checking out $(BENCHMARK_REPO_REF)..."; \
+		cd $(BENCHMARK_REPO_DIR) && git fetch --tags && git checkout $(BENCHMARK_REPO_REF); \
+	fi
+	@# install.sh reaches for sudo when a prerequisite is missing: it apt-installs
+	@# pip when python3 has no ensurepip, and drops helmfile/helm/kubectl into
+	@# /usr/local/bin. Under a non-interactive shell that sudo prompt has no
+	@# terminal to read from, and the step HANGS -- silently, because this recipe
+	@# is @-prefixed. Observed on WSL: no venv, no output, no error, forever.
+	@#
+	@# So say what is missing before running it. Closing stdin is NOT enough on
+	@# its own -- sudo reads the password from /dev/tty, not stdin, so
+	@# `install.sh </dev/null` still hung on `sudo apt-get update` for 50
+	@# minutes. It runs under setsid below, which detaches the controlling
+	@# terminal so sudo has no tty to prompt on and fails immediately.
+	@# Everything suggested below installs into $$HOME and needs no admin rights.
+	@missing=""; \
+	command -v helmfile >/dev/null 2>&1 || missing="$$missing helmfile"; \
+	if ! command -v uv >/dev/null 2>&1 && ! python3 -c 'import ensurepip' >/dev/null 2>&1; then \
+		missing="$$missing uv-or-python3-venv"; \
+	fi; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing prerequisites:$$missing"; \
+		echo ""; \
+		echo "llm-d-benchmark's install.sh would try to install these with sudo, and"; \
+		echo "in a non-interactive shell that blocks on a password prompt forever."; \
+		echo "Install them into your home directory instead -- no admin rights needed:"; \
+		echo ""; \
+		echo "  # uv (brings its own Python, avoids the missing-ensurepip apt path)"; \
+		echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"; \
+		echo ""; \
+		echo "  # helmfile -- the version llm-d-benchmark pins (tool_version_for)"; \
+		echo "  HF=$$(sed -n 's/.*helmfile)[[:space:]]*echo[[:space:]]*\"\([0-9.]*\)\".*/\1/p' \"$(BENCHMARK_REPO_DIR)/install.sh\" 2>/dev/null | head -1); HF=$${HF:-1.5.1}; \\"; \
+		echo "  curl -sSL \"https://github.com/helmfile/helmfile/releases/download/v\$$HF/helmfile_\$${HF}_linux_amd64.tar.gz\" \\"; \
+		echo "    | tar -xz -C \"\$$HOME/bin\" helmfile && chmod +x \"\$$HOME/bin/helmfile\""; \
+		echo ""; \
+		echo "Then re-run: make benchmark-install BENCHMARK_UV=true"; \
+		exit 1; \
+	fi
+	@# Already working? Then do not run install.sh at all. It runs
+	@# `sudo apt-get update` even when every tool it needs is present, and a
+	@# standup re-runs this target on every invocation.
+	@# Skip only when the installed CLI matches the CHECKOUT. The venv is an
+	@# editable install, so its code follows the tree but its package VERSION is
+	@# frozen at install time -- and the version resolver picks the harness image
+	@# tag from that version. After moving the ref v0.7.0 -> v0.7.8 the CLI still
+	@# reported 0.7.0, so the run used ghcr.io/llm-d/llm-d-benchmark:v0.7.0 while
+	@# copying v0.7.8's harness scripts into it. Those scripts call `guidellm
+	@# run`; the v0.7.0 image's guidellm only has `benchmark`, so every treatment
+	@# died with "Error: No such command 'run'".
+	@# Already working? Then do not run install.sh at all. It runs
+	@# `sudo apt-get update` even when every tool it needs is present, and a
+	@# standup re-runs this target on every invocation.
+	@#
+	@# The CLI is an editable install, so its CODE follows the checkout when the
+	@# ref moves; only its package VERSION is frozen, and that version is not
+	@# worth reinstalling for -- upstream ships pyproject 0.7.0 at tag v0.7.8, so
+	@# it says 0.7.0 on every ref anyway. The one thing that version used to
+	@# decide, the harness image tag, is now pinned explicitly in
+	@# benchmark-standup and benchmark-run instead of being inferred from it.
+	@# Build the venv HERE rather than delegating to install.sh, which runs
+	@# `sudo apt-get update` unconditionally -- even when every tool it needs is
+	@# already present. On a box without passwordless sudo that means a FRESH
+	@# CLONE can never bootstrap: the guard above reports prerequisites fine,
+	@# install.sh then dies on "sudo: a password is required", and the standup
+	@# fails several minutes in having said nothing useful. Observed on WSL
+	@# against the shared GPU cluster.
+	@#
+	@# The CLI is just an editable install of the checkout, so a plain venv plus
+	@# `pip install -e .` produces the same thing install.sh would, in $HOME, with
+	@# no admin rights. install.sh stays as the fallback for whatever else it does
+	@# on a machine that has not got this far.
+	@# The venv branch below installs TWO packages. The CLI imports `planner`,
+	@# which is a separate package install.sh pulls from a git URL -- `pip install
+	@# -e .` alone produces a venv whose llmdbenchmark dies on
+	@# `ModuleNotFoundError: No module named planner`. The pin is read out of
+	@# their install.sh, the same way this file already reads the helm-diff and
+	@# helmfile versions, so it cannot drift from the version the standup was
+	@# tested against.
+	@#
+	@# uv is tried FIRST: a box without python3-venv (no ensurepip) fails
+	@# `python3 -m venv` with "You may need to use sudo with that command" --
+	@# the very thing being avoided. uv brings its own Python and needs no
+	@# admin rights.
+	@#
+	@# These explanations live HERE, not inside the recipe, because a shell
+	@# comment cannot survive a backslash-joined make recipe: without a trailing
+	@# backslash make ends the command at the comment and the shell gets an
+	@# unterminated if/else ("syntax error: unexpected end of file"), and with
+	@# one the shell joins the comment to the next line and swallows the command.
+	@if [ -x "$(LLMDBENCHMARK)" ] && "$(LLMDBENCHMARK)" --version >/dev/null 2>&1; then \
+		echo "llmdbenchmark present at $(LLMDBENCHMARK) — skipping install.sh."; \
+		echo "Force a reinstall with: rm -rf $(BENCHMARK_VENV)"; \
+	else \
+		echo "Building the llmdbenchmark venv without sudo..."; \
+		planner=$$(sed -n "s|^PLANNER_GIT=\"\(git+[^\"]*\)\"|\1|p" \
+			"$(BENCHMARK_REPO_DIR)/install.sh" 2>/dev/null | head -1); \
+		planner=$${planner:-git+https://github.com/llm-d-incubation/llm-d-planner.git@v0.1.0}; \
+		if command -v uv >/dev/null 2>&1; then \
+			(cd $(BENCHMARK_REPO_DIR) && uv venv "$(BENCHMARK_VENV)" >/tmp/llmdbench-venv.log 2>&1 \
+			 && VIRTUAL_ENV="$(BENCHMARK_VENV)" uv pip install -q -e . $(BENCHMARK_TRANSFORMERS_FLOOR) >>/tmp/llmdbench-venv.log 2>&1 \
+			 && VIRTUAL_ENV="$(BENCHMARK_VENV)" uv pip install -q "$$planner" >>/tmp/llmdbench-venv.log 2>&1) || true; \
+		else \
+			(cd $(BENCHMARK_REPO_DIR) && python3 -m venv "$(BENCHMARK_VENV)" >/tmp/llmdbench-venv.log 2>&1 \
+			 && "$(BENCHMARK_VENV)/bin/pip" install -q -e . $(BENCHMARK_TRANSFORMERS_FLOOR) >>/tmp/llmdbench-venv.log 2>&1 \
+			 && "$(BENCHMARK_VENV)/bin/pip" install -q "$$planner" >>/tmp/llmdbench-venv.log 2>&1) || true; \
+		fi; \
+		if [ -x "$(LLMDBENCHMARK)" ] && "$(LLMDBENCHMARK)" --version >/dev/null 2>&1; then \
+			echo "  built $$("$(LLMDBENCHMARK)" --version)"; \
+		else \
+			echo "  could not build it here; falling back to llm-d-benchmark install.sh."; \
+			echo "  (that script uses sudo, so it fails fast on a box without it -- see /tmp/llmdbench-venv.log)"; \
+			cd $(BENCHMARK_REPO_DIR) && \
+			setsid ./install.sh $(if $(filter true,$(BENCHMARK_UV)),--uv,--no-uv) </dev/null; \
+		fi; \
+	fi
+	@# helm-diff has to match helm's MAJOR version, and this step assumed Helm 4:
+	@#   - v3.15.10's plugin.yaml uses `platformHooks`, a Helm 4 schema field.
+	@#     Installing it under helm 3 leaves a plugin that loads on every helm
+	@#     invocation and fails -- `helm plugin list`, and helmfile with it, stop
+	@#     working until the directory is deleted by hand.
+	@#   - `--verify` is a Helm 4 flag. Under helm 3 the command fails outright
+	@#     with "unknown flag: --verify", so this step could never have run.
+	@# Verified on helm v3.16.3, where it did both.
+	@# The version comes from llm-d-benchmark's own tool_version_for(), so this
+	@# cannot drift from the version the standup was tested against. Hardcoding a
+	@# second copy is how this line came to pin a Helm 4 build on a helm 3 box.
+	@diff_ver=$$(sed -n 's/.*helm-diff)[[:space:]]*echo[[:space:]]*"\(v[0-9.]*\)".*/\1/p' \
+		"$(BENCHMARK_REPO_DIR)/install.sh" 2>/dev/null | head -1); \
+	diff_ver=$${diff_ver:-v3.13.0}; \
+	echo "Installing helm-diff $$diff_ver (pinned by llm-d-benchmark)..."; \
+	helm plugin uninstall diff >/dev/null 2>&1 || true; \
+	helm plugin install https://github.com/databus23/helm-diff --version $$diff_ver >/tmp/helm-diff-install.log 2>&1 \
+		|| helm plugin install https://github.com/databus23/helm-diff --version $$diff_ver --verify=false >>/tmp/helm-diff-install.log 2>&1 \
+		|| { echo "helm-diff install failed. helmfile uses it to diff; applies still work."; \
+		     echo "Its own words:"; sed 's/^/  /' /tmp/helm-diff-install.log | tail -6; \
+		     echo "  A helm older than the one llm-d-benchmark pins is the usual cause"; \
+		     echo "  (helm $$(helm version --short 2>/dev/null) here)."; }; \
+	helm plugin list 2>/dev/null | awk '$$1=="diff"{print "  installed: helm-diff " $$2}'
+	@$(MAKE) --no-print-directory benchmark-patch
+
+.PHONY: benchmark-patch
+benchmark-patch: ## Reapply our fixes to the llm-d-benchmark clone (idempotent; run automatically by benchmark-install and benchmark-run)
+	@# The clone is gitignored and benchmark-install re-checks it out to a pinned
+	@# tag, so edits made in it are invisible to review and vanish on the next
+	@# install. Our fixes therefore live in hack/benchmark/patch_harness.sh and
+	@# are reapplied here. Two upstream bugs, both present in v0.7.8 AND on
+	@# origin/main, so there is no release to upgrade to:
+	@#
+	@#   process_epp_logs.py  -- EPP writes "ts" as a float epoch; the parser
+	@#     assumes an ISO string and dies on the FIRST entry, discarding the
+	@#     whole log. That is why "Avg queue depth (EPP)" was "?" on every run
+	@#     we ever took. Fixed properly; 127k-200k entries now parse.
+	@#
+	@#   guidellm-analyze_results.sh -- benchmark-report wants a top-level
+	@#     "args" that guidellm no longer emits, so conversion always fails and
+	@#     the pod exits non-zero, marking a perfectly good run FAILED. Made
+	@#     non-fatal, NOT faked: see the script for why aliasing "config" onto
+	@#     "args" would produce a silently wrong report.
+	@#
+	@# This reaches the cluster because step_06 builds the harness ConfigMap
+	@# from the checked-out tree, by design ("so a run can use a new/updated
+	@# harness with an older benchmark image").
+	@if [ -d "$(BENCHMARK_REPO_DIR)" ]; then \
+		GPU_MEM_UTIL=$(GPU_MEM_UTIL) HARNESS_MEMORY=$(HARNESS_MEMORY) bash "$(CURDIR)/hack/benchmark/patch_harness.sh" "$(BENCHMARK_REPO_DIR)"; \
+	else \
+		echo "benchmark-patch: no clone at $(BENCHMARK_REPO_DIR); run 'make benchmark-install' first"; \
+	fi
+
+BENCHMARK_SPECS_DIR ?= $(CURDIR)/hack/benchmark/scenarios/guides
+
+# How many replicas' worth of FMA warm capacity to keep. 0 disables hot start
+# entirely (the warmup step becomes a no-op), so it costs nothing on non-FMA
+# runs. Deliberately expressed in REPLICAS, not the per-node launcherCount the
+# populator actually enforces: this is the one number that may later be produced
+# by something else -- The scaling manager already computes desired and peak replicas -- and a
+# future producer should not need node topology to say "keep 6 warm".
+# hack/benchmark/warm_pool.sh owns the translation.
+WARM_REPLICAS ?= 0
+
+# Gate benchmark-run on the model actually serving. See hack/benchmark/wait_serving.sh.
+WAIT_SERVING          ?= true
+WAIT_SERVING_TIMEOUT  ?= 600
+
+ACTUATION_TARGET ?=
+ACTUATION_TRIALS ?= 5
+
+# FMA controller version applied by benchmark-fma-fixups. The standup pins
+# v0.6.0-alpha.13, which drops reconcile notifications (upstream #696) and leaves
+# dead endpoints in the InferencePool.
+FMA_VERSION ?= v0.6.4
+
+# Pin the FMA controllers to specific IMAGES rather than to a version of the
+# upstream registry. Needed to run a fork: a fork's build lives at its own path
+# (ours is ghcr.io/ev-shindin/dual-pods-controller), which shares no prefix with
+# upstream, so FMA_VERSION cannot reach it.
+#
+# Set this whenever a forked controller is under test. benchmark-standup re-runs
+# benchmark-fma-fixups, so without it a standup mid-experiment silently restores
+# the stock controller and the run measures unmodified behaviour:
+#
+#   make benchmark-fma-fixups BENCHMARK_NAMESPACE=<ns> \
+#     FMA_CONTROLLER_IMAGE=ghcr.io/ev-shindin/dual-pods-controller:aa072ef
+FMA_CONTROLLER_IMAGE ?=
+FMA_POPULATOR_IMAGE  ?=
+
+.PHONY: benchmark-fma-fixups
+benchmark-fma-fixups: ## Re-apply the FMA fixes a standup undoes: launcher RBAC + controller version (set BENCHMARK_NAMESPACE)
+	@# Run this after every FMA standup. Without it, FMA benchmarking does not
+	@# produce bad numbers -- it produces NO numbers, and the failure looks like a
+	@# load-generator crash rather than an FMA misconfiguration:
+	@#
+	@#   launcher SA cannot patch pods (403, retried forever)
+	@#     -> a launcher whose requester was deleted keeps inferenceServing=true
+	@#     -> a dead endpoint stays in the InferencePool
+	@#     -> EPP dispatches to it, ~20% of requests 503
+	@#     -> guidellm fails its one backend-validation probe and every worker dies
+	@#     -> no results.json, every metric "?"
+	@#
+	@# Both fixes are namespaced; the cluster-scoped CRDs are untouched.
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required"; exit 1; \
+	fi
+	@FMA_CONTROLLER_IMAGE="$(FMA_CONTROLLER_IMAGE)" FMA_POPULATOR_IMAGE="$(FMA_POPULATOR_IMAGE)" \
+		bash hack/benchmark/fma_fixups.sh $(BENCHMARK_NAMESPACE) $(FMA_VERSION)
+
+.PHONY: benchmark-verify-warm-affinity
+benchmark-verify-warm-affinity: ## Prove fma.warmAffinity beats default scheduler spreading (any cluster with >=3 nodes; no GPUs needed)
+	@# warmAffinity is a PREFERRED podAffinity, so whether it actually wins is a
+	@# question about scheduler scoring, not about YAML -- unreadable from the
+	@# template. This runs both arms and compares. Measured on kind: 2/6 replicas
+	@# on the launcher node without it, 6/6 with it.
+	@bash -c 'command -v python3 >/dev/null || { echo "python3 required"; exit 1; }'
+	@python3 hack/benchmark/verify_warm_affinity.py
+
+.PHONY: benchmark-fma-verify
+benchmark-fma-verify: ## Report where FMA launchers and requesters actually landed, and fail if the scenario's placement is inert (set BENCHMARK_NAMESPACE)
+	@# The question this answers is "will the next scale-up wake a sleeper or
+	@# rebuild from scratch", and it is a placement question: dual-pods binds
+	@# node-locally, so a requester on a node with no launcher is a ~50-90s cold
+	@# build rather than a ~3s wake. Run it against an FMA somebody else stood up
+	@# -- benchmark-run does the same check automatically for its own stack.
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-fma-verify BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@bash hack/benchmark/fma_placement.sh verify $(BENCHMARK_NAMESPACE) \
+		"$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml"
+
+.PHONY: benchmark-actuation
+benchmark-headroom: ## Refuse a run the cluster cannot hold: fleet at its ceilings vs free CPU/GPU (BENCHMARK_NAMESPACE required; EXCLUDE_NODE=<name> to skip a bad node)
+	@# GPUs are what everyone checks and CPU is what binds -- each engine Pod
+	@# requests 2 CPU, so a 10/10 P/D fleet wants 40 on top of whatever is
+	@# resident, and a GPU is useless to a Pod the scheduler cannot place. One
+	@# run spent 40 minutes with 1 of 10 replicas Running because the headroom a
+	@# GPU-only pre-flight never looked at had gone to another tenant.
+	@#
+	@# Sized from each ScaledObject's maxReplicaCount, not the current replica
+	@# count: a fleet checked at its current size passes and then fails to scale.
+	@#
+	@# Read-only. Exit 1 means it does not fit; exit 2 means the check could not
+	@# be made, which is not a pass.
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: set BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 2; \
+	fi
+	@hack/benchmark/check-fleet-headroom.sh "$(BENCHMARK_NAMESPACE)" \
+		$(if $(EXCLUDE_NODE),--exclude-node $(EXCLUDE_NODE),)
+
+benchmark-actuation: ## Measure how fast capacity arrives after a scale-up (set ACTUATION_TARGET=<deployment>; BENCHMARK_NAMESPACE required)
+	@# The claim FMA makes is that capacity arrives sooner -- not that tokens are
+	@# faster. This measures exactly that and nothing else: scale up, time each
+	@# new replica from creation to Ready, scale back, repeat.
+	@#
+	@# It needs no load generator, no router and no Prometheus, which is the
+	@# point. Every load-benchmark failure we hit came from that surrounding
+	@# stack rather than from the thing under test: a report converter that could
+	@# not read its own input, and a backend still returning 503 when guidellm
+	@# validated it. This runs in minutes and is repeatable, so a regression in
+	@# actuation shows up as a number instead of being inferred from a slow run.
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ] || [ -z "$(ACTUATION_TARGET)" ]; then \
+		echo "ERROR: set BENCHMARK_NAMESPACE and ACTUATION_TARGET=<deployment>"; \
+		echo "  e.g. make benchmark-actuation BENCHMARK_NAMESPACE=ns ACTUATION_TARGET=my-decode"; \
+		exit 1; \
+	fi
+	@ACTUATION_NS=$(BENCHMARK_NAMESPACE) \
+		bash hack/benchmark/actuation.sh $(ACTUATION_TARGET) $(ACTUATION_TRIALS)
+
+.PHONY: benchmark-scenarios
+benchmark-scenarios: ## Copy our scenario specs into the llm-d-benchmark clone (idempotent; run automatically by benchmark-run)
+	@# Same reasoning as benchmark-patch, and the same trap the workload
+	@# profiles already avoid: the clone is gitignored and benchmark-install
+	@# re-checks it out to a pinned tag, so a spec edited in place is invisible
+	@# to review and gone on the next install. An unversioned maxReplicas sat in
+	@# that clone for weeks doing nothing, and a wva.enabled=false left over from
+	@# one comparison would have silently disabled autoscaling for every later
+	@# run. Ours are versioned in hack/benchmark/scenarios/guides/ and copied in
+	@# before every run. Edit them there, never in the clone.
+	@if [ ! -d "$(BENCHMARK_REPO_DIR)/config/scenarios/guides" ]; then \
+		echo "benchmark-scenarios: no clone at $(BENCHMARK_REPO_DIR); run 'make benchmark-install' first"; \
+	else \
+		n=0; \
+		for f in $(BENCHMARK_SPECS_DIR)/*.yaml; do \
+			[ -f "$$f" ] || continue; \
+			dest="$(BENCHMARK_REPO_DIR)/config/scenarios/guides/$$(basename $$f)"; \
+			sed -e 's/__WARM_REPLICAS__/$(WARM_REPLICAS)/g' -e 's/^\([ 	]*\)gpuMemoryUtilization:.*/\1gpuMemoryUtilization: $(GPU_MEM_UTIL)/' "$$f" > "$$dest"; \
+			if grep -q '__WARM_REPLICAS__' "$$dest"; then \
+				echo "ERROR: unsubstituted token left in $$dest"; exit 1; \
+			fi; \
+			python3 hack/benchmark/render-engine-resources.py "$$dest" --model "$(BENCHMARK_MODEL_ID)" || exit 1; \
+			echo "  installed scenario $$(basename $$f) (WARM_REPLICAS=$(WARM_REPLICAS), gpuMemoryUtilization=$(GPU_MEM_UTIL))"; \
+			n=$$((n+1)); \
+		done; \
+		[ "$$n" -gt 0 ] || echo "  no specs in $(BENCHMARK_SPECS_DIR)"; \
+	fi
+
+.PHONY: benchmark-standup
+benchmark-standup: ## Stand up the benchmark environment, then install the scaling manager from this repo (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, IMG=<your build>; BENCHMARK_DIRECT_KEDA=true for controller-free EPP+KEDA autoscaling instead of the scaling manager)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-standup BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# Standing a guide up into a namespace that already runs FMA silently breaks
+	@# it. Both render a PodMonitor named vllm-<model>, and a scenario without
+	@# `fma.enabled` renders the port-NAME form, which generates no target for a
+	@# launcher (they declare no container ports). The FMA stack keeps serving and
+	@# its metrics just stop being collected, with no error anywhere. That is
+	@# exactly what happened on the shared GPU cluster -- an FMA guide at 09:25Z, another guide
+	@# over the top at 09:26Z -- and it is why a benchmark once showed a variant
+	@# flat at one replica through a 155-deep queue.
+	@launchers=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pods -n "$(BENCHMARK_NAMESPACE)" -l app.kubernetes.io/component=launcher --no-headers 2>/dev/null | wc -l | tr -d ' '); \
+	if [ "$${launchers:-0}" -gt 0 ]; then \
+		echo ""; \
+		echo "WARNING: $(BENCHMARK_NAMESPACE) already runs Fast Model Actuation ($$launchers launcher pod(s))."; \
+		echo "         This standup renders a PodMonitor named vllm-<model>, the same name the FMA guide uses."; \
+		echo "         If this scenario does not set fma.enabled, it will OVERWRITE the FMA-aware one and the"; \
+		echo "         launchers stop being scraped -- silently. Metrics for most of the traffic then vanish."; \
+		echo "         Either use a scenario with fma.enabled, or stand this up in a clean namespace, or"; \
+		echo "         re-apply scraping afterwards:  kubectl apply -k config/fma-launcher-metrics -n $(BENCHMARK_NAMESPACE)"; \
+		echo "         See docs/reference/operations.md, 'FMA launcher pods'."; \
+		echo ""; \
+	fi
+	@# An EPP already serving in this namespace is a stack somebody is using. The
+	@# guide renders its own EPP Deployment, Service, InferencePool and a PodMonitor
+	@# named vllm-<model>, and applies them unconditionally -- so a second standup
+	@# silently REPLACES the first one's objects. The failure is invisible: the pods
+	@# keep running and answering while the scrape config and pool membership change
+	@# underneath them. Same class of fault as the FMA PodMonitor collision above,
+	@# which cost a benchmark that read a variant flat at one replica through a
+	@# 155-deep queue. prometheus-adapter already declines to overwrite someone
+	@# else's object; the EPP did not.
+	@epps=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n "$(BENCHMARK_NAMESPACE)" --no-headers 2>/dev/null | grep -c -- '-epp' || true); \
+	if [ "$${epps:-0}" -gt 0 ] && [ "$(BENCHMARK_ALLOW_EPP_REUSE)" != "true" ]; then \
+		echo ""; \
+		echo "ERROR: $(BENCHMARK_NAMESPACE) already runs an EPP ($$epps deployment(s))."; \
+		echo "       This standup renders its own EPP, Service, InferencePool and a PodMonitor"; \
+		echo "       named vllm-<model>, and applies them over whatever is there. The pods keep"; \
+		echo "       running and answering, so the damage is SILENT -- scrape config and pool"; \
+		echo "       membership change underneath a stack somebody may be using."; \
+		echo ""; \
+		echo "       Choose one:"; \
+		echo "         - stand up in a clean namespace (recommended), or"; \
+		echo "         - benchmark what is already there:  make benchmark-run BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE)"; \
+		echo "         - re-render deliberately:           BENCHMARK_ALLOW_EPP_REUSE=true"; \
+		echo ""; \
+		kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n "$(BENCHMARK_NAMESPACE)" --no-headers 2>/dev/null | grep -- '-epp' | sed 's/^/         /'; \
+		echo ""; \
+		exit 1; \
+	fi
+	@# FMA placement that cannot take effect. Everything under `fma:` is read by
+	@# code that first checks whether FMA is a deployed method (standup step_06)
+	@# or reads fma.enabled directly (run step_02a_fma_warmup_hotstart), so a
+	@# placement or warmup setting under fma.enabled=false is decoration -- and
+	@# the run then measures the COLD path (~50-90s per wake) while reporting a
+	@# warm config. That is not hypothetical: `launcherNodeSelection.enabled:
+	@# true` sat under `enabled: false` in our own scenario, and every
+	@# FMA-vs-non-FMA number taken before 2026-08-18 is cold-path because of it.
+	@# Checked here, before anything is applied, because the cost of finding out
+	@# afterwards is a whole benchmark run.
+	@bash hack/benchmark/fma_placement.sh check \
+		"$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml"
+	@if [ "$(BENCHMARK_DIRECT_KEDA)" = "true" ]; then \
+		echo "Direct-KEDA mode: this feature isn't in a released llm-d-benchmark tag yet — upgrading the llm-d-benchmark checkout to '$(BENCHMARK_REPO_REF)' (unreleased)..."; \
+		if ! kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get crd scaledobjects.keda.sh >/dev/null 2>&1; then \
+			echo "ERROR: KEDA is not installed on this cluster (scaledobjects.keda.sh CRD not found)."; \
+			echo "Install KEDA first (e.g. 'make deploy-e2e-infra SCALER_BACKEND=keda ENVIRONMENT=$(ENVIRONMENT)', or your platform's KEDA operator) and re-run."; \
+			exit 1; \
+		fi; \
+		echo "KEDA ScaledObject CRD found — proceeding with direct-KEDA standup (no scaling manager controller)."; \
+	fi
+	@if [ -d "$(BENCHMARK_REPO_DIR)" ]; then \
+		cd $(BENCHMARK_REPO_DIR) && git checkout -- config/scenarios config/specification config/templates 2>/dev/null || true; \
+	fi
+	@$(MAKE) benchmark-install BENCHMARK_REPO_REF=$(BENCHMARK_REPO_REF)
+	@# AFTER benchmark-install, not before. That target git-checkouts the clone to
+	@# the pinned tag, so scenarios installed first are discarded -- which is how a
+	@# standup kept deploying the upstream 0.95 while the log said 0.90 had been
+	@# installed. Only benchmark-run called this before, and run happens after any
+	@# install, which is why the ordering never mattered there.
+	@$(MAKE) --no-print-directory benchmark-scenarios
+	@cd $(BENCHMARK_REPO_DIR) && git reset --hard origin/$(BENCHMARK_REPO_REF) 2>/dev/null || true
+	@# THE COPY BELOW IS THE ONE THE STANDUP DEPLOYS, so the engine resources are
+	@# rendered into it as well. benchmark-scenarios rendered them into the copy
+	@# it installed, and the git reset above put the upstream file back over any
+	@# scenario upstream also ships (guides/pd-disaggregation): a P/D run logged
+	@# "2 CPU / 8Gi" and deployed the scenario's 32 CPU / 128Gi.
+	@if [ -f "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml" ]; then \
+		echo "Copying local scenario: hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml -> $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml"; \
+		mkdir -p "$(BENCHMARK_REPO_DIR)/config/scenarios/$$(dirname $(BENCHMARK_SPEC))"; \
+		sed -e 's/__WARM_REPLICAS__/$(WARM_REPLICAS)/g' -e 's/^\([ 	]*\)gpuMemoryUtilization:.*/\1gpuMemoryUtilization: $(GPU_MEM_UTIL)/' "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml" \
+		   > "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml"; \
+		python3 hack/benchmark/render-engine-resources.py "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" --model "$(BENCHMARK_MODEL_ID)" || exit 1; \
+	fi
+	@if [ -f "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2" ]; then \
+		echo "Copying local specification: hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2 -> $(BENCHMARK_REPO_DIR)/config/specification/$(BENCHMARK_SPEC).yaml.j2"; \
+		mkdir -p "$(BENCHMARK_REPO_DIR)/config/specification/$$(dirname $(BENCHMARK_SPEC))"; \
+		cp "$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml.j2" \
+		   "$(BENCHMARK_REPO_DIR)/config/specification/$(BENCHMARK_SPEC).yaml.j2"; \
+	fi
+	@# The engine image on every accelerator node BEFORE the harness deploys it:
+	@# a replica scheduled to a node without the image pulls 10-20 GB first, and
+	@# the autoscaler's first ramp is sized by that minute. The image is the
+	@# harness's own pin (hack/benchmark/engine_image.sh reads it from the clone),
+	@# or BENCHMARK_PREPULL_IMAGES; BENCHMARK_PREPULL=false skips the step. The
+	@# holders keep pulling while the standup goes on; `make prepull-status` is
+	@# the check, and the well-lit paths say when a run's nodes had the image.
+	@# The namespace is created here, idempotently: the harness creates it
+	@# later, and a DaemonSet applied into a namespace that does not exist yet
+	@# is a NotFound the WARNING below would have swallowed.
+	@if [ "$(BENCHMARK_PREPULL)" != "false" ]; then \
+		imgs="$(BENCHMARK_PREPULL_IMAGES)"; \
+		[ -n "$$imgs" ] || imgs=$$(bash hack/benchmark/engine_image.sh "$(BENCHMARK_REPO_DIR)" "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" || true); \
+		if [ -z "$$imgs" ]; then \
+			echo "WARNING: could not read the engine image from $(BENCHMARK_REPO_DIR)/config/templates/values/defaults.yaml; not pre-pulling (set BENCHMARK_PREPULL_IMAGES=<image>)"; \
+		else \
+			echo "Holding the engine image on the accelerator nodes: $$imgs (BENCHMARK_PREPULL=false skips; make prepull-status NAMESPACE=$(BENCHMARK_NAMESPACE) checks)"; \
+			kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) create namespace "$(BENCHMARK_NAMESPACE)" --dry-run=client -o yaml | kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) apply -f - >/dev/null \
+				&& bash deploy/prepull.sh apply -n "$(BENCHMARK_NAMESPACE)" $(PREPULL_ARGS) \
+				$$(printf '%s' "$$imgs" | tr ',' '\n' | sed 's/^/--image /' | tr '\n' ' ') \
+				|| echo "WARNING: pre-pull did not apply; the standup continues without it"; \
+		fi; \
+	fi
+	@# Lives in a script, not inline here, so its branches can actually be run.
+	@# Inline it was reachable only by driving a whole standup, which is why it
+	@# shipped reviewed-but-never-executed -- and why the "ours from an earlier
+	@# run" case went unnoticed reporting "something else created it".
+	@if [ "$(BENCHMARK_SKIP_PROMETHEUS_ADAPTER)" = "true" ]; then \
+		bash hack/benchmark/pa_clusterrole.sh stub $(LLMSM_MONITORING_NAMESPACE); \
+	fi
+	@echo "Injecting PYTORCH_ALLOC_CONF, decode replicas, and KEDA config into scenario YAML ($(BENCHMARK_SPEC).yaml)..."
+	@sed -i.bak 's/extraEnvVars: \[\]/extraEnvVars:\n        - name: PYTORCH_ALLOC_CONF\n          value: "expandable_segments:True"/' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml
+	@sed -i.bak 's/replicas: 2$$/replicas: $(BENCHMARK_DECODE_REPLICAS)/' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml
+	@# The replica bounds and scaling periods, set by PATH rather than by
+	@# pattern-matching indented text.
+	@#
+	@# This was an awk block anchored on `scaledObject:` and `periodSeconds:
+	@# 180`/`300`. Neither string occurs in the scenario -- not in v0.7.8, and
+	@# not in v0.7.0 either (checked with grep -c: zero in both). So
+	@# BENCHMARK_KEDA_MIN_REPLICAS, BENCHMARK_KEDA_MAX_REPLICAS and both period
+	@# variables silently did nothing, for every run this repo has ever made.
+	@# The bounds live at .wva.hpa.*, and the periods under
+	@# .wva.hpa.behavior.scale{Up,Down}.policies[].
+	@#
+	@# yq addresses them directly, so a key that moves again fails loudly at the
+	@# path instead of quietly matching no lines.
+	@# One yq call per key, deliberately. A `\` continuation inside the
+	@# single-quoted expression is NOT removed by the shell -- it reaches yq as
+	@# literal backslash-newline and dies with
+	@#   Error: 1:65: lexer: invalid input text "\\\n        (.scen..."
+	@# Separate calls also name which key failed, instead of one opaque error.
+	@yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.minReplicas) = $(BENCHMARK_KEDA_MIN_REPLICAS)' $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml
+	@yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.maxReplicas) = $(BENCHMARK_KEDA_MAX_REPLICAS)' $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml
+	@# The periods are applied only when > 0. BENCHMARK_KEDA_SCALE_UP_PERIOD
+	@# defaults to 0, and HPA rejects periodSeconds: 0 ("must be greater than
+	@# zero") -- so writing the default would produce a ScaledObject the API
+	@# refuses. That default was harmless only while the old awk silently matched
+	@# nothing; applying it for real makes 0 mean "keep the scenario's own value".
+	@if [ "$(BENCHMARK_KEDA_SCALE_UP_PERIOD)" -gt 0 ] 2>/dev/null; then \
+		yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.behavior.scaleUp.policies[].periodSeconds) = $(BENCHMARK_KEDA_SCALE_UP_PERIOD)' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
+	fi
+	@if [ "$(BENCHMARK_KEDA_SCALE_DOWN_PERIOD)" -gt 0 ] 2>/dev/null; then \
+		yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.behavior.scaleDown.policies[].periodSeconds) = $(BENCHMARK_KEDA_SCALE_DOWN_PERIOD)' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
+	fi
+	@# Stabilization windows. Applied when NON-EMPTY, not when > 0: unlike
+	@# periodSeconds, 0 is a legal and meaningful value here ("act now").
+	@if [ -n "$(BENCHMARK_KEDA_SCALE_UP_STABILIZATION)" ]; then \
+		yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.behavior.scaleUp.stabilizationWindowSeconds) = $(BENCHMARK_KEDA_SCALE_UP_STABILIZATION)' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
+	fi
+	@if [ -n "$(BENCHMARK_KEDA_SCALE_DOWN_STABILIZATION)" ]; then \
+		yq -i '(.scenario[] | select(has("wva")) | .wva.hpa.behavior.scaleDown.stabilizationWindowSeconds) = $(BENCHMARK_KEDA_SCALE_DOWN_STABILIZATION)' \
+			$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
+	fi
+	@echo "Scaling behaviour: scaleUp period=$(BENCHMARK_KEDA_SCALE_UP_PERIOD)s stabilization=$(BENCHMARK_KEDA_SCALE_UP_STABILIZATION)s, scaleDown period=$(BENCHMARK_KEDA_SCALE_DOWN_PERIOD)s stabilization=$(if $(BENCHMARK_KEDA_SCALE_DOWN_STABILIZATION),$(BENCHMARK_KEDA_SCALE_DOWN_STABILIZATION),scenario default)"
+	@echo "KEDA bounds set: min=$(BENCHMARK_KEDA_MIN_REPLICAS) max=$(BENCHMARK_KEDA_MAX_REPLICAS), periods up=$(BENCHMARK_KEDA_SCALE_UP_PERIOD)s down=$(BENCHMARK_KEDA_SCALE_DOWN_PERIOD)s"
+	@# Turn OFF the scenario's own scaling manager install. This repo installs the scaling manager from
+	@# deploy/ in benchmark-deploy-scaling-manager, and benchmark-deploy-scaling-manager refuses to run
+	@# beside a controller it did not install -- two controllers decide the same
+	@# replica count. The scenario's copy is also the RELEASED chart
+	@# (ghcr.io/llm-d/...), which rejects --external-scaler-bind-address, and it
+	@# pulls kustomize resources from
+	@# github.com/llm-d/llm-d/guides/workload-autoscaling/wva-config/platform/ocp?ref=main,
+	@# a path that does not currently exist -- standup died there on the shared GPU cluster.
+	@# Restored with the rest of the scenario from the .bak below.
+	@yq -i '(.scenario[] | select(has("wva")) | .wva.enabled) = false' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml && \
+		echo "Scenario's own scaling manager install disabled (this repo installs it from deploy/)."
+	@# Run the harness as root, or it cannot start on OpenShift.
+	@#
+	@# Its entrypoint copies its scripts into /usr/local/bin and chmods them.
+	@# v0.7.0's pod template hardcoded runAsUser: 0 so that always worked;
+	@# v0.7.8 made it conditional on harness.runAsUser being set, and a scenario
+	@# that does not set it now gets no securityContext at all. OpenShift then
+	@# assigns a UID from the namespace range and the copy dies with
+	@#   cp: cannot create regular file '/usr/local/bin/...': Permission denied
+	@# followed by analyze_results failing on a results.json that was never
+	@# written. Observed on the shared GPU cluster with the v0.7.8 template.
+	@#
+	@# Granting anyuid to the harness ServiceAccount does NOT fix it there:
+	@# openshift-ai-llminferenceservice-multi-node-scc has priority 11 against
+	@# anyuid's 10, so it wins for any SA that can use it and forces
+	@# MustRunAsRange. Asking for UID 0 is what makes that SCC unable to admit
+	@# the pod, so selection falls to anyuid and the harness gets root.
+	@yq -i '(.scenario[] | select(has("harness")) | .harness.runAsUser) = $(BENCHMARK_HARNESS_RUN_AS_USER)' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml && \
+		echo "Harness runAsUser=$(BENCHMARK_HARNESS_RUN_AS_USER) (v0.7.8 stopped forcing it; OpenShift needs it)."
+	@# Pin the harness IMAGE to the ref we checked out.
+	@#
+	@# defaults.yaml hardcodes llm-d-benchmark_version: v0.7.0 -- in v0.7.8 as
+	@# well as v0.7.0 -- so the image never follows the checkout. The scripts
+	@# always do: they are copied from the checkout into the pod. v0.7.8's
+	@# guidellm-llm-d-benchmark.sh calls `guidellm run`, and the v0.7.0 image's
+	@# guidellm only has `benchmark`, so every treatment died with
+	@#   Error: No such command 'run'.
+	@# after the runAsUser fix let those scripts land -- the permission failure
+	@# had been hiding the mismatch by leaving the image's own scripts in place.
+	@$(eval BENCHMARK_IMAGE_TAG ?= $(BENCHMARK_REPO_REF))
+	@yq -i '(.scenario[] | select(has("common")) | .common.images.benchmark.tag) = "$(BENCHMARK_IMAGE_TAG)"' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml && \
+		echo "Harness image tag=$(BENCHMARK_IMAGE_TAG) (defaults.yaml pins v0.7.0 regardless of ref)."
+	@# The standup's own settings on the scenario copy: gateway reuse, decode
+	@# resources and the drain fields, in one script hack/check-scenario-overrides.sh
+	@# executes. Before the engines exist, so they start once, as configured.
+	@BENCHMARK_GATEWAY_SKIP_INSTALL="$(BENCHMARK_GATEWAY_SKIP_INSTALL)" \
+		BENCHMARK_GATEWAY_PROVIDER_NAMESPACE="$(BENCHMARK_GATEWAY_PROVIDER_NAMESPACE)" \
+		BENCHMARK_DECODE_CPU="$(BENCHMARK_DECODE_CPU)" BENCHMARK_DECODE_MEMORY="$(BENCHMARK_DECODE_MEMORY)" \
+		BENCHMARK_DECODE_NODE="$(BENCHMARK_DECODE_NODE)" \
+		BENCHMARK_DECODE_NODES="$(BENCHMARK_DECODE_NODES)" \
+		BENCHMARK_DECODE_TOLERATIONS='$(BENCHMARK_DECODE_TOLERATIONS)' \
+		BENCHMARK_RENDER_DRAIN="$(BENCHMARK_RENDER_DRAIN)" \
+		BENCHMARK_STACKS="$(BENCHMARK_STACKS)" \
+		bash hack/benchmark/scenario_overrides.sh "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml"
+	@# Node-local weights, last of the scenario edits: the script refuses a
+	@# namespace whose model-pvc is already on another class (the harness
+	@# keeps an existing claim, and the volume would never bind), and it
+	@# fails the standup rather than warn -- a run meant to measure a local
+	@# read that silently read the shared volume is the wrong measurement.
+	@if [ -n "$(BENCHMARK_MODEL_HOSTPATH)" ]; then \
+		bash hack/benchmark/model_hostpath.sh "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" \
+			"$(BENCHMARK_MODEL_HOSTPATH)" "$(BENCHMARK_NAMESPACE)" "$(PREPULL_NODE_SELECTOR)" "$(PREPULL_TOLERATIONS)"; \
+	fi
+	@# Node-local engine caches: the claim is applied here (the volume must
+	@# exist before the engines mount it), prepared with the harness's own
+	@# engine image, and the scenario copy is repointed at it. The edit script
+	@# refuses a namespace without a Bound claim, and fails the standup: engines
+	@# whose cache volume never mounts sit in ContainerCreating for good.
+	@if [ -n "$(BENCHMARK_ENGINE_CACHE_HOSTPATH)" ]; then \
+		img="$(BENCHMARK_PREPULL_IMAGES)"; \
+		[ -n "$$img" ] || img=$$(bash hack/benchmark/engine_image.sh "$(BENCHMARK_REPO_DIR)" "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" || true); \
+		img=$${img%%,*}; \
+		[ -n "$$img" ] || { echo "benchmark-standup: cannot read the engine image from the clone for the engine-cache preparer; set BENCHMARK_PREPULL_IMAGES=<image>" >&2; exit 1; }; \
+		kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) create namespace "$(BENCHMARK_NAMESPACE)" --dry-run=client -o yaml | kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) apply -f - >/dev/null; \
+		seed="$(BENCHMARK_ENGINE_CACHE_SEED)"; \
+		if [ "$$seed" = auto ]; then \
+			if kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc -n "$(BENCHMARK_NAMESPACE)" workload-pvc >/dev/null 2>&1; then seed=workload-pvc:engine-cache; else seed=""; fi; \
+		fi; \
+		[ "$$seed" != none ] || seed=""; \
+		[ -z "$$seed" ] || echo "Seeding the node-local engine cache from $$seed (BENCHMARK_ENGINE_CACHE_SEED=none skips)"; \
+		bash deploy/enginecache.sh apply -n "$(BENCHMARK_NAMESPACE)" --path "$(BENCHMARK_ENGINE_CACHE_HOSTPATH)" --image "$$img" $(PREPULL_ARGS) $${seed:+--seed-claim "$$seed"} || exit 1; \
+		bash hack/benchmark/engine_cache_claim.sh "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" "$(BENCHMARK_NAMESPACE)"; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
+		-p $(BENCHMARK_NAMESPACE) \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
+		$(if $(filter true,$(BENCHMARK_SKIP_SMOKETEST)),--skip-smoketest,) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,); \
+	rc=$$?; \
+	mv $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml.bak \
+	   $(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml; \
+	if [ $$rc -eq 0 ] && [ "$(BENCHMARK_MONITORING)" = "true" ]; then \
+		echo "Enabling user-workload monitoring for namespace $(BENCHMARK_NAMESPACE)..."; \
+		oc label namespace $(BENCHMARK_NAMESPACE) openshift.io/user-workload-monitoring=enabled --overwrite 2>/dev/null && \
+		echo "✅ Monitoring label applied. Prometheus will begin scraping ServiceMonitors in this namespace."; \
+	fi; \
+	exit $$rc
+	@if [ "$(BENCHMARK_DIRECT_KEDA)" = "true" ]; then \
+		echo "Direct-KEDA mode: not installing the scaling manager (that is the point of this mode)."; \
+	elif [ "$(BENCHMARK_LLMSM_DEPLOY)" != "true" ]; then \
+		echo "BENCHMARK_LLMSM_DEPLOY=$(BENCHMARK_LLMSM_DEPLOY): not installing the scaling manager. The model servers will not be autoscaled."; \
+	else \
+		$(MAKE) benchmark-deploy-scaling-manager BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE); \
+	fi
+	@# A standup reinstalls FMA from llm-d-benchmark, which reintroduces both
+	@# defects benchmark-fma-fixups exists to correct: the launcher SA that cannot
+	@# patch pods, and controllers old enough to drop the reconcile that would
+	@# clear the resulting stale binding. Re-apply them here so standing the
+	@# environment up does not quietly restore a configuration in which FMA
+	@# benchmarking yields no data. Skipped when FMA is not present.
+	@if kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n $(BENCHMARK_NAMESPACE) -o name 2>/dev/null | grep -q dual-pods-controller; then \
+		$(MAKE) --no-print-directory benchmark-fma-fixups BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE); \
+	fi
+
+	@# The model servers a standup deploys carry no preStop hook and the default
+	@# 30s grace period, so every scale-down during the run cuts the requests in
+	@# flight. Measured on a real run: 39 ClientPayloadError failures in four
+	@# bursts, each ending 25-30s after one of the four pod removals.
+	@#
+	@# Those failures are an artefact of how the harness deploys, not a property
+	@# of the autoscaler under test -- and they land in the same TTFT percentiles
+	@# and error counts the run exists to measure. A comparison between two
+	@# scaling policies is not measuring scaling if one of them happened to remove
+	@# more pods.
+	@#
+	@# Patched rather than reported, because unlike an operator's workloads these
+	@# are OURS: this target deployed them. It costs one rollout, taken here and
+	@# waited for, so the run starts against pods that are already settled rather
+	@# than mid-restart.
+	@echo "Making the model servers drain on scale-down..."
+	@# SCOPE and LLMSM_NS are PINNED, not inherited. workload-patch honours LLMSM_SCOPE
+	@# from the environment, and anyone running a cluster-scoped install has that
+	@# exported -- which would make this line walk every namespace on the cluster
+	@# and apply a live patch, restarting model servers that have nothing to do
+	@# with the benchmark. The justification for applying rather than emitting is
+	@# that these workloads are ours; that holds only inside BENCHMARK_NAMESPACE.
+	@$(MAKE) --no-print-directory workload-patch \
+		NAMESPACE=$(BENCHMARK_NAMESPACE) LLMSM_NS=$(BENCHMARK_NAMESPACE) \
+		SCOPE=namespace LLMSM_SCOPE=namespace LLMSM_DEFAULT_SO_NS=$(BENCHMARK_NAMESPACE) \
+		LLMSM_WORKLOAD_PATCH_APPLY=true \
+		LLMSM_WORKLOAD_PATCH_FILE=$(BENCHMARK_WORKSPACE)/scaling-manager-workload-patch.yaml || \
+		echo "  WARNING: could not patch the model servers; scale-downs in this run will truncate in-flight requests."
+	@for d in $$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n $(BENCHMARK_NAMESPACE) -o name 2>/dev/null | grep -E 'decode|prefill'); do \
+		kubectl rollout status $$d -n $(BENCHMARK_NAMESPACE) --timeout=$(BENCHMARK_DRAIN_ROLLOUT_TIMEOUT)s || \
+			echo "  WARNING: $$d did not settle; the run may start against restarting pods."; \
+	done
+	@# The model cache, reported from what the cluster ACTUALLY bound rather than
+	@# from what the scenario asked for. Whether the engine downloads outside it is
+	@# workload-patch's question, answered above; this is the other one, which only
+	@# the claim can answer: can more than one node mount it?
+	@#
+	@# It is checked here because it fails LATE and quietly. An RWO cache stands up
+	@# perfectly -- one replica, one node, everything green -- and then the first
+	@# scale-up leaves the new pod Pending on a volume it cannot attach. The run
+	@# then measures an autoscaler that appears not to work.
+	@# `.SHELLFLAGS = -ec`, so a bare `x=$$(kubectl ...)` assignment carries the
+	@# command status and `set -e` kills the whole recipe -- silently, because
+	@# 2>/dev/null ate the reason. That aborted benchmark-standup at the very end
+	@# of a long run if a token could list PVCs but not get one by name (separate
+	@# RBAC verbs). Every substitution below therefore ends in `|| true`.
+	@#
+	@# It also reports what BOUND, not what was requested: a claim can ask for RWX
+	@# and sit Pending forever on a cluster with no RWX class, and the accessModes
+	@# field still reads ReadWriteMany because it is the request.
+	@echo "Model cache:"
+	@found=0; listed=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc -n $(BENCHMARK_NAMESPACE) \
+		-o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>&1) || listed="__ERR__$$listed"; \
+	case "$$listed" in \
+		__ERR__*) \
+			echo "  WARNING: could not list PersistentVolumeClaims in $(BENCHMARK_NAMESPACE)."; \
+			echo "           This is NOT a report that there is no cache -- it is a report that"; \
+			echo "           nobody could look: $$(printf '%s' "$${listed#__ERR__}" | tail -1)"; \
+			found=-1 ;; \
+	esac; \
+	if [ "$$found" = 0 ]; then \
+		for pvc in $$(printf '%s\n' "$$listed" | grep -iE 'model|weight|cache' || true); do \
+			found=1; \
+			modes=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc $$pvc -n $(BENCHMARK_NAMESPACE) -o jsonpath='{.spec.accessModes[*]}' 2>/dev/null || true); \
+			phase=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc $$pvc -n $(BENCHMARK_NAMESPACE) -o jsonpath='{.status.phase}' 2>/dev/null || true); \
+			size=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc $$pvc -n $(BENCHMARK_NAMESPACE) -o jsonpath='{.status.capacity.storage}' 2>/dev/null || true); \
+			sc=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get pvc $$pvc -n $(BENCHMARK_NAMESPACE) -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true); \
+			echo "  $$pvc  $${size:-<unbound>}  [$${modes:-?}]  $${phase:-?}  class=$${sc:-<cluster default>}"; \
+			if [ "$$phase" != Bound ]; then \
+				echo "  WARNING: $$pvc is $${phase:-unreadable}, not Bound. Nothing can mount it, so the"; \
+				echo "           model servers will not start. A ReadWriteMany request on a cluster"; \
+				echo "           with no RWX StorageClass is accepted and then never binds."; \
+			fi; \
+			case "$$modes" in \
+				*ReadWriteMany*|*ReadOnlyMany*) ;; \
+				*) echo "  WARNING: $$pvc is $$modes, so it can be mounted on ONE NODE only."; \
+				   echo "           The stack will stand up and the first scale-up will not: a decode"; \
+				   echo "           replica scheduled on another node stays Pending on the volume, so this"; \
+				   echo "           run cannot measure scaling. Give the model cache an RWX StorageClass."; ;; \
+			esac; \
+		done; \
+	fi; \
+	if [ "$$found" = 0 ]; then \
+		echo "  WARNING: no model cache PVC found in $(BENCHMARK_NAMESPACE)."; \
+		echo "           Every replica this run adds fetches its weights from Hugging Face, which"; \
+		echo "           is charged to scale-up latency and fails outright without egress."; \
+		echo "           Create one:  make model-cache NAMESPACE=$(BENCHMARK_NAMESPACE)"; \
+	fi
+
+## Install the scaling manager from THIS repo into the benchmark namespace and register the model
+## servers with it. Split out of benchmark-standup so a run whose stack is already
+## up can (re)install the autoscaler without redeploying the model servers.
+##
+## IMG decides what is measured. It defaults to $(IMAGE_TAG_BASE)/...:$(IMG_TAG),
+## a REGISTRY image built from this branch — which is NOT automatically the
+## working copy. Pass IMG=<your build> after changing controller code, or the run
+## measures whatever was last pushed under that tag. Benchmarking the wrong
+## binary is what this target exists to stop happening silently, so it says which
+## image it is installing.
+.PHONY: benchmark-deploy-scaling-manager
+benchmark-deploy-scaling-manager: ## Install the scaling manager from deploy/ into BENCHMARK_NAMESPACE (namespace scope) and create its ScaledObjects. Set IMG=<your build>.
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-deploy-scaling-manager BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# A scenario that installs its own autoscaler (llm-d-benchmark's own ones do) would leave
+	@# two controllers optimizing the same namespace and writing the same replica
+	@# counts. Refuse rather than produce a benchmark of the two of them fighting.
+	@existing=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n $(BENCHMARK_NAMESPACE) \
+		-l app.kubernetes.io/name=scaling-manager \
+		-o name 2>/dev/null | grep -v '/scaling-manager-controller-manager$$' || true); \
+	if [ -n "$$existing" ]; then \
+		echo "ERROR: a scaling manager controller is already running in $(BENCHMARK_NAMESPACE):"; \
+		echo "  $$existing"; \
+		echo "It is not this install. Two controllers on one namespace both decide the"; \
+		echo "same replica counts. Either remove it, or re-run with"; \
+		echo "BENCHMARK_LLMSM_DEPLOY=false to benchmark that one instead."; \
+		exit 1; \
+	fi
+	@# A controller THIS repo installed is excluded from the check above, so the
+	@# install below re-applies over it and moves it to $(IMG). That is right when
+	@# you are iterating on your own build and wrong when the namespace belongs to a
+	@# run somebody else is watching -- the image changes underneath them with no
+	@# warning. Say what is about to happen, and name the way out.
+	@ours=$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n $(BENCHMARK_NAMESPACE) scaling-manager-controller-manager \
+		-o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true); \
+	if [ -n "$$ours" ]; then \
+		echo ""; \
+		echo "NOTE: $(BENCHMARK_NAMESPACE) already runs a scaling manager controller from this repo."; \
+		echo "      running: $$ours"; \
+		echo "      about to: $(IMG)"; \
+		if [ "$$ours" != "$(IMG)" ]; then \
+			echo "      This REPLACES the running controller's image. If someone is using this"; \
+			echo "      namespace, reuse it instead:  make benchmark-standup ... BENCHMARK_LLMSM_DEPLOY=false"; \
+		else \
+			echo "      Same image -- this is a no-op re-apply."; \
+		fi; \
+		echo ""; \
+	fi
+	@echo ""
+	@echo "Installing the scaling manager from this repo into namespace $(BENCHMARK_NAMESPACE) (scope: namespace)"
+	@echo "  image:  $(IMG)"
+	@echo "  target: $(BENCHMARK_LLMSM_TARGET)  (ENVIRONMENT=$(ENVIRONMENT))"
+	@echo ""
+	@# NAMESPACE as well as LLMSM_NS. They answer different questions -- what the scaling manager
+	@# MANAGES versus where the controller is installed -- and NAMESPACE became
+	@# mandatory in namespace scope, so passing only LLMSM_NS made the install
+	@# refuse and print 105 candidate namespaces. Here the two are the same
+	@# namespace by construction: the benchmark stands the model up and installs
+	@# the controller beside it.
+	@target=$(BENCHMARK_LLMSM_TARGET); \
+	if [ "$(ENVIRONMENT)" != "openshift" ] && \
+	   kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) api-resources --api-group=route.openshift.io -o name >/dev/null 2>&1 && \
+	   [ -n "$$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) api-resources --api-group=route.openshift.io -o name 2>/dev/null)" ]; then \
+		echo "OpenShift detected; installing with the OpenShift overlay (cluster-monitoring-view)."; \
+		target=deploy-scaling-manager-on-openshift; \
+	fi; \
+	$(MAKE) $$target \
+		LLMSM_NS=$(BENCHMARK_NAMESPACE) \
+		NAMESPACE=$(BENCHMARK_NAMESPACE) \
+		LLMSM_SCOPE=namespace \
+		IMG=$(IMG) \
+		$(if $(BENCHMARK_LLMSM_VERBOSITY),LLMSM_VERBOSITY=$(BENCHMARK_LLMSM_VERBOSITY),) \
+		$(if $(BENCHMARK_PROMETHEUS_URL),PROMETHEUS_URL=$(BENCHMARK_PROMETHEUS_URL),)
+	@# The ScaledObject is the registration: The scaling manager has no watch and no listing, so
+	@# without one it is never called and scales nothing. Applied as a second step
+	@# rather than via the install's LLMSM_DEFAULT_SO so the benchmark's replica
+	@# bounds reach so_discover.
+	@# Plan, then adopt, then apply. A benchmark scenario may bring its own
+	@# ScaledObjects, and the plan marks those "no" by default — which would leave
+	@# them pointed at whatever scaled them before, silently benchmarking something
+	@# other than the scaling manager. Adopting repoints them rather than adding a second object on
+	@# the same target. Entries whose model could not be read keep "no": adopting
+	@# one would register a variant of a model nobody runs.
+	LLMSM_DEFAULT_SO_MIN=$(BENCHMARK_KEDA_MIN_REPLICAS) \
+	LLMSM_DEFAULT_SO_MAX=$(BENCHMARK_KEDA_MAX_REPLICAS) \
+	$(MAKE) scaledobjects-plan \
+		LLMSM_NS=$(BENCHMARK_NAMESPACE) \
+		LLMSM_SCOPE=namespace \
+		LLMSM_DEFAULT_SO_NS=$(BENCHMARK_NAMESPACE) \
+		LLMSM_DEFAULT_SO_PLAN=$(BENCHMARK_SO_PLAN)
+	@yq -i '(.plan[] | select(.apply == "no" and .modelID != "") | .apply) = "adopt"' $(BENCHMARK_SO_PLAN)
+	$(MAKE) scaledobjects-apply \
+		LLMSM_NS=$(BENCHMARK_NAMESPACE) \
+		LLMSM_SCOPE=namespace \
+		LLMSM_DEFAULT_SO_PLAN=$(BENCHMARK_SO_PLAN)
+
+.PHONY: benchmark-run
+benchmark-run: ## Run a single benchmark workload (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>, BENCHMARK_HARNESS=guidellm|inference-perf)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# Cheap and idempotent, and the clone is gitignored: a checkout done by
+	@# anything other than benchmark-install would otherwise leave a run using
+	@# an unpatched harness, and the symptom of that (a valid run reported
+	@# FAILED, EPP metrics silently "?") reads as a cluster problem, not a
+	@# tooling one.
+	@$(MAKE) --no-print-directory benchmark-patch
+	@$(MAKE) --no-print-directory benchmark-scenarios
+	@mkdir -p "$(BENCHMARK_SCENARIOS_DIR)"
+	@# The profile has to match the harness, and this is the last cheap moment to
+	@# find out. The two take mutually invalid schemas, the copy below does not
+	@# look, and BENCHMARK_HARNESS defaults to guidellm while most profiles here
+	@# are inference-perf ones -- so the DEFAULT pairing is a mismatch. Unchecked
+	@# it costs a standup, a pod and five minutes, and then reports a full table
+	@# of "?" latencies beside real-looking replica counts.
+	@BENCHMARK_SCENARIOS_DIR="$(BENCHMARK_SCENARIOS_DIR)" bash hack/check-benchmark-profiles.sh $(BENCHMARK_HARNESS) $(BENCHMARK_WORKLOAD)
+	@if [ "$(BENCHMARK_DIRECT_KEDA)" = "true" ] && [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ]; then \
+		echo "Injecting external model endpoint for direct-KEDA mode..."; \
+		sed -i.bak 's|base_url: .*|base_url: http://infra-llmdbench-inference-gateway.$(BENCHMARK_NAMESPACE).svc.cluster.local:80|' \
+			"$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)"; \
+		rm -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).bak"; \
+	fi
+	@# Fetch workload from inference-perf catalog if not found locally and harness is inference-perf
+	@if [ "$(BENCHMARK_HARNESS)" = "inference-perf" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ] && [ ! -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).yaml.in" ]; then \
+		echo "Fetching $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog..."; \
+		if curl -sfL "https://raw.githubusercontent.com/kubernetes-sigs/inference-perf/main/workload-catalog/$(BENCHMARK_WORKLOAD)/inference-perf.yaml" \
+			-o "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)"; then \
+			echo "Successfully fetched $(BENCHMARK_WORKLOAD)"; \
+		else \
+			echo "ERROR: Could not fetch $(BENCHMARK_WORKLOAD) from inference-perf workload-catalog"; \
+			echo "Available workloads: interactive-chat, code-generation, deep-research, reasoning, batch-summarization-rag, batch-synthetic-data-generation"; \
+			exit 1; \
+		fi; \
+	fi
+	@# The profiles in this repo are named <workload>.yaml.in, and neither branch
+	@# below looked for that: one wanted <workload>.in, the other bare
+	@# <workload>. So nothing was ever copied, and the run died with
+	@#   Profile 'prefill_heavy.yaml' not found in .../workload/profiles/guidellm
+	@# -- naming the file it wanted while the file sat un-copied in
+	@# test/benchmark/scenarios. The CLI is invoked with -w <workload>.yaml, so
+	@# It must land as <workload>.yaml.in and NOT as <workload>.yaml. Every
+	@# profile the harness ships is .yaml.in only; profile_renderer.py
+	@# substitutes the REPLACE_ENV_* tokens in the template and produces the
+	@# .yaml itself. Copying a .yaml too shadows that render with an unsubstituted
+	@# file, and guidellm then dies on every option at once:
+	@#   Error: Invalid value for '--backend' / '--model' / '--target' ...:
+	@# with the values empty. The CLI is still invoked as -w <workload>.yaml; it
+	@# resolves that to the template, exactly as it does for its own profiles.
+	@# __REQUEST_RATE__ is OUR token, substituted here, before the file reaches the
+	@# harness. The harness's own REPLACE_ENV_* tokens resolve from a registry in
+	@# llm-d-benchmark, which benchmark-install re-checks-out to a pinned tag, so
+	@# a token added there would not survive the next install.
+	@#
+	@# A template that still holds the token produces invalid YAML rather than a
+	@# silent fallback: a run at the wrong request rate looks like a result, and
+	@# would be one nobody could reproduce.
+	@#
+	@# Substituted by NAME, not by matching `rate:` lines. Staged ladders (bursty,
+	@# sharegpt) carry several rates whose SHAPE is the scenario, and a pattern
+	@# that rewrote every rate line would flatten them into one number.
+	@#
+	@# A replay profile schedules from a trace it names by an in-pod path; the
+	@# trace is committed beside the profile, and copying the profile alone sent
+	@# a harness pod to die five minutes in on "Trace file not found" -- with a
+	@# report. workload_traces.sh copies what the profile names, or refuses.
+	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).yaml.in" ]; then \
+		echo "Copying local workload $(BENCHMARK_WORKLOAD).yaml.in to the $(BENCHMARK_HARNESS) harness (REQUEST_RATE=$(REQUEST_RATE))..."; \
+		sed -e 's/__REQUEST_RATE__/$(REQUEST_RATE)/g' -e 's/__MAX_DURATION__/$(MAX_DURATION)/g' \
+		   "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).yaml.in" \
+		   > "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml.in"; \
+		rm -f "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml"; \
+		bash hack/benchmark/workload_traces.sh "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml.in" "$(BENCHMARK_SCENARIOS_DIR)" "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)" "$(BENCHMARK_HARNESS)"; \
+	elif [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" ]; then \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).in"; \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD).in" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD)"; \
+	elif [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" ]; then \
+		echo "Copying local workload from $(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD) to harness..."; \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BENCHMARK_WORKLOAD)" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml"; \
+		if [ -n "$(BENCHMARK_MODEL_ID)" ]; then \
+			echo "Injecting MODEL_ID=$(BENCHMARK_MODEL_ID) into workload profile..."; \
+			sed -i.bak 's|model_name: .*|model_name: $(BENCHMARK_MODEL_ID)|' \
+				"$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml"; \
+			rm -f "$(BENCHMARK_REPO_DIR)/workload/profiles/$(BENCHMARK_HARNESS)/$(BENCHMARK_WORKLOAD).yaml.bak"; \
+		fi; \
+	fi
+	@# The harness UID has to be set HERE too, not only in benchmark-standup.
+	@# run renders its own plan from the scenario, and standup restores the
+	@# scenario from its .bak when it finishes -- so by the time the harness pod
+	@# is created the patch is gone, config.yaml carries harness.runAsUser: null,
+	@# and the pod is admitted with a namespace UID again. Observed: standup
+	@# applied it, the run twenty minutes later did not.
+	@yq -i '(.scenario[] | select(has("harness")) | .harness.runAsUser) = $(BENCHMARK_HARNESS_RUN_AS_USER)' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml 2>/dev/null || true
+	@# Same reasoning as in benchmark-standup: run renders its own plan, and the
+	@# image must match the ref whose scripts get copied into the pod.
+	@yq -i '(.scenario[] | select(has("common")) | .common.images.benchmark.tag) = "$(if $(BENCHMARK_IMAGE_TAG),$(BENCHMARK_IMAGE_TAG),$(BENCHMARK_REPO_REF))"' \
+		$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml 2>/dev/null || true
+	@# Sample replica counts ourselves for the duration of the run.
+	@#
+	@# The harness writes replica_status_timeseries.json, and on every FMA run
+	@# measured it came back with snapshots but NO controllers: collect_metrics.sh
+	@# filters them by comparing LLMDBENCH_HARNESS_STACK_NAME -- a stack name,
+	@# "inference-scheduling-llmsm" -- against the llm-d.ai/model label,
+	@# "qwen-qwe-...". They never match, so every controller is dropped and the
+	@# run reports no replicas and no cost. It cannot be corrected from here:
+	@# run_only.sh writes that variable into the harness pod from
+	@# endpoint_stack_name, which is also what it passes to --stack.
+	@#
+	@# Without this, a two-variant FMA run yields latency numbers and no way to
+	@# normalise them by the capacity that produced them, which is the only
+	@# comparison worth making.
+	@# Do not start the load generator before the model is actually servable.
+	@# Deployment readyReplicas is not that condition: the EndpointSlice, the
+	@# InferencePool's view of it and the router all sit between them. guidellm
+	@# validates its backend before generating any load, so a 503 in that window
+	@# kills every worker at once and the run produces NO results.json -- every
+	@# metric then reports "?", which reads as a tooling bug rather than "the
+	@# model was not up yet". That cost two full runs before it was diagnosed.
+	@# WAIT_SERVING=false skips it for a target that has no router.
+	@if [ "$(WAIT_SERVING)" != "false" ]; then \
+		bash hack/benchmark/wait_serving.sh $(BENCHMARK_NAMESPACE) $(WAIT_SERVING_TIMEOUT); \
+	fi
+	@# Placement decides warm vs cold, so check it against the CLUSTER before
+	@# generating load -- the static check at standup cannot see whether a node
+	@# actually carries the pin label or whether the requesters landed beside the
+	@# warm pool. A selector matching zero nodes constrains nothing and reports
+	@# success, which is how a cold run masquerades as a warm one. No-op when the
+	@# namespace runs no launchers.
+	@bash hack/benchmark/fma_placement.sh verify $(BENCHMARK_NAMESPACE) \
+		"$(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml"
+	@# No --force and nothing pre-removed. The paths carry a run id, so they are
+	@# new every invocation: a populated output here means something genuinely
+	@# unexpected and refusing is the right answer. Pre-removing was worse than
+	@# useless -- deleting the pidfile first is how a second run orphaned the
+	@# first run's sampler before being refused.
+	@echo "  capture: $(BENCHMARK_SAMPLES)"
+	@echo "  capture: $(BENCHMARK_LLMSM_LOG)"
+	@echo "  capture: $(BENCHMARK_RECORDINGS)"
+	@rm -f "$(BENCHMARK_SAMPLES).startfailed" "$(BENCHMARK_LLMSM_LOG).startfailed" "$(BENCHMARK_RECORDINGS).startfailed"
+	@bash hack/benchmark/sample_replicas.sh $(BENCHMARK_CAPTURE_CTX) start $(BENCHMARK_NAMESPACE) "$(BENCHMARK_SAMPLES)" || touch "$(BENCHMARK_SAMPLES).startfailed"
+	@bash hack/benchmark/tail_scaling_manager_logs.sh $(BENCHMARK_CAPTURE_CTX) start $(BENCHMARK_NAMESPACE) "$(BENCHMARK_LLMSM_LOG)" || touch "$(BENCHMARK_LLMSM_LOG).startfailed"
+	@# The learner recordings, copied out every BENCHMARK_RECORDINGS_INTERVAL
+	@# seconds and once more at the stop below. The copy runs in its own process
+	@# group, so a Ctrl-C of this make leaves it copying: benchmark-teardown
+	@# finds it by BENCHMARK_RECORDINGS_PREFIX, takes the final copy and stops
+	@# it, and it stops itself after BENCHMARK_WAIT_TIMEOUT plus an hour.
+	@$(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) start $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS)" || touch "$(BENCHMARK_RECORDINGS).startfailed"
+	@# Collect the results tree as a gzipped tar over exec rather than with
+	@# kubectl cp. The harness ships both paths and defaults to cp, which on a
+	@# large tree either runs for hours or drops: its own source puts cp at
+	@# ~0.3 MB/s through the apiserver exec stream, and runs here have lost
+	@# their client-side latencies to a copy that truncated mid-file on a run
+	@# that had otherwise succeeded.
+	@#
+	@# The retry is what makes the stream trustworthy, not the stream itself:
+	@# a dropped exec stream ("tar: Unexpected EOF") is transient and common,
+	@# and the harness retries the whole pipeline five times with a backoff,
+	@# overwriting on each attempt. Set BENCHMARK_FAST_COLLECT=false for cp.
+	-$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+		-p $(BENCHMARK_NAMESPACE) \
+		-l $(BENCHMARK_HARNESS) \
+		-w $(BENCHMARK_WORKLOAD).yaml \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,) \
+		$(if $(filter true,$(BENCHMARK_FAST_COLLECT)),--fast-collect,) \
+		--wait-timeout $(BENCHMARK_WAIT_TIMEOUT)
+	@# Stopped and filed even when the run above failed -- a run that errored in a
+	@# post-processing step still produced measurements worth reading, and every
+	@# FMA run so far has ended that way.
+	@# The status is recorded rather than discarded. A stop that could not end its
+	@# capture leaves the output unterminated, and the copy below would otherwise
+	@# announce it as this run's measurement four lines after saying it failed.
+	@rm -f "$(BENCHMARK_SAMPLES).stopfailed" "$(BENCHMARK_LLMSM_LOG).stopfailed"
+	@bash hack/benchmark/sample_replicas.sh $(BENCHMARK_CAPTURE_CTX) stop "$(BENCHMARK_SAMPLES)" $(BENCHMARK_NAMESPACE) || touch "$(BENCHMARK_SAMPLES).stopfailed"
+	@bash hack/benchmark/tail_scaling_manager_logs.sh $(BENCHMARK_CAPTURE_CTX) stop $(BENCHMARK_NAMESPACE) "$(BENCHMARK_LLMSM_LOG)" || touch "$(BENCHMARK_LLMSM_LOG).stopfailed"
+	@# The final copy of the recordings, taken whether the run succeeded,
+	@# failed or timed out: the `-` on the run lets every one of them reach here.
+	@$(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) stop $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS)" || true
+	@# The filing DECISION lives in a script, not here, because nothing could
+	@# test it in a recipe -- and two defects landed in this block while the
+	@# capture scripts beside it were covered by an executable check. It judges
+	@# each artefact on itself: present, non-empty, its own capture did not fail,
+	@# and for JSON that it parses. Gating on the stop's exit status does not
+	@# work, because every way this goes wrong exits 0.
+	@LATEST=$$(ls -td "$(BENCHMARK_WORKSPACE)"/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	bash hack/benchmark/file_capture.sh "$$LATEST" "$(BENCHMARK_SAMPLES)" "$(BENCHMARK_LLMSM_LOG)" "$(BENCHMARK_RECORDINGS)"
+	@echo ""
+	@echo "========================================="
+	@echo "  Generating benchmark report..."
+	@echo "========================================="
+	@$(MAKE) benchmark-report
+	@$(MAKE) benchmark-plot-two-variant || true
+	@# A load generator that never sent a request must not exit 0.
+	@#
+	@# The `-` on the run above is deliberate: a run that failed in POST-processing
+	@# still produced measurements worth filing, and the steps between here and
+	@# there do the filing. But it also swallowed the other case entirely. A
+	@# guidellm that rejected its own profile exited 2, sent nothing, and this
+	@# target still returned 0 -- leaving a table that read
+	@#
+	@#     Avg TTFT (ms)   ?        Avg replicas   1.00
+	@#     Avg queue depth 0.0      Max replicas   1
+	@#
+	@# which is indistinguishable from a real run of a fleet that correctly held
+	@# at one replica. That is the shape that gets believed: it was being read as
+	@# evidence that a GPU quota bound the fleet, when nothing had been asked of it.
+	@#
+	@# results.json is guidellm's own output and is the file postprocess.py reads
+	@# every latency number from, so its absence is exactly "no load ran".
+	@# `|| true` on the ls: SHELL carries -o pipefail and .SHELLFLAGS is -ec, so a
+	@# glob matching nothing makes ls exit 2, pipefail propagates it, and the
+	@# assignment kills the recipe with a bare `Error 2` -- losing the very
+	@# diagnosis below. $${USER} unset does the same, which is routine in a CI
+	@# container. An empty LATEST is then its own answer, reported not skipped.
+	@#
+	@# guidellm only: results.json is ITS output, and the file postprocess.py
+	@# reads every latency number from. Asserting it for a harness that writes
+	@# no such file would fail every successful run of that harness -- a worse
+	@# error than the one being caught.
+	@if [ "$(BENCHMARK_HARNESS)" = "guidellm" ]; then \
+		LATEST=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1 || true); \
+		if [ -z "$$LATEST" ]; then \
+			echo ""; \
+			echo "ERROR: no results directory was produced, so the harness never ran."; \
+			echo "  Looked for: $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_*"; \
+			echo "  An unset USER cannot match that glob -- set it, or pass BENCHMARK_WORKSPACE."; \
+			exit 1; \
+		fi; \
+		if [ ! -f "$$LATEST/results.json" ]; then \
+			echo ""; \
+			echo "ERROR: the harness produced no results.json, so NO LOAD WAS GENERATED."; \
+			echo "  Every latency number above is '?' for that reason, and the replica"; \
+			echo "  counts describe an idle fleet, not a measured one."; \
+			echo "  The harness pod said:"; \
+			grep -hE "^Error|Field required|Extra inputs|returned with error" "$$LATEST"/logs/*.log 2>/dev/null | sort -u | head -8 | sed 's/^/    /'; \
+			echo "  Full log: $$LATEST/logs/"; \
+			exit 1; \
+		fi; \
+	fi
+
+## The one benchmark to run after installing: symmetric 1024/1024 at 15 req/s for five
+## minutes, then a dashboard snapshot over exactly that window and a pointer to it.
+## Answers "is the scaling manager actually scaling this?" -- not "how fast is this model".
+.PHONY: benchmark-smoke
+benchmark-smoke: ## Post-install check: drive symmetric 1024/1024 load at 15 req/s, snapshot the dashboard, print where it is (NAMESPACE=<ns>)
+	@bash hack/benchmark/smoke.sh $(if $(NAMESPACE),$(NAMESPACE),$(BENCHMARK_NAMESPACE))
+
+## Generate a markdown table from the latest benchmark results
+.PHONY: benchmark-report
+benchmark-report: ## Generate a markdown table from the latest benchmark results
+	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	if [ -z "$$LATEST_DIR" ]; then \
+		echo "ERROR: No benchmark results found in $(BENCHMARK_WORKSPACE)"; \
+		exit 1; \
+	fi; \
+	echo "Results directory: $$LATEST_DIR"; \
+	echo ""; \
+	mkdir -p "$$LATEST_DIR/metrics"; \
+	REPORT_MD="$$LATEST_DIR/metrics/report.md"; \
+	if [ -n "$(BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX)" ]; then \
+		python3 $(CURDIR)/hack/benchmark/postprocess.py \
+			--secondary-suffix $(BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX) \
+			--scenario-yaml $(CURDIR)/hack/benchmark/scenarios/$(BENCHMARK_SPEC).yaml \
+			--variant-config $(VARIANT_CONFIG) \
+			$$LATEST_DIR | tee "$$REPORT_MD"; \
+	else \
+		python3 $(CURDIR)/hack/benchmark/postprocess.py $$LATEST_DIR | tee "$$REPORT_MD"; \
+	fi; \
+	echo ""; \
+	echo "Report saved: $$REPORT_MD"
+
+BENCHMARK_TWO_VARIANT_SECONDARY_SUFFIX ?= v2
+
+.PHONY: benchmark-plot-two-variant
+benchmark-plot-two-variant: ## Plot two-variant replica/latency/throughput graph from the latest results (no-op for single-variant runs)
+	@LATEST_DIR=$$(ls -td $(BENCHMARK_WORKSPACE)/$${USER}-*/results/$(BENCHMARK_HARNESS)-*_* 2>/dev/null | head -1); \
+	if [ -z "$$LATEST_DIR" ]; then \
+		echo "No benchmark results found, skipping two-variant plot"; \
+		exit 0; \
+	fi; \
+	bash $(CURDIR)/hack/benchmark/post_run_analyze.sh $$LATEST_DIR $(BENCHMARK_NAMESPACE)
+
+VARIANT_CONFIG ?= $(CURDIR)/hack/benchmark/scenarios/guides/variants/v2-tp1-cheaper.yaml
+LLMSM_V2_SATURATION_CONFIGMAP ?= $(CURDIR)/hack/benchmark/scenarios/scaling_manager_threshold/saturation_v2_config.yaml
+# The name deploy/ installs: config/base names it controller-manager and every
+# overlay applies namePrefix: scaling-manager-. The old value here was the deleted Helm
+# chart's name, so every restart-controller call failed with NotFound.
+LLMSM_CONTROLLER_DEPLOY ?= deploy/scaling-manager-controller-manager
+LLMSM_ROLLOUT_TIMEOUT ?= 120s
+LLMSM_MONITORING_NAMESPACE ?= scaling-manager-monitoring
+
+.PHONY: benchmark-add-variant
+benchmark-add-variant: ## Add a secondary scaling manager variant to the running benchmark (set BENCHMARK_NAMESPACE=<namespace>, optional VARIANT_CONFIG=<path>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-add-variant BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	python3 $(CURDIR)/hack/benchmark/add_variant.py \
+		-n $(BENCHMARK_NAMESPACE) \
+		--config $(VARIANT_CONFIG)
+	@# The variant is a new model server, deployed the same way and with the same
+	@# gap: no preStop hook. Without this the second model truncates streams on
+	@# every scale-down while the first one does not, which is a difference
+	@# between the two arms of whatever the run is comparing.
+	@$(MAKE) --no-print-directory workload-patch \
+		NAMESPACE=$(BENCHMARK_NAMESPACE) LLMSM_NS=$(BENCHMARK_NAMESPACE) \
+		SCOPE=namespace LLMSM_SCOPE=namespace LLMSM_DEFAULT_SO_NS=$(BENCHMARK_NAMESPACE) \
+		LLMSM_WORKLOAD_PATCH_APPLY=true \
+		LLMSM_WORKLOAD_PATCH_FILE=$(BENCHMARK_WORKSPACE)/scaling-manager-workload-patch.yaml || \
+		echo "  WARNING: the variant was added but not patched; its scale-downs will truncate in-flight requests."
+	@# Waited for, for the same reason the standup waits: a patch replaces the pod
+	@# template, so everything it touched is rolling when it returns. Adding a
+	@# variant to a RUNNING benchmark and returning mid-restart puts the restart
+	@# inside the measurement window.
+	@for d in $$(kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get deploy -n $(BENCHMARK_NAMESPACE) -o name 2>/dev/null | grep -E 'decode|prefill'); do \
+		kubectl rollout status $$d -n $(BENCHMARK_NAMESPACE) --timeout=$(BENCHMARK_DRAIN_ROLLOUT_TIMEOUT)s || \
+			echo "  WARNING: $$d did not settle."; \
+	done
+
+.PHONY: benchmark-enable-v2-saturation
+benchmark-enable-v2-saturation: ## Enable the scaling manager saturation V2 analyzer (apply configmap + restart controller)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-enable-v2-saturation BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) apply -n $(BENCHMARK_NAMESPACE) -f $(LLMSM_V2_SATURATION_CONFIGMAP)
+	$(MAKE) benchmark-restart-controller BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE)
+
+.PHONY: benchmark-restart-controller
+# The learned-state snapshot is deleted too: with LEARNED_STATE_SNAPSHOT on, a
+# restart restores what the controller learned, the state this target exists to
+# clear. It is deleted with no controller running. During a rolling restart a
+# replica that never read it -- an old non-leader taking the lease, or a new
+# pod -- writes it again, and the next leader then restores that.
+benchmark-restart-controller: ## Restart the scaling manager controller to flush learned state (e.g., k2 history between runs)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-restart-controller BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# K carries a request timeout; W does not: wait and rollout status carry
+	@# their own, and a request timeout would cut their watches short.
+	@set -e; K="kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) -n $(BENCHMARK_NAMESPACE)"; \
+	W="kubectl -n $(BENCHMARK_NAMESPACE)"; \
+	replicas=$$($$K get $(LLMSM_CONTROLLER_DEPLOY) -o jsonpath="{.spec.replicas}"); \
+	selector=$$($$K get $(LLMSM_CONTROLLER_DEPLOY) --subresource=scale -o jsonpath="{.status.selector}"); \
+	if [ -z "$$replicas" ] || [ -z "$$selector" ]; then \
+		echo "ERROR: could not read the replicas and selector of $(LLMSM_CONTROLLER_DEPLOY)"; exit 1; \
+	fi; \
+	$(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) snapshot $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS)" || true; \
+	$$K scale $(LLMSM_CONTROLLER_DEPLOY) --replicas=0; \
+	pods=$$($$K get pods -l "$$selector" -o name); \
+	if [ -n "$$pods" ]; then $$W wait --for=delete $$pods --timeout=$(LLMSM_ROLLOUT_TIMEOUT); fi; \
+	$$K delete configmap scaling-manager-learned-state --ignore-not-found; \
+	$$K scale $(LLMSM_CONTROLLER_DEPLOY) --replicas=$$replicas; \
+	$$W rollout status $(LLMSM_CONTROLLER_DEPLOY) --timeout=$(LLMSM_ROLLOUT_TIMEOUT)
+
+BURSTY_WORKLOAD    ?= bursty.yaml
+# How long to wait for the harness pod to COMPLETE. Must exceed the profile's own
+# duration plus tokenizer download, warmup and drain -- the CLI default is 3600s,
+# which a multi-stage profile can equal on load alone (burst_4k1000_6_14_6_14_6 is
+# 5 x 720s = exactly 3600s). At the default such a run is killed mid-drain and
+# writes no results, having consumed its full hour: measured 4599s against a
+# 3600s wait. Raise this, not the profile, when adding longer workloads.
+BENCHMARK_WAIT_TIMEOUT ?= 7200
+# Bound for the one rollout benchmark-standup causes when it adds the drain hook.
+# Deliberately NOT BENCHMARK_WAIT_TIMEOUT: that is the budget for standing a whole
+# stack up, and spending two hours on a single stuck rollout would look exactly
+# like a slow model load. A replica reloading its weights takes minutes.
+BENCHMARK_DRAIN_ROLLOUT_TIMEOUT ?= 900
+
+.PHONY: benchmark-run-bursty
+benchmark-run-bursty: ## Run bursty traffic benchmark using inference-perf multi-stage rates (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-bursty BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory benchmark-patch
+	@if [ -f "$(BENCHMARK_SCENARIOS_DIR)/$(BURSTY_WORKLOAD).in" ]; then \
+		cp "$(BENCHMARK_SCENARIOS_DIR)/$(BURSTY_WORKLOAD).in" \
+		   "$(BENCHMARK_REPO_DIR)/workload/profiles/inference-perf/$(BURSTY_WORKLOAD).in"; \
+	fi
+	@# --fast-collect as on benchmark-run above. The flag belongs to the run
+	@# subcommand rather than to a harness, so it applies to inference-perf
+	@# exactly as it does to guidellm.
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+		-p $(BENCHMARK_NAMESPACE) \
+		-l inference-perf \
+		-w $(BURSTY_WORKLOAD) \
+		-U $(BENCHMARK_GATEWAY_URL) \
+		$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
+		$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,) \
+		$(if $(filter true,$(BENCHMARK_FAST_COLLECT)),--fast-collect,) \
+		--wait-timeout $(BENCHMARK_WAIT_TIMEOUT)
+
+.PHONY: benchmark-run-all
+benchmark-run-all: ## Run all scenarios: teardown → standup → run per scenario (set BENCHMARK_NAMESPACE=<namespace>, MODEL_ID=<model>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-run-all BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# Each scenario's learner recordings are copied after its run, failed or
+	@# not, and before the next teardown deletes the controller; an interrupt
+	@# copies them too, then exits.
+	@rec() { $(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) snapshot $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS)/$$1" || true; }; \
+	trap 'rec "$${scenario_name:-interrupted}"; exit 130' INT TERM; \
+	for scenario in $(BENCHMARK_SCENARIOS_DIR)/*.yaml.in; do \
+		scenario_name=$$(basename "$$scenario" .in); \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[1/3] Tearing down before: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) teardown \
+			-p $(BENCHMARK_NAMESPACE) || true; \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[2/3] Standing up for: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) standup \
+			-p $(BENCHMARK_NAMESPACE) \
+			$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) \
+			$(if $(filter true,$(BENCHMARK_MONITORING)),--monitoring,) || { \
+			echo "ERROR: Standup failed for $$scenario_name"; \
+			rec "$$scenario_name"; \
+			exit 1; \
+		}; \
+		echo ""; \
+		echo "=========================================="; \
+		echo "[3/3] Running scenario: $$scenario_name"; \
+		echo "=========================================="; \
+		$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) run \
+			-p $(BENCHMARK_NAMESPACE) \
+			-l $(BENCHMARK_HARNESS) \
+			-w "$$scenario_name" \
+			$(if $(BENCHMARK_MODEL_ID),-m $(BENCHMARK_MODEL_ID),) || { \
+			echo "ERROR: Scenario $$scenario_name failed"; \
+			rec "$$scenario_name"; \
+			exit 1; \
+		}; \
+		rec "$$scenario_name"; \
+	done
+	@echo ""
+	@echo "=========================================="
+	@echo "All scenarios completed successfully"
+	@echo "=========================================="
+
+.PHONY: benchmark-teardown
+benchmark-teardown: ## Tear down the benchmark environment (set BENCHMARK_NAMESPACE=<namespace>)
+	@if [ -z "$(BENCHMARK_NAMESPACE)" ]; then \
+		echo "ERROR: BENCHMARK_NAMESPACE is required. Usage: make benchmark-teardown BENCHMARK_NAMESPACE=<namespace>"; \
+		exit 1; \
+	fi
+	@# The learner recordings go with the controller's Pod, so copy them first.
+	@# A run that was interrupted left its copy running: stop-all finishes it
+	@# into that run's directory. Only when there was none is a copy taken here.
+	@$(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) stop-all $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS_PREFIX)" || \
+		$(BENCHMARK_RECORDINGS_ENV) bash hack/benchmark/learner_recordings.sh $(BENCHMARK_CAPTURE_CTX) snapshot $(BENCHMARK_NAMESPACE) "$(BENCHMARK_RECORDINGS)" || true
+	@# Before the namespace goes: a namespace-scoped install still creates
+	@# cluster-scoped RBAC, which deleting the namespace would leave behind.
+	@if [ "$(BENCHMARK_DIRECT_KEDA)" != "true" ] && [ "$(BENCHMARK_LLMSM_DEPLOY)" = "true" ]; then \
+		$(MAKE) $(BENCHMARK_LLMSM_UNDEPLOY_TARGET) \
+			LLMSM_NS=$(BENCHMARK_NAMESPACE) LLMSM_SCOPE=namespace || \
+		echo "WARNING: The scaling manager undeploy reported a failure; check for leftovers with 'kubectl --request-timeout=$(BENCHMARK_KUBECTL_TIMEOUT) get clusterrole,clusterrolebinding | grep scaling-manager'"; \
+	fi
+	@# The controller is removed by the step ABOVE, and that step is authoritative.
+	@#
+	@# The harness teardown below tries to uninstall it a second time, through the
+	@# scenario's own scaling manager install -- which pulls kustomize resources from
+	@#   github.com/llm-d/llm-d/guides/workload-autoscaling/wva-config/platform/ocp?ref=main
+	@# a path that does not exist. benchmark-standup disables the scenario's the scaling manager for
+	@# exactly that reason, then RESTORES the scenario from its .bak, so by teardown
+	@# time the flag is back on and the harness dies on it:
+	@#   [01] uninstall_helm: FAILED - Helm uninstall had errors
+	@#   accumulating resources from '...wva-config/platform/ocp?ref=main'
+	@# Measured tearing a guide namespace down on the shared GPU cluster. The namespace deleted
+	@# cleanly and left no cluster-scoped RBAC behind, so this reads as a failed
+	@# teardown that in fact tore everything down -- the worst kind to debug.
+	@#
+	@# Disabling it loses nothing: there is nothing left for it to uninstall.
+	@if [ -f "$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" ]; then \
+		yq -i '(.scenario[] | select(has("wva")) | .wva.enabled) = false' \
+			"$(BENCHMARK_REPO_DIR)/config/scenarios/$(BENCHMARK_SPEC).yaml" 2>/dev/null || true; \
+	fi
+	$(LLMDBENCHMARK) $(BENCHMARK_CLI_FLAGS) teardown \
+		-p $(BENCHMARK_NAMESPACE)
+
+.PHONY: benchmark-full
+benchmark-full: benchmark-standup benchmark-run-all benchmark-teardown ## Full lifecycle: standup -> run all scenarios -> teardown
+
+# ---------------------------------------------------------------------------
+# Two models, anti-phase bursts, warm pool on and off.
+#
+# The one claim about warm pools this repo has never measured: that ONE pool
+# covers MANY models. Every warm-pool number so far is a single model bridging
+# its own scale-up, where the pool is pure overhead at steady state.
+#
+# Each verb is its own target, deliberately. The expensive failures here are the
+# ones found at minute 40 of a 45-minute run -- a second stack that replaced the
+# first one's objects, a pool never eligible to lend, a model that answers 404 --
+# so preflight, standup, verify, each arm and the report are separately runnable
+# and each says what it found. docs/guides/benchmarking/two-model-warm-pool.md
+# is the runbook.
+# ---------------------------------------------------------------------------
+TWO_MODEL := BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE) bash $(CURDIR)/hack/benchmark/two_model_pool.sh
+
+.PHONY: benchmark-two-model-preflight
+benchmark-two-model-preflight: ## Two-model pool run: check free accelerators, labels and cache BEFORE anything is created (BENCHMARK_NAMESPACE=<ns>)
+	@$(TWO_MODEL) preflight
+
+.PHONY: benchmark-two-model-standup
+benchmark-two-model-standup: ## Two-model pool run: stand up both model stacks (MODEL_A, MODEL_B)
+	@$(TWO_MODEL) standup
+
+.PHONY: benchmark-two-model-verify
+benchmark-two-model-verify: ## Two-model pool run: both models answer, two EPPs, pool state
+	@$(TWO_MODEL) verify
+
+.PHONY: benchmark-two-model-pool-create
+benchmark-two-model-pool-create: ## Two-model pool run: create the shared warm pool
+	@$(TWO_MODEL) pool-create
+
+.PHONY: benchmark-two-model-pool-delete
+benchmark-two-model-pool-delete: ## Two-model pool run: delete the shared warm pool
+	@$(TWO_MODEL) pool-delete
+
+.PHONY: benchmark-two-model-warm
+benchmark-two-model-warm: ## Two-model pool run: pin BOTH models resident in the pool and wait for them (a cold pool measures nothing)
+	@$(TWO_MODEL) warm
+
+.PHONY: benchmark-two-model-reset
+benchmark-two-model-reset: ## Two-model pool run: pin both models back to MIN_REPLICAS and wait, BEFORE each arm
+	@$(TWO_MODEL) reset
+
+.PHONY: benchmark-two-model-residency
+benchmark-two-model-residency: ## Two-model pool run: print what each pool Pod is actually holding
+	@$(TWO_MODEL) residency
+
+.PHONY: benchmark-two-model-run
+benchmark-two-model-run: ## Two-model pool run: drive the anti-phase load for one arm (ARM=nopool|pool|floor, or today|shadow|share under one quota)
+	@if [ -z "$(ARM)" ]; then \
+		echo "ERROR: ARM is required. Usage: make benchmark-two-model-run ARM=nopool  (then ARM=pool; ARM=floor for the over-provisioned baseline; ARM=today|shadow|share for the utilization-share comparison)"; \
+		exit 1; \
+	fi
+	@$(TWO_MODEL) run $(ARM)
+
+.PHONY: benchmark-two-model-report
+benchmark-two-model-report: ## Two-model pool run: compare every arm that ran against nopool
+	@$(TWO_MODEL) report
+
+.PHONY: benchmark-two-model-report-share
+benchmark-two-model-report-share: ## Two-model run: compare the shadow and share arms against today, and what the optimizer recorded
+	@$(TWO_MODEL) report-share
+
+.PHONY: benchmark-two-model-node-data
+benchmark-two-model-node-data: ## Two-model run: does the controller have the node data a mixed-size share run needs; prints the admin commands when not
+	@$(TWO_MODEL) node-data
+
+.PHONY: benchmark-two-model-share-arms
+benchmark-two-model-share-arms: ## Two-model run: REPEATS (2) x reset+run of today, shadow and share, a report per repeat, then report-repeats; TEARDOWN_ON_EXIT=1 tears down on every exit
+	@$(TWO_MODEL) share-arms
+
+.PHONY: benchmark-two-model-report-repeats
+benchmark-two-model-report-repeats: ## Two-model run: per-burst TTFT, spread across repeats, transfers from the controller log, GPU-seconds
+	@$(TWO_MODEL) report-repeats
+
+.PHONY: benchmark-two-model-status
+benchmark-two-model-status: ## Two-model pool run: what exists, and what holds accelerators
+	@$(TWO_MODEL) status
+
+.PHONY: benchmark-two-model-teardown
+benchmark-two-model-teardown: ## Two-model pool run: remove everything it created (shared cluster -- do not skip)
+	@$(TWO_MODEL) teardown
+
+# ---------------------------------------------------------------------------
+# The TTFT staircase. Plan: docs/plans/analyzers/ttft-staircase-repeat.md. How to run
+# it: docs/developer-guide/testing.md, "The TTFT staircase".
+# ---------------------------------------------------------------------------
+STAIRCASE_RUN ?=
+STAIRCASE_SPEC ?= $(CURDIR)/hack/benchmark/staircase_spec.yaml
+STAIRCASE := BENCHMARK_NAMESPACE=$(BENCHMARK_NAMESPACE) STAIRCASE_RUN=$(STAIRCASE_RUN) STAIRCASE_SPEC=$(STAIRCASE_SPEC) \
+	BENCHMARK_PROMETHEUS_URL=$(BENCHMARK_PROMETHEUS_URL) bash $(CURDIR)/hack/benchmark/staircase.sh
+
+.PHONY: benchmark-staircase-smoke
+benchmark-staircase-smoke: ## TTFT staircase: before the big run, a short one on 3 GPUs at most: label, lease, Job rights, two fleets, a deliberate abort, a teardown check (about 1.5 GPU-hours)
+	@$(STAIRCASE) smoke $(IMG)
+
+.PHONY: benchmark-staircase-lapse
+benchmark-staircase-lapse: ## TTFT staircase: the deadline Job on its own: a 1+1 fleet, the runner killed with -9, the workloads freed with nobody there (about 1 GPU-hour)
+	@$(STAIRCASE) lapse $(IMG)
+
+.PHONY: benchmark-staircase-run
+benchmark-staircase-run: ## TTFT staircase: stand up, warm up, wait for the freeze, run every phase, tear down on every exit (BENCHMARK_NAMESPACE=<fresh ns> STAIRCASE_RUN=<abs dir> IMG=<build>)
+	@$(STAIRCASE) run $(IMG)
+
+.PHONY: benchmark-staircase-predict
+benchmark-staircase-predict: whatif ## TTFT staircase: print the frozen prediction of RECORDING=<warm-up recording>, touching no cluster
+	@test -n "$(RECORDING)" || { echo "set RECORDING=<learner recording>"; exit 1; }
+	@bin/whatif freeze --recording $(RECORDING) --spec $(STAIRCASE_SPEC)
+
+.PHONY: benchmark-staircase-freeze
+benchmark-staircase-freeze: whatif ## TTFT staircase: freeze the prediction and write the ladder, once, after the warm-up and before any step
+	@$(STAIRCASE) freeze
+
+.PHONY: benchmark-staircase-redo
+benchmark-staircase-redo: whatif ## TTFT staircase: re-price each bursty bucket at its measured Ca2, targets held; analyze then reads it
+	@$(STAIRCASE) redo
+
+.PHONY: benchmark-staircase-analyze
+benchmark-staircase-analyze: ## TTFT staircase: per-step analysis of every phase, then report.md
+	@$(STAIRCASE) analyze
+
+.PHONY: benchmark-staircase-status
+benchmark-staircase-status: ## TTFT staircase: what the run has done, and what holds GPUs
+	@$(STAIRCASE) status
+
+.PHONY: benchmark-staircase-abort
+benchmark-staircase-abort: ## TTFT staircase: stop a run; its own exit path tears down
+	@$(STAIRCASE) abort
+
+.PHONY: benchmark-staircase-teardown
+benchmark-staircase-teardown: ## TTFT staircase: free everything this run owns, from any state; fails unless confirmed (shared cluster -- do not skip)
+	@$(STAIRCASE) teardown
+
+# Stub for llm-d nightly reusable workflows (test_target=nightly-test-llm-d)
+# No-op; temporarily satisfies nightly CI make invocation
+# TODO: add nightly guide tests here
+.PHONY: nightly-test-llm-d
+nightly-test-llm-d: ## Nightly CI: noop; use as test_target instead of empty string
+	@:
+
+# Canonical target for llm-d-infra nightly reusables: ENVIRONMENT=openshift|kubernetes
+# Deploys the scaling manager + monitoring + scaler backend only. llm-d model serving is deployed separately
+# by the nightly workflow's custom_deploy_script (kustomize + GAIE helm from llm-d/llm-d guide).
+.PHONY: nightly-deploy-scaling-manager-guide
+nightly-deploy-scaling-manager-guide: ## Nightly: The scaling manager controller + monitoring stack from job env (LLMSM_NS <- LLMSM_NAMESPACE or CONTROLLER_NAMESPACE)
+	# Note: CKS callers with resource constraints should disable nodeExporter by patching kube-prometheus-stack post-install.
+	# NAMESPACE is passed explicitly, defaulting to the controller namespace.
+	# NAMESPACE (what the scaling manager manages) is now mandatory in namespace scope, and this
+	# target only ever set LLMSM_NS (where the controller is installed) -- it relied on
+	# the old fallback that let one variable stand for both. Naming it here keeps this
+	# job's behaviour exactly as it was, rather than leaving it to a default that no
+	# longer exists.
+	@LLMSM_NS="$${LLMSM_NS:-$${LLMSM_NAMESPACE:-$${CONTROLLER_NAMESPACE:-}}}" \
+	NAMESPACE="$${NAMESPACE:-$${LLMSM_NS:-$${LLMSM_NAMESPACE:-$${CONTROLLER_NAMESPACE:-}}}}" \
+	ENVIRONMENT="$${ENVIRONMENT:-openshift}" \
+	./deploy/install.sh
+
+.PHONY: lint
+lint: golangci-lint ## Run golangci-lint linter
+	$(GOLANGCI_LINT) run
+
+.PHONY: lint-deploy-scripts
+lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and deploy plugins
+	@echo "Syntax-checking deploy shell scripts..."
+	@bash -n deploy/install.sh
+	@bash -n deploy/install-epp.sh
+	@bash -n hack/benchmark/workload_traces.sh
+	@bash -n deploy/prepull.sh
+	@bash -n deploy/lib/accelerator_nodes.sh
+	@bash -n deploy/weights.sh
+	@bash -n deploy/lib/nodedir.sh
+	@bash -n hack/benchmark/model_hostpath.sh
+	@bash -n deploy/enginecache.sh
+	@bash -n hack/benchmark/engine_cache_claim.sh
+	@bash -n hack/benchmark/scenario_overrides.sh
+	@bash -n hack/check-harness-teardown.sh
+	@bash -n hack/check-harness-standup.sh
+	@bash -n hack/benchmark/engine_image.sh
+	@bash -n hack/benchmark/capture_lib.sh
+	@bash -n hack/benchmark/sample_replicas.sh
+	@bash -n hack/benchmark/tail_scaling_manager_logs.sh
+	@bash -n hack/benchmark/file_capture.sh
+	@bash -n hack/benchmark/staircase.sh
+	@bash -n hack/check-staircase.sh
+	@bash -n hack/check-install-flow.sh
+	@bash -n hack/check-cluster-namespace-checks.sh
+	@bash -n hack/check-watch-namespace-list.sh
+	@bash -n hack/check-kueue-queues.sh
+	@bash -n hack/check-cluster-controller-namespace.sh
+	@bash -n hack/check-llmd-monitors.sh
+	@bash -n hack/check-setup-prereqs-render.sh
+	@bash -n hack/check-e2e-images.sh
+	@bash -n hack/check-kps-images.sh
+	@bash -n deploy/ci-pr-checks/free-disk.sh
+	@bash -n deploy/ci-pr-checks/disk-report.sh
+	@bash -n hack/check-disk-report.sh
+	@bash -n hack/check-goldens-section.sh
+	@bash -n hack/check-policy-apply-docs.sh
+	@bash -n hack/check-release-latest.sh
+	@bash -n hack/check-controller-ready.sh
+	@for script in deploy/lib/*.sh; do bash -n "$$script"; done
+	@for script in deploy/*/install.sh; do if [ -f "$$script" ]; then bash -n "$$script"; fi; done
+	@for script in deploy/kind-emulator/*.sh; do if [ -f "$$script" ]; then bash -n "$$script"; fi; done
+	@for script in deploy/ci-pr-checks/*.sh; do bash -n "$$script"; done
+	@echo "Checking for apostrophes inside quoted jq/yq programs..."
+	@# `bash -n` catches an ODD number and misses an EVEN one, which
+	@# rebalances the quoting and hands jq a truncated program. Both have
+	@# happened here; the even one shipped.
+	@bash hack/check-quoted-programs.sh
+	@echo "Checking that no tracked file names an internal cluster..."
+	@bash hack/check-cluster-names.sh
+	@echo "Checking the jq marker predicates..."
+	@bash hack/check-jq-predicates.sh
+	@echo "Checking the utilization-share script..."
+	@# Executes its verbs against a stub kubectl. The ones that matter are
+	@# refusals: a pod list that fails read as "no pod is marked" would remove
+	@# the optimizer block and strand the marks, and parses perfectly.
+	@bash -n deploy/utilization-share.sh
+	@bash hack/check-utilization-share-script.sh
+	@echo "Checking install-kueue.sh refuses a non-kind context..."
+	@# It installs Kueue and narrows its webhooks cluster-wide; on a real
+	@# cluster that is somebody else's Kueue. The guard parses either way.
+	@bash hack/check-install-kueue-context.sh
+	@echo "Checking a rebuilt Kueue quota entry keeps its borrowing settings..."
+	@# Executes policy_with_limiters. A re-run that drops a hand-written
+	@# borrowNamespaces turns a pilot into borrowing everywhere, and the
+	@# document it writes is perfectly valid.
+	@bash hack/check-kueue-borrow-keep.sh
+	@echo "Checking a re-install keeps passive mode through the apply..."
+	@# Executes the passive keep against a stub kubectl. Restoring it after
+	@# the apply left a window where a new pod started active, and a
+	@# passive: false read through the yq alternative operator came back empty.
+	@bash hack/check-passive-keep.sh
+	@echo "Checking the controller readiness check..."
+	@# Executes it against a stub kubectl. `rollout status` passes at once for
+	@# a Deployment at 0 replicas, so an install over a controller at 0/0
+	@# reported it running and ready: it parses, and it is green on every
+	@# cluster whose controller is up.
+	@bash hack/check-controller-ready.sh
+	@echo "Checking workload readiness detection..."
+	@# Executes the real functions against fixture pod specs. `bash -n` above
+	@# cannot see any of what this covers: choosing the wrong container, counting
+	@# preStop hooks pod-wide, or reporting an unreadable workload as healthy all
+	@# parse perfectly and are all wrong about a running cluster.
+	@bash hack/check-workload-gaps.sh
+	@echo "Checking the benchmark capture helpers..."
+	@# Executes them against a stub kubectl. A capture that replaces the run
+	@# already on disk, or that watches a cluster nobody named, parses perfectly
+	@# -- and both have cost data here.
+	@bash hack/check-benchmark-capture.sh
+	@echo "Checking the benchmark scripts read the controller's own log..."
+	@# Executes them against a stub kubectl. Warm-pool Pods share the label
+	@# they selected the controller by, so a pool Pod's log was read as the
+	@# controller's -- and the selector parses perfectly.
+	@bash hack/check-benchmark-controller-pod.sh
+	@echo "Checking the benchmark keeps the learner recordings on every exit path..."
+	@# Executes learner_recordings.sh and the harness paths that call it
+	@# against a stub kubectl. The recordings live in an emptyDir, so a
+	@# teardown that copied nothing deleted them, and parsed perfectly.
+	@bash -n hack/benchmark/learner_recordings.sh
+	@bash hack/check-learner-recordings.sh
+	@echo "Checking the k1/k2 report's Restored column..."
+	@# Fixture events through render_report: a restore is a field, not a source.
+	@bash hack/check-k2-decisions-restored.sh
+	@echo "Checking the post-run analysis asks for the lines its controller verbosity logs..."
+	@# Runs post_run_analyze.sh against a stub kubectl and fixture logs. A run
+	@# at the shipped --v=2 has no k2-decision line, and an empty window, or a
+	@# verbosity nobody read, finished as analysed: all of it parses.
+	@bash -n hack/check-run-log-guard.sh
+	@bash hack/check-run-log-guard.sh
+	@echo "Checking model identification..."
+	@# Same shape as the check above, on the parsers that name the model every
+	@# ScaledObject is written for. `bash -n` sees none of it: a --served-model-name
+	@# read as the literal $$MODEL_NAME, or an env value whose newline splits one
+	@# workload record into two, both parse perfectly.
+	@bash hack/check-scaledobject-parsers.sh
+	@echo "Checking the external-scaler NetworkPolicy..."
+	@# The scaler port has no authentication by default: whoever reaches it can
+	@# rewrite another workload's trigger metadata. A policy that selects no Pod,
+	@# admits {} or drops the metrics port all apply cleanly.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-external-scaler-networkpolicy.sh
+	@echo "Checking the external-scaler TLS provisioning..."
+	@# Runs the certificate code against a stubbed kubectl and the real openssl:
+	@# a certificate naming the wrong host, a re-install that drops TLS, or a
+	@# foreign Secret overwritten all install cleanly.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-scaler-tls.sh
+	@echo "Checking the ScaledObject re-wire..."
+	@# Runs scaledobjects-rewire against a stubbed kubectl. A re-wire that
+	@# patches a paused ScaledObject, another scaler's trigger, or reads an
+	@# unreadable HPA as wired all parse, and all exit 0.
+	@bash hack/check-scaledobject-rewire.sh
+	@echo "Checking the EPP /metrics authentication grant..."
+	@# Runs epp-metrics-auth against a stubbed kubectl. A grant that binds the
+	@# wrong ServiceAccount, reads a Forbidden list as no pools, or binds twice
+	@# all parse, and all exit 0.
+	@bash hack/check-epp-metrics-auth.sh
+	@echo "Checking which Prometheus address the installer picks, and that it verifies it..."
+	@# Runs the detection, the CA copy and the TLS check against a stubbed
+	@# kubectl and real certificates. prometheus-operated, which a
+	@# kube-prometheus-stack certificate does not name, was picked, reported as
+	@# found, and the controller crash-looped on the x509 name mismatch: all of
+	@# it parses.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-prometheus-url.sh
+	@echo "Checking that the detected Prometheus scrapes the model namespace..."
+	@# Runs the detection against several stubbed Prometheus resources. The
+	@# first one listed, a per-user Prometheus selecting only its own
+	@# namespace, was picked and the controller read no series: it parses.
+	@bash hack/check-prometheus-detect.sh
+	@# An alert that errors at evaluation, or never fires, loads cleanly; promtool
+	@# evaluates the shipped rules on synthetic series.
+	@$(MAKE) --no-print-directory promtool
+	@PROMTOOL=$(PROMTOOL) bash hack/check-alert-rules.sh
+	@# A per-pod query that folds a pod's data-parallel ranks with max parses
+	@# and returns a plausible number; only evaluating it on per-rank series
+	@# shows it priced the busiest rank.
+	@PROMTOOL=$(PROMTOOL) bash hack/check-collector-queries.sh
+	@echo "Checking what warmpool.sh actually emits..."
+	@# Renders the pool manifests and asserts their shape. Every bug this covers
+	@# parses fine: one container with the proxy image under the supervisor's
+	@# name, a missing ScaledObject (so the pool is never discovered), a worker
+	@# template carrying the proxy (so the group never becomes Ready).
+	@bash hack/check-warmpool-manifests.sh
+	@echo "Checking what prepull.sh actually emits..."
+	@# A holder that requests an accelerator, a selector that lands on every
+	@# node, two images sharing one DaemonSet name: all parse, all wrong.
+	@bash hack/check-prepull-manifests.sh
+	@echo "Checking what weights.sh and model_hostpath.sh actually emit..."
+	@bash hack/check-weights-manifests.sh
+	@echo "Checking what enginecache.sh and engine_cache_claim.sh actually emit..."
+	@bash hack/check-enginecache-manifests.sh
+	@echo "Checking the harness teardown patches (patch_harness.sh fixes 15-17)..."
+	@bash hack/check-harness-teardown.sh
+	@echo "Checking the harness standup patch (patch_harness.sh fix 18)..."
+	@bash hack/check-harness-standup.sh
+	@echo "Checking every benchmark recipe's kubectl requests time out..."
+	@bash hack/check-make-kubectl-timeouts.sh
+	@echo "Checking what scenario_overrides.sh does to every shipped scenario..."
+	@bash hack/check-scenario-overrides.sh
+	@echo "Checking every scrape interval is 10s, the harness default included..."
+	@# 30s on the engine PodMonitor is 0..30s of jitter on every scaling
+	@# decision; the P/D scenario took the harness default and paid it.
+	@bash hack/check-scrape-interval.sh
+	@echo "Checking the engine launch preamble asks the loader cache, not a walk of /..."
+	@bash hack/check-launch-preamble.sh
+	@echo "Checking the accelerator label keys agree..."
+	@# The controller (Go), the planning tools (Python) and the create path
+	@# (shell) each carry their own copy of the node label keys that name a GPU
+	@# product, and they cannot share one. Drift is invisible on a GFD cluster
+	@# and total on any other: a key missing from the create path pinned a pool
+	@# on a label no node carried, and one missing from the planning tools
+	@# reported five 8-GPU H200 nodes as `unknown  8x0 GiB GPU`.
+	@bash hack/check-accelerator-labels.sh
+	@echo "Checking that every refusal can actually refuse..."
+	@# log_error is an exit, and an exit inside `$$( )` ends the SUBSHELL only --
+	@# the caller gets an empty string and carries on. It is the most repeated
+	@# defect in the deploy scripts: a command printed "Refusing to publish a
+	@# bound it cannot deliver" and then "the limiter is now in force for every
+	@# the scaling manager on this cluster", exit 0. Three review rounds each found a fresh
+	@# instance, twice in code written to fix the previous one. `bash -n` sees
+	@# nothing, and neither does a reader -- each one shipped with a comment
+	@# beside it claiming the opposite.
+	@bash hack/check-refusals.sh
+	@echo "Checking the two-model warm-pool scenario's guards..."
+	@# Its arms differ only in whether a pool exists, and every way of getting
+	@# that wrong produces a complete, plausible, WRONG result rather than an
+	@# error: an arm labelled `pool` that ran without one, a `nopool` arm charged
+	@# for the pool's accelerators, or a pool arm against a COLD pool -- which
+	@# pays a model load into the pool on the first burst and reports it as the
+	@# pool's cost. All of them are 26 minutes of GPU each.
+	@bash hack/check-two-model-scenario.sh
+	@echo "Checking the TTFT staircase's exit paths and arithmetic..."
+	@# Executes it against a stub kubectl. What protects a shared cluster for a
+	@# multi-day run is its exit paths, and bash -n sees none of them.
+	@bash hack/check-staircase.sh
+	@echo "Checking each benchmark profile names a harness that will accept it..."
+	@# guidellm and inference-perf take mutually invalid profile schemas, and a
+	@# profile that matches neither can never run. The pre-run gate in
+	@# benchmark-run uses the same classifier, so this also proves the gate still
+	@# recognises both schemas -- one that called everything unknown would reject
+	@# correct pairings instead.
+	@bash hack/check-benchmark-profiles.sh
+	@echo "Checking each replay profile's trace is committed and gets copied..."
+	@bash hack/check-workload-traces.sh
+	@echo "Checking the limiter the installer declares..."
+	@# LLMSM_LIMITER=quota wrote `[{type: quota}]`, which the controller REJECTS on
+	@# read -- and a rejected entry costs the whole `default` policy and leaves no
+	@# limiter at all, while the install prints "Scaling is now bounded". Nothing
+	@# else can see it: the YAML is valid, the patch applies, and a cluster run
+	@# shows a healthy controller scaling a fleet.
+	@bash hack/check-limiter-declaration.sh
+	@echo "Checking every controller can find and read a published cluster policy..."
+	@# A namespace-scoped controller cannot read a cluster-scoped Namespace
+	@# through its Role, so it never saw scaling-manager-policy and ran on its own
+	@# ConfigMap while enable-physical-limiter reported the cluster bounded;
+	@# and one installed after the policy was published had no RoleBinding
+	@# to read it and refused to start. Executed against a stub kubectl.
+	@bash hack/check-policy-namespace-grants.sh
+	@echo "Checking who enable-physical-limiter grants node read to..."
+	@# The label it finds controllers by is one anyone can set, and the grant went
+	@# to whatever ServiceAccount the labelled Deployment named. Executed against a
+	@# stub kubectl, on an impostor beside a genuine controller.
+	@bash hack/check-physical-limiter-targets.sh
+	@echo "Checking the defaults the installer chooses..."
+	@# Which image is pulled and how, and whether a non-reproducible install
+	@# says so. A digest treated as a moving tag, or :main deployed in silence,
+	@# installs cleanly -- nothing else here would notice.
+	@bash hack/check-install-defaults.sh
+	@echo "Checking the Kueue reader Namespace grant on upgrade..."
+	@# A kueue-reader role from before the Namespace read, kept by a
+	@# controller-only upgrade, bounds the namespace at nothing. The
+	@# preflight must refuse that phase; executed against a stub kubectl.
+	@bash hack/check-kueue-namespace-grant.sh
+	@# With a Kueue budget, a namespace with no LocalQueue on a GPU
+	@# ClusterQueue, or a model server with no queue label, installs
+	@# cleanly and is charged to no queue. The preflight must refuse it.
+	@bash hack/check-kueue-queues.sh
+	@echo "Checking the installer's decisions against a stubbed cluster..."
+	@# KEDA preflight and install order, image pinning, chart pinning, TLS
+	@# verification, uninstall grants and summaries: each parses and is wrong.
+	@bash hack/check-install-flow.sh
+	@echo "Checking the cluster-scoped preflight checks every llm-d namespace..."
+	@# It used to check only the controller's namespace, and passed on nothing.
+	@bash hack/check-cluster-namespace-checks.sh
+	@echo "Checking one namespace-scoped controller managing a list of namespaces..."
+	@# LLMSM_WATCH_NS=team-a,team-b or auto: a Role in each, checks per namespace.
+	@bash hack/check-watch-namespace-list.sh
+	@echo "Checking a cluster-scoped install into a non-default controller namespace..."
+	@# CONTROLLER_NAMESPACE must reach every step of the cluster-wide guide.
+	@bash hack/check-cluster-controller-namespace.sh
+	@echo "Checking setup adds the monitors a fresh llm-d lacks, and flow control off is a warning..."
+	@# A fresh llm-d install has neither, and the preflight used to refuse it.
+	@bash hack/check-llmd-monitors.sh
+	@echo "Checking setup-prereqs RENDER writes admin.yaml and admin.sh and applies nothing..."
+	@# Runs install.sh against stub kubectl and helm. A render that makes one
+	@# write to the cluster parses perfectly and breaks the promise it exists for.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-setup-prereqs-render.sh
+	@echo "Checking every image the e2e Go code names has a registry host..."
+	@# AGENTS.md: never docker.io in e2e. An image with no host resolves there.
+	@bash hack/check-e2e-images.sh
+	@echo "Checking every image the installed kube-prometheus-stack pulls names a registry other than docker.io..."
+	@# The e2e monitoring stack is chart defaults, not Go code, so the check
+	@# above never saw it: Grafana came from Docker Hub. Renders the release
+	@# deploy_prometheus_kube_stack installs; needs helm and the chart repo.
+	@bash hack/check-kps-images.sh
+	@echo "Checking the e2e disk report never fails the job, whatever its samples..."
+	@# It runs after every e2e job; an empty sample value made it exit 1.
+	@bash hack/check-disk-report.sh
+	@echo "Checking the goldens gate..."
+	@# Runs it on fixture pull requests. A gate that reads a template comment as
+	@# a name, or treats an unreadable diff as no golden moved, passes everything.
+	@bash hack/check-goldens-section.sh
+	@echo "Checking no doc applies the sample scaling policy over an install..."
+	@# The sample has no limiters: applying it removes the GPU limit.
+	@bash hack/check-policy-apply-docs.sh
+	@echo "Checking only the highest final release tag moves latest..."
+	@# Runs the release workflow step against a scratch repository. A backport
+	@# tagged after a newer release used to move latest back to the old line.
+	@bash hack/check-release-latest.sh
+	@echo "Checking the tenant Role still covers the generated ClusterRole..."
+	@# The ClusterRole is GENERATED from kubebuilder markers; the namespaced Role
+	@# the tenant overlay installs is maintained by hand, so it does not move when
+	@# the controller gains a permission. It already failed to: pods gained patch
+	@# for the warm pool and the Role did not, so every namespace-scoped install
+	@# started, saw it could never complete a borrow, and disabled the pool --
+	@# after it had been created and was holding accelerators.
+	@python3 hack/check-tenant-role.py
+	@echo "Checking the secondary variant gets scraped..."
+	@# add_variant.py clones the primary's PodMonitor onto the secondary, because
+	@# the chart's selects on a label the secondary deliberately lacks. Every way
+	@# this can go wrong is silent: an unscraped variant reports the PRIMARY's
+	@# per-replica capacity as its own, so the two read identically and the
+	@# comparison the scenario exists for cannot happen. A cluster run only ever
+	@# exercises the happy path, so the rules are asserted offline.
+	@python3 hack/check-add-variant.py
+	@echo "Checking the pod spec the warm pool planner reads..."
+	@python3 hack/check-warmpool-plan.py
+	@echo "Checking for mangled line continuations..."
+	@# `bash -n` cannot catch this: `cmd \n | grep ...` is SYNTACTICALLY VALID —
+	@# the \n becomes a literal argument. It shipped once, in the limiter path,
+	@# where it turned LLMSM_LIMITER=gpu-inventory into an install that aborted.
+	@# A real continuation is a backslash at END of line; a mangled one has command
+	@# text after it.
+	@if grep -rnE '[^"'"'"']\\n[[:space:]]' deploy/install.sh deploy/install-epp.sh deploy/lib/*.sh deploy/*/install.sh 2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*#'; then \
+		echo "ERROR: literal '\\n' inside a command — a line continuation was collapsed by an edit."; \
+		exit 1; \
+	fi
+	@echo "deploy script line continuations OK"
+	@echo "Checking for make comments inside a continued recipe..."
+	@bash hack/check-make-recipes.sh
+	@echo "deploy script syntax OK"
+
+.PHONY: smoke-deploy-scripts
+smoke-deploy-scripts: lint-deploy-scripts ## Non-interactive deploy script smoke check (source order + arg parsing)
+	@echo "Running deploy script smoke check..."
+	@SKIP_CHECKS=true ENVIRONMENT=kubernetes ./deploy/install.sh --help >/dev/null
+	@echo "deploy script smoke OK"
+
+.PHONY: lint-fix
+lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
+	$(GOLANGCI_LINT) run --fix
+
+.PHONY: lint-config
+lint-config: golangci-lint ## Verify golangci-lint linter configuration
+	$(GOLANGCI_LINT) config verify
+
+##@ Build
+
+.PHONY: build
+build: manifests generate fmt vet ## Build manager binary.
+	go build -ldflags "$(LEARNREC_LDFLAGS)" -o bin/manager cmd/main.go
+
+.PHONY: run
+run: manifests generate fmt vet ## Run a controller from your host.
+	go run ./cmd/main.go
+
+# If you wish to build the manager image targeting other platforms you can use the --platform flag.
+# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
+# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+.PHONY: docker-build
+docker-build: ## Build docker image with the manager.
+	$(CONTAINER_TOOL) build --build-arg GIT_COMMIT=$(GIT_COMMIT) -t ${IMG} .
+
+.PHONY: docker-build-warmpool-proxy
+docker-build-warmpool-proxy: ## Build the warm-pool proxy image. WARMPOOL_PROXY_IMG=<ref>
+	$(CONTAINER_TOOL) build -t ${WARMPOOL_PROXY_IMG} -f Dockerfile.warmpool-proxy .
+
+.PHONY: docker-push-warmpool-proxy
+docker-push-warmpool-proxy: ## Push the warm-pool proxy image.
+	$(CONTAINER_TOOL) push ${WARMPOOL_PROXY_IMG}
+
+.PHONY: docker-push
+docker-push: ## Push docker image with the manager.
+	$(CONTAINER_TOOL) push ${IMG}
+
+# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
+# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
+# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
+# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
+# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
+PLATFORMS ?= linux/arm64,linux/amd64
+BUILDER_NAME ?= scaling-manager-builder
+
+.PHONY: docker-buildx
+docker-buildx: ## Build and push docker image for the manager for cross-platform support
+	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+	- $(CONTAINER_TOOL) buildx create --name scaling-manager-builder
+	$(CONTAINER_TOOL) buildx use scaling-manager-builder
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg GIT_COMMIT=$(GIT_COMMIT) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx rm scaling-manager-builder
+	rm Dockerfile.cross
+
+##@ Deployment
+
+ifndef ignore-not-found
+  ignore-not-found = false
+endif
+
+
+##@ Dependencies
+
+## Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+## Tool Binaries
+KUBECTL ?= kubectl
+KIND ?= kind
+KUSTOMIZE ?= $(LOCALBIN)/kustomize
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+ENVTEST ?= $(LOCALBIN)/setup-envtest
+GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+HELM ?= $(LOCALBIN)/helm
+# The version is in the name, so raising PROMTOOL_VERSION installs it afresh.
+PROMTOOL ?= $(LOCALBIN)/promtool-$(PROMTOOL_VERSION)
+
+## Tool Versions
+KUSTOMIZE_VERSION ?= v5.6.0
+CONTROLLER_TOOLS_VERSION ?= v0.17.2
+#ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
+ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
+#ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
+ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
+GOLANGCI_LINT_VERSION ?= v2.9.0
+HELM_VERSION ?= v3.17.1
+# PROMTOOL_VERSION is a Prometheus release; promtool comes from its tarball.
+PROMTOOL_VERSION ?= 2.54.1
+
+.PHONY: kustomize
+kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
+$(KUSTOMIZE): $(LOCALBIN)
+	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+
+.PHONY: controller-gen
+controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
+$(CONTROLLER_GEN): $(LOCALBIN)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Download the binaries required for ENVTEST in the local bin directory.
+	@echo "Setting up envtest binaries for Kubernetes version $(ENVTEST_K8S_VERSION)..."
+	@$(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path || { \
+		echo "Error: Failed to set up envtest binaries for version $(ENVTEST_K8S_VERSION)."; \
+		exit 1; \
+	}
+
+.PHONY: promtool
+promtool: $(PROMTOOL) ## Download promtool locally if necessary.
+$(PROMTOOL): $(LOCALBIN)
+	@bash hack/install-promtool.sh $(PROMTOOL) $(PROMTOOL_VERSION)
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCI_LINT): $(LOCALBIN)
+	@[ -f "$(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)" ] || { \
+	set -e; \
+	echo "Downloading golangci-lint $(GOLANGCI_LINT_VERSION)"; \
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(LOCALBIN) $(GOLANGCI_LINT_VERSION); \
+	if [ -f "$(LOCALBIN)/golangci-lint" ]; then \
+		mv $(LOCALBIN)/golangci-lint $(LOCALBIN)/golangci-lint-$(GOLANGCI_LINT_VERSION); \
+	fi; \
+	} ;\
+	ln -sf golangci-lint-$(GOLANGCI_LINT_VERSION) $(GOLANGCI_LINT)
+
+.PHONY: helm
+helm: $(HELM) ## Download helm locally if necessary.
+$(HELM): $(LOCALBIN)
+	@[ -f "$(LOCALBIN)/helm-$(HELM_VERSION)" ] || { \
+	set -e; \
+	echo "Downloading helm $(HELM_VERSION)"; \
+	curl -sSfL https://get.helm.sh/helm-$(HELM_VERSION)-$(shell go env GOOS)-$(shell go env GOARCH).tar.gz | tar xz --no-same-owner -C $(LOCALBIN) --strip-components=1 $(shell go env GOOS)-$(shell go env GOARCH)/helm; \
+	mv $(LOCALBIN)/helm $(LOCALBIN)/helm-$(HELM_VERSION); \
+	} ;\
+	ln -sf helm-$(HELM_VERSION) $(HELM)
+
+# go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
+# $1 - target path with name of binary
+# $2 - package url which can be installed
+# $3 - specific version of package
+# go-install-tool retries: the module proxy and checksum server occasionally
+# drop an HTTP/2 stream ("stream error ... INTERNAL_ERROR"), and a CI job
+# with no module cache then fails before it builds anything.
+define go-install-tool
+@[ -f "$(1)-$(3)" ] || { \
+set -e; \
+package=$(2)@$(3) ;\
+echo "Downloading $${package}" ;\
+rm -f $(1) || true ;\
+for attempt in 1 2 3; do \
+  GOBIN=$(LOCALBIN) go install $${package} && break ;\
+  [ $$attempt -lt 3 ] || exit 1 ;\
+  echo "go install $${package} failed (attempt $$attempt of 3), retrying" ;\
+  sleep $$((attempt * 10)) ;\
+done ;\
+mv $(1) $(1)-$(3) ;\
+} ;\
+ln -sf $(1)-$(3) $(1)
+endef
+

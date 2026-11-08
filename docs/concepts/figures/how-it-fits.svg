@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+  </defs>
+  <rect width="960" height="600" rx="12" fill="#ffffff"/>
+
+  <!-- serving path -->
+  <text x="20" y="28" font-size="12" fill="#57606a" font-weight="600">SERVING PATH (llm-d)</text>
+  <rect x="20" y="45" width="130" height="80" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="85" y="90" text-anchor="middle" font-weight="600">Clients</text>
+
+  <rect x="200" y="45" width="230" height="80" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="315" y="74" text-anchor="middle" font-weight="600">Gateway + EPP (router)</text>
+  <text x="315" y="96" text-anchor="middle" font-size="12">picks a replica per request;</text>
+  <text x="315" y="113" text-anchor="middle" font-size="12">queues them when all are busy</text>
+
+  <rect x="480" y="35" width="260" height="100" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="610" y="62" text-anchor="middle" font-weight="600">Model servers</text>
+  <text x="610" y="84" text-anchor="middle" font-size="12">vLLM or SGLang pods</text>
+  <text x="610" y="101" text-anchor="middle" font-size="12">a Deployment or LeaderWorkerSet</text>
+  <text x="610" y="118" text-anchor="middle" font-size="12">per variant</text>
+
+  <line x1="150" y1="85" x2="196" y2="85" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+  <line x1="430" y1="85" x2="476" y2="85" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+  <text x="453" y="76" text-anchor="middle" font-size="11" fill="#57606a">requests</text>
+
+  <!-- prometheus -->
+  <rect x="480" y="225" width="260" height="70" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="610" y="254" text-anchor="middle" font-weight="600">Prometheus</text>
+  <text x="610" y="276" text-anchor="middle" font-size="12">engine and EPP metrics</text>
+  <line x1="610" y1="135" x2="610" y2="221" stroke="#57606a" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <line x1="410" y1="125" x2="490" y2="221" stroke="#57606a" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <text x="618" y="183" font-size="11" fill="#57606a">scraped metrics</text>
+
+  <!-- scaling manager -->
+  <rect x="200" y="380" width="540" height="150" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="2"/>
+  <text x="470" y="405" text-anchor="middle" font-weight="700" fill="#0969da">llm-d-scaling-manager</text>
+  <text x="470" y="422" text-anchor="middle" font-size="11" fill="#57606a">one Deployment: scaling-manager-controller-manager</text>
+  <text x="470" y="440" text-anchor="middle" font-size="13">every 15 s, per model: read the load, size each variant, stay inside the GPU budget</text>
+  <rect x="220" y="455" width="230" height="64" rx="6" fill="#ffffff" stroke="#0969da"/>
+  <text x="335" y="479" text-anchor="middle" font-size="12" font-weight="600">Scaling policy (ConfigMap)</text>
+  <text x="335" y="499" text-anchor="middle" font-size="11">scaling-manager-scaling-policy-config:</text>
+  <text x="335" y="513" text-anchor="middle" font-size="11">thresholds, tiers, limiters</text>
+  <rect x="490" y="455" width="230" height="64" rx="6" fill="#ffffff" stroke="#0969da"/>
+  <text x="605" y="479" text-anchor="middle" font-size="12" font-weight="600">KEDA external scaler</text>
+  <text x="605" y="499" text-anchor="middle" font-size="11">gRPC on :9090 (Service</text>
+  <text x="605" y="513" text-anchor="middle" font-size="11">scaling-manager-external-scaler)</text>
+
+  <line x1="610" y1="295" x2="610" y2="376" stroke="#0969da" stroke-width="2" marker-end="url(#b)"/>
+  <text x="618" y="340" font-size="11" fill="#0969da">PromQL</text>
+  <line x1="315" y1="125" x2="315" y2="376" stroke="#0969da" stroke-width="2" marker-end="url(#b)"/>
+  <text x="323" y="250" font-size="11" fill="#0969da">queue, read directly</text>
+  <text x="323" y="265" font-size="11" fill="#0969da">for a model at zero</text>
+
+  <!-- limits -->
+  <rect x="20" y="395" width="140" height="120" rx="8" fill="#f6f8fa" stroke="#57606a" stroke-dasharray="5 4"/>
+  <text x="90" y="418" text-anchor="middle" font-weight="600" font-size="13">GPU budget</text>
+  <text x="90" y="436" text-anchor="middle" font-size="11" fill="#57606a">optional</text>
+  <text x="90" y="458" text-anchor="middle" font-size="12">GPU inventory</text>
+  <text x="90" y="477" text-anchor="middle" font-size="12">quota</text>
+  <text x="90" y="496" text-anchor="middle" font-size="12">Kueue queues</text>
+  <line x1="160" y1="455" x2="196" y2="455" stroke="#0969da" stroke-width="2" marker-end="url(#b)"/>
+
+  <!-- KEDA + HPA -->
+  <rect x="790" y="410" width="150" height="100" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="865" y="438" text-anchor="middle" font-weight="600">KEDA</text>
+  <text x="865" y="460" text-anchor="middle" font-size="12">one ScaledObject per</text>
+  <text x="865" y="477" text-anchor="middle" font-size="12">variant; asks for its</text>
+  <text x="865" y="494" text-anchor="middle" font-size="12">replica count</text>
+  <line x1="744" y1="482" x2="786" y2="482" stroke="#0969da" stroke-width="2" marker-start="url(#b)" marker-end="url(#b)"/>
+  <text x="765" y="472" text-anchor="middle" font-size="11" fill="#0969da">gRPC</text>
+
+  <rect x="790" y="225" width="150" height="70" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <text x="865" y="254" text-anchor="middle" font-weight="600">HPA</text>
+  <text x="865" y="276" text-anchor="middle" font-size="12">made by KEDA</text>
+  <line x1="865" y1="410" x2="865" y2="299" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+  <polyline points="865,225 865,85 744,85" fill="none" stroke="#57606a" stroke-width="2" marker-end="url(#a)"/>
+  <text x="873" y="160" font-size="11" fill="#57606a">scales the</text>
+  <text x="873" y="175" font-size="11" fill="#57606a">workload</text>
+
+  <text x="20" y="572" font-size="12" fill="#57606a">The scaling manager decides; KEDA and the HPA act. It never writes a replica count itself.</text>
+  <text x="20" y="590" font-size="12" fill="#57606a">Dashed box: optional. Dashed arrows: Prometheus scrapes. Blue: what the scaling manager reads and answers.</text>
+</svg>
