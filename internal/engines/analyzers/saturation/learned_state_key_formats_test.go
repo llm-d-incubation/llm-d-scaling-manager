@@ -12,8 +12,7 @@ import (
 )
 
 // The keys of the learned-state document, as v0.10.1 wrote them: one sample
-// per map, taken from the back-compat fixtures
-// (steadystate/testdata/learned-state). A restored document is found again
+// per map, taken from the documents that release wrote. A restored document is found again
 // only under the keys today's builders make, so a builder that changes its
 // format strands every document written before it. Changing one fails here;
 // a deliberate change needs a migration of the stored keys, not an edit of
