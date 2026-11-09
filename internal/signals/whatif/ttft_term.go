@@ -171,11 +171,8 @@ type termPlan struct {
 // own latency and raises the term's flags.
 func termOn(t DecodeTerm, pf *prefillPlan) *termPlan {
 	i := pf.p.PromptTokens
-	engine, engineToken := t.Engine.split(i)
+	engine, engineToken := t.EngineAt(i, pf.pull)
 	hop, hopToken := t.Hop.split(i)
-	if !t.EngineOmitted && pf.pull > 0 {
-		engine, engineToken = netOfPull(engine, engineToken, pf.pull, i)
-	}
 	tp := &termPlan{engine: engine, hop: hop, perStep: t.PerStep, fromITL: t.FromITL, omitted: t.EngineOmitted, oldTransfer: pf.xfer}
 	if t.EngineOmitted {
 		pf.xfer += hopToken
@@ -199,6 +196,18 @@ func termOn(t DecodeTerm, pf *prefillPlan) *termPlan {
 		pf.flags = append(pf.flags, DecodeTermPrefixHits)
 	}
 	return tp
+}
+
+// EngineAt is D's fixed and per-token parts as priced at a prompt of i
+// tokens, with the KV pull priced as its own stage at pull seconds a token
+// (TTFTFleet.ProcessorSharing with a decode line; 0 otherwise): the fit read
+// at i, net of the pull (netOfPull) unless D is omitted.
+func (t DecodeTerm) EngineAt(i, pull float64) (fixed, perToken float64) {
+	fixed, perToken = t.Engine.split(i)
+	if !t.EngineOmitted && pull > 0 {
+		fixed, perToken = netOfPull(fixed, perToken, pull, i)
+	}
+	return fixed, perToken
 }
 
 // netOfPull is D's fixed and per-token parts at a prompt of i tokens with the

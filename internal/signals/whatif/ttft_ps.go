@@ -60,6 +60,12 @@ import (
 // prompt cv 0.058 and 1, they read -1.1 % to +117 % (the most at light load,
 // near-constant prompts and Ca^2 4), and the mean -3.8 % to +45 %; bucket C
 // (Ca^2 4, two pods) reads its mean 8-12 % high and p90 and p95 25-32 % high.
+// The over-read at light load is real, not noise: on one pod at Ca^2 4 and cv
+// 0.058, p95 reads +118 % at rho 0.3, +48 % at 0.6 and +10 % at 0.85, and a
+// 250 ms p95 target is met at 0.68 of the rate that truly meets it. s is the
+// heavy-traffic burst factor at every load; blending it from 1 toward
+// Kingman's as rho rises is a follow-up (the proposal's "Burstier than
+// Poisson").
 //
 // Past a prompt cv of MaxPSPromptCV the price is the larger of this and the
 // first-come queue's (ttftPlan.price): no run has validated processor
@@ -300,10 +306,16 @@ func (pl prefillPlan) psStages(rate float64, decodePods int, pooled bool) (stage
 }
 
 // splitCA2 is the Ca^2 of the arrivals one pod takes at share p of a stream
-// of Ca^2 ca2, p ca2 + 1 - p: exact for a renewal stream split at random,
-// and the router's split stands in for that. A pod that takes a part of a
-// bursty stream sees it less bursty, so each stage is priced at its pods'
-// Ca^2, not the fleet's.
+// of Ca^2 ca2, p ca2 + 1 - p. A pod that takes a part of a bursty stream sees
+// it less bursty, so each stage is priced at its pods' Ca^2, not the fleet's.
+//
+// It is exact for a renewal stream split at random (Bernoulli routing). A
+// load-aware router, which sends the next request to the least loaded pod,
+// spreads a burst wider than that, so there it errs safe. It is optimistic
+// where a burst stays on one pod: prefix-affinity routing that keeps a
+// session's or a shared prefix's requests together, and bursts that are not
+// renewal (a modulated stream whose rate swings for minutes, which a split
+// does not thin); there a pod sees more of the fleet's Ca^2 than p of it.
 func splitCA2(ca2, p float64) float64 { return p*ca2 + 1 - p }
 
 // podShares is each of n prefill pods' share of the arrivals at imbalance f
@@ -312,11 +324,14 @@ func splitCA2(ca2, p float64) float64 { return p*ca2 + 1 - p }
 // 1/n, (2 - f)/n, or to 0 where that is negative (f > 2), the step then set so
 // the shares still sum to 1. At n 2 it is f/2 and 1 - f/2, which f fixes.
 //
-// f says only how loaded the busiest pod is. Spreading the others evenly is
-// the least spread they can have, and the stretch is convex in a pod's
-// share, so even spreading is the population's lowest reading (about 10 %
-// low at three pods, in review). The linear fall is the spread priced
-// instead, a conservative stand-in until the router's per-pod shares are
+// f fixes only the busiest pod's share; at two pods that fixes both, and the
+// shares are exact. From three pods on the others can spread many ways.
+// Spreading them evenly is the least spread they can have, and the stretch is
+// convex in a pod's share, so even spreading is the population's most
+// optimistic reading (about 10 % low at three pods, in review). The worst
+// spread f allows, every other pod's share piled on as few pods as it can,
+// reads far higher. The linear fall is a middle estimate, less optimistic
+// than even spreading and not a bound, until the router's per-pod shares are
 // read: at f 1.5 and 0.8 of the knee it prices the mean stretch 4.6 % above
 // even at three pods and 9.6 % at four (TestPS_TheFallIsNoLowerThanEven).
 func podShares(f float64, n int) []float64 {

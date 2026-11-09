@@ -560,18 +560,22 @@ func logTTFT(logger logr.Logger, input domain.AnalyzerInput, variant string, in 
 		rho, theta, knee = t.PrefillUtilization, t.WaitScale, t.PrefillKnee
 		onsetPrefill, onsetDecode = t.Onsets.Prefill, t.Onsets.Decode
 		engineWait, kvPullWait = t.Parts.EngineWait, t.Parts.KVPullWait
-		if in.processorSharing {
-			// No first-come wait, so no wait scale (0 in the answer).
+		if in.processorSharing && t.WaitScale == 0 {
+			// Priced as processor sharing: no first-come wait, so no wait
+			// scale. Past a wide prompt spread the answer can be the
+			// first-come queue's, which has one.
 			theta = nan
 		}
 	}
-	// decodePerToken is D's per-token part as priced: under processor sharing
-	// with a decode line, net of the pull, which is its own stage (whatif's
-	// netOfPull takes it from the per-token part first).
-	decodePerToken := term.Engine.PerToken
-	if in.processorSharing && in.decode != nil && !term.EngineOmitted {
-		decodePerToken = max(decodePerToken-in.transfer, 0)
+	// decodeBaseNet and decodePerTokenNet are D's parts as priced at the
+	// prompt: under processor sharing with a decode line, net of the pull,
+	// which is its own stage (whatif.DecodeTerm.EngineAt); otherwise the fit
+	// read at the prompt.
+	var pull float64
+	if in.processorSharing && in.decode != nil {
+		pull = in.transfer
 	}
+	decodeBaseNet, decodePerTokenNet := term.EngineAt(in.prompt, pull)
 	fleetRate, prefillRate := nan, nan
 	var boundBy []whatif.Bound
 	if r := p.rate; r != nil {
@@ -614,7 +618,8 @@ func logTTFT(logger logr.Logger, input domain.AnalyzerInput, variant string, in 
 		"decodeTTFTPrompt", in.decodeTTFT.PromptTokens, "flowControl", flowControlName(in.flow.State),
 		// The decode term as priced: on no fit, base is the held D, read at
 		// heldPrompt and fromITL.
-		"decodeBase", term.Engine.Base, "decodePerToken", decodePerToken, "decodePerStep", term.PerStep,
+		"decodeBase", term.Engine.Base, "decodePerToken", term.Engine.PerToken, "decodePerStep", term.PerStep,
+		"decodeBaseNet", decodeBaseNet, "decodePerTokenNet", decodePerTokenNet,
 		"decodeHeldPrompt", term.Engine.HeldPromptTokens, "decodeFromITL", term.FromITL,
 		"decodeTermRefused", string(term.EngineRefused), "hopBase", term.Hop.Base, "hopPerToken", term.Hop.PerToken,
 		"hopHeldPrompt", term.Hop.HeldPromptTokens, "hopRefused", string(term.HopRefused),

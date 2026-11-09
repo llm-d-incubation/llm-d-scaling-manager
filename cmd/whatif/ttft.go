@@ -68,6 +68,9 @@ const (
 	ttftNoteMeasured = "at the sent spread (cv 0.06) it read up to 33% under the router's percentile on the P2 recordings."
 	// ttftNoteArrivals stands for both: the P2 table was read at Poisson arrivals.
 	ttftNoteArrivals = "no recording has checked it at a stated Ca^2."
+	// ttftNoteBurst follows it at a stated Ca^2 above 1: the burst rule reads
+	// high at light load (whatif's ttft_ps.go; one pod, Ca^2 4, cv 0.058).
+	ttftNoteBurst = " Above Ca^2 1 it reads high at light load: on one pod at Ca^2 4 its p95 read +118% at utilization 0.3 and +10% at 0.85 against a simulation."
 )
 
 // assumedA is a --assume-a supplied: P3 has no flag for it, as S1 has no
@@ -792,6 +795,9 @@ func footerNote(fleets []*pricedFleet) string {
 	switch {
 	case slices.ContainsFunc(fleets, func(pf *pricedFleet) bool { return pf.in.ArrivalCV2 > 0 }):
 		note = ttftNoteOpen + ttftNoteArrivals
+		if slices.ContainsFunc(fleets, func(pf *pricedFleet) bool { return pf.in.ArrivalCV2 > 1 }) {
+			note += ttftNoteBurst
+		}
 	case slices.ContainsFunc(fleets, func(pf *pricedFleet) bool {
 		if pf.statedCV {
 			return pf.in.PromptCV != whatif.AssumedPromptCV

@@ -8,4 +8,4 @@ prefill  8.03 r/s           TTFT p95, decode admission               UNVALIDATED
 fleet    8.03 r/s           TTFT p95, end to end                     UNVALIDATED; V_P ASSUMED [4.91 .. 10.63] at V_P +-15%
 flags: AssumedShape (IL 1000, OL 1000); OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; TransferOmitted; DecodeTermOmitted; RouterHopAssumed; SpreadBeyondProcessorSharing; FlowControlInferredOff; HeldByDecodeAdmission; AssumedPoissonArrivals; AssumedArrivalCV2
 estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json)
-TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: no recording has checked it at a stated Ca^2. V_P ASSUMED.
+TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: no recording has checked it at a stated Ca^2. Above Ca^2 1 it reads high at light load: on one pod at Ca^2 4 its p95 read +118% at utilization 0.3 and +10% at 0.85 against a simulation. V_P ASSUMED.

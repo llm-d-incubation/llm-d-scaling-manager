@@ -1619,14 +1619,16 @@ always in the CLI:
   takes `f/N_p` of the arrivals and the others fall linearly from it, down to
   the least share that keeps the mean (`(2 − f)/N_p`, or 0 past `f` 2); at two
   pods that is the rest. A request is on a pod by its share, so the percentile
-  is the population's, a request on any pod, not the busiest pod's. `f` says
-  only how loaded the busiest pod is: spreading the others evenly is the least
-  spread they can have, and the stretch is convex in a pod's share, so that
-  read about 10 % low at three pods in review. The linear fall is a
-  conservative stand-in until the router's per-pod shares are read: at `f` 1.5
-  and 0.8 of the knee it prices the mean stretch 4.6 % above the even spread
-  at three pods and 9.6 % at four. There is no prefill wait: the stretch is
-  the wait.
+  is the population's, a request on any pod, not the busiest pod's. `f` fixes
+  only the busiest pod's share: at two pods that fixes both, and the shares are
+  exact. From three pods on, spreading the others evenly is the least spread
+  they can have, and the stretch is convex in a pod's share, so it is the most
+  optimistic reading (about 10 % low at three pods in review); the worst
+  spread `f` allows reads far higher. The linear fall is a middle estimate,
+  less optimistic than even spreading and not a bound, until the router's
+  per-pod shares are read: at `f` 1.5 and 0.8 of the knee it prices the mean
+  stretch 4.6 % above the even spread at three pods and 9.6 % at four. There is
+  no prefill wait: the stretch is the wait.
 - `T_X` is the KV pull, work `I·κ`, as a processor-sharing stage on the decode
   pod it lands on, the `N_d` pods sharing the arrivals evenly. A pull that
   saturates its pods is refused (`Saturated`).
@@ -1666,13 +1668,29 @@ checked against simulation, not derived. The first version priced
 `s = (1 + Ca²)/2` with the variance at `s`, and on one pod with near-constant
 prompts that read 15 to 49 % short at `Ca²` 2 to 4 and `ρ` 0.6 to 0.85. Each
 stage is priced at its own pods' `Ca²`: a pod taking share `p` of a stream sees
-`p·Ca² + 1 − p` (exact for a renewal stream split at random), the prefill pods
-at their shares and the pull at `1/N_d`. Against a one-pod M/G/1-PS
-simulation at `Ca²` 2 and 4, `ρ` 0.3 to 0.93 and prompt cv 0.058 and 1, p90 and
-p95 read −1.1 % to +117 %, the mean −3.8 % to +45 %: never more than 5 % short
-at a percentile, and most high at light load with near-constant prompts at
-`Ca²` 4. A first-come queue (Kingman's mean, an exponential tail) read at or
-below the rule at every one of those points, so it is no floor for burst.
+`p·Ca² + 1 − p`, the prefill pods at their shares and the pull at `1/N_d`.
+That is exact for a renewal stream split at random (Bernoulli routing). A
+load-aware router spreads a burst wider, so there it errs safe. It is
+optimistic where a burst stays on one pod: prefix-affinity routing that keeps
+a session's or a shared prefix's requests together, and bursts that are not
+renewal (a modulated stream whose rate swings for minutes, which a split does
+not thin).
+
+Against a one-pod M/G/1-PS simulation at `Ca²` 2 and 4, `ρ` 0.3 to 0.93 and
+prompt cv 0.058 and 1, p90 and p95 read −1.1 % to +117 %, the mean −3.8 % to
++45 %: never more than 5 % short at a percentile. A first-come queue
+(Kingman's mean, an exponential tail) read at or below the rule at every one
+of those points, so it is no floor for burst.
+
+**It reads high at light load, and that is real.** `s` is the heavy-traffic
+burst factor, applied at every load. On one pod at `Ca²` 4 with near-constant
+prompts (cv 0.058) p95 reads +118 % at `ρ` 0.3, +48 % at 0.6 and +10 % at
+0.85. On the rate side, a 250 ms p95 target is met at 0.68 of the rate that
+truly meets it. The CLI's note says so on every answer at a stated `Ca²` above
+1. Follow-up: blend `s` from 1 toward Kingman's ratio as `ρ` rises (the
+review's suggestion; `s^(1 + ρ)` on the variance read p90 and p95 0.3 % to
+53 % high over the same grid), and check it against the same simulation
+before it replaces the rule.
 
 **Past a wide prompt spread.** The staircase sent prompts at cv 0.058. vLLM's
 chunked prefill need not share a prompt longer than its step budget

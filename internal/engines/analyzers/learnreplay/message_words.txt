@@ -850,10 +850,12 @@ decode-only
 decode-queue-unknown
 decode-style
 decodeBase
+decodeBaseNet
 decodeFromITL
 decodeHeldPrompt
 decodePerStep
 decodePerToken
+decodePerTokenNet
 decodeSaturatedAt
 decodeSaturation
 decodeTTFT

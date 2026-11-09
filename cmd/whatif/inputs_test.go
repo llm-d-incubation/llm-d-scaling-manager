@@ -190,6 +190,11 @@ func TestPromptCV_TheNoteQuotesTheTableAtItsOwnCV(t *testing.T) {
 	assert.NotContains(t, note, "4.1x")
 	assert.NotContains(t, note, "33%")
 	assert.Contains(t, note, "no recording has checked it at a stated Ca^2")
+	// Above Ca^2 1 the burst rule reads high at light load, and says so;
+	// below it there is no such rule.
+	assert.Contains(t, note, "Above Ca^2 1 it reads high at light load")
+	bursty.in.ArrivalCV2 = 0.5
+	assert.NotContains(t, footerNote([]*pricedFleet{bursty}), "reads high at light load")
 }
 
 // A fleet refused before pricing still says what the flags stated, in its
