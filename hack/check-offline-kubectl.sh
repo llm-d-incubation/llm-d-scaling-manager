@@ -55,7 +55,8 @@ else bad "what passes ran with: $(cat "$T/env")"; fi
 ln -s "$W" "$T/link"
 for real in "" "real" "$W" "$T/link"; do
     : > "$T/calls"
-    if out=$(OFFLINE_KUBECTL_REAL="$real" timeout 20 "$W" kustomize config/x 2>&1); then bad "OFFLINE_KUBECTL_REAL='$real' must be refused"
+    # From $T, where "real" names an executable file: only its being relative refuses it.
+    if out=$(cd "$T" && OFFLINE_KUBECTL_REAL="$real" timeout 20 "$W" kustomize config/x 2>&1); then bad "OFFLINE_KUBECTL_REAL='$real' must be refused"
     elif echo "$out" | grep -q 'names no other kubectl'; then ok "OFFLINE_KUBECTL_REAL='${real/#$T/T}' is refused, and says so"
     else bad "OFFLINE_KUBECTL_REAL='$real' failed without saying why: $out"; fi
 done
