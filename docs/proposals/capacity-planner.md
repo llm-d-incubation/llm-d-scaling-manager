@@ -1,10 +1,10 @@
-# Cluster capacity planner: a graphical front end for what-if
+# Capacity planner: a graphical front end for what-if
 
-**Status:** proposal, 2026-11-09. Nothing on this page is built. It builds on
+**Status:** proposal, 2026-11-09; the open questions are settled under
+[Decisions](#decisions). Nothing on this page is built. It builds on
 `cmd/whatif` and `internal/signals/whatif`, which are
 ([what-if capacity](slo-capacity-planner.md), [end-to-end TTFT](slo-capacity-planner-ttft.md)),
-and it assumes the processor-sharing TTFT pricing on `fix/ttft-processor-sharing`
-(PR #16) lands as it stands.
+including the processor-sharing TTFT pricing (PR #16, merged).
 
 **Audience:** contributors. There is no operator page yet; one goes in
 `docs/guides/` when phase 1 ships.
@@ -30,8 +30,9 @@ graphical planner on top of it:
 - a Grafana link and, where a plugin is allowed, an optional panel; Grafana is
   not the planner's main home ([Grafana](#can-it-be-built-on-grafana)).
 
-The user-facing name is **cluster capacity planner**. `whatif` stays the name of
-the engine and the CLI. See open question 1 on the word "cluster".
+The user-facing name is **capacity planner**. It plans one model's P/D fleet,
+not a cluster, so the name says no more than that. `whatif` stays the name of
+the engine and the CLI.
 
 ### Scope of v1
 
@@ -40,8 +41,11 @@ the engine and the CLI. See open question 1 on the word "cluster".
 - The critical class only. Regular and batch are on screen and disabled
   ([Traffic classes](#traffic-classes)).
 - TTFT and TPOT. TTFT at any percentile from p50 to p99, or the mean. TPOT as
-  the mean, or a per-request percentile when a ratio `R_q` is learned or
-  assumed.
+  the mean or a per-request percentile; the percentile is flagged on the
+  figure whenever its ratio `R_q` is assumed rather than learned.
+- One TTFT line for the current mix. The per-bucket lines are the "if all
+  traffic were bucket b" view, on the buckets 1k, 4k, 8k, 32k and 128k.
+- Inputs from a Prometheus window: the page works without the controller.
 - Read only. The planner never changes a replica count, a policy or a
   ConfigMap.
 
@@ -71,9 +75,9 @@ Each change below is a proposal, with its reason. None removes anything above.
 | C5 | An inverse mode: type a target rate, get the fewest replicas per role that carry it under the SLO | The planning question is often "how many do I need", not "what does this fleet do" |
 | C6 | Every number carries its caveats: a badge for assumed, unvalidated, held by a flag or refused | The engine never returns a number without its flags; a screen that drops them over-states the model ([Provenance and caveats](#provenance-and-caveats)) |
 | C7 | A traffic mix control (per-bucket shares), defaulting to the observed mix | Per-bucket lines depend on the mix. Without a mix control the user cannot see why a line moved |
-| C8 | Per-bucket lines are priced **in the mix** by default; "if all traffic were this bucket" is a separate, labelled view | These are different questions with different answers; the second is what the engine computes today ([TTFT per bucket](#ttft-per-bucket)) |
+| C8 | v1 prices TTFT for the **current mix**, one line and one target; per-bucket lines are the "if all traffic were bucket b" view, labelled so and never used for a limit. Per bucket inside the mix is later (E1) | These are different questions with different answers; the second is what the engine computes today ([TTFT per bucket](#ttft-per-bucket)) |
 | C9 | In v1 the critical rate is the **total** rate, labelled so | Batch traffic in the engine slows critical traffic whatever the router does; setting it to 0 is not neutral ([Traffic classes](#traffic-classes)) |
-| C10 | Save a scenario, and later compare two side by side | Planning is comparing options. Phase 3 |
+| C10 | Save a scenario, and later compare two side by side | Planning is comparing options. Phase 2 |
 | C11 | Call the critical/regular/batch split a "traffic class", not a "tier" | "Tier" already means a named scaling-policy tier and an ITL line's tier in this repo |
 | C12 | Start every session from "now": the current replicas, the observed rate and mix, the policy's SLO | The first screen then answers "where am I", and every slider move is a change from there |
 
@@ -85,17 +89,18 @@ sliders move.
 
 | Part | Field | Values | Default |
 | --- | --- | --- | --- |
-| Inputs | `inputsId` | a content hash of the resolved inputs ([Sources](#where-the-inputs-come-from)) | the current source |
+| Inputs | `inputsId` | a content hash of the resolved inputs ([Sources](#where-the-inputs-come-from)) | a Prometheus window ending now |
 | Fleet | `prefill`, `decode` | replicas, integers 0..64 | the Ready count |
 | Traffic | `classes.critical.rate` | r/s over the model, total in v1 | the observed rate |
 | Traffic | `classes.regular.rate`, `classes.batch.rate` | r/s; 0 and disabled in v1 | 0 |
-| Traffic | `mix` | per bucket: share, mean prompt, mean output, prompt cv | the observed mix |
+| Traffic | `mix` | per bucket (`1k`, `4k`, `8k`, `32k`, `128k`): share, mean prompt, mean output, prompt cv | the observed mix |
 | Traffic | `arrivalCV2` | `Ca²`, 1 is Poisson | learned, else 1 (flagged) |
 | SLO | `ttft.statistic` | `mean`, or `p50`..`p99` | the policy's `slo.ttft` |
-| SLO | `ttft.targets` | seconds per bucket, or one for all | the policy's target for every bucket |
-| SLO | `tpot.statistic` | `mean`, or `pNN` (needs `R_q`) | the policy's `slo.tpot` |
+| SLO | `ttft.target` | seconds, for the mix | the policy's target |
+| SLO | `ttft.bucketTargets` | seconds per bucket, drawn on the "all traffic were bucket b" view only | the mix target for every bucket |
+| SLO | `tpot.statistic` | `mean`, or `pNN` (flagged `AssumedTPOTRatio` when `R_q` is assumed) | the policy's `slo.tpot` |
 | SLO | `tpot.target` | seconds | the policy's target |
-| Policy | `headroom` | (0, 1]; 1 lifts the operating-point cap | the policy's `scaleUpThreshold`, 0.85 |
+| Policy | `headroom` | (0, 1]; 1 lifts the operating-point cap | the policy's `scaleUpThreshold`, 0.85: the fleet limit is capped by default, the uncapped figure shown beside it |
 | Assumptions | `assume` | typed values for learned terms: `vp`, `a`, `imbalance`, `promptCV`, `tpotRatio`, `routerHop` | none |
 
 The statistic names are the ones the SLO metrics already use (`statistic`
@@ -111,13 +116,15 @@ the learned value beside the typed one.
 
 The engine reads one learned state: the analyzers' state replayed to a cycle
 (`learnreplay.StateAt`). The planner offers three sources of it, and shows
-which one is in use at the top of the screen.
+which one is in use at the top of the screen. **The page opens on a Prometheus
+window** (the last hour, ending now): it must work with no controller
+installed.
 
-| Source | What it reads | Freshness | Built today |
-| --- | --- | --- | --- |
-| Recording | a `.jsonl.gz` recording, replayed to a cycle (`whatif ... --recording`) | fixed | yes, in the CLI |
-| Prometheus window | a past window captured and generated in memory (`whatif ... --prometheus --from --to`) | as of the window's end; seconds to replay | yes, in the CLI |
-| Controller | the controller's in-memory learned state for the model, at its last cycle | one cycle, 15 s | no: the read-only handler in [Data per mode](slo-capacity-planner.md#data-per-mode) |
+| Source | What it reads | Freshness | Built today | In |
+| --- | --- | --- | --- | --- |
+| Prometheus window (default) | a past window captured and generated in memory (`whatif ... --prometheus --from --to`) | as of the window's end; seconds to replay | yes, in the CLI | v1 |
+| Recording | a `.jsonl.gz` recording, replayed to a cycle (`whatif ... --recording`) | fixed | yes, in the CLI | v1 |
+| Controller | the controller's in-memory learned state for the model, at its last cycle | one cycle, 15 s | no: the read-only handler in [Data per mode](slo-capacity-planner.md#data-per-mode) | later |
 
 The learned-state ConfigMap ([snapshot](learned-state-snapshot.md)) is not a
 source on its own. It holds k2, throughput windows, ITL baselines and start
@@ -174,6 +181,13 @@ One line: the TPOT statistic picked (mean, or `pNN` as mean times `R_q`)
 against the rate, from `whatif.SLOAtReplicas` with `ReplicasQuery.Rate` at each
 grid rate. The target is a horizontal line; the chosen rate a vertical one.
 
+The percentile is in the picker from v1. `R_q` comes from the router's
+per-request TPOT histogram; with none, the page asks for an assumed ratio
+(the CLI's `--assume-tpot-ratio`), and every percentile figure then carries
+`AssumedTPOTRatio` as a badge, as do the decode limit and the fleet limit when
+decode binds. With neither, the percentile is refused (`NoTPOTHistogram`) and
+the mean stays available.
+
 - **Point A**, the TPOT at the chosen rate: `SLOAtReplicas` at that rate.
 - **Point B**, the rate at the target: `RateForTPOT`, with `Basis.Uncapped`
   shown when the operating-point cap set the rate ("TPOT alone would allow
@@ -188,18 +202,23 @@ one line for the mix; per-output-bucket TPOT is later.
 
 ### TTFT
 
-One line per prompt-length bucket, each with its own target, at the statistic
-picked. The prefill limit is the smallest of the per-bucket point Bs.
+In v1, one line for the current mix, with one target, at the statistic
+picked. The prefill limit is its point B.
 
-- **Point A per bucket**: the TTFT of that bucket's requests at the chosen
-  rate.
-- **Point B per bucket**: the total rate at which that bucket's TTFT reaches
-  its target, the mix held.
+- **Point A**: the TTFT at the chosen rate (`TTFTAt`).
+- **Point B**: the rate at which the TTFT reaches the target
+  (`RateForTTFT`).
 - Markers: the prefill knee (`PrefillKnee`), the decode knee, the
   flow-control onsets (`FlowControlOnsets`; the decode onset caps the rate,
   the prefill onset shades the region past it), the operating-point cap.
-- The TTFT floor per bucket, drawn as the line's left end; a target under it
-  refuses (`TargetBelowFloor`).
+- The TTFT floor, drawn as the line's left end; a target under it refuses
+  (`TargetBelowFloor`).
+
+A toggle switches the graph to the **"if all traffic were bucket b"** view:
+one line per bucket, each priced as though every request had that bucket's
+prompt, each with its own dashed target and its own point A and point B. The
+view is labelled so on the graph and in its legend, and no limit is read from
+it ([TTFT per bucket](#ttft-per-bucket)).
 
 The y axis is clipped at three times the largest target: every TTFT curve goes
 to infinity at the knee, and an unclipped axis flattens the region that
@@ -226,32 +245,41 @@ function of the prompt's relative size `u`). So a bucket's TTFT in a mix is:
 the load `rho` from the whole mix, and `T(x)` with `x` drawn from the
 bucket's own prompt distribution. That is new engine work, not a UI change:
 
-- **E1** (engine): `TTFTAtInMix(fleet, mix, bucket, rate, q)` and
+- **E1** (engine, phase 4): `TTFTAtInMix(fleet, mix, bucket, rate, q)` and
   `RateForTTFTInMix(fleet, mix, targets)`, the latter returning the binding
   bucket. Priced under PS only; first-come in a mix is out of scope. Not
   validated until a staircase runs a mixed bucket.
 
-Until E1 lands, the planner draws:
+E1 is not in v1: the single mix line answers the fleet's question. v1 draws:
 
 - one TTFT line for the **current mix** with one target (what `RateForTTFT`
   prices today);
 - the per-bucket lines in a separate view, **"if all traffic were this
-  bucket"**, faint and labelled so, never used for the fleet limit.
+  bucket"**, labelled so, never used for the fleet limit.
 
-Bucket edges: the repo's buckets are `classifyInputLength`'s edges (100, 500,
-1500, 3000, 6000 tokens), which put every long-context prompt in one bucket.
-The planner shows only buckets with at least 5% of the observed requests, and
-the edges are an open question (2).
+**Buckets.** v1 uses a fixed set suited to long context, on the staircase's
+pattern: 1k, 4k, 8k, 32k and 128k prompt tokens. A request falls in the
+nearest bucket at or above its prompt (so `8k` holds prompts from 4k to 8k;
+anything past 128k is in `128k`). The repo's own `classifyInputLength` edges
+(100 to 6000 tokens) are not used: they put every long-context prompt in one
+bucket. The view shows only buckets with at least 5% of the observed requests.
+User-set edges come in v2.
 
 ## The answer: the most the fleet serves
 
 ```
-prefill limit  = RateForTTFT(fleet, target)        min over buckets once E1 lands
+prefill limit  = RateForTTFT(fleet, target)        for the mix; per bucket only with E1
 decode limit   = RateForTPOT(decode, target, headroom)
 fleet limit    = min(prefill limit, decode limit), then the operating-point cap
+uncapped       = min(prefill limit, decode limit with headroom 1)
 binding        = the role whose limit is lower; on a tie, both
 headroom       = fleet limit - chosen rate         (negative: the SLO is missed)
 ```
+
+**The cap is on by default.** The fleet limit applies the operating-point cap
+(`headroom` times the lower knee), as the CLI does, because past it the
+autoscaler would already be adding replicas. The uncapped figure is printed
+beside it, labelled "without headroom", whenever the cap is what binds.
 
 The `BoundBy` the engine returns is shown verbatim beside each limit: `TTFT`,
 `TTFT` then `decode admission` (flagged `HeldByDecodeAdmission`: the decode
@@ -270,7 +298,7 @@ The design names three classes: critical, regular, batch. Nothing in this repo
 models classes yet. llm-d classifies requests with an `InferenceObjective`'s
 integer `priority`; traffic with no objective is priority 0; a negative
 priority is sheddable ([router configuration](../reference/router-configuration.md)).
-The proposed mapping, to be confirmed (open question 3):
+The mapping, decided for v1 (names configurable later):
 
 | Class | `InferenceObjective` priority |
 | --- | --- |
@@ -297,7 +325,7 @@ So in v1 the critical slider is the **total** rate, labelled "critical (all
 traffic priced as one class)", and the observed rate it starts at is the total.
 That is conservative for critical traffic and honest about what is priced.
 
-**Later** (phase 4), a rate per class needs: the collector split by
+**Later** (phase 5), a rate per class needs: the collector split by
 `priority`, the recorder carrying it, and a router-gate model with priority
 (a priority queue at the gate above the onset, the engine's PS stretch from the
 total in-engine load below and above it). Each class then gets its own tab and
@@ -306,20 +334,20 @@ shares that meets every class's targets", and the bar shows which class binds.
 
 ## The screen
 
-Main screen, critical tab, before E1 (one mix line plus the "all traffic"
-view collapsed):
+Main screen, critical tab, v1 (one mix line; the "all traffic were bucket b"
+view off):
 
 ```
 +---------------------------------------------------------------------------------------+
-| Cluster capacity planner     model: qwen3-32b  ns: llm      [ source: controller v ]  |
-| inputs: cycle 1840, 12 s ago, 0 refused, 3 assumed [details]                  [save]  |
+| Capacity planner   model: qwen3-32b  ns: llm   [ source: Prometheus, last 1 h v ]     |
+| inputs: window 10:02-11:02, cycles 1-240, 0 refused, 3 assumed [details]      [save]  |
 | ! TTFT model UNVALIDATED: reads up to 33% low at light load. Not a bound.             |
 +---------------------------------------------------------------------------------------+
 | FLEET                        | TRAFFIC                          | SLO                   |
 | prefill  [-]  2 [+]  now 2   | critical (all traffic as one)    | TTFT [p90 v] 800 ms   |
 | decode   [-]  3 [+]  now 3   |   6.0 r/s  |----o--------|  now 5.1 |   |--o----------| |
 |                              | regular  0  (later)  disabled    | TPOT [mean v] 12 ms   |
-| [ how many replicas for ...] | batch    0  (later)  disabled    |   |-----o-------| |
+| [how many replicas? (v2)]    | batch    0  (later)  disabled    |   |-----o-------| |
 |                              | mix: observed [edit]             | headroom 0.85         |
 +---------------------------------------------------------------------------------------+
 | [ Critical ]   [ Regular  (later) ]   [ Batch  (later) ]                               |
@@ -328,6 +356,7 @@ view collapsed):
 |                 0         2         4         6    |    8         10        12  r/s   |
 | prefill  TTFT   [###########################################]  7.9   BINDS           |
 | decode   TPOT   [#################################################]  9.4  op. cap      |
+|                 without headroom: 10.2                                                 |
 | fleet           7.9 r/s  (7.1 .. 8.6 over V_P, f)   you chose 6.0: headroom 1.9 (24%) |
 | +1 prefill -> 9.4 (+1.5, now decode binds)        +1 decode -> 7.9 (+0)               |
 +---------------------------------------------------------------------------------------+
@@ -350,22 +379,23 @@ view collapsed):
 +---------------------------------------------------------------------------------------+
 ```
 
-After E1 the TTFT graph carries one line per bucket, each with its dashed
-target in the same color, and the prefill row names the binding bucket:
+The "if all traffic were bucket b" view, switched on. Each line is its own
+fleet's answer; the knee moves with the bucket, and the limits above do not
+change:
 
 ```
-| TTFT p90, in the mix                                   | prefill knee 9.4
-|  s                                       C       .     |
-| 2.0 +- - - - - - - - - - - - - - - - - -*- C target    |
-|     |                                 .'               |  ///////
-| 0.8 +- - - - - - - - - - - - - -*- - - - B target      |  saturated
-|     |               B      . '                         |  ///////
-| 0.3 +- - - -*- - - - - - - - - - - - - - A target      |
-|     | A . ' o           o                              |
-|     +-------+-----------+--------+---------+-----------+---> r/s
-|            3.1         6.0      7.0       8.4
-|       A at target    your rate  B at     C at
-| prefill limit 7.0 r/s, bound by bucket B (8k-32k) p90
+| TTFT p90  --  IF ALL TRAFFIC WERE BUCKET b  (not the mix; no limit is read here)
+|  s                                         32k            .
+| 2.0 +- - - - - - - - - - - - - - - - - - -*- - 32k target  |
+|     |                    8k           . '                  | 32k knee 8.9
+| 0.8 +- - - - - - - - - -*- - - - . '- - - - - 8k target    |
+|     |              . '        . '                          |
+| 0.3 +- - -*- - - - - - - - - - - - - - - - - 4k target     |
+|     |  4k     o        o                                   |
+|     +----+-----+-------+--------+-------------+-------------+---> r/s
+|          2.4   6.0     6.9      8.1
+|       4k at target  your rate  8k at  32k at
+| buckets under 5% of requests (1k, 128k) hidden   [show all]
 ```
 
 Controls:
@@ -375,14 +405,19 @@ Controls:
   the lower knee, so the saturated region is reachable and shows as such.
 - **Dragging a point** on a graph moves the matching slider: point A moves the
   rate, point B the target. Optional; the sliders are the primary control.
-- **Per-bucket targets** live in a small table under the TTFT graph (bucket,
-  share, target slider), collapsed to one "all buckets" row by default.
+- **Per-bucket targets** (the "all traffic" view only) live in a small table
+  under the TTFT graph (bucket, share, target slider), collapsed to one "all
+  buckets" row by default.
+- **TPOT percentile.** Picking `pNN` with no learned `R_q` opens a ratio box
+  ("assume R_q"); the figures then carry `AssumedTPOTRatio`.
+- **Source.** A picker at the top: Prometheus window (default, with its
+  from/to), or a recording.
 - **Disabled tabs** say why on hover: "needs traffic split by priority; see
   [Traffic classes](#traffic-classes)".
 - **Inverse mode** ("how many replicas for ..."): type a rate; the answer is
   the fewest prefill and decode replicas whose fleet limit reaches it, with the
   binding role, from `POST /v1/size`.
-- **Compare** (phase 3): pin the current scenario as A, change knobs, and the
+- **Compare** (phase 2): pin the current scenario as A, change knobs, and the
   screen shows both: curves overlaid, A dashed, and a table of the limits with
   deltas.
 
@@ -392,19 +427,20 @@ One package, `internal/whatifapi`, holds the handlers. It calls
 `internal/signals/whatif` and `learnreplay`, and builds no model of its own:
 every number it returns is one the CLI can also print. It is mounted by:
 
-- **`whatif serve`** (phase 1): a new subcommand of the CLI, serving the API
+- **`whatif serve`** (phase 0): a new subcommand of the CLI, serving the API
   and the page from one binary. It reads recordings from a directory and
   Prometheus as `whatif capture` does. This is the planner's standalone mode,
   outside the manager image, like the CLI.
-- **the controller** (phase 3): the same handlers on the metrics server, off by
-  default, read only, giving the "controller" source. This is the handler
-  [Data per mode](slo-capacity-planner.md#data-per-mode) already proposes.
+- **the controller** (phase 3, optional): the same handlers on the metrics
+  server, off by default, read only, giving the "controller" source. This is
+  the handler [Data per mode](slo-capacity-planner.md#data-per-mode) already
+  proposes. Nothing in v1 needs it.
 
 ### Endpoints
 
 All JSON. `schemaVersion` is the API's own (1), with a `whatifSchema` field
 naming the CLI schema its answer, refusal and flag shapes follow (`schema-v3`
-after PR #16).
+today).
 
 | Method and path | Does | Cost |
 | --- | --- | --- |
@@ -423,9 +459,11 @@ after PR #16).
 }
 ```
 
-`kind` is `recording` (`name`, `cycle`), `prometheus` (as above; the URL and
-role map are server flags, not request fields), or `controller` (no further
-fields). The response:
+`kind` is `prometheus` (as above; the URL and role map are server flags, not
+request fields), `recording` (`name`, `cycle`), or later `controller` (no
+further fields). With no `source`, or `from` and `to` left out, it is a
+Prometheus window of the last hour ending now: the page's default. The mix is
+read on the fixed buckets, each named by its upper edge. The response:
 
 ```json
 {
@@ -436,8 +474,10 @@ fields). The response:
   "fleet": {"prefill": {"variant": "qwen3-32b-prefill", "replicas": 2},
             "decode":  {"variant": "qwen3-32b-decode",  "replicas": 3}},
   "observed": {"rate": 5.1,
-               "mix": [{"bucket": "xxlong", "share": 0.62, "promptTokens": 8100, "outputTokens": 480, "promptCV": 0.4},
-                       {"bucket": "huge",   "share": 0.31, "promptTokens": 31000, "outputTokens": 350, "promptCV": 0.2}]},
+               "buckets": [1024, 4096, 8192, 32768, 131072],
+               "mix": [{"bucket": "4k",  "share": 0.07, "promptTokens": 3100,  "outputTokens": 520, "promptCV": 0.2},
+                       {"bucket": "8k",  "share": 0.62, "promptTokens": 7400,  "outputTokens": 480, "promptCV": 0.1},
+                       {"bucket": "32k", "share": 0.31, "promptTokens": 21000, "outputTokens": 350, "promptCV": 0.3}]},
   "policy": {"ttft": {"statistic": "p90", "seconds": 0.8}, "tpot": {"statistic": "mean", "seconds": 0.012},
              "headroom": 0.85, "flowControl": "disabled"},
   "terms": [
@@ -451,8 +491,23 @@ fields). The response:
 }
 ```
 
-`POST /v1/plan` takes a scenario ([The scenario](#the-scenario)) and returns
-everything the screen draws:
+`POST /v1/plan` takes a scenario ([The scenario](#the-scenario)). Here the TPOT
+percentile is asked with no TPOT histogram, so a ratio is assumed:
+
+```json
+{
+  "inputsId": "sha256:4f1c...",
+  "fleet": {"prefill": 2, "decode": 3},
+  "traffic": {"classes": {"critical": {"rate": 6.0}}, "mix": "observed"},
+  "slo": {"ttft": {"statistic": "p90", "target": 0.8},
+          "tpot": {"statistic": "p90", "target": 0.016}},
+  "assume": {"tpotRatio": 1.3},
+  "headroom": 0.85,
+  "views": {"allTrafficPerBucket": false}
+}
+```
+
+It returns everything the screen draws:
 
 ```json
 {
@@ -473,20 +528,30 @@ everything the screen draws:
     "markers": {"prefillKnee": 9.4, "decodeKnee": 11.1, "operatingCap": 7.99,
                 "onsets": {"prefill": 0, "decode": 0}}
   },
-  "tpot": {"statistic": "mean", "target": 0.012, "floor": 0.0061,
-           "curve": [{"rate": 0.5, "seconds": 0.0064}],
-           "atRate": {"rate": 6.0, "seconds": 0.0081},
-           "atTarget": {"seconds": 0.012, "rate": 9.4, "uncapped": 10.2, "boundBy": ["operating-point cap"]},
+  "tpot": {"statistic": "p90", "target": 0.016, "floor": 0.0079,
+           "ratio": {"value": 1.3, "source": "assumed", "flags": ["AssumedTPOTRatio"]},
+           "curve": [{"rate": 0.5, "seconds": 0.0083}],
+           "atRate": {"rate": 6.0, "seconds": 0.0105, "flags": ["AssumedTPOTRatio"]},
+           "atTarget": {"seconds": 0.016, "rate": 9.4, "uncapped": 10.2, "boundBy": ["operating-point cap"],
+                        "flags": ["AssumedTPOTRatio"]},
            "markers": {"decodeKnee": 11.1}},
   "limits": {"prefill": {"rate": 7.9, "boundBy": ["TTFT"], "bucket": "mix"},
-             "decode":  {"rate": 9.4, "boundBy": ["operating-point cap"]},
-             "fleet":   {"rate": 7.9, "binding": ["prefill"]},
+             "decode":  {"rate": 9.4, "uncapped": 10.2, "boundBy": ["operating-point cap"], "flags": ["AssumedTPOTRatio"]},
+             "fleet":   {"rate": 7.9, "uncapped": 7.9, "capApplied": true, "binding": ["prefill"]},
              "chosen":  {"rate": 6.0, "headroom": 1.9}},
   "marginal": {"prefillPlusOne": {"fleetRate": 9.4, "binding": ["decode"]},
                "decodePlusOne":  {"fleetRate": 7.9, "binding": ["prefill"]}},
-  "flags": [{"flag": "AssumedPromptSpread", "on": ["ttft"], "text": "prompt spread assumed: cv 2", "clears": "a prompt-length histogram (recorder R1)"}]
+  "flags": [{"flag": "AssumedPromptSpread", "on": ["ttft"], "text": "prompt spread assumed: cv 2", "clears": "a prompt-length histogram (recorder R1)"},
+            {"flag": "AssumedTPOTRatio", "on": ["tpot", "limits.decode"], "text": "TPOT p90 is the mean times an assumed ratio 1.3", "clears": "the router's per-request TPOT histogram (recorder R1)"}]
 }
 ```
+
+With `views.allTrafficPerBucket` true, `ttft` gains a second list,
+`perBucket`, one line per shown bucket with `"semantics": "allTraffic"`, its
+own curve, floor, knee, target, `atRate` and `atTarget`. Nothing in `limits`
+reads it. With the TPOT ratio neither learned nor assumed, `tpot` holds the
+refusal (`NoTPOTHistogram`) and `limits.decode` and `limits.fleet` hold it
+too, and the page offers the mean.
 
 Rules the payload keeps:
 
@@ -507,8 +572,8 @@ TTFT at that decode count, then rechecks decode once.
 
 ### Caching and cost
 
-- `inputsId` entries are immutable and kept in an LRU. A `controller` or a
-  rolling Prometheus source resolves to a new id when it is refreshed, on a
+- `inputsId` entries are immutable and kept in an LRU. A rolling Prometheus
+  window (or, later, the controller) resolves to a new id when it is refreshed, on a
   "refresh" button or every N seconds when the user asks for live mode; the
   screen shows the age.
 - `plan` splits its work by what changes it: the curves depend on the inputs,
@@ -612,11 +677,16 @@ contract, and a Grafana row plus a link for monitoring. The page:
 
 | Phase | Ships | Depends on |
 | --- | --- | --- |
-| 0 | `internal/whatifapi` with `inputs` and `plan` (mix line, TPOT, limits, marginal), `whatif serve` without a page; timing measured on the goldens and PS fleets | PR #16 |
-| 1 | The page: critical tab, TTFT (mix line, and the "all traffic were bucket b" view) and TPOT, prefill/decode steppers, rate and target sliders, SLO statistic pickers, the binding bar, +1 deltas, flags drawer, provenance chips; recording and Prometheus sources | 0 |
-| 2 | E1, per-bucket TTFT in the mix, with per-bucket targets and the binding bucket; inverse mode (`/v1/size`) | E1 in `internal/signals/whatif`; a mixed-bucket staircase to validate it |
-| 3 | Controller source (handler on the metrics server, off by default); scenario save and compare; Grafana monitoring row and link; optional Infinity dashboard | 1 |
-| 4 | Regular and batch classes | collector split by `priority`, recorder fields, a priority gate model |
+v1 is phases 0 and 1; v2 is phase 2.
+
+| Phase | Ships | Depends on |
+| --- | --- | --- |
+| 0 | `internal/whatifapi` with `inputs` (Prometheus window by default, recordings; the fixed buckets 1k/4k/8k/32k/128k) and `plan` (mix line, the "all traffic" view, TPOT mean and percentile with `AssumedTPOTRatio`, capped and uncapped limits, marginal); `whatif serve` without a page; timing measured on the goldens and PS fleets | PR #16 (merged) |
+| 1 | The page: critical tab, the TTFT mix line and the labelled "all traffic were bucket b" view, TPOT, prefill/decode steppers, rate and target sliders, SLO statistic pickers including the TPOT percentile, the binding bar with the uncapped figure, +1 deltas, flags drawer, provenance chips; source picker opening on a Prometheus window | 0 |
+| 2 | Inverse mode (`/v1/size`); scenario save and compare; user-set bucket edges | 1 |
+| 3 | Grafana monitoring row and link; optional controller source (handler on the metrics server, off by default); optional Infinity dashboard | 1 |
+| 4 | E1, per-bucket TTFT inside the mix, with per-bucket targets and the binding bucket | E1 in `internal/signals/whatif`; a mixed-bucket staircase to validate it |
+| 5 | Regular and batch classes; configurable class names | collector split by `priority`, recorder fields, a priority gate model |
 
 ## Risks
 
@@ -666,29 +736,31 @@ contract, and a Grafana row plus a link for monitoring. The page:
 - **Model accuracy is not tested here.** It is the staircase's job
   ([TTFT ground truth](slo-capacity-planner-ttft.md#ground-truth-and-the-staircase)).
 
+## Decisions
+
+Decided 2026-11-09, on the questions the first draft left open.
+
+1. **Name: "capacity planner".** It plans one model's P/D fleet, not a
+   cluster, so "cluster" is dropped from the name and the page.
+2. **Prompt buckets: a fixed set for long context in v1**, on the staircase's
+   pattern: 1k, 4k, 8k, 32k and 128k tokens. User-set edges in v2 (phase 2).
+3. **Traffic classes: the proposed mapping for v1.** Critical is the highest
+   band above 0, regular is 0, batch is below 0 (sheddable). Configurable
+   names later (phase 5).
+4. **Default source: a Prometheus window.** The page must work without the
+   controller. The controller as a source stays a later option (phase 3).
+5. **Headroom: the fleet limit applies the operating-point cap by default**,
+   with the uncapped figure beside it, labelled "without headroom".
+6. **TPOT percentile: in the picker from v1**, flagged `AssumedTPOTRatio` on
+   every figure that rests on an assumed `R_q`.
+7. **E1 is not in v1.** The single mix line is enough. The per-bucket view
+   stays labelled "if all traffic were bucket b". E1 moves to phase 4.
+
 ## Open questions
 
-1. **The name.** "Cluster capacity planner" plans one model's P/D fleet, not a
-   cluster. Keep the name (it is what operators will search for), or "capacity
-   planner"?
-2. **Prompt buckets.** The shared edges (100 to 6000 tokens) put long-context
-   traffic in one bucket. Use the staircase's buckets, a fixed set for long
-   context (e.g. 1k, 4k, 8k, 32k, 128k), or let the user set edges?
-3. **Classes.** Is the critical/regular/batch to `InferenceObjective` priority
-   mapping above right, and should the class names be configurable?
-4. **Default source.** Should the page open on a Prometheus window (works
-   without the controller) or the controller (one cycle fresh, phase 3)?
-5. **Headroom.** Should the fleet limit apply the operating-point cap by
-   default (the CLI does), or show the uncapped limit with the cap as a marker
-   only?
-6. **TPOT percentile.** The SLO analyzer's config accepts a mean TPOT only;
-   the CLI accepts a percentile with `R_q`. Offer the percentile in the picker
-   from v1, flagged when `R_q` is assumed?
-7. **E1 priority.** Is per-bucket TTFT in the mix worth an engine change and a
-   mixed-bucket staircase before phase 1 ships, or is the single mix line
-   enough for v1?
-8. **Grafana.** Is an optional Infinity dashboard wanted at all, given the
-   plugin cannot be installed in most users' Grafana?
+1. **Grafana.** Is an optional Infinity dashboard wanted at all, given the
+   plugin cannot be installed in most users' Grafana? Until answered it stays
+   optional in phase 3.
 
 ## See also
 
