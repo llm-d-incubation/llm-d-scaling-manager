@@ -361,7 +361,7 @@ override what `check-prereqs` reported.
 | `KEDA_HELM_INSTALL` | `false` on Kubernetes | `true` |
 | `KEDA_NAMESPACE` | detected (admin step) | `keda` |
 | `PROMETHEUS_SA` | none (admin step) | `monitoring/prometheus-k8s` |
-| `SKIP_CHECKS` | `false`. `true` turns refusals into warnings ([what it does not skip](../../reference/configuration.md#deployment-flags)) | `true` |
+| `SKIP_CHECKS` | `false`. `true` turns refusals into warnings ([what it does not skip](../../reference/install-options.md#deployment-flags)) | `true` |
 
 Full list: [Configuration reference](../../reference/configuration.md).
 

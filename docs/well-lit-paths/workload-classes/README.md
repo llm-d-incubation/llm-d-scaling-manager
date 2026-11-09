@@ -81,7 +81,7 @@ so it is only a place to retune the unnamed fleet later. Delete it and
 A `scalingPolicy` key in each variant's KEDA trigger metadata selects the
 tier. The trigger is already the registration, so nothing is watched, listed
 or matched. Set it on the trigger, or in the variant's entry in
-[the ScaledObject plan](../../reference/configuration.md#default-scaledobjects)
+[the ScaledObject plan](../../reference/install-options.md#default-scaledobjects)
 before `make scaledobjects-apply`:
 
 ```yaml

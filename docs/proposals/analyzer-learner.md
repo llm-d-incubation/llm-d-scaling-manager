@@ -1834,7 +1834,7 @@ What can move the fleet size, and which way:
 TA only drives a scale-up where it is the highest order; saturation still
 votes. A policy that lists throughput alone has no such floor: a silent line
 holds the role. 4b-1 says so in
-[configuration.md](../reference/configuration.md#the-throughput-analyzers-line),
+[configuration.md](../reference/install-options.md#the-throughput-analyzers-line),
 with how long the line is silent after a restart or a shape change, and the
 above-band fallback's one-sided error.
 

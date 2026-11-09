@@ -460,7 +460,7 @@ llmsm_verify_scaler_tls() {
     client_ca="$(llmsm_scaler_flag_of "$dep" --external-scaler-client-ca)"
     san="$(llmsm_scaler_flag_of "$dep" --external-scaler-client-san)"
     if [ -z "$cert_path" ]; then
-        log_info "External scaler: plaintext gRPC (no TLS). To serve mutual TLS and move the ScaledObjects that name it:  $(llmsm_make_cmd deploy-scaling-manager LLMSM_SCALER_TLS=true LLMSM_SCALER_TLS_MIGRATE=true)  (see docs/reference/configuration.md#external-scaler-mutual-tls)."
+        log_info "External scaler: plaintext gRPC (no TLS). To serve mutual TLS and move the ScaledObjects that name it:  $(llmsm_make_cmd deploy-scaling-manager LLMSM_SCALER_TLS=true LLMSM_SCALER_TLS_MIGRATE=true)  (see docs/reference/install-options.md#external-scaler-mutual-tls)."
         # ScaledObjects on the TLS address or reference cannot reach it.
         if declare -F llmsm_scaler_plaintext_scaledobjects >/dev/null; then
             rc=0

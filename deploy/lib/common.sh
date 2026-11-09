@@ -2453,7 +2453,7 @@ llmsm_render_finish() {
         # these, and decided on what it saw.
         log_warning "  Some reads were refused for you, so this render may differ from what a cluster admin's run would do:"
         printf '%s\n' "$forbidden" | head -12 | while IFS= read -r line; do log_warning "      $line"; done
-        log_warning "  Get read access to them (docs/reference/configuration.md, RENDER) and render again, or have the admin check admin.sh closely."
+        log_warning "  Get read access to them (docs/reference/install-options.md, RENDER) and render again, or have the admin check admin.sh closely."
     fi
     log_info "Give both files to a cluster admin, who reviews them and runs:"
     log_info "    bash $out/admin.sh"

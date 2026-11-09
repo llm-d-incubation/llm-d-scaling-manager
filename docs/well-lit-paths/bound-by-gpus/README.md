@@ -29,7 +29,7 @@ To undo, the admin runs `make disable-limiter`
 ([Cleanup](../../guides/admin-gpu-bounding/README.md#cleanup)). It removes only
 the physical limiter; a quota in the same policy stays. To bound one
 install instead, its namespace owner adds `LLMSM_LIMITER=gpu-inventory` to
-`make deploy-scaling-manager` ([configuration](../../reference/configuration.md#core-configuration));
+`make deploy-scaling-manager` ([configuration](../../reference/install-options.md#core-configuration));
 the same owner can edit it away.
 
 ## What it costs

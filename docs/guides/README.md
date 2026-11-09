@@ -43,7 +43,8 @@ source docs/guides/env.sh
 
 | page | covers |
 | --- | --- |
-| [Configuration](../reference/configuration.md) | every variable the installer reads |
+| [Installer options](../reference/install-options.md) | every variable the installer reads |
+| [Configuration](../reference/configuration.md) | every setting the controller reads, by what you set and what you tune |
 | [After the install](../reference/operations.md) | verifying the install, first-line troubleshooting |
 | [Watching what the scaling manager decides](../reference/monitoring.md) | the dashboard, the metrics, the logs |
 | [Preparing a workload](../reference/workload-preparation.md) | the model cache, draining, `make workload-patch`, the start path (`make prepull`, `make weights`) |

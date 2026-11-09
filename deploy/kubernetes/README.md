@@ -4,7 +4,7 @@ What `make deploy-scaling-manager` does on a Kubernetes cluster, and the Kuberne
 settings. For the full walk-through start with a guide —
 [install in a namespace](../../docs/guides/install-in-namespace/) is the common
 case — and for every variable see the
-[configuration reference](../../docs/reference/configuration.md).
+[installer options](../../docs/reference/install-options.md).
 
 ```bash
 export NAMESPACE=<namespace where llm-d already serves>
@@ -51,7 +51,7 @@ make scaledobjects-apply
 ```
 
 or pass `LLMSM_DEFAULT_SO=plan|edit|true` to the install. See
-[Default ScaledObjects](../../docs/reference/configuration.md#default-scaledobjects).
+[Default ScaledObjects](../../docs/reference/install-options.md#default-scaledobjects).
 
 ## Settings you are most likely to change
 

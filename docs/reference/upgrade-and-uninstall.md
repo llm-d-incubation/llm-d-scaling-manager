@@ -49,7 +49,7 @@ Pass every install-time variable you used the first time (`SCOPE`,
 `ENVIRONMENT`, `DEPLOY_ALERTING_RULES`, ...) on every upgrade. An upgrade
 re-renders the install from them. For example, leaving `DEPLOY_ALERTING_RULES`
 at its default `false` deletes the alert rules. The full list is in
-[Configuration](configuration.md).
+[Installer options](install-options.md).
 
 The limiter is the exception. A re-run without `LLMSM_LIMITER` keeps the limiter
 the controller's `scaling-manager-scaling-policy-config` already declares; pass `LLMSM_LIMITER`
@@ -1033,7 +1033,7 @@ find those refusals from a KEDA Pod, they name this cause and the restart.
   `make deploy-scaling-manager` cannot write KEDA's side, and stays on plaintext until the
   admin has.
 - **GitOps:** run the command, then commit the
-  [new trigger](configuration.md#external-scaler-mutual-tls) (the TLS address
+  [new trigger](install-options.md#external-scaler-mutual-tls) (the TLS address
   and the `authenticationRef`) to git right away. Otherwise GitOps puts the old
   one back and those ScaledObjects stop reaching the scaler.
 
@@ -1139,11 +1139,11 @@ A new controller pod starts with no decision in memory. Until it has one:
   throughput are re-learned after every restart or leader change, so a request
   shape it had already priced is sized from occupancy again until it saturates
   once more. `LEARNED_STATE_SNAPSHOT=true` carries it across instead
-  ([learned state across a restart](configuration.md#learned-state-across-a-restart)).
+  ([learned state across a restart](install-options.md#learned-state-across-a-restart)).
   A snapshot written by v0.10.0 or earlier has no ITL slope, so on the first
   restart after upgrading from it each decode variant fits its ITL line, and
   so mu, from fresh readings; from the next restart on the line can come
-  back ([on these terms](configuration.md#learned-state-across-a-restart)).
+  back ([on these terms](install-options.md#learned-state-across-a-restart)).
 
 Do not judge an upgrade by the first few minutes of decisions.
 

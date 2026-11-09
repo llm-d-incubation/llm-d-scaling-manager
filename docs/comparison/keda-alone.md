@@ -181,7 +181,7 @@ path"*. It is the better choice in these cases:
   ([known gaps](../why.md#known-gaps)). What it learned is held in memory by
   default, so a restart or leader change learns it again; the opt-in
   `LEARNED_STATE_SNAPSHOT` carries it across
-  ([learned state across a restart](../reference/configuration.md#learned-state-across-a-restart)).
+  ([learned state across a restart](../reference/install-options.md#learned-state-across-a-restart)).
   Each variant learns its own figures. A sibling's measurement on the same
   engine configuration can price a new variant higher only with the opt-in
   [`enableLearnedStateReuse`](../reference/scaling-policy.md#enablelearnedstatereuse);
@@ -191,7 +191,7 @@ path"*. It is the better choice in these cases:
   install serves it over mutual TLS when it can, and says why when it stays on
   plaintext; an upgrade with existing ScaledObjects stays on plaintext until
   you move them
-  ([external scaler mutual TLS](../reference/configuration.md#external-scaler-mutual-tls)).
+  ([external scaler mutual TLS](../reference/install-options.md#external-scaler-mutual-tls)).
   The admin phase (`make setup-prereqs`) also writes a NetworkPolicy admitting
   the port only from KEDA's namespace when it knows that namespace, and warns
   that the port is open when it does not; the policy holds only where the

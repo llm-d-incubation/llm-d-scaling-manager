@@ -408,7 +408,7 @@ llmsm_warn_scaler_port_open() {
     log_warning "  To close it, as a cluster admin:"
     log_warning "    $phase_cmd"
     log_warning "  or serve the scaler over mutual TLS (LLMSM_SCALER_TLS=true; see"
-    log_warning "  docs/reference/configuration.md)."
+    log_warning "  docs/reference/install-options.md#external-scaler-mutual-tls)."
     log_warning "=================================================================="
 }
 

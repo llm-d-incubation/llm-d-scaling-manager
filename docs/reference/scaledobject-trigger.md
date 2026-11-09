@@ -77,7 +77,7 @@ reads it. On a TLS install (the default) its value is
 an `authenticationRef` to ClusterTriggerAuthentication
 `scaling-manager-external-scaler-<controller-namespace>`. On a plaintext install it is
 `scaling-manager-external-scaler.<controller-namespace>.svc.cluster.local:9090`, with no
-`authenticationRef`. See [external scaler mutual TLS](configuration.md#external-scaler-mutual-tls).
+`authenticationRef`. See [external scaler mutual TLS](install-options.md#external-scaler-mutual-tls).
 
 **A bad value freezes the model at its current count.** If `modelID` is empty,
 or `variantCost`, `warmPoolCopies` or `defaultOutputTokens` does not parse, the

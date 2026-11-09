@@ -126,6 +126,14 @@ make deploy-scaling-manager      LLMSM_NS=scaling-manager-${NAMESPACE} LLMSM_WAT
   keeps the limiter already declared there, and says so. Pass
   `LLMSM_LIMITER=gpu-inventory|quota` to replace it, or `LLMSM_LIMITER=none` to
   remove it ([gpu-limiter](../../reference/gpu-limiter.md)).
+- The tenant registers models against that controller: `make scaledobjects-plan`
+  and `make scaledobjects-apply` with `NAMESPACE=<ns>
+  LLMSM_NS=scaling-manager-<ns> LLMSM_WATCH_NS=<ns>`, so every trigger names
+  the scaler in `scaling-manager-<ns>`.
+- The quota and utilization share are then yours too. Run the sharing steps
+  with `CONTROLLER_NAMESPACE=scaling-manager-<ns> RESTART=1`: that controller
+  reads its policy only at start
+  ([when the controller is out of your reach](../../well-lit-paths/utilization-share/README.md#when-the-controller-is-out-of-your-reach)).
 - The tenant can still create a `scaling-manager-scaling-policy-config` in **their**
   namespace. It sets thresholds, tiers and utilization-share weights for their
   models, never the limiters ([security model](../../reference/security-model.md#multi-tenancy)).

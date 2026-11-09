@@ -241,7 +241,7 @@ $types" in
         else
             # The SAME answer the rest of the installer gets. `${LLMSM_SCOPE:-cluster}`
             # stood here and took the opposite default: everywhere else an unset
-            # LLMSM_SCOPE means `namespace` (llmsm_install_scope, and configuration.md
+            # LLMSM_SCOPE means `namespace` (llmsm_install_scope, and install-options.md
             # says so in as many words), so `deploy/install.sh` run directly with
             # no LLMSM_SCOPE keyed its quota on `default` while the comment below
             # said it would name the managed namespace.

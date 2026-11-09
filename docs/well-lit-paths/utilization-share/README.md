@@ -24,21 +24,46 @@ used or not (on-prem, a reservation, a team allotment).
   when a donor funds many models and the imbalance is not hard, the last is
   served late: about 100 minutes for 15 receivers, against 23 minutes when it
   is. Tested in simulation up to 16 models; benchmarked with two.
+- One model on one GPU type, or a latency-SLO target: llm-d's own KEDA
+  recipes are enough
+  ([where KEDA alone is enough](../../comparison/keda-alone.md#where-keda-alone-is-enough)).
 - More cases are in [Details](#more-cases-where-it-does-not-fit).
 
 ## Start here
 
-You need two or more models scaled by the scaling manager under one limiter,
-model servers that drain on termination, and `kubectl`, `jq`, `yq` and `make`
-in a checkout of this repository. Every step is in
-[Turn on the utilization-share optimizer, safely](../../guides/utilization-share/).
-Steps 2 to 4 are run by whoever owns the policy: the namespace owner for an
-own-install quota, the cluster admin for a policy in `scaling-manager-policy` or `llmsm-<ns>`.
+This is the main path. You need two or more models on one GPU product, model
+servers that drain on termination, and `kubectl`, `jq`, `yq` and `make` in a
+checkout of this repository. Each step links to the guide that has the
+commands.
 
-1. Namespace owner: [install with a quota](../../guides/install-in-namespace/), adding `LLMSM_LIMITER=quota LLMSM_QUOTAS='<accelerator>=<n>'`, or stand up the guide's [two-model trial](../../guides/utilization-share/README.md#a-trial-setup).
-2. [Check there is a budget to share](../../guides/utilization-share/README.md#prerequisites).
-3. [Turn it on in shadow, read what it would move, then activate it](../../guides/utilization-share/README.md#installation-instructions).
-4. [Check it works](../../guides/utilization-share/README.md#verification): the mode reads `active` and transfers end `done`.
+1. **Install passive, with the quota.** The controller decides for every
+   model and changes no replica count. Prepare the namespace, install with
+   `LLMSM_PASSIVE=true` and a quota, and register the models:
+   [Try it in passive mode, steps 1 to 3](../../guides/try-in-passive-mode/README.md#installation-instructions),
+   with the quota from
+   [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
+2. **Watch.** Leave it through each model's busy period. Compare what it would
+   order with what runs:
+   [Verification](../../guides/try-in-passive-mode/README.md#verification).
+3. **Turn on utilization share in shadow.** Check there is a budget to share,
+   then let it report what it would move, and move nothing:
+   [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
+4. **Go active.** Make the models active, one first if you want
+   ([Make one model active](../../guides/try-in-passive-mode/README.md#make-one-model-active)),
+   then turn the optimizer on and check that transfers end `done`:
+   [Turn on the utilization-share optimizer](../../guides/utilization-share/README.md#installation-instructions)
+   and its [Verification](../../guides/utilization-share/README.md#verification).
+
+Steps 3 and 4 are run by whoever owns the policy: the namespace owner for an
+own-install quota, the cluster admin for a policy in `scaling-manager-policy`
+or a controller out of the tenant's reach
+([Details](#when-the-controller-is-out-of-your-reach)).
+
+Already running the scaling manager active? Skip steps 1 and 2 and use the
+optimizer's own shadow mode:
+[Turn on the utilization-share optimizer, safely](../../guides/utilization-share/).
+Want to try it on two test models first? Stand up the guide's
+[two-model trial](../../guides/utilization-share/README.md#a-trial-setup).
 
 Models in several namespaces, one budget for all of them? Use [Share GPUs
 between models in different namespaces](../../guides/utilization-share-cluster-wide/)
@@ -48,13 +73,8 @@ between namespaces. If the scaling manager may not read every namespace, use
 install](../../guides/utilization-share-namespaced/): it manages only the
 llm-d namespaces, with a Role in each, under one quota.
 
-To see what sharing would move before anything scales, install the scaling
-manager passive first: [Utilization share in passive
-mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
-
 To undo, see [Cleanup](../../guides/utilization-share/README.md#cleanup). The
-guide's two-model trial holds GPUs until you tear it down. If the controller
-is out of your reach, see [Details](#when-the-controller-is-out-of-your-reach).
+guide's two-model trial holds GPUs until you tear it down.
 
 ## What it costs
 
@@ -88,8 +108,12 @@ table and timeline is in [measured](measured.md); all nine runs are summarised
   GPU-seconds. Two runs, one rise per model each; shadow alone differed from
   today by 24 s and 32 s on the prompt-heavy model. At
   20 000-token prompts the prompt-heavy burst was overloaded in every arm.
-- Not yet measured: whole-node or multi-GPU pods, a cluster-wide quota, and
-  the physical GPU limiter.
+- Shadow, which plans the same and moves nothing, should match running with
+  no sharing. It did not always: it differed by up to 32 s on the
+  prompt-heavy model, and in one run the quota did not bind every arm
+  ([measured](measured.md)).
+- Not yet measured: whole-node or multi-GPU pods, more than two models, a
+  cluster-wide quota, and the physical GPU limiter.
 
 ## Details
 
