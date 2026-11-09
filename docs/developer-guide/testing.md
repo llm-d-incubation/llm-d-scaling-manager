@@ -1877,10 +1877,79 @@ Job loses the API, 30 minutes of failed reads count as a lapse, and it keeps try
 delete for 6 hours. A run does not start without a Job that has read its lease. The
 check is `kubectl get deploy -n $BENCHMARK_NAMESPACE`.
 
+**The EPP's metrics are a precondition.** The run reads the router's histograms and its
+flow-control series straight from the EPP, from the `witness` pod, with the token the
+controller scrapes with (the Secret it mounts as `epp-metrics-token`). The EPP answers
+401 to a read with no token, and a read through the API server's pod proxy carries none:
+the API server strips the caller's credentials before it proxies. If the EPP cannot be
+read, the run stops before the warm-up and says why in `timeline.txt`. The Secret and
+the EPP's ports are tried three times, and a Deployment that cannot be read is named an
+API error, not a missing volume. The witness sleeps forever, the capture re-creates it
+when it is not Running, and three failed EPP scrapes in a row, or a failed Prometheus
+pull, are written to `timeline.txt`.
+
 **Reading the report.** The client's rate decides the mark, at the operating point.
-The router's column is a cross-check, because its buckets are wide where the targets
-sit. "How each phase ended" names the rule that stopped each phase: `client-p90` is
-the frozen rule, and `max-inflight` is the safety cap, whose step reads as a bound.
+How a reading becomes a crossing:
+
+- **The rate.** A step's reading is credited to the rate it sent, not the one it asked:
+  the driver logs its seed and schedule, and the analysis recomputes the arrivals the
+  schedule put in the window. The crossing is interpolated and bracketed on that rate.
+- **The envelope.** A step that reads above a later valid step is lowered to that
+  reading when the later one sits under its quantile's sampling band (the binomial
+  band of the order statistics) or the step drifted in its window (p90 of its second
+  half over 1.5 times its first, or under 1/1.5). On one fleet TTFT does not fall as
+  the rate rises, so such an excess was a transient. An excess inside the band is
+  noise: those steps are pooled, the isotonic fit weighted by requests. "Steps the
+  envelope moved" lists each, and a verdict read on one says so. In r1, one bad minute
+  in bucket A's step 2 (p50 from 38 to 70.5 ms) had set the crossing at 16.8 r/s
+  instead of 25.0.
+- **The cliff.** When the steps around a crossing read more than 4 times apart, a line
+  between them means nothing, and any target in that range crosses between them. The
+  bracket is the reading, marked "on the cliff". The step below must be valid, and the
+  step above must not be void for a reason that inflates its reading (send lag, a cut,
+  a fleet that moved, a burstier Ca2 than asked), must fail only as the fleet fails
+  (a 5xx, a 429, a timeout; not a refused connection or a 4xx), and must have no EPP
+  restart or engine error in its window. The gate does not stop on a cliff whose whole
+  bracket is in the mark, but it does not count it as a pass either. A cliff whose
+  bracket crosses or misses the mark stops the gate.
+- **A void step.** A crossing on one is a bound, and the gate stops on it. A step is
+  void when its rows fall short of its seeded schedule by more than one row and 0.1%:
+  a load process that died reads low, and would otherwise lower the steps before it.
+  A step with no schedule in its log is held to 3 standard deviations of its count of
+  arrivals around the rate asked, `sqrt(Ca2 / (rate x window))`.
+- **The router.** Its quantiles are read by linear interpolation inside wide buckets
+  (183.4 ms against the client's 130.1 at 13.3 r/s in r1), so they are not scored. Its
+  mean comes from `_sum` and `_count` and is exact. The report shows the router's mean
+  less the client's, which r1 put within 4 ms.
+
+**Above the prefill flow-control onset.** Once the router's prefill gate closes,
+requests wait in its queue. The model flags that wait (`AboveFlowControlOnset`) but
+does not price it yet. A bucket's `measureAboveOnset` in the spec adds steps at those
+multiples of its frozen prefill onset, after its scored steps and held the same way.
+They are never scored: no crossing, knee or falsifier reads them. The report's "Above
+the prefill onset" table lists every flow-control-on step past the onset, with the
+client's TTFT and the router queue's wait from the EPP's
+`llm_d_epp_flow_control_request_queue_duration_seconds`: the share that waited over
+10 ms, the mean, a coarse p90, the prefill gate's saturation and the queue's peak. The
+freeze refuses these steps unless flow control is on alone and they sit below the
+decode onset. That rules out A and B at 2+2, whose prefill onsets are past their decode
+knees, so B-onset (2+4) carries them, at 1.10x and 1.15x. In r1, B-onset reached 1.05x
+with the gate open (saturation 0.05) and no queue. The only queue r1 saw was at
+C-onset's collapse, at 1.14x. A further table, one per flow-control-on phase and
+measure-only steps included, gives each step's `vllm:num_requests_running` and
+`_waiting` per prefill pod (mean and max over the polls), the max across pods and the
+poll interval measured: a sampled lower bound on the engine's running cap L, equal to
+L only where a pod held at the cap with requests waiting, with `max_num_seqs` from the
+prefill Deployment's args when set; reported and not scored. The share waited is past
+the largest bucket edge at or under 10 ms, which the table names.
+
+For bursty buckets the freeze sizes each step's window for the top of the Ca2 band
+(1.25 times the Ca2 asked), because the analysis judges a step at the Ca2 it actually
+sent. Bucket C has extra steps between 0.80 and 0.925 of the knee. At 2+2, no window up
+to `maxHoldSeconds` holds 0.95 of the knee, so those are the steps a crossing can land on.
+
+"How each phase ended" names the rule that stopped each phase: `client-p90` is the
+frozen rule, and `max-inflight` is the safety cap, whose step reads as a bound.
 
 `make lint-deploy-scripts` runs `hack/check-staircase.sh`, which takes the exit paths it
 lists against a stub kubectl and checks the arithmetic against hand-worked figures. It

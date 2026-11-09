@@ -15,8 +15,10 @@ integrated over it. Every row carries stopped_by, the rule that ended the phase
 on that step, "" on a step no rule ended.
 
 report writes report.md into the run directory. The client is the witness: the
-mark is read from it, at the operating point only. The router is a cross-check
-and never decides a mark. The knee is reported apart, with no mark. A rate is
+mark is read from it, at the operating point only, on the envelope of its steps
+(staircase_lib.envelope). The router is a cross-check by its mean, and never decides
+a mark: its quantiles are coarse, and are kept in the rows but not scored. The knee
+is reported apart, with no mark. A rate is
 compared over the median of a bucket's repeats, and a verdict stands for the
 bucket only if every repeat agrees. A phase with no `done` file crashed: it is
 excluded and named, and a bucket with a repeat missing has no pass.
@@ -39,9 +41,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import staircase_lib as lib  # noqa: E402
+import staircase_load as load  # noqa: E402
 
 TTFT = "llm_d_epp_request_ttft_seconds"
 TPOT = "llm_d_epp_request_streaming_tpot_seconds"
+# The time a request waits in the router's flow-control queue, which fills once the
+# prefill gate closes: what the steps above the prefill onset are there to read.
+QUEUE = "llm_d_epp_flow_control_request_queue_duration_seconds"
+# A wait the report counts as one: over 10 ms, against a TTFT of hundreds.
+QUEUE_WAITED = 0.01
 PROM_STEP = 15
 PHASE = re.compile(r"^(.+)-(on|off)(?:-r(\d+))?$")
 INF = float("inf")
@@ -76,14 +84,19 @@ def read_pod_map(path):
 
 
 def read_raw_epp(path):
-    """The raw EPP scrape: {name: {t: {le or "": value}}}, summed over label sets."""
+    """The raw EPP scrape: {name: {t: {le or "": value}}}, summed over label sets, one EPP
+    pod a poll: the first pod a poll names is the one read, so two pods' counters, which
+    reset apart, are never added."""
     raw = collections.defaultdict(lambda: collections.defaultdict(lambda: collections.defaultdict(float)))
+    pod_at = {}
     for line in read_lines(path):
         p = line.split()
         if len(p) < 4:
             continue
+        if pod_at.setdefault(p[0], p[1]) != p[1]:
+            continue
         name = p[2].split("{")[0]
-        if not (name.startswith(TTFT) or name.startswith(TPOT)):
+        if not (name.startswith(TTFT) or name.startswith(TPOT) or name.startswith(QUEUE)):
             continue
         m = re.search(r'le="([^"]*)"', p[2])
         raw[name][lib.ts(p[0])][m[1] if m else ""] += float(p[-1])
@@ -118,16 +131,34 @@ def replicas_seen(samples, a, b):
 
 
 def read_engine(path):
-    """{role: {pod: {sum or count: [(t, value)]}}} of the engines' TTFT counters."""
+    """{role: {pod: {...}}} of the engines: "sum" and "count" are the TTFT counters as
+    [(t, value)]; "running" and "waiting" the request gauges as {t: value}, summed over a
+    pod's engines, since a data-parallel pod reports one series per engine."""
     out = {"decode": {}, "prefill": {}}
     for line in read_lines(path):
         p = line.split()
-        if len(p) < 4 or "time_to_first_token_seconds_" not in p[2]:
+        if len(p) < 4:
             continue
         role = "decode" if "-decode-" in p[1] else "prefill" if "-prefill-" in p[1] else None
-        if role:
-            kind = "sum" if "_sum" in p[2] else "count"
-            out[role].setdefault(p[1], {"sum": [], "count": []})[kind].append((lib.ts(p[0]), float(p[-1])))
+        if not role:
+            continue
+        pod = out[role].setdefault(p[1], {"sum": [], "count": [], "running": {}, "waiting": {}})
+        if "time_to_first_token_seconds_" in p[2]:
+            pod["sum" if "_sum" in p[2] else "count"].append((lib.ts(p[0]), float(p[-1])))
+        elif p[2].startswith(("vllm:num_requests_running", "vllm:num_requests_waiting")):
+            gauge = pod["running" if "_running" in p[2] else "waiting"]
+            t = lib.ts(p[0])
+            gauge[t] = gauge.get(t, 0.0) + float(p[-1])
+    return out
+
+
+def gauge_figures(pods, key, a, b):
+    """{pod: [mean, max]} of a gauge over the polls in [a, b); pods with no poll there are left out."""
+    out = {}
+    for name, series in sorted(pods.items()):
+        seen = [v for t, v in series[key].items() if a <= t < b]
+        if seen:
+            out[name] = [sum(seen) / len(seen), max(seen)]
     return out
 
 
@@ -213,7 +244,14 @@ def client_figures(win, span, pods=None):
     spread = math.sqrt(lib.scv(prompts)) if len(prompts) > 1 else math.nan
     pairs = [((len(r) > 10 and r[10]) or (pods or {}).get(r[0], ""), float(r[3])) for r in win]
     by_pod = lib.ca2_by_pod(pairs)
-    return dict(due=len(win), failed=len(win) - len(ok), completed=len(ok), achieved=len(win) / span,
+    passed = {id(r) for r in ok}
+    failed = [r for r in win if id(r) not in passed]
+    other = sum(1 for r in failed if not lib.fleet_failure(r[6], r[9] if len(r) > 9 else ""))
+    cis = {}
+    for q in (50, 90, 95):
+        cis["client_ttft_p%d_lo" % q], cis["client_ttft_p%d_hi" % q] = lib.pct_ci(ttft, q / 100)
+    return dict(cis, failed_other=other,
+                due=len(win), failed=len(win) - len(ok), completed=len(ok), achieved=len(win) / span,
                 ca2_sent=lib.arrival_ca2([float(r[3]) for r in win]), ca2_by_pod=by_pod or None,
                 lag_p99=lib.pct(lag, 0.99), prompt_mean=mean_p, prompt_cv=spread,
                 client_ttft_p50=lib.pct(ttft, .5), client_ttft_p90=lib.pct(ttft, .9),
@@ -241,6 +279,67 @@ def router_figures(row, raw, prom, a, b):
             row[key + "_mean"] = prom_total(prom, prom_key.replace("_bucket", "_sum"), a, b) / count
 
 
+def queue_figures(row, raw, prom, a, b):
+    """The router queue's wait into row: how many waited, the share over QUEUE_WAITED, the
+    mean, and a coarse p90. Raw scrape first, Prometheus else; nothing with neither."""
+    h = raw_delta(raw, QUEUE, a, b) or prom_delta(prom, "fc_queue_bucket", a, b)
+    if not h or not h["cum"] or h["cum"][-1][1] <= 0:
+        return
+    total = h["cum"][-1][1]
+    # The histogram says nothing finer than its edges: the share counted is the one past
+    # the largest edge at or under QUEUE_WAITED, and that edge is kept beside it.
+    under = [(le, c) for le, c in h["cum"] if le <= QUEUE_WAITED]
+    row["fc_wait_n"], row["fc_wait_src"] = total, h["src"]
+    if under:
+        edge, count = max(under)
+        row["fc_waited_share"], row["fc_waited_edge"] = max(0.0, 1 - count / total), edge
+    row["fc_wait_p90_coarse"] = lib.hist_quantile(h["cum"], 0.9)[0]
+    if h.get("_count"):
+        row["fc_wait_mean"] = h["_sum"] / h["_count"]
+    else:
+        count = prom_total(prom, "fc_queue_count", a, b)
+        if count:
+            row["fc_wait_mean"] = prom_total(prom, "fc_queue_sum", a, b) / count
+
+
+PLAN_LINE = re.compile(r"\d+ levels, \d+ s, \d+ requests, seed (-?\d+): (\S+)")
+
+
+def read_plan(lines, rows):
+    """([(due offset, level)], t0) of the seeded schedule the driver logged, t0 the epoch its
+    offsets count from, read off a row (its scheduled time less its due offset); (None, 0)
+    when the log has no plan line or no row lines up with it."""
+    for line in lines[:5]:
+        m = PLAN_LINE.search(line)
+        if m:
+            plan = [(due, n) for due, n, _, _ in load.arrivals(load.parse_schedule(m[2]), int(m[1]))]
+            for r in rows:
+                i = int(r[0]) if r[0].isdigit() else -1
+                if 0 <= i < len(plan) and plan[i][1] == int(r[1]):
+                    return plan, float(r[2]) - plan[i][0]
+            return None, 0.0
+    return None, 0.0
+
+
+def read_epp_pods(path):
+    """[(t, pod)] of the EPP pods the raw scrape read, one a poll."""
+    seen = {}
+    for line in read_lines(path):
+        p = line.split(None, 2)
+        if len(p) >= 2:
+            seen.setdefault(p[0], p[1])
+    return [(lib.ts(t), pod) for t, pod in seen.items()]
+
+
+def poll_interval(pods, a, b):
+    """The median seconds between a prefill pod's polls in [a, b); None with under two."""
+    gaps = []
+    for series in pods.values():
+        ts_ = sorted(t for t in series["running"] if a <= t < b)
+        gaps += [y - x for x, y in zip(ts_, ts_[1:])]
+    return lib.median(gaps) if gaps else None
+
+
 def analyze_steps(run, phase, discard):
     """One row a judged step, stop rule on each."""
     d = os.path.join(run, "phases", phase)
@@ -250,6 +349,9 @@ def analyze_steps(run, phase, discard):
     raw, prom = read_raw_epp(run + "/epp-metrics.log"), read_prom(d + "/prom.jsonl")
     engine = read_engine(run + "/vllm-metrics.log")
     replicas = read_replicas(run + "/replicas.log")
+    plan, t0 = read_plan(read_lines(d + "/sweep.log"), rows)
+    errors = [lib.ts(line.split()[0]) for line in read_lines(run + "/engine-errors.txt") if line.strip()]
+    epp = read_epp_pods(run + "/epp-metrics.log")
     by_level = collections.defaultdict(list)
     for r in rows:
         by_level[int(r[1])].append(r)
@@ -268,12 +370,25 @@ def analyze_steps(run, phase, discard):
                    hold_s=level["hold"], truncated=span < level["hold"] - discard,
                    stopped_by=stop["rule"] if stop and stop["level"] == level["n"] else "")
         row.update(client_figures(win, span, pods))
+        if plan is not None:
+            # The seeded schedule fixed what was sent: the rate is what it put in the window,
+            # and a step whose rows fall short of it lost requests the analysis cannot see.
+            row["scheduled"] = sum(1 for due, n in plan if n == level["n"] and a <= t0 + due < b)
+            row["recorded"] = len(win)
+            row["achieved"] = row["scheduled"] / span
+        row["engine_errors"] = sum(1 for t in errors if a <= t < b)
+        row["epp_pods"] = sorted({pod for t, pod in epp if a <= t < b})
         row["completion_rate"] = sum(1 for r in rows if r[6] == "200" and a <= float(r[5]) < b) / span
         router_figures(row, raw, prom, a, b)
+        queue_figures(row, raw, prom, a, b)
         pre, dec = engine_mean(engine["prefill"], a, b), engine_mean(engine["decode"], a, b)
         if pre is not None and dec is not None and row["client_ttft_mean"] == row["client_ttft_mean"]:
             row["engine_prefill_mean"], row["engine_decode_mean"] = pre, dec
             row["hop_mean"] = row["client_ttft_mean"] - pre - dec
+        # The prefill engines' running cap L, as each pod's poll read it: reported, not scored.
+        row["prefill_running"] = gauge_figures(engine["prefill"], "running", a, b)
+        row["prefill_waiting"] = gauge_figures(engine["prefill"], "waiting", a, b)
+        row["engine_poll_s"] = poll_interval(engine["prefill"], a, b)
         row["replicas"] = replicas_seen(replicas, a, b)
         row["fc_saturation"] = series_mean(prom, "fc_saturation", a, b)
         row["fc_queue"] = series_mean(prom, "fc_queue", a, b)
@@ -335,6 +450,21 @@ def fail(verdict):
     return verdict.startswith("FAIL")
 
 
+def router_agreement(repeats):
+    """The router's mean TTFT less the client's over a bucket's steps, in ms, as text.
+
+    The cross-check the router can give: its mean comes from _sum and _count and is
+    exact, where its quantiles are read inside wide buckets. Steps with a failure are
+    left out: the client counts a failure as infinitely slow, the router not at all.
+    """
+    diffs = [1000 * (r["router_ttft_mean"] - r["client_ttft_mean"]) for rows in repeats.values() for r in rows
+             if r.get("router_ttft_mean") is not None and math.isfinite(r["router_ttft_mean"])
+             and math.isfinite(r.get("client_ttft_mean", math.nan)) and r.get("failed", 0) == 0]
+    if not diffs:
+        return "no router mean"
+    return "%+.1f to %+.1f over %d steps" % (min(diffs), max(diffs), len(diffs))
+
+
 def judge(predicted, per_repeat, missing=()):
     """(median measured text, ratio, verdict) over the repeats' measured() results.
 
@@ -347,17 +477,19 @@ def judge(predicted, per_repeat, missing=()):
     if missing and not any(fail(v) for v in verdicts):
         text = lib.show(*per_repeat[0]) if per_repeat else "none finished"
         return text, "n/a", "no mark, repeat %s missing" % ",".join(str(n) for n in missing)
-    values = [(v[0] + v[1]) / 2 if k == "bound" else v for k, v in per_repeat if v is not None]
+    values = [(v[0] + v[1]) / 2 if k in ("bound", "cliff") else v for k, v in per_repeat if v is not None]
     centre = lib.median(values) if values else None
     bound = any("a bound" in v for v in verdicts)
+    cliff = any("on the cliff" in v for v in verdicts)
     if any(fail(v) for v in verdicts):
-        verdict = "FAIL, a bound" if bound else "FAIL"
+        verdict = "FAIL, a bound" if bound else "FAIL, on the cliff" if cliff else "FAIL"
     elif lib.NO_VALID_CROSSING in verdicts:
         verdict = lib.NO_VALID_CROSSING
-    elif all(v.startswith("in the mark") for v in verdicts):
-        verdict = "in the mark, a bound" if bound else "in the mark"
+    elif all(v.startswith("in the mark") or v == lib.CLIFF_IN for v in verdicts):
+        # A bound outranks the cliff: the gate stops on a bound, and not on the cliff.
+        verdict = "in the mark, a bound" if bound else lib.CLIFF_IN if cliff else "in the mark"
     else:
-        verdict = "no mark, a bound" if bound else "no mark"
+        verdict = "no mark, a bound" if bound else "no mark, on the cliff" if cliff else "no mark"
     if len(per_repeat) == 1:
         kind, value = per_repeat[0]
         return lib.show(kind, value), lib.mark(predicted, kind, value)[0], lib.mark(predicted, kind, value)[1]
@@ -421,6 +553,61 @@ def expected_phases(spec, finished, frozen, only_gate, repeats):
     return out
 
 
+def moved_note(used):
+    """What a verdict's text adds when its crossing was read on a step the envelope moved."""
+    if "lowered" in used:
+        return " (read on a lowered step)"
+    if "pooled" in used:
+        return " (read on pooled steps)"
+    return ""
+
+
+def prefill_running_cap(data, measure, frozen, out, max_num_seqs=None):
+    """One table a flow-control-on phase: each step's prefill engines' running and waiting
+    requests, per pod, as the poll read vllm:num_requests_running and _waiting. The running
+    cap L the router's gate stands in front of; reported, not scored."""
+    print("\n## The prefill engines' running requests, flow control on\n", file=out)
+    print("What each prefill pod ran at once, as its polls read it, scored by nothing. Per pod mean / "
+          "max. The running max is the most any poll read: a sampled lower bound on the engine's "
+          "running cap L, at the poll interval shown, and L itself only where a pod held at the cap "
+          "with requests waiting in the engine. The prefill Deployment's args set max_num_seqs %s.\n"
+          % ("to %d" % max_num_seqs if max_num_seqs else "nowhere the run recorded (vLLM's default applies)"), file=out)
+    shown = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        if fc != "on":
+            continue
+        onset = frozen[bucket]["onsets"].get("Prefill")
+        for n in sorted(repeats):
+            extra = measure.get((bucket, fc, n), [])
+            rows = sorted(repeats[n] + extra, key=lambda r: r["level"])
+            print("### %s on r%d\n" % (bucket, n), file=out)
+            print("| Step | Rate, r/s | Over the onset | Role | Running, per pod mean / max | Running max, all pods, a sampled lower bound | Waiting, per pod mean / max | Poll, s |", file=out)
+            print("| --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
+            for r in rows:
+                shown += 1
+                running, waiting = r.get("prefill_running") or {}, r.get("prefill_waiting") or {}
+                poll = r.get("engine_poll_s")
+                print("| %d | %.1f | %s | %s | %s | %s | %s | %s |" % (
+                    r["level"], r["rate"], "%.2fx" % (r["rate"] / onset) if onset else "no onset",
+                    "measure only" if r in extra else "scored",
+                    " ".join("%.1f / %.0f" % tuple(v) for v in running.values()) or "unread",
+                    "%.0f" % max(v[1] for v in running.values()) if running else "unread",
+                    " ".join("%.1f / %.0f" % tuple(v) for v in waiting.values()) or "unread",
+                    "%.0f" % poll if poll else "unread"), file=out)
+            print(file=out)
+    if not shown:
+        print("No flow-control-on step.", file=out)
+
+
+MAX_NUM_SEQS = re.compile(r"--max[-_]num[-_]seqs[= ]+(\d+)")
+
+
+def read_max_num_seqs(run):
+    """max_num_seqs from the prefill Deployment's args the run saved (prefill-args.txt); None unset."""
+    m = MAX_NUM_SEQS.search(" ".join(read_lines(os.path.join(run, "prefill-args.txt"))))
+    return int(m[1]) if m else None
+
+
 def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False):
     """The report; returns the verdicts by (bucket, fc, reading). repeats and only_gate narrow it to a gate."""
     frozen = {b["name"]: b for b in frozen_file["buckets"]}
@@ -428,13 +615,19 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
     ratio_q = {r["percentile"]: r.get("value") for r in frozen_file.get("tpotRatio", [])}
     finished, crashed = phases_of(run)
     expected = expected_phases(spec, finished, frozen, only_gate, repeats or range(1, spec.get("repeats", 1) + 1))
-    data, missing = {}, {}
+    data, missing, measure = {}, {}, {}
     for key, wanted in sorted(expected.items()):
         found = finished.get(key, {})
         data[key] = {n: load_steps(run, found[n]) for n in wanted if n in found}
         missing[key] = [n for n in wanted if n not in found]
         for rows in data[key].values():
             flag_steps(rows, frozen[key[0]], spec["promptCV"])
+        # The measurement-only steps leave the scored rows here: no crossing, knee or
+        # falsifier reads them.
+        rates = lib.measure_rates(frozen[key[0]], spec)
+        for n, rows in data[key].items():
+            measure[key + (n,)] = [r for r in rows if lib.is_measure(r["rate"], rates)]
+            data[key][n] = [r for r in rows if not lib.is_measure(r["rate"], rates)]
 
     print("# Staircase report\n", file=out)
     if crashed:
@@ -479,7 +672,12 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         print("| none | | |", file=out)
 
     print("\n## TTFT at the operating point\n", file=out)
-    print("| Bucket | Flow control | q | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router, cross-check |", file=out)
+    print("A step reading above a later valid step reads that step's figure: TTFT does not fall as the rate "
+          "rises (lowered steps are listed below). A crossing between steps over %g times apart is on the "
+          "cliff: its bracket is the reading, the gate stops on it unless the whole bracket is in the mark, "
+          "and it never counts as a pass. The router's quantiles are read from wide buckets and are not "
+          "scored; its mean, which is exact, is set against the client's.\n" % lib.CLIFF_FACTOR, file=out)
+    print("| Bucket | Flow control | q | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router mean less client mean, ms |", file=out)
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
     verdicts = {}
     for (bucket, fc), repeats in sorted(data.items()):
@@ -487,13 +685,33 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         for t in b["targets"]:
             q = int(t["percentile"])
             predicted = t["predictedOff"] if fc == "off" else t["predictedOn"]
-            client = [lib.measured(rows, "client_ttft_p%d" % q, t["seconds"]) for _, rows in sorted(repeats.items())]
-            router = [lib.measured(rows, "router_ttft_p%d" % q, t["seconds"]) for _, rows in sorted(repeats.items())]
+            used = []
+            client = [lib.measured(rows, "client_ttft_p%d" % q, t["seconds"], x="achieved", used=used)
+                      for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(predicted, client, missing[bucket, fc])
-            rtext, rratio, _ = judge(predicted, router, missing[bucket, fc])
             verdicts[bucket, fc, "ttft", q] = verdict
-            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s | %s, %s |" % (
-                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, rtext, rratio), file=out)
+            print("| %s | %s | p%d | %.1f ms | %.1f | %s | %s | %s%s | %s |" % (
+                bucket, fc, q, t["seconds"] * 1000, predicted, text, ratio, verdict, moved_note(used),
+                router_agreement(repeats)), file=out)
+
+    print("\n## Steps the envelope moved\n", file=out)
+    print("Lowered: the step read above a later valid step by more than its own sampling band, or "
+          "moved inside its window. Pooled: the excess was inside the band, and the steps share their "
+          "weighted mean. A verdict read on either says so.\n", file=out)
+    print("| Phase | Step | Reading | How | Read, ms | Scored, ms |", file=out)
+    print("| --- | --- | --- | --- | --- | --- |", file=out)
+    moved = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        for n, rows in sorted(repeats.items()):
+            for q in sorted({int(t["percentile"]) for t in frozen[bucket]["targets"]}):
+                key = "client_ttft_p%d" % q
+                for r, scored, how in zip(rows, *lib.envelope_marks(rows, key)):
+                    if how and r.get(key) is not None:
+                        moved += 1
+                        print("| %s %s r%d | %d | p%d | %s | %.1f | %.1f |" % (
+                            bucket, fc, n, r["level"], q, how, 1000 * r[key], 1000 * scored), file=out)
+    if not moved:
+        print("| none | | | | | |", file=out)
 
     print("\n## TPOT at the operating point\n", file=out)
     print("| Bucket | Flow control | Reading | Target | Predicted r/s | Measured r/s, client | Ratio | Mark | Router, cross-check |", file=out)
@@ -507,13 +725,17 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         for name, router_key, client_key, target in readings:
             if not target > 0:
                 continue
-            client = [lib.measured(rows, client_key, target) for _, rows in sorted(repeats.items())]
-            router = [lib.measured(rows, router_key, target) for _, rows in sorted(repeats.items())]
+            client = [lib.measured(rows, client_key, target, x="achieved") for _, rows in sorted(repeats.items())]
             text, ratio, verdict = judge(b["operatingRate"], client, missing[bucket, fc])
-            rtext, rratio, _ = judge(b["operatingRate"], router, missing[bucket, fc])
             verdicts[bucket, fc, "tpot", name] = verdict
-            print("| %s | %s | %s | %.1f ms | %.1f | %s | %s | %s | %s, %s |" % (
-                bucket, fc, name, target * 1000, b["operatingRate"], text, ratio, verdict, rtext, rratio), file=out)
+            if name == "mean":
+                router = [lib.measured(rows, router_key, target, x="achieved") for _, rows in sorted(repeats.items())]
+                rtext, rratio, _ = judge(b["operatingRate"], router, missing[bucket, fc])
+                cross = "%s, %s" % (rtext, rratio)
+            else:
+                cross = "not scored: coarse buckets"
+            print("| %s | %s | %s | %.1f ms | %.1f | %s | %s | %s | %s |" % (
+                bucket, fc, name, target * 1000, b["operatingRate"], text, ratio, verdict, cross), file=out)
 
     print("\n## The knee, reported apart\n", file=out)
     print("A step held if completions in its window came within 3% of what was sent and nothing failed. No mark applies.\n", file=out)
@@ -544,6 +766,42 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             print("| %s | %d | %.1f | %.1f | %.2f | %.0f | %.2f | %s |" % (
                 bucket, n, onset, r["rate"], saturation, queue, r["window_s"] / r["need_s"],
                 "no: under the noise floor" if r["noise_flag"] else "yes"), file=out)
+
+    print("\n## Above the prefill onset: the router queue's wait\n", file=out)
+    print("Every flow-control-on step above the frozen prefill onset. Measure-only steps are scored by nothing: "
+          "the model flags this wait (AboveFlowControlOnset) and does not price it. Waited is the share of "
+          "requests the router queue held past the largest bucket edge at or under %g ms, shown with it "
+          "(the histogram reads nothing finer); its p90 is read inside wide buckets.\n" % (1000 * QUEUE_WAITED), file=out)
+    print("| Bucket | Repeat | Step, r/s | Over the onset | Role | Client TTFT p50 / p90, ms | Waited | Wait mean, ms | Wait p90, ms, coarse | Prefill gate saturation, mean / peak | Queue, peak | Held |", file=out)
+    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
+    shown = 0
+    for (bucket, fc), repeats in sorted(data.items()):
+        onset = frozen[bucket]["onsets"]["Prefill"]
+        if fc != "on" or not onset:
+            continue
+        for n in sorted(repeats):
+            rows = sorted(repeats[n] + measure.get((bucket, fc, n), []), key=lambda r: r["level"])
+            for r in rows:
+                if r["rate"] <= onset:
+                    continue
+                shown += 1
+                gate = r.get("fc_saturation", {})
+                pre = [v for k, v in gate.items() if "prefill" in k.split()]
+                print("| %s | %d | %.1f | %.2fx | %s | %.1f / %.1f | %s | %s | %s | %s | %s | %s |" % (
+                    bucket, n, r["rate"], r["rate"] / onset,
+                    "measure only" if r in measure.get((bucket, fc, n), []) else "scored",
+                    1000 * r["client_ttft_p50"], 1000 * r["client_ttft_p90"],
+                    ("%.1f%%" % (100 * r["fc_waited_share"]) + (" past %g ms" % (1000 * r["fc_waited_edge"]) if "fc_waited_edge" in r else ""))
+                    if "fc_waited_share" in r else "unread",
+                    "%.1f" % (1000 * r["fc_wait_mean"]) if "fc_wait_mean" in r else "unread",
+                    "%.1f" % (1000 * r["fc_wait_p90_coarse"]) if "fc_wait_p90_coarse" in r else "unread",
+                    "%.2f / %.2f" % tuple(pre[0]) if pre else "unread",
+                    "%.0f" % max((v[1] for v in r.get("fc_queue", {}).values()), default=math.nan) if r.get("fc_queue") else "unread",
+                    "yes" if lib.held(r) else "no"), file=out)
+    if not shown:
+        print("| none | | | | | | | | | | | |", file=out)
+
+    prefill_running_cap(data, measure, frozen, out, read_max_num_seqs(run))
 
     print("\n## Model against client, per step\n", file=out)
     print("Report only: flow control off, the frozen curve at the step's rate.\n", file=out)
@@ -592,14 +850,18 @@ def gate(run, frozen, spec, repeat, out):
     """Score one repeat of the gate buckets: 0 to go on, 1 to stop. Written beside the report."""
     with open(os.path.join(run, "gate-r%d.md" % repeat), "w", encoding="utf8") as f:
         verdicts = report(run, frozen, spec, None, f, repeats=[repeat], only_gate=True)
-    # A void step can pass no gate: a crossing on one is a bound, not a reading.
-    bad = {k: v if fail(v) or "missing" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
-           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING)}
+    # A void step can pass no gate: a crossing on one is a bound, not a reading. A crossing
+    # on the cliff stops it unless its whole bracket is in the mark, and passes nothing.
+    bad = {k: v if fail(v) or "missing" in v or "on the cliff" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
+           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
+                                  or v == "no mark, on the cliff")}
     if not verdicts:
         print("gate repeat %d: no gate bucket to score" % repeat, file=out)
         return 1
-    print("gate repeat %d: %d readings, %d stop the run%s" % (
+    cliff = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == lib.CLIFF_IN)
+    print("gate repeat %d: %d readings, %d stop the run%s%s" % (
         repeat, sum(1 for k in verdicts if k[2] == "ttft"), len(bad),
+        ", %d on the cliff and in the mark, not scored" % cliff if cliff else "",
         ": " + "; ".join("%s %s p%s %s" % (k[0], k[1], k[3], v) for k, v in sorted(bad.items())) if bad else ""), file=out)
     return 1 if bad else 0
 
