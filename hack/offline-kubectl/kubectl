@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# kubectl for the checks that need no cluster. A check puts this directory first on
+# PATH: renders (kustomize) and client-side work (--dry-run=client, --local,
+# version --client) go to the real kubectl further down PATH; anything that would read
+# or write a cluster fails, as an unreachable cluster would, so a check's result never
+# depends on what the current kube context points at.
+set -u
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real=""
+IFS=: read -ra dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+    [ -n "$d" ] && [ -d "$d" ] || continue
+    [ "$(cd "$d" && pwd)" = "$self" ] && continue
+    if [ -x "$d/kubectl" ]; then real="$d/kubectl"; break; fi
+done
+case " $* " in
+    *" kustomize "*|*" --dry-run=client "*|*" --local "*|*" version --client "*)
+        [ -n "$real" ] || { echo "offline kubectl: no kubectl further down PATH" >&2; exit 1; }
+        exec "$real" "$@" ;;
+esac
+echo "offline check: kubectl $* is not run; this check reads no cluster" >&2
+exit 1

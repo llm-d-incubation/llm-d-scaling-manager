@@ -14,6 +14,8 @@
 # first function definition.
 
 set -u
+# No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl).
+PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
 
 # CHECK_ROOT runs the check against another tree -- how its negative control is
 # taken: point it at an extracted older deploy/ and the cases must fail.

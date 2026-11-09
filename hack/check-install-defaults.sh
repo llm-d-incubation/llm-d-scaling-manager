@@ -14,6 +14,8 @@
 # ended early.
 
 set -u
+# No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl).
+PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
