@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 # kubectl for the checks that need no cluster. A check puts this directory first on
 # PATH: renders (kustomize) and client-side work (--dry-run=client, --local,
-# version --client) go to the real kubectl further down PATH; anything that would read
-# or write a cluster fails, as an unreachable cluster would, so a check's result never
-# depends on what the current kube context points at.
+# version --client) go to the real kubectl; anything that would read or write a cluster
+# fails, as an unreachable cluster would, so a check's result never depends on what the
+# current kube context points at.
+#
+# The real kubectl is OFFLINE_KUBECTL_REAL, which whoever puts this on PATH resolves
+# first. It is never looked up on PATH from here: a check that stubs kubectl and has its
+# stub call "the real one" (command -v kubectl, which is this) would otherwise be found
+# here as the real one, and the two would call each other without end.
 set -u
-self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-real=""
-IFS=: read -ra dirs <<< "$PATH"
-for d in "${dirs[@]}"; do
-    [ -n "$d" ] && [ -d "$d" ] || continue
-    [ "$(cd "$d" && pwd)" = "$self" ] && continue
-    if [ -x "$d/kubectl" ]; then real="$d/kubectl"; break; fi
-done
+real="${OFFLINE_KUBECTL_REAL:-}"
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kubectl"
 case " $* " in
     *" kustomize "*|*" --dry-run=client "*|*" --local "*|*" version --client "*)
-        [ -n "$real" ] || { echo "offline kubectl: no kubectl further down PATH" >&2; exit 1; }
-        exec "$real" "$@" ;;
+        if [ -z "$real" ] || [ ! -x "$real" ] || [ "$(cd "$(dirname "$real")" && pwd)/$(basename "$real")" = "$self" ]; then
+            echo "offline kubectl: OFFLINE_KUBECTL_REAL names no other kubectl ('$real')" >&2
+            exit 1
+        fi
+        # A call back into here from below the real kubectl is a loop: refuse it.
+        if [ -n "${OFFLINE_KUBECTL_DEPTH:-}" ]; then
+            echo "offline kubectl: called again from under the real kubectl; refusing a loop" >&2
+            exit 1
+        fi
+        OFFLINE_KUBECTL_DEPTH=1 exec "$real" "$@" ;;
 esac
 echo "offline check: kubectl $* is not run; this check reads no cluster" >&2
 exit 1

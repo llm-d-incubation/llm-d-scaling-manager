@@ -3090,6 +3090,7 @@ lint: golangci-lint ## Run golangci-lint linter
 .PHONY: lint-deploy-scripts
 # The checks read no cluster: every kubectl their recipes, scripts and make -n runs
 # reach renders or fails (hack/offline-kubectl), whatever the current kube context is.
+lint-deploy-scripts: export OFFLINE_KUBECTL_REAL := $(shell command -v kubectl 2>/dev/null)
 lint-deploy-scripts: export PATH := $(CURDIR)/hack/offline-kubectl:$(PATH)
 lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and deploy plugins
 	@echo "Syntax-checking deploy shell scripts..."
@@ -3118,6 +3119,7 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@bash -n hack/check-watch-namespace-list.sh
 	@bash -n hack/check-kueue-queues.sh
 	@bash -n hack/check-cluster-controller-namespace.sh
+	@bash -n hack/check-offline-kubectl.sh
 	@bash -n hack/check-llmd-monitors.sh
 	@bash -n hack/check-setup-prereqs-render.sh
 	@bash -n hack/check-e2e-images.sh
@@ -3358,6 +3360,7 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@echo "Checking a cluster-scoped install into a non-default controller namespace..."
 	@# CONTROLLER_NAMESPACE must reach every step of the cluster-wide guide.
 	@bash hack/check-cluster-controller-namespace.sh
+	@bash hack/check-offline-kubectl.sh
 	@echo "Checking setup adds the monitors a fresh llm-d lacks, and flow control off is a warning..."
 	@# A fresh llm-d install has neither, and the preflight used to refuse it.
 	@bash hack/check-llmd-monitors.sh

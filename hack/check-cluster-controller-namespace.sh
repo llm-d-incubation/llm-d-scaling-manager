@@ -20,6 +20,7 @@
 set -u
 # No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl). make -n
 # still runs a recipe line that calls $(MAKE), and those lines call kubectl too.
+OFFLINE_KUBECTL_REAL="${OFFLINE_KUBECTL_REAL:-$(command -v kubectl || true)}"; export OFFLINE_KUBECTL_REAL
 PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
 
 # CHECK_ROOT runs the check against another tree -- how its negative control is

@@ -18,6 +18,7 @@
 # all this does: --dry-run, then assert the shape. It needs no cluster.
 set -u
 # No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl).
+OFFLINE_KUBECTL_REAL="${OFFLINE_KUBECTL_REAL:-$(command -v kubectl || true)}"; export OFFLINE_KUBECTL_REAL
 PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
 
 SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/deploy/warmpool.sh"
