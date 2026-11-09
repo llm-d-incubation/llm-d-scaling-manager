@@ -77,7 +77,7 @@ exist yet, not a missing directory; every save went through.
 | Hold | 10 minutes, first 3 discarded, lengthened to fit 4 relaxation times, at most 25 minutes | Page, with a cap |
 | Stop | Client p90 above twice the p90 target over the whole window | Page |
 | Safety stop | 4000 in flight. It is not a judgement: a step it cuts is a bound. The report names which rule ended each phase, which M2's log did not | Fixes an M2 deviation |
-| Validity | Achieved rate within 3%, failures at most 1%, send lag p99 at most 100 ms, `replicas.log` at the bucket's fleet, `Ca²` sent within 0.75 to 1.25 of asked, at the noise floor. A step past any of these is void: a crossing on it is a bound, and the report lists it. No engine error, or the run stops | M2's, enforced |
+| Validity | Every request the seeded schedule put in the window recorded (one row and 0.1% of slack), the reading credited to the rate that schedule sent, failures at most 1%, send lag p99 at most 100 ms, `replicas.log` at the bucket's fleet, `Ca²` sent within 0.75 to 1.25 of asked, at the noise floor. A step past any of these is void: a crossing on it is a bound, and the report lists it. No engine error, or the run stops | M2's, enforced |
 | Seeds | From 3001, a new one per phase. None of M2's 201 to 206 | |
 | Repeats | 3, and the statistic is the median. A verdict stands only if every repeat agrees | Page |
 
@@ -208,33 +208,37 @@ learned `R_q` does.
 
 ## What it costs
 
-From `staircase_freeze.py plan` on M2's warm-up, at every step of every ladder. A
-phase that stops early costs less: M2's phases ran 34 to 74 minutes of a 100-minute
-ladder.
+From `staircase_freeze.py plan` on r1's frozen warm-up, each ladder laid from the
+spec's steps times the bucket's knee as a fresh freeze lays it, at every step of every
+ladder. A phase that stops early costs less: M2's phases ran 34 to 74 minutes of a
+100-minute ladder.
 
 | Bucket | Pods | Hours a phase | Phases | GPU-hours |
 | --- | --- | --- | --- | --- |
-| A | 4 | 1.70 | 6 | 41 |
-| B | 4 | 1.69 | 6 | 41 |
-| C | 4 | 1.90 | 6 | 46 |
-| `B-onset` | 6 | 1.34 | 3 | 24 |
-| `C-onset` | 6 | 1.75 | 3 | 32 |
-| **Gate** | | | **24** | **182** |
-| `H-3k` | 4 | 1.69 | 3 | 20 |
-| `H-16k` | 4 | 1.98 | 3 | 24 |
-| `H-pods` | 6 | 1.69 | 3 | 30 |
-| `H-ca2` | 4 | 1.77 | 3 | 21 |
-| `H-ca8` | 4 | 1.96 | 3 | 24 |
-| `H-low` | 4 | 0.90 | 3 | 11 |
-| **Held out** | | | **18** | **130** |
+| A | 4 | 1.75 | 6 | 42 |
+| B | 4 | 1.74 | 6 | 42 |
+| C | 4 | 2.59 | 6 | 62 |
+| `B-onset` | 6 | 2.17 | 3 | 39 |
+| `C-onset` | 6 | 1.82 | 3 | 33 |
+| **Gate** | | **48.5** | **24** | **218** |
+| `H-3k` | 4 | 1.75 | 3 | 21 |
+| `H-16k` | 4 | 2.04 | 3 | 24 |
+| `H-pods` | 6 | 1.74 | 3 | 31 |
+| `H-ca2` | 4 | 1.90 | 3 | 23 |
+| `H-ca8` | 4 | 2.07 | 3 | 25 |
+| `H-low` | 4 | 1.74 | 3 | 21 |
+| **Held out** | | **33.7** | **18** | **145** |
+
+Against main's code and spec on the same file: C's three extra steps add 41 minutes a
+phase, B-onset's two measure-only steps 50, and sizing a bursty step's window for the
+top of its Ca² band adds 4 to C-onset, 3 to `H-ca2` and 4 to `H-ca8`.
 
 Add about 2 hours and 8 GPU-hours for the standup and warm-up. **The whole run is at
-most 320 GPU-hours and 73 hours end to end**, at 4 to 6 GPUs at a time (6 pods at TP 1
-is the peak). Phases that stop at about 0.95 of the knee, as M2's did, would bring it
-nearer 260. That figure is a rough estimate, not a computed one.
+most about 370 GPU-hours and 84 hours end to end**, against the harness's hard cap of
+96 hours, at 4 to 6 GPUs at a time (6 pods at TP 1 is the peak). Phases that stop at
+about 0.95 of the knee, as M2's did, would bring it lower; that is not computed.
 
-Repeat 1 of everything is about 112 GPU-hours with the warm-up. The gate buckets' repeat
-1 is about 61, and a failure there stops the rest.
+A failure in the gate buckets' repeat 1 stops the rest.
 
 ## What to cut first
 

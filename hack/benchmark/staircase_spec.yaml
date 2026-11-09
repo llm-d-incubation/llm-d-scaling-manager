@@ -38,10 +38,18 @@ warmup:
 buckets:
 - {name: A, prompt: 1000, output: 1000, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
 - {name: B, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
-- {name: C, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+# C's noise floor is about 2.5 times B's (Ca^2 + Cs^2 is 5, not 2), so at 2 + 2 no window
+# up to maxHoldSeconds holds 0.95 or 1.00 of the knee: r1 had no valid C step past 0.90,
+# and its crossings had nowhere to land. The steps between 0.80 and 0.925 are where they can.
+- {name: C, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 2, fc: ["off", "on"], gate: true, steps: [0.40, 0.60, 0.75, 0.80, 0.825, 0.85, 0.875, 0.90, 0.925, 0.95, 1.00]}
 # Above the prefill onset. Decode binds at N_d 2, so these double it: the ladder is in
 # shares of the prefill knee, which then is the lower knee.
-- {name: B-onset, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 4, fc: ["on"], gate: true, steps: [0.70, 0.85, 0.92, 0.96, 0.97, 1.00]}
+# measureAboveOnset: steps at these multiples of the frozen prefill flow-control onset,
+# after the scored ones, for the router queue's wait, which the model does not price yet.
+# Scored by nothing. r1 ran B-onset to 1.05x with the gate open (prefill saturation 0.05)
+# and no queue. They need flow control on and a decode onset above them, which B and A
+# at 2 + 2 do not have (B's prefill onset 53.2 r/s is past its decode knee 33.3).
+- {name: B-onset, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 4, fc: ["on"], gate: true, steps: [0.70, 0.85, 0.92, 0.96, 0.97, 1.00], measureAboveOnset: [1.10, 1.15]}
 - {name: C-onset, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 4, fc: ["on"], gate: true, steps: [0.70, 0.85, 0.92, 0.96, 0.97, 1.00]}
 # Held out.
 - {name: H-3k, prompt: 3000, output: 500, ca2: 1, prefill: 2, decode: 2, fc: ["off"]}
