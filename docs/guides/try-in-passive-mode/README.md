@@ -119,7 +119,7 @@ cat > observe-trigger.yaml <<EOF
   path: /spec/triggers/-
   value:
     type: external-push
-    name: scaling-manager
+    name: llmsm
     metricType: AverageValue
     metadata:
       scalerAddress: scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc:9090
@@ -375,7 +375,7 @@ the utilization-share optimizer, safely](../utilization-share/).
 ## Cleanup
 
 Remove any trigger you added in step 3 first (`kubectl edit scaledobject
-${SCALEDOBJECT} -n ${NAMESPACE}`, delete the `scaling-manager` trigger). The
+${SCALEDOBJECT} -n ${NAMESPACE}`, delete the `llmsm` trigger). The
 uninstall does not touch ScaledObjects it did not create, and a trigger that
 calls a removed scaler fails on every KEDA poll.
 

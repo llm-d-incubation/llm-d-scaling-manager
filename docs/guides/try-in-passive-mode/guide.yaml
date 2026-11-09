@@ -42,7 +42,7 @@ deploy:
         path: /spec/triggers/-
         value:
           type: external-push
-          name: scaling-manager
+          name: llmsm
           metricType: AverageValue
           metadata:
             scalerAddress: scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc:9090

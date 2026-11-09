@@ -238,7 +238,7 @@ scale and have the scaling manager only report. Nothing else is needed.
      - type: prometheus          # yours, unchanged: this one scales
        metadata: {serverAddress: ..., query: ..., threshold: "..."}
      - type: external-push       # ours: observes
-       name: scaling-manager
+       name: llmsm
        metricType: AverageValue  # the only type our answer is a count under
        metadata:
          scalerAddress: scaling-manager-external-scaler.<controller-namespace>.svc:9090
