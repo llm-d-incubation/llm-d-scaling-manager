@@ -334,6 +334,16 @@ shares that meets every class's targets", and the bar shows which class binds.
 
 ## The screen
 
+An example of the page, with the controls and both graphs working, is in
+[capacity-planner/example.html](capacity-planner/example.html): download it and
+open it in a browser (GitHub shows its source). Its numbers come from formulas
+shaped like the model, not from the what-if engine, and the page says so.
+
+![The capacity planner, critical tab: replica and rate controls, the SLO
+percentile and targets, the fleet's limit with prefill and decode and the one
+that binds, and the TTFT and TPOT graphs with the target, the rate set, and
+the two points](capacity-planner/example.png)
+
 Main screen, critical tab, v1 (one mix line; the "all traffic were bucket b"
 view off):
 
