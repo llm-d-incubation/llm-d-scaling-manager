@@ -92,14 +92,25 @@ active:
     run: make deploy-scaling-manager LLMSM_PASSIVE=false
 
 share:
+  products:
+    note: The GPU product of each node.
+    run: kubectl get nodes -L nvidia.com/gpu.product
+  vars:
+    note: The GPU product your models run on, and how many of its GPUs they may hold together.
+    run: |
+      export ACCELERATOR=<gpu product>
+      export GPUS=<gpus>
   install:
     note: The controller, passive, with a GPU quota for the models to share.
     run: |
       make deploy-scaling-manager LLMSM_PASSIVE=true \
-        LLMSM_LIMITER=quota LLMSM_QUOTAS='<accelerator>=<gpus>'
+        LLMSM_LIMITER=quota LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
   check:
     note: Read-only. Is there a budget to share, and does the GPU product resolve.
     run: make utilization-share-check
+  shadow:
+    note: Write the optimizer block, in shadow. Activate refuses a policy without it.
+    run: make utilization-share-shadow
   activate:
     note: Configure the optimizer to act. While a model of a group is passive, the group only reports.
     run: make utilization-share-activate
@@ -108,6 +119,12 @@ share:
     run: |
       kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
         | grep 'Utilization share: would rebalance'
+  live:
+    note: Make every model active, then turn the optimizer on again, because the re-install drops its block.
+    run: |
+      make deploy-scaling-manager LLMSM_PASSIVE=false
+      make utilization-share-shadow
+      make utilization-share-activate
 
 cleanup:
   uninstall:

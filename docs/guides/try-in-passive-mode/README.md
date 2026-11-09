@@ -292,6 +292,9 @@ make deploy-scaling-manager LLMSM_PASSIVE=false
 You should see `Restarting the controller` in its output, and then `false`
 from the [`passiveDefault` check](#2-install-the-controller-passive).
 
+This re-install drops the utilization-share optimizer block, if you turned it
+on. To share GPUs again, follow [Go live](#go-live) instead.
+
 ## Utilization share in passive mode
 
 The [utilization-share optimizer](../utilization-share/) moves GPUs between
@@ -299,18 +302,43 @@ models under one quota. A group of models that holds a passive model never
 moves anything: it computes and publishes the shares, and starts no transfer.
 So a passive install shows you what sharing would do before it does anything.
 
-Install as in step 2, with a quota for the models to share:
+If your models are already active and you only want sharing to report first,
+you do not need passive mode: use the optimizer's own shadow mode in [Turn on
+the utilization-share optimizer, safely](../utilization-share/).
+
+You need two or more models in the namespace, on one GPU product. Find that
+product:
+
+<!-- guide:share.products start -->
+```bash
+# The GPU product of each node.
+kubectl get nodes -L nvidia.com/gpu.product
+```
+<!-- guide:share.products end -->
+
+The `GPU.PRODUCT` column names it, for example `NVIDIA-A100-PCIE-80GB`. Set
+it, and how many of its GPUs the models may hold together:
+
+<!-- guide:share.vars start -->
+```bash
+# The GPU product your models run on, and how many of its GPUs they may hold together.
+export ACCELERATOR=<gpu product>
+export GPUS=<gpus>
+```
+<!-- guide:share.vars end -->
+
+Install with a quota for the models to share. Run this in place of step 2, or
+after it: the controller stays passive and gets the quota.
 
 <!-- guide:share.install start -->
 ```bash
 # The controller, passive, with a GPU quota for the models to share.
 make deploy-scaling-manager LLMSM_PASSIVE=true \
-  LLMSM_LIMITER=quota LLMSM_QUOTAS='<accelerator>=<gpus>'
+  LLMSM_LIMITER=quota LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
 ```
 <!-- guide:share.install end -->
 
-Register the models as in step 3, then check there is a budget and turn the
-optimizer on:
+Register the models as in step 3, then check there is a budget:
 
 <!-- guide:share.check start -->
 ```bash
@@ -318,6 +346,21 @@ optimizer on:
 make utilization-share-check
 ```
 <!-- guide:share.check end -->
+
+Until the optimizer has logged a decision, the check warns `the controller has
+logged no accelerator yet`: at the default log level only the optimizer's own
+lines name the GPU product. Go on if `no AcceleratorNotResolved events` reads
+`[OK]`.
+
+Turn the optimizer on in shadow first, then configure it to act. Activate
+refuses a policy that has no optimizer block yet:
+
+<!-- guide:share.shadow start -->
+```bash
+# Write the optimizer block, in shadow. Activate refuses a policy without it.
+make utilization-share-shadow
+```
+<!-- guide:share.shadow end -->
 
 <!-- guide:share.activate start -->
 ```bash
@@ -344,8 +387,10 @@ kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manage
 ... Utilization share: would rebalance (shadow: the group holds a passive model) {"accelerator": "NVIDIA-A100-PCIE-80GB", "scope": "llm-d-sim", "budget": 4, ..., "replicasToMove": 1, "actionable": ["llm-d-sim/model-a/decode"], ...}
 ```
 
-The line is written only when the roles a move would fix change, so a quiet
-log means nothing would move. Read the rest in Prometheus:
+The line is written only when the roles a move would fix change. If they have
+not changed since the shadow step, the last line is that step's, `would
+rebalance (shadow)`. A quiet log means nothing would move. Read the rest in
+Prometheus:
 
 ```promql
 # 1 while the group only reports because it holds a passive model
@@ -364,13 +409,32 @@ transfer starts, so `llmsm_utilization_share_transfers_total` does not grow
 and there are no `UtilizationShareGiving` or `UtilizationShareReceiving`
 Events.
 
-To go live, make every model of the group active, as in [Make one model
-active](#make-one-model-active). The group acts once none of its models is
-passive, after two to three minutes in which nothing in it scales.
+### Go live
 
-If your models are already active and you only want sharing to report first,
-you do not need passive mode: use the optimizer's own shadow mode in [Turn on
-the utilization-share optimizer, safely](../utilization-share/).
+The group acts only once none of its models is passive. The switch in [Switch
+it to active](#3-switch-it-to-active) writes one entry, `passive-trial`, so it
+makes one model active at a time: run it for a second model and the first is
+passive again. Hand over each model still in `observe`, as in [step
+2](#2-hand-the-model-over). Then make every model active and turn the
+optimizer on again:
+
+<!-- guide:share.live start -->
+```bash
+# Make every model active, then turn the optimizer on again, because the re-install drops its block.
+make deploy-scaling-manager LLMSM_PASSIVE=false
+make utilization-share-shadow
+make utilization-share-activate
+```
+<!-- guide:share.live end -->
+
+The re-install restarts the controller and drops the optimizer block, so
+shadow and activate run again. For two to three minutes nothing in the group
+scales. Then `llmsm_utilization_share_passive_shadow` reads `0`, and a
+transfer shows as `UtilizationShareGiving` and `UtilizationShareReceiving`
+Events, then `UtilizationShareReceived` once the receiver's replica is up.
+`make utilization-share-status` counts them. A model with no load may also
+scale down on its own first; the busy model then takes its GPU with no
+transfer and no event.
 
 ## Cleanup
 

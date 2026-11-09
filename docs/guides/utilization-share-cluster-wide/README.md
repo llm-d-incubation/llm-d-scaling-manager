@@ -600,8 +600,11 @@ step 15 turns on physical groups.
 
 If not:
 
-- **`the controller has logged no accelerator yet`.** Wait another minute and
-  run it again.
+- **`the controller has logged no accelerator yet`.** Expected before step 15:
+  at the default log level only the optimizer's own lines name the GPU
+  product. Go on if `no AcceleratorNotResolved events` reads `[OK]`. Once the
+  optimizer logs a decision, the status in step 15 shows the product in its
+  `log:` line.
 - **Option A: the quota has no key for a product.** Run steps 8 and 9 again
   with that exact name.
 
@@ -722,6 +725,12 @@ the budget:
 A move waits for the giver's scale-down window, 300 seconds by default. If
 you see nothing after ten minutes, see [the troubleshooting
 list](../../reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything).
+
+No event does not always mean nothing moved. A model with no load scales down
+on its own once its scale-down window ends, and the busy model then takes the
+freed GPU without a transfer. You see no event, the giver shows the blocked
+reason `floor-pinned`, and the replica counts have moved. A transfer, with its
+events, moves a GPU the giver would otherwise keep.
 
 The controller's log has the same moves:
 

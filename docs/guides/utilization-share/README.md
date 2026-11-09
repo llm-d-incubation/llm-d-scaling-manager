@@ -135,6 +135,7 @@ kill $PF
 | `quiet-period` for two to three minutes | the group holds still after activation and after a restart |
 | `spare_gpus` below 0 | the quota cannot cover every model's need; no move fixes that |
 | `invalid` mode | the block did not validate, or the policy has no `limiters:` list; the log says which |
+| `the controller has logged no accelerator yet` from the check, before shadow | at the default log level only the optimizer's own lines name the GPU product; `no AcceleratorNotResolved events` is what matters |
 
 It evaluates but never moves anything? Work down [the troubleshooting
 list](../../reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything).
