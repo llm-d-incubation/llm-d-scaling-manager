@@ -650,7 +650,7 @@ place for **planning**.
   the limits. It loses the sliders, linked points, per-bucket targets, the
   caveat badges and compare, and it depends on a plugin we cannot install in
   most users' Grafana or in an air-gapped one. Offered as an optional
-  dashboard in phase 3, not as v1.
+  dashboard in v2 (phase 2), not in v1.
 
 ## Other front ends considered
 
@@ -683,8 +683,8 @@ v1 is phases 0 and 1; v2 is phase 2.
 | --- | --- | --- |
 | 0 | `internal/whatifapi` with `inputs` (Prometheus window by default, recordings; the fixed buckets 1k/4k/8k/32k/128k) and `plan` (mix line, the "all traffic" view, TPOT mean and percentile with `AssumedTPOTRatio`, capped and uncapped limits, marginal); `whatif serve` without a page; timing measured on the goldens and PS fleets | PR #16 (merged) |
 | 1 | The page: critical tab, the TTFT mix line and the labelled "all traffic were bucket b" view, TPOT, prefill/decode steppers, rate and target sliders, SLO statistic pickers including the TPOT percentile, the binding bar with the uncapped figure, +1 deltas, flags drawer, provenance chips; source picker opening on a Prometheus window | 0 |
-| 2 | Inverse mode (`/v1/size`); scenario save and compare; user-set bucket edges | 1 |
-| 3 | Grafana monitoring row and link; optional controller source (handler on the metrics server, off by default); optional Infinity dashboard | 1 |
+| 2 | Inverse mode (`/v1/size`); scenario save and compare; user-set bucket edges; optional Grafana Infinity dashboard | 1 (the dashboard: the API from phase 0) |
+| 3 | Grafana monitoring row and link; optional controller source (handler on the metrics server, off by default) | 1 |
 | 4 | E1, per-bucket TTFT inside the mix, with per-bucket targets and the binding bucket | E1 in `internal/signals/whatif`; a mixed-bucket staircase to validate it |
 | 5 | Regular and batch classes; configurable class names | collector split by `priority`, recorder fields, a priority gate model |
 
@@ -755,12 +755,12 @@ Decided 2026-11-09, on the questions the first draft left open.
    every figure that rests on an assumed `R_q`.
 7. **E1 is not in v1.** The single mix line is enough. The per-bucket view
    stays labelled "if all traffic were bucket b". E1 moves to phase 4.
+8. **The Grafana Infinity dashboard is not in v1; it is v2** (phase 2), and
+   stays optional: it needs a plugin most users' Grafana does not have.
 
 ## Open questions
 
-1. **Grafana.** Is an optional Infinity dashboard wanted at all, given the
-   plugin cannot be installed in most users' Grafana? Until answered it stays
-   optional in phase 3.
+None.
 
 ## See also
 
