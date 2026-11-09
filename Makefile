@@ -3088,6 +3088,9 @@ lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-deploy-scripts
+# The checks read no cluster: every kubectl their recipes, scripts and make -n runs
+# reach renders or fails (hack/offline-kubectl), whatever the current kube context is.
+lint-deploy-scripts: export PATH := $(CURDIR)/hack/offline-kubectl:$(PATH)
 lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and deploy plugins
 	@echo "Syntax-checking deploy shell scripts..."
 	@bash -n deploy/install.sh
