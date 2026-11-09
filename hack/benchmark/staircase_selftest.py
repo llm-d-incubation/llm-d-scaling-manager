@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 180
+EXPECTED = 185
 checks = fails = 0
 
 
@@ -505,6 +505,41 @@ with tempfile.TemporaryDirectory() as run:
     ok("and the report shows its queue wait", "| B-onset | 1 | 58.5 | 1.10x | measure only | 52.0 / 6000.0 | 52.0% | 2500.0 |"
        in TEXT.getvalue())
 
+# The report reads the client's crossing at the rate each step sent: 0.4 s between 41.0
+# (asked 40) and 52.0 (asked 50) is 46.5 sent; at the rates asked it would be 45.0.
+with tempfile.TemporaryDirectory() as run:
+    d = os.path.join(run, "phases", "B-onset-on-r1")
+    os.makedirs(d)
+    open(os.path.join(d, "done"), "w", encoding="utf8").close()
+    with open(os.path.join(d, "analysis.jsonl"), "w", encoding="utf8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in (
+            dict(ROW_ON, level=1, rate=40.0, achieved=41.0, client_ttft_p90=0.30, scheduled=17220, recorded=17220),
+            dict(ROW_ON, level=2, rate=50.0, achieved=52.0, client_ttft_p90=0.50, scheduled=21840, recorded=21840)))
+    TEXT = io.StringIO()
+    analyze.report(run, FROZEN_ON, SPEC_ON, None, TEXT, repeats=[1], only_gate=True)
+    LINE = [line for line in TEXT.getvalue().splitlines() if line.startswith("| B-onset | on | p90 |")]
+    ok("the report's TTFT crossing is read at the rates the steps sent", LINE and "| 46.5 |" in LINE[0], LINE)
+
+# The quantile band at the burstiness sent: bunches of four 10 ms apart, a second between
+# bunches, so Ca2 well above 1, widen the Poisson band by sqrt(Ca2); an even stream does not.
+def stream(gaps):
+    t, rows = 0.0, []
+    for i, g in enumerate(gaps):
+        t += g
+        rows.append([str(i), "1", "%.4f" % t, "%.4f" % t, "%.4f" % (t + 0.1 + 0.001 * (i % 97)), "%.4f" % (t + 1), "200", "100", "10", "", ""])
+    return rows
+
+
+BURSTY = stream([0.01, 0.01, 0.01, 1.0] * 100)
+FIG = analyze.client_figures(BURSTY, 120.0)
+TTFTS = sorted(float(r[4]) - float(r[2]) for r in BURSTY)
+ok("a bursty step's quantile band is widened by sqrt(Ca2 sent)", FIG["ca2_sent"] > 1
+   and FIG["client_ttft_p90_lo"] == lib.pct_ci(TTFTS, 0.9, 1.96 * math.sqrt(FIG["ca2_sent"]))[0]
+   and FIG["client_ttft_p90_lo"] < lib.pct_ci(TTFTS, 0.9)[0], (FIG["ca2_sent"], FIG["client_ttft_p90_lo"], lib.pct_ci(TTFTS, 0.9)))
+EVEN = stream([0.25] * 400)
+FIG = analyze.client_figures(EVEN, 100.0)
+ok("an even stream keeps the Poisson band", FIG["client_ttft_p90_lo"] == lib.pct_ci(sorted(float(r[4]) - float(r[2]) for r in EVEN), 0.9)[0])
+
 # The queue wait from the raw scrape: 100 requests in the window, half over 10 ms, 10 s in all.
 with tempfile.TemporaryDirectory() as run:
     base = lib.ts("2026-11-06T02:00:00Z")
@@ -595,6 +630,15 @@ with tempfile.TemporaryDirectory() as run:
     SECOND = STEPS_S[1] if len(STEPS_S) > 1 else {}
     ok("a step whose load died is void by its missing rows", any("scheduled" in w for w in lib.validity(SECOND))
        if SECOND else False, {k: SECOND.get(k) for k in ("scheduled", "recorded")})
+    with open(os.path.join(d, "sweep.log"), encoding="utf8") as f:
+        LOG_LINES = f.readlines()
+    ok("the plan line is found below the log's head", analyze.read_plan(["noise\n"] * 8 + LOG_LINES, analyze.read_requests(
+        os.path.join(d, "requests.csv.gz")))[0] is not None)
+    with open(os.path.join(d, "sweep.log"), "w", encoding="utf8") as f:
+        f.writelines(LOG_LINES[1:])
+    UNREAD, _ = analyze.analyze_steps(run, "S-off-r1", 180)
+    ok("a step read without its schedule is marked, and keeps the band", UNREAD and all(r.get("schedule_unread") and "scheduled" not in r
+                                                                         for r in UNREAD), [sorted(r) for r in UNREAD[:1]])
 
 print("%d checks, %d failed" % (checks, fails))
 if checks != EXPECTED:

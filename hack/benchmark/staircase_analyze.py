@@ -247,12 +247,16 @@ def client_figures(win, span, pods=None):
     passed = {id(r) for r in ok}
     failed = [r for r in win if id(r) not in passed]
     other = sum(1 for r in failed if not lib.fleet_failure(r[6], r[9] if len(r) > 9 else ""))
+    # The quantile's band at the burstiness the step sent: n arrivals at a Ca2 above 1
+    # carry about n / Ca2 independent readings, so the Poisson band widens by sqrt(Ca2).
+    sent_ca2 = lib.arrival_ca2([float(r[3]) for r in win])
+    widen = math.sqrt(sent_ca2) if sent_ca2 == sent_ca2 and sent_ca2 > 1 else 1.0
     cis = {}
     for q in (50, 90, 95):
-        cis["client_ttft_p%d_lo" % q], cis["client_ttft_p%d_hi" % q] = lib.pct_ci(ttft, q / 100)
+        cis["client_ttft_p%d_lo" % q], cis["client_ttft_p%d_hi" % q] = lib.pct_ci(ttft, q / 100, 1.96 * widen)
     return dict(cis, failed_other=other,
                 due=len(win), failed=len(win) - len(ok), completed=len(ok), achieved=len(win) / span,
-                ca2_sent=lib.arrival_ca2([float(r[3]) for r in win]), ca2_by_pod=by_pod or None,
+                ca2_sent=sent_ca2, ca2_by_pod=by_pod or None,
                 lag_p99=lib.pct(lag, 0.99), prompt_mean=mean_p, prompt_cv=spread,
                 client_ttft_p50=lib.pct(ttft, .5), client_ttft_p90=lib.pct(ttft, .9),
                 client_ttft_p95=lib.pct(ttft, .95), client_sent_ttft_p90=lib.pct(sent_ttft, .9),
@@ -308,8 +312,9 @@ PLAN_LINE = re.compile(r"\d+ levels, \d+ s, \d+ requests, seed (-?\d+): (\S+)")
 def read_plan(lines, rows):
     """([(due offset, level)], t0) of the seeded schedule the driver logged, t0 the epoch its
     offsets count from, read off a row (its scheduled time less its due offset); (None, 0)
-    when the log has no plan line or no row lines up with it."""
-    for line in lines[:5]:
+    when the log has no plan line or no row lines up with it. The plan line is looked for
+    anywhere in the log, not only at its head."""
+    for line in lines:
         m = PLAN_LINE.search(line)
         if m:
             plan = [(due, n) for due, n, _, _ in load.arrivals(load.parse_schedule(m[2]), int(m[1]))]
@@ -376,6 +381,10 @@ def analyze_steps(run, phase, discard):
             row["scheduled"] = sum(1 for due, n in plan if n == level["n"] and a <= t0 + due < b)
             row["recorded"] = len(win)
             row["achieved"] = row["scheduled"] / span
+        else:
+            # No schedule to count against: validity falls back to the band around the rate
+            # asked, and the report names the step.
+            row["schedule_unread"] = True
         row["engine_errors"] = sum(1 for t in errors if a <= t < b)
         row["epp_pods"] = sorted({pod for t, pod in epp if a <= t < b})
         row["completion_rate"] = sum(1 for r in rows if r[6] == "200" and a <= float(r[5]) < b) / span
@@ -670,6 +679,11 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
                     print("| %s %s r%d | %d | %s |" % (bucket, fc, n, r["level"], "; ".join(why)), file=out)
     if not void:
         print("| none | | |", file=out)
+    unread = ["%s %s r%d step %d" % (bucket, fc, n, r["level"]) for (bucket, fc), repeats in sorted(data.items())
+              for n, rows in sorted(repeats.items()) for r in rows if r.get("schedule_unread")]
+    if unread:
+        print("\nRead without their seeded schedule, so held to the band around the rate asked, and read at "
+              "the rate their rows show: %s." % ", ".join(unread), file=out)
 
     print("\n## TTFT at the operating point\n", file=out)
     print("A step reading above a later valid step reads that step's figure: TTFT does not fall as the rate "

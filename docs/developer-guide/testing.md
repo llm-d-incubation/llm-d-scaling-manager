@@ -1884,9 +1884,11 @@ controller scrapes with (the Secret it mounts as `epp-metrics-token`). The EPP a
 the API server strips the caller's credentials before it proxies. If the EPP cannot be
 read, the run stops before the warm-up and says why in `timeline.txt`. The Secret and
 the EPP's ports are tried three times, and a Deployment that cannot be read is named an
-API error, not a missing volume. The witness sleeps forever, the capture re-creates it
-when it is not Running, and three failed EPP scrapes in a row, or a failed Prometheus
-pull, are written to `timeline.txt`.
+API error, not a missing volume. The witness sleeps forever (`sleep infinity`, or 68
+years where a busybox sleep refuses that), the capture re-creates it when it is gone,
+Failed or Succeeded (Pending is left to come up, and one re-creation runs at a time),
+and three failed EPP scrapes in a row, or a failed Prometheus pull, are written to
+`timeline.txt`.
 
 **Reading the report.** The client's rate decides the mark, at the operating point.
 How a reading becomes a crossing:
@@ -1894,9 +1896,13 @@ How a reading becomes a crossing:
 - **The rate.** A step's reading is credited to the rate it sent, not the one it asked:
   the driver logs its seed and schedule, and the analysis recomputes the arrivals the
   schedule put in the window. The crossing is interpolated and bracketed on that rate.
+  A step whose log has no schedule line keeps the band around the rate asked, and the
+  report names it.
 - **The envelope.** A step that reads above a later valid step is lowered to that
   reading when the later one sits under its quantile's sampling band (the binomial
-  band of the order statistics) or the step drifted in its window (p90 of its second
+  band of the order statistics, widened by the square root of the Ca2 the step sent
+  when that is above 1, since n bursty arrivals carry about n / Ca2 independent
+  readings) or the step drifted in its window (p90 of its second
   half over 1.5 times its first, or under 1/1.5). On one fleet TTFT does not fall as
   the rate rises, so such an excess was a transient. An excess inside the band is
   noise: those steps are pooled, the isotonic fit weighted by requests. "Steps the
