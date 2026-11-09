@@ -181,7 +181,7 @@ stack](guides/testing-with-llm-d/) · [benchmark the scaling manager](guides/ben
 ## What this project is
 
 - **[Project proposal](project-proposal.md)** — the case for an analytical autoscaler: what it does, what is measured, what it does not cover, mapped against the llm-d autoscaling problem space
-- **[blog/](blog/)** — posts written for people outside the repository
+- **[Blog: sub-second scale-ups on llm-d](blog/sub-second-scale-ups-on-llm-d.md)** — posts written for people outside the repository
 
 ## Design notes
 

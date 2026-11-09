@@ -1765,8 +1765,8 @@ is not finite (`.nan`, `.inf`) is skipped and reported.
   `carry` of `5m`, and both go back to `2m` and `5m`. Write
   `{steadyFor: 10m, carry: 15m}` instead.
 
-**No value of these keys raises, floors, ages or resets k2** (the measured KV
-capacity). The `k2Settle` keys only decide which saturated readings k2 may learn
+**No value of these keys raises, floors, ages or resets k2** (the measured
+batch capacity: the tokens a replica holds when its batch is full). The `k2Settle` keys only decide which saturated readings k2 may learn
 from. A stricter value admits fewer readings; a looser one admits more, each of
 them a real measurement.
 

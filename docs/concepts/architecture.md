@@ -14,7 +14,7 @@ flowchart LR
   coll --> learners
   subgraph learners [Learners]
     mu["Throughput per replica (mu)"]
-    k2["KV-cache capacity (k2)"]
+    k2["Batch capacity in tokens (k2)"]
     itl[Latency line]
     st[Replica start time]
     snap[(Learned-state snapshot)]
@@ -65,9 +65,9 @@ with the throughput and SLO analyzers keeping latency lines of their own.
 
 | Learner | What it measures | What it is used for |
 | --- | --- | --- |
-| Throughput per replica (mu) | The requests per second one replica completes at the current request shape | Pricing the load: how many replicas the arrival rate needs |
-| KV-cache capacity (k2) | How full the KV cache gets when a replica is saturated | How much one replica holds before it is full |
-| Latency line | How inter-token latency rises as a replica fills | Decode capacity, and a second estimate of throughput |
+| Throughput per replica (mu) | The requests per second one full replica completes, per request shape (for prefill, prompt tokens per second). Measured when replicas saturate; for a shape not yet seen saturated, computed from the latency line | Pricing the load: the arrival rate divided by mu is the replicas needed. It can only raise the demand read from KV-cache use, never lower it |
+| Batch capacity in tokens (k2) | The tokens one replica holds when its batch is full: how many requests the engine runs at once, times the tokens each holds. Measured when a replica saturates; until then, derived from the engine's flags (`--max-num-seqs` and its token budget per step) | A replica's capacity is the smaller of this and its KV-cache limit (`kvCacheThreshold`, 0.80, of the KV cache). The KV-cache limit is read from the engine, not learned |
+| Latency line | How inter-token latency rises with KV-cache use, fitted as a straight line between 0.15 and 0.80 of the cache | Computing throughput per replica (mu) for a request shape not yet run saturated |
 | Replica start time | Seconds from a new Pod to Ready | How far ahead to order, and how long a move takes |
 | Learned-state snapshot | Everything above, written to the ConfigMap `scaling-manager-learned-state` | Keeping it across a restart. Off by default (`LEARNED_STATE_SNAPSHOT`); without it a restart relearns from cold |
 

@@ -6,7 +6,7 @@
 
 llm-d-scaling-manager sizes LLM inference fleets on llm-d, aggregated and
 prefill/decode alike. It learns each model's capacity from its own servers
-(throughput per replica, KV-cache limit, latency, start time) and orders the
+(throughput per replica, batch capacity, latency, start time) and orders the
 replicas the load needs. Under a GPU quota it shares the GPUs between models
 (**utilization share**, experimental: benchmarked with two models so far; see
 [Why use it](docs/why.md#how-mature-each-part-is)): each model gets its need,
@@ -21,7 +21,7 @@ flowchart LR
   coll --> learners
   subgraph learners [Learners]
     mu["Throughput per replica (mu)"]
-    k2["KV-cache capacity (k2)"]
+    k2["Batch capacity in tokens (k2)"]
     itl[Latency line]
     st[Replica start time]
     snap[(Learned-state snapshot)]
@@ -50,7 +50,7 @@ the scaler answers with the current replica count, so nothing moves.
   install passive, watch, turn on sharing in shadow, then go active.
 - **[Configuration](docs/reference/configuration.md)**: every setting, the
   ones to set for your setup and the ones to tune per model.
-- **[How it decides](docs/concepts/)**: the learners, the analyzers and the
+- **[How it decides](docs/concepts/architecture.md)**: the learners, the analyzers and the
   engine, in operator terms.
 - **[Other scenarios](docs/well-lit-paths/)**: scale on saturation, scale to
   zero, warm pool, P/D, Kueue quotas and more.
