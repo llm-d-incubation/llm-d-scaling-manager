@@ -75,7 +75,7 @@ whatif slo-to-rate     --recording run.jsonl --tpot 4ms --ttft 200ms@p95 [--assu
   is not a bound. At the assumed prompt `cv` 2, which is what the CLI prints
   for rows with no computed-token histogram, it read 1.1x to 4.1x the router's
   percentile on the P2 recordings; at the spread the load generator sent
-  (`cv` 0.06) up to 34% under it. Do not size from it yet.
+  (`cv` 0.06) up to 33% under it. Do not size from it yet.
 - **Read the `assumed` row first.** It names each input the recording did not
   give. `V_P ASSUMED` means `--assume-vp` supplied `V_P`, and `a ASSUMED` that
   `--assume-a` supplied `a`.

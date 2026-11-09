@@ -83,7 +83,11 @@ estimate from cycles 1-226, not a guarantee; see basis (-o json)
 These are the proposal's figures, at `cv` 1. [As built](#ttft-as-built) the CLI
 assumes S1's `cv` 2, prints no TTFT band and adds a `prefill knee` row: the same
 commands read 373 ms and 0.25 r/s, the 20 ms a hop the recording has no fit of
-([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)).
+([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)). The prefill
+pod is priced as processor sharing
+([as built](slo-capacity-planner-ttft.md#as-built-processor-sharing)), but past a prompt
+cv of 0.25 as the larger of that and the first-come queue, which at `cv` 2 is first
+come's.
 
 Refusals, flags, the standalone mode and exit codes are in the
 [CLI reference](#cli-reference).
@@ -998,16 +1002,20 @@ ttft inputs     V_P 30000 ASSUMED; a 11.04 ms learned; f 1 (one pod); N_p 1 (--p
 assumed         V_P 30000 tok/s (--assume-vp); prompt 1000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); decode term omitted (no fit, TooFewDecodeMinutes, and no quiet decode row): T_xfer + ITL stands for it; router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
 ```
 
-That is the worked example with the CLI's `cv` of 2 and an assumed 20 ms hop, so
-373 ms where the page, at `cv` 1 on the old sum, has 160 ms; `a` is P1's 11.04 ms.
-Question 1 at 200 ms p95 reads 0.25 r/s where the page has 11.10, and the assumed
-row says the assumed term moved it from 1.19. `--assume-prompt-cv 1`, the page's
-`cv`, reads 10.80, and `--arrival-cv2 4` on top of it 4.80
-(`TestInputs_TheWorkedExampleAtTheStatedInputs`).
-`TestTTFT_TheWorkedExampleFromTheRecording` puts `cv` 1 and the old sum back on
-the fleet the CLI read, and gets the page's figures within 1 ms, 1.6 ms lower as
-the page says. `TestTTFT_HandComputedAtCV2` holds a figure at `cv` 2 through the command
-to a calculation that reads no Go: 4.752942 s on run 4 at `--assume-vp 130000`.
+That is the worked example with the CLI's `cv` of 2 and an assumed 20 ms hop. At
+that spread the price is the larger of processor sharing's and the first-come
+queue's (flag `SpreadBeyondProcessorSharing`), here first come's, so 373 ms where
+the page, at `cv` 1 on the old sum, has 160 ms (processor sharing alone reads 250
+ms); `a` is P1's 11.04 ms. Question 1 at 200 ms p95 reads 0.25 r/s where the page
+has 11.10, and the JSON's note says the assumed term moved it from 1.19.
+`--assume-prompt-cv 1`, the page's `cv`, reads 9.64 (processor sharing's, the
+larger there), and `--arrival-cv2 4` on top of it 4.21
+(`TestInputs_TheWorkedExampleAtTheStatedInputs`; 10.80 and 4.80 first come).
+`TestTTFT_TheWorkedExampleFromTheRecording` puts `cv` 1, the old sum and the
+first-come queue back on the fleet the CLI read, and gets the page's figures within
+1 ms, 1.6 ms lower as the page says. `TestTTFT_HandComputedAtCV2` holds a figure at
+`cv` 2 through the command, priced first come, to a calculation that reads no Go:
+4.752942 s on run 4 at `--assume-vp 130000` (2.46 s as processor sharing).
 Both check the arithmetic. Neither validates the model. The `ttft-*.golden`
 files are regression pins, read back from the code.
 
@@ -1015,7 +1023,7 @@ files are regression pins, read back from the code.
 `V_P ASSUMED` when `--assume-vp` supplied it and `a ASSUMED` when `--assume-a` did. The closing line, and the JSON's
 `note`, give the direction for what the CLI can print: "at the assumed prompt
 cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the
-sent spread (cv 0.06) up to 34% under it". At `cv` 2 the frozen table in
+sent spread (cv 0.06) up to 33% under it". At `cv` 2 the frozen table in
 `ttft_validation_test.go` reads 13 of 14 levels over the 25% mark, none under,
 and one pass; `TestTTFTFrozen_TheNotesFigures` holds the note to the table. With
 a measured `cv` (Q1) the note keeps only the sent spread's half.
@@ -1058,7 +1066,11 @@ role. A TTFT rate's `basis.floor` and `basis.kneeRate` are the TTFT's. Every key
 is new and absent with no TTFT asked, so it took no new `schemaVersion`, as for
 `source.window`. `ttft.promptCVRead` and `ttft.arrivalCV2` are absent unless their
 flags ask. `inputs.shape.outputDispersion` appears on a recording that reads a
-spread, with no flag asking, so `schemaVersion` is `2`.
+spread, with no flag asking, so `schemaVersion` is `2`. The TTFT priced as
+processor sharing ([the TTFT page](slo-capacity-planner-ttft.md#as-built-processor-sharing))
+changed what `parts.engineWait` means (the prefill pods' stretch, not the busiest
+pod's first-come wait), added `parts.kvPullWait`, and left `parts.waitScale` and
+`parts.waitOffset` at 0, so `schemaVersion` is `3`.
 
 **Replay.** `learnreplay.State` gains `Prefill`, `FlowControlSeries` and each
 variant's `DecodeTTFT` (`state_ttft.go`). They are read from the cycles' rows and
@@ -1112,7 +1124,7 @@ four results only `meanTPOT` is kept here):
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -1236,10 +1248,10 @@ To read a figure, for example the mean TPOT in milliseconds:
 whatif replicas-to-slo --recording run.jsonl.gz -o json | jq '.roles[0].results.meanTPOT.answer.value * 1000'
 ```
 
-Every key path, with its JSON type, for `schemaVersion` 2 (the `cmd/whatif`
+Every key path, with its JSON type, for `schemaVersion` 3 (the `cmd/whatif`
 tests hold the wire types to this list):
 
-<!-- whatif-json-schema-v2: begin -->
+<!-- whatif-json-schema-v3: begin -->
 ```
 bands object
 bands.blockCycles number
@@ -1475,6 +1487,7 @@ roles[].results.ttft.answer.parts.decodeWaitProbability number
 roles[].results.ttft.answer.parts.engineWait number
 roles[].results.ttft.answer.parts.firstStep number
 roles[].results.ttft.answer.parts.independent number
+roles[].results.ttft.answer.parts.kvPullWait number
 roles[].results.ttft.answer.parts.onsets object
 roles[].results.ttft.answer.parts.onsets.decode number
 roles[].results.ttft.answer.parts.onsets.prefill number
@@ -1565,7 +1578,7 @@ source.window.roles string
 source.window.stepSeconds number
 source.window.to string
 ```
-<!-- whatif-json-schema-v2: end -->
+<!-- whatif-json-schema-v3: end -->
 
 ## See also
 

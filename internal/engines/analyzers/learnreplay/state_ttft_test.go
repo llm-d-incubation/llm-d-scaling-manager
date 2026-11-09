@@ -366,7 +366,7 @@ func TestTTFTFrozen_TheNotesFigures(t *testing.T) {
 	require.Len(t, assumed, 14)
 	assert.InDelta(t, 1.1, slices.Min(assumed), 0.05)
 	assert.InDelta(t, 4.1, slices.Max(assumed), 0.05)
-	assert.InDelta(t, 0.34, 1-under, 0.005)
+	assert.InDelta(t, 0.325, 1-under, 0.005) // the note rounds it to 33%
 	assert.InDelta(t, 0.06, knownPromptCV, 0.005)
 	over := 0
 	for _, r := range assumed {

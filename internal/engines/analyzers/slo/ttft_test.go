@@ -1394,7 +1394,7 @@ func TestTTFT_TheFlagListIsTheModels(t *testing.T) {
 		whatif.DecodeStepSlopeAssumed, whatif.RouterHopAssumed, whatif.DecodeTermFloored, whatif.DecodeTermPrefixHits,
 		whatif.VPScaledToPrompt, whatif.VPShapeMoved,
 		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.HeldByDecodeAdmission,
-		whatif.DecodeOnsetUnchecked, whatif.BelowFittedBand, whatif.KVBoundSlots,
+		whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
 		AssumedPoissonArrivals, PromptSpreadClamped, FlowControlMismatch, PromptSpreadAbovePeak, ImbalanceNotSustained,
 		whatif.OutputSpreadUnread}
 	want := make([]string, len(flags))
@@ -1554,6 +1554,75 @@ func TestTTFT_TheDecodeTermSwitchOnALine(t *testing.T) {
 	assert.NotContains(t, off.Flags, string(whatif.RouterHopAssumed))
 	assert.NotContains(t, off.Flags, string(whatif.DecodeTermOmitted), "the old sum as it was")
 	assert.Greater(t, on.Predicted, off.Predicted)
+}
+
+// The processor-sharing switch, on the fleet ttftFleet builds: on, the fleet
+// prices its prefill pods and KV pull as processor-sharing stages, and the TTFT
+// at the rate moves; off, the first-come queue as before.
+func TestTTFT_TheProcessorSharingSwitch(t *testing.T) {
+	in := ttftInputsAt(1, 0)
+	in.decode = testDecode()
+	in.transfer = 2.5e-6
+	in.processorSharing = true
+	fl, _ := ttftFleet(in, 1)
+	assert.True(t, fl.ProcessorSharing)
+	on := priceTTFT(in, 0.1, ttftTarget)
+	require.NotNil(t, on.at)
+	assert.Positive(t, on.at.Parts.KVPullWait, "the pull is a stage")
+
+	in.processorSharing = false
+	fl, _ = ttftFleet(in, 1)
+	assert.False(t, fl.ProcessorSharing)
+	off := priceTTFT(in, 0.1, ttftTarget)
+	require.NotNil(t, off.at)
+	assert.Zero(t, off.at.Parts.KVPullWait)
+	assert.Positive(t, off.at.WaitScale, "the first-come wait")
+	assert.NotEqual(t, on.at.Seconds, off.at.Seconds)
+}
+
+// The switch through Analyze on a decode line that prices: each publishes what
+// whatif.TTFTAt prices on the fleet ttftFleet builds from the cycle's inputs,
+// processor sharing as the switch. The rig's spread is S1's assumed cv 2, past
+// whatif.MaxPSPromptCV, so on is the larger of the two queues, flagged, and
+// never under off.
+func TestTTFT_TheProcessorSharingSwitchOnALine(t *testing.T) {
+	type priced struct {
+		in     ttftInputs
+		rate   float64
+		target whatif.TTFTTarget
+	}
+	var last priced
+	onTTFTPriced = func(in ttftInputs, rate float64, target whatif.TTFTTarget) { last = priced{in, rate, target} }
+	t.Cleanup(func() { onTTFTPriced = nil })
+	read := func(on bool) metrics.SLOTTFTReading {
+		rows := func(i int) []domain.ReplicaMetrics {
+			return append(prefillRows("pre", 4000), cycleRows("dec", i)...)
+		}
+		r := newTTFTRig(ttftEstimate(), rows(0))
+		r.a.store = capacity.NewStore()
+		r.a.store.Update("ns", "m", "dec", capacity.Record{EngineParams: &capacity.EngineParams{MaxNumSeqs: 64}}, ttftNow)
+		r.in.VariantStates = append(r.in.VariantStates, decState)
+		require.NoError(t, r.a.SetSwitchesForReplay(map[string]bool{SwitchTTFTProcessorSharing: on}))
+		require.Equal(t, on, r.a.ttftProcessorSharing)
+		var got metrics.SLOTTFTReading
+		for i := range 13 {
+			r.now = r.now.Add(time.Minute)
+			r.in.ReplicaMetrics = rows(i)
+			got = r.one(t)
+		}
+		require.False(t, math.IsNaN(got.Predicted), got.Reason)
+		fl, _ := ttftFleet(last.in, last.in.pods)
+		require.Equal(t, on, fl.ProcessorSharing)
+		require.NotNil(t, fl.Decode, "priced on the decode line")
+		want, ok := whatif.TTFTAt(fl, last.rate, last.target.Percentile).(whatif.TTFT)
+		require.True(t, ok)
+		assert.Equal(t, want.Seconds, got.Predicted, "switch %v: published is the fleet's price", on)
+		assert.Equal(t, on, want.HasFlag(whatif.SpreadBeyondProcessorSharing))
+		assert.Equal(t, on, slices.Contains(got.Flags, string(whatif.SpreadBeyondProcessorSharing)), "published")
+		return got
+	}
+	on, off := read(true), read(false)
+	assert.GreaterOrEqual(t, on.Predicted, off.Predicted)
 }
 
 // The judge runs first, so the router's mean of the cycle reaches the window

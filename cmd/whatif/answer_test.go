@@ -481,19 +481,19 @@ func TestJSONSchemaIsDocumented(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.ReplaceAll(string(page), "\r\n", "\n")
-	const open = "<!-- whatif-json-schema-v2: begin -->\n```\n"
-	const closing = "```\n<!-- whatif-json-schema-v2: end -->"
+	const open = "<!-- whatif-json-schema-v3: begin -->\n```\n"
+	const closing = "```\n<!-- whatif-json-schema-v3: end -->"
 	start := strings.Index(text, open)
 	end := strings.Index(text, closing)
 	if start < 0 || end < start {
 		t.Fatal("the proposal has no JSON schema reference between its markers")
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", "schema-v2.txt"))
+	want, err := os.ReadFile(filepath.Join("testdata", "schema-v3.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, w := text[start+len(open):end], strings.ReplaceAll(string(want), "\r\n", "\n"); got != w {
-		t.Errorf("the proposal's JSON reference differs from testdata/schema-v2.txt\npage:\n%s\nfile:\n%s", got, w)
+		t.Errorf("the proposal's JSON reference differs from testdata/schema-v3.txt\npage:\n%s\nfile:\n%s", got, w)
 	}
 }
 

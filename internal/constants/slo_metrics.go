@@ -222,8 +222,9 @@ var SLOTTFTRefusedReasons = []string{SLOTTFTReasonSaturated, SLOTTFTReasonAboveD
 // prefill-stress recordings' 14 light-load points, 7 each at p90 and p95. A
 // test holds its figures to the frozen validation table.
 const SLOTTFTPredictionCaveat = "Not a bound, and which way it errs depends on the prompt spread. At the " +
-	"assumed cv 2 (flag AssumedPromptSpread) it reads high: over the router at 13 of 14 points, worst " +
-	"3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 34% under."
+	"assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at " +
+	"13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at " +
+	"9 of 14, worst 33% under."
 
 // SLOTTFTFlags is every flag the flag series zero-fills, in the order they are
 // published: the TTFT model's, the decode flags a TTFT answer can carry, and
@@ -238,7 +239,7 @@ var SLOTTFTFlags = []string{
 	"DecodeTermFloored", "DecodeTermPrefixHits",
 	"VPScaledToPrompt", "VPShapeMoved", "FlowControlInferredOff",
 	"AboveFlowControlOnset", "HeldByDecodeAdmission", "DecodeOnsetUnchecked",
-	"BelowFittedBand", "KVBoundSlots",
+	"SpreadBeyondProcessorSharing", "BelowFittedBand", "KVBoundSlots",
 	"AssumedPoissonArrivals", "PromptSpreadClamped", "FlowControlMismatch",
 	"PromptSpreadAbovePeak", "ImbalanceNotSustained", "OutputSpreadUnread",
 }

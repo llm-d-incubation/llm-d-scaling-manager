@@ -1,0 +1,15 @@
+knee            30.88 r/s   decode, batch cap binds at fill 0.680
+operating rate  26.25 r/s   0.85 x knee (scaleUpThreshold)
+mean TPOT       3.09 ms     [3.09 .. 3.10]   line pinned-B, observed fill up to 0.28
+prefill knee    39.98 r/s   [29.55 .. 54.10] N_p 2 x V_P 30000 / (f 1.5 x 1000 tokens); UNVALIDATED; V_P ASSUMED; a ASSUMED
+TTFT p90        325.5 ms    [195.5 .. 1087.9] end to end; UNVALIDATED; V_P ASSUMED; a ASSUMED
+                (bands: V_P and f +-15%, a sweep, not a confidence interval)
+                (272.4 ms if prefill and decode waits were independent)
+                (floor 96.4 ms, pooled 210.4 ms, worst pod utilization 0.656)
+ttft inputs     V_P 30000 ASSUMED; a 9.00 ms ASSUMED; f 1.5 (assumed); N_p 2 (--prefill); prompt 1000 tokens (measured, cycles 64-83); decode by its line, term assumed, hop assumed
+assumed         V_P 30000 tok/s (--assume-vp); a 9ms (--assume-a); f 1.5 on 2 pods (none learned at that count); prompt cv 0.06 (--assume-prompt-cv); decode TTFT 29.1 ms held from a quiet row, slope 10 on ITL above 3.34 ms (no fit: NoStepSpread); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
+shape           IL 1000 OL 602 (measured, cycles 64-83), output spread D 1.304 (measured)
+line check      ok at another shape (rows at KV 2992 a request, priced at 1393): median 14.3% off the rate read, line high; 3 of 10 rows past 15%, worst 15.9%, fill 0.48-0.58, cycles 33-42; left out 17 on a ramp, 0 above the band, 0 older than 30m0s
+flags: ExtrapolatedFill (fill 0.680, 0.396 above the readings); UnvalidatedTTFT; AssumedVP; AssumedImbalance; AssumedPromptSpread; DecodeStepSlopeAssumed; RouterHopAssumed; FlowControlInferredOff; AssumedPoissonArrivals; AssumedA; TransferHeld
+estimate from 14 readings (cycles 64-77) of a 83-cycle recording, not a guarantee; see basis (-o json)
+TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the sent spread (cv 0.06) it read up to 33% under the router's percentile on the P2 recordings. V_P ASSUMED. a ASSUMED.

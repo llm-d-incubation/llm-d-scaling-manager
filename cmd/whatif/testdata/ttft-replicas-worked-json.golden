@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -236,6 +236,7 @@
               "TransferOmitted",
               "DecodeTermOmitted",
               "RouterHopAssumed",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "AssumedPoissonArrivals",
               "AssumedShape",
@@ -246,6 +247,7 @@
               "pooled": 0.33143853287278646,
               "decodeShare": 0.031774930977097736,
               "engineWait": 0.05047520035773935,
+              "kvPullWait": 0,
               "ownPrefill": 0.044368837498301734,
               "decodeWait": 0.01591097479879894,
               "firstStep": 0.0036607509947803553,
@@ -269,5 +271,5 @@
     }
   ],
   "exitCode": 0,
-  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. V_P ASSUMED."
+  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. V_P ASSUMED."
 }

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -221,7 +221,7 @@
         },
         "ttft": {
           "answer": {
-            "value": 0.1971296093890043,
+            "value": 0.21870478437206117,
             "unit": "s",
             "basis": {
               "fill": 0,
@@ -238,6 +238,7 @@
               "TransferOmitted",
               "DecodeTermOmitted",
               "RouterHopAssumed",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "AssumedPoissonArrivals",
               "AssumedArrivalCV2",
@@ -245,10 +246,11 @@
               "OutputSpreadUnread"
             ],
             "parts": {
-              "independent": 0.18980248560978497,
-              "pooled": 0.1971296093890043,
+              "independent": 0.2073821886170056,
+              "pooled": 0.21870478437206117,
               "decodeShare": 0.031774930977097736,
               "engineWait": 0.025237600178869675,
+              "kvPullWait": 0,
               "ownPrefill": 0.044368837498301734,
               "decodeWait": 0.01591097479879894,
               "firstStep": 0.0036607509947803553,
@@ -256,15 +258,15 @@
               "routerHop": 0.02,
               "prefillUtilization": 0.37721959104845126,
               "vpMarginApplied": 0,
-              "waitScale": 0.06690426684553634,
+              "waitScale": 0,
               "waitOffset": 0,
               "decodeWaitProbability": 0.03177493097709786,
               "prefillKnee": 30,
               "decodeKnee": 13.313632625239457
             },
             "sensitivity": {
-              "lo": 0.16369753411483565,
-              "hi": 0.25261570216897244
+              "lo": 0.17798500240601547,
+              "hi": 0.28749906898418315
             }
           }
         }
@@ -272,5 +274,5 @@
     }
   ],
   "exitCode": 0,
-  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: no recording has checked it at a stated Ca^2. V_P ASSUMED."
+  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: no recording has checked it at a stated Ca^2. Above Ca^2 1 it reads high at light load: on one pod at Ca^2 4 its p95 read +118% at utilization 0.3 and +10% at 0.85 against a simulation. V_P ASSUMED."
 }

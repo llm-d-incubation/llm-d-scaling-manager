@@ -249,7 +249,7 @@ func TestS1_OnThePrefillStressGoldensAsP1LearnsThem(t *testing.T) {
 // own rows through Analyze: the path from the rows to the published figure.
 // It is at S1's assumed spread (no recording carries the computed-token
 // histogram), where the model reads over the router's p90, so the logged
-// ratios are not the 34% under that the sent spread gives. The test holds the
+// ratios are not the 33% under that the sent spread gives. The test holds the
 // path and the flags, not the accuracy: the accuracy table is
 // TestTTFTValidation_AgainstTheRouter.
 func TestS1_PricedOnRecordedRows(t *testing.T) {

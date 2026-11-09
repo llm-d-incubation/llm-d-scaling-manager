@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "slo-to-rate",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ols-sweep/recording.jsonl.gz",
@@ -170,6 +170,7 @@
               "TransferOmitted",
               "DecodeTermOmitted",
               "RouterHopAssumed",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "BelowFittedBand",
               "AssumedShape",
@@ -210,6 +211,7 @@
               "TransferOmitted",
               "DecodeTermOmitted",
               "RouterHopAssumed",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "BelowFittedBand",
               "AssumedShape",
@@ -227,5 +229,5 @@
     }
   ],
   "exitCode": 0,
-  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. V_P ASSUMED."
+  "note": "estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. V_P ASSUMED."
 }

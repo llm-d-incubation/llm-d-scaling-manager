@@ -821,6 +821,7 @@ P3's on the answer.
 | `TransferSecondsPerToken` | Measured: the mean of the R1 field `AvgKVTransferTime` over Ready decode rows with `AvgKVTransferTimeKnown`, divided by `E[I_eff]`. Run 2 recorded it on 374 of 386 decode rows. `TransferOmitted` (0 passed) only where no decode row carries one. With no decode line and `DecodeTTFT` measured, P3 does not price it (the decode engine's TTFT holds the pull) |
 | `DecodeTTFT` | With no decode line only: the decode variant's measured `AvgTTFT` and the prompt it was read at ([below](#3-what-s1-passes-to-ttftat-and-rateforttft)); 0 when no row carries it (`DecodeTTFTUnmeasured`) |
 | `DecodeTerm` | With a decode line: `D` and `R` as the variant's window has learned them, flagged when assumed ([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)). Switch `slo-ttft-decode-term`; off, the old sum |
+| `ProcessorSharing` | True: the prefill pods and, with a decode line, the KV pull priced as processor-sharing stages, `D` net of the pull ([processor sharing](slo-capacity-planner-ttft.md#as-built-processor-sharing)). Switch `slo-ttft-processor-sharing`; off, the first-come queue |
 | `Decode` | The model's decode variant, from the inputs S1 already prices TPOT with: its line, band, capacity tokens, `KVreq`, `O`, batch cap times ranks, and Ready replicas `N_d`. Only when the model has exactly one decode variant and its line prices (`own` or `pinned`; not `pinned-default`, `no-line` or `declined`) |
 | `FlowControl` | The tier's `slo.flowControl` when it is set ([below](#the-flow-control-state)): `enabled` passes `FlowControlOn`, `disabled` passes `FlowControlOff`. Unset, it is inferred from the series: on when the router's flow-control queue series exists for the model, `FlowControlNoSeries` (flagged `FlowControlInferredOff`) otherwise. On always carries the upstream detector thresholds 5 and 0.8, which this repository's install leaves unchanged, so P3's `FlowControlUnknown` cannot arise |
 | The rate | The model's arrival rate times the variant's share of the Ready prefill replicas |
@@ -1052,7 +1053,8 @@ The flag series zero-fills a fixed list, `constants.SLOTTFTFlags`, in this
 order: P3's TTFT flags (`UnvalidatedTTFT`, `AssumedVP`, `VPLowerBound`,
 `VPAboveSlopeBound`, `AssumedImbalance`, `AssumedPromptSpread`,
 `TransferOmitted`, `DecodeSideOmitted`, `DecodeTTFTUnmeasured`, `DecodeEngineMeasured`, `DecodeTermOmitted`, `DecodeStepSlopeAssumed`, `RouterHopAssumed`, `DecodeTermFloored`, `DecodeTermPrefixHits`, `VPScaledToPrompt`, `VPShapeMoved`, `FlowControlInferredOff`,
-`AboveFlowControlOnset`, `HeldByDecodeAdmission`, `DecodeOnsetUnchecked`),
+`AboveFlowControlOnset`, `HeldByDecodeAdmission`, `DecodeOnsetUnchecked`,
+`SpreadBeyondProcessorSharing`),
 the decode flags a TTFT answer can carry (`BelowFittedBand`,
 `KVBoundSlots`), and S1's (`AssumedPoissonArrivals`,
 `PromptSpreadClamped`, `FlowControlMismatch`). `AssumedVP` and `DecodeOnsetUnchecked` always read 0
@@ -1343,7 +1345,7 @@ P2](slo-capacity-planner-ttft.md#as-built-p3-after-p2), 7 each at p90 and p95:
 | Spread | Result | Worst |
 | --- | --- | --- |
 | Assumed `cv` 2, all S1 has today | Reads **high**: over the mark at 13 of 14 (6 of 7 at p90, 7 of 7 at p95) | 3.15x at p90, 4.13x at p95 |
-| The spread sent, `cv` 0.058 | Reads **low**: under the mark at 9 of 14 (5 of 7 at p90, 4 of 7 at p95) | 34% under, at p90 |
+| The spread sent, `cv` 0.058 | Reads **low**: under the mark at 9 of 14 (5 of 7 at p90, 4 of 7 at p95) | 33% under, at p90 |
 
 `constants.SLOTTFTPredictionCaveat` carries this into the metric's help, and
 `TestS1_TheCaveatIsTheFrozenTable` holds its figures to the frozen table.
