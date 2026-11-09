@@ -15,8 +15,7 @@
 
 set -u
 # No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl).
-OFFLINE_KUBECTL_REAL="${OFFLINE_KUBECTL_REAL:-$(command -v kubectl || true)}"; export OFFLINE_KUBECTL_REAL
-PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/offline-kubectl.sh"
 
 # CHECK_ROOT runs the check against another tree -- how its negative control is
 # taken: point it at an extracted older deploy/ and the cases must fail.

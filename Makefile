@@ -3090,6 +3090,8 @@ lint: golangci-lint ## Run golangci-lint linter
 .PHONY: lint-deploy-scripts
 # The checks read no cluster: every kubectl their recipes, scripts and make -n runs
 # reach renders or fails (hack/offline-kubectl), whatever the current kube context is.
+# Run it with a POSIX make (Linux, macOS, WSL): a native Windows make gives $(CURDIR) as
+# C:/..., which a PATH entry cannot carry, and the offline kubectl would not be found.
 lint-deploy-scripts: export OFFLINE_KUBECTL_REAL := $(shell command -v kubectl 2>/dev/null)
 lint-deploy-scripts: export PATH := $(CURDIR)/hack/offline-kubectl:$(PATH)
 lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and deploy plugins
