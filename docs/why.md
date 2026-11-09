@@ -100,12 +100,12 @@ intervals.
   ([before the first decision](reference/scaledobject-trigger.md#before-the-first-decision-and-the-fallback)).
 - **What it learned is held in memory** by default, so a restart or leader
   change learns it again. `LEARNED_STATE_SNAPSHOT=true` carries it across
-  ([learned state across a restart](reference/configuration.md#learned-state-across-a-restart);
+  ([learned state across a restart](reference/install-options.md#learned-state-across-a-restart);
   whether it becomes the default is still open).
 - **One more port.** KEDA calls the scaler on `:9090`. A new install serves
   it over mutual TLS when it can, and says why when it stays on plaintext; an
   upgrade with existing ScaledObjects stays on plaintext until you move them
-  ([external scaler mutual TLS](reference/configuration.md#external-scaler-mutual-tls)).
+  ([external scaler mutual TLS](reference/install-options.md#external-scaler-mutual-tls)).
   `make setup-prereqs` also writes a NetworkPolicy admitting only KEDA's
   namespace when it knows that namespace, and warns when it does not
   ([network exposure](reference/security-model.md#network-exposure)).
@@ -162,13 +162,13 @@ runs per arm on one cluster type (the P/D pair repeated once).
 - Learned capacity is re-learned after a restart unless the opt-in
   `LEARNED_STATE_SNAPSHOT` is on, and even then a new engine image rolled out
   while the controller was down re-fits the ITL line, and so mu, from fresh
-  readings ([what is restored](reference/configuration.md#learned-state-across-a-restart);
+  readings ([what is restored](reference/install-options.md#learned-state-across-a-restart);
   whether it becomes the default is still open).
 - The scaler port stays on plaintext where the installer cannot turn mutual
   TLS on, for example when KEDA is absent or not found, when the cluster
   admin has not yet written KEDA's side, or when existing ScaledObjects have
   not yet been moved; the installer says which
-  ([every case](reference/configuration.md#external-scaler-mutual-tls)).
+  ([every case](reference/install-options.md#external-scaler-mutual-tls)).
 - The Kueue quota source counts cohort borrowing only on a flat cohort
   without Fair Sharing or `effectiveQuotas`, and, unless the experimental
   [hand-back](reference/quota-limiter.md#lenders-kueue-does-not-reclaim-for)

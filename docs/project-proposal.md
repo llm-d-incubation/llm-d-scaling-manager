@@ -132,7 +132,7 @@ dataset, the busiest engine per model did 99.0 % and 98.7 % of prompt tokens
 while every added replica did 0.3–2.0 %. Our warm-pool benchmark uses synthetic
 prompts sharing no prefix, where an empty second replica took 49.4 % in its
 first minute, which was necessary to measure a scale-up at all and is a
-favourable condition. A bug report is drafted in [upstream/](upstream/).
+favourable condition. A bug report is drafted in [upstream/](upstream/prefix-cache-scorer-pins-scale-ups.md).
 
 **The demand floor is learned by being saturated.** A shape has to saturate once
 before it can be priced well. A first-principles queueing model would not need
@@ -185,6 +185,6 @@ reallocation between models (`enableRescale`) is built, off by default and
 covered by unit tests only. Apache 2.0, and the module
 path has not changed.
 
-Design detail lives in [concepts/](concepts/): what gets measured and how it
+Design detail lives in [concepts/](concepts/architecture.md): what gets measured and how it
 becomes a replica count, what is modelled and what is not, and what the GPU
 budget counts.

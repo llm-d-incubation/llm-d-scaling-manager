@@ -4,7 +4,7 @@ What `make deploy-scaling-manager` does on OpenShift, and how it differs from Ku
 For the full walk-through start with a guide —
 [install in a namespace](../../docs/guides/install-in-namespace/) is the common
 case — and for every variable see the
-[configuration reference](../../docs/reference/configuration.md).
+[installer options](../../docs/reference/install-options.md).
 
 ```bash
 oc login --server=<api-url> --token=<token>
@@ -58,7 +58,7 @@ make scaledobjects-plan      # lists your model servers; applies nothing
 make scaledobjects-apply
 ```
 
-See [Default ScaledObjects](../../docs/reference/configuration.md#default-scaledobjects).
+See [Default ScaledObjects](../../docs/reference/install-options.md#default-scaledobjects).
 
 ## Check it
 

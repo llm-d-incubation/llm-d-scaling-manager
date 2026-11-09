@@ -177,7 +177,7 @@ Full detail: [Upgrade and uninstall](../../reference/upgrade-and-uninstall.md).
 A cluster-scoped install can read every ConfigMap and patch every pod in the
 cluster; every permission is in the [security
 model](../../reference/security-model.md#cluster-scoped-both-platforms). Full
-list of settings: [Configuration reference](../../reference/configuration.md).
+list of settings: [installer options](../../reference/install-options.md).
 
 ## Details
 

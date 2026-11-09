@@ -6,8 +6,8 @@ landed — so read the status line first: several of these are finished, and one
 is proposed and unscheduled.
 
 These are **developer-facing working documents**, not a description of current
-behaviour. For that, use the [reference](../reference/) and
-[concepts](../concepts/) pages.
+behaviour. For that, use the [reference](../README.md#reference--what-you-set-and-read) and
+[concepts](../concepts/architecture.md) pages.
 
 ## analyzers
 

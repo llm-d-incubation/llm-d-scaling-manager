@@ -10,7 +10,7 @@ CREATE_CLUSTER=true make deploy-e2e-infra
 
 For the full llm-d stack on kind, see
 [Test against a full llm-d stack](../../docs/guides/testing-with-llm-d/); for
-every install variable, the [configuration reference](../../docs/reference/configuration.md).
+every install variable, the [installer options](../../docs/reference/install-options.md).
 
 ## Prerequisites
 

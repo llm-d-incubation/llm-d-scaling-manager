@@ -170,7 +170,7 @@
   where stabilization does not enter. The probe does not reproduce the
   unmasked case 4.4 names, so no known-failing row was added for it; on
   the recorded restart the dip is 75 s, so a scale-down stabilization
-  under about 90 s would let it through (configuration.md says so).
+  under about 90 s would let it through (install-options.md says so).
 - **Problem:** the analyzers learn about fifteen quantities. Each one accepts
   readings, fits, forgets and logs in its own way. The same defects were fixed
   in one learner after another, because no learner could reuse another's fix.
@@ -1834,7 +1834,7 @@ What can move the fleet size, and which way:
 TA only drives a scale-up where it is the highest order; saturation still
 votes. A policy that lists throughput alone has no such floor: a silent line
 holds the role. 4b-1 says so in
-[configuration.md](../reference/configuration.md#the-throughput-analyzers-line),
+[install-options.md](../reference/install-options.md#the-throughput-analyzers-line),
 with how long the line is silent after a restart or a shape change, and the
 above-band fallback's one-sided error.
 

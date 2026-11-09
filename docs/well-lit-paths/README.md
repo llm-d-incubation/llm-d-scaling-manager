@@ -2,7 +2,8 @@
 
 A well-lit path is a recipe for one scenario: what you get, what it costs,
 when not to take it, and the evidence that it works. Pick the row that names
-your problem. Every path except the first assumes
+your problem. **The main path** is [sharing one GPU quota between
+models](utilization-share/), installed passive first. Every path except the first assumes
 [the saturation path](scale-on-saturation/) is in place, and that a new
 replica starts fast ([start-path checklist](../reference/workload-preparation.md#the-rest-of-the-start-path)).
 

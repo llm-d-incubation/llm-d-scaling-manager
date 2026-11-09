@@ -278,7 +278,7 @@ passive: true    # or false; absent inherits
 | per-model entry | an entry whose body names the model |
 | tier | the tier the variant names, else `default.defaultPolicy` |
 | `default` entry | the namespace's own `scaling-manager-scaling-policy-config` when it has one, else the controller's |
-| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([configuration](configuration.md#deployment-flags)) |
+| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([installer options](install-options.md#deployment-flags)) |
 
 The key is live. The external scaler applies an edit at KEDA's next call
 about the variant (every `pollingInterval`, and every HPA sync); the engine
@@ -1433,7 +1433,7 @@ It does not control learning: a variant learns from its own readings either
 way, and changing the key clears nothing stored. Nor does it decide what a
 restart keeps: a variant's own ITL line comes back with the learned-state
 snapshot whether this key is on or off
-([learned state across a restart](configuration.md#learned-state-across-a-restart)).
+([learned state across a restart](install-options.md#learned-state-across-a-restart)).
 
 #### What it does not govern
 
@@ -1765,8 +1765,8 @@ is not finite (`.nan`, `.inf`) is skipped and reported.
   `carry` of `5m`, and both go back to `2m` and `5m`. Write
   `{steadyFor: 10m, carry: 15m}` instead.
 
-**No value of these keys raises, floors, ages or resets k2** (the measured KV
-capacity). The `k2Settle` keys only decide which saturated readings k2 may learn
+**No value of these keys raises, floors, ages or resets k2** (the measured
+batch capacity: the tokens a replica holds when its batch is full). The `k2Settle` keys only decide which saturated readings k2 may learn
 from. A stricter value admits fewer readings; a looser one admits more, each of
 them a real measurement.
 
@@ -1799,7 +1799,7 @@ spelling is reported as an unknown key and ignored.
 
 | Key | Default | Range | What it does |
 |-----|---------|-------|--------------|
-| `steadyFor` | `2m` | 1m to 24h | How long a replica's KV fill must hold still before its latency reading may teach the ITL line. The latency is a one-minute average, so a shorter wait pairs this moment's fill with last minute's latency. It is also how long a replica waits after it starts to settle: it joins, its engine restarts under the same Pod name, it is back after more than the absence tolerance without a row (1 minute at the default interval; 2.5 optimize intervals when that is longer), or load returns after `idleRows` idle cycles. A controller restart counts too: every replica waits `steadyFor` from the controller's first cycle, so the line does not refit for that long. A replica missing from one cycle keeps its settle. The slo analyzer's line waits too, and has no snapshot to hold it; see [learned state across a restart](configuration.md#learned-state-across-a-restart). |
+| `steadyFor` | `2m` | 1m to 24h | How long a replica's KV fill must hold still before its latency reading may teach the ITL line. The latency is a one-minute average, so a shorter wait pairs this moment's fill with last minute's latency. It is also how long a replica waits after it starts to settle: it joins, its engine restarts under the same Pod name, it is back after more than the absence tolerance without a row (1 minute at the default interval; 2.5 optimize intervals when that is longer), or load returns after `idleRows` idle cycles. A controller restart counts too: every replica waits `steadyFor` from the controller's first cycle, so the line does not refit for that long. A replica missing from one cycle keeps its settle. The slo analyzer's line waits too, and has no snapshot to hold it; see [learned state across a restart](install-options.md#learned-state-across-a-restart). |
 | `maxKDrift` | `0.10` | (0, 1) | How far the KV fill may move within `steadyFor` and still count as steady. The fill is the one averaged over the latency's minute when the collector has it, else the instant fill; the average is smoother, so the same value admits more readings than it did against the instant fill. |
 | `carry` | `5m` | `steadyFor` to 24h | How long a steady reading is kept past the newest window, so a load step's old level is still there when the new one settles. If the merged policy has `carry` under `steadyFor`, both go back to `2m` and `5m`, and the controller logs a `WARNING: tuning figure not used` line when it reads the ConfigMap. |
 | `idleRows` | `2` | 1 to 1000 | How many idle cycles in a row make a replica idle rather than one missed scrape. A cycle is idle only on evidence: the KV fill was read and is 0, and the latency window was read and is empty, or the generation rate was read and is 0. A prefill replica's latency window is empty however busy it is, so its cycle is idle when the KV fill was read and is 0 and the request rate was read and is 0. A cycle whose gauges were not read (a failed scrape) neither counts nor breaks the run, and two idle cycles further apart than the absence tolerance (1 minute at the default interval) do not make a run. An idle replica waits out `steadyFor` again when load returns. |

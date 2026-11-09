@@ -152,7 +152,7 @@ A detected URL never creates it. With none of those, **no binding** is created,
 the installer warns, and `make check-prereqs` lists it as optional. It never
 binds a guessed account or `default`: a grant to an account nobody chose waits
 for whoever creates it. Pass `PROMETHEUS_SA=<namespace>/<serviceaccount>` to
-grant your Prometheus the scrape ([configuration](configuration.md)).
+grant your Prometheus the scrape ([installer options](install-options.md)).
 
 Only those sources write or repoint it. An admin re-run of `make setup-prereqs`
 with none of them **keeps** an existing binding and warns, naming its account
@@ -245,7 +245,7 @@ delete it when they go
 
 | Port | Protocol | Exposed by | Authentication | Notes |
 | --- | --- | --- | --- | --- |
-| `9090` | gRPC over **mutual TLS** when the install can turn it on, else plaintext ([when](configuration.md#external-scaler-mutual-tls)) | Service `scaling-manager-external-scaler` (ClusterIP); NetworkPolicy `scaling-manager-external-scaler` admits only KEDA's namespace, where the admin phase wrote it (below) | with TLS, only a client certificate the install's CA signed for `scaling-manager-keda-client`; in plaintext, **none** | the KEDA external scaler |
+| `9090` | gRPC over **mutual TLS** when the install can turn it on, else plaintext ([when](install-options.md#external-scaler-mutual-tls)) | Service `scaling-manager-external-scaler` (ClusterIP); NetworkPolicy `scaling-manager-external-scaler` admits only KEDA's namespace, where the admin phase wrote it (below) | with TLS, only a client certificate the install's CA signed for `scaling-manager-keda-client`; in plaintext, **none** | the KEDA external scaler |
 | `8443` | HTTPS | Service `scaling-manager-controller-manager-metrics-service` (ClusterIP) | TokenReview + SubjectAccessReview on `get /metrics` | self-signed certificate unless `--metrics-cert-path` is set (OpenShift sets it, from the service CA) |
 | `8081` | HTTP | no Service; the kubelet's probes | none | `/healthz`, `/readyz` |
 | `8001` (warm pool only) | HTTP, **plaintext** | the warm-pool pod's launcher (supervisor); also `8002` (proxy control) and `9001`-`9016` (engine instances) | **none** | the supervisor starts engine processes with **caller-supplied argv and env**, in a pod that mounts the shared model cache (`model-pvc`) **read-write**. The only protection is the pool's NetworkPolicy, see below |
@@ -296,7 +296,7 @@ is chosen, and which policies the installer leaves alone:
 A wrong namespace fails closed: KEDA is refused and nothing scales. The policy
 holds only where the network plugin enforces NetworkPolicy; elsewhere, serve the
 scaler over TLS and require KEDA's client certificate
-([configuration](configuration.md#advanced)). The shipped rule is equivalent to:
+([installer options](install-options.md#advanced)). The shipped rule is equivalent to:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -338,12 +338,12 @@ spec:
 
 The NetworkPolicy holds only on a network plugin that enforces it. Mutual TLS
 holds on any network. It is on by default, once KEDA's side is in place
-([when it stays off](configuration.md#external-scaler-mutual-tls)):
+([when it stays off](install-options.md#external-scaler-mutual-tls)):
 
 - The installer issues a serving certificate for the scaler Service and a
   client certificate for KEDA, from cert-manager when it is installed and from
   a private CA of its own otherwise (on OpenShift the serving certificate comes
-  from the service CA). Details: [configuration](configuration.md#external-scaler-mutual-tls).
+  from the service CA). Details: [installer options](install-options.md#external-scaler-mutual-tls).
 - The controller then accepts only a client certificate that CA signed **and**
   that names `scaling-manager-keda-client`. Anything else is refused in the TLS handshake,
   before any call can register a workload or read a decision.
@@ -356,7 +356,7 @@ holds on any network. It is on by default, once KEDA's side is in place
 - It authenticates KEDA, not whoever wrote a ScaledObject. Anyone who may
   create a ScaledObject can give it this install's `authenticationRef`, and
   KEDA then calls the scaler for them
-  ([what a ScaledObject needs](configuration.md#external-scaler-mutual-tls)).
+  ([what a ScaledObject needs](install-options.md#external-scaler-mutual-tls)).
   Who may create ScaledObjects is still your RBAC.
 - A ScaledObject on the TLS address **without** the `authenticationRef` gets no
   access, but can cost everyone scaling. KEDA shares one connection per
@@ -612,4 +612,4 @@ not in a public issue.
 
 - [Cluster-admin setup](../guides/admin-cluster-setup/) — the objects a cluster admin creates, and why
 - [The GPU limiter](gpu-limiter.md) — where policy lives and who may edit it
-- [Configuration](configuration.md) — every installer variable
+- [Installer options](install-options.md) — every installer variable

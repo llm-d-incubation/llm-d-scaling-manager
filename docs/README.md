@@ -12,8 +12,10 @@ The picture, explained: [how the scaling manager fits together](concepts/archite
 Evaluating it? [Why llm-d-scaling-manager](why.md) is the one-page case: what it
 was measured to do, what it costs, and how mature each part is.
 
-**Start here.** Pick your scenario in the [well-lit paths](well-lit-paths/)
-index, then follow the guide that path links to. Nothing installed yet? The
+**Start here.** The main path is [sharing one GPU quota between
+models](well-lit-paths/utilization-share/), installed passive first. For any
+other scenario, pick it in the [well-lit paths](well-lit-paths/) index, then
+follow the guide that path links to. Nothing installed yet? The
 [three steps below](#getting-started-in-three-steps) come first.
 
 ## Terms you will meet
@@ -133,7 +135,7 @@ stack](guides/testing-with-llm-d/) · [benchmark the scaling manager](guides/ben
 
 ## Reference — what you set and read
 
-- **[Configuration](reference/configuration.md)** — every variable the installer reads, and which settings need a restart
+- **[Configuration](reference/configuration.md)** — every setting: what to set for your setup, what to tune per workload, and whether a change needs a restart. The rest: [advanced settings](reference/configuration-advanced.md) and [installer options](reference/install-options.md)
 - **[After the install](reference/operations.md)** — verifying it worked, and first-line troubleshooting
 - **[Watching what the scaling manager decides](reference/monitoring.md)** — the dashboard, who owns it, and the metrics that answer specific questions
 - **[The cycle log](reference/cycle-log.md)** — the two lines the scaling manager emits per cycle, their fields and reason codes: the page that answers "why did it scale?"
@@ -153,7 +155,7 @@ stack](guides/testing-with-llm-d/) · [benchmark the scaling manager](guides/ben
 
 ## Concepts — how the scaling manager decides
 
-- **[How the scaling manager fits together](concepts/architecture.md)**: the parts, one decision cycle, what gets installed. Start here
+- **[How the scaling manager fits together](concepts/architecture.md)**: the parts, the learners, one decision cycle, what gets installed. Start here
 - **[The steady-state engine](concepts/steady-state-engine.md)** — what it measures, and how a measurement becomes a replica count
 - **[GPU capacity accounting](concepts/gpu-capacity-accounting.md)** — what each limiter bounds, how they combine, node fit, Kueue borrowing, and where the figures can still be wrong
 - **[Modeling and optimization](concepts/modeling-and-optimization.md)** — what is modelled, what is not, and how per-variant demands become replica counts
@@ -179,7 +181,7 @@ stack](guides/testing-with-llm-d/) · [benchmark the scaling manager](guides/ben
 ## What this project is
 
 - **[Project proposal](project-proposal.md)** — the case for an analytical autoscaler: what it does, what is measured, what it does not cover, mapped against the llm-d autoscaling problem space
-- **[blog/](blog/)** — posts written for people outside the repository
+- **[Blog: sub-second scale-ups on llm-d](blog/sub-second-scale-ups-on-llm-d.md)** — posts written for people outside the repository
 
 ## Design notes
 
