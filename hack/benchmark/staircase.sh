@@ -376,8 +376,9 @@ witness() {
     kube create configmap staircase-witness --from-file=staircase_promq.py="$HERE/staircase_promq.py" >/dev/null \
         || { t "witness configmap failed"; return 1; }
     # It must outlive the run: HARD_CAP is 96 h, and a pod of restartPolicy Never that
-    # exits takes the EPP scrape and every Prometheus pull after it with it.
-    pod_yaml witness witness staircase-witness /w "sleep infinity" 100m 128Mi 512Mi "$secret" > "$R/witness.yaml"
+    # exits takes the EPP scrape and every Prometheus pull after it with it. GNU sleep
+    # takes "infinity"; a busybox sleep refuses it at once, and then sleeps 68 years.
+    pod_yaml witness witness staircase-witness /w "sleep infinity || sleep 2147483647" 100m 128Mi 512Mi "$secret" > "$R/witness.yaml"
     witness_up || return 1
     for i in $(seq 1 "$WITNESS_TRIES"); do
         target=$(epp_pod)
@@ -410,12 +411,23 @@ witness_up() {
 witness_alive() {
     local ph
     [ -s "$R/witness.yaml" ] || return 1
-    # A failed read is not a dead pod: only a pod read as gone or not Running is replaced.
+    # A failed read is not a dead pod: only a pod read as gone, Failed or Succeeded is
+    # replaced. Pending is a witness on its way up, perhaps the one another caller (the
+    # capture loop or a Prometheus pull) just made, and is left alone.
     ph=$(kube get pod witness --ignore-not-found -o jsonpath='{.status.phase}' 2>/dev/null) || return 1
-    [ "$ph" = Running ] && return 0
+    case "$ph" in Running|Pending) return 0 ;; esac
+    # One re-creation at a time: the other caller waits its turn out and looks again.
+    # A lock older than the wait is a caller that died holding it.
+    if ! mkdir "$R/witness.lock" 2>/dev/null; then
+        [ $(( $(date +%s) - $(date -r "$R/witness.lock" +%s 2>/dev/null || date +%s) )) -gt 300 ] || return 1
+        rm -rf "$R/witness.lock"; mkdir "$R/witness.lock" 2>/dev/null || return 1
+    fi
+    local rc=0
     t "witness is ${ph:-gone}: re-creating it"
     kube delete pod witness --ignore-not-found --grace-period=1 --timeout=40s >/dev/null 2>&1
-    witness_up && t "witness re-created"
+    if witness_up; then t "witness re-created"; else rc=1; fi
+    rm -rf "$R/witness.lock"
+    return $rc
 }
 
 # epp_pod : "<pod> <pod IP> <container ports...>" of a Running, Ready EPP pod; empty with

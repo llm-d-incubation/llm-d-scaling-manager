@@ -19,21 +19,20 @@ production on it.
 Pin a release tag or a digest, and deploy with the manifests from the **same**
 release. An image older than the manifests crash-loops on flags it does not
 know. Releases are listed on the
-[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases).
-No release has been cut in this repository yet; the first one follows. Until then, install from `main`. To pin before then, use the digest of the `:main` build
-you tested, from a checkout of the commit it was built from. A checked-out
-release deploys its own tag, so `IMG_TAG` below only makes that explicit. Each
-release's notes list its image digest; a digest names one build, and a tag
-could in principle be re-pushed.
+[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases);
+the first release in this repository is the release candidate `v0.11.0-rc1`.
+A checked-out release deploys its own tag, so `IMG_TAG` below only makes that
+explicit. Each release's notes list its image digest; a digest names one build,
+and a tag could in principle be re-pushed.
 
 ```bash
-git checkout main
-make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=main
-# or by digest: the build of main you tested
+git checkout v0.11.0-rc1
+make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=v0.11.0-rc1
+# or by digest (v0.11.0-rc1's, from its release notes)
 make deploy-scaling-manager NAMESPACE=<namespace> \
-  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>
+  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:80bf8573906df7c4f43d5307bd47282e3d930a63962b19663d8b61bd3212f78f
 # out-of-reach shape (the cluster admin runs it): the controller runs in llmsm-<namespace>
-NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=main
+NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=v0.11.0-rc1
 ```
 
 `IMG_TAG` sets the tag of the default `IMG`; `IMG` replaces the whole reference.
@@ -126,7 +125,12 @@ changed, and there is no compatibility path. Reinstall.
 3. Install from this tree and re-create what you need. Learned state, tuned
    policy, labels on namespaces and ScaledObject addresses are not carried over.
 
-### Upgrading from v0.10.2 to the next release
+### Upgrading from v0.10.2 to v0.11.0-rc1
+
+v0.11.0-rc1 is the first release after the move, so there is no in-place
+upgrade from v0.10.2: reinstall as in
+[Moving from llm-scaling-manager](#moving-from-llm-scaling-manager). What
+behaves differently from v0.10.2 once it runs:
 
 An ordinary aggregated deployment (a variant with no `llm-d.ai/role` label) now reports an inter-token-latency line and the service rate it derives: `llmsm_itl_line_slope` and `llmsm_service_rate_per_replica{source="derived-report-only"}` appear for it. Once the line accounts for the request shape and has matched the replicas' generated tokens for 3 cycles, the variant is sized from it (`source="derived-aggregated"`), never above a measured rate of its own. A vLLM aggregated variant needs `vllm:num_requests_running` scraped for that; an SGLang one stays reported only. The learned-state document gains `itlLineShapes`; an older controller ignores it. An aggregated line restored from a document written before this release has no shape, so it prices nothing, reported or sized, until the variant fits it again under load.
 

@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=98
+EXPECTED_CHECKS=99
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -215,6 +215,8 @@ case "$args" in
     *" get pod witness "*)
         # WITNESS_DIES: the first look finds it Failed, as a pod whose sleep ended.
         if [ -n "${WITNESS_DIES:-}" ] && [ ! -e "$STATE/witness-died" ]; then touch "$STATE/witness-died"; echo Failed; exit 0; fi
+        # WITNESS_PENDING: a witness on its way up, as one another caller just made.
+        if [ -n "${WITNESS_PENDING:-}" ]; then echo Pending; exit 0; fi
         echo Running ;;
     *" wait pod witness "*) [ -z "${WITNESS_NOT_READY:-}" ] || { echo "timed out waiting for the condition" >&2; exit 1; } ;;
     *" get pods -o json "*)
@@ -429,6 +431,13 @@ start WITNESS_DIES=1 SCRAPE_FLAKY=1
 if wait_for 'EPP scrape failed 3 polls running' "$RUN/timeline.txt"; then ok "failed EPP scrapes in a row reach the timeline, with the error"; else bad "failed EPP scrapes in a row reach the timeline, with the error"; fi
 expect "a witness found dead is re-created from its spec, which outlives the run" \
     'grep -q "witness is Failed: re-creating it" "$RUN/timeline.txt" && grep -q "witness re-created" "$RUN/timeline.txt" && [ "$(grep -c "apply -f .*witness.yaml" "$LOG")" = 2 ] && grep -q "delete pod witness" "$LOG" && grep -q "sleep infinity" "$RUN/witness.yaml"'
+kill -TERM "$pid" 2>/dev/null; wait_run
+
+fresh witnesspending
+start WITNESS_PENDING=1
+wait_for 'llm_d_epp' "$RUN/epp-metrics.log"
+for i in $(seq 1 10); do sleep 0.2; done
+expect "a Pending witness is left to come up, not deleted and made again"     '[ -s "$RUN/epp-metrics.log" ] && ! grep -q "re-creating" "$RUN/timeline.txt" && ! grep -q "delete pod witness" "$LOG" && [ "$(grep -c "apply -f .*witness.yaml" "$LOG")" = 1 ]'
 kill -TERM "$pid" 2>/dev/null; wait_run
 
 fresh armfail

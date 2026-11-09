@@ -64,10 +64,13 @@ const outputSpreadUnreadWords = "no output-length histogram: KVreq is ILeff + OL
 // (TestTTFTFrozen_TheNotesFigures, learnreplay).
 const (
 	ttftNoteOpen     = "TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: "
-	ttftNoteAssumed  = "at the assumed prompt cv %s it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34%% under it."
-	ttftNoteMeasured = "at the sent spread (cv 0.06) it read up to 34% under the router's percentile on the P2 recordings."
+	ttftNoteAssumed  = "at the assumed prompt cv %s it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33%% under it."
+	ttftNoteMeasured = "at the sent spread (cv 0.06) it read up to 33% under the router's percentile on the P2 recordings."
 	// ttftNoteArrivals stands for both: the P2 table was read at Poisson arrivals.
 	ttftNoteArrivals = "no recording has checked it at a stated Ca^2."
+	// ttftNoteBurst follows it at a stated Ca^2 above 1: the burst rule reads
+	// high at light load (whatif's ttft_ps.go; one pod, Ca^2 4, cv 0.058).
+	ttftNoteBurst = " Above Ca^2 1 it reads high at light load: on one pod at Ca^2 4 its p95 read +118% at utilization 0.3 and +10% at 0.85 against a simulation."
 )
 
 // assumedA is a --assume-a supplied: P3 has no flag for it, as S1 has no
@@ -344,6 +347,11 @@ func (f *answerFlags) nameStatedInputs(pf *pricedFleet) {
 	pf.refused = &r
 }
 
+// processorSharing is how the CLI prices the prefill side: as
+// slo.SwitchTTFTProcessorSharing on. The CLI has no switch; a test that holds
+// the first-come arithmetic turns it off (firstCome).
+var processorSharing = true
+
 // readFleet is fleetFor before a refusal names the stated inputs.
 func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillState, q ttftQuestion, pv *pricedVariant) *pricedFleet {
 	pf := &pricedFleet{pv: pv, q: q.q, flags: []whatif.Flag{assumedPoisson},
@@ -366,6 +374,7 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 		return pf
 	}
 	pf.fleet.Prefill = p
+	pf.fleet.ProcessorSharing = processorSharing
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop
@@ -786,6 +795,9 @@ func footerNote(fleets []*pricedFleet) string {
 	switch {
 	case slices.ContainsFunc(fleets, func(pf *pricedFleet) bool { return pf.in.ArrivalCV2 > 0 }):
 		note = ttftNoteOpen + ttftNoteArrivals
+		if slices.ContainsFunc(fleets, func(pf *pricedFleet) bool { return pf.in.ArrivalCV2 > 1 }) {
+			note += ttftNoteBurst
+		}
 	case slices.ContainsFunc(fleets, func(pf *pricedFleet) bool {
 		if pf.statedCV {
 			return pf.in.PromptCV != whatif.AssumedPromptCV

@@ -175,6 +175,9 @@ type Analyzer struct {
 	// ttftDecodeTerm is SwitchTTFTDecodeTerm (ttft.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftDecodeTerm bool
+	// ttftProcessorSharing is SwitchTTFTProcessorSharing (ttft.go): on from
+	// the constructor; a replay turns it off (SetSwitchesForReplay).
+	ttftProcessorSharing bool
 	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#276,
 	// output_dispersion.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
@@ -258,6 +261,7 @@ func New(router RouterLatencySource, store *capacity.Store) *Analyzer {
 		ttftMeasuredTransfer: true,
 		ttftQuietTransfer:    true,
 		ttftDecodeTerm:       true,
+		ttftProcessorSharing: true,
 		kvOutputDispersion:   true,
 		imbalance:            make(map[string]*imbalanceWindow),
 		prompts:              make(map[string]*promptSpreadWindow),

@@ -18,6 +18,9 @@
 #     every later step that names the controller's namespace reads it.
 
 set -u
+# No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl). make -n
+# still runs a recipe line that calls $(MAKE), and those lines call kubectl too.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/offline-kubectl.sh"
 
 # CHECK_ROOT runs the check against another tree -- how its negative control is
 # taken: point it at an extracted older tree and the cases must fail.
@@ -94,11 +97,23 @@ fi
 for lib in common.sh scaledobject.sh infra_monitoring.sh infra_scaling_manager.sh; do
     tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$WORK/$lib"
 done
-render_out="$(cd "$ROOT" && bash -c '
+# Offline: the render asks the cluster which Prometheus scrapes the controller, so
+# with the caller's kubectl it read whatever cluster the current context named, and
+# the result moved with that cluster's state. kubectl is a function here that renders
+# and refuses everything else, KUBECONFIG names nothing, and the Prometheus answers a
+# caller may have exported are cleared.
+render_out="$(cd "$ROOT" && env -u PROMETHEUS_SA -u PROMETHEUS_URL -u PROMETHEUS_URL_EXPLICIT \
+    -u LLMSM_PROMETHEUS_URL_RESOLVED -u LLMSM_LIVE_PROM_URL KUBECONFIG=/dev/null bash -c '
     BLUE="" GREEN="" YELLOW="" RED="" NC=""
-    if ! command -v kubectl >/dev/null 2>&1; then
-        kubectl() { [ "$1" = kustomize ] && { shift; kustomize build "$@"; }; }
-    fi
+    kubectl() {
+        if [ "$1" = kustomize ]; then
+            shift
+            if command -v kustomize >/dev/null 2>&1; then command kustomize build "$@"; else command kubectl kustomize "$@"; fi
+            return
+        fi
+        echo "offline check: kubectl $* is not run" >&2
+        return 1
+    }
     for l in common.sh scaledobject.sh infra_monitoring.sh infra_scaling_manager.sh; do . "'"$WORK"'/$l"; done
     LLMSM_PROJECT=$PWD LLMSM_SCOPE=cluster LLMSM_NS='"$CTL"' ENVIRONMENT=kubernetes
     llmsm_render_manifests' 2>&1)"

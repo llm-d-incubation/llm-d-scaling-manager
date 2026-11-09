@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "question": "replicas-to-slo",
   "source": {
     "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/ttft-saturated/recording.jsonl.gz",
@@ -159,6 +159,7 @@
               "UnvalidatedTTFT",
               "AssumedPromptSpread",
               "DecodeEngineMeasured",
+              "SpreadBeyondProcessorSharing",
               "FlowControlInferredOff",
               "AssumedPoissonArrivals",
               "AssumedA"
@@ -168,6 +169,7 @@
               "pooled": 14.185800739014844,
               "decodeShare": 0,
               "engineWait": 4.090153880101791,
+              "kvPullWait": 0,
               "ownPrefill": 0.2997167444777735,
               "decodeWait": 0,
               "firstStep": 0,
@@ -192,5 +194,5 @@
     }
   ],
   "exitCode": 3,
-  "note": "estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. a ASSUMED."
+  "note": "estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. a ASSUMED."
 }

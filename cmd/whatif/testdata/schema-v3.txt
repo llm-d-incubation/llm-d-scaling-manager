@@ -232,6 +232,7 @@ roles[].results.ttft.answer.parts.decodeWaitProbability number
 roles[].results.ttft.answer.parts.engineWait number
 roles[].results.ttft.answer.parts.firstStep number
 roles[].results.ttft.answer.parts.independent number
+roles[].results.ttft.answer.parts.kvPullWait number
 roles[].results.ttft.answer.parts.onsets object
 roles[].results.ttft.answer.parts.onsets.decode number
 roles[].results.ttft.answer.parts.onsets.prefill number

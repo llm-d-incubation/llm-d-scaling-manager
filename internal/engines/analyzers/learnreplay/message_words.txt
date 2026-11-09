@@ -366,6 +366,7 @@ SetRecordedValue
 SetUsed
 SingularFit
 Skipping
+SpreadBeyondProcessorSharing
 StartOptimizeLoop
 StatefulSet
 Successfully
@@ -849,10 +850,12 @@ decode-only
 decode-queue-unknown
 decode-style
 decodeBase
+decodeBaseNet
 decodeFromITL
 decodeHeldPrompt
 decodePerStep
 decodePerToken
+decodePerTokenNet
 decodeSaturatedAt
 decodeSaturation
 decodeTTFT
@@ -996,6 +999,7 @@ engine-agnostic
 engineParams
 engineParamsSource
 engineRanks
+engineWait
 engines
 enough
 entered
@@ -1455,6 +1459,7 @@ kvCeiling
 kvFromInstant
 kvFullPods
 kvMaxToMean
+kvPullWait
 kvReqFleet
 kvReqPerSeq
 kvTokensPerRequest
@@ -2074,6 +2079,7 @@ priork2|
 priors
 probe
 processing
+processorSharing
 produced
 product
 production
@@ -2091,6 +2097,7 @@ providersSkipped
 published
 publishedSeconds
 publishes
+pull
 python3
 q
 quadratic
@@ -2332,6 +2339,7 @@ saturated-throughput-yields-to-siblings
 saturatedReplicas
 saturatedThroughput
 saturatedThroughputBucket
+saturates
 saturation
 saturation-holds-role
 saturation-itl-clears-on-a-new-revision
@@ -2514,6 +2522,7 @@ slo-ttft-decode-term
 slo-ttft-measured-spread
 slo-ttft-measured-transfer
 slo-ttft-price
+slo-ttft-processor-sharing
 slo-ttft-quiet-transfer
 slo-ttft-variant
 slo-variant

@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 3,
+  "question": "replicas-to-slo",
+  "source": {
+    "recording": "../../internal/engines/analyzers/learnreplay/testdata/goldens/throughput-sweep/recording.jsonl.gz",
+    "namespace": "ns-01",
+    "model": "model-02",
+    "firstCycle": 1,
+    "lastCycle": 83,
+    "totalCycles": 83,
+    "firstAt": "2026-11-05T21:16:12.503094596Z",
+    "lastAt": "2026-11-05T21:36:44.100618545Z"
+  },
+  "bands": {
+    "method": "block bootstrap",
+    "blockCycles": 4,
+    "resamples": 200,
+    "seed": 1,
+    "loPercent": 10,
+    "hiPercent": 90
+  },
+  "roles": [
+    {
+      "role": "decode",
+      "variant": "variant-01",
+      "inputs": {
+        "line": {
+          "a": 0.002179945786395079,
+          "b": 0.0019602990400941736,
+          "tier": "pinned-B",
+          "readings": 14,
+          "observedFill": {
+            "lo": 0.22825024437927666,
+            "hi": 0.283642880417074
+          },
+          "fromCycle": 64,
+          "toCycle": 77,
+          "resamples": 200,
+          "tierChanges": 0,
+          "check": {
+            "status": "ok-at-another-shape",
+            "compared": 10,
+            "onRamp": 17,
+            "aboveBand": 0,
+            "tooOld": 0,
+            "past": 3,
+            "medianErrorPct": 14.319396863089322,
+            "worstErrorPct": 15.861032138310588,
+            "signedErrorPct": 14.319396863089322,
+            "fromCycle": 33,
+            "toCycle": 42,
+            "rowKVPerRequest": 2991.942343243448,
+            "otherShape": true
+          }
+        },
+        "fillBand": {
+          "lo": 0.12,
+          "hi": 0.7
+        },
+        "capacityTokens": 131072,
+        "kvPerRequest": 1392.8280927271592,
+        "shape": {
+          "inputTokens": 1000.2564938328671,
+          "inputSource": "measured",
+          "outputTokens": 602.0198948155494,
+          "outputSource": "measured",
+          "outputDispersion": 1.3041814806288772,
+          "prefixHitRate": 0,
+          "fromCycle": 64,
+          "toCycle": 83,
+          "cycles": 20
+        },
+        "batchCap": 64,
+        "batchCapSource": "flags",
+        "ranks": 1,
+        "replicas": 1,
+        "replicasFrom": "recording",
+        "headroom": 0.85
+      },
+      "results": {
+        "knee": {
+          "answer": {
+            "value": 30.87802159050532,
+            "unit": "r/s",
+            "band": {
+              "lo": 30.74122177317214,
+              "hi": 30.961879631240954
+            },
+            "basis": {
+              "fill": 0.6800918421519332,
+              "kneeRate": 30.87802159050532,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [
+                "batch cap"
+              ],
+              "tier": "pinned-B"
+            },
+            "flags": [
+              "ExtrapolatedFill"
+            ]
+          }
+        },
+        "operatingRate": {
+          "answer": {
+            "value": 26.24631835192952,
+            "unit": "r/s",
+            "band": {
+              "lo": 26.130038507196318,
+              "hi": 26.317597686554812
+            },
+            "basis": {
+              "fill": 0.5191801082329363,
+              "kneeRate": 30.87802159050532,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [
+                "operating-point cap"
+              ],
+              "tier": "pinned-B"
+            },
+            "flags": [
+              "ExtrapolatedFill"
+            ]
+          }
+        },
+        "meanTPOT": {
+          "answer": {
+            "value": 0.003092083529416704,
+            "unit": "s",
+            "band": {
+              "lo": 0.003085536890793889,
+              "hi": 0.00310238368898344
+            },
+            "basis": {
+              "fill": 0.5191801082329363,
+              "kneeRate": 30.87802159050532,
+              "floor": 0.002221892534461583,
+              "uncapped": 0,
+              "boundBy": [],
+              "tier": "pinned-B"
+            },
+            "flags": [
+              "ExtrapolatedFill"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "role": "prefill",
+      "variant": "variant-02",
+      "ttft": {
+        "decodeVariant": "variant-01",
+        "percentile": 0.9,
+        "rate": 26.24631835192952,
+        "rateSource": "headroom x decode knee",
+        "replicas": 2,
+        "replicasFrom": "--prefill",
+        "vp": 30000,
+        "vpSource": "assumed",
+        "fixedLatencySeconds": 0.009,
+        "fixedLatencySource": "assumed",
+        "imbalance": 1.5,
+        "imbalanceSource": "assumed",
+        "promptTokens": 1000.3860619469029,
+        "promptSource": "measured",
+        "promptFromCycle": 64,
+        "promptToCycle": 83,
+        "promptCV": 0.06,
+        "promptCVSource": "assumed",
+        "arrivalsSource": "assumed",
+        "transferSecondsPerToken": 0.000008500527551544257,
+        "transferSource": "held by the decode term, not priced",
+        "decodeSide": "line",
+        "decodeTermRefused": "NoStepSpread",
+        "routerHopRefused": "NoRouterMean",
+        "decodeBaseSeconds": 0.029096796905759965,
+        "decodeHeldPromptTokens": 998.3320433436534,
+        "decodeFromITLSeconds": 0.0033444760811969575,
+        "routerHopBaseSeconds": 0.02,
+        "decodeTermSource": "assumed",
+        "routerHopSource": "assumed",
+        "decodePerStep": 10,
+        "flowControl": "off, inferred",
+        "assumed": [
+          "V_P 30000 tok/s (--assume-vp)",
+          "a 9ms (--assume-a)",
+          "f 1.5 on 2 pods (none learned at that count)",
+          "prompt cv 0.06 (--assume-prompt-cv)",
+          "decode TTFT 29.1 ms held from a quiet row, slope 10 on ITL above 3.34 ms (no fit: NoStepSpread)",
+          "router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one",
+          "flow control off (no queue series)",
+          "Poisson arrivals"
+        ]
+      },
+      "results": {
+        "knee": {
+          "answer": {
+            "value": 39.98456348157624,
+            "unit": "r/s",
+            "basis": {
+              "fill": 0,
+              "kneeRate": 39.98456348157624,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [
+                "prefill knee"
+              ],
+              "tier": ""
+            },
+            "flags": [
+              "UnvalidatedTTFT",
+              "AssumedVP",
+              "AssumedImbalance",
+              "AssumedPromptSpread"
+            ],
+            "sensitivity": {
+              "lo": 29.553807790730264,
+              "hi": 54.09676235742668
+            }
+          }
+        },
+        "ttft": {
+          "answer": {
+            "value": 0.3255081309897781,
+            "unit": "s",
+            "basis": {
+              "fill": 0,
+              "kneeRate": 39.98456348157624,
+              "floor": 0.09635450460738157,
+              "uncapped": 0,
+              "boundBy": [],
+              "tier": "pinned-B"
+            },
+            "flags": [
+              "UnvalidatedTTFT",
+              "AssumedVP",
+              "AssumedImbalance",
+              "AssumedPromptSpread",
+              "DecodeStepSlopeAssumed",
+              "RouterHopAssumed",
+              "FlowControlInferredOff",
+              "AssumedPoissonArrivals",
+              "AssumedA",
+              "TransferHeld"
+            ],
+            "parts": {
+              "independent": 0.27235648439056637,
+              "pooled": 0.21038861928645006,
+              "decodeShare": 0.07438570927566464,
+              "engineWait": 0.05011481736326467,
+              "kvPullWait": 0.0024433330422215915,
+              "ownPrefill": 0.0715028641853795,
+              "decodeWait": 0.016060119883361607,
+              "firstStep": 0,
+              "decodeEngine": 0,
+              "routerHop": 0.02,
+              "prefillUtilization": 0.6564112764172876,
+              "vpMarginApplied": 0,
+              "waitScale": 0,
+              "waitOffset": 0,
+              "decodeWaitProbability": 0.07438570927568154,
+              "prefillKnee": 39.98456348157624,
+              "decodeKnee": 30.87802159050532
+            },
+            "sensitivity": {
+              "lo": 0.19554831873055709,
+              "hi": 1.087923746410954
+            }
+          }
+        }
+      }
+    }
+  ],
+  "exitCode": 0,
+  "note": "estimate from 14 readings (cycles 64-77) of a 83-cycle recording, not a guarantee; see basis (-o json); TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the sent spread (cv 0.06) it read up to 33% under the router's percentile on the P2 recordings. V_P ASSUMED. a ASSUMED."
+}

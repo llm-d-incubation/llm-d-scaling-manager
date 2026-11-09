@@ -5,3 +5,5 @@
 # contributor has core.autocrlf=true (Windows). Blobs are already LF; this
 # forces the working-tree checkout to LF too.
 *.sh text eol=lf
+# The offline kubectl has no .sh suffix and runs under WSL from a Windows checkout too.
+hack/offline-kubectl/kubectl text eol=lf

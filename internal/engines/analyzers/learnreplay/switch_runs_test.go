@@ -138,6 +138,12 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// line is priced. Its unit tests hold it
 	// (heldBy); the CLI, which has no switch, moves its own goldens.
 	slo.SwitchTTFTDecodeTerm: nil,
+	// The prefill pod and the KV pull priced as processor-sharing stages. It
+	// moves no golden, for the decode term's reason: no committed recording's
+	// cycle holds an a, so S1 stops at no-fixed-latency before a fleet is
+	// priced. Its unit tests hold it (heldBy); the CLI, which has no switch,
+	// moves its own goldens.
+	slo.SwitchTTFTProcessorSharing: nil,
 	// ev-shindin/llm-scaling-manager#495's one slow pod (mu_slow_pod.go), four switches, measured each
 	// alone against all off:
 	//
@@ -1087,6 +1093,13 @@ var heldBy = map[string][]heldTest{
 		{"../slo", "TestTTFT_TheDecodeTermWindow"},
 		{"../slo", "TestTTFT_TheDecodeTermSwitchOnALine"},
 		{"../slo", "TestTTFT_TheRouterMeanReachesTheWindow"},
+	},
+	// Processor sharing: the first prices one fleet on and off and asserts
+	// both (the pull a stage on, the first-come wait off); the second runs the
+	// switch through Analyze (the published figures differ).
+	slo.SwitchTTFTProcessorSharing: {
+		{"../slo", "TestTTFT_TheProcessorSharingSwitch"},
+		{"../slo", "TestTTFT_TheProcessorSharingSwitchOnALine"},
 	},
 	// It runs the switch on and off through Analyze and asserts both.
 	saturation.SwitchITLClearsOnNewRevision: {

@@ -17,8 +17,12 @@ import (
 // way the pinned key list in testdata/schema-v<N>.txt changes
 // (TestJSONSchemaIsPinned).
 
-// schemaVersion is the version of the JSON output's schema.
-const schemaVersion = 2
+// schemaVersion is the version of the JSON output's schema. 3: the TTFT's
+// prefill side is priced as processor sharing (whatif.TTFTFleet.ProcessorSharing),
+// so parts.engineWait is the prefill pods' mean stretch, parts.kvPullWait the KV
+// pull's, and parts.waitScale and parts.waitOffset, which describe a first-come
+// wait, are 0.
+const schemaVersion = 3
 
 // wireOutput is one command's whole JSON output.
 type wireOutput struct {
@@ -354,6 +358,7 @@ type wireTTFTParts struct {
 	Pooled                float64 `json:"pooled"`
 	DecodeShare           float64 `json:"decodeShare"`
 	EngineWait            float64 `json:"engineWait"`
+	KVPullWait            float64 `json:"kvPullWait"`
 	OwnPrefill            float64 `json:"ownPrefill"`
 	DecodeWait            float64 `json:"decodeWait"`
 	FirstStep             float64 `json:"firstStep"`
@@ -455,7 +460,7 @@ func toWireTTFT(r whatif.Result) *wireTTFTResult {
 			Floor: v.Floor, KneeRate: v.PrefillKnee, BoundBy: []string{}, Tier: v.Tier,
 		}, Parts: wireTTFTParts{
 			Independent: v.Independent, Pooled: v.Pooled, DecodeShare: v.DecodeShare,
-			EngineWait: v.Parts.EngineWait, OwnPrefill: v.Parts.OwnPrefill, DecodeWait: v.Parts.DecodeWait,
+			EngineWait: v.Parts.EngineWait, KVPullWait: v.Parts.KVPullWait, OwnPrefill: v.Parts.OwnPrefill, DecodeWait: v.Parts.DecodeWait,
 			FirstStep: v.Parts.FirstStep, DecodeEngine: v.Parts.DecodeEngine, RouterHop: v.Parts.RouterHop,
 			PrefillUtilization: v.PrefillUtilization, VPMarginApplied: v.VPMarginApplied,
 			WaitScale: v.WaitScale, WaitOffset: v.WaitOffset, DecodeWaitProbability: v.DecodeWaitProbability,

@@ -6,6 +6,6 @@ TTFT p90        4752.9 ms   [2396.3 .. Saturated] end to end; UNVALIDATED; V_P A
                 (floor 454.3 ms, pooled 4608.9 ms, worst pod utilization 0.850)
 ttft inputs     V_P 130000 ASSUMED; a 11.58 ms learned; f 1 (one pod); N_p 1 (recording); prompt 15975 tokens (measured, cycles 83-102); decode engine TTFT 73.9 ms at 16608 tokens, measured
 assumed         V_P 130000 tok/s (--assume-vp); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
-flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; DecodeEngineMeasured; FlowControlInferredOff; AssumedPoissonArrivals
+flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; DecodeEngineMeasured; SpreadBeyondProcessorSharing; FlowControlInferredOff; AssumedPoissonArrivals
 estimate from no readings of the line's own of a 105-cycle recording, not a guarantee; see basis (-o json)
-TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 34% under it. V_P ASSUMED.
+TTFT is UNVALIDATED until a fresh frozen run passes, and is not a bound: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. V_P ASSUMED.

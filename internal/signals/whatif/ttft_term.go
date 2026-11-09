@@ -171,13 +171,15 @@ type termPlan struct {
 // own latency and raises the term's flags.
 func termOn(t DecodeTerm, pf *prefillPlan) *termPlan {
 	i := pf.p.PromptTokens
-	engine, engineToken := t.Engine.split(i)
+	engine, engineToken := t.EngineAt(i, pf.pull)
 	hop, hopToken := t.Hop.split(i)
 	tp := &termPlan{engine: engine, hop: hop, perStep: t.PerStep, fromITL: t.FromITL, omitted: t.EngineOmitted, oldTransfer: pf.xfer}
 	if t.EngineOmitted {
 		pf.xfer += hopToken
 	} else {
-		pf.xfer = engineToken + hopToken
+		// With the pull its own stage, it is priced there and in the own
+		// time beside D net of it.
+		pf.xfer = engineToken + hopToken + pf.pull
 		pf.flags = slices.DeleteFunc(pf.flags, func(f Flag) bool { return f == TransferOmitted })
 	}
 	pf.setVP(pf.vp)
@@ -194,6 +196,32 @@ func termOn(t DecodeTerm, pf *prefillPlan) *termPlan {
 		pf.flags = append(pf.flags, DecodeTermPrefixHits)
 	}
 	return tp
+}
+
+// EngineAt is D's fixed and per-token parts as priced at a prompt of i
+// tokens, with the KV pull priced as its own stage at pull seconds a token
+// (TTFTFleet.ProcessorSharing with a decode line; 0 otherwise): the fit read
+// at i, net of the pull (netOfPull) unless D is omitted.
+func (t DecodeTerm) EngineAt(i, pull float64) (fixed, perToken float64) {
+	fixed, perToken = t.Engine.split(i)
+	if !t.EngineOmitted && pull > 0 {
+		fixed, perToken = netOfPull(fixed, perToken, pull, i)
+	}
+	return fixed, perToken
+}
+
+// netOfPull is D's fixed and per-token parts at a prompt of i tokens with the
+// KV pull, pull seconds a token, taken out: D is the decode engine's TTFT, the
+// pull inside it, fitted on windows whose pull was measured as it ran, so with
+// the pull priced as its own processor-sharing stage (TTFTFleet.ProcessorSharing)
+// D keeps only the rest. The pull comes out of the per-token part, and what
+// that part cannot hold out of the fixed one (a held D has no per-token part);
+// the step term is not touched.
+func netOfPull(fixed, perToken, pull, i float64) (float64, float64) {
+	if perToken >= pull {
+		return fixed, perToken - pull
+	}
+	return fixed - (pull-perToken)*i, 0
 }
 
 // at is the term's D and R at step time itl, the line at the actual fill.

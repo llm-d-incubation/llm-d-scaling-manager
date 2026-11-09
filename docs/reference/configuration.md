@@ -38,9 +38,9 @@ Every option `deploy/install.sh` reads. Each entry is read by something, and eve
 
 `main`, `latest`, `dev` and `nightly` are floating tags: the same install deploys a
 different binary after the next push, and the installer warns. To reproduce a
-deployment, install from a release checkout (`git checkout vX.Y.Z`, which
-deploys `:vX.Y.Z`; the first release in this repository follows), or pass
-`IMG=<repo>@sha256:<digest>` with the digest of the build you tested. See
+deployment, install from a release checkout (`git checkout v0.11.0-rc1`, which
+deploys `:v0.11.0-rc1`), or pass `IMG=<repo>@sha256:<digest>` with the digest
+from the release notes. See
 [Pin the version](upgrade-and-uninstall.md#pin-the-version).
 
 ## Namespaces

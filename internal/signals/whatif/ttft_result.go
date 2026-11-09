@@ -47,7 +47,7 @@ const (
 	// UnvalidatedTTFT is on every TTFT figure. Repeat 1 of the staircase run
 	// (M2) failed the form before the decode term. That run chose the term,
 	// so it cannot validate it: validation is a fresh frozen run. On P2's
-	// goldens it reads low at light load, up to about 34% under the router's
+	// goldens it reads low at light load, up to about 33% under the router's
 	// p90: not a bound.
 	UnvalidatedTTFT Flag = "UnvalidatedTTFT"
 	// AssumedVP is V_P supplied by the caller (--assume-vp) rather than
@@ -146,6 +146,11 @@ const (
 	// priced, could not be placed, so the answer may stand above it. Pass
 	// the decode role to check it.
 	DecodeOnsetUnchecked Flag = "DecodeOnsetUnchecked"
+	// SpreadBeyondProcessorSharing is a TTFT priced with
+	// TTFTFleet.ProcessorSharing at a prompt spread past MaxPSPromptCV, wider
+	// than any run has validated processor sharing at: the figure is the
+	// larger of processor sharing's and the first-come queue's.
+	SpreadBeyondProcessorSharing Flag = "SpreadBeyondProcessorSharing"
 )
 
 // The bounds a TTFT rate or a prefill knee can be set by.
@@ -183,7 +188,11 @@ type TTFTBasis struct {
 type TTFT struct {
 	// Seconds is the answer: at a percentile, the optimised union bound over
 	// the prefill side (block 1) and the decode admission wait; for the mean,
-	// the sum of the parts' means.
+	// the sum of the parts' means. On the first-come queue block 1 is a
+	// request on the busiest prefill pod, so the percentile and the mean are
+	// that pod's. With TTFTFleet.ProcessorSharing block 1 is every prefill
+	// pod's requests mixed by their shares, so they are the population's: a
+	// request on any pod.
 	Seconds float64
 	// Independent is the same percentile with the two blocks taken
 	// independent, printed beside the union bound; never above it. Equal to
@@ -191,7 +200,8 @@ type TTFT struct {
 	Independent float64
 	// Pooled is the optimistic figure: the union bound with the prefill
 	// pods pooled into one M/G/N_p queue (Allen-Cunneen) and no imbalance,
-	// in place of the worst pod's M/G/1. Never above Seconds. It describes a
+	// in place of the worst pod's M/G/1 (with TTFTFleet.ProcessorSharing,
+	// every prefill pod shared at the mean share). Never above Seconds. It describes a
 	// router that holds requests and sends each to the first free pod, which
 	// is what flow control does only above the prefill onset; below it, each
 	// pod queues for itself and Pooled is a bound, not an estimate.
@@ -220,7 +230,8 @@ type TTFT struct {
 	// tail is rho_w * exp(-r (t - s)) from s on, and rho_w before it
 	// (engineWait: s is 0 except under the Lundberg bound, at cv < 1). The
 	// mean wait in Parts is Pollaczek-Khinchine's (Kingman's) rho_w * theta,
-	// not this tail's mean.
+	// not this tail's mean. Both are 0 with TTFTFleet.ProcessorSharing,
+	// which has no first-come wait.
 	WaitScale, WaitOffset float64
 	// DecodeWaitProbability is the share of requests that wait for a decode
 	// slot; 0 with no decode side.
@@ -252,8 +263,16 @@ type TTFTParts struct {
 	// (Pollaczek-Khinchine at Poisson arrivals, Kingman otherwise). W_router
 	// is 0 below the onsets and is not priced apart above the prefill onset.
 	// It is the worst pod's mean, not the fleet's: the mean TTFT (Seconds at
-	// q = 0) is the mean a request on the busiest pod sees.
+	// q = 0) is the mean a request on the busiest pod sees. With
+	// TTFTFleet.ProcessorSharing it is the prefill pods' mean stretch over
+	// the requests, the busiest pod's and the others' by their shares: the
+	// time a prompt shares its pod beyond its own work.
 	EngineWait float64
+	// KVPullWait is the KV pull's mean stretch on the decode pod, the time
+	// the pull shares the pod beyond its own work: 0 unless
+	// TTFTFleet.ProcessorSharing prices it, with a decode line. The pull's
+	// own work is in OwnPrefill.
+	KVPullWait float64
 	// OwnPrefill is a + E[I_eff]/V_P, plus the part of decode's term that
 	// goes with the prompt: T_xfer on the old sum, the per-token parts of D
 	// and R with a DecodeTerm. It follows the prompt's quantile.

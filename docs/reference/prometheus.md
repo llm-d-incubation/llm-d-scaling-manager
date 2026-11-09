@@ -1174,7 +1174,7 @@ is set, and is scraped with the workload's namespace as `exported_namespace`.
 | `llmsm_scale_from_zero_wake_seconds` | histogram | `namespace`, `model_name` | Time from the first activation published to the model being observed serving. Buckets 1 s to 300 s. | Wakes are slow. With a warm pool or FMA the distribution is bimodal; a shift toward the slow mode is the regression. |
 | `llmsm_saturation_metrics_up` | gauge | `variant_name`, `namespace` | `1` when the variant got a fresh decision this cycle; `0` when the analyzer knew the variant but its saturation and capacity gauges were not refreshed. | Gate alerts on the saturation gauges with this, rather than trusting a stale value. |
 | `llmsm_replica_start_seconds` | histogram | `variant_name`, `namespace` | Pod creation to Ready, one observation per replica started. Buckets 5 s to 900 s. | Scale-ups land late. It is also an input: the demand floor projects the queue over the start time. |
-| `llmsm_replica_start_seconds_estimate` | gauge | `variant_name`, `namespace`, `source` | The controller's start estimate for the variant. `source` is `seed` (the ScaledObject's `replicaStartSeconds`, nothing measured yet), `default` (70 s, neither), `blended` (one or two of the variant's pods measured: the value blends the seed or default with them, so it lies between the two) or `measured` (three or more pods). Sizing never uses a start shorter than a measured one (`sizedSeconds` in the `replica-start-measured` line). Before the next release, `seed` meant the 70 s default. | It disagrees with the histogram: the controller is sizing on a belief the cluster does not bear out. |
+| `llmsm_replica_start_seconds_estimate` | gauge | `variant_name`, `namespace`, `source` | The controller's start estimate for the variant. `source` is `seed` (the ScaledObject's `replicaStartSeconds`, nothing measured yet), `default` (70 s, neither), `blended` (one or two of the variant's pods measured: the value blends the seed or default with them, so it lies between the two) or `measured` (three or more pods). Sizing never uses a start shorter than a measured one (`sizedSeconds` in the `replica-start-measured` line). Before v0.11.0-rc1, `seed` meant the 70 s default. | It disagrees with the histogram: the controller is sizing on a belief the cluster does not bear out. |
 | `llmsm_warmpool_free_pods` | gauge | `pool` | Warm-pool Pods that can serve a wake now (every instance asleep, none loading). Compare with the pool's `sleepMinSize`. | Below `sleepMinSize` for long. See [operating the warm pool](../guides/warm-pool/operating.md). |
 | `llmsm_warmpool_borrow_total` | counter | `namespace`, `model_name`, `outcome` | Attempts to cover a scale-up from the pool. `outcome`: `hit`, `blocked` (the model was resident but every holding Pod was busy: add Pods), `miss` (resident nowhere: fix the warm set). | The hit rate drops. |
 | `llmsm_warmpool_bridge_seconds` | histogram | `namespace`, `model_name` | How long a borrowed Pod served before ordinary replicas took over. Should track the ordinary start time. | It sits near `maxHoldSeconds`: ordinary scale-ups are failing and the pool is masking it. |
@@ -1341,7 +1341,7 @@ p90 and 7 at p95. Which way it errs depends on the prompt spread:
   and at 7 of 7 at p95, worst 4.13x. That is a wrong spread hiding a missing
   term, not a margin.
 - **With the spread the load generator actually sent,** it reads **low**: under
-  at 5 of 7 points at p90 and 4 of 7 at p95, worst 34% under. Two terms are
+  at 5 of 7 points at p90 and 4 of 7 at p95, worst 33% under. Two terms are
   missing: decode's spread, and the prefill engine's overhead on long prompts.
 - **At saturation** the model refuses the rate: no prediction,
   `llmsm_slo_ttft_refused` `1`, and `llmsm_slo_ttft_unmet` `1`.
@@ -1416,6 +1416,7 @@ model reads all of them `0`, including the two marked "on every answer":
 | `FlowControlMismatch` | The declared `slo.flowControl` contradicts the series. Priced as declared; the log says so. |
 | `AboveFlowControlOnset` | At the rate answered, the prefill gate is closing: the model is not proven conservative there. |
 | `HeldByDecodeAdmission` | The decode wait lowers the rate a little. Informational below `decode-bound`. |
+| `SpreadBeyondProcessorSharing` | The prompt spread is wider than cv 0.25, where processor sharing has not been checked against a run: TTFT is the higher of processor sharing and the first-come queue. The assumed spread of 2 always raises it. |
 | `PromptSpreadClamped` | The measured spread was above 3 or ran past the histogram: priced at 3. |
 | `PromptSpreadAbovePeak` | The spread, assumed or measured, is above the one that prices the longest prompt at this percentile (2.22 at p90, 1.66 at p85), so a wider spread reads a shorter floor. At p85 and below the assumed 2 sets it. |
 | `BelowFittedBand`, `KVBoundSlots` | Decode ran below its fitted band, or KV set its slots rather than the batch cap. |

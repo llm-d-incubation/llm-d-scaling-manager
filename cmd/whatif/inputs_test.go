@@ -61,6 +61,8 @@ func TestArrivalCV2_ReachesThePrefillQueue(t *testing.T) {
 // The fleet that showed a burstier arrival priced better than Poisson at the
 // default cv: 300 ms at p95 read 5.26 r/s at Poisson and 5.53 at Ca^2 1.0001, and
 // p95 at 10 r/s read 396.0 ms and 361.5 ms. Kingman's decay outran Poisson's root.
+// The figures are the first-come model's, where that was; the property holds
+// on processor sharing too.
 func TestArrivalCV2_TheWorkedFleetPricesNoBetterThanPoisson(t *testing.T) {
 	rate := func(flags ...string) float64 {
 		out, code := runCmd(t, slices.Concat(workedTTFT("slo-to-rate", "--ttft", "300ms@p95", "-o", "json"), flags)...)
@@ -84,16 +86,20 @@ func TestArrivalCV2_TheWorkedFleetPricesNoBetterThanPoisson(t *testing.T) {
 		t.Fatal(out)
 		return 0
 	}
-	poissonRate, poissonWait := rate(), p95()
-	near(t, "the Poisson rate", poissonRate, 5.26, 0.005)
-	near(t, "the Poisson p95", poissonWait, 0.3960, 0.00005)
-	prevRate, prevWait := poissonRate, poissonWait
-	for _, ca2 := range []string{"1.0001", "2.5", "3", "4", "8"} {
-		gotRate, gotWait := rate("--arrival-cv2", ca2), p95("--arrival-cv2", ca2)
-		assert.LessOrEqual(t, gotRate, prevRate*(1+1e-6), "Ca^2 %s", ca2)
-		assert.GreaterOrEqual(t, gotWait, prevWait*(1-1e-9), "Ca^2 %s", ca2)
-		prevRate, prevWait = gotRate, gotWait
+	monotone := func(model string) {
+		prevRate, prevWait := rate(), p95()
+		for _, ca2 := range []string{"1.0001", "2.5", "3", "4", "8"} {
+			gotRate, gotWait := rate("--arrival-cv2", ca2), p95("--arrival-cv2", ca2)
+			assert.LessOrEqual(t, gotRate, prevRate*(1+1e-6), "%s, Ca^2 %s", model, ca2)
+			assert.GreaterOrEqual(t, gotWait, prevWait*(1-1e-9), "%s, Ca^2 %s", model, ca2)
+			prevRate, prevWait = gotRate, gotWait
+		}
 	}
+	monotone("processor sharing")
+	firstCome(t)
+	near(t, "the Poisson rate", rate(), 5.26, 0.005)
+	near(t, "the Poisson p95", p95(), 0.3960, 0.00005)
+	monotone("first come")
 }
 
 // Decode's admission is a birth-death chain with no Ca^2: on a decode line
@@ -175,15 +181,20 @@ func TestPromptCV_TheNoteQuotesTheTableAtItsOwnCV(t *testing.T) {
 	assert.Contains(t, footerNote([]*pricedFleet{assumedAt(whatif.AssumedPromptCV)}), "at the assumed prompt cv 2")
 	got := footerNote([]*pricedFleet{assumedAt(1)})
 	assert.NotContains(t, got, "4.1x")
-	assert.Contains(t, got, "at the sent spread (cv 0.06) it read up to 34%")
+	assert.Contains(t, got, "at the sent spread (cv 0.06) it read up to 33%")
 
 	// Both rows were read at Poisson arrivals: a stated Ca^2 quotes neither.
 	bursty := assumedAt(whatif.AssumedPromptCV)
 	bursty.in.ArrivalCV2 = 4
 	note := footerNote([]*pricedFleet{bursty})
 	assert.NotContains(t, note, "4.1x")
-	assert.NotContains(t, note, "34%")
+	assert.NotContains(t, note, "33%")
 	assert.Contains(t, note, "no recording has checked it at a stated Ca^2")
+	// Above Ca^2 1 the burst rule reads high at light load, and says so;
+	// below it there is no such rule.
+	assert.Contains(t, note, "Above Ca^2 1 it reads high at light load")
+	bursty.in.ArrivalCV2 = 0.5
+	assert.NotContains(t, footerNote([]*pricedFleet{bursty}), "reads high at light load")
 }
 
 // A fleet refused before pricing still says what the flags stated, in its
@@ -235,8 +246,8 @@ func TestInputs_TheWorkedExampleAtTheStatedInputs(t *testing.T) {
 		want  string
 	}{
 		{nil, "fleet    0.25 r/s"},
-		{[]string{"--assume-prompt-cv", "1"}, "fleet    10.80 r/s"},
-		{[]string{"--assume-prompt-cv", "1", "--arrival-cv2", "4"}, "fleet    4.80 r/s"},
+		{[]string{"--assume-prompt-cv", "1"}, "fleet    9.64 r/s"},
+		{[]string{"--assume-prompt-cv", "1", "--arrival-cv2", "4"}, "fleet    4.21 r/s"},
 	} {
 		text, code := runCmd(t, slices.Concat(asked, c.flags)...)
 		assert.Equal(t, 0, code, text)

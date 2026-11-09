@@ -225,14 +225,32 @@ func (bl block) exceeds(t float64) float64 {
 	return min(max(p, 0), 1)
 }
 
+// mean is E[W + own].
+func (bl block) mean() float64 {
+	return bl.own.mean + bl.wait.mean()
+}
+
 // quantile is the least t with P(W + own > t) <= alpha, alpha in (0, 1), by
 // bisection: the tail is non-increasing in t.
 func (bl block) quantile(alpha float64) float64 {
-	lo, hi := 0.0, bl.own.mean+bl.wait.mean()
+	return tailQuantile(bl.exceeds, bl.mean(), alpha)
+}
+
+// quantiler is block 1 of the union bound: a time with a quantile, which is
+// a block (a wait, then the request's own time) or, under processor sharing,
+// a stageMix.
+type quantiler interface {
+	quantile(alpha float64) float64
+}
+
+// tailQuantile is the least t with exceeds(t) <= alpha, alpha in (0, 1), by
+// bisection from mean: exceeds is non-increasing in t.
+func tailQuantile(exceeds func(float64) float64, mean, alpha float64) float64 {
+	lo, hi := 0.0, mean
 	if !(hi > 0) {
 		hi = 1
 	}
-	for i := 0; bl.exceeds(hi) > alpha; i++ {
+	for i := 0; exceeds(hi) > alpha; i++ {
 		if i > 200 {
 			return math.Inf(1)
 		}
@@ -240,7 +258,7 @@ func (bl block) quantile(alpha float64) float64 {
 	}
 	for range 200 {
 		mid := lo + (hi-lo)/2
-		if bl.exceeds(mid) > alpha {
+		if exceeds(mid) > alpha {
 			lo = mid
 		} else {
 			hi = mid
@@ -264,7 +282,7 @@ func (bl block) quantile(alpha float64) float64 {
 // a log-spaced grid, then a golden-section search beside its best point.
 // The even split, beta = (1-q)/2, is a candidate too, so the answer is never
 // above it whatever the search finds.
-func split(b1 block, dec waitTail, q float64) (value, beta float64) {
+func split(b1 quantiler, dec waitTail, q float64) (value, beta float64) {
 	eps := 1 - q
 	if len(dec.w) == 0 {
 		return b1.quantile(eps), 0
