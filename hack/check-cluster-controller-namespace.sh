@@ -18,6 +18,9 @@
 #     every later step that names the controller's namespace reads it.
 
 set -u
+# No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl). make -n
+# still runs a recipe line that calls $(MAKE), and those lines call kubectl too.
+PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/offline-kubectl:$PATH"; export PATH
 
 # CHECK_ROOT runs the check against another tree -- how its negative control is
 # taken: point it at an extracted older tree and the cases must fail.
