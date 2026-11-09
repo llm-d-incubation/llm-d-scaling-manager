@@ -499,14 +499,13 @@ scenario:
       #   curl -sL "https://ghcr.io/token?scope=repository:llm-d-incubation/llm-d-scaling-manager:pull" \
       #     | jq -r .token | xargs -I{} curl -sH "Authorization: Bearer {}" \
       #       https://ghcr.io/v2/llm-d-incubation/llm-d-scaling-manager/tags/list
-      # Floating main: no release has been cut in this repository yet; pin
-      # the first one here when it is. `make benchmark-standup` turns this
-      # install off (wva.enabled=false) and installs the controller from
-      # deploy/ with IMG instead, so to measure a build there, pass
-      # IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:main or its digest.
+      # Pinned to the latest release, v0.11.0-rc1. `make benchmark-standup`
+      # turns this install off (wva.enabled=false) and installs the controller
+      # from deploy/ with IMG instead, so to measure the release there, check
+      # out v0.11.0-rc1 and pass IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.11.0-rc1.
       image:
         repository: ghcr.io/llm-d-incubation/llm-d-scaling-manager
-        tag: main
+        tag: v0.11.0-rc1
       replicaCount: 1 # the scaling manager controller pod replicas (1 is the chart default)
       # Disable to skip installing the controller but still render the VA
       # + HPA (rare; useful when you reuse a cluster-wide controller

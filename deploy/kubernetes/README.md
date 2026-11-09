@@ -59,7 +59,7 @@ or pass `LLMSM_DEFAULT_SO=plan|edit|true` to the install. See
 | --- | --- | --- |
 | `NAMESPACE` | none (required in namespace scope) | where llm-d serves; the controller is installed there too |
 | `SCOPE` | `namespace` | `cluster` installs one controller for every namespace (work in progress) |
-| `IMG` | `ghcr.io/llm-d-incubation/llm-d-scaling-manager:main` on `main`; the release tag on a release checkout (`git checkout vX.Y.Z`; the first release in this repository follows) | controller image; [pin a release](../../docs/reference/upgrade-and-uninstall.md#pin-the-version) for anything beyond development |
+| `IMG` | `ghcr.io/llm-d-incubation/llm-d-scaling-manager:main` on `main`; the release tag on a release checkout (`git checkout v0.11.0-rc1`) | controller image; [pin a release](../../docs/reference/upgrade-and-uninstall.md#pin-the-version) for anything beyond development |
 | `PROMETHEUS_URL` | detected | the Prometheus the controller reads |
 | `KEDA_HELM_INSTALL` | `false` | install KEDA with Helm |
 | `LLMSM_LIMITER` | `none` | `none` leaves scaling unbounded except by `maxReplicaCount`; `gpu-inventory,quota` bounds by both; see [bounding GPU usage](../../docs/guides/admin-gpu-bounding/) |
