@@ -250,7 +250,7 @@ scale and have the scaling manager only report. Nothing else is needed.
 
    To compare every model at once, run the whole controller passive instead
    of step 1: `make deploy-scaling-manager LLMSM_PASSIVE=true`
-   ([configuration](../../reference/install-options.md#deployment-flags)).
+   ([installer options](../../reference/install-options.md#deployment-flags)).
 
 3. Check the mode, then read the two counts side by side over the run:
 

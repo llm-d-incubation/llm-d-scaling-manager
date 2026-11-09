@@ -541,7 +541,7 @@ across a restart, are otherwise visible only in the logs.
 
 ### `llmsm_learned_state_restores_total`
 - **Type**: Counter
-- **Description**: Variants whose restored learned state was checked against their engine configuration after a controller restart (`LEARNED_STATE_SNAPSHOT`, see [configuration](install-options.md#learned-state-across-a-restart)), counted on the variant's first cycle.
+- **Description**: Variants whose restored learned state was checked against their engine configuration after a controller restart (`LEARNED_STATE_SNAPSHOT`, see [installer options](install-options.md#learned-state-across-a-restart)), counted on the variant's first cycle.
 - **Labels**: `outcome`, each published at 0 from startup:
   - `whole`: the configuration matched; everything was restored;
   - `args`: the arguments matched on another engine image; everything but the ITL baseline was restored;

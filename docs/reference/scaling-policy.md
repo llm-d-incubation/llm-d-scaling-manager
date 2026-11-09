@@ -278,7 +278,7 @@ passive: true    # or false; absent inherits
 | per-model entry | an entry whose body names the model |
 | tier | the tier the variant names, else `default.defaultPolicy` |
 | `default` entry | the namespace's own `scaling-manager-scaling-policy-config` when it has one, else the controller's |
-| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([configuration](install-options.md#deployment-flags)) |
+| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([installer options](install-options.md#deployment-flags)) |
 
 The key is live. The external scaler applies an edit at KEDA's next call
 about the variant (every `pollingInterval`, and every HPA sync); the engine

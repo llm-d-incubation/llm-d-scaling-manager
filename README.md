@@ -8,9 +8,11 @@ llm-d-scaling-manager sizes LLM inference fleets on llm-d, aggregated and
 prefill/decode alike. It learns each model's capacity from its own servers
 (throughput per replica, KV-cache limit, latency, start time) and orders the
 replicas the load needs. Under a GPU quota it shares the GPUs between models
-(**utilization share**): each model gets its need, the spare goes by weight, and
-GPUs move as demand shifts. It can run **passive** first and report what it
-would do without changing anything. KEDA does the scaling.
+(**utilization share**, experimental: benchmarked with two models so far; see
+[Why use it](docs/why.md#how-mature-each-part-is)): each model gets its need,
+the spare goes by weight, and GPUs move as demand shifts. It can run
+**passive** first and report what it would do without changing anything.
+KEDA does the scaling.
 
 ```mermaid
 flowchart LR
@@ -27,12 +29,12 @@ flowchart LR
   learners --> ana["Analyzers: saturation sizes, throughput adds, SLO only reports"]
   ana --> engine
   subgraph engine [Engine]
-    ss[Steady state]
+    ss[Per-model sizing]
     us[Utilization share]
     lim["Limiters: quota, Kueue, physical GPUs"]
     wp[Warm pool]
   end
-  engine --> scaler{"KEDA external scaler: passive mode switches here"}
+  engine --> scaler(["KEDA external scaler<br/>passive switches here"])
   scaler --> hpa[KEDA and HPA]
   hpa --> work[Deployments and LeaderWorkerSets]
 ```
@@ -58,8 +60,12 @@ the scaler answers with the current replica count, so nothing moves.
 ## Install
 
 You need llm-d model servers in a namespace, KEDA, a Prometheus, and a checkout
-of this repository with `kubectl`, `jq`, `yq` and `make`. This installs it
-passive with a GPU quota, so it decides and changes nothing:
+of this repository with `kubectl`, `jq`, `yq` and `make`. The model servers must
+drain on termination, because sharing scales a donor down: `make workload-patch`
+writes the patch ([preparing a workload](docs/reference/workload-preparation.md)).
+This installs it passive with a GPU quota, so it decides and changes nothing.
+`<gpu product>` is the `GPU.PRODUCT` column of
+`kubectl get nodes -L nvidia.com/gpu.product`:
 
 ```bash
 export NAMESPACE=<the namespace running llm-d>
@@ -74,7 +80,9 @@ make utilization-share-shadow         # report what sharing would move
 ```
 
 Leave it through each model's busy period and read what it would have done
-([how](docs/guides/try-in-passive-mode/README.md#verification)). Then go active:
+(how: [per model](docs/guides/try-in-passive-mode/README.md#verification),
+[for sharing](docs/guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode)).
+Then go active:
 
 ```bash
 make deploy-scaling-manager LLMSM_PASSIVE=false

@@ -45,9 +45,10 @@ commands.
 2. **Watch.** Leave it through each model's busy period. Compare what it would
    order with what runs:
    [Verification](../../guides/try-in-passive-mode/README.md#verification).
-3. **Turn on utilization share in shadow.** Check there is a budget to share,
-   turn the optimizer on in shadow, then configure it to act. While a group
-   holds a passive model it reports what it would move, and moves nothing:
+3. **Turn on utilization share in shadow, and keep watching.** Check there is
+   a budget to share and run `make utilization-share-shadow`; leave
+   `make utilization-share-activate` for step 4. It reports what it would move,
+   and moves nothing:
    [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
 4. **Go active.** Make every model active, turn the optimizer on again, and
    check that transfers end `done`:
@@ -107,13 +108,11 @@ table and timeline is in [measured](measured.md); all nine runs are summarised
   output-heavy p95 0.090 s against 51 s, prompt-heavy p95 6.0 s against 96 s
   with no dropped requests; +39% GPU-seconds. A repeat run agreed: 0.093 s
   against 73 s, 3.5 s against 100 s, no failed requests against 123, +43%
-  GPU-seconds. Two runs, one rise per model each; shadow alone differed from
-  today by 24 s and 32 s on the prompt-heavy model. At
+  GPU-seconds. Two runs, one rise per model each. Shadow, which plans the same
+  and moves nothing, should match running with no sharing, but differed from it
+  by 24 s and 32 s on the prompt-heavy model, and in one run the quota did not
+  bind every arm ([measured](measured.md)). At
   20 000-token prompts the prompt-heavy burst was overloaded in every arm.
-- Shadow, which plans the same and moves nothing, should match running with
-  no sharing. It did not always: it differed by up to 32 s on the
-  prompt-heavy model, and in one run the quota did not bind every arm
-  ([measured](measured.md)).
 - Not yet measured: whole-node or multi-GPU pods, more than two models, a
   cluster-wide quota, and the physical GPU limiter.
 

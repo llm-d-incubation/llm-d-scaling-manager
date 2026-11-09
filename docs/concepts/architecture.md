@@ -22,12 +22,12 @@ flowchart LR
   learners --> ana["Analyzers: saturation sizes, throughput adds, SLO only reports"]
   ana --> engine
   subgraph engine [Engine]
-    ss[Steady state]
+    ss[Per-model sizing]
     us[Utilization share]
     lim["Limiters: quota, Kueue, physical GPUs"]
     wp[Warm pool]
   end
-  engine --> scaler{"KEDA external scaler: passive mode switches here"}
+  engine --> scaler(["KEDA external scaler<br/>passive switches here"])
   scaler --> hpa[KEDA and HPA]
   hpa --> work[Deployments and LeaderWorkerSets]
 ```
@@ -59,7 +59,9 @@ The same picture with the serving path around it:
 
 Fixed thresholds hold for one model and one request shape. Instead, the
 learners measure each model on its own servers, per variant and per request
-shape, and the analyzers size from what they measured.
+shape, and the analyzers size from what they measured. They are drawn apart
+above, but they live inside the analyzers: most in the saturation analyzer,
+with the throughput and SLO analyzers keeping latency lines of their own.
 
 | Learner | What it measures | What it is used for |
 | --- | --- | --- |
@@ -88,7 +90,7 @@ example after a model change, see
 
 ### The engine
 
-- **Steady state** splits each model's need across its variants. With no
+- **Per-model sizing** (the steady-state engine) splits each model's need across its variants. With no
   limiter it grows the variant with the lowest cost per unit of capacity
   (`variantCost`) first.
 - **Limiters** bound every decision by a GPU budget: a quota you declare,
@@ -147,6 +149,10 @@ spec:
         name: scaling-manager-external-scaler-<controller-namespace>
         kind: ClusterTriggerAuthentication
 ```
+
+`modelID` is the only field you must supply. The accelerator, the role
+(prefill or decode), the GPUs per replica and the InferencePool are derived
+from the workload, so they cannot drift from it.
 
 You rarely write this by hand: `make scaledobjects-plan` lists the model
 servers it finds and writes a plan to edit, and `make scaledobjects-apply`

@@ -363,7 +363,7 @@ override what `check-prereqs` reported.
 | `PROMETHEUS_SA` | none (admin step) | `monitoring/prometheus-k8s` |
 | `SKIP_CHECKS` | `false`. `true` turns refusals into warnings ([what it does not skip](../../reference/install-options.md#deployment-flags)) | `true` |
 
-Full list: [Configuration reference](../../reference/configuration.md).
+Full list: [installer options](../../reference/install-options.md).
 
 ## Details
 

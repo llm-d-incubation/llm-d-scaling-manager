@@ -5,12 +5,18 @@ twenty things once ([Set for your setup](#set-for-your-setup)) and tune a
 handful per model ([Tune per workload](#tune-per-workload)). Everything else has
 a calibrated default: [advanced settings](configuration-advanced.md).
 
+Looking for an installer variable, or a section such as *External scaler
+mutual TLS* or *Learned state across a restart*? It moved to
+[installer options](install-options.md).
+
+In the tables, **bold** marks the settings most installs change.
+
 ## Where settings live
 
 | Place | What it is | A change applies |
 | --- | --- | --- |
 | **Installer** | `make` and `deploy/install.sh` variables. They write the places below. Every one: [installer options](install-options.md) | on the next install run |
-| **Manager ConfigMap** | `scaling-manager-manager-config`, key `config.yaml`, in the controller's namespace. Every key is also an environment variable of the same name on the controller Deployment. A flag beats an environment variable, which beats the ConfigMap, which beats the built-in default | after a controller restart |
+| **Manager ConfigMap** | `scaling-manager-manager-config`, key `config.yaml`, in the controller's namespace. Every key can also be set as an environment variable of the same name on the controller Deployment. A flag beats an environment variable, which beats the ConfigMap, which beats the built-in default | after a controller restart |
 | **Flag** | an `args` entry on the controller Deployment | after a controller restart |
 | **Policy** | `scaling-manager-scaling-policy-config`: a `default` entry, named tiers, per-model overrides ([scaling policy](scaling-policy.md)). "Policy, `default`" means the cluster `default` entry only | live, within a cycle (\*) |
 | **Trigger** | a ScaledObject's trigger `metadata`, plus its `minReplicaCount` and `maxReplicaCount` ([trigger reference](scaledobject-trigger.md)) | live, when KEDA next calls |
@@ -100,8 +106,7 @@ The main path. Written by `make utilization-share-shadow` and
 
 The settings that change how a model scales. Set them on the `default` entry
 for every model, on a named tier for a class of models (a trigger picks it with
-`scalingPolicy`), or on a per-model override. The bold ones are the ones most
-installs touch.
+`scalingPolicy`), or on a per-model override.
 
 ### When to add and remove capacity
 
@@ -125,7 +130,7 @@ installs touch.
 | **`optimizer.utilizationShare.maxHeadroomReplicas`** | Policy, `default` | `1` | Spare replicas per unit of weight while the quota is contended | live |
 | `optimizer.utilizationShare.reserveGPUs` | Policy, `default` | `0` | GPUs held back from sharing, for scale-from-zero | live |
 | `optimizer.utilizationShare.namespaces.<ns>.enabled` | Policy, `default` | `true` | Take one namespace out of sharing | live |
-| `optimizer.utilizationShare.clusterNamespaces` | Policy, `default` | every namespace | Under a cluster quota, share only in these first (a canary) | live |
+| `optimizer.utilizationShare.clusterNamespaces` | Policy, `default` | every namespace | Under a cluster quota, share only in these; other models keep today's optimizer (a canary) | live |
 | `limiters[].exclude` | Policy, `default` | none | Namespaces the limiter does not bound | live |
 | `limiters[].kueue.countBorrowable`; installer `LLMSM_QUOTA_KUEUE_BORROW` | Policy, `default` | `true` | Count what Kueue lets a queue borrow from its cohort | live |
 
@@ -187,4 +192,3 @@ These names appear in manifests or older docs but change nothing:
 - `--warm-pool-namespace`: ignored.
 - `WEBHOOK_CERT_PATH`, `WEBHOOK_CERT_NAME`, `WEBHOOK_CERT_KEY`: the controller
   registers no webhooks.
-- `SKIP_TLS_VERIFY` (installer): use `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`.

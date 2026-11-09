@@ -247,7 +247,7 @@ These settings are read **only at startup**; changing them needs
 | `GLOBAL_OPT_INTERVAL` (the cycle length), feature flags, `LEARNED_STATE_*`, the Prometheus cache | same |
 | enabling or disabling the throughput analyzer | scaling policy; the controller records a `ThroughputAnalyzerRestartRequired` Warning Event on the ConfigMap |
 
-The full split is in [Configuration](install-options.md#what-a-change-needs-a-restart-or-not).
+Every setting's answer is in the Applies column of [the configuration reference](configuration.md#where-settings-live).
 A restart has its own cost; see [Upgrade and uninstall](upgrade-and-uninstall.md#after-every-upgrade-or-restart).
 
 ## What the controller is running with

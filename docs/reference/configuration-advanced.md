@@ -7,8 +7,8 @@ most installs need are on that page.
 
 ## Controller
 
-Manager ConfigMap keys are also environment variables of the same name on the
-controller Deployment. All of these need a restart.
+Manager ConfigMap keys can also be set as environment variables of the same
+name on the controller Deployment. All of these need a restart.
 
 | Name | Where set | Default | Change it when |
 | --- | --- | --- | --- |

@@ -1148,8 +1148,10 @@ If `SCALE_UP_THRESHOLD` and/or `SCALE_DOWN_BOUNDARY` are set in the environment,
 
 ## What a change needs: a restart, or not
 
-The controller's configuration has two halves, and which one a setting is in
-decides whether a change needs a restart.
+The per-setting answer is the Applies column of the
+[configuration reference](configuration.md#where-settings-live); this section
+explains the split. The controller's configuration has two halves, and which
+one a setting is in decides whether a change needs a restart.
 
 **Static**: read once at startup, so a change needs a restart. The metrics and
 probe addresses, leader election, the Prometheus URL and its TLS material, the

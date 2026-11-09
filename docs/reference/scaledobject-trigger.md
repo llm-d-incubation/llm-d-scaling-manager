@@ -97,7 +97,7 @@ KEDA shows nothing on the ScaledObject. Three things do:
 
 The cause is in a log line at verbosity 4, which the default (2) hides. Add
 `--v=4` to the controller Deployment's `args` (see
-[configuration](configuration.md)) and look for
+[advanced settings](configuration-advanced.md#controller)) and look for
 `Skipping a registered workload with unusable trigger metadata`: the
 ScaledObject is in `scaledObject`, the key and value in `error`. If a registered
 model never gets a decision, check these values first.

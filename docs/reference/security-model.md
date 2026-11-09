@@ -296,7 +296,7 @@ is chosen, and which policies the installer leaves alone:
 A wrong namespace fails closed: KEDA is refused and nothing scales. The policy
 holds only where the network plugin enforces NetworkPolicy; elsewhere, serve the
 scaler over TLS and require KEDA's client certificate
-([configuration](install-options.md#advanced)). The shipped rule is equivalent to:
+([installer options](install-options.md#advanced)). The shipped rule is equivalent to:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -343,7 +343,7 @@ holds on any network. It is on by default, once KEDA's side is in place
 - The installer issues a serving certificate for the scaler Service and a
   client certificate for KEDA, from cert-manager when it is installed and from
   a private CA of its own otherwise (on OpenShift the serving certificate comes
-  from the service CA). Details: [configuration](install-options.md#external-scaler-mutual-tls).
+  from the service CA). Details: [installer options](install-options.md#external-scaler-mutual-tls).
 - The controller then accepts only a client certificate that CA signed **and**
   that names `scaling-manager-keda-client`. Anything else is refused in the TLS handshake,
   before any call can register a workload or read a decision.
