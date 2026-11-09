@@ -968,8 +968,8 @@ var _ = Describe("Passive mode: observe beside a foreign trigger", Serial, Label
 		setLoadPods(2)
 		since := time.Now()
 		rec := recordReplicas(m.deployment())
-		m.register(0, 6, fixtures.WithOwnTriggerName("scaling-manager"), fixtures.WithForeignTrigger(foreign),
-			fixtures.WithScalingModifiers("scaling-manager + pods", "1"))
+		m.register(0, 6, fixtures.WithOwnTriggerName("llmsm"), fixtures.WithForeignTrigger(foreign),
+			fixtures.WithScalingModifiers("llmsm + pods", "1"))
 		expectLog(since, 3*time.Minute, "Passive observe is unsupported here", m.modelID(), `"mode": "observe-unsafe"`)
 		time.Sleep(passiveHoldWindow)
 		samples := rec.Stop("case6-observe-unsafe")
