@@ -210,3 +210,9 @@ last; it is the unit change that makes the other two land.
   flow-control queue above the rate where its gate closes, and an optimised
   union bound for the percentile. Shared with the SLO analyzer's TTFT pricing;
   validated by a fixed-replica staircase.
+- **[Cluster capacity planner](cluster-capacity-planner.md)** — proposed. A
+  graphical front end for what-if: prefill and decode replicas, a rate and SLO
+  targets on sliders, TTFT and TPOT curves with the point at the chosen rate and
+  the rate at the target, and the most the fleet serves with the binding role.
+  An HTTP API served by `whatif serve`, a small web page on it, and Grafana for
+  monitoring only; why v1 prices the critical class alone.
