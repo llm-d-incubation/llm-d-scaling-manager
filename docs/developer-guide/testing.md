@@ -85,7 +85,13 @@ doc-comment owners) run from their own targets.
 
 A new fixture check follows the same convention (see AGENTS.md): a
 `hack/check-*.sh` script, called from `lint-deploy-scripts`. A check behind a
-new make target is one CI never runs.
+new make target is one CI never runs. A check reads no cluster: one that runs the
+installer's code with the real kubectl sources `hack/lib/offline-kubectl.sh`, which
+puts `hack/offline-kubectl` first on `PATH`. That kubectl lets through only renders,
+`version --client`, `create --dry-run=client` and `--local` edits, runs them with an
+empty kubeconfig and no in-cluster account, and refuses everything else, so a check's
+result does not depend on the current kube context. `lint-deploy-scripts` does the same
+for every check it runs; run it with a POSIX make (Linux, macOS, WSL).
 
 `check-rendered-manifests.sh` also needs kustomize, so it runs in the
 `kustomize-build` CI job instead. It renders the overlays, and the overlay the

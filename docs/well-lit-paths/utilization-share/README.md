@@ -46,13 +46,15 @@ commands.
    order with what runs:
    [Verification](../../guides/try-in-passive-mode/README.md#verification).
 3. **Turn on utilization share in shadow.** Check there is a budget to share,
-   then let it report what it would move, and move nothing:
+   turn the optimizer on in shadow, then configure it to act. While a group
+   holds a passive model it reports what it would move, and moves nothing:
    [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
-4. **Go active.** Make the models active, one first if you want
-   ([Make one model active](../../guides/try-in-passive-mode/README.md#make-one-model-active)),
-   then turn the optimizer on and check that transfers end `done`:
-   [Turn on the utilization-share optimizer](../../guides/utilization-share/README.md#installation-instructions)
-   and its [Verification](../../guides/utilization-share/README.md#verification).
+4. **Go active.** Make every model active, turn the optimizer on again, and
+   check that transfers end `done`:
+   [Go live](../../guides/try-in-passive-mode/README.md#go-live), then the
+   optimizer's [Verification](../../guides/utilization-share/README.md#verification).
+   To hand over one model first, see
+   [Make one model active](../../guides/try-in-passive-mode/README.md#make-one-model-active).
 
 Steps 3 and 4 are run by whoever owns the policy: the namespace owner for an
 own-install quota, the cluster admin for a policy in `scaling-manager-policy`

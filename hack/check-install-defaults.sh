@@ -14,6 +14,8 @@
 # ended early.
 
 set -u
+# No cluster is read: kubectl renders and refuses the rest (hack/offline-kubectl).
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/offline-kubectl.sh"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

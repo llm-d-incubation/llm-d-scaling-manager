@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# kubectl for the checks that need no cluster. A check puts this directory first on
+# PATH (hack/lib/offline-kubectl.sh). Only work that needs no cluster goes on to the real
+# kubectl: a render (kustomize), version --client, create ... --dry-run=client (the
+# generators) and --local edits. Everything else fails, as an unreachable cluster would,
+# so a check's result never depends on what the current kube context points at.
+#
+# What does go on runs with no cluster to reach: KUBECONFIG names an empty file and the
+# in-cluster variables are unset, so a call that turns out to need a server fails
+# instead of reading the caller's context (or a pod's own service account).
+#
+# The real kubectl is OFFLINE_KUBECTL_REAL, an absolute path to a regular executable
+# file, resolved by whoever puts this on PATH. It is never looked up on PATH from here:
+# a check that stubs kubectl and has its stub call "the real one" (command -v kubectl,
+# which is this) would be found as the real one, and the two would call each other
+# without end. Three guards: the real one may not resolve to this file, this directory
+# is taken off PATH before it runs, and a call back into here from under it is refused.
+set -u
+
+refuse() { echo "offline check: kubectl $* is not run; this check reads no cluster" >&2; exit 1; }
+
+# The verb: the first word that is not a flag or a flag's value.
+verb="" client=0 local=0 dry_client=0
+i=1
+while [ "$i" -le "$#" ]; do
+    a="${!i}"
+    case "$a" in
+        --) i=$((i + 1)); verb="${!i:-}"; break ;;
+        -n|--namespace|-s|--server|--context|--cluster|--user|--kubeconfig|--token|--as|--as-group|--as-uid|\
+        --request-timeout|--certificate-authority|--client-certificate|--client-key|--cache-dir|--tls-server-name|\
+        --profile|--profile-output|-v|--v|--vmodule)
+            i=$((i + 2)) ;;
+        -*) i=$((i + 1)) ;;
+        *) verb="$a"; break ;;
+    esac
+done
+for a in "$@"; do
+    case "$a" in
+        --client|--client=true) client=1 ;;
+        --local|--local=true) local=1 ;;
+        --dry-run=client) dry_client=1 ;;
+    esac
+done
+case "$verb" in
+    kustomize) ;;
+    version) [ "$client" = 1 ] || refuse "$@" ;;
+    create) [ "$dry_client" = 1 ] || refuse "$@" ;;
+    *) [ "$local" = 1 ] || refuse "$@" ;;
+esac
+
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+real="${OFFLINE_KUBECTL_REAL:-}"
+case "$real" in
+    /*) ;;
+    *) echo "offline kubectl: OFFLINE_KUBECTL_REAL names no other kubectl ('$real'): not an absolute path" >&2; exit 1 ;;
+esac
+if [ ! -f "$real" ] || [ ! -x "$real" ] || [ "$(readlink -f "$real")" = "$self" ]; then
+    echo "offline kubectl: OFFLINE_KUBECTL_REAL names no other kubectl ('$real')" >&2
+    exit 1
+fi
+if [ -n "${OFFLINE_KUBECTL_DEPTH:-}" ]; then
+    echo "offline kubectl: called again from under the real kubectl; refusing a loop" >&2
+    exit 1
+fi
+
+# This directory off PATH, so nothing under the real kubectl can find it again.
+dir="$(dirname "$self")" path=""
+IFS=: read -ra dirs <<< "${PATH:-}"
+for d in "${dirs[@]}"; do
+    [ -n "$d" ] && [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$dir" ] && continue
+    path="${path:+$path:}$d"
+done
+exec env -u KUBERNETES_SERVICE_HOST -u KUBERNETES_SERVICE_PORT PATH="$path" KUBECONFIG=/dev/null \
+    OFFLINE_KUBECTL_DEPTH=1 "$real" "$@"

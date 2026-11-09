@@ -43,7 +43,10 @@ EXPECT_CASES=25
 for tool in jq yq openssl; do
     command -v "$tool" >/dev/null 2>&1 || { printf 'FATAL: %s is required.\n' "$tool" >&2; exit 1; }
 done
-REAL_KUBECTL="$(command -v kubectl || true)"
+# Under lint-deploy-scripts, command -v kubectl is hack/offline-kubectl, which the
+# stubbed environment of this check would not hand the real kubectl on to; the real one is
+# what its stub passes --local and --dry-run=client to.
+REAL_KUBECTL="${OFFLINE_KUBECTL_REAL:-$(command -v kubectl || true)}"
 [ -n "$REAL_KUBECTL" ] || { printf 'FATAL: kubectl is required (its offline --local and --dry-run=client output).\n' >&2; exit 1; }
 # The directories of the tools the installer needs, behind the stubs.
 TOOLPATH=""
