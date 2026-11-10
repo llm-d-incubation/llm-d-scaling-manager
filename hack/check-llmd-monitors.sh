@@ -25,7 +25,7 @@ FAIL=0
 PASS=0
 # Every case reports ok or FAIL exactly once; a run that stops early must not
 # pass having checked less. Change this deliberately with the cases.
-EXPECT_CASES=19
+EXPECT_CASES=24
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -60,9 +60,11 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1"; [ -n "${2:-}" ] && printf '%s\n' "$
 #   OWN_PM         yes: the scaling manager's own model-server PodMonitor exists
 #   PODS_JSON      the model-server pods the PodMonitor selects; PODS_FORBIDDEN
 #                  yes: listing them is refused
+#   PM_JSON        the PodMonitor list the port check reads from the cluster
+#   ALL_PODS_JSON  every pod in the namespace
 APPLIED="$WORK/applied.yaml"
 CALLS="$WORK/calls.log"
-NO_CRDS=no OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}'
+NO_CRDS=no OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}' PM_JSON='{"items":[]}' ALL_PODS_JSON='{"items":[]}'
 PROM_JSON='{"items":[{"spec":{"podMonitorSelector":{"matchLabels":{"release":"prom"}},"serviceMonitorSelector":{"matchLabels":{"release":"prom"}}}}]}'
 SVC_JSON='{"metadata":{"labels":{"app.kubernetes.io/name":"optimized-baseline-epp","helm.sh/chart":"x-1.0"}},"spec":{"ports":[{"name":"http","port":80},{"name":"http-metrics","port":9090}]}}'
 kubectl() {
@@ -75,10 +77,14 @@ kubectl() {
             printf '%s' "$PROM_JSON"; return 0 ;;
         "get svc "*" -o json")
             printf '%s' "$SVC_JSON"; return 0 ;;
+        "get podmonitor -n team-a -l app.kubernetes.io/component=modelserver-metrics --request-timeout=30s -o json")
+            printf '%s' "$PM_JSON"; return 0 ;;
         "get podmonitor -n "*)
             [ "$OWN_PM" = yes ] && echo "scaling-manager-modelserver-metrics 1d"
             return 0 ;;
-        "get pods -n team-a -l llm-d.ai/role in (decode,prefill) -o json")
+        "get pods -n team-a --request-timeout=30s -o json")
+            printf '%s' "$ALL_PODS_JSON"; return 0 ;;
+        "get pods -n team-a -l app=vllm --request-timeout=30s -o json"|"get pods -n team-a -l llm-d.ai/role in (decode,prefill) --request-timeout=30s -o json")
             if [ "$PODS_FORBIDDEN" = yes ]; then
                 echo 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods"' >&2
                 return 1
@@ -109,7 +115,7 @@ llmsm_epp_flowcontrol_state() { echo "$FLOW_STATE"; }
 reset() {
     : > "$APPLIED"; : > "$CALLS"
     NO_CRDS=no SERVERS=1 MS_CONFLICT="" EPP_SVCS="optimized-baseline-epp" EPP_SCRAPERS="" FLOW_STATE=on
-    OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}'
+    OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}' PM_JSON='{"items":[]}' ALL_PODS_JSON='{"items":[]}'
     LLMSM_LLMD_MONITORS_ADDED=()
     LLMSM_MONITORS_PLANNED=false
 }
@@ -309,7 +315,8 @@ fi
 reset; OWN_PM=yes; PODS_FORBIDDEN=yes
 out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "could not check that a model server in team-a declares the port" \
-    && printf '%s' "$out" | grep -q "Forbidden" && ! printf '%s' "$out" | grep -q "no model-server pod"; then
+    && printf '%s' "$out" | grep -q "Forbidden" && ! printf '%s' "$out" | grep -q "no model-server pod" \
+    && ! printf '%s' "$out" | grep -q "PodMonitor is in place"; then
     ok "a Forbidden pod list is said as could not check, not as no pods"
 else
     fail "a Forbidden pod list must read as could not check (rc=$rc)" "$out"
@@ -323,6 +330,59 @@ if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "no model-server pod runs in 
     ok "no model-server pod yet: says the port was not checked, without a warning"
 else
     fail "with no model-server pod the report must say the port was not checked (rc=$rc)" "$out"
+fi
+
+# 20. The port and selector are the PodMonitor's own, read from the cluster:
+# one edited to scrape `metrics` on app=vllm pods is checked as it is, not as
+# shipped.
+reset; OWN_PM=yes
+PM_JSON='{"items":[{"spec":{"selector":{"matchLabels":{"app":"vllm"}},"podMetricsEndpoints":[{"port":"metrics"}]}}]}'
+PODS_JSON='{"items":[{"metadata":{"name":"vllm-0"},"spec":{"containers":[{"name":"vllm","ports":[{"name":"metrics","containerPort":8000}]}]}}]}'
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "PodMonitor is in place" && ! printf '%s' "$out" | grep -q WARNING; then
+    ok "the port check reads the PodMonitor from the cluster, not the shipped manifest"
+else
+    fail "an edited PodMonitor must be checked as it is in the cluster (rc=$rc)" "$out"
+fi
+
+# 21. Model servers run, and the selector matches none of them: the same
+# nothing-scraped, so a warning, not "no pod yet" and not "in place".
+reset; OWN_PM=yes
+ALL_PODS_JSON='{"items":[{"metadata":{"name":"vllm-0","labels":{"llm-d.ai/inferenceServing":"true"}}},{"metadata":{"name":"epp-0","labels":{"app":"epp"}}}]}'
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "matches none of the model-server pods running there (vllm-0)" \
+    && ! printf '%s' "$out" | grep -q "PodMonitor is in place" && ! printf '%s' "$out" | grep -q "no model-server pod runs"; then
+    ok "model servers the selector does not match: a warning naming them"
+else
+    fail "a selector matching none of the running model servers must warn (rc=$rc)" "$out"
+fi
+
+# 22. More than five pods: five named, the rest counted.
+reset; OWN_PM=yes
+PODS_JSON="$(jq -cn '{items: [range(7) | {metadata: {name: ("decode-" + tostring)}, spec: {containers: [{name: "vllm", ports: [{name: "http", containerPort: 8000}]}]}}]}')"
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"
+if printf '%s' "$out" | grep -qF "decode-4 (http); +2 more" && ! printf '%s' "$out" | grep -q "decode-5"; then
+    ok "more than five pods: five named, then +N more"
+else
+    fail "a long pod list must be cut at five with +N more" "$out"
+fi
+
+# 23. A pod list that is not JSON is said, and not "in place".
+reset; OWN_PM=yes; PODS_JSON='not json'
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"
+if printf '%s' "$out" | grep -q "could not parse the pod list of team-a" && ! printf '%s' "$out" | grep -q "PodMonitor is in place"; then
+    ok "an unparseable pod list is said, not passed"
+else
+    fail "an unparseable pod list must be reported" "$out"
+fi
+
+# 24. Neither the cluster PodMonitor nor the manifest can be read: said.
+reset; OWN_PM=yes
+out="$( (LLMSM_WATCH_NS=team-a LLMSM_PROJECT="$WORK/nowhere" llmsm_report_modelserver_metrics) 2>&1)"
+if printf '%s' "$out" | grep -q "could not read the port and selector" && ! printf '%s' "$out" | grep -q "PodMonitor is in place"; then
+    ok "an unreadable PodMonitor and manifest are said, not passed"
+else
+    fail "an unreadable PodMonitor and manifest must be reported" "$out"
 fi
 
 # 15. The PodMonitor setup adds for the model servers is not read as a monitor

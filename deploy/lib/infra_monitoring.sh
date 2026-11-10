@@ -223,27 +223,35 @@ llmsm_serving_workload_count() {
 # one -- while the install reported "PodMonitor in place". So read the pods the
 # PodMonitor selects and require one that declares the port.
 #
-# The port and the selector come from the shipped manifest, the one
-# llmsm_apply_modelserver_podmonitor applies. Returns 1 only when pods were read
-# and none declares the port (it warns, naming each pod and its port names). No
-# selected pod (scaled to zero) and a pod list that failed -- Forbidden
-# included, which is not "no pods" -- are said as such and return 0.
+# The port and the selector are the PodMonitor's own, read from the cluster
+# (someone may have edited it); the shipped manifest, the one
+# llmsm_apply_modelserver_podmonitor applies, when it cannot be read.
+#
+# Returns 0 when a selected pod declares the port, or when no model server runs
+# in $1 yet (said). Returns 1 when pods were read and none declares the port, or
+# the selector matches none of the model-server pods that run (it warns, naming
+# each pod and its port names). Returns 2 when it could not check -- a pod list
+# that failed, Forbidden included, is not "no pods".
 llmsm_modelserver_port_check() {
-    local ns="$1" manifest port selector pods errf verdict
+    local ns="$1" manifest spec="" port selector pods errf verdict all served
+    local t="--request-timeout=${LLMSM_KUBECTL_TIMEOUT:-30s}"
     manifest="$LLMSM_PROJECT/config/modelserver-metrics/modelserver-podmonitor.yaml"
-    port="$(yq -r '.spec.podMetricsEndpoints[0].port // ""' "$manifest" 2>/dev/null || true)"
-    selector="$(yq -r '[((.spec.selector.matchLabels // {}) | to_entries | .[] | .key + "=" + .value),
-        ((.spec.selector.matchExpressions // []) | .[] | select(.operator == "In") | .key + " in (" + (.values | join(",")) + ")")]
-        | join(",")' "$manifest" 2>/dev/null || true)"
+    spec="$(kubectl get podmonitor -n "$ns" -l app.kubernetes.io/component=modelserver-metrics "$t" -o json 2>/dev/null \
+        | jq -c '.items[0].spec // empty' 2>/dev/null || true)"
+    [ -n "$spec" ] || spec="$(yq -o=json -I=0 '.spec' "$manifest" 2>/dev/null || true)"
+    port="$(printf '%s' "$spec" | jq -r '.podMetricsEndpoints[0].port // ""' 2>/dev/null || true)"
+    selector="$(printf '%s' "$spec" | jq -r '[((.selector.matchLabels // {}) | to_entries | .[] | .key + "=" + (.value | tostring)),
+        ((.selector.matchExpressions // []) | .[] | select(.operator == "In") | .key + " in (" + (.values | join(",")) + ")")]
+        | join(",")' 2>/dev/null || true)"
     if [ -z "$port" ] || [ -z "$selector" ]; then
-        log_warning "  Model-server metrics: could not read the port and selector of $manifest, so whether the PodMonitor in $ns scrapes anything was not checked."
-        return 0
+        log_warning "  Model-server metrics: could not read the port and selector of the PodMonitor in $ns or of $manifest, so whether it scrapes anything was not checked."
+        return 2
     fi
     errf="$(mktemp)"
-    if ! pods="$(kubectl get pods -n "$ns" -l "$selector" -o json 2>"$errf")"; then
+    if ! pods="$(kubectl get pods -n "$ns" -l "$selector" "$t" -o json 2>"$errf")"; then
         log_warning "  Model-server metrics: could not check that a model server in $ns declares the port '$port' the PodMonitor scrapes: listing its pods failed ($(tr '\n' ' ' < "$errf" | cut -c1-200))."
         rm -f "$errf"
-        return 0
+        return 2
     fi
     rm -f "$errf"
     # Init containers too: a sidecar container (restartPolicy Always) is
@@ -260,6 +268,25 @@ llmsm_modelserver_port_check() {
     case "$verdict" in
         ok) return 0 ;;
         none)
+            # Nothing selected. That is the parked fleet -- or model servers
+            # the selector does not match, which scrapes nothing just the same.
+            errf="$(mktemp)"
+            if ! all="$(kubectl get pods -n "$ns" "$t" -o json 2>"$errf")"; then
+                log_warning "  Model-server metrics: the PodMonitor in $ns selects no pod ($selector), and listing the pods there to tell why failed ($(tr '\n' ' ' < "$errf" | cut -c1-200))."
+                rm -f "$errf"
+                return 2
+            fi
+            rm -f "$errf"
+            served="$(printf '%s' "$all" | jq -r --argjson markers "$(so_serving_markers_json)" '
+                [.items[]? | select((.metadata.labels // {}) | to_entries
+                    | any((.key + "=" + (.value | tostring)) as $kv | ($markers | index($kv)) != null))
+                  | .metadata.name]
+                | if length == 0 then "" else (.[:5] | join(", ")) + (if length > 5 then " +" + ((length - 5) | tostring) + " more" else "" end) end' 2>/dev/null || true)"
+            if [ -n "$served" ]; then
+                log_warning "  Model-server metrics: the PodMonitor in $ns selects pods by $selector, and that matches none of the model-server pods running there ($served), so nothing is scraped."
+                log_warning "    Give them the labels it selects, or add a PodMonitor of your own that selects them."
+                return 1
+            fi
             log_info "  Model-server metrics: no model-server pod runs in $ns yet ($selector), so the port the PodMonitor scrapes ('$port') was not checked."
             return 0 ;;
         missing\ *)
@@ -269,7 +296,7 @@ llmsm_modelserver_port_check() {
             return 1 ;;
         *)
             log_warning "  Model-server metrics: could not parse the pod list of $ns, so the port '$port' was not checked."
-            return 0 ;;
+            return 2 ;;
     esac
 }
 
@@ -306,6 +333,8 @@ llmsm_report_modelserver_metrics() {
          --no-headers 2>/dev/null | grep -q .; then
         # In place is not scraping: it names a port the servers may not have.
         # A warning, not a refusal: the port is the model server's to name.
+        # Only when the check passed: a warning, or a check that could not be
+        # made, is not "in place".
         if llmsm_modelserver_port_check "$ns"; then
             log_success "  Model-server metrics: The scaling manager's own PodMonitor is in place."
         fi
