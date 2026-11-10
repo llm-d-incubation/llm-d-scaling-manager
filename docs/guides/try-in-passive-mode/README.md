@@ -292,8 +292,8 @@ make deploy-scaling-manager LLMSM_PASSIVE=false
 You should see `Restarting the controller` in its output, and then `false`
 from the [`passiveDefault` check](#2-install-the-controller-passive).
 
-This re-install drops the utilization-share optimizer block, if you turned it
-on. To share GPUs again, follow [Go live](#go-live) instead.
+This re-install keeps the utilization-share optimizer block, if you turned it
+on, in the mode it was in.
 
 ## Utilization share in passive mode
 
@@ -415,20 +415,18 @@ The group acts only once none of its models is passive. The switch in [Switch
 it to active](#3-switch-it-to-active) writes one entry, `passive-trial`, so it
 makes one model active at a time: run it for a second model and the first is
 passive again. Hand over each model still in `observe`, as in [step
-2](#2-hand-the-model-over). Then make every model active and turn the
-optimizer on again:
+2](#2-hand-the-model-over). Then make every model active:
 
 <!-- guide:share.live start -->
 ```bash
-# Make every model active, then turn the optimizer on again, because the re-install drops its block.
+# Make every model active. The re-install keeps the optimizer block.
 make deploy-scaling-manager LLMSM_PASSIVE=false
-make utilization-share-shadow
-make utilization-share-activate
+make utilization-share-status
 ```
 <!-- guide:share.live end -->
 
-The re-install restarts the controller and drops the optimizer block, so
-shadow and activate run again. For two to three minutes nothing in the group
+The re-install restarts the controller and keeps the optimizer block, so
+status prints `optimizer block: active`. For two to three minutes nothing in the group
 scales. Then `llmsm_utilization_share_passive_shadow` reads `0`, and a
 transfer shows as `UtilizationShareGiving` and `UtilizationShareReceiving`
 Events, then `UtilizationShareReceived` once the receiver's replica is up.
