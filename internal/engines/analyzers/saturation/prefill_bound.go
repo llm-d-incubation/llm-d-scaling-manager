@@ -145,7 +145,7 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 	// recorded: a serving row's saturated reading, the bound's evidence.
 	recorded := saturated && adm.serving() && rm.PrefillComputedTokenRate > 0 && ileff > 0
 	if recorded && a.prefillBoundConfident {
-		a.notePrefillBoundSample(key, rm.PodName, rm.PrefillComputedTokenRate, args)
+		a.notePrefillBoundSample(key, rm.PodName, rm.PrefillComputedTokenRate, args, evidenceOf(rm))
 	}
 	if recorded && !a.prefillBoundConfident {
 		tokens := rm.PrefillComputedTokenRate
@@ -164,12 +164,12 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 		readsKept = readsKept && kept.at.Equal(sampledAt) && kept.pods != nil
 		a.mu.Unlock()
 		// Under the pod's name, so the readings of one minute fold as mu's
-		// do: a max over one pod's re-reads and the mean across pods
+		// do: one pod's latest re-read and the mean across pods
 		// (recordSaturatedThroughputFrom). Under one name for every pod, the
 		// fold kept the fastest pod's reading, and one pod read at twice its
 		// rate -- a doubled series -- or one fast pod set the whole fleet's
 		// bound (ev-shindin/llm-scaling-manager#395).
-		a.recordSaturatedThroughputFrom(key, rm.PodName, tokens)
+		a.recordSaturatedReading(key, rm.PodName, tokens, evidenceOf(rm))
 		a.mu.Lock()
 		if ra, ok := a.saturatedThroughput[key]; ok {
 			if args != "" {
@@ -242,18 +242,19 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 }
 
 // notePrefillBoundSample writes one saturated reading of pod to the bound's
-// window, as read, under SwitchPrefillBoundHeldConfidence: the minute's
+// window, as read (ev, what its row says of the moment it was read), under
+// SwitchPrefillBoundHeldConfidence: the minute's
 // readings fold at their mean across pods, as mu's do. When it starts a
 // sample, the samples before it are complete, and their lower confidence
 // bound may raise the held figure (prefill_bound_held.go).
-func (a *SaturationAnalyzer) notePrefillBoundSample(key, pod string, tokens float64, args string) {
+func (a *SaturationAnalyzer) notePrefillBoundSample(key, pod string, tokens float64, args string, ev readEvidence) {
 	a.mu.Lock()
 	var complete []float64
 	if ra, ok := a.saturatedThroughput[key]; ok {
 		complete = ra.Snapshot().Values
 	}
 	a.mu.Unlock()
-	w := a.recordSaturatedThroughputFrom(key, pod, tokens)
+	w := a.recordSaturatedReading(key, pod, tokens, ev)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.saturatedThroughput[key]; ok && args != "" {
