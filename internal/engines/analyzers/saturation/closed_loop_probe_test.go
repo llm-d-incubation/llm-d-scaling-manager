@@ -349,9 +349,7 @@ func TestClosedLoopProbe_ALoadStepOnEqualReplicasSettlesAtNeed(t *testing.T) {
 // counts by its weight, with the unread siblings at what they serve over the
 // target (mu_slow_pod.go), so the fleet grows while it is slow, to 24 at its
 // peak, and settles at 20, inside the bound. 20 is a fixed point: each of
-// the twenty serves 0.64, which over the target is the figure on record, so
-// the figure sits at the fleet's served bound and the minority rule keeps it
-// (minorityFigureExpired releases only a figure under that bound).
+// the twenty serves 0.64, which over the target is the figure on record.
 //
 // Measured (60 min): need 18 (bound 21.7), peak 24, at 20 from 21.5 min to
 // the end. The weighing's hold is what keeps the peak at 24: read fresh
@@ -373,8 +371,7 @@ func TestClosedLoopProbe_OneSlowReplicaUnderHalfItsSiblingsDoesNotSealTheFleet(t
 // over-ordered for good. Now the sample counts the fifteen unread siblings
 // at what they serve over the target, which keeps the fleet under the bound
 // throughout. It settles at 20, the fixed point where the figure equals what
-// the fleet serves over the target, so the minority rule, which releases
-// only a figure under the fleet's served bound, does not act here.
+// the fleet serves over the target.
 //
 // Measured (60 min): need 18 (bound 21.7), 21 from 1.75 min, 20 from 16.25
 // min to the end; peak 21. The margin to the bound is zero replicas: 22
@@ -407,19 +404,15 @@ func TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound(t *t
 // a need of 17 at the return and sits 3m30s under need, occupancy reading
 // every replica full while the return's queue drains (cause B, ev-shindin/llm-scaling-manager#520).
 // Then a lull at 2 req/s from 10 to 45 min, which queues nothing for longer
-// than lowHoldFor, and the load returns at 12. The figure is not under what
-// the fleet serves in the lull (a fleet at a fraction of its limit serves a
-// fraction of it), so the minority rule keeps it, and the fleet meets the
-// return at need.
+// than lowHoldFor, and the load returns at 12. The figure stands through the
+// lull, and the fleet meets the return at need.
 //
 // Measured (60 min): need 17; 17, down to 3 in the lull, back to 17 at 45
 // min, peak 33 at the return, 19 at the end; never under need past the
-// start. Negative control, F as first built (released to no mu, no bound
-// gate), patched in by hand since it has no switch: the figure was released
-// on 45 cycles and the fleet moved the same way, because the first queued
-// reading at the return writes it back within a cycle. The simulator cannot
-// show the cost of that release: its floor never binds above occupancy
-// without a queue.
+// start. A rule that released a minority's figure after lowHoldFor
+// (mu-minority-figure-expires, removed on 2026-11-10) moved this fleet the
+// same way, because the first queued reading at the return writes the
+// figure back within a cycle.
 func TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure(t *testing.T) {
 	pods := make([]float64, 18)
 	for i := range pods {
@@ -446,7 +439,6 @@ func TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure(t *testing.T) 
 	t.Logf("need %d, final %d, peak %d, longest under need %s; fleet by cycle %v", r.need, r.final, r.peak, r.underFor, r.trace)
 	require.Empty(t, r.verdict())
 	require.Zero(t, r.underFor, "the fleet never sat under need")
-	require.Zero(t, r.muCounts[muReasonMinorityExpired], "a right minority figure, not under what the fleet serves, is kept")
 	require.Positive(t, r.muCounts[muReasonSampled], "premise: the steered replicas were read")
 }
 
@@ -458,7 +450,7 @@ func TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure(t *testing.T) 
 // requests, too short to be read; the real router lies between, and ev-shindin/llm-scaling-manager#282 H1
 // saw a slow replica queue behind it. The horizon is 60 min, past lowHoldFor
 // (30 min) after the slow replica's last saturated reading and the 5 min
-// scale-down stabilization, so the run covers the minority rule's decision.
+// scale-down stabilization, so the run covers the recovered fleet at rest.
 func slowReplicaCase(slow float64) probeCase {
 	pods := make([]float64, 16)
 	for i := range pods {

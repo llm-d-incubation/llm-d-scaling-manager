@@ -501,8 +501,6 @@ ago
 agree
 agreeCycles
 agreed
-agreeing
-agrees
 aim
 alignment
 aligns
@@ -1214,7 +1212,6 @@ held
 heldAt
 heldAtFleet
 heldCycles
-heldFor
 heldSince
 heldUntil
 heldUntilStableOrBy
@@ -1658,8 +1655,6 @@ minSamples
 minValue
 minimum
 minimumPreserved
-minority
-minority-expired
 minute
 minutes
 misconfigured
@@ -1700,7 +1695,6 @@ mu-key-bucket-held
 mu-latch-reads-smoothed-ratio
 mu-latch-restores-safe-side
 mu-margin-clamp
-mu-minority-figure-expires
 mu-sample-weighs-the-fleet
 mu-sample-written
 mu-swap-freeze
@@ -2332,7 +2326,6 @@ sanity
 sat
 saturated
 saturated-throughput-low-confirmed
-saturated-throughput-minority-expired
 saturated-throughput-not-priced
 saturated-throughput-refused
 saturated-throughput-yields-to-siblings
@@ -2425,11 +2418,9 @@ series
 seriesPresent
 serve
 served
-served-bound
 served-siblings
 servedBound
 server
-serves
 service
 serviceable
 serving

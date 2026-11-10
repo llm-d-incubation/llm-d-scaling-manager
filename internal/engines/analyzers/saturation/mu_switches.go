@@ -67,14 +67,6 @@ const SwitchMuYieldCappedAtMeasurement = "mu-yield-capped-at-measurement"
 // again. Off, as SwitchMuWeighsFleet alone, it counted at what it serves.
 const SwitchMuUnreadAtTarget = "mu-unread-replica-at-target"
 
-// SwitchMuMinorityFigureExpires is the replay switch for a measured mu no
-// line can replace, written by a minority of the fleet
-// (minorityFigureExpired; analyzer-learner.md, 3.4). On, a figure under the
-// fleet's served bound gives way to that bound after MuChoice.LowHoldFor with
-// no saturated reading in agreement with it. Off, as before, with no line the
-// measurement stood for good.
-const SwitchMuMinorityFigureExpires = "mu-minority-figure-expires"
-
 // SwitchMuWeighingBand is the replay switch for the weighing's band
 // (muChoice.weighs; analyzer-learner.md, 3.5). On, a key starts counting the
 // replicas its readers did not read when the readers' rate over theirs,

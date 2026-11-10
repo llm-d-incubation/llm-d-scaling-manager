@@ -382,7 +382,6 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 				if unread > 0 {
 					a.noteMuCount(namespace, modelID, rm.VariantName, muReasonWeighedFleet)
 				}
-				a.noteSampleWriters(throughputKey, served, w)
 				if args != "" {
 					a.mu.Lock()
 					if _, ok := a.saturatedThroughput[throughputKey]; ok {
@@ -414,21 +413,6 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	}
 	reading := muSwapFrozen(a.carriedThroughput(throughputKey, leftKey, args,
 		a.saturatedThroughputReadingUnder(throughputKey, args, adm.serving())), frozen)
-	if rel := a.minorityFigureExpired(throughputKey, reading, served, derived.OK, tune, a.now()); rel.released {
-		// A minority's figure, no line to give way to, stale past the hold
-		// and under what the fleet serves: it gives way to that served bound,
-		// as the hold gives way to the derived figure under a line. Logged
-		// once per key on the transition, counted on every replica.
-		a.noteMuCount(namespace, modelID, rm.VariantName, muReasonMinorityExpired)
-		if rel.first {
-			logger.V(logging.DEFAULT).Info("saturated-throughput-minority-expired",
-				"modelID", modelID, "namespace", namespace, "variant", rm.VariantName,
-				"role", role, "measuredRate", reading.rate, "servedBound", rel.bound,
-				"heldFor", tune.MuChoice.LowHoldFor.Duration().String(),
-				"reason", "written by a minority of the fleet, with no line, under what the fleet serves, and no saturated reading agreeing with it for lowHoldFor: priced at the fleet's served bound until a reading agrees again")
-		}
-		reading.rate, reading.bucket = rel.bound, servedBoundBucket
-	}
 	saturatedThroughput, throughputBucket := reading.rate, reading.bucket
 	// A derived figure prices the shape the fleet has NOT measured -- that is
 	// the whole of its job. Where the fleet HAS measured this shape, under this
@@ -726,10 +710,6 @@ func pricedDerivedRate(derived whatif.DerivedMu, reading throughputReading) floa
 // from the ITL model rather than measured. classifyOutputLength can never
 // produce it, so it cannot be spoofed by a real output bucket.
 const derivedBucket = "derived"
-
-// servedBoundBucket is the bucket name logged for a minority's measured mu
-// that gave way to the fleet's served bound (minorityFigureExpired).
-const servedBoundBucket = "served-bound"
 
 // servedBucket is the bucket name logged for a measured mu that yielded to
 // what the variant's Ready, full replicas serve (siblingYield).

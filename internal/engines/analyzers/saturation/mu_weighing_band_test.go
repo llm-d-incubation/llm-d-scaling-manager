@@ -219,7 +219,7 @@ func weighTrail(seed uint64, path []float64, nz weighNoise, switches map[string]
 	var out []bool
 	for i, x := range path {
 		slow := x * h * (1 + noise[i])
-		if _, err := rig.analyze(slowPodRows(4, 1, slow, served, 0.5), aggStates(4), slow+3*served, propCycle); err != nil {
+		if _, err := rig.analyze(slowPodRows(slow, served), aggStates(4), slow+3*served, propCycle); err != nil {
 			return nil, err
 		}
 		sample, read, ok := rig.weighSample()

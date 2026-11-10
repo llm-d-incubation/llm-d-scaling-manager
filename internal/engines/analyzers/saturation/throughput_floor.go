@@ -179,7 +179,7 @@ func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate
 		// readings is about the replica, and stands.
 		if c, ok := a.throughputMuChoice[key]; ok {
 			c.saturatedAt, c.yielded, c.sibling = time.Time{}, false, 0
-			c.unread, c.unreadLast, c.minority, c.released = 0, 0, false, false
+			c.unread, c.unreadLast = 0, 0
 			c.weighing, c.weighChanged, c.weighRatios, c.weighProvisional = false, time.Time{}, nil, false
 			c.latchKnown = true // a new window has given way to nothing
 			// Nor is the old window's ratio to the derived figure its own.
