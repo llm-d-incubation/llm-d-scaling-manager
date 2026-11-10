@@ -90,7 +90,8 @@ const (
 	// window -- at 30 s scrapes, exactly the same two samples -- and a
 	// reading a minute later is from a window that shares none of them.
 	// Readings inside the spacing are folded into the last sample (its
-	// window is still being read; the sample is the max of it). Equal to the
+	// window is still being read; the sample is each replica's latest
+	// reading of it, SwitchMuRereadTakesLatest). Equal to the
 	// collector's rate window, registration.RequestRateWindow; a test holds
 	// the two together. See recordSaturatedThroughput.
 	ThroughputSampleSpacing = time.Minute
