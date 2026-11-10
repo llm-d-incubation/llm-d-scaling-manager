@@ -1037,7 +1037,10 @@ kubectl rollout restart deployment/keda-operator -n <KEDA namespace>
 
 `make verify-deployment`, `make check-prereqs`, and the installer after it
 moves ScaledObjects read the controller's log. When they find those refusals
-from a KEDA Pod, they name this cause and the restart, and fail.
+from a KEDA Pod, they name this cause and the restart, and fail: the install
+exits non-zero until KEDA's operator is restarted. A tenant or a GitOps
+pipeline that cannot restart KEDA sets `LLMSM_ALLOW_STALE_KEDA=true` to get a
+warning instead.
 
 - **Split install:** KEDA's side must be in place first. A cluster admin runs
   `make setup-prereqs`; then the tenant runs the command above. A tenant's
@@ -1196,7 +1199,7 @@ make undeploy-scaling-manager NAMESPACE=<namespace> LLMSM_NS=llmsm-<namespace>
 | ScaledObjects you **adopted** (written by you or GitOps, pointed at this scaler) | not the installer's to delete. Their trigger now calls a scaler that is gone, and **a model parked at zero never wakes**: activation only comes from the scaler | see below |
 | Prometheus, KEDA, the EPP | shared; this install may not have created them | `UNDEPLOY_SHARED=true` removes them too, for everything on the cluster |
 | KEDA's connection to the scaler's TLS address, with the old client certificate | KEDA keeps it until its operator restarts. It matters only if you install the scaler in the same namespace again | nothing: the uninstall keeps the CA for it (next row) |
-| Secret `scaling-manager-external-scaler-ca`, the scaler's CA, annotated `scaling-manager.llmd.ai/kept-for-keda` | kept when ScaledObjects used the TLS address (or could not be listed), or when KEDA's side stays (a controller-only uninstall). KEDA's operator still trusts it, so a reinstall in the same namespace signs its new certificates with it and KEDA keeps reaching the scaler with no restart. Without it the reinstall mints a new CA, KEDA refuses every certificate the new install serves, and nothing scales | (cluster admin) restart KEDA's operator first, `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>`, then `kubectl delete secret scaling-manager-external-scaler-ca -n "$NS"`. An uninstall with `KEDA_RESTART=true` does both |
+| Secret `scaling-manager-external-scaler-ca`, the scaler's CA, annotated `scaling-manager.llmd.ai/kept-for-keda` | kept when ScaledObjects used the TLS address (or could not be listed), or when KEDA's side stays (a controller-only uninstall). KEDA's operator still trusts it, so a reinstall in the same namespace signs its new certificates with it and KEDA keeps reaching the scaler with no restart. Without it the reinstall mints a new CA, KEDA refuses every certificate the new install serves, and nothing scales. So an uninstall and reinstall does not rotate the CA. The uninstall warns, and lists it under "Left in place". With `DELETE_NAMESPACES=true` the CA goes with the namespace: restart KEDA's operator before installing again | (cluster admin) to remove or rotate it, restart KEDA's operator first, `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>`, then `kubectl delete secret scaling-manager-external-scaler-ca -n "$NS"`. An uninstall with `KEDA_RESTART=true` does both |
 | the PrometheusRule `controller-manager-alerts` | the uninstall does not render the alerts component | `kubectl delete prometheusrule controller-manager-alerts -n "$NS"` |
 | the dashboard ConfigMap `scaling-manager-operation-dashboard` | shared by every install on the cluster | (cluster admin, if it is in a shared monitoring namespace) `kubectl delete configmap scaling-manager-operation-dashboard -n <dashboard-namespace>` |
 | cluster policy in the policy namespace (`scaling-manager-policy`, or the one a `scaling-manager.llmd.ai/policy-namespace` label names): the ConfigMap, Role `scaling-manager-policy-reader` and this install's RoleBinding `scaling-manager-policy-reader-<suffix>` | the ConfigMap is written by `make enable-physical-limiter`; the Role and RoleBinding by it and by `make setup-prereqs` (for a controller that manages its own namespace, when the policy namespace exists) | (cluster admin) see below |
