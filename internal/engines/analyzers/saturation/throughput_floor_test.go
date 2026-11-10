@@ -137,15 +137,15 @@ var _ = Describe("the saturated-throughput window", func() {
 		Expect(a.saturatedThroughput["k"].StaleAt(now, time.Hour)).To(BeFalse())
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
 
-		By("folding a higher reading inside the spacing into the sample: two replicas, one moment, the max")
+		By("folding a reading inside the spacing into the sample: the replica's latest (SwitchMuRereadTakesLatest)")
 		a.recordSaturatedThroughput("k", 3.6)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6), "the sample is the max of its window")
+		Expect(a.saturatedThroughput["k"].Last()).To(Equal(3.6), "a higher re-read replaces the sample")
 		a.recordSaturatedThroughput("k", 3.5)
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6), "and a lower one leaves it")
+		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
+		Expect(a.saturatedThroughput["k"].Last()).To(Equal(3.5), "and so does a lower one: the max picked the noise (issue #55)")
 
 		By("not counting the last reading again at the boundary: the same pair straddling it, or a repeat")
-		// The last READING was 3.5, not the folded 3.6 the sample now holds.
 		now = t0.Add(ThroughputSampleSpacing)
 		a.recordSaturatedThroughput("k", 3.5)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
@@ -153,7 +153,7 @@ var _ = Describe("the saturated-throughput window", func() {
 		By("counting a reading that differs and lands a rate window after the last counted one")
 		a.recordSaturatedThroughput("k", 3.4333333333333336)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(2))
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6))
+		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.5))
 
 		By("and a value seen before, a window later, is a reading of its own: a different window")
 		now = t0.Add(2 * ThroughputSampleSpacing)

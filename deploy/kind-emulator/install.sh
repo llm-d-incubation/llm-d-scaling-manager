@@ -43,7 +43,6 @@ WARMPOOL_PROXY_IMAGE=${WARMPOOL_PROXY_IMAGE:-"ghcr.io/ev-shindin/warmpool-proxy:
 
 # The scaling manager Configuration
 LLMSM_RECONCILE_INTERVAL=${LLMSM_RECONCILE_INTERVAL:-"60s"} # the scaling manager controller reconcile interval - tests set 30s interval
-LLMSM_LOG_LEVEL="debug" # the scaling manager log level set to debug for emulated environments
 # Prometheus Configuration
 PROMETHEUS_SVC_NAME="kube-prometheus-stack-prometheus"
 PROMETHEUS_BASE_URL="https://$PROMETHEUS_SVC_NAME.$MONITORING_NAMESPACE.svc.cluster.local"

@@ -1586,12 +1586,9 @@ llama-8b-prod:
 ```
 
 **The risk goes one way: it can add prefill replicas, never remove them.** The
-bound is low, so prefill can end up larger than its load needs. One exception
-for now: the readings of one replica within a minute are combined by their
-highest, which reads about 9-13 % high under the gauge's normal noise
-([#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531)), so
-until that is fixed the bound can read that much high and order that much
-less prefill than the load needs. In the worst
+bound is low, so prefill can end up larger than its load needs. One case can
+still read high: a burst of completions as a replica's queue drains, read
+while its batch is still full. In the worst
 case the extra is the ratio between what prefill can really do and the rate
 it was seen doing behind a full decode. A prefill that large rarely
 queues on its own, so the extra **lasts until you reset the variant's learned
