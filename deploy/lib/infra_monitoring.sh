@@ -217,6 +217,62 @@ llmsm_serving_workload_count() {
     echo "$total"
 }
 
+# llmsm_modelserver_port_check says whether the scaling manager's own PodMonitor
+# in $1 can scrape anything: it names a container PORT, and a model server whose
+# port has another name (`http`, say) yields no target at all -- not a failing
+# one -- while the install reported "PodMonitor in place". So read the pods the
+# PodMonitor selects and require one that declares the port.
+#
+# The port and the selector come from the shipped manifest, the one
+# llmsm_apply_modelserver_podmonitor applies. Returns 1 only when pods were read
+# and none declares the port (it warns, naming each pod and its port names). No
+# selected pod (scaled to zero) and a pod list that failed -- Forbidden
+# included, which is not "no pods" -- are said as such and return 0.
+llmsm_modelserver_port_check() {
+    local ns="$1" manifest port selector pods errf verdict
+    manifest="$LLMSM_PROJECT/config/modelserver-metrics/modelserver-podmonitor.yaml"
+    port="$(yq -r '.spec.podMetricsEndpoints[0].port // ""' "$manifest" 2>/dev/null || true)"
+    selector="$(yq -r '[((.spec.selector.matchLabels // {}) | to_entries | .[] | .key + "=" + .value),
+        ((.spec.selector.matchExpressions // []) | .[] | select(.operator == "In") | .key + " in (" + (.values | join(",")) + ")")]
+        | join(",")' "$manifest" 2>/dev/null || true)"
+    if [ -z "$port" ] || [ -z "$selector" ]; then
+        log_warning "  Model-server metrics: could not read the port and selector of $manifest, so whether the PodMonitor in $ns scrapes anything was not checked."
+        return 0
+    fi
+    errf="$(mktemp)"
+    if ! pods="$(kubectl get pods -n "$ns" -l "$selector" -o json 2>"$errf")"; then
+        log_warning "  Model-server metrics: could not check that a model server in $ns declares the port '$port' the PodMonitor scrapes: listing its pods failed ($(tr '\n' ' ' < "$errf" | cut -c1-200))."
+        rm -f "$errf"
+        return 0
+    fi
+    rm -f "$errf"
+    # Init containers too: a sidecar container (restartPolicy Always) is
+    # discovered like any other.
+    verdict="$(printf '%s' "$pods" | jq -r --arg p "$port" '
+        [.items[]? | {name: .metadata.name,
+                      ports: [((.spec.containers // []) + (.spec.initContainers // []))[]
+                              | (.ports // [])[] | (.name // ("unnamed " + (.containerPort | tostring)))]}]
+        | if length == 0 then "none"
+          elif any(.[]; any(.ports[]; . == $p)) then "ok"
+          else "missing " + ((.[:5] | map(.name + " (" + (if (.ports | length) == 0 then "no ports" else (.ports | join(", ")) end) + ")") | join("; "))
+                             + (if length > 5 then "; +" + ((length - 5) | tostring) + " more" else "" end))
+          end' 2>/dev/null || true)"
+    case "$verdict" in
+        ok) return 0 ;;
+        none)
+            log_info "  Model-server metrics: no model-server pod runs in $ns yet ($selector), so the port the PodMonitor scrapes ('$port') was not checked."
+            return 0 ;;
+        missing\ *)
+            log_warning "  Model-server metrics: the PodMonitor scrapes the container port named '$port', and no model-server pod in $ns declares it, so nothing is scraped there."
+            log_warning "    Pods and their port names: ${verdict#missing }"
+            log_warning "    Name the model server's metrics port '$port', or add a PodMonitor of your own for the port it uses."
+            return 1 ;;
+        *)
+            log_warning "  Model-server metrics: could not parse the pod list of $ns, so the port '$port' was not checked."
+            return 0 ;;
+    esac
+}
+
 # llmsm_report_modelserver_metrics is the read-only half, for the preflight: say
 # whether anything scrapes the model servers, without applying anything.
 llmsm_report_modelserver_metrics() {
@@ -248,7 +304,11 @@ llmsm_report_modelserver_metrics() {
     fi
     if kubectl get podmonitor -n "$ns" -l app.kubernetes.io/component=modelserver-metrics \
          --no-headers 2>/dev/null | grep -q .; then
-        log_success "  Model-server metrics: The scaling manager's own PodMonitor is in place."
+        # In place is not scraping: it names a port the servers may not have.
+        # A warning, not a refusal: the port is the model server's to name.
+        if llmsm_modelserver_port_check "$ns"; then
+            log_success "  Model-server metrics: The scaling manager's own PodMonitor is in place."
+        fi
         return 0
     fi
     # The admin phase adds it (llmsm_ensure_llmd_monitors), so a missing one is
@@ -2058,6 +2118,7 @@ llmsm_ensure_llmd_monitors() {
              --no-headers 2>/dev/null | grep -q .; then
         if llmsm_apply_modelserver_podmonitor "$ns"; then
             added+=("PodMonitor scaling-manager-modelserver-metrics")
+            llmsm_modelserver_port_check "$ns" || true
         else
             log_warning "  $ns: could not add PodMonitor scaling-manager-modelserver-metrics."
         fi

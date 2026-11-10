@@ -8,7 +8,9 @@
 #     undeploy removes exactly those (llmsm_ensure_llmd_monitors);
 #   - the checks report a monitor setup will add as work, not as a failure,
 #     when the run includes the admin phase (LLMSM_MONITORS_PLANNED);
-#   - an EPP with the flowControl gate off is a warning, never a refusal.
+#   - an EPP with the flowControl gate off is a warning, never a refusal;
+#   - the model-server PodMonitor names a container port, and when no model
+#     server declares it the install warns instead of reporting it in place.
 #
 # A fresh llm-d install has no monitors and no flow-control gate, and the
 # preflight used to refuse it and hand the reader commands to run in every
@@ -23,7 +25,7 @@ FAIL=0
 PASS=0
 # Every case reports ok or FAIL exactly once; a run that stops early must not
 # pass having checked less. Change this deliberately with the cases.
-EXPECT_CASES=15
+EXPECT_CASES=19
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -55,9 +57,12 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1"; [ -n "${2:-}" ] && printf '%s\n' "$
 #   PROM_JSON      the Prometheus CR listing
 #   APPLIED        every document handed to `kubectl apply -f`
 #   CALLS          every kubectl command line
+#   OWN_PM         yes: the scaling manager's own model-server PodMonitor exists
+#   PODS_JSON      the model-server pods the PodMonitor selects; PODS_FORBIDDEN
+#                  yes: listing them is refused
 APPLIED="$WORK/applied.yaml"
 CALLS="$WORK/calls.log"
-NO_CRDS=no
+NO_CRDS=no OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}'
 PROM_JSON='{"items":[{"spec":{"podMonitorSelector":{"matchLabels":{"release":"prom"}},"serviceMonitorSelector":{"matchLabels":{"release":"prom"}}}}]}'
 SVC_JSON='{"metadata":{"labels":{"app.kubernetes.io/name":"optimized-baseline-epp","helm.sh/chart":"x-1.0"}},"spec":{"ports":[{"name":"http","port":80},{"name":"http-metrics","port":9090}]}}'
 kubectl() {
@@ -71,7 +76,14 @@ kubectl() {
         "get svc "*" -o json")
             printf '%s' "$SVC_JSON"; return 0 ;;
         "get podmonitor -n "*)
+            [ "$OWN_PM" = yes ] && echo "scaling-manager-modelserver-metrics 1d"
             return 0 ;;
+        "get pods -n team-a -l llm-d.ai/role in (decode,prefill) -o json")
+            if [ "$PODS_FORBIDDEN" = yes ]; then
+                echo 'Error from server (Forbidden): pods is forbidden: User "u" cannot list resource "pods"' >&2
+                return 1
+            fi
+            printf '%s' "$PODS_JSON"; return 0 ;;
         "apply -f -"*)
             cat >> "$APPLIED"; echo "---" >> "$APPLIED"; return 0 ;;
         "apply -f "*)
@@ -97,6 +109,7 @@ llmsm_epp_flowcontrol_state() { echo "$FLOW_STATE"; }
 reset() {
     : > "$APPLIED"; : > "$CALLS"
     NO_CRDS=no SERVERS=1 MS_CONFLICT="" EPP_SVCS="optimized-baseline-epp" EPP_SCRAPERS="" FLOW_STATE=on
+    OWN_PM=no PODS_FORBIDDEN=no PODS_JSON='{"items":[]}'
     LLMSM_LLMD_MONITORS_ADDED=()
     LLMSM_MONITORS_PLANNED=false
 }
@@ -257,6 +270,59 @@ if grep -q 'delete podmonitors.monitoring.coreos.com,servicemonitors.monitoring.
     ok "undeploy removes exactly what setup marked, and cleanup calls it"
 else
     fail "undeploy must remove the marked monitors" "$(cat "$CALLS")"
+fi
+
+# 16-19. The PodMonitor scrapes the container port named `modelserver`, and a
+# model server whose port has another name yields no target at all. The
+# install said "PodMonitor in place" and nothing else. Found walking the guide
+# on kind with a hand-written model fixture.
+HTTP_PODS='{"items":[{"metadata":{"name":"decode-0"},"spec":{"containers":[{"name":"vllm","ports":[{"name":"http","containerPort":8000}]},{"name":"proxy","ports":[{"containerPort":9000}]}]}},{"metadata":{"name":"decode-1"},"spec":{"containers":[{"name":"vllm"}]}}]}'
+NAMED_PODS='{"items":[{"metadata":{"name":"decode-0"},"spec":{"containers":[{"name":"vllm","ports":[{"name":"http","containerPort":8000}]}],"initContainers":[{"name":"sidecar","restartPolicy":"Always","ports":[{"name":"modelserver","containerPort":8200}]}]}}]}'
+
+# 16. Setup applies it and warns, naming each pod and its ports.
+reset; PODS_JSON="$HTTP_PODS"
+out="$(llmsm_ensure_llmd_monitors team-a 2>&1)"
+if [ "$(kind_doc PodMonitor | yq '.metadata.name')" = "scaling-manager-modelserver-metrics" ] \
+    && printf '%s' "$out" | grep -q "no model-server pod in team-a declares it" \
+    && printf '%s' "$out" | grep -qF "decode-0 (http, unnamed 9000); decode-1 (no ports)"; then
+    ok "setup applies the PodMonitor and warns when no model server declares its port, naming the pods"
+else
+    fail "setup must warn when no model server declares the scraped port" "$out"
+fi
+
+# 17. The report says in place only when a pod declares the port (a sidecar
+# counts); otherwise it warns instead, and still passes.
+reset; OWN_PM=yes; PODS_JSON="$NAMED_PODS"
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
+reset; OWN_PM=yes; PODS_JSON="$HTTP_PODS"
+out2="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc2=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "PodMonitor is in place" && ! printf '%s' "$out" | grep -q WARNING \
+    && [ "$rc2" -eq 0 ] && ! printf '%s' "$out2" | grep -q "PodMonitor is in place" \
+    && printf '%s' "$out2" | grep -q "scrapes the container port named .modelserver., and no model-server pod in team-a declares it"; then
+    ok "check-prereqs: in place when a pod declares the port, a warning naming the pods when none does"
+else
+    fail "the report must say in place only when a model server declares the port (rc=$rc rc2=$rc2)" "$out
+$out2"
+fi
+
+# 18. A pod list that is refused is "could not check", never "no pods".
+reset; OWN_PM=yes; PODS_FORBIDDEN=yes
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "could not check that a model server in team-a declares the port" \
+    && printf '%s' "$out" | grep -q "Forbidden" && ! printf '%s' "$out" | grep -q "no model-server pod"; then
+    ok "a Forbidden pod list is said as could not check, not as no pods"
+else
+    fail "a Forbidden pod list must read as could not check (rc=$rc)" "$out"
+fi
+
+# 19. No model-server pod yet (scaled to zero): said, and not a warning.
+reset; OWN_PM=yes
+out="$( (LLMSM_WATCH_NS=team-a llmsm_report_modelserver_metrics) 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q "no model-server pod runs in team-a yet" \
+    && ! printf '%s' "$out" | grep -q WARNING; then
+    ok "no model-server pod yet: says the port was not checked, without a warning"
+else
+    fail "with no model-server pod the report must say the port was not checked (rc=$rc)" "$out"
 fi
 
 # 15. The PodMonitor setup adds for the model servers is not read as a monitor
