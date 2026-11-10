@@ -95,6 +95,19 @@ Read the review first; the implementation design says what was built.
   KEDA's own triggers so KEDA scales and we observe. Records the audit of what
   compares against the controller's own previous output.
 
+## Install and release
+
+- **[Install from the release, not from a checkout](install-from-release.md)**
+  — proposed. The release attaches rendered, digest-pinned, cosign-signed
+  manifests; the operator applies them with `kubectl`, edits one settings
+  ConfigMap (passive by default; passive, shadow and active become live
+  `kubectl patch` steps), and runs a preflight Job that reports each
+  prerequisite as PASS, WARN, FAIL or UNKNOWN. Lists what the install scripts
+  do that a static manifest cannot and where each goes. `make
+  deploy-scaling-manager` stays a supported second path on the same render,
+  names and settings, so an install can move between the two. Records the
+  2026-11-10 decisions, the migration, and what ships in v0.11.0.
+
 ## Engine and analyzers
 
 - **[Replicas that change P/D role in place](pd-role-switch/)** —

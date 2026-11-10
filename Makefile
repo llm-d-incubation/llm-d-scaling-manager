@@ -3030,6 +3030,10 @@ benchmark-staircase-lapse: ## TTFT staircase: the deadline Job on its own: a 1+1
 benchmark-staircase-run: ## TTFT staircase: stand up, warm up, wait for the freeze, run every phase, tear down on every exit (BENCHMARK_NAMESPACE=<fresh ns> STAIRCASE_RUN=<abs dir> IMG=<build>)
 	@$(STAIRCASE) run $(IMG)
 
+.PHONY: benchmark-staircase-resume
+benchmark-staircase-resume: ## TTFT staircase: go on with a stopped run on its frozen prediction, same IMG: a fresh standup, no warm-up or freeze, only the phases not done, then the rest of the ladder
+	@$(STAIRCASE) resume $(IMG)
+
 .PHONY: benchmark-staircase-predict
 benchmark-staircase-predict: whatif ## TTFT staircase: print the frozen prediction of RECORDING=<warm-up recording>, touching no cluster
 	@test -n "$(RECORDING)" || { echo "set RECORDING=<learner recording>"; exit 1; }

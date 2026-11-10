@@ -32,6 +32,7 @@ Standard library only.
 import argparse
 import collections
 import csv
+import glob
 import gzip
 import json
 import math
@@ -455,6 +456,10 @@ def phases_of(run):
     return out, crashed
 
 
+# The verdict of a bound whose whole bracket is in the mark: the gate passes it.
+BOUND_IN = "in the mark, a bound"
+
+
 def fail(verdict):
     return verdict.startswith("FAIL")
 
@@ -486,7 +491,9 @@ def judge(predicted, per_repeat, missing=()):
     if missing and not any(fail(v) for v in verdicts):
         text = lib.show(*per_repeat[0]) if per_repeat else "none finished"
         return text, "n/a", "no mark, repeat %s missing" % ",".join(str(n) for n in missing)
-    values = [(v[0] + v[1]) / 2 if k in ("bound", "cliff") else v for k, v in per_repeat if v is not None]
+    # A bracket's middle; an open one (no high end) by its low end.
+    values = [((v[0] + v[1]) / 2 if math.isfinite(v[1]) else v[0]) if k in ("bound", "cliff", "jump") else v
+              for k, v in per_repeat if v is not None]
     centre = lib.median(values) if values else None
     bound = any("a bound" in v for v in verdicts)
     cliff = any("on the cliff" in v for v in verdicts)
@@ -495,7 +502,8 @@ def judge(predicted, per_repeat, missing=()):
     elif lib.NO_VALID_CROSSING in verdicts:
         verdict = lib.NO_VALID_CROSSING
     elif all(v.startswith("in the mark") or v == lib.CLIFF_IN for v in verdicts):
-        # A bound outranks the cliff: the gate stops on a bound, and not on the cliff.
+        # A bound outranks the cliff: the gate passes a bound in the mark, and does not
+        # score the cliff.
         verdict = "in the mark, a bound" if bound else lib.CLIFF_IN if cliff else "in the mark"
     else:
         verdict = "no mark, a bound" if bound else "no mark, on the cliff" if cliff else "no mark"
@@ -506,15 +514,29 @@ def judge(predicted, per_repeat, missing=()):
     return "median %.1f of %d" % (centre, len(values)) if centre else "n/a", ratio, verdict
 
 
+def onset_ladder(bucket):
+    """True for a frozen bucket whose ladder is in shares of its prefill knee: the prefill
+    knee is the lower one, as in B-onset and C-onset, which double decode so that the steps
+    run up to the prefill flow-control onset. Read from the frozen file, which every run
+    carries, so it needs nothing the spec of a run frozen before it was written lacks."""
+    prefill = bucket.get("prefillKnee")
+    return prefill is not None and prefill <= bucket["knee"]
+
+
 def falsifiers(data, frozen, spec, out):
-    """The falsifiers set before the run: each says whether it held."""
+    """The falsifiers set before the run: each says whether it held. The ITL slope is
+    judged at the operating point only: a bucket on an onset ladder prints its slope as
+    reported, and it counts toward nothing."""
     bands = spec.get("falsifiers", {})
     print("\n## Falsifiers\n", file=out)
     print("| Falsifier | Reading | Band | Held |", file=out)
     print("| --- | --- | --- | --- |", file=out)
     results = []
 
-    def line(name, value, band):
+    def line(name, value, band, judged=True):
+        if not judged:
+            print("| %s | %.2f | %g to %g | reported, onset phase |" % (name, value, band[0], band[1]), file=out)
+            return
         ok = lib.in_band(value, band)
         results.append(ok)
         print("| %s | %.2f | %g to %g | %s |" % (name, value, band[0], band[1], "yes" if ok else "NO"), file=out)
@@ -525,7 +547,8 @@ def falsifiers(data, frozen, spec, out):
                 if "engine_decode_mean" in r and not r["truncated"] and r["failed"] == 0]
         if len(rows) >= 3 and "itlSlope" in bands:
             line("ITL slope, %s %s" % (bucket, fc), lib.ols_slope([r["client_tpot_mean"] for r in rows],
-                                                                  [r["engine_decode_mean"] for r in rows]), bands["itlSlope"])
+                                                                  [r["engine_decode_mean"] for r in rows]), bands["itlSlope"],
+                 judged=not onset_ladder(frozen[bucket]))
         low = [r["hop_mean"] for r in rows if r["rate"] <= frozen[bucket]["operatingRate"]]
         if low:
             hops.setdefault(frozen[bucket]["prompt"], []).extend(low)
@@ -617,6 +640,17 @@ def read_max_num_seqs(run):
     return int(m[1]) if m else None
 
 
+POST_HOC = ("Scored under two rules written on 2026-11-10, after repeat 1 of the second run was seen: "
+            "the ITL slope is judged at the operating point only, and a bound wholly in the mark passes the gate.")
+
+
+def post_hoc_note(run):
+    """The line every report and gate carries: the rules changed after seeing data, and
+    where the verdicts before them are kept (a resume's prior-<n>/gate-r*.out)."""
+    kept = sorted(os.path.relpath(p, run).replace(os.sep, "/") for p in glob.glob(os.path.join(run, "prior-*", "gate-r*.out")))
+    return "**%s** Verdicts from before them: %s." % (POST_HOC, ", ".join(kept) if kept else "none in this run")
+
+
 def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False):
     """The report; returns the verdicts by (bucket, fc, reading). repeats and only_gate narrow it to a gate."""
     frozen = {b["name"]: b for b in frozen_file["buckets"]}
@@ -639,6 +673,7 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             data[key][n] = [r for r in rows if not lib.is_measure(r["rate"], rates)]
 
     print("# Staircase report\n", file=out)
+    print(post_hoc_note(run) + "\n", file=out)
     if crashed:
         print("**Phases that did not finish, excluded: %s.**\n" % ", ".join(crashed), file=out)
     print("## What the prediction rests on\n", file=out)
@@ -864,17 +899,23 @@ def gate(run, frozen, spec, repeat, out):
     """Score one repeat of the gate buckets: 0 to go on, 1 to stop. Written beside the report."""
     with open(os.path.join(run, "gate-r%d.md" % repeat), "w", encoding="utf8") as f:
         verdicts = report(run, frozen, spec, None, f, repeats=[repeat], only_gate=True)
-    # A void step can pass no gate: a crossing on one is a bound, not a reading. A crossing
-    # on the cliff stops it unless its whole bracket is in the mark, and passes nothing.
+    # A crossing on a void step is a bound: only its bracket is known. It passes when the
+    # whole bracket is in the mark, since the verdict is then the same wherever in it the
+    # crossing sits; a bracket across the mark's edge, or outside it, stops the run. A
+    # crossing on the cliff stops it unless its whole bracket is in the mark, and passes
+    # nothing.
     bad = {k: v if fail(v) or "missing" in v or "on the cliff" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
-           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
-                                  or v == "no mark, on the cliff")}
+           if k[2] == "ttft" and v != BOUND_IN and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
+                                                    or v == "no mark, on the cliff")}
     if not verdicts:
         print("gate repeat %d: no gate bucket to score" % repeat, file=out)
         return 1
     cliff = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == lib.CLIFF_IN)
-    print("gate repeat %d: %d readings, %d stop the run%s%s" % (
+    bounds = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == BOUND_IN)
+    print(post_hoc_note(run), file=out)
+    print("gate repeat %d: %d readings, %d stop the run%s%s%s" % (
         repeat, sum(1 for k in verdicts if k[2] == "ttft"), len(bad),
+        ", %d bounds wholly in the mark, passed" % bounds if bounds else "",
         ", %d on the cliff and in the mark, not scored" % cliff if cliff else "",
         ": " + "; ".join("%s %s p%s %s" % (k[0], k[1], k[3], v) for k, v in sorted(bad.items())) if bad else ""), file=out)
     return 1 if bad else 0
