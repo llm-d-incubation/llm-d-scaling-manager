@@ -177,11 +177,12 @@ func TestCompletedRateByRole(t *testing.T) {
 	assert.InDelta(t, 3, got[domain.RoleDecode].queuedEach, 1e-12)
 }
 
-// A queue that stops growing is priced at least as the growing region priced
-// it, net of the growth it no longer has, and never above occupancy
-// (drainStanding): one replica at mu 6 completing 6 (RunningRequests /
-// AvgServiceTime), lambda 6, the queue 100 -> 160 over a minute, then
-// standing at 160 for a minute.
+// A queue that stops growing is priced by the growing region's formula with
+// dB/dt at 0, never above occupancy (drainStanding): one replica at mu 6
+// completing 6 (RunningRequests / AvgServiceTime), lambda 6, the queue
+// 100 -> 160 over 45 s, then standing at 160. Standing, it is exactly the
+// drain price of its arrivals and backlog, (6 + 160 / 60) / 6 replicas, which
+// is under the last growing cycle's price by the growth it no longer has.
 func TestQueueDrain_AQueueThatStopsGrowingIsPricedAsDrain(t *testing.T) {
 	const mu, resident, perReq = 6.0, 260_123.0, 239_323.0 / 160
 	a := NewSaturationAnalyzer(capacity.NewStore())
@@ -211,11 +212,43 @@ func TestQueueDrain_AQueueThatStopsGrowingIsPricedAsDrain(t *testing.T) {
 		if i >= 4 {
 			// The drain price of the standing queue: the arrivals the replica
 			// completes and the queue over the drain time.
-			assert.GreaterOrEqual(t, got, min(occupancy, (6+160.0/60)/mu*floorFleetP)-1, "t=%ds: under the standing queue's drain price", 15*i)
+			standing := (6 + 160.0/60) / mu * floorFleetP
+			require.Less(t, standing, occupancy, "premise: under occupancy")
+			assert.InDelta(t, standing, got, 1, "t=%ds: the standing queue's drain price", 15*i)
+			assert.Less(t, got, growing, "t=%ds: under the last growing cycle, by its growth", 15*i)
 		}
 		clock = clock.Add(15 * time.Second)
 	}
-	assert.Greater(t, growing, 0.0)
+}
+
+// A standing prefill queue (ttft-saturated, 20:38): one replica learned at mu
+// 4.09 completing 3.16 req/s, 3.12 arriving, 58 queued, a 94 s start seed.
+// Prefill is not a drain region; the swap prices it at the floor at the
+// served rate, mu capped at 3.16. The floor prices both starts and keeps the
+// larger (pickLargerFloor): over the seed, the backlog projected to landing
+// (58 + (3.12 - 3.16) x 94) over 94 s, (3.12 + 54.24 / 94) / 3.16 = 1.17
+// replicas; with no measured start (the parent), the 58 over the 60 s drain
+// time, (3.12 + 58 / 60) / 3.16 = 1.29. It keeps 1.29.
+func TestThroughputFloor_AStandingPrefillQueueIsPricedAtTheServedRate(t *testing.T) {
+	const mu, served, lambda, start, queue = 4.09, 3.16, 3.12, 94.0, 58
+	const resident, perReq = 0.9 * floorFleetP, 30_000.0
+	a := NewSaturationAnalyzer(capacity.NewStore())
+	row := domain.ReplicaMetrics{PodName: "p", VariantName: "pf", RequestRate: served, RequestRateKnown: true}
+	in := makeAnalyzerInput([]domain.ReplicaMetrics{row}, []domain.VariantReplicaState{
+		{VariantName: "pf", AcceleratorName: "H200", CurrentReplicas: 1, GPUsPerReplica: 1, StartSeedSeconds: start, StartSeedSet: true}})
+	in.ArrivalRate = lambda
+	charge := float64(queue) * perReq
+	rcs := []capacity.ReplicaCapacity{{VariantName: "pf", PodName: "p", QueueLength: queue, LocalQueueDemand: int64(charge),
+		SaturatedThroughput: mu, SaturatedThroughputSamples: 2}}
+	vcs := []domain.VariantCapacity{{VariantName: "pf", Role: domain.RolePrefill, ReplicaCount: 1, PerReplicaCapacity: floorFleetP}}
+	got := a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), rcs, vcs, resident+charge, nil, nil, 0, false, logr.Discard())
+	seeded := (lambda + min(float64(queue)+(lambda-served)*start, served*start)/start) / served * floorFleetP
+	want := (lambda + min(float64(queue), served*floorDrainT)/floorDrainT) / served * floorFleetP
+	t.Logf("priced %.0f (%.3f replicas); over the seed %.3f, over the drain time %.3f; occupancy %.0f",
+		got, got/floorFleetP, seeded/floorFleetP, want/floorFleetP, resident+charge)
+	assert.InDelta(t, 1.17, seeded/floorFleetP, 0.005, "premise: the arithmetic in the comment")
+	assert.InDelta(t, 1.29, want/floorFleetP, 0.005, "premise: the arithmetic in the comment")
+	assert.InDelta(t, want, got, 1, "the larger of the two starts' floors, at the served rate")
 }
 
 // The standing price (drainStanding) reads its arrivals from what the role

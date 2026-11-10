@@ -861,9 +861,9 @@ not cover a key.
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
 finding above is in exactly one state:
 
-- **Caught:** 37 findings. For each, a mutant puts the defect back, and its
+- **Caught:** 38 findings. For each, a mutant puts the defect back, and its
   class fails on that mutant. For 29 a mutant runs the production learner
-  (a policy key, rows, or a stub); 8 are caught only by a toy, and the code
+  (a policy key, rows, or a stub); 9 are caught only by a toy, and the code
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
   restart case fails on it, and the per-path counter "joined refusals with a
@@ -4599,10 +4599,10 @@ mu now. Three changes:
   serving under its learned mu; this prices that fleet at the rate it serves
   (pd-restart at 12:46:35: 2.89 req/s against a learned 6.22).
 - **A standing queue (`drainStanding`):** where the swap runs on a role the
-  drain price reads, the role is priced at least as the growing region
-  prices it, with the arrivals at least what the role completes, and capped
-  at occupancy. A queue that stops growing then costs what it did while it
-  grew, less the growth it no longer has: 100, 120, 140, 160, 160 req
+  drain price reads, the role is priced at least at the growing region's
+  formula with dB/dt at 0 and the arrivals at least what the role completes,
+  capped at occupancy. A queue that stops growing then costs its arrivals and
+  backlog, not the growth it no longer has: 100, 120, 140, 160, 160 req
   priced 1.28, 1.56, 1.61, 1.67, 1.44 replicas at mu 6. Main priced it the
   same once standing. A build that kept occupancy's charge for any standing
   queue priced it at 1.92, and ttft-saturated's prefill at 10x. Occupancy
@@ -4618,11 +4618,14 @@ sampling, not proved. Two property cases hold it, and stub mutants hold both:
 - `monotonicity/floor/lower-mu-never-prices-less` prices one measured state at
   eight mu from 0.25x to 3x. On main it fails on 19 of 20 seeds.
 - `known-truth/floor/standing-queue-priced-at-drain` has lambda equal to
-  completions and the queue standing a minute. It requires the price to sit
-  between keeping up (lambda at the served rate) and the drain price at the
-  served rate. On main it fails on 5 of 20 seeds, under keeping up: main
-  prices at the learned mu, above what is served. On the build that kept
-  occupancy's charge it fails on 8 of 20, over the drain price.
+  completions and the queue standing a minute. It requires the price to be
+  the drain price at the served rate: (lambda + each queue capped at what its
+  replica drains in 60 s, over 60 s) at that rate, capped at occupancy, and at
+  most 2 % over the uncapped figure. On the build that kept occupancy's charge
+  it fails on 8 of 20 seeds, over the drain price. Two mutants hold it:
+  - a toy-output mutant that cuts the price to what only keeps up with lambda;
+  - dropping the backlog from the served-rate floor and the standing price,
+    which fails on 17 of 20.
 
 Measured on the goldens against main, the switch moves only role and model
 demand:

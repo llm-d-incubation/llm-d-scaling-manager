@@ -23,7 +23,7 @@ func floorCases() []propCase {
 		{class: classMonotonicity, learner: "floor", name: "standing-local-queue", family: familyDirect, tuning: tunedDefault, check: checkFloorDrainBound(nil)},
 		{class: classEdges, learner: "floor", name: "backlog-grew", family: familyDirect, tuning: tunedDefault, seeds: cheapSeeds, check: checkBacklogEdge(tuningDefault)},
 		{class: classMonotonicity, learner: "floor", name: "lower-mu-never-prices-less", family: familyDirect, tuning: tunedDefault, check: checkFloorMuMonotone(nil)},
-		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil)},
+		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil, nil)},
 	}
 }
 
@@ -40,11 +40,15 @@ func floorCases() []propCase {
 //     for the slope of a queue a request longer (the drain horizon is at
 //     least 60 s, so the bound is loose). Occupancy charged every queued
 //     request as resident KV, 10x that on ttft-saturated's prefill;
-//   - never under keeping up: at least the resident KV or lambda at that
-//     rate, unless occupancy is less.
+//   - never under the drain price itself: at least the resident KV or
+//     (lambda + each queue capped at what its replica drains in 60 s, over
+//     60 s) at that rate, as cappedBacklog caps it, unless occupancy is
+//     less. The rig learns no start, so the drain horizon is the 60 s drain
+//     time and the bound is tight there.
 //
-// stub, when set, edits the analyzer before it prices (a mutant).
-func checkFloorStandingQueue(stub func(*SaturationAnalyzer)) func(uint64) error {
+// stub, when set, edits the analyzer before it prices, and edit the price it
+// returns, given the price that only keeps up with lambda (mutants).
+func checkFloorStandingQueue(stub func(*SaturationAnalyzer), edit func(got, keepUp float64) float64) func(uint64) error {
 	return func(seed uint64) error {
 		r := propRand(seed)
 		n := 1 + r.IntN(6)
@@ -89,14 +93,21 @@ func checkFloorStandingQueue(stub func(*SaturationAnalyzer)) func(uint64) error 
 		price(r.IntN(2))
 		clock = clock.Add(BacklogGrowthLookback)
 		got, measured := price(0)
+		if edit != nil {
+			got = edit(got, max(resident, lambda/rate*p))
+		}
 		upper := max(resident, (lambda+backlog/floorDrainT)/rate*p) * 1.02
-		lower := min(measured, max(resident, lambda/rate*p)) * (1 - 1e-9)
+		capped := 0.0
+		for _, q := range queues {
+			capped += min(float64(q), rate*floorDrainT)
+		}
+		lower := min(measured, max(resident, (lambda+capped/floorDrainT)/rate*p)) * (1 - 1e-6)
 		if got > upper {
 			return violation(kindOverPriced, "%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, %0.f queued, standing: priced %.0f over the drain price %.0f (occupancy %.0f)",
 				n, lambda, mu, rate, backlog, got, upper, measured)
 		}
 		return holds(got >= lower, kindWrongSide,
-			"%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, standing: priced %.0f under keeping up, %.0f",
+			"%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, standing: priced %.0f under the drain price, %.0f",
 			n, lambda, mu, rate, got, lower)
 	}
 }

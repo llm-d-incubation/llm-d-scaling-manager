@@ -379,8 +379,9 @@ type drainTerm struct {
 	// occupancy's measured demand and the floor's tokens.
 	occupancy float64
 	// standing prices the floor's swap (a mu that may order, the backlog not
-	// growing) at least at the growing region's price, never above
-	// occupancy (SwitchFloorTrustReadsCompletions).
+	// growing) at least at the growing region's formula with dB/dt at 0 and
+	// the arrivals at least what the role completes, never above occupancy
+	// (SwitchFloorTrustReadsCompletions).
 	standing bool
 	// completed is what the role completes (completedRateByRole), which a
 	// standing price reads its arrivals from.
@@ -409,13 +410,16 @@ type drainPriced struct {
 //     the lowest of the floor's mu, this cycle's first read and what the
 //     queued replicas complete (drainRead.served), P the floor's.
 //   - standing (SwitchFloorTrustReadsCompletions, t.standing): a mu that may
-//     order and the backlog not growing, where the floor's swap ran. Priced
-//     as growing, with the arrivals at least what the role completes
-//     (RequestRate where RunningRequests / AvgServiceTime is not read) plus
-//     dB/dt, and the role's demand is at least that price, capped at
-//     occupancy (t.occupancy): a queue that stops growing is not priced
-//     under what it was while it grew, for its dB/dt, and the swap's trust
-//     never takes it lower. llm-d-incubation/llm-d-scaling-manager#54.
+//     order and the backlog not growing, where the floor's swap ran. The
+//     growing region's formula with dB/dt at 0 (backlogGrowthRate reads the
+//     last cycle's slope, which stands at 0) and the arrivals at least what
+//     the role completes (RequestRate where RunningRequests / AvgServiceTime
+//     is not read); the role's demand is at least that price, capped at
+//     occupancy (t.occupancy), and the swap's trust never takes it lower. A
+//     queue that stops growing is priced at its arrivals and backlog, not
+//     its last growing cycle's: at mu 6 a queue grown to 160 priced 1.67
+//     replicas growing and 1.44 standing, as main.
+//     llm-d-incubation/llm-d-scaling-manager#54.
 //
 // A mu that may order with the backlog standing is otherwise the floor's
 // swap, as before. The price may raise demand above occupancy's: on a load step the

@@ -1849,8 +1849,8 @@ collector's one-minute rate window and is not configurable.
 
 The drain price is what the queued replicas need to clear the queue at the
 rate they actually serve, not at the learned rate. On a role that generates
-output, a queue that stops growing is priced at least as it was while it
-grew, less the growth itself. That price never goes above what occupancy
+output, a queue that stops growing is priced at its arrivals and its
+backlog, as a growing queue is, less the growth itself. That price never goes above what occupancy
 charges for the queue.
 
 If the merged policy has `trustFraction` at or under `lagFraction`, both go
