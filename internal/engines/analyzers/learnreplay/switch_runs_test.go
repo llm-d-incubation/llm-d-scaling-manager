@@ -672,18 +672,20 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	},
 
 	// llm-d-incubation/llm-d-scaling-manager#54 (saturation.SwitchFloorTrustReadsCompletions,
-	// throughput_floor.go): the floor's trust reads lambda against what the
-	// role completes, not lambda x P / mu against the resident KV; it swaps a
-	// queue's residency charge for the drain price only as far as the queue is
-	// seen draining (backlogDrainShare); and the drain price is the floor at no
-	// more than what the queued replicas complete. It moves the role and model
-	// demand outputs of the fixtures whose swap ran, and nothing else. Mostly
-	// up, the cost side: a standing queue keeps its charge where mu's ratio
-	// trusted the swap (ttft-saturated's prefill up on 101 cycles, to x10).
-	// Down only where the queue fell over the minute: pd-restart 13:00:52
-	// (963 to 606), the start fixtures as their queues drained, b-off at
-	// 02:11:09 and 02:15:24, and e1's decode by under 1 % as its queue of 300
-	// emptied.
+	// throughput_floor.go, queue_drain.go): the floor's trust reads lambda
+	// against what the role completes, not lambda x P / mu against the
+	// resident KV; the swap's drain price is the floor at no more than what
+	// the queued replicas complete; and a standing queue is priced at least at
+	// the growing region's price, capped at occupancy (drainStanding). It
+	// moves role and model demand and nothing else. Down where occupancy
+	// charged a queue as resident KV over its served-rate drain price
+	// (ttft-saturated's prefill, to x0.21; the start fixtures, whose P is 6
+	// tokens), up where the queued replicas serve under mu (pd-restart's
+	// decode, to +61 %). Alone it also moves throughput-sweep-restart; with
+	// SwitchQueuePricedAsDrain on, as all on runs, the drain price holds
+	// those cycles. With SwitchThroughputFloorRaisesVariants on as well, all
+	// on also moves e1's and e1-tuned's variant capacities, which that
+	// switch's row names: an interaction.
 	saturation.SwitchFloorTrustReadsCompletions: {
 		"e1-tuned/results.csv", "e1/results.csv",
 		"pd-restart/composite-results.csv", "pd-restart/composite-roles.csv", "pd-restart/results.csv",
@@ -999,13 +1001,11 @@ var startSeedSeamMoves = map[string][]string{
 	saturation.SwitchITLWaitsAfterRestart: {
 		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/lines.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
-	// Its start-restored results and composite-results stopped moving with
-	// llm-d-incubation/llm-d-scaling-manager#54's switch on (see
-	// SwitchMuMarginClamp below).
 	saturation.SwitchK2FirstReadingWaits: {
 		"start-seed/composite-variants.csv", "start-seed/learned-state.csv", "start-seed/variant-capacities.csv",
 		"start-seed-restart/learned-state.csv", "start-seed-restart/variant-capacities.csv",
-		"start-restored/learned-state.csv", "start-restored/variant-capacities.csv",
+		"start-restored/composite-results.csv", "start-restored/learned-state.csv", "start-restored/results.csv",
+		"start-restored/variant-capacities.csv",
 	},
 	saturation.SwitchK2KeyBucketHeld: {
 		"start-seed/learned-state.csv", "start-seed/variant-capacities.csv", "start-seed-restart-2/learned-state.csv",
@@ -1016,18 +1016,14 @@ var startSeedSeamMoves = map[string][]string{
 		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
 		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
-	// These two, and SwitchK2FirstReadingWaits above, stopped moving
-	// start-seed-restart-2's results and composite-results with
-	// llm-d-incubation/llm-d-scaling-manager#54's switch on: the mu they move
-	// priced the floor's swap there, and those cycles' queues stand, so the
-	// swap no longer runs and occupancy's figure, which mu does not reach,
-	// stands either way.
 	saturation.SwitchMuMarginClamp: {
-		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
+		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
 	saturation.SwitchMuSwapFreeze: {
 		"start-seed/composite-results.csv", "start-seed/learned-state.csv", "start-seed/results.csv", "start-seed/variant-capacities.csv",
-		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
+		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
 }
 

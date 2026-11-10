@@ -215,14 +215,12 @@ func scaled(demands []float64, p float64) []string {
 }
 
 // drainFixedRows are the start probes' ev-shindin/llm-scaling-manager#520 ledger rows the drain price
-// clears. Not the load step at 463 s since
-// llm-d-incubation/llm-d-scaling-manager#54: its queue stands while the order
-// starts, and a standing queue keeps its residency charge
-// (backlogDrainShare), over-priced again (peak 15 and 16 against 14.5; their
-// ledger rows).
+// clears.
 var drainFixedRows = []string{
 	"closed-loop-load-step-start-15s-jsq",
 	"closed-loop-load-step-start-90s-jsq",
+	"closed-loop-load-step-start-463s",
+	"closed-loop-load-step-start-463s-jsq",
 	"closed-loop-restart-before-step-start-15s-jsq",
 	"closed-loop-restart-before-step-start-90s-jsq",
 }

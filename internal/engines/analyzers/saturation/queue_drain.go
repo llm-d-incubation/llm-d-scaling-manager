@@ -78,6 +78,7 @@ const drainHoldHorizons = 2
 const (
 	drainBeforeTwoReadings = "before-two-readings"
 	drainGrowing           = "growing"
+	drainStanding          = "standing"
 	drainHaircutHeld       = "haircut-held"
 )
 
@@ -374,6 +375,16 @@ type drainTerm struct {
 	want, resident float64
 	// scheduler is the scheduler's queue, for the role that owns it.
 	scheduler float64
+	// occupancy is the role's demand before the floor's swap: the higher of
+	// occupancy's measured demand and the floor's tokens.
+	occupancy float64
+	// standing prices the floor's swap (a mu that may order, the backlog not
+	// growing) at least at the growing region's price, never above
+	// occupancy (SwitchFloorTrustReadsCompletions).
+	standing bool
+	// completed is what the role completes (completedRateByRole), which a
+	// standing price reads its arrivals from.
+	completed float64
 }
 
 // drainPriced is what priceDrain priced a role at, for the log line.
@@ -397,9 +408,17 @@ type drainPriced struct {
 //   - growing: a mu that may order, and the backlog grew (backlogGrew). mu =
 //     the lowest of the floor's mu, this cycle's first read and what the
 //     queued replicas complete (drainRead.served), P the floor's.
+//   - standing (SwitchFloorTrustReadsCompletions, t.standing): a mu that may
+//     order and the backlog not growing, where the floor's swap ran. Priced
+//     as growing, with the arrivals at least what the role completes
+//     (RequestRate where RunningRequests / AvgServiceTime is not read) plus
+//     dB/dt, and the role's demand is at least that price, capped at
+//     occupancy (t.occupancy): a queue that stops growing is not priced
+//     under what it was while it grew, for its dB/dt, and the swap's trust
+//     never takes it lower. llm-d-incubation/llm-d-scaling-manager#54.
 //
-// A mu that may order with the backlog standing is the floor's swap, as
-// before. The price may raise demand above occupancy's: on a load step the
+// A mu that may order with the backlog standing is otherwise the floor's
+// swap, as before. The price may raise demand above occupancy's: on a load step the
 // arrivals outrun what is resident. With no backlog the hold prices nothing:
 // the queue its order was for has drained, and what remains is the floor's.
 func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drainRead, c drainContext,
@@ -431,10 +450,16 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 			}
 			switch {
 			case !(queued > 0):
-			case t.inFloor && t.term.MayOrder && !t.term.Held && !grew:
+			case t.inFloor && t.term.MayOrder && !t.term.Held && !grew && !t.standing:
 				// The floor's swap.
-			case t.inFloor && t.term.MayOrder && grew:
+			case t.inFloor && t.term.MayOrder && (grew || !t.term.Held):
 				region, out.mu, p = drainGrowing, t.term.Mu, t.term.PerReplica
+				if !grew {
+					region = drainStanding
+					if finitePositive(t.completed) {
+						out.arrival = max(out.arrival, t.completed+out.growth)
+					}
+				}
 				if d.mu0 > 0 {
 					out.mu = min(out.mu, d.mu0)
 				}
@@ -466,9 +491,13 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 		out.region = region
 		out.backlog = cappedBacklog(d.queues, t.scheduler, out.mu, out.horizon)
 		out.replicas = drainReplicas(out.arrival, out.backlog, out.horizon, out.mu)
-		want = max(t.resident, out.replicas*p)
+		price := max(t.resident, out.replicas*p)
 		if t.inFloor {
-			want = max(want, t.tokens)
+			price = max(price, t.tokens)
+		}
+		want = price
+		if region == drainStanding {
+			want = max(t.want, min(t.occupancy, price))
 		}
 	} else {
 		out.mu = 0

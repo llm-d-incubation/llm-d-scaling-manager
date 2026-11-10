@@ -842,13 +842,7 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 			swap := term.MayOrder && !term.Held && !grew[role]
 			drainTokens := tokens
 			if a.floorTrustCompleted {
-				// And only as far as the queue is seen draining: a queue that
-				// stands at lambda = completions is a fleet at capacity, and
-				// the drain price would order nothing for it
-				// (backlogDrainShare).
-				trust = tune.completedTrust(tf.Lambda, completed[role].total) *
-					a.backlogDrainShare(input.Namespace, input.ModelID, role, queued[role],
-						floor.DrainHorizon(floor.BacklogDrainSeconds, starts.sized[role]), tune)
+				trust = tune.completedTrust(tf.Lambda, completed[role].total)
 				drainTokens = max(tokens, served.ByRole[role])
 			} else {
 				trust = tune.residentTrust(term.ArrivalDemand, resident)
@@ -865,6 +859,7 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 			}
 			want, dp = a.priceDrain(input.Namespace, input.ModelID, role, d, drainCtx, drainTerm{
 				term: term, inFloor: inFloor, tokens: tokens, want: want, resident: resident, scheduler: sched,
+				occupancy: max(measured, tokens), standing: a.floorTrustCompleted, completed: completed[role].total,
 			})
 		}
 		if want == measured {
@@ -1121,50 +1116,6 @@ func (a *SaturationAnalyzer) noteBacklogGrowth(namespace, modelID string, backlo
 	return grew
 }
 
-// backlogDrainShare is how much of the evidence the floor's drain price needs
-// a role's queue gives (SwitchFloorTrustReadsCompletions): the drain price
-// assumes the backlog clears within horizon, and that holds only for a queue
-// seen draining at least backlog / horizon a second. From 0 to 1, the share
-// of that rate the queue fell at since the reading noteBacklogGrowth compares
-// with (called after it has recorded this cycle's), net of the noise band
-// backlogGrew reads growth past: max(minRequests, fraction of the earlier
-// backlog).
-//
-// A queue that stands, or grows, reads 0, and so does one with nothing to
-// compare with: the fleet is at capacity, and the queue's wait is the latency
-// the residency charge pays for. Priced as drain it ordered nothing (on
-// ttft-saturated, prefill standing at 58 queued, 3.1 req/s in and out). What
-// the role completes over lambda is not read as drain: on the start fixtures
-// it read 0.5-1 req/s over lambda while the queue stood at 55, and on
-// pd-restart at 12:46:35 5.8 over while it grew 1008 to 1093. An empty queue
-// reads 1: there is no charge to swap. No mu enters it, so the trust stays
-// flat in mu.
-func (a *SaturationAnalyzer) backlogDrainShare(namespace, modelID, role string, backlog, horizon float64, t tuning) float64 {
-	if !(backlog > 0) {
-		return 1
-	}
-	if !(horizon > 0) {
-		return 0
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	memo := a.k2Settle[namespace+"|"+modelID]
-	if memo == nil || len(memo.backlogs) < 2 {
-		return 0
-	}
-	ref, cur := memo.backlogs[0], memo.backlogs[len(memo.backlogs)-1]
-	dt := cur.at.Sub(ref.at).Seconds()
-	prev, seen := ref.byRole[role]
-	if !seen || !(dt > 0) {
-		return 0
-	}
-	fell := prev - backlog - max(t.BacklogGrowth.MinRequests, t.BacklogGrowth.Fraction*prev)
-	if !(fell > 0) {
-		return 0
-	}
-	return min(fell/dt*horizon/backlog, 1)
-}
-
 // localQueueBacklog is what one replica's own engine queue adds to its role's
 // floor backlog: the queue, but no more than the replica drains itself in
 // horizon seconds at its saturated throughput (applyThroughputFloor). A
@@ -1181,10 +1132,15 @@ func localQueueBacklog(rc capacity.ReplicaCapacity, horizon float64) float64 {
 // SwitchFloorTrustReadsCompletions is the replay switch for the floor's trust
 // read from the arrival rate against what the role completes
 // (completedTrust), where it was read against the resident KV over mu
-// (residentTrust). On, demand is non-increasing in mu for a fixed measured
-// state: the trust no longer moves with mu, and both demands it blends
-// (floorBlend) fall as mu rises. Off, as before, a lower mu could price the
-// same queue lower (llm-d-incubation/llm-d-scaling-manager#54).
+// (residentTrust); and the drain price of a standing queue taken as the
+// growing region's, capped at occupancy (priceDrain, drainStanding). On, the
+// trust no longer moves with mu, and the demands it blends (floorBlend) and
+// the standing price fall as mu rises. The gates around them (mayOrder, the
+// hold, the drain regions) read state mu may move, so that demand is
+// non-increasing in mu for a fixed measured state is verified by sampling,
+// not proved: monotonicity/floor/lower-mu-never-prices-less. Off, as before,
+// a lower mu could price the same queue lower
+// (llm-d-incubation/llm-d-scaling-manager#54).
 const SwitchFloorTrustReadsCompletions = "floor-trust-reads-completions"
 
 // flooredDemand is a role's demand once the floor has spoken, with the trust
@@ -1203,7 +1159,7 @@ func (t tuning) flooredDemand(measured, resident, tokens, arrivalDemand float64,
 // the higher of the resident KV and drainTokens, the floor's price of the
 // queue as drain, but never above where it started. Both ends fall as the
 // floor's tokens and drainTokens do, so for a trust that does not move with
-// mu the result is non-increasing in mu.
+// mu the blend itself does not rise with mu.
 func floorBlend(measured, resident, tokens, drainTokens, trust float64, swap bool) float64 {
 	want := max(measured, tokens)
 	if swap {

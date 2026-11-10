@@ -128,28 +128,19 @@ func TestTuningIdleKvUsageReachesAnalyze(t *testing.T) {
 // analyzerTuning.floorTrust reaches the throughput floor. At lambda 0.8 the
 // arrival rate is 0.13 of the 6 req/s the full replica completes: under the
 // default ramp (0.5-0.8) the floor may not lower demand; with the ramp at
-// 0.05-0.10 it trusts the drain price in full. The queue is seen draining
-// (400 a minute before), so the drain gate is open (backlogDrainShare).
+// 0.05-0.10 it trusts the drain price in full.
 func TestTuningFloorTrustReachesTheFloor(t *testing.T) {
 	const resident, charge = 260_123.0, 239_323.0
 	floor := func(cfg *config.ScalingPolicy) float64 {
 		a := NewSaturationAnalyzer(capacity.NewStore())
-		clock := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-		a.now = func() time.Time { return clock }
+		in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(6)}, nil)
+		in.ArrivalRate = 0.8
+		rcs := []capacity.ReplicaCapacity{{
+			VariantName: "v", PodName: "p", QueueLength: 160, LocalQueueDemand: int64(charge),
+			SaturatedThroughput: 6, SaturatedThroughputSamples: 2,
+		}}
 		vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: 1, PerReplicaCapacity: 260_622}}
-		cycle := func(q int) float64 {
-			c := charge * float64(q) / 160
-			in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(6)}, nil)
-			in.ArrivalRate = 0.8
-			rcs := []capacity.ReplicaCapacity{{
-				VariantName: "v", PodName: "p", QueueLength: q, LocalQueueDemand: int64(c),
-				SaturatedThroughput: 6, SaturatedThroughputSamples: 2,
-			}}
-			return a.applyThroughputFloor(in, cfg, rcs, vcs, resident+c, nil, nil, 0, false, logr.Discard())
-		}
-		cycle(400)
-		clock = clock.Add(BacklogGrowthLookback)
-		return cycle(160)
+		return a.applyThroughputFloor(in, cfg, rcs, vcs, resident+charge, nil, nil, 0, false, logr.Discard())
 	}
 	def := floor(policyWith(func(*config.ScalingPolicy) {}))
 	tuned := floor(policyWith(func(p *config.ScalingPolicy) {

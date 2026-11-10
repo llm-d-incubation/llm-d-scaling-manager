@@ -158,16 +158,10 @@ func TestUnevenRoutingShortFleetKeepsItsBacklog(t *testing.T) {
 // queued replicas themselves, (5 + 3) / 0.85 = 9.41 (it ordered 41.2), and
 // three queued 60 -- a queue each drains inside T -- keep the 9.41
 // TestUnevenRoutingShortFleetKeepsItsBacklog asserts.
-//
-// Not the queue of 1000 since llm-d-incubation/llm-d-scaling-manager#54: the
-// floor swaps a queue's residency charge for its drain price only for a queue
-// seen draining (backlogDrainShare), and a queue pinned on one replica of mu
-// 1 falls at most 60 a minute, inside the noise band of 100. It keeps
-// occupancy's figure, 5.25 replicas: the cost side.
 func TestUnevenRoutingAPinnedQueueIsPricedAtWhatItsReplicaDrains(t *testing.T) {
 	light := [3]float64{0.3, 0, 0.33}
 	useful := (2.0 + 1) / 1 / 0.85
-	for _, q := range []float64{60, 300} {
+	for _, q := range []float64{60, 300, 1000} {
 		a, clock := unevenSeed(t)
 		var got float64
 		for range 6 { // past BacklogGrowthLookback: a queue that has stood, not one still growing

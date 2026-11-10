@@ -571,15 +571,6 @@ func TestClosedLoopProbe_StartingReplicasAreCreditedNotReordered(t *testing.T) {
 		t.Run(start.String(), func(t *testing.T) {
 			pc := restartStepCase(0, false, 0)
 			pc.start, pc.queueBlind = start, c.queueBlind
-			if c.queueBlind {
-				// At 463 s the queue stands while the order starts, and since
-				// llm-d-incubation/llm-d-scaling-manager#54 a standing queue
-				// keeps its residency charge (backlogDrainShare): occupancy,
-				// not the floor, then sets the order, to 29 shown or hidden.
-				// The credit is the floor's, so it is read with the swap as
-				// it was before.
-				pc.switches = map[string]bool{SwitchFloorTrustReadsCompletions: false}
-			}
 			r := runProbe(t, pc)
 			pc.hidePending = true
 			hidden := runProbe(t, pc)

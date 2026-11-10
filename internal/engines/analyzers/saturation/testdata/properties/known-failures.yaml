@@ -33,13 +33,6 @@
   finding: "Under assumed stress noise on the output length (4 %, phi 0.9; E1 measures 0.5-0.9 %, where the main case passes) the shape tracker, which moves its anchor and the key on one reading past 20 % and anchors on that reading, is moved a second time by one tail reading and back by the next."
   measured: "5/1000 seeds (64, 247, 407, 901, 926); seed 64, down to 775: 1000 -> 792 at cycle 91 -> 630 at 171 -> 765 at 185"
   owner: "ev-shindin/llm-scaling-manager#495"
-- id: liveness/floor/closed-loop-decode-step-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step from 2.5 to 12 req/s (need 17), with no restart, climbs to 29 and ends at 25, over the 26.5 ceiling and the 20.5 bound. The queue stands while the order starts and on the even split, which keeps feeding the first replicas their start's queue (ev-shindin/llm-scaling-manager#520 cause C). Since llm-d-incubation/llm-d-scaling-manager#54 the floor prices a queue as drain only while it is seen draining (backlogDrainShare): a queue that stands keeps its residency charge, the cost side, so the SLO is not missed on a fleet at capacity."
-  measured: "1/1 seed (the probe draws nothing from it); even split, starting replicas shown: peak 29 (ceiling 26.5), 22 from 15.25 min, 29 from 23.25 min, final 25 at 44m15s against the 20.5 bound, never under need"
-  owner: "llm-d-incubation/llm-d-scaling-manager#54"
 - id: liveness/floor/closed-loop-decode-step-start-463s-jsq
   class: liveness
   learner: floor
@@ -47,27 +40,6 @@
   finding: "At a 463 s start the decode step (need 17), with no restart, overshoots to 31 replicas when the first order lands and is still at 23 at the backlog allowance (44m15s): the first replicas hold their start's queue full while the joiners carry the arrivals, and occupancy counts both. At the shortest-queue limit (a bound on the EPP, not the observed router) each replica that joins a queued fleet fills to the fleet's queue at once, and occupancy reads every replica full while the queue drains (ev-shindin/llm-scaling-manager#520)."
   measured: "1/1 seed; shortest-queue limit: peak 31 at 23.25 min (ceiling 26.5), 24 from 39.25 min, 23 from 42.25 min, final 23 at 44m15s against the 20.5 bound, never under need"
   owner: "ev-shindin/llm-scaling-manager#520"
-- id: liveness/floor/closed-loop-load-step-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the load step (need 9) peaks at 15, over the 14.5 ceiling: the queue stands while the order starts. Since llm-d-incubation/llm-d-scaling-manager#54 the floor prices a queue as drain only while it is seen draining (backlogDrainShare): a queue that stands keeps its residency charge, the cost side, so the SLO is not missed on a fleet at capacity."
-  measured: "1/1 seed; even split, starting replicas shown: peak 15 from 10m45s (ceiling 14.5), final 11 at 40m0s against the 11.3 bound, under need 30s (bound 11m13s)"
-  owner: "llm-d-incubation/llm-d-scaling-manager#54"
-- id: liveness/floor/closed-loop-load-step-start-463s-jsq
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the load step (need 9) at the shortest-queue limit peaks at 16, over the 14.5 ceiling: the queue stands while the order starts. Since llm-d-incubation/llm-d-scaling-manager#54 the floor prices a queue as drain only while it is seen draining (backlogDrainShare): a queue that stands keeps its residency charge, the cost side, so the SLO is not missed on a fleet at capacity."
-  measured: "1/1 seed; shortest-queue limit: peak 16 from 12m15s (ceiling 14.5), final 9 at 40m0s against the 11.3 bound, under need 30s (bound 11m13s)"
-  owner: "llm-d-incubation/llm-d-scaling-manager#54"
-- id: liveness/floor/closed-loop-restart-before-step-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step after a controller restart, with no mu yet, climbs to 29 and ends at 25, over the 26.5 ceiling and the 20.5 bound: the queue stands while the order starts, and on the even split the first replicas keep their start's queue (ev-shindin/llm-scaling-manager#520 cause C). Since llm-d-incubation/llm-d-scaling-manager#54 the floor prices a queue as drain only while it is seen draining (backlogDrainShare): a queue that stands keeps its residency charge, the cost side, so the SLO is not missed on a fleet at capacity."
-  measured: "1/1 seed; even split, starting replicas shown: peak 29 from 23.5 min (ceiling 26.5), final 25 at 44m15s against the 20.5 bound, under need 15s (bound 11m13s)"
-  owner: "llm-d-incubation/llm-d-scaling-manager#54"
 - id: liveness/floor/closed-loop-restart-before-step-start-463s-jsq
   class: liveness
   learner: floor
@@ -75,13 +47,6 @@
   finding: "At a 463 s start the decode step after a controller restart, with no mu yet, climbs to 28 replicas, over the 26.5 ceiling (44 before the queue was priced by drain time), and is at 23 at the backlog allowance (44m15s). At the shortest-queue limit (a bound on the EPP, not the observed router) each replica that joins a queued fleet fills to the fleet's queue at once, and occupancy reads every replica full while the queue drains, and with no mu the floor cannot order against it (ev-shindin/llm-scaling-manager#520)."
   measured: "1/1 seed; shortest-queue limit: peak 28, final 23 at 44m15s against the 20.5 bound, under need 15s (bound 11m13s); switch off: peak 44, final 23, under need 8m0s"
   owner: "ev-shindin/llm-scaling-manager#520"
-- id: liveness/floor/closed-loop-restored-snapshot-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step through a restored snapshot climbs to 29 and ends at 25, the same trace as with no restart. Since llm-d-incubation/llm-d-scaling-manager#54 the floor prices a queue as drain only while it is seen draining (backlogDrainShare): a queue that stands keeps its residency charge, the cost side, so the SLO is not missed on a fleet at capacity."
-  measured: "1/1 seed; even split, starting replicas shown: peak 29 from 23.25 min (ceiling 26.5), final 25 at 44m15s against the 20.5 bound, never under need"
-  owner: "llm-d-incubation/llm-d-scaling-manager#54"
 - id: liveness/floor/closed-loop-restored-snapshot-start-463s-jsq
   class: liveness
   learner: floor

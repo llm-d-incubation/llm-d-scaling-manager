@@ -2581,6 +2581,7 @@ stale_metrics
 staleness
 stalled
 standard
+standing
 start
 start-above-bound
 start-blends-first-samples

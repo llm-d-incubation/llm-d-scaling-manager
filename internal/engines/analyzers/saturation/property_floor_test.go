@@ -23,35 +23,48 @@ func floorCases() []propCase {
 		{class: classMonotonicity, learner: "floor", name: "standing-local-queue", family: familyDirect, tuning: tunedDefault, check: checkFloorDrainBound(nil)},
 		{class: classEdges, learner: "floor", name: "backlog-grew", family: familyDirect, tuning: tunedDefault, seeds: cheapSeeds, check: checkBacklogEdge(tuningDefault)},
 		{class: classMonotonicity, learner: "floor", name: "lower-mu-never-prices-less", family: familyDirect, tuning: tunedDefault, check: checkFloorMuMonotone(nil)},
-		{class: classKnownTruth, learner: "floor", name: "standing-queue-keeps-occupancy", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil)},
+		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil)},
 	}
 }
 
 // checkFloorStandingQueue: a decode variant of 1 to 6 replicas, each holding
-// resident KV and a queue charged as residency, with lambda equal to what
-// they complete, read twice a BacklogGrowthLookback apart with the queue the
-// same or a request or so longer: a fleet at capacity whose queue stands. The
-// floor never prices it under occupancy's figure, queue charge included, at
-// any mu from 0.5x to 2x what a replica completes
-// (llm-d-incubation/llm-d-scaling-manager#54). stub, when set, edits the
-// analyzer before it prices (a mutant).
+// resident KV and a queue charged as residency, each completing 0.5x to 1x
+// mu, with lambda equal to what they complete, read twice a
+// BacklogGrowthLookback apart with the queue the same or a request or so
+// longer: a fleet at capacity whose queue stands. The floor prices it at the
+// drain price at the rate the queued replicas serve
+// (llm-d-incubation/llm-d-scaling-manager#54):
+//
+//   - never over it: at most the resident KV or (lambda + queue / 60 s) at
+//     the lower of mu and the median a queued replica completes, 2 % over
+//     for the slope of a queue a request longer (the drain horizon is at
+//     least 60 s, so the bound is loose). Occupancy charged every queued
+//     request as resident KV, 10x that on ttft-saturated's prefill;
+//   - never under keeping up: at least the resident KV or lambda at that
+//     rate, unless occupancy is less.
+//
+// stub, when set, edits the analyzer before it prices (a mutant).
 func checkFloorStandingQueue(stub func(*SaturationAnalyzer)) func(uint64) error {
 	return func(seed uint64) error {
 		r := propRand(seed)
 		n := 1 + r.IntN(6)
 		p := 100_000 + 300_000*r.Float64()
 		perReq := 500 + 2500*r.Float64()
-		mu := (1 + 9*r.Float64())
+		mu := 1 + 9*r.Float64()
 		rows := make([]domain.ReplicaMetrics, n)
-		queues, residents := make([]int, n), make([]float64, n)
-		lambda := 0.0
+		queues, residents, served := make([]int, n), make([]float64, n), make([]float64, n)
+		lambda, resident, backlog := 0.0, 0.0, 0.0
 		for i := range n {
-			c := mu * (0.5 + 1.5*r.Float64())
-			lambda += c
-			rows[i] = domain.ReplicaMetrics{PodName: fmt.Sprintf("r%d", i), VariantName: "v", RequestRate: c, RequestRateKnown: true}
+			served[i] = mu * (0.5 + 0.5*r.Float64())
+			lambda += served[i]
+			rows[i] = domain.ReplicaMetrics{PodName: fmt.Sprintf("r%d", i), VariantName: "v", RequestRate: served[i], RequestRateKnown: true}
 			queues[i] = 20 + r.IntN(180)
 			residents[i] = p * (0.5 + 0.5*r.Float64())
+			resident += residents[i]
+			backlog += float64(queues[i])
 		}
+		rate, _ := medianRate(served)
+		rate = min(rate, mu)
 		vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: n, PerReplicaCapacity: p}}
 		a := NewSaturationAnalyzer(capacity.NewStore())
 		if stub != nil {
@@ -76,9 +89,15 @@ func checkFloorStandingQueue(stub func(*SaturationAnalyzer)) func(uint64) error 
 		price(r.IntN(2))
 		clock = clock.Add(BacklogGrowthLookback)
 		got, measured := price(0)
-		return holds(got >= measured*(1-1e-9), kindWrongSide,
-			"%d replicas at capacity, lambda %.2f, mu %.2f, the queue standing: priced %.0f under occupancy's %.0f",
-			n, lambda, mu, got, measured)
+		upper := max(resident, (lambda+backlog/floorDrainT)/rate*p) * 1.02
+		lower := min(measured, max(resident, lambda/rate*p)) * (1 - 1e-9)
+		if got > upper {
+			return violation(kindOverPriced, "%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, %0.f queued, standing: priced %.0f over the drain price %.0f (occupancy %.0f)",
+				n, lambda, mu, rate, backlog, got, upper, measured)
+		}
+		return holds(got >= lower, kindWrongSide,
+			"%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, standing: priced %.0f under keeping up, %.0f",
+			n, lambda, mu, rate, got, lower)
 	}
 }
 
