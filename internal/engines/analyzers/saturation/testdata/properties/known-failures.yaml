@@ -23,8 +23,8 @@
   class: edges
   learner: mu
   expect: flipped
-  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3): the crossing changes the source once; a key's first reading in a noise trough sets the weighing at its start, the provisional set clears within minutes, and the crossing sets it again. The fixes that remove it seal the closed-loop probe (see the 10 % row)."
-  measured: "14/100 seeds; seed 3: cleared at cycle 14, set again at 76"
+  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3), but since issue #55 the reversals are also mid-run: the readers' samples are their latest reads, no longer their max, so the reader's ratio carries its full per-read noise, and the band's 5 min set window dips under the tolerance and sets the weighing again after it cleared (seed 3: reversed at cycles 40 and 72, where it reversed at 14 and 76 before). The first-reading trough of the 10 % row remains. The fixes that remove that seal the closed-loop probe (see the 10 % row)."
+  measured: "16/100 seeds; seed 3: the source reversed at cycles 40 and 72 (14/100 before issue #55, when each replica's re-reads folded by their max and read high)"
   owner: "ev-shindin/llm-scaling-manager#495"
 - id: edges/shape-hold/tolerance-excursion-stress
   class: edges
@@ -33,13 +33,6 @@
   finding: "Under assumed stress noise on the output length (4 %, phi 0.9; E1 measures 0.5-0.9 %, where the main case passes) the shape tracker, which moves its anchor and the key on one reading past 20 % and anchors on that reading, is moved a second time by one tail reading and back by the next."
   measured: "5/1000 seeds (64, 247, 407, 901, 926); seed 64, down to 775: 1000 -> 792 at cycle 91 -> 630 at 171 -> 765 at 185"
   owner: "ev-shindin/llm-scaling-manager#495"
-- id: liveness/floor/closed-loop-decode-step-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step from 2.5 to 12 req/s (need 17), with no restart, holds 22 replicas until 36.5 min and ends at 21, over the bound even at the backlog allowance (44m15s). On the even split, which keeps feeding the first replicas their start's queue, it drains at mu less their share (ev-shindin/llm-scaling-manager#520)."
-  measured: "1/1 seed (the probe draws nothing from it); even split, starting replicas shown: peak 22 (ceiling 26.5), 22 from 15.25 min, 21 from 36.5 min, final 21 at 44m15s against the 20.5 bound, never under need"
-  owner: "ev-shindin/llm-scaling-manager#520"
 - id: liveness/floor/closed-loop-decode-step-start-463s-jsq
   class: liveness
   learner: floor
@@ -47,26 +40,12 @@
   finding: "At a 463 s start the decode step (need 17), with no restart, overshoots to 31 replicas when the first order lands and is still at 23 at the backlog allowance (44m15s): the first replicas hold their start's queue full while the joiners carry the arrivals, and occupancy counts both. At the shortest-queue limit (a bound on the EPP, not the observed router) each replica that joins a queued fleet fills to the fleet's queue at once, and occupancy reads every replica full while the queue drains (ev-shindin/llm-scaling-manager#520)."
   measured: "1/1 seed; shortest-queue limit: peak 31 at 23.25 min (ceiling 26.5), 24 from 39.25 min, 23 from 42.25 min, final 23 at 44m15s against the 20.5 bound, never under need"
   owner: "ev-shindin/llm-scaling-manager#520"
-- id: liveness/floor/closed-loop-restart-before-step-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step after a controller restart, with no mu yet, ends at 21, over the bound even at the backlog allowance (44m15s). Since the queue is priced by drain time (queue-priced-as-drain) the peak is 22, inside the 26.5 ceiling, and the fleet is under need 15 s; what stays over is the even split feeding the first replicas their start's queue, which then drain at mu less their share (ev-shindin/llm-scaling-manager#520 cause C)."
-  measured: "1/1 seed; even split, starting replicas shown: peak 22 (ceiling 26.5), final 21 at 44m15s against the 20.5 bound, under need 15s (bound 11m13s); switch off: peak 29, final 23, under need 8m0s"
-  owner: "ev-shindin/llm-scaling-manager#520"
 - id: liveness/floor/closed-loop-restart-before-step-start-463s-jsq
   class: liveness
   learner: floor
   expect: over-priced
   finding: "At a 463 s start the decode step after a controller restart, with no mu yet, climbs to 28 replicas, over the 26.5 ceiling (44 before the queue was priced by drain time), and is at 23 at the backlog allowance (44m15s). At the shortest-queue limit (a bound on the EPP, not the observed router) each replica that joins a queued fleet fills to the fleet's queue at once, and occupancy reads every replica full while the queue drains, and with no mu the floor cannot order against it (ev-shindin/llm-scaling-manager#520)."
   measured: "1/1 seed; shortest-queue limit: peak 28, final 23 at 44m15s against the 20.5 bound, under need 15s (bound 11m13s); switch off: peak 44, final 23, under need 8m0s"
-  owner: "ev-shindin/llm-scaling-manager#520"
-- id: liveness/floor/closed-loop-restored-snapshot-start-463s
-  class: liveness
-  learner: floor
-  expect: over-priced
-  finding: "At a 463 s start the decode step through a restored snapshot holds 22 replicas until 36.5 min and ends at 21, over the bound even at the backlog allowance (44m15s), the same trace as with no restart (ev-shindin/llm-scaling-manager#520)."
-  measured: "1/1 seed; even split, starting replicas shown: peak 22 (ceiling 26.5), 21 from 36.5 min, final 21 at 44m15s against the 20.5 bound, never under need"
   owner: "ev-shindin/llm-scaling-manager#520"
 - id: liveness/floor/closed-loop-restored-snapshot-start-463s-jsq
   class: liveness

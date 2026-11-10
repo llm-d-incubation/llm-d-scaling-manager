@@ -1586,12 +1586,9 @@ llama-8b-prod:
 ```
 
 **The risk goes one way: it can add prefill replicas, never remove them.** The
-bound is low, so prefill can end up larger than its load needs. One exception
-for now: the readings of one replica within a minute are combined by their
-highest, which reads about 9-13 % high under the gauge's normal noise
-([#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531)), so
-until that is fixed the bound can read that much high and order that much
-less prefill than the load needs. In the worst
+bound is low, so prefill can end up larger than its load needs. One case can
+still read high: a burst of completions as a replica's queue drains, read
+while its batch is still full. In the worst
 case the extra is the ratio between what prefill can really do and the rate
 it was seen doing behind a full decode. A prefill that large rarely
 queues on its own, so the extra **lasts until you reset the variant's learned
@@ -1860,8 +1857,14 @@ collector's one-minute rate window and is not configurable.
 
 | Key | Default | Range | What it does |
 |-----|---------|-------|--------------|
-| `lagFraction` | `0.5` | (0, 1) | Below this share of the resident KV, the arrival rate is taken as lagging and the floor never lowers demand. |
+| `lagFraction` | `0.5` | (0, 1) | Below this share of what the role's replicas complete, the arrival rate is taken as lagging and the floor never lowers demand. |
 | `trustFraction` | `0.8` | (`lagFraction`, 1] | At or above this share, the floor's drain price is trusted in full. In between the two prices are blended. |
+
+The drain price is what the queued replicas need to clear the queue at the
+rate they actually serve, not at the learned rate. On a role that generates
+output, a queue that stops growing is priced at its arrivals and its
+backlog, as a growing queue is, less the growth itself. That price never goes above what occupancy
+charges for the queue.
 
 If the merged policy has `trustFraction` at or under `lagFraction`, both go
 back to `0.5` and `0.8`, and the controller logs a `WARNING: tuning figure not

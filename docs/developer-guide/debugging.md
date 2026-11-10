@@ -122,10 +122,11 @@ cluster's Prometheus through a port-forward.
    `9090`). Set that field on one ScaledObject to
    `ssh-gateway.debugging.svc.cluster.local:9090`.
 
-Log verbosity comes only from `--v=N` (`cmd/main.go`, default 2); `--v=4` shows
-debug lines. `config/base/manager/deployment.yaml` sets `LOG_LEVEL: info`, but no
-code reads it. To raise verbosity in a cluster, add `--v=4` to the manager
-container's `args`.
+Log verbosity comes from `--v=N` (`cmd/main.go`, default 2; `--v=4` shows debug
+lines) or, when no `--v` is given, from the `LOG_LEVEL` environment variable
+(`error`, `warn`, `info`, `debug`, `trace`; `internal/logging`).
+`--zap-log-level` beats both. To raise verbosity in a cluster, set
+`LOG_LEVEL=debug` on the manager container, or add `--v=4` to its `args`.
 
 ## Verification
 

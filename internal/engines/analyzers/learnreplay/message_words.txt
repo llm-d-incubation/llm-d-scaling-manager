@@ -750,6 +750,8 @@ compatible
 compatible-variant-live
 complete
 completed
+completedPerQueuedReplica
+completedRate
 completely
 completes
 completion
@@ -1110,7 +1112,9 @@ flight
 flipped
 float
 floor
+floor-trust-reads-completions
 floorExcessGPUs
+floorTrust
 floorTrust.lagFraction
 floorTrust.lagFraction/trustFraction
 floorTrust.trustFraction
@@ -1695,6 +1699,7 @@ mu-key-bucket-held
 mu-latch-reads-smoothed-ratio
 mu-latch-restores-safe-side
 mu-margin-clamp
+mu-reread-takes-latest
 mu-sample-weighs-the-fleet
 mu-sample-written
 mu-swap-freeze
@@ -2568,6 +2573,7 @@ stale_metrics
 staleness
 stalled
 standard
+standing
 start
 start-above-bound
 start-blends-first-samples

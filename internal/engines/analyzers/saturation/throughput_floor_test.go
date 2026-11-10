@@ -137,15 +137,15 @@ var _ = Describe("the saturated-throughput window", func() {
 		Expect(a.saturatedThroughput["k"].StaleAt(now, time.Hour)).To(BeFalse())
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
 
-		By("folding a higher reading inside the spacing into the sample: two replicas, one moment, the max")
+		By("folding a reading inside the spacing into the sample: the replica's latest (SwitchMuRereadTakesLatest)")
 		a.recordSaturatedThroughput("k", 3.6)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6), "the sample is the max of its window")
+		Expect(a.saturatedThroughput["k"].Last()).To(Equal(3.6), "a higher re-read replaces the sample")
 		a.recordSaturatedThroughput("k", 3.5)
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6), "and a lower one leaves it")
+		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
+		Expect(a.saturatedThroughput["k"].Last()).To(Equal(3.5), "and so does a lower one: the max picked the noise (issue #55)")
 
 		By("not counting the last reading again at the boundary: the same pair straddling it, or a repeat")
-		// The last READING was 3.5, not the folded 3.6 the sample now holds.
 		now = t0.Add(ThroughputSampleSpacing)
 		a.recordSaturatedThroughput("k", 3.5)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(1))
@@ -153,7 +153,7 @@ var _ = Describe("the saturated-throughput window", func() {
 		By("counting a reading that differs and lands a rate window after the last counted one")
 		a.recordSaturatedThroughput("k", 3.4333333333333336)
 		Expect(a.saturatedThroughput["k"].Len()).To(Equal(2))
-		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.6))
+		Expect(a.saturatedThroughput["k"].Max()).To(Equal(3.5))
 
 		By("and a value seen before, a window later, is a reading of its own: a different window")
 		now = t0.Add(2 * ThroughputSampleSpacing)
@@ -762,9 +762,13 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 	It("keeps the resident KV when the backlog term is smaller than it", func() {
 		saturate()
 		// Three replicas nearly full with a small queue: the resident KV is
-		// the larger figure and stays; the floor never lowers demand.
+		// the larger figure and stays; the floor never lowers demand. They
+		// complete the 16 req/s that arrive (SwitchFloorTrustReadsCompletions
+		// reads the trust from that): at 2 req/s each they would be serving
+		// under the 6 that arrive per replica, priced at that rate the floor's
+		// drain price is above occupancy, and the queue's charge would stand.
 		rm := []domain.ReplicaMetrics{
-			decode("a", 1_000_000, 2, 2.0), decode("b", 1_000_000, 2, 2.0), decode("c", 1_000_000, 2, 2.0),
+			decode("a", 1_000_000, 2, 16.0/3), decode("b", 1_000_000, 2, 16.0/3), decode("c", 1_000_000, 2, 16.0/3),
 			prefill("p", 0),
 		}
 		// An arrival rate that accounts for what the replicas hold: 16 req/s
@@ -777,9 +781,10 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			"the six queued requests come out of the residency charge and the resident 3M stays")
 
 		By("keeping the queue's charge where the arrival rate lags what is resident")
-		// At 6 req/s the arrival half is 1.11 replicas against 3M resident:
-		// lambda is reading a minute the replicas have moved past, so it
-		// cannot price the queue as drain, and the demand stays as measured.
+		// At 6 req/s the arrival half is 1.11 replicas against 3M resident,
+		// and 0.375 of the 16 req/s the replicas complete: lambda is reading a
+		// minute the replicas have moved past, so it cannot price the queue as
+		// drain, and the demand stays as measured.
 		in.ArrivalRate = runLambda
 		lagging, err := analyzer.Analyze(ctx, in)
 		Expect(err).NotTo(HaveOccurred())

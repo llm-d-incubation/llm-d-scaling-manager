@@ -382,6 +382,10 @@ type SaturationAnalyzer struct {
 	// SwitchMuWeighingBand. On from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	muWeighingBand bool
+	// muRereadLatest is SwitchMuRereadTakesLatest
+	// (recordSaturatedThroughputFrom): on from the constructor; a replay
+	// turns it off (SetSwitchesForReplay).
+	muRereadLatest bool
 	// batchCapDeclared and batchCapLearned are the batch cap's replay
 	// switches (batch_cap.go): SwitchBatchCapDeclared and
 	// SwitchBatchCapLearned. On from the constructor; a replay turns them
@@ -521,6 +525,10 @@ type SaturationAnalyzer struct {
 	// queue_drain.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	queuePricedAsDrain bool
+	// floorTrustCompleted is SwitchFloorTrustReadsCompletions
+	// (llm-d-incubation/llm-d-scaling-manager#54, throughput_floor.go): on
+	// from the constructor; a replay turns it off (SetSwitchesForReplay).
+	floorTrustCompleted bool
 	// drainHaircut is FirstReadHaircut; a test sets another to measure what
 	// the haircut buys.
 	drainHaircut float64
@@ -722,6 +730,7 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		muYieldCapped:          true,
 		muUnreadAtTarget:       true,
 		muWeighingBand:         true,
+		muRereadLatest:         true,
 		batchCapDeclared:       true,
 		batchCapLearned:        true,
 		batchCapITLAdmission:   true,
@@ -764,6 +773,7 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		itlClearsOnRevision:    true,
 		floorRaisesVariants:    true,
 		queuePricedAsDrain:     true,
+		floorTrustCompleted:    true,
 		drainHaircut:           FirstReadHaircut,
 		itlOneSidedLast:        make(map[string]itlOneSidedRecord),
 		prefillObserver:        prefill.NewObserver(),

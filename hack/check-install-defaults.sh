@@ -74,7 +74,7 @@ done
 unset ENVIRONMENT_EXPLICIT PROMETHEUS_URL_EXPLICIT DEPLOY_PROMETHEUS \
       LLMSM_IMAGE_REPO LLMSM_IMAGE_TAG LLMSM_IMAGE_DIGEST LLMSM_DEFAULT_IMAGE_REF LLMSM_WATCH_NS
 
-EXPECT_CASES=155
+EXPECT_CASES=158
 RAN=0
 FAILED=0
 
@@ -214,6 +214,16 @@ check 'summary: one naming another scaler does not count' 1 \
 # Forbidden is not "none".
 check 'summary: an unreadable list is not called none' '0|1' \
     "$(out="$(summary FORBIDDEN ghcr.io/o/scaling-manager:main)"; printf '%s|%s' "$(printf '%s\n' "$out" | grep -c 'NEXT: nothing scales yet')" "$(printf '%s\n' "$out" | grep -c 'could not be listed')")"
+
+# The scale-to-zero line reports what the install settled and applied. A run
+# that applied no controller (INSTALL_PHASE=prereqs) read no live value, so it
+# printed OFF over a controller running with it ON.
+check 'summary: scale-to-zero not settled by this run prints no line' 0 \
+    "$(ENABLE_SCALE_TO_ZERO=true LLMSM_SCALE_TO_ZERO_RESOLVED='' summary "$NO_SO" ghcr.io/o/scaling-manager:main | grep -c 'Scale-to-zero is')"
+check 'summary: scale-to-zero settled on reports ON' 1 \
+    "$(ENABLE_SCALE_TO_ZERO=true LLMSM_SCALE_TO_ZERO_RESOLVED=1 summary "$NO_SO" ghcr.io/o/scaling-manager:main | grep -c 'Scale-to-zero is ON')"
+check 'summary: scale-to-zero settled off reports OFF' 1 \
+    "$(ENABLE_SCALE_TO_ZERO=false LLMSM_SCALE_TO_ZERO_RESOLVED=1 summary "$NO_SO" ghcr.io/o/scaling-manager:main | grep -c 'Scale-to-zero is OFF')"
 
 # The Makefile itself, evaluated by make: the recipe and the repository list run
 # exactly these expressions.

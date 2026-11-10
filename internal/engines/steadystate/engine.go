@@ -875,6 +875,10 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		// a named model will never park. With no models left, every such assertion
 		// is about a workload that is gone.
 		e.evictAllBlockedModels()
+		// No active model resolves an accelerator: say so, or the status keeps
+		// the last busy cycle's list after a scale-to-zero, and a controller
+		// started with every model at zero never sets the key at all.
+		e.Status.SetResolvedAccelerators(nil)
 
 		// The PHYSICAL picture is not published from here — internal/gpuusage
 		// discovers it independently, precisely so a parked fleet still has one.
@@ -2308,6 +2312,12 @@ func (e *Engine) applySaturationDecisions(
 		return int(d.DesiredReplicas), mark.at, ok && sameFleet
 	}
 
+	// The accelerators this cycle resolved, published to the controller status
+	// so a tool can read them without the log, where at the default level
+	// only a utilization-share decision names one.
+	resolved := make([]string, 0, len(vaMap))
+	defer func() { e.Status.SetResolvedAccelerators(resolved) }()
+
 	// Iterate over ALL active VAs to ensure we update status and trigger reconciliation for everyone
 	for vaName, va := range vaMap {
 		decision, hasDecision := decisionMap[vaName]
@@ -2462,6 +2472,8 @@ func (e *Engine) applySaturationDecisions(
 		if !constants.IsAcceleratorResolved(acceleratorName) {
 			e.emitAcceleratorNotResolvedEvent(&updateVa)
 			e.policies.ReportUnresolvedAccelerator(ctx, va.Namespace, vaName, e.Config.EffectiveLimiterSummary())
+		} else {
+			resolved = append(resolved, acceleratorName)
 		}
 
 		// Stage the just-computed decision on the in-memory VA so that

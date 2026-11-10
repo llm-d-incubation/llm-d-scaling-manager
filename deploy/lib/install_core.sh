@@ -3,7 +3,7 @@
 # Core install orchestration for deploy/install.sh.
 # Requires vars: ENVIRONMENT, SCRIPT_DIR, SKIP_CHECKS, deployment toggles.
 # Requires funcs sourced by install.sh: parse_args(), check_prerequisites(),
-# set_scaling_manager_logging_level(), create_namespaces(), deploy_*(), verify_deployment(), print_summary().
+# create_namespaces(), deploy_*(), verify_deployment(), print_summary().
 # llm-d install: see llm-d project guides or deploy/install-epp.sh for kind EPP setup.
 #
 
@@ -609,8 +609,6 @@ main() {
     if [ "$SKIP_CHECKS" != "true" ]; then
         check_keda_prerequisite
     fi
-
-    set_scaling_manager_logging_level
 
     if [ "${LLMSM_ENV_SOURCED:-false}" = "true" ]; then
         # Already sourced and already run, above. Calling

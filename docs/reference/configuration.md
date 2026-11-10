@@ -37,7 +37,7 @@ second column, that writes them for you.
 | `LLMSM_SCOPE` (Make: `SCOPE`) | Installer | `namespace` | One controller per namespace, or one for the whole cluster. Picks the RBAC and the managed namespaces ([cluster-wide install](../guides/install-cluster-wide/)) | reinstall |
 | `LLMSM_NS` | Installer | `scaling-manager-system` | The controller's namespace, where its ConfigMaps live | reinstall |
 | `NAMESPACE` | Installer | none; required at namespace scope | Where your model servers run. Read by the installer only | install |
-| `--watch-namespace` (env `WATCH_NAMESPACE`); installer `LLMSM_WATCH_NS` | Flag / Installer | built in: empty, every namespace. A namespace-scoped install sets it to the controller's namespace, or to `LLMSM_WATCH_NS` (a list, or `auto`) | The namespaces whose workloads the controller reads. A workload outside them is called about by KEDA but never scaled | restart |
+| `--watch-namespace` (env `WATCH_NAMESPACE`); installer `LLMSM_WATCH_NS` | Flag / Installer | built in: empty, every namespace. A namespace-scoped install sets it to the controller's namespace, or to `LLMSM_WATCH_NS` (a list, or `auto`) | The namespaces whose workloads the controller reads. A workload outside them is called about by KEDA but never scaled. To change it, re-install with `LLMSM_WATCH_NS`. Editing the Deployment instead: a namespace-scoped install passes `--watch-namespace=$(LLMSM_WATCH_NAMESPACE)`, so edit the `LLMSM_WATCH_NAMESPACE` env var; `WATCH_NAMESPACE` loses to the flag. A cluster-scoped install passes no flag, and its `LLMSM_WATCH_NAMESPACE` is read by no controller code (only installer helpers read it) | restart |
 | `KEDA_NAMESPACE` | Installer | `keda-system` when the installer installs KEDA; otherwise detected | The only namespace the scaler's NetworkPolicy admits | reinstall |
 | `LLMSM_SCALER_TLS`; flags `--external-scaler-cert-path`, `--external-scaler-client-ca` | Installer | unset: mutual TLS when KEDA's side is in place, else plaintext with a warning | Whether KEDA talks to the scaler over mutual TLS ([how](install-options.md#external-scaler-mutual-tls)) | reinstall |
 
@@ -147,15 +147,12 @@ for every model, on a named tier for a class of models (a trigger picks it with
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |
 | **`scaleToZero.enabled`** | Policy, any entry | inherits `LLMSM_SCALE_TO_ZERO` | Allow this model to be parked at zero. It also needs `minReplicaCount: 0` ([scale to zero](scaling-policy.md#scaletozero)) | live |
-| `LLMSM_SCALE_TO_ZERO`; installer `ENABLE_SCALE_TO_ZERO` | Manager ConfigMap | `false` in the code and the shipped ConfigMap; see the note below | The fleet default for `scaleToZero.enabled` | restart |
+| `LLMSM_SCALE_TO_ZERO`; installer `ENABLE_SCALE_TO_ZERO` | Manager ConfigMap | `false` in the code, the shipped ConfigMap and the installer. A re-install that does not name `ENABLE_SCALE_TO_ZERO` keeps the live value | The fleet default for `scaleToZero.enabled` | restart |
 | `scaleToZero.retentionPeriod` | Policy, any entry | `10m` | Idle time before a model goes to zero | live |
 | `scaleFromZero.requirePrefill` | Policy, any entry | `false` | Under P/D, wake prefill and decode together, never decode alone ([scale from zero](scaling-policy.md#scalefromzero)) | live |
 
-`deploy/install.sh` defaults `ENABLE_SCALE_TO_ZERO` to `true`, so an install
-with `make deploy-scaling-manager` writes `LLMSM_SCALE_TO_ZERO: "true"`.
-`make deploy-e2e-infra` passes `false`. A later run with `false` leaves an
-existing `true` in place. Either way no model reaches zero until its
-ScaledObject's `minReplicaCount` is `0`.
+Whatever the default, no model reaches zero until its ScaledObject's `minReplicaCount`
+is `0`.
 
 ### Seeds the learners replace
 
@@ -183,9 +180,6 @@ first measurement, so a figure of the right order is enough.
 
 These names appear in manifests or older docs but change nothing:
 
-- `LOG_LEVEL` on the controller Deployment, and the installer's
-  `LLMSM_LOG_LEVEL`: nothing reads them. Verbosity is the `--v` flag (installer
-  `LLMSM_VERBOSITY`; built in `2`, `4` is debug).
 - `defaultOutputTokens` on a scaling-policy entry: ignored on purpose. Set it on
   the trigger.
 - `analyzerName` on a policy entry: it has one legal value, `saturation`.

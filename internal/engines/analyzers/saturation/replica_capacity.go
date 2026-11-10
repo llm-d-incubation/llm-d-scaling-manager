@@ -376,7 +376,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 				}
 				// The reading is admitted beside k2's P1-obs write, so it
 				// carries k2's stamp (noteMuWrite).
-				w := a.recordSaturatedThroughputFrom(throughputKey, rm.PodName, write)
+				w := a.recordSaturatedReading(throughputKey, rm.PodName, write, evidenceOf(rm))
 				unread, unreadAt := a.weighUnreadReplicas(throughputKey, served, w, tune)
 				a.noteMuWrite(namespace, modelID, rm.VariantName, rm.PodName, write, w, unread, unreadAt)
 				if unread > 0 {

@@ -842,6 +842,7 @@ not cover a key.
 | Headroom counted twice (+17.6 %); idle room counted twice; the rules together always pick the higher mu | known truth |
 | KV and throughput units mixed | scale |
 | Max across replicas (+13.6 % at 16) | N-dependence |
+| Max over one replica's re-reads within a minute (issue #55) | N-dependence, each pod read four times a minute at AR(1) noise |
 | Prefill double scrape | heterogeneity at the analyzer (one value at 2x); the doubling itself is a collector test |
 | Demand falls when λ lags a step; local queue priced as drainable | monotonicity along a trajectory |
 | Weighted median flapping between modes | edges, on a **bimodal** fleet |
@@ -861,9 +862,9 @@ not cover a key.
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
 finding above is in exactly one state:
 
-- **Caught:** 35 findings. For each, a mutant puts the defect back, and its
-  class fails on that mutant. For 27 a mutant runs the production learner
-  (a policy key, rows, or a stub); 8 are caught only by a toy, and the code
+- **Caught:** 39 findings. For each, a mutant puts the defect back, and its
+  class fails on that mutant. For 30 a mutant runs the production learner
+  (a policy key, rows, or a stub); 9 are caught only by a toy, and the code
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
   restart case fails on it, and the per-path counter "joined refusals with a
@@ -894,7 +895,10 @@ finding above is in exactly one state:
   assumes one output length" is caught since ev-shindin/llm-scaling-manager#276: a bimodal workload with
   lengths on vLLM's bucket bounds, read through the histogram's bound on
   E[O^2], and with the spread's replay switch off known-truth/k2/output-spread
-  and known-truth/mu/output-spread each fail (19 of 20 seeds). "k == 0 unsettles"
+  and known-truth/mu/output-spread each fail (19 of 20 seeds). "Max over one
+  replica's re-reads within a minute" is caught since issue #55: a stub
+  mutant turns `mu-reread-takes-latest` off, and n-dependence/mu/ar-reread
+  and n-dependence/prefill-bound/ar-reread each fail (20 of 20 seeds). "k == 0 unsettles"
   and the settle holes "fall", "rate escape", "idle return" and "lend" are
   caught since ev-shindin/llm-scaling-manager#495, each on 20 of 20 seeds. A stub mutant turns
   `Admission.IdleOnEvidence` off, and a scrape that read nothing counts as idle.
@@ -1190,7 +1194,7 @@ restores, exact repeats and unknown ages. Two rules apply to all:
 | borrowed k2 | too high | the upward relaxation over 6 h of serving time |
 | measured mu | too high | the stale yield to a higher derived figure after 30 min (5 min toward a lower one). The restart that drops the latch (see [the mu choice](#the-mu-choice); restored to the safe side since PR 3). An unknown age (above; safe side since PR 3). An exact repeat: since PR 3 it refreshes freshness only under the derived figure, where losing it would let a repeating low rate yield to the higher figure, and not over it, where staleness yields to the lower one. Since ev-shindin/llm-scaling-manager#526 the stale latch sets and releases on the ratio to derived smoothed over 3 min, so the stale yield to a lower figure waits up to 5.4 min (a step to 2.2x) while it prices the higher, measured one; a cycle's own ratio at 2.8x or more sets it at once, and the release, toward the risky side, is never faster than the smoothing (`mu-latch-reads-smoothed-ratio`). Backed by new evidence, so allowed: the **immediate** yield when a Ready replica serves more than 2x it. The sibling yield was on this list; since ev-shindin/llm-scaling-manager#495 it is capped at the measurement (`mu-yield-capped-at-measurement`), so it no longer moves mu up: what the siblings serve reaches mu through the sample instead. A rule that let a minority's figure with no line give way to the fleet's served bound after `lowHoldFor` (`mu-minority-figure-expires`) shipped with ev-shindin/llm-scaling-manager#495 and was removed on 2026-11-10 by the user's decision: a 72-cell sweep with it on and off moved no cell. With no line, a measured figure stands, whoever wrote it. And an unread replica under the KV line counts at what it serves over the scale-up target (`mu-unread-replica-at-target`): at most 1 / target over what it served unqueued, so the floor orders the fleet in which it serves that again, and no more ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)) The weighing's band (`mu-weighing-band`) holds a weighing key on the weighed sample until its readers average 0.90 of the unread replicas over 10 min, not 0.80 on one reading: a move toward the higher figure that the readings no longer back on their own. The reason is the noise (one crossing switched the source up to 11 times) and that the weighed figure still counts every replica at what it served |
 | ITL line and derived mu | ITL(kPrice) too low, that is, derived mu too high (with B pinned low, A comes out too high and the prediction is still low) | the 6 ms default B or a stashed B. With B pinned below the true intercept, the pinned A absorbs the error and the prediction at kPrice is low by (B_true − B_pin)(1 − kPrice / k̄): **risky whenever the fleet runs above its pricing point**, the under-provisioned fleet that most needs a correct line |
-| prefill bound | too high | before ev-shindin/llm-scaling-manager#397, its window max only rose, survived the episode reset through `RaiseLast`, and never aged while read: a running max over the bound's life, about 1.5σ above the mean after 10 readings and 3.2σ after a day at one a minute (measured at one pod: +15 % after ten minutes at 10 % noise, +50 % after a day at 15 %). Since ev-shindin/llm-scaling-manager#397 (`prefill-bound-held-confidence`) the window keeps its samples as read and the bound is the larger of their mean and a **held** figure, the max of lower confidence bounds on a window's mean (`mean - t * sd / sqrt(n)`, Student's t), the k-th taken at `1 - alpha/(k(k+1))` with alpha 0.05, so over the bound's life all of them stand under the true rate with 95 % confidence, provided each minute's sample is an unbiased, roughly independent reading (not yet true in production: [#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531), below). The held figure still only rises and carries past a new window after `EpisodeGap`; the reason is the episode test's (a reading behind a full decode falls once the bound grows prefill, and pricing on it grew prefill every episode). It is the move toward the SLO side this row names, bounded: measured at one pod and 19 % stationary noise, one read a minute, the bound is within 0.2 % of the truth after ten minutes and an hour and 1.2 % high after a day. The held figure falls only on eviction, an engine-argument change, a per-variant forget or a restart, as the old max did; a window restored from a build that raised its samples is not tested until its samples are all new. Not in the snapshot: after a restart the bound is the window's mean, the safe side. Left: the within-minute fold takes a max over one pod's re-reads, as mu's does, which the property rig (one read a pod a minute) does not exercise; read four times a minute at AR(1) noise (phi 0.3 per 15 s cycle), the bound reads 8.8 % high at 10 % noise and 13 % at 15 %, at one pod and at four, and the held figure stands above the true rate on 47-50 of 50 seeds (ev-shindin/llm-scaling-manager#531) |
+| prefill bound | too high | before ev-shindin/llm-scaling-manager#397, its window max only rose, survived the episode reset through `RaiseLast`, and never aged while read: a running max over the bound's life, about 1.5σ above the mean after 10 readings and 3.2σ after a day at one a minute (measured at one pod: +15 % after ten minutes at 10 % noise, +50 % after a day at 15 %). Since ev-shindin/llm-scaling-manager#397 (`prefill-bound-held-confidence`) the window keeps its samples as read and the bound is the larger of their mean and a **held** figure, the max of lower confidence bounds on a window's mean (`mean - t * sd / sqrt(n)`, Student's t), the k-th taken at `1 - alpha/(k(k+1))` with alpha 0.05, so over the bound's life all of them stand under the true rate with 95 % confidence, provided each minute's sample is an unbiased, roughly independent reading (not yet true in production: [#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531), below). The held figure still only rises and carries past a new window after `EpisodeGap`; the reason is the episode test's (a reading behind a full decode falls once the bound grows prefill, and pricing on it grew prefill every episode). It is the move toward the SLO side this row names, bounded: measured at one pod and 19 % stationary noise, one read a minute, the bound is within 0.2 % of the truth after ten minutes and an hour and 1.2 % high after a day. The held figure falls only on eviction, an engine-argument change, a per-variant forget or a restart, as the old max did; a window restored from a build that raised its samples is not tested until its samples are all new. Not in the snapshot: after a restart the bound is the window's mean, the safe side. The within-minute fold took a max over one pod's re-reads, as mu's did: simulated at four reads a minute and AR(1) noise (phi 0.3 per 15 s cycle), the bound read 8.9 % high at 10 % noise and 13.4 % at 15 %, at one pod and at four, and the held figure stood above the true rate on 47-50 of 50 seeds (ev-shindin/llm-scaling-manager#531). Since issue #55 a sample keeps each pod's latest reading taken while the pod is still saturated (`mu-reread-takes-latest`; a re-read on the way out of saturation does not count), and the bound is within 0.5 % of the truth there; mu, which reads the same fold, went from 8-13 % high to within 2.5 % (its window's lower median, under the truth). On the recordings a steady pod's latest re-read is within 1 % of its highest (median), so the simulated bias is an upper end there. A drain burst read with a full batch is still taken |
 | start time | **both** | too low under-orders a fleet that is behind (λ > mu · ready). Too high, in `internal/signals/floor/floor.go`: `DrainHorizon` under-prices the backlog whenever S exceeds 60 s, `startingCredit` credits a stuck pod for up to 2S, and a fleet with spare projects more drain and orders less. Share pacing errs the other way: too low moves GPUs for bursts that end first. PR 5 bounds both sides |
 | share need history (#14) | too low for the role, too high for its neighbours | `PeakNeed` is a max of adjacent-pair minima, low by design; trimming to the swing window ages a peak out with no new evidence |
 | share release time (#15) | too low | p90 over ≥ 3 releases is the max at n = 3 |
@@ -3925,7 +3929,9 @@ same either way (55.99 requests at 21:22:34), and in replicas the cap is
 min(q / (mu x T), 1) per replica, which never falls as mu does.
 `TestMuSlowPod_TheFloorTrustIsHowALowerMuLowersDemand` pins the cycle. Whether
 a lower mu should lower the demand charged for a measured queue through the
-trust blend is a question for the floor, not this change; it is filed apart.
+trust blend is a question for the floor, not this change; it is filed apart
+(llm-d-incubation/llm-d-scaling-manager#54, "The floor's trust read against
+completions, as built").
 
 - **The sample weighs the fleet (`mu-sample-weighs-the-fleet`).** No served
   rate refuses a reading. While the readers sit under `siblingMuTolerance` of
@@ -4565,6 +4571,90 @@ the whole queue of 1366, while the drain price caps each replica's queue at
 what it drains in T (937 of it). A request waiting in one engine's queue is
 served by that engine only (`localQueueBacklog`). `e1`, `e1-tuned` and
 `throughput-sweep-restart` price no cycle under need.
+
+Not run on a cluster.
+
+#### The floor's trust read against completions, as built (llm-d-incubation/llm-d-scaling-manager#54)
+
+Behind one replay switch, `saturation.SwitchFloorTrustReadsCompletions`, on
+from the constructor. The trust blend (`flooredDemand`) read lambda x P / mu
+against the resident KV. A lower mu raised that ratio, so more of the queues'
+residency charge was swapped for the floor's drain price, and the same
+measured queue could price lower at a lower mu ("One slow pod, as built").
+
+**No trust that moves with mu can fix it.** As mu grows the floor's tokens
+and the ratio go to zero, so the old trust prices occupancy's figure there,
+queue charge and all. A demand that never rises with mu would then never fall
+under occupancy at any mu, and the swap would be gone. So the trust reads no
+mu now. Three changes:
+
+- **Trust:** `floorTrust` of lambda over what the role completes: per replica
+  the larger of `RequestRate` and `RunningRequests / AvgServiceTime`, summed.
+  A load step reads as before: 0.8 req/s against a full replica completing 6
+  is 0.13. With no completion on record the trust is 0. `floorTrust.lagFraction`
+  and `trustFraction` keep their defaults and now mean a share of the
+  completions.
+- **Drain price at the served rate:** the floor again, with each replica's mu
+  capped at what the role's queued replicas complete (the median, from at
+  least half of them). The old ratio held back trust from a full fleet
+  serving under its learned mu; this prices that fleet at the rate it serves
+  (pd-restart at 12:46:35: 2.89 req/s against a learned 6.22).
+- **A standing queue (`drainStanding`):** where the swap runs on a role the
+  drain price reads, the role is priced at least at the growing region's
+  formula with dB/dt at 0 and the arrivals at least what the role completes,
+  capped at occupancy. A queue that stops growing then costs its arrivals and
+  backlog, not the growth it no longer has: 100, 120, 140, 160, 160 req
+  priced 1.28, 1.56, 1.61, 1.67, 1.44 replicas at mu 6. Main priced it the
+  same once standing. A build that kept occupancy's charge for any standing
+  queue priced it at 1.92, and ttft-saturated's prefill at 10x. Occupancy
+  charges every queued prompt as resident KV, and that is the wrong unit for a
+  queue: priced as resident KV, the queue is charged as many replicas as it
+  holds prompts' worth of KV.
+
+The trust and the prices it blends do not move with mu. The gates around them
+(mayOrder, the hold, the drain regions) read state mu may move. So the claim
+that demand is non-increasing in mu for a fixed measured state is checked by
+sampling, not proved. Two property cases hold it, and stub mutants hold both:
+
+- `monotonicity/floor/lower-mu-never-prices-less` prices one measured state at
+  eight mu from 0.25x to 3x. On main it fails on 19 of 20 seeds.
+- `known-truth/floor/standing-queue-priced-at-drain` has lambda equal to
+  completions and the queue standing a minute. It requires the price to be
+  the drain price at the served rate: (lambda + each queue capped at what its
+  replica drains in 60 s, over 60 s) at that rate, capped at occupancy, and at
+  most 2 % over the uncapped figure. On the build that kept occupancy's charge
+  it fails on 8 of 20 seeds, over the drain price. Two mutants hold it:
+  - a toy-output mutant that cuts the price to what only keeps up with lambda;
+  - dropping the backlog from the served-rate floor and the standing price,
+    which fails on 17 of 20.
+
+Measured on the goldens against main, the switch moves only role and model
+demand:
+
+| golden | role | up | down | range |
+| --- | --- | --- | --- | --- |
+| `pd-restart` | decode | 39 | 3 | x0.775 to x1.607 |
+| `ttft-saturated` | prefill | 13 | 19 | x0.213 to x1.320 |
+| `ttft-staircase-b-off` | decode | 9 | 7 | x0.442 to x2.064 |
+| `ttft-staircase-c-on` | decode | 15 | 3 | x0.609 to x1.305 |
+| `e1`, `e1-tuned` | decode | 4 | 98 | x0.889 to x1.047 |
+| start fixtures | model | 3 | 59 | x0.006 to x1.973 |
+
+Required capacity falls on 85 cycles. On 55 the queue fell over the minute
+before, and on 2 there was none. On 28 it stood or grew inside the noise
+band:
+
+- ttft-saturated's prefill, 12 cycles: a queue of 58 at 3.1 req/s in and out,
+  priced at the served-rate drain price, about 1.2 replicas, where main kept part of
+  occupancy's charge (1.5 to 2.1).
+- The simulator fixtures, 15 cycles: P is 6 tokens, so the residency charge
+  priced a queue of 55 at a thousand replicas.
+- pd-restart 12:46:35: 1008 to 1093 queued. It is priced at 2.99M tokens (8.1
+  replicas) at the served rate, against occupancy's 3.36M (9.1). Lambda read 7.07 against 12.83
+  completed, so the trust is 0.17.
+
+Each is priced at the drain price at the rate served, which is the bound the
+change sets.
 
 Not run on a cluster.
 
