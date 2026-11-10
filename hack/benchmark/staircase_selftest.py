@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 190
+EXPECTED = 197
 checks = fails = 0
 
 
@@ -115,9 +115,29 @@ ok("top still meets", lib.measured(RUNG, "client_ttft_p90", 1.0) == ("at least",
 ok("an infinite step brackets the crossing: it is on the cliff",
    lib.measured([step(10, 0.1), step(20, math.inf)], "client_ttft_p90", 0.2, bounds=False) == ("cliff", (10, 20)))
 SHORT = [step(10, 0.1, 1), step(20, 0.2, 2), step(30, 0.4, 3, achieved=20.0)]
-ok("a crossing on a short step is a bound", lib.measured(SHORT, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A rate off its band can move a reading either way: it closes no bracket, so it is open.
+ok("a crossing on a short step is a bound, open above", lib.measured(SHORT, "client_ttft_p90", 0.3) == ("bound", (20, math.inf)),
+   lib.measured(SHORT, "client_ttft_p90", 0.3))
 NOISY = [step(10, 0.1, 1), step(20, 0.2, 2, noise_flag=True), step(30, 0.4, 3)]
-ok("a crossing on a noisy step is a bound", lib.measured(NOISY, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A step under the noise floor reads low: it cannot be the low end, so the bracket widens.
+ok("a crossing past a noisy step is a bound from the last step that can hold it",
+   lib.measured(NOISY, "client_ttft_p90", 0.3) == ("bound", (10, 30)), lib.measured(NOISY, "client_ttft_p90", 0.3))
+# The reviewer's probe: 30 valid 0.10 s, 34 short of its schedule 0.15 s, 36 valid 0.30 s,
+# target 0.2 s. Bracketed from 34 it read 0.96 to 1.01 of 34.5 and passed; 34 reads low,
+# so the bracket is 30 to 36, 0.96 to 1.15, across the mark's edge.
+PROBE = [step(30, 0.10, 1), step(34, 0.15, 2, scheduled=10000, recorded=9000), step(36, 0.30, 3)]
+GOT = lib.measured(PROBE, "client_ttft_p90", 0.2)
+ok("a step short of its schedule is no low end", GOT == ("bound", (30, 36)), GOT)
+ok("and the probe's bound is across the mark, not in it", lib.mark(34.5, *GOT)[1] == "no mark, a bound", lib.mark(34.5, *GOT))
+JUMPED = [step(30, 0.10, 1), step(34, 0.15, 2, noise_flag=True), step(36, 5.0, 3)]
+GOT = lib.measured(JUMPED, "client_ttft_p90", 0.2)
+ok("a bound whose ends are past the cliff factor apart is a jump", GOT == ("jump", (30, 36)), GOT)
+ok("and a jump is never in the mark, even with its bracket inside it", lib.mark(32, *GOT)[1] == "no mark, a bound across a jump",
+   lib.mark(32, *GOT))
+ok("a bracket at exactly the mark's limits, 0.75 and 1.10, is in it", lib.mark(33, "bound", (30, 44))[1] == "in the mark, a bound",
+   lib.mark(33, "bound", (30, 44)))
+ok("an open bracket is never in the mark", lib.mark(35, "bound", (34, math.inf))[1] == "no mark, a bound"
+   and lib.mark(20, "bound", (34, math.inf))[1] == "FAIL, a bound")
 ok("NaN reads no data", lib.measured([step(10, math.nan)], "client_ttft_p90", 1)[0] == "no data")
 ok("no row reads no data", lib.measured([], "client_ttft_p90", 1)[0] == "no data")
 
@@ -132,7 +152,8 @@ ok("a cut step is void", lib.invalid(CUT) and "max-inflight" in lib.validity(CUT
 ok("a cap on its step is void even uncut", lib.invalid(dict(CUT, truncated=False)))
 ok("the p90 rule at a step's end voids nothing", not lib.invalid(dict(CUT, truncated=False, stopped_by=lib.RULE_P90)))
 CUTRUNG = [step(10, 0.1, 1), step(20, 0.2, 2), dict(step(30, 0.4, 3), truncated=True, stopped_by=lib.RULE_INFLIGHT)]
-ok("a crossing on a cut step is a bound", lib.measured(CUTRUNG, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A cut can only raise a reading: it may be the low end, never the high one.
+ok("a crossing on a cut step is a bound, open above", lib.measured(CUTRUNG, "client_ttft_p90", 0.3) == ("bound", (20, math.inf)))
 
 # --- the mark ---------------------------------------------------------------------------
 ok("in the mark", lib.mark(10, "=", 10)[1] == "in the mark")
@@ -254,7 +275,7 @@ ok("a bracket past it fails", lib.mark(70.0, *GOT)[1] == "FAIL, on the cliff")
 ok("the cliff needs a valid step below the crossing: a void one makes a bound", lib.measured(
     [step(47.490, 0.4942, 2, noise_flag=True), step(51.401, 0.5916, 3), step(53.636, 31.5, 4)], "client_ttft_p90", 0.9634)[0] == "cliff"
    and lib.measured([step(47.490, 0.4942, 2), step(51.401, 0.5916, 3, noise_flag=True), step(53.636, 31.5, 4)],
-                    "client_ttft_p90", 0.9634)[0] == "bound")
+                    "client_ttft_p90", 0.9634)[0] == "jump")
 ok("a top step void by send lag brackets no cliff: the client times from the schedule", lib.measured(
     [step(51.401, 0.5916, 3), step(53.636, 31.5, 4, lag_p99=2.0)], "client_ttft_p90", 0.9634)[0] == "bound")
 ok("steps less than the factor apart interpolate", lib.measured(RUNG, "client_ttft_p90", 0.3) == ("=", 25.0))
@@ -396,7 +417,15 @@ with tempfile.TemporaryDirectory() as run:
     # A crossing on a void step is a bound, bracketed by 35 and 40 r/s. 37 predicted is
     # 0.93 to 1.06 of it, wholly in the mark [0.75, 1.10]: the verdict is the same
     # wherever in the bracket the crossing sits, so it passes.
+    # A top step void by send lag reads high: it closes no bracket, and the gate stops. One
+    # short of its schedule (a load that died) reads low if anything, and closes it.
     TWO = [dict(ROW, rate=35.0, achieved=35.0), dict(ROW, level=2, rate=40.0, achieved=40.0, client_ttft_p90=0.5, lag_p99=1.0)]
+    with open(os.path.join(run, "phases", "B-off-r1", "analysis.jsonl"), "w", encoding="utf8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in TWO)
+    GATE_OUT = io.StringIO()
+    ok("a bound open above, its top step void by send lag, stops the gate",
+       analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 1 and "no valid crossing" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    TWO = [dict(ROW, rate=35.0, achieved=35.0), dict(ROW, level=2, rate=40.0, achieved=40.0, client_ttft_p90=0.3, scheduled=1000, recorded=800)]
     with open(os.path.join(run, "phases", "B-off-r1", "analysis.jsonl"), "w", encoding="utf8") as f:
         f.writelines(json.dumps(r) + "\n" for r in TWO)
     GATE_OUT = io.StringIO()

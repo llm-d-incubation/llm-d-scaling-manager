@@ -490,7 +490,9 @@ def judge(predicted, per_repeat, missing=()):
     if missing and not any(fail(v) for v in verdicts):
         text = lib.show(*per_repeat[0]) if per_repeat else "none finished"
         return text, "n/a", "no mark, repeat %s missing" % ",".join(str(n) for n in missing)
-    values = [(v[0] + v[1]) / 2 if k in ("bound", "cliff") else v for k, v in per_repeat if v is not None]
+    # A bracket's middle; an open one (no high end) by its low end.
+    values = [((v[0] + v[1]) / 2 if math.isfinite(v[1]) else v[0]) if k in ("bound", "cliff", "jump") else v
+              for k, v in per_repeat if v is not None]
     centre = lib.median(values) if values else None
     bound = any("a bound" in v for v in verdicts)
     cliff = any("on the cliff" in v for v in verdicts)
