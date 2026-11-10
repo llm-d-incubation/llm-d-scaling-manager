@@ -263,7 +263,8 @@ const defaultLogVerbosity = logging.DEFAULT
 func main() {
 	// Command-line flags
 
-	loggerVerbosity := flag.Int("v", defaultLogVerbosity, "number for the log level verbosity")
+	loggerVerbosity := flag.Int("v", defaultLogVerbosity, "number for the log level verbosity. "+
+		"Given, it beats the LOG_LEVEL environment variable (error, warn, info, debug, trace).")
 
 	configFilePath := flag.String("config-file", "", "Path to the YAML configuration file. "+
 		"When set, the main configuration is read from this file instead of a Kubernetes ConfigMap.")
@@ -386,7 +387,7 @@ func main() {
 
 	flag.Parse()
 
-	logging.InitLogging(&opts, loggerVerbosity)
+	logging.InitLogging(&opts, *loggerVerbosity, flag.CommandLine.Changed("v"), os.Getenv(logging.LogLevelEnv))
 	defer logging.Sync() // nolint:errcheck
 
 	setupLog := ctrl.Log.WithName("setup")

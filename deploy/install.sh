@@ -90,7 +90,9 @@ LLMSM_IMAGE_PULL_POLICY=${LLMSM_IMAGE_PULL_POLICY:-}
 # have to be handed a password, and this way the credential is created once by
 # whoever owns it and never passes through an install run.
 LLMSM_IMAGE_PULL_SECRET=${LLMSM_IMAGE_PULL_SECRET:-}
-LLMSM_LOG_LEVEL=${LLMSM_LOG_LEVEL:-"info"}
+# The controller's LOG_LEVEL by name (error|warn|info|debug|trace). Unset keeps
+# the shipped info; an explicit LLMSM_VERBOSITY beats it.
+LLMSM_LOG_LEVEL=${LLMSM_LOG_LEVEL:-}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 
 ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
@@ -180,7 +182,6 @@ if [ -z "${ENVIRONMENT:-}" ]     && [ -n "$(kubectl api-resources --api-group=ro
 fi
 ENVIRONMENT=${ENVIRONMENT:-"kubernetes"}
 COMPATIBLE_ENV_LIST=("kubernetes" "openshift" "kind-emulator")
-NON_EMULATED_ENV_LIST=("kubernetes" "openshift")
 REQUIRED_TOOLS=("kubectl" "helm" "git")
 DEPLOY_LIB_DIR="$SCRIPT_DIR/lib"
 

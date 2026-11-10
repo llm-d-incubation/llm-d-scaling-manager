@@ -51,14 +51,14 @@ for fn in llmsm_append_crb_name_patches llmsm_append_metrics_reader_subject_patc
           llmsm_append_kueue_reader_scope_patch llmsm_append_policy_namespace_reader_scope_patch \
           llmsm_append_install_kueue_reader_scope_patch llmsm_kueue_reader_names pl_grant_kueue_read pl_grant_kueue_borrow_read \
           llmsm_rendered_prereq_objects llmsm_prometheus_scraper_sa llmsm_missing_prereqs llmsm_append_replicas_patch \
-          llmsm_append_verbosity_patch; do
+          llmsm_append_verbosity_patch llmsm_append_log_level_patch; do
     declare -F "$fn" >/dev/null || {
         printf 'FATAL: %s is not defined after sourcing the library.\n' "$fn" >&2
         exit 1
     }
 done
 
-EXPECT_CASES=62
+EXPECT_CASES=66
 RAN=0
 FAILED=0
 
@@ -146,6 +146,29 @@ check 'verbosity: LLMSM_VERBOSITY=3 adds --v=3 to the manager' '--v=3' "$(render
 check 'verbosity: unset adds no --v (the shipped default)' '' "$(render_verbosity '')"
 check 'verbosity: a non-integer is refused' 'refused' "$(render_verbosity abc)"
 check 'verbosity: a level above the most verbose one is refused' 'refused' "$(render_verbosity 6)"
+
+# ----------------------------------------------------------------------------
+# LLMSM_LOG_LEVEL reaches the manager's LOG_LEVEL, and only a name it knows
+# ----------------------------------------------------------------------------
+# The installer used to set LLMSM_LOG_LEVEL and write it nowhere, and the
+# controller read no LOG_LEVEL: a debug install logged exactly what an info one
+# did. The controller reads LOG_LEVEL now (internal/logging); this is the half
+# that must put it there.
+render_log_level() {
+    local dir
+    dir="$(mktemp -d "$WORK/ovl.XXXXXX")"
+    ln -s "$ROOT/config/overlays/cluster-scoped/kubernetes" "$dir/base"
+    printf 'namespace: wns\nresources:\n- ./base\n' > "$dir/kustomization.yaml"
+    ( LLMSM_LOG_LEVEL="$1" llmsm_append_log_level_patch "$dir/kustomization.yaml" 2>/dev/null ) || { echo refused; return; }
+    "${KBUILD[@]}" "$dir" \
+        | yq -N -r 'select(.kind == "Deployment" and .metadata.name == "scaling-manager-controller-manager")
+            | .spec.template.spec.containers[] | select(.name == "manager") | .env[] | select(.name == "LOG_LEVEL") | .value'
+}
+check 'log level: LLMSM_LOG_LEVEL=debug sets the manager LOG_LEVEL' 'debug' "$(render_log_level debug)"
+check 'log level: unset keeps the shipped info' 'info' "$(render_log_level '')"
+check 'log level: LOG_LEVEL is set once, not appended beside the shipped one' '1' \
+    "$(render_log_level trace | grep -c .)"
+check 'log level: a name the controller does not know is refused' 'refused' "$(render_log_level verbose)"
 
 # ----------------------------------------------------------------------------
 # The expected set of admin-owned objects makes the install's own decision

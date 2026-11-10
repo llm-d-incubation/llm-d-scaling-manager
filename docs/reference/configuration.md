@@ -183,9 +183,6 @@ first measurement, so a figure of the right order is enough.
 
 These names appear in manifests or older docs but change nothing:
 
-- `LOG_LEVEL` on the controller Deployment, and the installer's
-  `LLMSM_LOG_LEVEL`: nothing reads them. Verbosity is the `--v` flag (installer
-  `LLMSM_VERBOSITY`; built in `2`, `4` is debug).
 - `defaultOutputTokens` on a scaling-policy entry: ignored on purpose. Set it on
   the trigger.
 - `analyzerName` on a policy entry: it has one legal value, `saturation`.

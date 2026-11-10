@@ -6,23 +6,6 @@
 # Requires funcs: log_info/log_warning/log_success/log_error, containsElement().
 #
 
-set_scaling_manager_logging_level() {
-    log_info "Setting the scaling manager logging level..."
-
-    # Set logging level based on environment
-    if ! containsElement "$ENVIRONMENT" "${NON_EMULATED_ENV_LIST[@]}"; then
-        LLMSM_LOG_LEVEL="debug"
-        log_info "Development environment - using debug logging"
-    else
-        LLMSM_LOG_LEVEL="info"
-        log_info "Production environment - using info logging"
-    fi
-
-    export LLMSM_LOG_LEVEL
-    log_success "the scaling manager logging level set to: $LLMSM_LOG_LEVEL"
-    echo ""
-}
-
 # llmsm_watch_rbac_names echoes `role binding` — the names this install owns in the
 # namespace it manages. Suffixed by the controller's namespace, so two admin-owned
 # controllers pointed at one tenant do not overwrite or delete each other's.
@@ -2027,8 +2010,10 @@ EOF
 
     llmsm_append_replicas_patch "$tmp_overlay/kustomization.yaml" "$LLMSM_NS"
 
-    # LLMSM_VERBOSITY sets the controller's --v; unset keeps the shipped default.
+    # LLMSM_VERBOSITY sets the controller's --v, LLMSM_LOG_LEVEL its LOG_LEVEL;
+    # unset keeps the shipped default.
     llmsm_append_verbosity_patch "$tmp_overlay/kustomization.yaml"
+    llmsm_append_log_level_patch "$tmp_overlay/kustomization.yaml"
 
     # LLMSM_WATCH_NS separates the namespace the controller MANAGES from the one it
     # RUNS IN.
@@ -2967,6 +2952,43 @@ llmsm_append_verbosity_patch() {
     - op: add
       path: /spec/template/spec/containers/0/args/-
       value: --v=${LLMSM_VERBOSITY}
+  target:
+    kind: Deployment
+    name: scaling-manager-controller-manager
+PATCH
+}
+
+# llmsm_append_log_level_patch sets the manager container's LOG_LEVEL -- the
+# level by name: error, warn, info, debug or trace -- to LLMSM_LOG_LEVEL in the
+# throw-away overlay's kustomization.yaml $1. Unset writes nothing, and the
+# controller runs at the shipped info (the level --v=2 logs at). An explicit
+# --v (LLMSM_VERBOSITY) beats it, which is said. Any other name is refused.
+llmsm_append_log_level_patch() {
+    local kustomization="$1"
+    [ -n "${LLMSM_LOG_LEVEL:-}" ] || return 0
+    case "$LLMSM_LOG_LEVEL" in
+        error|warn|info|debug|trace) ;;
+        *) log_error "LLMSM_LOG_LEVEL=$LLMSM_LOG_LEVEL is not one of error, warn, info, debug, trace" ;;
+    esac
+    if [ -n "${LLMSM_VERBOSITY:-}" ]; then
+        log_warning "LLMSM_LOG_LEVEL=$LLMSM_LOG_LEVEL is overridden by LLMSM_VERBOSITY=$LLMSM_VERBOSITY: an explicit --v wins"
+    fi
+    log_info "Controller log level: LOG_LEVEL=$LLMSM_LOG_LEVEL"
+    grep -q '^patches:' "$kustomization" || printf 'patches:\n' >> "$kustomization"
+    cat >> "$kustomization" <<PATCH
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: scaling-manager-controller-manager
+    spec:
+      template:
+        spec:
+          containers:
+          - name: manager
+            env:
+            - name: LOG_LEVEL
+              value: "${LLMSM_LOG_LEVEL}"
   target:
     kind: Deployment
     name: scaling-manager-controller-manager
