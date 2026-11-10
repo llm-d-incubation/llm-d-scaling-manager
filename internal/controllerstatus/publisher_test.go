@@ -531,3 +531,18 @@ func TestReportErrThrottlesUnchangedError(t *testing.T) {
 		t.Errorf("the same error after a recovery: %d lines, want 5 (re-armed)", len(logged))
 	}
 }
+
+func TestResolvedAcceleratorsAreSortedAndUnique(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	if _, found := p.Data()[KeyResolvedAccelerators]; found {
+		t.Fatalf("resolvedAccelerators set before any cycle")
+	}
+	p.SetResolvedAccelerators([]string{"NVIDIA-H100-80GB-HBM3", "NVIDIA-A100-PCIE-80GB", "NVIDIA-H100-80GB-HBM3"})
+	if got, want := p.Data()[KeyResolvedAccelerators], "NVIDIA-A100-PCIE-80GB,NVIDIA-H100-80GB-HBM3"; got != want {
+		t.Errorf("resolvedAccelerators = %q, want %q", got, want)
+	}
+	p.SetResolvedAccelerators(nil)
+	if got, found := p.Data()[KeyResolvedAccelerators]; !found || got != "" {
+		t.Errorf("resolvedAccelerators = %q (found %v) after a cycle that resolved none, want present and empty", got, found)
+	}
+}

@@ -693,10 +693,14 @@ With option B, the limiter line reads:
 
 If not:
 
-- **`the controller has logged no accelerator yet`.** Expected before step 15:
-  at the default log level only the optimizer's own lines name the GPU
-  product. Go on if `no AcceleratorNotResolved events` reads `[OK]`. Once the
-  optimizer logs a decision, step 16 shows the product in its `log:` line.
+- **`the controller records no resolvedAccelerators`.** The controller has
+  not finished a cycle yet. Rerun the check after a minute; it reads the
+  product from the controller's status, so waiting for the optimizer is not
+  needed. (An older controller has no such key, and names the product only
+  once the optimizer decides.)
+- **`the controller resolved no accelerator in its last cycle`.** Every model
+  is at zero replicas, or none of them names its GPU product. Rerunning does
+  not clear the second; the `AcceleratorNotResolved` line below names it.
 - **`AcceleratorNotResolved event(s)`.** A model server does not name its GPU
   product. Add `nvidia.com/gpu.product: <product from step 5>` to its
   `nodeSelector`. The event stays for an hour after the fix; delete it with
