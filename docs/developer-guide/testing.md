@@ -1875,14 +1875,17 @@ make benchmark-staircase-resume IMG=<the build the run started on, by digest>
 It stands the fleet up again and reuses the frozen prediction: no warm-up and no freeze.
 It runs only the phases with no `done` record, then the rest of the ladder, and scores
 each gate again over every phase that finished, in either session. The last session's
-gate scores, exit files and unfinished phases move to `$STAIRCASE_RUN/prior-<n>/`. It
+gate scores, exit files, capture log, tooling copy and unfinished phases move to
+`$STAIRCASE_RUN/prior-<n>/`, and each phase records the session that ran it. The fleet
+is compared against `frozen-config/`, written once from the first session. It
 costs a standup (about 25 minutes on the fleet's GPUs) and the phases themselves, and
 saves the warm-up (about 1 h 45 m). It refuses another image than the one in the
 timeline's `run start` line, frozen files missing or not matching their hashes, a runner
-that may still be alive, a namespace that is another run's or still holds workloads, and
+that may still be alive, a last session with no confirmed teardown, a namespace that
+cannot be read, is another run's or still holds workloads or its deadline Job, and
 a ladder with nothing left to run. After the standup it stops, and tears down, if the
-router's config, the listed policy or the prefill command line differs from the frozen
-run's. `make benchmark-staircase-redo` is something else: it re-prices the bursty
+router's config, the listed policy, the engines' command lines or the decode nodeSelector
+differ from the frozen run's. `make benchmark-staircase-redo` is something else: it re-prices the bursty
 buckets at the `Ca²` they sent, touching no cluster.
 
 `make benchmark-staircase-status` shows progress and what holds GPUs.
@@ -1950,9 +1953,13 @@ How a reading becomes a crossing:
   restart or engine error in its window. The gate does not stop on a cliff whose whole
   bracket is in the mark, but it does not count it as a pass either. A cliff whose
   bracket crosses or misses the mark stops the gate.
-- **A void step.** A crossing on one is a bound: only the bracket between the steps
-  around it is known. The gate passes a bound whose whole bracket is in the mark, and
-  stops on one whose bracket crosses the mark's edge or misses it. A step is
+- **A void step.** A crossing a void step touches is a bound: only a bracket is known.
+  Its low end is the last step under the target that is valid or void only in a way
+  that raises a reading (send lag, a cut, failures); its high end the first over it that
+  is valid or void only in a way that lowers one (the noise floor, rows short of the
+  schedule). With no high end the bracket is open, and ends past the cliff factor apart
+  make a jump. The gate passes a bound whose whole bracket is in the mark, and stops on
+  one open, across a jump, across the mark's edge or outside it. A step is
   void when its rows fall short of its seeded schedule by more than one row and 0.1%:
   a load process that died reads low, and would otherwise lower the steps before it.
   A step with no schedule in its log is held to 3 standard deviations of its count of

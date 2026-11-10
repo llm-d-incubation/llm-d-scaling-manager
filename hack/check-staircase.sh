@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=108
+EXPECTED_CHECKS=135
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -167,6 +167,7 @@ case "${HANG:-}" in
     exec) case "$args" in *" exec "*) exec sleep 300 ;; esac ;;
     get) case "$args" in *" get scaledobject "*) exec sleep 300 ;; esac ;;
     gzip) case "$args" in *" exec "*gzip*) exec sleep 300 ;; esac ;;
+    patchon) case "$args" in *"patch cm eppcm"*epp-patch-on*) exec sleep 300 ;; esac ;;
     ready) case "$args" in *" get deploy m-"*jsonpath*) exec sleep 300 ;; esac ;;
 esac
 if [ -n "${OWN_FAIL:-}" ]; then
@@ -190,6 +191,10 @@ case "$args" in
     *" create namespace "*) touch "$STATE/ns" ;;
     *" label namespace "*) [ -z "${LABEL_FAIL:-}" ] || exit 1; echo "${*: -1}" | sed 's/.*=//' > "$STATE/label" ;;
     *" get namespace "*" -o json "*) printf '{"metadata":{"labels":{"llm-d-scaling-manager/staircase-run":"%s"}}}\n' "${LABEL_RUN-$(cat "$STATE/label" 2>/dev/null)}" ;;
+    *" get namespace "*"--ignore-not-found -o name"*)
+        [ -n "${NS_FORBID:-}" ] && { echo 'Error from server (Forbidden): namespaces "stair-ns" is forbidden' >&2; exit 1; }
+        [ -n "${NS_EXISTS:-}" ] && echo namespace/stair-ns
+        exit 0 ;;
     *" get namespace "*) [ -n "${NS_EXISTS:-}" ]; exit ;;
     *" get configmap staircase-lease "*)
         n=$(grep -c 'patch cm staircase-lease' "$LOG")
@@ -212,7 +217,7 @@ case "$args" in
     *" get svc -o json "*) printf '{"items":[{"metadata":{"name":"m-epp"},"spec":{"ports":[{"port":80}]}}]}\n' ;;
     *" get configmap scaling-manager-scaling-policy-config "*) printf '{"data":{"default":"analyzers:\\n  - name: saturation\\n    score: 1\\n"}}\n' ;;
     *" get deploy m-decode -o json "*|*" get deploy m-prefill -o json "*)
-        printf '{"spec":{"template":{"spec":{"containers":[{"name":"vllm","env":[{"name":"VLLM_MAX_MODEL_LEN","value":"40960"}]}]}}}}\n' ;;
+        printf '{"spec":{"template":{"spec":{"containers":[{"name":"vllm","args":["serve","m"],"env":[{"name":"VLLM_MAX_MODEL_LEN","value":"40960"}]}],"nodeSelector":{"gpu":"x"}}}}}\n' ;;
     *" get scaledobject -o json "*) printf '{"items":[{"metadata":{"name":"so-d"},"spec":{"scaleTargetRef":{"name":"m-decode"}}},{"metadata":{"name":"so-p"},"spec":{"scaleTargetRef":{"name":"m-prefill"}}}]}\n' ;;
     *" get deploy m-"*"jsonpath="*)
         case "$args" in *m-decode*) f="$STATE/so-d" ;; *) f="$STATE/so-p" ;; esac
@@ -615,6 +620,50 @@ frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG="$TRANSIENT_MSG"
 expect "one that never answers is tried 4 times, then the phase fails and the gate stops the run" \
     '[ "$rc" != 0 ] && [ "$(on_patches)" = 4 ] && grep -q "EPP config patch failed" "$RUN/timeline.txt" && grep -q "the gate failed" "$RUN/timeline.txt" && tore_down'
 
+expect "each try is named, up to the last but one" \
+    'grep -q "try 2 of 4" "$RUN/timeline.txt" && grep -q "try 3 of 4" "$RUN/timeline.txt" && ! grep -q "try 4 of 4" "$RUN/timeline.txt"'
+
+for c in "notfound|Error from server (NotFound): configmaps \"eppcm\" not found" \
+         "both|Error from server (Forbidden): configmaps \"eppcm\" is forbidden: context deadline exceeded"; do
+    fresh "kr${c%%|*}"
+    frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG="${c#*|}"
+    expect "an answer is not asked again (${c%%|*}), whatever transient word it carries" \
+        '[ "$rc" != 0 ] && [ "$(on_patches)" = 1 ] && ! grep -q "no answer from the API server" "$RUN/timeline.txt" && grep -q "EPP config patch failed" "$RUN/timeline.txt"'
+done
+
+fresh krhung
+frozen_run HANG=patchon STAIRCASE_KUBE_TIMEOUT=1
+expect "a call killed by its own timeout is not sent again" \
+    '[ "$(on_patches)" = 1 ] && ! grep -q "no answer from the API server" "$RUN/timeline.txt" && grep -q "EPP config patch failed" "$RUN/timeline.txt"'
+
+# What cost r2 C-off-r1: the EPP restart, once unanswered.
+target="rollout restart deploy/m-epp"
+fresh krrestartepp
+frozen_run FLAKY="$target" FLAKY_N=1 FLAKY_MSG="$TRANSIENT_MSG"
+expect "an EPP restart the API server did not answer is sent again, and the run goes on" \
+    '[ "$rc" = 0 ] && [ "$(steps)" = 3 ] && grep -q "kubectl rollout restart deploy/m-epp: no answer from the API server (try 1 of 4)" "$RUN/timeline.txt"'
+# The controller restart: once unanswered it is sent again; never answered, the phase
+# fails rather than run on the last phase's controller and recording.
+target="rollout restart deployment/scaling-manager-controller-manager"
+fresh krrestartctl
+frozen_run FLAKY="$target" FLAKY_N=1 FLAKY_MSG="$TRANSIENT_MSG"
+expect "a controller restart the API server did not answer is sent again, and the run goes on" \
+    '[ "$rc" = 0 ] && [ "$(steps)" = 3 ] && grep -q "kubectl rollout restart deployment/scaling-manager-controller-manager: no answer from the API server (try 1 of 4)" "$RUN/timeline.txt"'
+fresh krrestartctlever
+frozen_run FLAKY="$target" FLAKY_N=99 FLAKY_MSG="$TRANSIENT_MSG"
+expect "a controller restart that never lands fails its phase: no load runs on the old controller" \
+    '[ "$rc" != 0 ] && [ "$(steps)" = 0 ] && grep -q "controller restart failed" "$RUN/timeline.txt" && tore_down'
+
+fresh krabort
+start FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG="$TRANSIENT_MSG" STAIRCASE_KUBE_RETRY_WAIT=30
+wait_for 'waiting for the freeze' "$RUN/timeline.txt"
+base_env bash "$B/staircase.sh" freeze > /dev/null 2>&1
+if wait_for 'no answer from the API server (try 1 of 4)' "$RUN/timeline.txt"; then
+    begin=$(date +%s); touch "$RUN/abort"; wait_run; took=$(($(date +%s) - begin))
+    expect "an abort in a retry's wait lands at once and sends nothing more: ${took}s" \
+        '[ "$took" -lt 15 ] && [ "$(on_patches)" = 1 ] && ! grep -q "try 2 of 4" "$RUN/timeline.txt" && tore_down'
+else bad "an abort in a retry's wait"; fi
+
 fresh forbidden
 frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG='Error from server (Forbidden): configmaps "eppcm" is forbidden: User "u" cannot patch resource "configmaps"'
 expect "a Forbidden is an answer: sent once, the phase fails and the gate stops the run" \
@@ -629,22 +678,75 @@ resume_run() {
     pid=$!
     PIDS="$PIDS $pid"
 }
+# refused <name> <message> <VAR=value...> : a resume that must stop before it changes
+# anything: its message, no kubectl call that writes, and no prior-<n> made.
+refused() {
+    local name=$1 msg=$2
+    shift 2
+    : > "$LOG"
+    base_env NS_EXISTS=1 "$@" bash "$B/staircase.sh" resume "${RESUME_IMG:-img}" > "$RUN.resume.out" 2>&1
+    rc=$?
+    expect "$name" '[ "$rc" != 0 ] && grep -q "$msg" "$RUN.resume.out" && ! grep -qE " (create|delete|label|patch|apply|rollout) " "$LOG" && [ ! -e "$RUN/prior-1" ]'
+}
+RESUME_IMG=other refused "another image than the run started on is refused" "started on image .img., not .other."
+expect "and not one kubectl call was made" '[ ! -s "$LOG" ]'
+cp "$RUN/frozen.json" "$WORK/frozen.keep"; echo " " >> "$RUN/frozen.json"
+refused "a frozen file off its hash is refused, before any call" "do not match their hashes"
+cp "$WORK/frozen.keep" "$RUN/frozen.json"
+for f in run-id frozen.sha256; do
+    mv "$RUN/$f" "$WORK/$f.keep"
+    refused "a run with no $f is refused, before any call" "$f missing"
+    expect "and no kubectl call was made ($f)" '[ ! -s "$LOG" ]'
+    mv "$WORK/$f.keep" "$RUN/$f"
+done
+mv "$RUN/STOP" "$WORK/STOP.keep"; touch "$RUN/heartbeat"
+refused "a runner that beat moments ago, with no STOP, is refused, its age named" "the run beat [0-9]*s ago and never stopped"
+mv "$WORK/STOP.keep" "$RUN/STOP"
+echo "2026-11-10T00:00:00Z exit rc=1: teardown" >> "$RUN/timeline.txt"
+refused "a last session with no confirmed teardown is refused" "no confirmed teardown after the last session"
+"$TOOLS/sed" -i '$d' "$RUN/timeline.txt"
+refused "a namespace that cannot be read is refused, not taken as absent" "could not be read: not taken as absent" NS_FORBID=1
+refused "a namespace another run owns is refused, nothing deleted" "is not this run's" LEASE_RUN=theirs LABEL_RUN=theirs
+refused "a namespace still holding workloads is refused" "still holds 1 workloads" LEFT=1
+rm -f "$STATE/job-gone"
+refused "a deadline Job still standing is refused" "the deadline Job stands"
+touch "$STATE/job-gone"
+mv "$RUN/frozen-config/policy.yaml" "$WORK/policy.keep"
+refused "a config snapshot missing a file is refused, before any call" "frozen-config/policy.yaml missing"
+mv "$WORK/policy.keep" "$RUN/frozen-config/policy.yaml"
+expect "the snapshot was written once, by the first session" '[ -s "$RUN/frozen-config/pd-config-on.yaml" ] && [ "$(cat "$RUN/frozen-config/prefill-args.txt")" = "serve m" ] && grep -q gpu "$RUN/frozen-config/node-selectors.json"'
+done_run=$RUN
+RUN=$WORK/flaky
+refused "a run with every phase done is refused" "every phase of the ladder is done"
+RUN=$done_run
+
+# same_config: each compared file, moved in the snapshot, stops the resume after the standup.
+for f in policy.yaml pd-config-on.yaml prefill-args.txt; do
+    cp "$RUN/frozen-config/$f" "$WORK/$f.keep"; echo tampered >> "$RUN/frozen-config/$f"
+    : > "$LOG"
+    resume_run; wait_run
+    expect "same_config: a fleet whose $f is not the frozen run's stops before any phase, and tears down" \
+        '[ "$rc" != 0 ] && grep -q "$f is not the one the run was frozen on" "$RUN/timeline.txt" && [ "$(steps)" = "$first_steps" ] && tore_down'
+    if [ "$f" = policy.yaml ]; then
+        # The refused session's own files are now the run's: the snapshot still holds.
+        : > "$LOG"
+        resume_run; wait_run
+        expect "same_config: a second resume after a refused one is refused too" \
+            '[ "$rc" != 0 ] && [ "$(grep -c "policy.yaml is not the one the run was frozen on" "$RUN/timeline.txt")" = 2 ] && [ "$(steps)" = "$first_steps" ]'
+    fi
+    cp "$WORK/$f.keep" "$RUN/frozen-config/$f"
+done
 : > "$LOG"
-RESUME_IMG=other resume_run; wait_run
-expect "another image than the run started on is refused before any call" \
-    '[ "$rc" != 0 ] && grep -q "started on image .img., not .other." "$RUN.resume.out" && [ ! -s "$LOG" ] && [ ! -e "$RUN/prior-1" ]'
-echo tampered >> "$RUN/policy.yaml"
-resume_run; wait_run
-expect "a fleet whose config is not the frozen run's stops before any phase, and tears down" \
-    '[ "$rc" != 0 ] && grep -q "policy.yaml is not the one the run was frozen on" "$RUN/timeline.txt" && [ "$(steps)" = "$first_steps" ] && tore_down'
-: > "$LOG"
-resume_run; wait_run
+# The namespace is gone, and the runner's heartbeat is old with no STOP: it goes on.
+rm -f "$RUN/STOP"; touch -d '1 hour ago' "$RUN/heartbeat"
+resume_run NS_EXISTS=; wait_run
 expect "a resume runs only what did not finish, and scores the gate over both sessions" \
     '[ "$rc" = 0 ] && [ "$(($(steps) - first_steps))" = 2 ] && grep -q "phase B-off-r1 already done" "$RUN/timeline.txt" && grep -q "phase B-on-r1 rc=0" "$RUN/timeline.txt" && grep -q "gate, repeat 1: rc=0" "$RUN/timeline.txt"'
 expect "with no warm-up and no freeze: the frozen files are the first session's" \
     'grep -q "run resume image=img" "$RUN/timeline.txt" && [ "$(sed -n "/run resume image=img/,\$p" "$RUN/timeline.txt" | grep -c "warmup")" = 0 ] && ! grep -q "/warmup/" "$LOG" && [ "$(sha256sum < "$RUN/frozen.json")" = "$frozen_sum" ]'
-expect "the last gate and the unfinished phase are kept apart, the namespace taken back under the same id" \
-    '[ -s "$RUN/prior-1/gate-r1.out" ] && [ -d "$RUN/prior-1/phases/B-on-r1" ] && [ "$(cat "$RUN/run-id")" = "$run_id" ] && grep -q "label --overwrite namespace stair-ns llm-d-scaling-manager/staircase-run=$run_id" "$LOG" && ! grep -q "create namespace" "$LOG" && tore_down'
+expect "the last gate and the unfinished phase are kept apart, the namespace made again and claimed under the same id" \
+    '[ -s "$RUN/prior-1/gate-r1.out" ] && [ -d "$RUN/prior-1/phases/B-on-r1" ] && [ -s "$RUN/prior-1/bin/staircase.sh" ] && [ "$(cat "$RUN/run-id")" = "$run_id" ] && grep -q "create namespace stair-ns" "$LOG" && grep -q "label --overwrite namespace stair-ns llm-d-scaling-manager/staircase-run=$run_id" "$LOG" && tore_down'
+expect "each phase says which session ran it" '[ -s "$RUN/phases/B-on-r1/session" ] && [ "$(cat "$RUN/phases/B-on-r1/session")" != "$(cat "$RUN/phases/B-off-r1/session")" ]'
 
 echo "a dead runner..."
 fresh kill9

@@ -133,6 +133,12 @@ kretry() {
         fi
         t "kubectl $1 $2 $3: no answer from the API server (try $i of $KUBE_TRIES), again in ${KUBE_RETRY_WAIT}s: $(tr '\n' ' ' < "$err" | cut -c1-200)"
         nap "$KUBE_RETRY_WAIT"
+        # An abort in the wait sends nothing more.
+        if aborted; then
+            cat "$err" >&2
+            rm -f "$err"
+            return "$rc"
+        fi
     done
 }
 
@@ -701,6 +707,8 @@ phase() {
     local n=$1 fc=$2 sched=$3 run=$4 seed=$5 np=$6 nd=$7 d pod hold rc from to
     d="$R/phases/$n"; mkdir -p "$d"
     [ -e "$d/done" ] && { t "phase $n already done"; return 0; }
+    # Which session ran it: a resume runs on a fleet stood up again.
+    echo "${SESSION:-}" > "$d/session"
     verify_frozen || return 1
     t "phase $n start fc=$fc runaway=$run seed=$seed fleet=$np+$nd"
     pin_fleet "$np" "$nd" || return 1
@@ -833,19 +841,65 @@ smoke_verdict() {
 }
 
 # --- resume ---------------------------------------------------------------------------------
+# ns_read : "namespace/<name>" when it exists, empty when the API says it does not; fails
+# on a read that fails. Forbidden or a timeout is not an absent namespace.
+ns_read() {
+    timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" --ignore-not-found -o name
+}
+
 # same_config : a resume's fleet must be the one the prediction was frozen for. The router's
 # config, the listed policy and the prefill engine's command line, as this standup read
 # them, against the first session's (kept in STAIRCASE_PRIOR).
+CONFIG_CORE="pd-config-on.yaml policy.yaml prefill-args.txt"
+CONFIG_MORE="decode-args.txt node-selectors.json"
+
+# same_config : a resume's fleet must be the one the prediction was frozen for. What this
+# standup read, against frozen-config/, written once from the first session and never
+# again, so a resume refused once cannot pass on a second try. A core file the snapshot
+# lacks refuses; one this standup could not read is skipped, and the timeline says so.
 same_config() {
-    local f
-    for f in pd-config-on.yaml policy.yaml prefill-args.txt; do
-        [ -s "$STAIRCASE_PRIOR/$f" ] || continue
-        if [ "$(sha256sum < "$STAIRCASE_PRIOR/$f")" != "$(sha256sum < "$R/$f")" ]; then
-            t "resume: $f is not the one the run was frozen on (kept in $STAIRCASE_PRIOR): stopping"
+    local f s="$R/frozen-config"
+    for f in $CONFIG_CORE $CONFIG_MORE; do
+        if [ ! -e "$s/$f" ]; then
+            case " $CONFIG_CORE " in *" $f "*) t "resume: frozen-config/$f is missing: nothing to compare it with: stopping"; return 1 ;; esac
+            t "resume: $f not compared: the first session did not record it"
+            continue
+        fi
+        if [ ! -s "$R/$f" ]; then
+            t "resume: $f not compared: this standup could not read it"
+            continue
+        fi
+        if [ "$(sha256sum < "$s/$f")" != "$(sha256sum < "$R/$f")" ]; then
+            t "resume: $f is not the one the run was frozen on (frozen-config/$f): stopping"
             return 1
         fi
     done
-    t "resume: the router config, the policy and the prefill command line are the frozen run's"
+    t "resume: the fleet's config is the frozen run's"
+}
+
+# fleet_config : what same_config compares, read from this standup: the engines' command
+# lines and the decode pods' nodeSelector. A read that fails leaves the file empty.
+fleet_config() {
+    local dep
+    for dep in "$PRE:prefill-args.txt" "$DEC:decode-args.txt"; do
+        : > "$R/${dep#*:}"
+        kretry get deploy "${dep%%:*}" -o json > "$R/deploy.json" || continue
+        jq -r '[.spec.template.spec.containers[]? | select(.name == "vllm")
+            | (.command // []) + (.args // []) | .[]] | join(" ")' "$R/deploy.json" > "$R/${dep#*:}" 2>/dev/null
+        [ "${dep#*:}" = decode-args.txt ] && jq -S '.spec.template.spec.nodeSelector // {}' "$R/deploy.json" > "$R/node-selectors.json" 2>/dev/null
+    done
+    rm -f "$R/deploy.json"
+}
+
+# snapshot_config : frozen-config/, once. A file that exists is never replaced.
+snapshot_config() {
+    local f
+    [ -d "$R/frozen-config" ] && return 0
+    mkdir -p "$R/frozen-config" || return 1
+    for f in $CONFIG_CORE $CONFIG_MORE; do
+        [ -s "$R/$f" ] && cp -p "$R/$f" "$R/frozen-config/$f"
+    done
+    return 0
 }
 
 # resume <image> : go on with a run that stopped, on its own frozen prediction. Refuses
@@ -859,7 +913,7 @@ cmd_resume() {
     need
     [ $# = 1 ] || die "usage: staircase.sh resume <image>"
     [ -n "$PROM" ] || die "set BENCHMARK_PROMETHEUS_URL"
-    local was f d n todo prior age own job
+    local was f d n todo prior age own job ns
     [ -s "$R/timeline.txt" ] || die "$R/timeline.txt: no run to resume here"
     was=$(sed -n 's/^[^ ]* run start image=//p' "$R/timeline.txt" | head -1)
     [ "$was" = "$1" ] || die "the run started on image '$was', not '$1': its prediction was frozen on that one"
@@ -871,9 +925,23 @@ cmd_resume() {
         age=$(($(date +%s) - $(date -r "$R/heartbeat" +%s 2>/dev/null || echo 0)))
         [ "$age" -ge "$HEART_MAX" ] || die "the run beat ${age}s ago and never stopped: it may still be running"
     fi
+    # The last session ended and confirmed its teardown: a "teardown rc=0" after its last
+    # "exit rc=". staircase.sh teardown, by hand, writes one too.
+    awk '/ exit rc=/ {e = NR} / teardown rc=0/ {d = NR} END {exit !(e && d > e)}' "$R/timeline.txt" \
+        || die "no confirmed teardown after the last session's exit in the timeline: staircase.sh teardown first"
     todo=$(awk 'NF && $1 != "gate-check" {print $1}' "$R/ladder.txt" | while read -r n; do [ -e "$R/phases/$n/done" ] || echo "$n"; done)
     [ -n "$todo" ] || die "every phase of the ladder is done: nothing to resume (staircase.sh analyze)"
-    if timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" >/dev/null 2>&1; then
+    # A run frozen before frozen-config/ existed: its own files are still the first
+    # session's, since a resume writes the snapshot before it stands anything up.
+    for f in $CONFIG_CORE; do
+        if [ -d "$R/frozen-config" ]; then
+            [ -s "$R/frozen-config/$f" ] || die "frozen-config/$f missing: no config to hold a resume to"
+        else
+            [ -s "$R/$f" ] || die "$R/$f missing: no config to hold a resume to"
+        fi
+    done
+    ns=$(ns_read) || die "namespace $NS could not be read: not taken as absent"
+    if [ -n "$ns" ]; then
         own=0; owned || own=$?
         [ "$own" = 0 ] || die "namespace $NS is not this run's, or who owns it could not be read"
         n=$(holding) || die "could not read what $NS holds"
@@ -889,8 +957,14 @@ cmd_resume() {
         f=${f#"$R/"}
         if [ -e "$R/$f" ]; then mv "$R/$f" "$prior/" || die "cannot move $f"; fi
     done
-    for f in pd-config-on.yaml policy.yaml prefill-args.txt; do
-        if [ -e "$R/$f" ]; then cp -p "$R/$f" "$prior/" || die "cannot keep $f"; fi
+    snapshot_config || die "cannot write $R/frozen-config"
+    # The tooling and the capture as the last session ran them; say if the load moved.
+    cp -rp "$R/bin" "$prior/bin" 2>/dev/null
+    [ -e "$R/capture.out" ] && mv "$R/capture.out" "$prior/"
+    for f in staircase_load.py closed_loop_sweep.py; do
+        if [ "$(sha256sum < "$prior/bin/$f" 2>/dev/null)" != "$(sha256sum < "$HERE/$f")" ]; then
+            t "resume: $f differs from the last session's (kept in $prior/bin): $(sha256sum < "$prior/bin/$f" 2>/dev/null | cut -c1-12) to $(sha256sum < "$HERE/$f" | cut -c1-12)"
+        fi
     done
     for d in "$R"/phases/*/; do
         if [ -d "$d" ] && [ ! -e "$d/done" ]; then mv "$d" "$prior/phases/" || die "cannot move $d"; fi
@@ -919,6 +993,8 @@ cmd_run() {
         STAIRCASE_COPY=1 STAIRCASE_ROOT="$ROOT" STAIRCASE_WHATIF="$WHATIF" exec bash "$R/bin/staircase.sh" run "$1"
     fi
     STARTED=0; CAP=; CHILD=
+    SESSION="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    echo "$SESSION" >> "$R/sessions.txt"
     beat
     trap finish EXIT
     trap 'exit 143' INT TERM HUP
@@ -926,8 +1002,14 @@ cmd_run() {
         # cmd_resume checked the image, the frozen files and that the namespace, if it
         # stands, is this run's and holds nothing.
         t "run resume image=$1: the frozen prediction stands, and a phase already done is not run again"
-        if ! timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" >/dev/null 2>&1; then
+        local ns own=0
+        ns=$(ns_read) || { t "resume: namespace $NS could not be read: stopping"; exit 1; }
+        if [ -z "$ns" ]; then
             timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" create namespace "$NS" >/dev/null || { t "namespace create failed"; exit 1; }
+        else
+            # Read again here: nothing is deleted or relabelled in a namespace not this run's.
+            owned || own=$?
+            [ "$own" = 0 ] || { t "resume: namespace $NS is not this run's (owned rc=$own): nothing deleted"; exit 1; }
         fi
         # The last session's lease, deadline script and harness ConfigMaps: made again below.
         kube delete configmap staircase-lease staircase-deadline staircase-witness staircase-loadgen --ignore-not-found >/dev/null \
@@ -949,9 +1031,9 @@ cmd_run() {
     recorder_on || exit 1
     witness || exit 1
     # The prefill engine's command line, for the max_num_seqs the analysis reports beside L.
-    kube get deploy "$PRE" -o json 2>/dev/null | jq -r '[.spec.template.spec.containers[]? | select(.name == "vllm")
-        | (.command // []) + (.args // []) | .[]] | join(" ")' > "$R/prefill-args.txt" 2>/dev/null || true
-    if [ -n "${STAIRCASE_RESUME:-}" ]; then same_config || exit 1; fi
+    # Also what a resume compares against the first session's, in frozen-config/.
+    fleet_config
+    if [ -n "${STAIRCASE_RESUME:-}" ]; then same_config || exit 1; else snapshot_config; fi
     capture_loop "$$" > "$R/capture.out" 2>&1 &
     CAP=$!
     [ -n "${STAIRCASE_SMOKE:-}" ] && { smoke_body; exit 1; }
@@ -1073,6 +1155,8 @@ cmd_teardown() {
     kube delete job staircase-deadline --ignore-not-found --wait=false 2>&1
     kube delete pod -l job-name=staircase-deadline --grace-period=5 --timeout=40s 2>&1
     echo "confirmed: no workload left in $NS"
+    # What a resume reads to know the last session freed everything.
+    t "teardown rc=0: confirmed by staircase.sh teardown"
 }
 
 # holding : deployments, statefulsets, daemonsets and LeaderWorkerSets left, plus pods
