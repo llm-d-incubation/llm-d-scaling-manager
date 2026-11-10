@@ -3,7 +3,10 @@ package saturation
 import (
 	"fmt"
 	"math"
+	"slices"
 	"time"
+
+	"github.com/go-logr/logr"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
@@ -19,6 +22,146 @@ func floorCases() []propCase {
 		{class: classMonotonicity, learner: "floor", name: "lambda-and-queue-rise", family: familyDirect, tuning: tunedDefault, check: checkFloorMonotone},
 		{class: classMonotonicity, learner: "floor", name: "standing-local-queue", family: familyDirect, tuning: tunedDefault, check: checkFloorDrainBound(nil)},
 		{class: classEdges, learner: "floor", name: "backlog-grew", family: familyDirect, tuning: tunedDefault, seeds: cheapSeeds, check: checkBacklogEdge(tuningDefault)},
+		{class: classMonotonicity, learner: "floor", name: "lower-mu-never-prices-less", family: familyDirect, tuning: tunedDefault, check: checkFloorMuMonotone(nil)},
+		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil, nil)},
+	}
+}
+
+// checkFloorStandingQueue: a decode variant of 1 to 6 replicas, each holding
+// resident KV and a queue charged as residency, each completing 0.5x to 1x
+// mu, with lambda equal to what they complete, read twice a
+// BacklogGrowthLookback apart with the queue the same or a request or so
+// longer: a fleet at capacity whose queue stands. The floor prices it at the
+// drain price at the rate the queued replicas serve
+// (llm-d-incubation/llm-d-scaling-manager#54):
+//
+//   - never over it: at most the resident KV or (lambda + queue / 60 s) at
+//     the lower of mu and the median a queued replica completes, 2 % over
+//     for the slope of a queue a request longer (the drain horizon is at
+//     least 60 s, so the bound is loose). Occupancy charged every queued
+//     request as resident KV, 10x that on ttft-saturated's prefill;
+//   - never under the drain price itself: at least the resident KV or
+//     (lambda + each queue capped at what its replica drains in 60 s, over
+//     60 s) at that rate, as cappedBacklog caps it, unless occupancy is
+//     less. The rig learns no start, so the drain horizon is the 60 s drain
+//     time and the bound is tight there.
+//
+// stub, when set, edits the analyzer before it prices, and edit the price it
+// returns, given the price that only keeps up with lambda (mutants).
+func checkFloorStandingQueue(stub func(*SaturationAnalyzer), edit func(got, keepUp float64) float64) func(uint64) error {
+	return func(seed uint64) error {
+		r := propRand(seed)
+		n := 1 + r.IntN(6)
+		p := 100_000 + 300_000*r.Float64()
+		perReq := 500 + 2500*r.Float64()
+		mu := 1 + 9*r.Float64()
+		rows := make([]domain.ReplicaMetrics, n)
+		queues, residents, served := make([]int, n), make([]float64, n), make([]float64, n)
+		lambda, resident, backlog := 0.0, 0.0, 0.0
+		for i := range n {
+			served[i] = mu * (0.5 + 0.5*r.Float64())
+			lambda += served[i]
+			rows[i] = domain.ReplicaMetrics{PodName: fmt.Sprintf("r%d", i), VariantName: "v", RequestRate: served[i], RequestRateKnown: true}
+			queues[i] = 20 + r.IntN(180)
+			residents[i] = p * (0.5 + 0.5*r.Float64())
+			resident += residents[i]
+			backlog += float64(queues[i])
+		}
+		rate, _ := medianRate(served)
+		rate = min(rate, mu)
+		vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: n, PerReplicaCapacity: p}}
+		a := NewSaturationAnalyzer(capacity.NewStore())
+		if stub != nil {
+			stub(a)
+		}
+		clock := propStart
+		a.now = func() time.Time { return clock }
+		price := func(less int) (got, measured float64) {
+			rcs := make([]capacity.ReplicaCapacity, n)
+			for i := range n {
+				q := max(queues[i]-less*(i%2), 0)
+				charge := float64(q) * perReq
+				measured += residents[i] + charge
+				rcs[i] = capacity.ReplicaCapacity{VariantName: "v", PodName: rows[i].PodName, QueueLength: q,
+					LocalQueueDemand: int64(charge), SaturatedThroughput: mu, SaturatedThroughputSamples: 2}
+			}
+			in := makeAnalyzerInput(rows, nil)
+			in.ArrivalRate = lambda
+			return a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), rcs, vcs,
+				measured, nil, nil, 0, false, logr.Discard()), measured
+		}
+		price(r.IntN(2))
+		clock = clock.Add(BacklogGrowthLookback)
+		got, measured := price(0)
+		if edit != nil {
+			got = edit(got, max(resident, lambda/rate*p))
+		}
+		upper := max(resident, (lambda+backlog/floorDrainT)/rate*p) * 1.02
+		capped := 0.0
+		for _, q := range queues {
+			capped += min(float64(q), rate*floorDrainT)
+		}
+		lower := min(measured, max(resident, (lambda+capped/floorDrainT)/rate*p)) * (1 - 1e-6)
+		if got > upper {
+			return violation(kindOverPriced, "%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, %0.f queued, standing: priced %.0f over the drain price %.0f (occupancy %.0f)",
+				n, lambda, mu, rate, backlog, got, upper, measured)
+		}
+		return holds(got >= lower, kindWrongSide,
+			"%d replicas at capacity, lambda %.2f, mu %.2f, %.2f served a queued replica, standing: priced %.0f under the drain price, %.0f",
+			n, lambda, mu, rate, got, lower)
+	}
+}
+
+// checkFloorMuMonotone: one measured state -- a decode variant of 1 to 6
+// replicas, each holding resident KV and a queue charged as residency, each
+// completing a rate, under an arrival rate from 0.2x to 1.4x what the fleet
+// completes at the base rate -- priced by the floor at eight mu from 0.25x to
+// 3x the base. Demand never rises as mu does: a lower mu never prices the
+// same queue lower (llm-d-incubation/llm-d-scaling-manager#54). stub, when
+// set, edits each analyzer before it prices (a mutant).
+func checkFloorMuMonotone(stub func(*SaturationAnalyzer)) func(uint64) error {
+	return func(seed uint64) error {
+		r := propRand(seed)
+		n := 1 + r.IntN(6)
+		p := 100_000 + 300_000*r.Float64()
+		perReq := 500 + 2500*r.Float64()
+		base := 1 + 9*r.Float64()
+		lambda := float64(n) * base * (0.2 + 1.2*r.Float64())
+		rows := make([]domain.ReplicaMetrics, n)
+		rcs := make([]capacity.ReplicaCapacity, n)
+		measured := 0.0
+		for i := range n {
+			pod := fmt.Sprintf("r%d", i)
+			q := r.IntN(200)
+			charge := float64(q) * perReq
+			measured += p*(0.5+0.5*r.Float64()) + charge
+			rows[i] = domain.ReplicaMetrics{PodName: pod, VariantName: "v",
+				RequestRate: base * (0.3 + 0.9*r.Float64()), RequestRateKnown: true}
+			rcs[i] = capacity.ReplicaCapacity{VariantName: "v", PodName: pod, QueueLength: q,
+				LocalQueueDemand: int64(charge), SaturatedThroughputSamples: 2}
+		}
+		vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: n, PerReplicaCapacity: p}}
+		prev, prevMu := math.Inf(1), 0.0
+		for k := range 8 {
+			mu := base * (0.25 + 2.75*float64(k)/7)
+			for i := range rcs {
+				rcs[i].SaturatedThroughput = mu
+			}
+			a := NewSaturationAnalyzer(capacity.NewStore())
+			if stub != nil {
+				stub(a)
+			}
+			in := makeAnalyzerInput(rows, nil)
+			in.ArrivalRate = lambda
+			got := a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), slices.Clone(rcs), vcs,
+				measured, nil, nil, 0, false, logr.Discard())
+			if got > prev*(1+1e-9) {
+				return violation(kindFell, "%d replicas, lambda %.2f: at mu %.3f the floor priced %.0f, at mu %.3f %.0f: the lower mu priced less",
+					n, lambda, prevMu, prev, mu, got)
+			}
+			prev, prevMu = got, mu
+		}
+		return nil
 	}
 }
 
