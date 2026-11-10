@@ -24,7 +24,7 @@
   learner: mu
   expect: flipped
   finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3): the crossing changes the source once; a key's first reading in a noise trough sets the weighing at its start, the provisional set clears within minutes, and the crossing sets it again. The fixes that remove it seal the closed-loop probe (see the 10 % row)."
-  measured: "14/100 seeds; seed 3: cleared at cycle 14, set again at 76"
+  measured: "16/100 seeds; seed 3: the source reversed at cycles 40 and 72 (14/100 before issue #55, when each replica's re-reads folded by their max and read high)"
   owner: "ev-shindin/llm-scaling-manager#495"
 - id: edges/shape-hold/tolerance-excursion-stress
   class: edges

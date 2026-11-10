@@ -94,3 +94,18 @@ const SwitchMuWeighingBand = "mu-weighing-band"
 // and at that noise the 1.6-2.0 band let go and set again several times in
 // one excursion.
 const SwitchMuLatchReadsSmoothedRatio = "mu-latch-reads-smoothed-ratio"
+
+// SwitchMuRereadTakesLatest is the replay switch for how one replica's
+// re-reads of its rate within a sample fold (recordSaturatedThroughputFrom;
+// issue #55, analyzer-learner.md 2.6). The rate is a rate[1m] read afresh
+// every 15 s cycle, so a saturated replica reads about four times inside the
+// one-minute sample spacing. On, the sample keeps the replica's latest
+// reading: unbiased under the gauges' noise, and on a fill the reading whose
+// window holds the most saturated time, which is what the max kept. Off, as
+// before, it kept their max, which picks the noise: measured at four reads a
+// minute and AR(1) noise (phi 0.3 per cycle), mu 8-9 % high at 10 % noise
+// and 11-13 % at 15 %, the side that orders too few replicas; on, within
+// 2.5 % (the window's lower median, under the truth). The prefill bound
+// writes through the same fold and follows the switch: 9 % and 13-14 % high
+// off, within 0.5 % on.
+const SwitchMuRereadTakesLatest = "mu-reread-takes-latest"

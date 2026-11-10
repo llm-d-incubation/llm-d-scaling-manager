@@ -55,13 +55,12 @@ import (
 // share no samples.
 //
 // A reading inside the spacing belongs to the last sample's window, and is
-// folded into it: the sample becomes the max of what that replica
-// read -- the max the window kept when every cycle was added, no
-// more. Dropping in-spacing readings instead lost the highest reading of
-// an episode exactly when no next window would come, and on two replayed
-// passes left mu 10-12 % low for the rest of the pass, on one of them
-// ordering a fourth replica the run never needed. The fold is a max over
-// re-reads of one replica and the mean across replicas
+// folded into it: the sample becomes that replica's latest reading.
+// Dropping in-spacing readings instead lost the latest reading of an
+// episode, its highest on a fill, exactly when no next window would come,
+// and on two replayed passes left mu 10-12 % low for the rest of the pass,
+// on one of them ordering a fourth replica the run never needed. The fold is
+// the latest re-read of one replica and the mean across replicas
 // (recordSaturatedThroughputFrom): two replicas saturating in one cycle read
 // as one moment at the mean of their two readings.
 //
@@ -124,15 +123,32 @@ const (
 //
 // The window is per bucket, not per replica, and every saturated replica of
 // the variant reads into it each cycle. A reading inside the spacing is folded
-// into the last sample, and the fold is a max over re-reads of ONE replica's
-// rate window -- the same moment read again, whose highest reading is the
-// best one -- and the MEAN across replicas, whose readings are independent.
-// Folded by a max across replicas too, a sample was the hottest of N
-// readings and the window's median an order statistic whose expectation
+// into the last sample, and the fold is the LATEST of ONE replica's re-reads
+// of its rate window and the MEAN across replicas, whose readings are
+// independent. Folded by a max across replicas, a sample was the hottest of
+// N readings and the window's median an order statistic whose expectation
 // rose with N: measured with 6 % reading noise on a true 6.0 req/s, +5.5 % at
 // one saturated replica and +13.6 % at sixteen. An over-stated mu orders too
-// few replicas. Per replica, the cross-replica part is gone and what is left
-// is the one-replica re-read max the window always kept.
+// few replicas.
+//
+// A replica's re-reads were folded by their max too, on the view that they
+// are the same moment read again, whose highest reading is the best. They
+// are not: the rate[1m] is evaluated afresh every 15 s cycle, so a replica
+// saturated for the whole minute reads about four overlapping windows, each
+// with its own noise, and their max picks the noise. Measured at four reads
+// a minute and the gauges' AR(1) noise (phi 0.3 per cycle), at one replica
+// and at four, mu read 7.7-8.6 % high at 10 % noise and 11.5-12.9 % at 15 %,
+// and the prefill bound 8.9-9.4 % and 13.4-14.0 %; both read this fold, and
+// ordered too few replicas by as much (issue #55;
+// TestRereadFold_TheBiasAtTheMeasuredNoise). With SwitchMuRereadTakesLatest
+// on, the sample keeps the replica's latest reading. Under stationary noise
+// it is unbiased. On a fill, what the max was kept for, the latest reading is the
+// one whose window holds the most saturated time: the rate rises through the
+// minute, and the latest reading is the max the window kept. A mean of the
+// re-reads would count the minute's first, partial windows, the under-read
+// the file header describes, and errs to the cost side by as much. Where
+// the latest reading is a drain at the end of an episode, the max took it
+// too (file header): that case is still open.
 //
 // The mean, not the median: a fleet serves the sum of its replicas' rates,
 // so what one replica serves on average is their mean. A lower median
@@ -145,7 +161,8 @@ const (
 // The per-replica readings of the sample belong to the sample: they are kept
 // with its time (throughputPodReads) and start over with the next sample, and
 // a sample with none on record -- restored, or put aside and brought back --
-// counts its own value as the reading of the replica that reads next.
+// counts its own value as the reading of the replica that reads next, which
+// that replica's reading then replaces (with the switch off, raises).
 func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate float64) muWrite {
 	// `!(rate > 0)` rejects a NaN, which `rate <= 0` would admit. +Inf is
 	// excluded too, to match floor.priceable: it passes `rate > 0`, and left in
@@ -195,7 +212,11 @@ func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate
 			if reads.at != last || reads.pods == nil {
 				reads = podReads{at: last, pods: map[string]float64{pod: ra.Last()}}
 			}
-			reads.pods[pod] = max(reads.pods[pod], rate)
+			if a.muRereadLatest {
+				reads.pods[pod] = rate
+			} else {
+				reads.pods[pod] = max(reads.pods[pod], rate)
+			}
 			a.throughputPodReads[key] = reads
 			ra.SetLastAt(meanOf(reads.pods), now)
 			return muFolded

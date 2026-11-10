@@ -1701,6 +1701,7 @@ mu-latch-reads-smoothed-ratio
 mu-latch-restores-safe-side
 mu-margin-clamp
 mu-minority-figure-expires
+mu-reread-takes-latest
 mu-sample-weighs-the-fleet
 mu-sample-written
 mu-swap-freeze

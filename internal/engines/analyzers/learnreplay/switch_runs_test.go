@@ -200,6 +200,66 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// (heldBy), and ev-shindin/llm-scaling-manager#524's latch-return-excursion cases.
 	saturation.SwitchMuLatchReadsSmoothedRatio: nil,
 
+	// Issue #55: one replica's re-reads within a sample fold to the latest,
+	// not the max. Base: main at 17c3970. Measured alone against all off, it
+	// moves 38 outputs of the 10 fixtures whose replicas read saturated on
+	// consecutive cycles: the measured mu and what prices from it. A
+	// replica's latest reading is never above the max of its readings, so
+	// every mu that moves falls (ServiceRate.Rate, all on against main):
+	// mu-paths by up to 2 %, ttft-saturated 7 %, pd-restart 18 %, the start
+	// fixtures 7-36 %, throughput-sweep-restart up to 60 % on a minute whose
+	// rate fell as it was read. Where the floor raises demand, a lower mu
+	// orders more, the cost side: throughput-sweep-restart's model demand
+	// rises on all 111 rows that move, pd-restart's on 140 of 144,
+	// ttft-saturated's on 68 of 86, the staircases' on 51 of 58. Where
+	// demand falls -- most rows of the four start fixtures -- it is the
+	// floor's trust blend: the floor's own replicas rise with the lower mu,
+	// and lambda x P / mu against the resident KV trusts the floor more, so
+	// more of the queue's residency charge is swapped for the drain price
+	// (issue #54, not this fold; start-seed 21:05:58, floor 8.24 replicas
+	// against 6.99, demand 3265 against 6153 tokens). The unit tests hold the
+	// fold itself (heldBy).
+	saturation.SwitchMuRereadTakesLatest: {
+		"mu-paths/learned-state.csv",
+		"mu-paths/variant-capacities.csv",
+		"pd-restart/composite-results.csv",
+		"pd-restart/composite-roles.csv",
+		"pd-restart/results.csv",
+		"pd-restart/variant-capacities.csv",
+		"start-restored/composite-results.csv",
+		"start-restored/learned-state.csv",
+		"start-restored/results.csv",
+		"start-restored/variant-capacities.csv",
+		"start-seed-restart-2/composite-results.csv",
+		"start-seed-restart-2/learned-state.csv",
+		"start-seed-restart-2/results.csv",
+		"start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart/composite-results.csv",
+		"start-seed-restart/learned-state.csv",
+		"start-seed-restart/results.csv",
+		"start-seed-restart/variant-capacities.csv",
+		"start-seed/composite-results.csv",
+		"start-seed/learned-state.csv",
+		"start-seed/results.csv",
+		"start-seed/variant-capacities.csv",
+		"throughput-sweep-restart/composite-results.csv",
+		"throughput-sweep-restart/composite-roles.csv",
+		"throughput-sweep-restart/results.csv",
+		"throughput-sweep-restart/variant-capacities.csv",
+		"ttft-saturated/composite-results.csv",
+		"ttft-saturated/composite-roles.csv",
+		"ttft-saturated/results.csv",
+		"ttft-saturated/variant-capacities.csv",
+		"ttft-staircase-b-off/composite-results.csv",
+		"ttft-staircase-b-off/composite-roles.csv",
+		"ttft-staircase-b-off/results.csv",
+		"ttft-staircase-b-off/variant-capacities.csv",
+		"ttft-staircase-c-on/composite-results.csv",
+		"ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/results.csv",
+		"ttft-staircase-c-on/variant-capacities.csv",
+	},
+
 	// Which rows the transfer is read from. It moves no golden: no committed
 	// recording prices a line (the decode term's reason, above). Its unit test
 	// holds it (heldBy).
@@ -1388,6 +1448,13 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestMuLatchBand_AStaleStepLatchesWithinTheStatedTime"},
 		{"../saturation", "TestMuLatchBand_ARatioSmoothedWhileFreshLatchesWhenStale"},
 	},
+	// Issue #55: each runs the switch on and off and asserts both, at the
+	// measured rate noise, and on a fill.
+	saturation.SwitchMuRereadTakesLatest: {
+		{"../saturation", "TestRereadFold_TheBiasAtTheMeasuredNoise"},
+		{"../saturation", "TestRereadFold_TheCasesFailWithTheSwitchOff"},
+		{"../saturation", "TestRereadFold_AFillKeepsTheFullestWindow"},
+	},
 	saturation.SwitchMuLatchRestoresSafe: {
 		{"../saturation", "TestMuLatch_ARestoredMeasurementOverDerivedComesBackLatched"},
 		{"../saturation", "TestMuLatch_TheRestoredLatchIsKnownAfterItsFirstChoice"},
@@ -1656,6 +1723,13 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	// pd-restart/composite-roles.csv is ev-shindin/llm-scaling-manager#520's too, at the same digest.
 	"pd-restart/composite-roles.csv": "b6629b4b25d4b0d8d20246ec2319ce6e6c596482def6d1fe7634977798918e07",
 	"pd-restart/store-records.csv":   "5f97bd429a7f97b77ea04146f204c2a310c2bd7f8decf32b993db398e99edd46",
+
+	// Issue #55's outputs no earlier switch names, as main holds them at
+	// 17c3970.
+	"start-restored/variant-capacities.csv":     "60110dafe6b3cfabbfff6e77817d6f20a08a437f55c860cc6995a96f4e3f4571",
+	"start-seed-restart/variant-capacities.csv": "a51d5988cc6f7cd34659fca3d492dc53727bbd73c34916a46b30a0127cb78a09",
+	"start-seed/variant-capacities.csv":         "6a99f3797ea08c447a5eb25933c93607f073b7adf819b9188cced35bde1eb3ce",
+	"ttft-saturated/composite-roles.csv":        "b66979a9a955650878efd5c410dbdd4cddc08638e1fd58d310c4bb67d29b78d3",
 })
 
 // The slow tests of this package run in parallel with each other (each

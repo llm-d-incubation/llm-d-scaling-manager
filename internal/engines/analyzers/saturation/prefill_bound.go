@@ -164,7 +164,7 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 		readsKept = readsKept && kept.at.Equal(sampledAt) && kept.pods != nil
 		a.mu.Unlock()
 		// Under the pod's name, so the readings of one minute fold as mu's
-		// do: a max over one pod's re-reads and the mean across pods
+		// do: one pod's latest re-read and the mean across pods
 		// (recordSaturatedThroughputFrom). Under one name for every pod, the
 		// fold kept the fastest pod's reading, and one pod read at twice its
 		// rate -- a doubled series -- or one fast pod set the whole fleet's

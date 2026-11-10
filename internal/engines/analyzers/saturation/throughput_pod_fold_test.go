@@ -54,8 +54,9 @@ func measuredMuBias(t *testing.T, n, trials int) float64 {
 // into it, so the measured mu rose with the number of saturated replicas: the
 // probe on the review tree read +5.5 % at one and +13.6 % at sixteen. An
 // over-stated mu orders too few replicas, more so the bigger the fleet. The
-// sample now folds re-reads of one replica by their max and replicas by their
-// median, so the bias is the one-replica figure at any fleet size.
+// sample now folds re-reads of one replica to the latest and replicas by
+// their mean, so the bias is the one-replica figure at any fleet size: +5.4 %
+// while re-reads folded by their max, -1.0 % and -0.3 % since issue #55.
 func TestMeasuredMu_DoesNotGrowWithTheSaturatedFleet(t *testing.T) {
 	one := measuredMuBias(t, 1, 60)
 	sixteen := measuredMuBias(t, 16, 60)

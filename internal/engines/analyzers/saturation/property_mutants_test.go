@@ -71,6 +71,7 @@ var findings = []finding{
 	{row: "the rules together always pick the higher mu", status: statusCaughtToy},
 	{row: "KV and throughput units mixed", status: statusCaught},
 	{row: "Max across replicas (+13.6 % at 16)", status: statusCaughtToy},
+	{row: "Max over one replica's re-reads within a minute (issue #55)", status: statusCaught},
 	{row: "Prefill double scrape", status: statusCaught},
 	{row: "Demand falls when lambda lags a step", status: statusEscaping, why: "the monotonicity trajectory passes on today's code and no pre-fix floor is reproduced"},
 	{row: "local queue priced as drainable", status: statusCaughtToy},
@@ -273,6 +274,12 @@ func propertyMutants() []propMutant {
 		{row: "KV per request assumes one output length (ev-shindin/llm-scaling-manager#276)", caseID: "known-truth/mu/output-spread", level: levelStub,
 			how:   "SwitchKVPerRequestOutputDispersion off: the derived mu prices a resident request at IL + O/2, as before",
 			check: checkMuOutputSpreadOn(func(a *SaturationAnalyzer) { a.kvOutputDispersion = false })},
+		{row: "Max over one replica's re-reads within a minute (issue #55)", caseID: "n-dependence/mu/ar-reread", level: levelStub,
+			how:   "SwitchMuRereadTakesLatest off: a sample keeps the max of each replica's re-reads within the minute, as before",
+			check: checkRereadFold(rereadMu(false), rateNoise10)},
+		{row: "Max over one replica's re-reads within a minute (issue #55)", caseID: "n-dependence/prefill-bound/ar-reread", level: levelStub,
+			how:   "SwitchMuRereadTakesLatest off: the bound's samples keep the max of each replica's re-reads within the minute, as before",
+			check: checkRereadFold(rereadBound(false), rateNoise10)},
 	}
 }
 

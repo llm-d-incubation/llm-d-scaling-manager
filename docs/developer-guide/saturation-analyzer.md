@@ -1250,6 +1250,19 @@ replay switch (`mu_switches.go`):
   from then on (`muChoice.latchKnown`, `TestMuLatch_*`). A restore that
   installs a window, and a bring-back from the stash, mark a memo made
   before them unknown (`unknownLatchLocked`).
+- **A replica's re-reads fold to the latest** (`SwitchMuRereadTakesLatest`,
+  issue #55). Inside the one-minute spacing a sample keeps each replica's
+  latest reading, not their max. The rate[1m] is read afresh every 15 s
+  cycle, so a replica saturated for the minute reads about four windows,
+  each with its own noise, and their max picked it: at four reads a minute
+  and AR(1) noise (phi 0.3 per cycle), mu read 8-9 % high at 10 % noise and
+  11-13 % at 15 %, the prefill bound 9 % and 13-14 %, at one replica and at
+  four. On, mu is within 2.5 % (the window's lower median, under the truth)
+  and the bound within 0.5 % (`TestRereadFold_TheBiasAtTheMeasuredNoise`).
+  On a fill the latest reading is the one whose window holds the most
+  saturated time, which is what the max kept (`TestRereadFold_AFillKeepsTheFullestWindow`);
+  a mean of the re-reads would count the partial windows. The prefill bound
+  writes through the same fold and follows the switch.
 
 Mu has no joined test of its own: a sample is written only beside a k2
 `P1-obs` write, so it waits out k2's settle, the wait after a controller
@@ -1351,8 +1364,8 @@ each computes part of the prefill and their rates add.
 
 The window (`recordSaturatedThroughputFrom`) takes one sample per
 `ThroughputSampleSpacing`. Readings inside the spacing fold into the last
-sample: by their **max** for re-reads of one replica (the same rate window read
-again) and by their **mean** across replicas (independent readings,
+sample: to the **latest** of one replica's re-reads (`SwitchMuRereadTakesLatest`;
+their max before issue #55, which picked the noise) and by their **mean** across replicas (independent readings,
 `throughputPodReads`). The mean because a fleet serves the sum of its
 replicas' rates: a lower median ignored a slow replica once three read, and
 four at 1, 1, 1 and 0.5 priced 1.0 against the 0.875 they serve
@@ -1364,7 +1377,8 @@ fleet the router loads unevenly the idle replicas neither enter nor dilute it
 saturated learns the balanced fleet's mu and k2). With a max across replicas the sample was the hottest of
 N readings, and the window's median rose with the number of saturated replicas:
 with 6 % reading noise on a true 6.0 req/s, +5.4 % at one replica and +13.6 %
-at sixteen. Per replica it stays at the one-replica +5.4-5.5 % at any size
+at sixteen. Per replica it stays at the one-replica figure at any size, +5.4-5.5 %
+with re-reads folded by their max and -1.0 % and -0.3 % since issue #55
 (`TestMeasuredMu_DoesNotGrowWithTheSaturatedFleet`).
 
 An admitted k2 reading is not always a service rate. `throughputRefusal`
@@ -1657,15 +1671,17 @@ The four `n-dependence/prefill-bound/*` property cases (iid and AR(1) noise at
 10 and 15 %) pass with the switch on and fail on every seed with it off
 (`TestPrefillBoundHeld_TheClearedLedgerCasesFailWithTheSwitchOff`).
 
-Not fixed here ([#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531)): the within-minute fold takes a max over one pod's re-reads
-before the mean across pods (`recordSaturatedThroughputFrom`), shared with mu.
-The property rig reads each pod once a minute, so it does not exercise that
-max. At the 15 s cycle a pod is re-read about four times a minute, and with
-AR(1) noise at phi 0.3 per cycle the bound then reads 8.8 % high at 10 %
-noise and 13 % at 15 %, at one pod and at four (the running max read 15-32 %
-high there). That breaks the condition above: at four reads a minute the held
-figure stood above the true rate on 47 of 50 seeds after an hour and 50 of 50
-after a day, at 10 % and 15 % noise.
+The within-minute fold took a max over one pod's re-reads before the mean
+across pods (`recordSaturatedThroughputFrom`), shared with mu, until issue #55
+([#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531) before
+the move). At the 15 s cycle a pod is re-read about four times a minute, and
+with AR(1) noise at phi 0.3 per cycle the bound read 8.9 % high at 10 % noise
+and 13.4 % at 15 %, at one pod and at four, which broke the condition above:
+the held figure stood above the true rate on 47 of 50 seeds after an hour. With
+`SwitchMuRereadTakesLatest` on a sample keeps each pod's latest reading, and
+the bound is within 0.5 % of the truth there; the `n-dependence/*/ar-reread`
+property cases read each pod four times a minute
+(`TestRereadFold_TheCasesFailWithTheSwitchOff`).
 
 ## Shape change
 
