@@ -50,6 +50,7 @@ Environment Variables:
                                several from LLMSM_NS, with a Role in each and nothing cluster-wide
   LLMSM_REPLICAS                 Controller replicas. >1 is leader-election failover, NOT more throughput (default: 1)
   LLMSM_VERBOSITY                Controller --v, 0 to 5. 3 adds the per-replica capacity lines (default: unset, the shipped 2)
+  LLMSM_LOG_LEVEL                Controller LOG_LEVEL: error|warn|info|debug|trace. LLMSM_VERBOSITY beats it (default: unset, the shipped info)
   DEPLOY_SCALING_MANAGER                   Deploy the scaling manager controller (default: true)
   SKIP_CHECKS                  Skip the prerequisite and permission checks (default: false)
   LLMSM_KUBE_CONTEXT             Pin every kubectl/helm call to this context, without
@@ -85,7 +86,7 @@ Environment Variables:
                                within ONE controller's policy. Published to several controllers
                                (make enable-physical-limiter), each enforces the cap on its own,
                                so N controllers permit N x the number.
-  ENABLE_SCALE_TO_ZERO         Allow parking idle models at 0 replicas (default: true)
+  ENABLE_SCALE_TO_ZERO         Allow parking idle models at 0 replicas (default: unset, keep the live value, else false)
   LLMSM_DEFAULT_SO               Create default ScaledObjects for what is already running:
                                false (default) | plan (print and stop) | edit (plan, \$EDITOR, apply) | true (apply all)
   LLMSM_DEFAULT_SO_PLAN          Plan file. If it exists, apply exactly it and skip discovery.

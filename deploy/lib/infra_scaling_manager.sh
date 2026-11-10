@@ -6,23 +6,6 @@
 # Requires funcs: log_info/log_warning/log_success/log_error, containsElement().
 #
 
-set_scaling_manager_logging_level() {
-    log_info "Setting the scaling manager logging level..."
-
-    # Set logging level based on environment
-    if ! containsElement "$ENVIRONMENT" "${NON_EMULATED_ENV_LIST[@]}"; then
-        LLMSM_LOG_LEVEL="debug"
-        log_info "Development environment - using debug logging"
-    else
-        LLMSM_LOG_LEVEL="info"
-        log_info "Production environment - using info logging"
-    fi
-
-    export LLMSM_LOG_LEVEL
-    log_success "the scaling manager logging level set to: $LLMSM_LOG_LEVEL"
-    echo ""
-}
-
 # llmsm_watch_rbac_names echoes `role binding` — the names this install owns in the
 # namespace it manages. Suffixed by the controller's namespace, so two admin-owned
 # controllers pointed at one tenant do not overwrite or delete each other's.
@@ -259,18 +242,20 @@ llmsm_resolve_prometheus_url() {
 # verified against a mounted CA verifying against the public roots only, and
 # it could no longer connect. See llmsm_prometheus_ca_path.
 llmsm_render_manager_config_patch() {
-    local tmp_overlay="$1" src rendered passive
+    local tmp_overlay="$1" src rendered passive s2z
     src="$LLMSM_PROJECT/config/base/manager/manager-configmap.yaml"
     # LLMSM_PASSIVE too: rendered, not patched after the apply, so the applied
     # ConfigMap never carries the shipped false over a passive controller. With
     # passive mode to keep, a render that fails is an error, not a skip: the
-    # apply would reset the controller to active.
+    # apply would reset the controller to active. LLMSM_SCALE_TO_ZERO likewise
+    # (llmsm_scale_to_zero_want): a re-install must not reset it to false.
     passive="$(llmsm_passive_want)" || return 1
+    s2z="$(llmsm_scale_to_zero_want)" || return 1
     if [ ! -f "$src" ]; then
-        [ -z "$passive" ] || { log_warning "cannot render LLMSM_PASSIVE=$passive: $src is missing"; return 1; }
+        [ -z "$passive$s2z" ] || { log_warning "cannot render LLMSM_PASSIVE=$passive LLMSM_SCALE_TO_ZERO=$s2z: $src is missing"; return 1; }
         return 0
     fi
-    [ -n "${PROMETHEUS_URL:-}" ] || [ -n "$passive" ] || return 0
+    [ -n "${PROMETHEUS_URL:-}" ] || [ -n "$passive" ] || [ -n "$s2z" ] || return 0
 
     local skip="" ca=""
     if [ -n "${PROMETHEUS_URL:-}" ]; then
@@ -284,9 +269,14 @@ llmsm_render_manager_config_patch() {
         | if [ -n "${PROMETHEUS_URL:-}" ]; then LLMSM_URL="$PROMETHEUS_URL" yq '.PROMETHEUS_BASE_URL = strenv(LLMSM_URL)'; else cat; fi \
         | if [ -n "$skip" ]; then LLMSM_SKIP="$skip" yq '.PROMETHEUS_TLS_INSECURE_SKIP_VERIFY = strenv(LLMSM_SKIP)'; else cat; fi \
         | if [ -n "$ca" ]; then LLMSM_CA="$ca" yq '.PROMETHEUS_CA_CERT_PATH = strenv(LLMSM_CA)'; else cat; fi \
-        | if [ -n "$passive" ]; then LLMSM_P="$passive" yq '.LLMSM_PASSIVE = strenv(LLMSM_P)'; else cat; fi)" || rendered=""
+        | if [ -n "$passive" ]; then LLMSM_P="$passive" yq '.LLMSM_PASSIVE = strenv(LLMSM_P)'; else cat; fi \
+        | if [ -n "$s2z" ]; then LLMSM_S2Z="$s2z" yq '.LLMSM_SCALE_TO_ZERO = strenv(LLMSM_S2Z)'; else cat; fi)" || rendered=""
     if [ -n "$passive" ] && [ "$(printf '%s\n' "$rendered" | llmsm_yaml_scalar '.LLMSM_PASSIVE')" != "$passive" ]; then
         log_warning "could not render LLMSM_PASSIVE=$passive into scaling-manager-manager-config"
+        return 1
+    fi
+    if [ -n "$s2z" ] && [ "$(printf '%s\n' "$rendered" | llmsm_yaml_scalar '.LLMSM_SCALE_TO_ZERO')" != "$s2z" ]; then
+        log_warning "could not render LLMSM_SCALE_TO_ZERO=$s2z into scaling-manager-manager-config"
         return 1
     fi
     [ -n "$rendered" ] || return 0
@@ -2013,8 +2003,10 @@ EOF
     # applied so the render below and the policy patch carry it.
     if [ "${LLMSM_APPLY_SCOPE:-all}" != "prereqs" ]; then
         llmsm_live_passive "$LLMSM_NS" || log_error "Cannot read the passive mode this controller runs with now (${LLMSM_LIVE_PASSIVE_ERR:-}), and the apply would reset it and every key of the policy default entry it keeps. Fix the read (the install needs get on ConfigMaps scaling-manager-manager-config and scaling-manager-scaling-policy-config in $LLMSM_NS) and re-run; naming LLMSM_PASSIVE does not skip it."
+        # Scale-to-zero the same way (llmsm_resolve_scale_to_zero).
+        llmsm_resolve_scale_to_zero || exit 1
     fi
-    llmsm_render_manager_config_patch "$tmp_overlay" || log_error "Refusing to apply: passive mode could not be rendered into scaling-manager-manager-config, and the apply would reset the controller to active."
+    llmsm_render_manager_config_patch "$tmp_overlay" || log_error "Refusing to apply: passive mode or scale-to-zero could not be rendered into scaling-manager-manager-config, and the apply would reset it to the shipped value."
     llmsm_append_prometheus_ca_mount_patch "$tmp_overlay/kustomization.yaml"
 
     # Who may call the external scaler: KEDA's namespace only, unless opted out.
@@ -2027,8 +2019,10 @@ EOF
 
     llmsm_append_replicas_patch "$tmp_overlay/kustomization.yaml" "$LLMSM_NS"
 
-    # LLMSM_VERBOSITY sets the controller's --v; unset keeps the shipped default.
+    # LLMSM_VERBOSITY sets the controller's --v, LLMSM_LOG_LEVEL its LOG_LEVEL;
+    # unset keeps the shipped default.
     llmsm_append_verbosity_patch "$tmp_overlay/kustomization.yaml"
+    llmsm_append_log_level_patch "$tmp_overlay/kustomization.yaml"
 
     # LLMSM_WATCH_NS separates the namespace the controller MANAGES from the one it
     # RUNS IN.
@@ -2543,18 +2537,60 @@ llmsm_live_get() {
 llmsm_live_passive() {
     local ns="$1" cfg def
     LLMSM_LIVE_PASSIVE=""
+    LLMSM_LIVE_SCALE_TO_ZERO=""
     LLMSM_LIVE_DEFAULT_PASSIVE=""
     LLMSM_LIVE_DEFAULT=""
     LLMSM_LIVE_PASSIVE_ERR=""
     cfg="$(llmsm_live_get "$ns" scaling-manager-manager-config '{.data.config\.yaml}')" || return 1
     if [ -n "$cfg" ]; then
         LLMSM_LIVE_PASSIVE="$(printf '%s\n' "$cfg" | llmsm_yaml_scalar '.LLMSM_PASSIVE')"
+        LLMSM_LIVE_SCALE_TO_ZERO="$(printf '%s\n' "$cfg" | llmsm_yaml_scalar '.LLMSM_SCALE_TO_ZERO')"
     fi
     def="$(llmsm_live_get "$ns" scaling-manager-scaling-policy-config '{.data.default}')" || return 1
     LLMSM_LIVE_DEFAULT="$def"
     if [ -n "$def" ]; then
         LLMSM_LIVE_DEFAULT_PASSIVE="$(printf '%s\n' "$def" | llmsm_yaml_scalar '.passive')"
     fi
+}
+
+# llmsm_scale_to_zero_want prints the LLMSM_SCALE_TO_ZERO this install writes,
+# true or false: ENABLE_SCALE_TO_ZERO when given, else the live value
+# (llmsm_live_passive), else nothing -- the shipped false.
+#
+# ENABLE_SCALE_TO_ZERO must be true or false. The live value is written as the
+# controller reads it (viper, strconv.ParseBool): 1, t, T, TRUE, True and true
+# are true; 0, f, F, FALSE, False and false are false. Anything else is refused,
+# naming the live ConfigMap, since the controller reads it as false and the
+# operator meant something else; ENABLE_SCALE_TO_ZERO replaces it.
+#
+# It used to default to true in deploy/install.sh while the controller, the
+# shipped ConfigMap, install-epp.sh and the e2e Makefile all said false, and a
+# re-install that did not name it reset a live true to false through the apply.
+llmsm_scale_to_zero_want() {
+    case "${ENABLE_SCALE_TO_ZERO:-}" in
+        '') ;;
+        true|false) printf '%s' "$ENABLE_SCALE_TO_ZERO"; return 0 ;;
+        *) log_error "ENABLE_SCALE_TO_ZERO must be true or false (got: $ENABLE_SCALE_TO_ZERO)"; return 1 ;;
+    esac
+    case "${LLMSM_LIVE_SCALE_TO_ZERO:-}" in
+        '') ;;
+        1|t|T|TRUE|True|true) printf true ;;
+        0|f|F|FALSE|False|false) printf false ;;
+        *) log_error "LLMSM_SCALE_TO_ZERO in ConfigMap scaling-manager-manager-config (namespace ${LLMSM_NS:-}) is '$LLMSM_LIVE_SCALE_TO_ZERO', which the controller reads as false. Pass ENABLE_SCALE_TO_ZERO=true or false to replace it."
+           return 1 ;;
+    esac
+}
+
+# llmsm_resolve_scale_to_zero settles ENABLE_SCALE_TO_ZERO for the rest of the
+# install, after llmsm_live_passive: llmsm_scale_to_zero_want, or the shipped
+# false when that is empty (a first install, or a live ConfigMap without the
+# key). The render then writes it, and the summary reports what was applied.
+llmsm_resolve_scale_to_zero() {
+    local want
+    want="$(llmsm_scale_to_zero_want)" || return 1
+    ENABLE_SCALE_TO_ZERO="${want:-false}"
+    LLMSM_SCALE_TO_ZERO_RESOLVED=1
+    export ENABLE_SCALE_TO_ZERO LLMSM_SCALE_TO_ZERO_RESOLVED
 }
 
 # llmsm_passive_want prints the LLMSM_PASSIVE this install writes: the install
@@ -2967,6 +3003,43 @@ llmsm_append_verbosity_patch() {
     - op: add
       path: /spec/template/spec/containers/0/args/-
       value: --v=${LLMSM_VERBOSITY}
+  target:
+    kind: Deployment
+    name: scaling-manager-controller-manager
+PATCH
+}
+
+# llmsm_append_log_level_patch sets the manager container's LOG_LEVEL -- the
+# level by name: error, warn, info, debug or trace -- to LLMSM_LOG_LEVEL in the
+# throw-away overlay's kustomization.yaml $1. Unset writes nothing, and the
+# controller runs at the shipped info (the level --v=2 logs at). An explicit
+# --v (LLMSM_VERBOSITY) beats it, which is said. Any other name is refused.
+llmsm_append_log_level_patch() {
+    local kustomization="$1"
+    [ -n "${LLMSM_LOG_LEVEL:-}" ] || return 0
+    case "$LLMSM_LOG_LEVEL" in
+        error|warn|info|debug|trace) ;;
+        *) log_error "LLMSM_LOG_LEVEL=$LLMSM_LOG_LEVEL is not one of error, warn, info, debug, trace" ;;
+    esac
+    if [ -n "${LLMSM_VERBOSITY:-}" ]; then
+        log_warning "LLMSM_LOG_LEVEL=$LLMSM_LOG_LEVEL is overridden by LLMSM_VERBOSITY=$LLMSM_VERBOSITY: an explicit --v wins"
+    fi
+    log_info "Controller log level: LOG_LEVEL=$LLMSM_LOG_LEVEL"
+    grep -q '^patches:' "$kustomization" || printf 'patches:\n' >> "$kustomization"
+    cat >> "$kustomization" <<PATCH
+- patch: |-
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: scaling-manager-controller-manager
+    spec:
+      template:
+        spec:
+          containers:
+          - name: manager
+            env:
+            - name: LOG_LEVEL
+              value: "${LLMSM_LOG_LEVEL}"
   target:
     kind: Deployment
     name: scaling-manager-controller-manager
