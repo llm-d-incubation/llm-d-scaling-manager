@@ -618,12 +618,28 @@ verb_check() {
         *) info "controller: ${line:0:300}" ;;
     esac
 
-    # Both log encoders: `"accelerator": "x"` (console) and `"accelerator":"x"` (json).
-    accels="$(printf '%s\n' "$LOGS" | grep -oE '"accelerator": ?"[^"]*"' | sed -E 's/.*: ?"//; s/"$//' | sort -u || true)"
-    if [ -z "$accels" ]; then
-        warn "the controller has logged no accelerator yet; rerun once the models have been planned"
+    # The accelerators the controller resolved, from its status: it records
+    # them every cycle (resolvedAccelerators). Its log is no source at the
+    # default level: only a utilization-share decision names one there, so
+    # before the first decision the check warned "no accelerator yet" with
+    # the accelerator resolved. The log is read only for a controller that
+    # publishes no such key (an older version, or no cycle finished yet).
+    read_status
+    if [ -n "$STATUS" ] && [ "$(printf '%s' "$STATUS" | jq -r 'has("resolvedAccelerators")')" = true ]; then
+        accels="$(status_field resolvedAccelerators | tr ',' '\n' | grep . || true)"
+        if [ -z "$accels" ]; then
+            warn "the controller resolved no accelerator in its last cycle (resolvedAccelerators in $STATUS_CM is empty): no model is planned yet, or none resolves"
+        else
+            info "accelerators the controller resolves: $(printf '%s' "$accels" | tr '\n' ' ')"
+        fi
     else
-        info "accelerators the controller resolves: $(printf '%s' "$accels" | tr '\n' ' ')"
+        # Both log encoders: `"accelerator": "x"` (console) and `"accelerator":"x"` (json).
+        accels="$(printf '%s\n' "$LOGS" | grep -oE '"accelerator": ?"[^"]*"' | sed -E 's/.*: ?"//; s/"$//' | sort -u || true)"
+        if [ -z "$accels" ]; then
+            warn "the controller records no resolvedAccelerators in $STATUS_CM (it has not finished a cycle, or it predates that key) and its log names none: at the info level only a utilization-share decision does. Rerun after a cycle; an older controller names them once the optimizer decides"
+        else
+            info "accelerators the controller resolves: $(printf '%s' "$accels" | tr '\n' ' ') (from its log)"
+        fi
     fi
     # A cluster-scoped controller plans models of every namespace into one
     # group, so an unresolved accelerator in another namespace matters as much
@@ -660,7 +676,7 @@ verb_check() {
         keys="$(printf '%s\n' "$POLICY" | us_quota_keys)" || die "could not parse the quota entries"
         for a in $accels; do
             grep -qxF -- "$a" <<<"$keys" \
-                || warn "the quota has no '$a' key: its models are charged to no quota group (the key must be the name the controller logs)"
+                || warn "the quota has no '$a' key: its models are charged to no quota group (the key must be the name the controller resolves)"
         done
     fi
 

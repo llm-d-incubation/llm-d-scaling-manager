@@ -135,7 +135,8 @@ kill $PF
 | `quiet-period` for two to three minutes | the group holds still after activation and after a restart |
 | `spare_gpus` below 0 | the quota cannot cover every model's need; no move fixes that |
 | `invalid` mode | the block did not validate, or the policy has no `limiters:` list; the log says which |
-| `the controller has logged no accelerator yet` from the check, before shadow | at the default log level only the optimizer's own lines name the GPU product; `no AcceleratorNotResolved events` is what matters |
+| `resolved no accelerator in its last cycle` from the check | the controller has not planned the models yet; rerun after a minute. `no AcceleratorNotResolved events` is what matters |
+| `records no resolvedAccelerators` from the check | the controller predates that status key and names the product in its log only once the optimizer decides; `no AcceleratorNotResolved events` is what matters |
 
 It evaluates but never moves anything? Work down [the troubleshooting
 list](../../reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything).
@@ -213,7 +214,8 @@ model](../install-small-model/) twice.
 - **`utilization-share-check`** names the limiter in the policy and the one the
   controller runs. It fails on no limiter, an unresolved accelerator, or anything
   it could not read. It warns when a quota has no key for an accelerator the
-  controller logs; the key must match the logged name exactly.
+  controller resolved (`resolvedAccelerators` in its status ConfigMap); the
+  key must match that name exactly.
 - **Finding the policy.** The steps read the policy namespace from the
   controller's `scaling-manager-controller-status` ConfigMap, else its log, else the
   namespace's labels and `scaling-manager-policy`. `POLICY_NAMESPACE` names it when none of

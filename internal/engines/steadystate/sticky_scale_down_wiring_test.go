@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/controllerstatus"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/decision"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
@@ -166,4 +167,25 @@ func TestStickyWiring_OffIsTheOldBehaviour(t *testing.T) {
 	require.EqualValues(t, 1, cycle(t, e, "fleet-1", wiringDecision(2, 1, 18770)))
 	// The crept-up target is published as is: the chatter, unchanged.
 	require.EqualValues(t, 2, cycle(t, e, "fleet-1", wiringDecision(2, 2, 20676)))
+}
+
+// The apply pass publishes the accelerators it resolved, so a tool reads them
+// from the controller status rather than from a log where, at the default
+// level, only a utilization-share decision names one. A cycle that resolves
+// none says so with an empty value, not a stale one.
+func TestApplyPassPublishesResolvedAccelerators(t *testing.T) {
+	e := wiringEngine(t, wiringDeployment())
+	e.Status = controllerstatus.New(e.client, e.client, "scaling-manager-system")
+	_, found := e.Status.Data()[controllerstatus.KeyResolvedAccelerators]
+	require.False(t, found, "absent before the first cycle")
+
+	cycle(t, e, "fleet-1", wiringDecision(2, 2, 20676))
+	require.Equal(t, "NVIDIA-H100-80GB-HBM3", e.Status.Data()[controllerstatus.KeyResolvedAccelerators])
+
+	// No decision, and neither the variant nor the scale target names an
+	// accelerator: nothing resolves this cycle.
+	cycle(t, e, "fleet-1")
+	got, found := e.Status.Data()[controllerstatus.KeyResolvedAccelerators]
+	require.True(t, found, "a cycle that resolved none records it")
+	require.Empty(t, got)
 }

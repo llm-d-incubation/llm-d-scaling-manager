@@ -347,9 +347,10 @@ make utilization-share-check
 ```
 <!-- guide:share.check end -->
 
-Until the optimizer has logged a decision, the check warns `the controller has
-logged no accelerator yet`: at the default log level only the optimizer's own
-lines name the GPU product. Go on if `no AcceleratorNotResolved events` reads
+The check reads the GPU product the controller resolved from its status
+ConfigMap, so it names the product as soon as the controller has planned the
+models once. It warns `resolved no accelerator in its last cycle` until then;
+rerun it after a minute. Go on when `no AcceleratorNotResolved events` reads
 `[OK]`.
 
 Turn the optimizer on in shadow first, then configure it to act. Activate

@@ -600,11 +600,10 @@ step 15 turns on physical groups.
 
 If not:
 
-- **`the controller has logged no accelerator yet`.** Expected before step 15:
-  at the default log level only the optimizer's own lines name the GPU
-  product. Go on if `no AcceleratorNotResolved events` reads `[OK]`. Once the
-  optimizer logs a decision, the status in step 15 shows the product in its
-  `log:` line.
+- **`the controller resolved no accelerator in its last cycle`.** The
+  controller has not planned the models yet. Rerun the check after a minute;
+  it reads the product from the controller's status, so waiting for the
+  optimizer is not needed.
 - **Option A: the quota has no key for a product.** Run steps 8 and 9 again
   with that exact name.
 

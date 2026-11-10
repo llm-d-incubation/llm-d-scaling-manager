@@ -90,6 +90,11 @@
 //	                       expiry. State, not status: the steady-state engine
 //	                       reads it back after a restart, and a new term
 //	                       carries it over. See KeyInFlightLedger.
+//	resolvedAccelerators   the accelerator types the steady-state engine
+//	                       resolved for the variants of its last cycle,
+//	                       sorted and joined by ",". Empty when that cycle
+//	                       resolved none; absent until the first cycle. The
+//	                       names are the ones quota keys must match.
 //
 // limiter, limiterWarnings and utilizationShare are recomputed from the applied configuration
 // in the same update that records policyResourceVersion, so they never lag
@@ -112,6 +117,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,6 +186,10 @@ const (
 	// KeyPassiveDefault is the LLMSM_PASSIVE this process read at start,
 	// "true" or "false".
 	KeyPassiveDefault = "passiveDefault"
+	// KeyResolvedAccelerators is the accelerator types the steady-state
+	// engine resolved in its last cycle, sorted and joined by ",": "" when it
+	// resolved none, absent before its first cycle.
+	KeyResolvedAccelerators = "resolvedAccelerators"
 )
 
 // PodListDeniedMessage is the KeyPodListDenied value.
@@ -672,6 +682,17 @@ func (p *Publisher) SetPassiveDefault(passive bool) {
 		return
 	}
 	p.update(func(d map[string]string) { d[KeyPassiveDefault] = strconv.FormatBool(passive) })
+}
+
+// SetResolvedAccelerators records the accelerator types the steady-state
+// engine resolved in its last cycle. Duplicates and order do not matter; an
+// empty list records "", which says the cycle resolved none.
+func (p *Publisher) SetResolvedAccelerators(accelerators []string) {
+	if p == nil {
+		return
+	}
+	sorted := slices.Compact(slices.Sorted(slices.Values(accelerators)))
+	p.update(func(d map[string]string) { d[KeyResolvedAccelerators] = strings.Join(sorted, ",") })
 }
 
 // setOrDelete sets key to value, or removes it when value is empty.

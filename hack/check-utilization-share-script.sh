@@ -750,7 +750,21 @@ vcase "logs: every controller pod is read, not one that may be a standby" eval '
 fresh "$QUOTA_POLICY"; echo '{"level":"info","msg":"x","accelerator":"NVIDIA-H200"}' > "$STATE/logs"; run check
 vcase "check: reads accelerators from a json-encoded log" eval '[ $RC -eq 0 ] && says "resolves: NVIDIA-H200"'
 
-CASES_EXPECTED=123
+# The accelerators come from the controller status, which records them every
+# cycle: at the info level the log names one only in a utilization-share
+# decision, so before the first decision the check warned "no accelerator yet"
+# with the accelerator resolved.
+status_accels() { jq --arg a "$1" '.resolvedAccelerators = $a' "$STATE/status.json" > "$STATE/status.tmp" && mv "$STATE/status.tmp" "$STATE/status.json"; }
+fresh "$QUOTA_POLICY"; status_on; status_accels NVIDIA-H200; run check
+vcase "check: reads the resolved accelerators from the status, with none in the log" \
+    eval '[ $RC -eq 0 ] && says "resolves: NVIDIA-H200" && ! says "no accelerator"'
+fresh "$QUOTA_POLICY"; status_on; status_accels H200,NVIDIA-H200; run check
+vcase "check: a resolved accelerator in the status with no quota key warns" eval 'says "has no '"'"'H200'"'"' key" && ! says "has no '"'"'NVIDIA-H200'"'"' key"'
+fresh "$QUOTA_POLICY"; status_on; status_accels ""; run check
+vcase "check: a status that resolved none says so, not that the log names none" \
+    eval 'says "resolved no accelerator in its last cycle" && ! says "log names none"'
+
+CASES_EXPECTED=126
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. A case was added or removed; update CASES_EXPECTED deliberately."
 fi

@@ -274,6 +274,7 @@ kubectl get cm scaling-manager-controller-status -n "$NS" -o jsonpath='{.data}{"
 | `utilizationShareError` | the optimizer block's error when the mode is `invalid` |
 | `passiveDefault` | `true` or `false`: the `LLMSM_PASSIVE` the controller read at start ([passive](scaling-policy.md#passive)). It is read only then: a different value in `scaling-manager-manager-config` means a restart is due, and `make deploy-scaling-manager` restarts it |
 | `utilizationShareNote` | present while the settings in force differ from the block as written. Today: a namespace-scoped controller with no quota on its namespace ignores `physicalGroups`. The mode is not `invalid` |
+| `resolvedAccelerators` | the GPU products the controller resolved for its models in its last cycle, joined by `,`: the names a quota key must match. Empty when that cycle resolved none; absent until the first cycle. `make utilization-share-check` reads it |
 | `leader` | the pod that wrote it |
 | `controllerInstance` | the `controller_instance` metrics label, when set |
 | `clusterQuotaPerController` | present while a namespace-scoped controller enforces a `scope: cluster` quota: it is charged only its own variants' GPUs, so the quota caps this controller, not the cluster. With one controller on the cluster that is the same cap |
