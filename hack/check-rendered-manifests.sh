@@ -58,7 +58,7 @@ for fn in llmsm_append_crb_name_patches llmsm_append_metrics_reader_subject_patc
     }
 done
 
-EXPECT_CASES=66
+EXPECT_CASES=68
 RAN=0
 FAILED=0
 
@@ -169,6 +169,12 @@ check 'log level: unset keeps the shipped info' 'info' "$(render_log_level '')"
 check 'log level: LOG_LEVEL is set once, not appended beside the shipped one' '1' \
     "$(render_log_level trace | grep -c .)"
 check 'log level: a name the controller does not know is refused' 'refused' "$(render_log_level verbose)"
+# The cases above call the patch functions directly; these hold the install to
+# calling them, or a removed call passes every case above.
+check 'log level: the controller install applies the LOG_LEVEL patch' '1' \
+    "$(declare -f deploy_scaling_manager_controller | grep -c 'llmsm_append_log_level_patch "$tmp_overlay/kustomization.yaml"')"
+check 'verbosity: the controller install applies the --v patch' '1' \
+    "$(declare -f deploy_scaling_manager_controller | grep -c 'llmsm_append_verbosity_patch "$tmp_overlay/kustomization.yaml"')"
 
 # ----------------------------------------------------------------------------
 # The expected set of admin-owned objects makes the install's own decision

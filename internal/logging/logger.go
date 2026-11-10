@@ -24,8 +24,9 @@ const (
 const LogLevelEnv = "LOG_LEVEL"
 
 // levelNames maps a LOG_LEVEL name to its zap level. info, debug and trace are
-// the levels --v=2, --v=4 and --v=5 log at (logr's V(n) is zap level -n);
-// warn and error log less than any --v does.
+// the levels --v=2, --v=4 and --v=5 log at (logr's V(n) is zap level -n).
+// logr has no warning call -- every line is Info or Error -- so warn and error
+// log the same: only the errors.
 var levelNames = map[string]zapcore.Level{
 	"error":   zapcore.ErrorLevel,
 	"warn":    zapcore.WarnLevel,

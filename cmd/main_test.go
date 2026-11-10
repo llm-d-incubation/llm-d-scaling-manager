@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/zapr"
+	flag "github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	uberzap "go.uber.org/zap"
@@ -51,4 +52,42 @@ func TestDefaultVerbosityLevelArithmetic(t *testing.T) {
 	quiet.V(capacityLogVerbosity).Info("capacity-line")
 	assert.Empty(t, quietLogs.FilterMessage("capacity-line").All(),
 		"-v=0 must silence the per-variant capacity lines")
+}
+
+// LOG_LEVEL reaches the logger only through logLevelInputs: --v given or not,
+// and the environment variable. Each is driven through a real pflag set, the
+// way main parses its command line, and resolved by logging.Level as
+// InitLogging does.
+func TestLogLevelInputsReachTheLevel(t *testing.T) {
+	env := func(debug bool) func(string) string {
+		return func(key string) string {
+			if debug && key == logging.LogLevelEnv {
+				return "debug"
+			}
+			return ""
+		}
+	}
+	cases := []struct {
+		name  string
+		args  []string
+		debug bool
+		want  int
+	}{
+		{name: "LOG_LEVEL=debug with no --v", debug: true, want: logging.DEBUG},
+		{name: "an explicit --v=2 beats LOG_LEVEL=debug", args: []string{"--v=2"}, debug: true, want: logging.DEFAULT},
+		{name: "--v=4 with no LOG_LEVEL", args: []string{"--v=4"}, want: logging.DEBUG},
+		{name: "neither: the --v default", want: defaultLogVerbosity},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("manager", flag.ContinueOnError)
+			v := fs.Int("v", defaultLogVerbosity, "")
+			require.NoError(t, fs.Parse(tc.args))
+
+			set, name := logLevelInputs(fs, env(tc.debug))
+			lvl, ignored := logging.Level(*v, set, name)
+			assert.False(t, ignored)
+			assert.Equal(t, zapcore.Level(int8(-tc.want)), lvl)
+		})
+	}
 }

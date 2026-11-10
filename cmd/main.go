@@ -259,6 +259,14 @@ func managerOptions(cfg *config.Config, metricsServerOptions metricsserver.Optio
 // the fleet, and hack/benchmark/dump_k2_decisions.py needs --v=3 to read them.
 const defaultLogVerbosity = logging.DEFAULT
 
+// logLevelInputs returns what logging.InitLogging takes besides --v's value:
+// whether --v was given on fs, and the LOG_LEVEL environment variable read
+// through getenv. An explicit --v beats LOG_LEVEL, so a --v left at its default
+// must not read as given.
+func logLevelInputs(fs *flag.FlagSet, getenv func(string) string) (verbositySet bool, logLevel string) {
+	return fs.Changed("v"), getenv(logging.LogLevelEnv)
+}
+
 // nolint:gocyclo
 func main() {
 	// Command-line flags
@@ -387,7 +395,8 @@ func main() {
 
 	flag.Parse()
 
-	logging.InitLogging(&opts, *loggerVerbosity, flag.CommandLine.Changed("v"), os.Getenv(logging.LogLevelEnv))
+	verbositySet, logLevel := logLevelInputs(flag.CommandLine, os.Getenv)
+	logging.InitLogging(&opts, *loggerVerbosity, verbositySet, logLevel)
 	defer logging.Sync() // nolint:errcheck
 
 	setupLog := ctrl.Log.WithName("setup")
