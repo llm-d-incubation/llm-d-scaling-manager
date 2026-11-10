@@ -518,6 +518,7 @@ var _ = Describe("ResolveScaleToZeroEnabled reads the loaded config", func() {
 	// loader is the only reader now: a nil config is the built-in default.
 	It("reads no environment of its own: a nil config is the built-in default", func() {
 		Expect(os.Setenv("LLMSM_SCALE_TO_ZERO", "true")).To(Succeed())
-		Expect(ResolveScaleToZeroEnabled(nil, &ScalingPolicy{})).To(Equal(DefaultScaleToZeroEnabled))
+		Expect(ResolveScaleToZeroEnabled(nil, &ScalingPolicy{})).To(BeFalse(),
+			"a nil config is DefaultScaleToZeroEnabled (false), whatever the environment says")
 	})
 })
