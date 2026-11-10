@@ -20,19 +20,39 @@ import (
 // arrival rate lambda, with a saturated throughput of 6 req/s from samples
 // readings of its own window, and returns the model's demand after the floor.
 // The replica is full, so it completes its mu (fullReplicaRow), whatever
-// lambda reads.
+// lambda reads. The queue stands: there is no earlier reading of it
+// (floorOneReplicaFrom).
 func floorOneReplica(lambda float64, samples int, resident, queueCharge float64, queued int) float64 {
+	return floorOneReplicaFrom(lambda, 6, samples, resident, queueCharge, queued, 0)
+}
+
+// floorOneReplicaFrom is floorOneReplica with the replica completing
+// completes req/s and, when drainedFrom is set, its queue read at drainedFrom
+// one BacklogGrowthLookback before (charged at the same tokens a request):
+// the evidence that the queue drains, which the swap needs
+// (backlogDrainShare).
+func floorOneReplicaFrom(lambda, completes float64, samples int, resident, queueCharge float64, queued, drainedFrom int) float64 {
 	const mu = 6.0
 	a := NewSaturationAnalyzer(capacity.NewStore())
-	in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(mu)}, nil)
-	in.ArrivalRate = lambda
-	rcs := []capacity.ReplicaCapacity{{
-		VariantName: "v", PodName: "p", QueueLength: queued, LocalQueueDemand: int64(queueCharge),
-		SaturatedThroughput: mu, SaturatedThroughputSamples: samples,
-	}}
+	clock := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return clock }
 	vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: 1, PerReplicaCapacity: 260_622}}
-	return a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), rcs, vcs,
-		resident+queueCharge, nil, nil, 0, false, logr.Discard())
+	cycle := func(q int) float64 {
+		charge := queueCharge * float64(q) / float64(queued)
+		in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(completes)}, nil)
+		in.ArrivalRate = lambda
+		rcs := []capacity.ReplicaCapacity{{
+			VariantName: "v", PodName: "p", QueueLength: q, LocalQueueDemand: int64(charge),
+			SaturatedThroughput: mu, SaturatedThroughputSamples: samples,
+		}}
+		return a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), rcs, vcs,
+			resident+charge, nil, nil, 0, false, logr.Discard())
+	}
+	if drainedFrom > 0 {
+		cycle(drainedFrom)
+		clock = clock.Add(BacklogGrowthLookback)
+	}
+	return cycle(queued)
 }
 
 // fullReplicaRow is the row of the one replica "p" of variant "v" the floor
@@ -51,6 +71,10 @@ func TestThroughputFloor_DoesNotLowerDemandOnALaggingArrivalRate(t *testing.T) {
 	const resident, charge = 260_123.0, 239_323.0
 	got := floorOneReplica(0.8, 2, resident, charge, 160)
 	assert.InDelta(t, resident+charge, got, 1, "the occupancy and queue demand stands")
+	// Nor with the queue falling: the lag reads against what the replica
+	// completes, 0.8 of 6, whatever the queue does.
+	got = floorOneReplicaFrom(0.8, 6, 2, resident, charge, 160, 400)
+	assert.InDelta(t, resident+charge, got, 1, "a draining queue does not open the lag gate")
 }
 
 // Nor on a term that may not order: at 07:46:12 on the first run a single
@@ -62,30 +86,47 @@ func TestThroughputFloor_DoesNotLowerDemandOnAHeldTerm(t *testing.T) {
 }
 
 // What the swap is for still happens: with an arrival rate that accounts for
-// what is resident and a mu that may order, a standing queue is priced as
-// work to drain within BacklogDrainSeconds -- here 376 k against the 499 k
-// its residency charge comes to.
-func TestThroughputFloor_PricesABacklogAsDrainWhenLambdaHolds(t *testing.T) {
-	const resident, charge = 260_123.0, 239_323.0
-	got := floorOneReplica(6.0, 2, resident, charge, 160)
-	want := (6.0 + 160.0/60) / 6.0 * 260_622
+// what the replica completes, a mu that may order, and a queue seen draining
+// within the drain time (60 to 150 a minute before, 7.5 completed against 6
+// arriving), the queue is priced as work to drain within
+// BacklogDrainSeconds -- here 304 k against the 350 k its residency charge
+// comes to.
+func TestThroughputFloor_PricesADrainingBacklogAsDrain(t *testing.T) {
+	const resident, perReq = 260_123.0, 239_323.0 / 160
+	got := floorOneReplicaFrom(6.0, 7.5, 2, resident, 60*perReq, 60, 150)
+	want := (6.0 + 60.0/60) / 6.0 * 260_622
 	assert.InDelta(t, want, got, 1)
-	assert.Less(t, got, resident+charge)
+	assert.Less(t, got, resident+60*perReq)
 	assert.Greater(t, got, resident)
 }
 
+// But not while it stands (llm-d-incubation/llm-d-scaling-manager#54): a
+// queue of 160 at 6 req/s in and out is a replica at capacity, and its
+// residency charge stands. Priced as drain it read 376 k, which orders no
+// replica for a queue that never shrinks.
+func TestThroughputFloor_AStandingQueueKeepsItsResidencyCharge(t *testing.T) {
+	const resident, charge = 260_123.0, 239_323.0
+	got := floorOneReplica(6.0, 2, resident, charge, 160)
+	assert.InDelta(t, resident+charge, got, 1)
+	// Read a minute apart at 160 both times, the same.
+	got = floorOneReplicaFrom(6.0, 6, 2, resident, charge, 160, 160)
+	assert.InDelta(t, resident+charge, got, 1)
+}
+
 // The swap is blended in, not switched on: demand moves continuously as the
-// arrival rate crosses FloorLagFraction of the resident KV. A hard switch
-// took this replica from 499 446 to 260 123 between 2.95 and 3.0 req/s.
+// arrival rate crosses FloorLagFraction of what the replica completes. A
+// hard switch took this replica from 499 446 to 260 123 between 2.95 and
+// 3.0 req/s. The queue is seen draining (400 to 160 over a minute), so the
+// drain gate is open and the lambda gate is what moves.
 func TestThroughputFloor_TheSwapIsContinuousInLambda(t *testing.T) {
 	const resident, charge = 260_123.0, 239_323.0
-	below := floorOneReplica(2.95, 2, resident, charge, 160)
-	above := floorOneReplica(3.0, 2, resident, charge, 160)
+	below := floorOneReplicaFrom(2.95, 6, 2, resident, charge, 160, 400)
+	above := floorOneReplicaFrom(3.0, 6, 2, resident, charge, 160, 400)
 	t.Logf("demand at 2.95 req/s %.0f, at 3.0 req/s %.0f", below, above)
 	assert.InDelta(t, below, above, 0.02*below, "a 2 %% rise in lambda moves demand by at most 2 %%")
 	prev := resident + charge
 	for _, lambda := range []float64{2.8, 3.2, 3.6, 4.0, 4.4, 4.8, 5.2, 6.0, 8.0} {
-		got := floorOneReplica(lambda, 2, resident, charge, 160)
+		got := floorOneReplicaFrom(lambda, 6, 2, resident, charge, 160, 400)
 		t.Logf("lambda %.1f: demand %.0f", lambda, got)
 		assert.LessOrEqual(t, prev-got, 0.15*(resident+charge),
 			"at %.1f req/s demand fell by more than 15 %% of the measured demand in one step", lambda)

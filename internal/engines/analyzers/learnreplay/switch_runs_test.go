@@ -673,21 +673,17 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 
 	// llm-d-incubation/llm-d-scaling-manager#54 (saturation.SwitchFloorTrustReadsCompletions,
 	// throughput_floor.go): the floor's trust reads lambda against what the
-	// role completes, not lambda x P / mu against the resident KV, and the
-	// swap's drain price is the floor at no more than what the queued
-	// replicas complete. It moves the role and model demand outputs of the
-	// fixtures whose swap ran in the trust's band, and nothing else:
-	// pd-restart's decode rises on 36 cycles (to +61 %, where the queued
-	// replicas served 1.4-4.3 req/s against a learned 6.2) and falls on 3
-	// (to -22 %); ttft-saturated's prefill falls on 19 cycles (to -79 %:
-	// lambda equals what it completes, so the trust is full, where mu's
-	// ratio read 0.3-0.75); the start fixtures fall to the floor's figure
-	// (their P is 6 tokens, so the residency charge priced a queue of 56 at
-	// over a thousand replicas). Alone it also moves throughput-sweep-restart
-	// on 2 cycles from 22:14:20 (decode -6.6 % there, priced at the resident
-	// KV); with SwitchQueuePricedAsDrain on,
-	// as all on runs, the drain price holds those cycles and nothing there
-	// moves.
+	// role completes, not lambda x P / mu against the resident KV; it swaps a
+	// queue's residency charge for the drain price only as far as the queue is
+	// seen draining (backlogDrainShare); and the drain price is the floor at no
+	// more than what the queued replicas complete. It moves the role and model
+	// demand outputs of the fixtures whose swap ran, and nothing else. Mostly
+	// up, the cost side: a standing queue keeps its charge where mu's ratio
+	// trusted the swap (ttft-saturated's prefill up on 101 cycles, to x10).
+	// Down only where the queue fell over the minute: pd-restart 13:00:52
+	// (963 to 606), the start fixtures as their queues drained, b-off at
+	// 02:11:09 and 02:15:24, and e1's decode by under 1 % as its queue of 300
+	// emptied.
 	saturation.SwitchFloorTrustReadsCompletions: {
 		"e1-tuned/results.csv", "e1/results.csv",
 		"pd-restart/composite-results.csv", "pd-restart/composite-roles.csv", "pd-restart/results.csv",
@@ -1004,9 +1000,8 @@ var startSeedSeamMoves = map[string][]string{
 		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/lines.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
 	// Its start-restored results and composite-results stopped moving with
-	// llm-d-incubation/llm-d-scaling-manager#54's switch on: the cycles k2's
-	// first reading moved there are now priced at the floor's own figure,
-	// and come out the same either way.
+	// llm-d-incubation/llm-d-scaling-manager#54's switch on (see
+	// SwitchMuMarginClamp below).
 	saturation.SwitchK2FirstReadingWaits: {
 		"start-seed/composite-variants.csv", "start-seed/learned-state.csv", "start-seed/variant-capacities.csv",
 		"start-seed-restart/learned-state.csv", "start-seed-restart/variant-capacities.csv",
@@ -1021,14 +1016,18 @@ var startSeedSeamMoves = map[string][]string{
 		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
 		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
+	// These two, and SwitchK2FirstReadingWaits above, stopped moving
+	// start-seed-restart-2's results and composite-results with
+	// llm-d-incubation/llm-d-scaling-manager#54's switch on: the mu they move
+	// priced the floor's swap there, and those cycles' queues stand, so the
+	// swap no longer runs and occupancy's figure, which mu does not reach,
+	// stands either way.
 	saturation.SwitchMuMarginClamp: {
-		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
-		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
 	saturation.SwitchMuSwapFreeze: {
 		"start-seed/composite-results.csv", "start-seed/learned-state.csv", "start-seed/results.csv", "start-seed/variant-capacities.csv",
-		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
-		"start-seed-restart-2/results.csv", "start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
 }
 

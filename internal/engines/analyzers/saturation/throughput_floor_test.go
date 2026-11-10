@@ -279,16 +279,15 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			clock = clock.Add(ThroughputSampleSpacing + time.Second)
 		}
 	}
-	// standing analyzes in on 15 s cycles for BacklogGrowthLookback and returns
-	// the last: a queue the floor may price as drain is one that has stood
-	// that long, not one that grew over it (applyThroughputFloor, backlogGrew).
-	standing := func(in domain.AnalyzerInput) (*domain.AnalyzerResult, error) {
-		for range int(BacklogGrowthLookback / (15 * time.Second)) {
-			if _, err := analyzer.Analyze(ctx, in); err != nil {
-				return nil, err
-			}
-			clock = clock.Add(15 * time.Second)
+	// draining analyzes prior, then in one BacklogGrowthLookback later, and
+	// returns the second: in's queue seen falling from prior's, the evidence
+	// the floor's swap needs before it prices a queue as drain
+	// (backlogDrainShare). A queue that stands keeps its residency charge.
+	draining := func(prior, in domain.AnalyzerInput) (*domain.AnalyzerResult, error) {
+		if _, err := analyzer.Analyze(ctx, prior); err != nil {
+			return nil, err
 		}
+		clock = clock.Add(BacklogGrowthLookback)
 		return analyzer.Analyze(ctx, in)
 	}
 
@@ -719,7 +718,15 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			states(1, 1))
 		in.ArrivalRate = runLambda
 		in.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 200, QueueBytes: 200 * 6000 * 4}
-		result, err := standing(in)
+		// Seen draining: a minute before, 400 waited in the engine and 400
+		// at the scheduler. Standing, the queue keeps its residency charge
+		// (backlogDrainShare; the spec below the next).
+		prior := makeAnalyzerInput(
+			[]domain.ReplicaMetrics{decode("decode-0", 1_158_912, 400, runMu), prefill("prefill-0", 66_183)},
+			states(1, 1))
+		prior.ArrivalRate = runLambda
+		prior.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 400, QueueBytes: 400 * 6000 * 4}
+		result, err := draining(prior, in)
 		Expect(err).NotTo(HaveOccurred())
 		var decodeP float64
 		for _, vc := range result.VariantCapacities {
@@ -775,7 +782,13 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 		// at mu 5.4 is 2.96 replicas, about the 3M resident.
 		in := makeAnalyzerInput(rm, states(3, 1))
 		in.ArrivalRate = 16
-		result, err := analyzer.Analyze(ctx, in)
+		// The queue seen draining, ten each a minute before (backlogDrainShare).
+		prior := makeAnalyzerInput([]domain.ReplicaMetrics{
+			decode("a", 1_000_000, 10, 16.0/3), decode("b", 1_000_000, 10, 16.0/3), decode("c", 1_000_000, 10, 16.0/3),
+			prefill("p", 0),
+		}, states(3, 1))
+		prior.ArrivalRate = 16
+		result, err := draining(prior, in)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RoleDemand[domain.RoleDecode]).To(BeNumerically("~", 3_000_000, 1),
 			"the six queued requests come out of the residency charge and the resident 3M stays")
@@ -824,7 +837,11 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 		in2.ArrivalRate = runLambda
 		_, err = analyzer.Analyze(ctx, in2)
 		Expect(err).NotTo(HaveOccurred())
-		result, err = standing(in)
+		// The scheduler's queue seen draining, 500 a minute before
+		// (backlogDrainShare): standing, it keeps its residency charge.
+		prior := in
+		prior.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 500, QueueBytes: 500 * 6000 * 4}
+		result, err = draining(prior, in)
 		Expect(err).NotTo(HaveOccurred())
 		var prefillP float64
 		for _, vc := range result.VariantCapacities {
@@ -1061,7 +1078,11 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 		in = makeAnalyzerInput([]domain.ReplicaMetrics{both("a", 1_158_912, 60, runMu)}, st)
 		in.ArrivalRate = runLambda
 		in.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 40, QueueBytes: 40 * 6000 * 4}
-		result, err = standing(in)
+		// Seen draining from 150 and 100 a minute before (backlogDrainShare).
+		prior := makeAnalyzerInput([]domain.ReplicaMetrics{both("a", 1_158_912, 150, runMu)}, st)
+		prior.ArrivalRate = runLambda
+		prior.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 100, QueueBytes: 100 * 6000 * 4}
+		result, err = draining(prior, in)
 		Expect(err).NotTo(HaveOccurred())
 		P := result.VariantCapacities[0].PerReplicaCapacity
 		Expect(result.TotalDemand).To(BeNumerically("~", (runLambda+100.0/floor.BacklogDrainSeconds)/runMu*P, 1))

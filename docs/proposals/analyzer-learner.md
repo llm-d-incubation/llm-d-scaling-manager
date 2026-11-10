@@ -861,8 +861,8 @@ not cover a key.
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
 finding above is in exactly one state:
 
-- **Caught:** 36 findings. For each, a mutant puts the defect back, and its
-  class fails on that mutant. For 28 a mutant runs the production learner
+- **Caught:** 37 findings. For each, a mutant puts the defect back, and its
+  class fails on that mutant. For 29 a mutant runs the production learner
   (a policy key, rows, or a stub); 8 are caught only by a toy, and the code
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
@@ -4585,53 +4585,64 @@ measured queue could price lower at a lower mu ("One slow pod, as built").
 and the ratio go to zero, so the old trust prices occupancy's figure there,
 queue charge and all. A demand that never rises with mu would then never fall
 under occupancy at any mu, and the swap would be gone. So the trust reads no
-mu now:
+mu now. It is the product of two shares, and neither reads mu:
 
-- **Trust:** `floorTrust` of lambda over what the role completes: per replica
+- **Lag:** `floorTrust` of lambda over what the role completes: per replica
   the larger of `RequestRate` and `RunningRequests / AvgServiceTime`, summed.
   A load step reads as before: 0.8 req/s against a full replica completing 6
-  is 0.13. With no completion on record, the trust is 0 and occupancy's charge
-  stands. `floorTrust.lagFraction` and `trustFraction` keep their defaults and
-  now mean a share of the completions.
-- **Drain price:** the floor again, with each replica's mu capped at what the
-  role's queued replicas complete (the median, from at least half of them).
-  The old ratio also held back trust from a full fleet serving under its
-  learned mu. That case is now priced at the rate the fleet serves:
-  `pd-restart` at 12:46:35 served 2.89 req/s a replica against a learned 6.22.
+  is 0.13. With no completion on record it is 0. `floorTrust.lagFraction` and
+  `trustFraction` keep their defaults and now mean a share of the completions.
+- **Drain (`backlogDrainShare`):** the drain price assumes the queue clears
+  within the drain horizon, so the swap needs the queue seen draining that
+  fast. The share is how fast the queue fell since the reading
+  `noteBacklogGrowth` compares with, net of the growth noise band, over
+  backlog / horizon, capped at 1. A queue that stands or grows reads 0 and
+  keeps occupancy's charge: lambda then equals what the fleet completes, the
+  fleet is at capacity, and the queue's wait is latency. Priced as drain,
+  ttft-saturated's standing prefill queue of 58 at 3.1 req/s ordered nothing.
+  Completions above lambda are not read as drain: on the start fixtures they
+  read 0.5-1 req/s over lambda while the queue stood at 55.
 
-Both ends of the blend fall as mu rises, and the trust does not move with it.
-`monotonicity/floor/lower-mu-never-prices-less` holds this: eight mu from
-0.25x to 3x on one measured state. It fails on 19 of 20 seeds with the switch
-off, and a stub mutant holds that.
+The drain price is the floor again, with each replica's mu capped at what the
+role's queued replicas complete. Both ends of the blend fall as mu rises, and
+the trust does not move with it. Two property cases hold this:
 
-Measured on the goldens, the switch alone moves only role and model demand.
-Most moved cycles go to the SLO side; some go up:
+- `monotonicity/floor/lower-mu-never-prices-less` prices one measured state at
+  eight mu from 0.25x to 3x. On main it fails on 19 of 20 seeds.
+- `known-truth/floor/standing-queue-keeps-occupancy` has lambda equal to
+  completions and the queue standing a minute, and requires the floor never to
+  price under occupancy. On the first build of this change, which had the lag
+  share and no drain share, it fails on 7 of 20 seeds.
+
+Stub mutants (the switch off) hold both.
+
+Measured on the goldens against main, the switch moves only role and model
+demand. Most of it goes up, to the cost side:
 
 | golden | role | up | down | range |
 | --- | --- | --- | --- | --- |
-| `pd-restart` | decode | 36 | 3 | x0.775 to x1.607 |
-| `ttft-saturated` | prefill | 13 | 19 | x0.213 to x1.320 |
-| `ttft-staircase-b-off` | decode | 5 | 7 | x0.441 to x2.064 |
-| `ttft-staircase-c-on` | decode | 12 | 3 | x0.609 to x1.305 |
-| `e1`, `e1-tuned` | decode | 0 | 98 | x0.889 to x1.000 |
-| start fixtures | model | 2 | 59 | x0.006 to x1.973 |
+| `ttft-saturated` | prefill | 101 | 0 | x1.142 to x10.125 |
+| `pd-restart` | decode | 45 | 1 | x0.880 to x2.506 |
+| `ttft-staircase-b-off` | decode | 15 | 3 | x0.773 to x2.755 |
+| `ttft-staircase-c-on` | decode | 18 | 2 | x1.000 to x1.584 |
+| `throughput-sweep-restart` | decode | 13 | 0 | x1.132 to x1.348 |
+| `e1`, `e1-tuned` | decode | 133 | 12 | x0.992 to x1.029 |
+| start fixtures | model | 41 | 14 | x0.010 to x96.3 |
 
-- **Down, the SLO side.** Cycles where lambda matched what the role completed
-  but mu's ratio read under 0.8: the queued replicas served under their learned
-  mu, or the fleet had room. `ttft-saturated` keeps a standing prefill queue of
-  58 at 3.1 req/s, priced at what one replica drains. Its required capacity
-  goes to 0 on 14 cycles where it was 0.1 to 0.9 of a replica.
-- **Start fixtures.** Their P is 6 tokens, so the residency charge priced a
-  queue of 56 at over a thousand replicas. They now fall to the floor's figure.
-- **Up, the cost side.** Cycles where the queued replicas complete under mu,
-  priced at what they serve.
+Required capacity falls on 19 cycles. On 17 of them the queue fell over the
+minute before: pd-restart 13:00:52, 963 to 606; the start fixtures as their
+queues drained; b-off 02:11:09, 567 to 331; b-off 02:15:24, 320 to 220. On the
+other 2 the engines had no queue (c-on 05:45:35 and 05:49:20, under 5 %).
 
-Three over-priced ledger rows now pass and are removed:
-`liveness/floor/closed-loop-{decode-step,restart-before-step,restored-snapshot}-start-463s`.
-Their `-jsq` twins still fail.
+The cost: five closed-loop probes at a 463 s start are over-priced. Their
+queue stands while the order starts, so occupancy's charge stands too: the
+decode step peaks at 29 against a ceiling of 26.5, and the load step at 15
+and 16 against 14.5. They are ledger rows. Three of them were removed by the
+first build of this change and are back.
+`TestUnevenRoutingAPinnedQueueIsPricedAtWhatItsReplicaDrains` no longer covers
+a queue of 1000 pinned on one replica, which keeps occupancy's 5.25 replicas.
 
-Not run on a cluster. Whether the cut on a standing queue, priced at what the
-fleet drains, holds the SLO is a question for one.
+Not run on a cluster.
 
 ## 8. Risks and limits
 

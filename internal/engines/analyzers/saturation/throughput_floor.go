@@ -842,7 +842,13 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 			swap := term.MayOrder && !term.Held && !grew[role]
 			drainTokens := tokens
 			if a.floorTrustCompleted {
-				trust = tune.completedTrust(tf.Lambda, completed[role].total)
+				// And only as far as the queue is seen draining: a queue that
+				// stands at lambda = completions is a fleet at capacity, and
+				// the drain price would order nothing for it
+				// (backlogDrainShare).
+				trust = tune.completedTrust(tf.Lambda, completed[role].total) *
+					a.backlogDrainShare(input.Namespace, input.ModelID, role, queued[role],
+						floor.DrainHorizon(floor.BacklogDrainSeconds, starts.sized[role]), tune)
 				drainTokens = max(tokens, served.ByRole[role])
 			} else {
 				trust = tune.residentTrust(term.ArrivalDemand, resident)
@@ -1113,6 +1119,50 @@ func (a *SaturationAnalyzer) noteBacklogGrowth(namespace, modelID string, backlo
 		memo.seen = now
 	}
 	return grew
+}
+
+// backlogDrainShare is how much of the evidence the floor's drain price needs
+// a role's queue gives (SwitchFloorTrustReadsCompletions): the drain price
+// assumes the backlog clears within horizon, and that holds only for a queue
+// seen draining at least backlog / horizon a second. From 0 to 1, the share
+// of that rate the queue fell at since the reading noteBacklogGrowth compares
+// with (called after it has recorded this cycle's), net of the noise band
+// backlogGrew reads growth past: max(minRequests, fraction of the earlier
+// backlog).
+//
+// A queue that stands, or grows, reads 0, and so does one with nothing to
+// compare with: the fleet is at capacity, and the queue's wait is the latency
+// the residency charge pays for. Priced as drain it ordered nothing (on
+// ttft-saturated, prefill standing at 58 queued, 3.1 req/s in and out). What
+// the role completes over lambda is not read as drain: on the start fixtures
+// it read 0.5-1 req/s over lambda while the queue stood at 55, and on
+// pd-restart at 12:46:35 5.8 over while it grew 1008 to 1093. An empty queue
+// reads 1: there is no charge to swap. No mu enters it, so the trust stays
+// flat in mu.
+func (a *SaturationAnalyzer) backlogDrainShare(namespace, modelID, role string, backlog, horizon float64, t tuning) float64 {
+	if !(backlog > 0) {
+		return 1
+	}
+	if !(horizon > 0) {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	memo := a.k2Settle[namespace+"|"+modelID]
+	if memo == nil || len(memo.backlogs) < 2 {
+		return 0
+	}
+	ref, cur := memo.backlogs[0], memo.backlogs[len(memo.backlogs)-1]
+	dt := cur.at.Sub(ref.at).Seconds()
+	prev, seen := ref.byRole[role]
+	if !seen || !(dt > 0) {
+		return 0
+	}
+	fell := prev - backlog - max(t.BacklogGrowth.MinRequests, t.BacklogGrowth.Fraction*prev)
+	if !(fell > 0) {
+		return 0
+	}
+	return min(fell/dt*horizon/backlog, 1)
 }
 
 // localQueueBacklog is what one replica's own engine queue adds to its role's

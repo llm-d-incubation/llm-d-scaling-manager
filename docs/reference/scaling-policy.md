@@ -1847,6 +1847,10 @@ collector's one-minute rate window and is not configurable.
 | `lagFraction` | `0.5` | (0, 1) | Below this share of what the role's replicas complete, the arrival rate is taken as lagging and the floor never lowers demand. |
 | `trustFraction` | `0.8` | (`lagFraction`, 1] | At or above this share, the floor's drain price is trusted in full. In between the two prices are blended. |
 
+The floor lowers demand only for a queue it has seen draining over the last
+minute, and only as far as that queue drains within the drain time. A queue
+that stands or grows keeps its full charge, whatever these keys say.
+
 If the merged policy has `trustFraction` at or under `lagFraction`, both go
 back to `0.5` and `0.8`, and the controller logs a `WARNING: tuning figure not
 used` line when it reads the ConfigMap.
