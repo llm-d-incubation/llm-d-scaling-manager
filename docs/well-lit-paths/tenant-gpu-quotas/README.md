@@ -103,7 +103,7 @@ both, declare two entries, and both are consulted.
 A later `make deploy-scaling-manager` without `LLMSM_LIMITER` keeps the `limiters:` list, a
 hand-written entry included. `LLMSM_LIMITER=quota` replaces it and
 `LLMSM_LIMITER=none` removes it
-([why](../../reference/scaling-policy.md#re-running-the-installer-resets-the-default-entry)).
+([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
 `make disable-limiter` also clears the limiter it wrote into
 admin-owned controllers' own ConfigMaps. It leaves the read-only grants,
 except that `LLMSM_LIMITER_TYPE=quota` or `all` revokes the Kueue controller
