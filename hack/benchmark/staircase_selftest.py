@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 185
+EXPECTED = 200
 checks = fails = 0
 
 
@@ -115,9 +115,29 @@ ok("top still meets", lib.measured(RUNG, "client_ttft_p90", 1.0) == ("at least",
 ok("an infinite step brackets the crossing: it is on the cliff",
    lib.measured([step(10, 0.1), step(20, math.inf)], "client_ttft_p90", 0.2, bounds=False) == ("cliff", (10, 20)))
 SHORT = [step(10, 0.1, 1), step(20, 0.2, 2), step(30, 0.4, 3, achieved=20.0)]
-ok("a crossing on a short step is a bound", lib.measured(SHORT, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A rate off its band can move a reading either way: it closes no bracket, so it is open.
+ok("a crossing on a short step is a bound, open above", lib.measured(SHORT, "client_ttft_p90", 0.3) == ("bound", (20, math.inf)),
+   lib.measured(SHORT, "client_ttft_p90", 0.3))
 NOISY = [step(10, 0.1, 1), step(20, 0.2, 2, noise_flag=True), step(30, 0.4, 3)]
-ok("a crossing on a noisy step is a bound", lib.measured(NOISY, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A step under the noise floor reads low: it cannot be the low end, so the bracket widens.
+ok("a crossing past a noisy step is a bound from the last step that can hold it",
+   lib.measured(NOISY, "client_ttft_p90", 0.3) == ("bound", (10, 30)), lib.measured(NOISY, "client_ttft_p90", 0.3))
+# The reviewer's probe: 30 valid 0.10 s, 34 short of its schedule 0.15 s, 36 valid 0.30 s,
+# target 0.2 s. Bracketed from 34 it read 0.96 to 1.01 of 34.5 and passed; 34 reads low,
+# so the bracket is 30 to 36, 0.96 to 1.15, across the mark's edge.
+PROBE = [step(30, 0.10, 1), step(34, 0.15, 2, scheduled=10000, recorded=9000), step(36, 0.30, 3)]
+GOT = lib.measured(PROBE, "client_ttft_p90", 0.2)
+ok("a step short of its schedule is no low end", GOT == ("bound", (30, 36)), GOT)
+ok("and the probe's bound is across the mark, not in it", lib.mark(34.5, *GOT)[1] == "no mark, a bound", lib.mark(34.5, *GOT))
+JUMPED = [step(30, 0.10, 1), step(34, 0.15, 2, noise_flag=True), step(36, 5.0, 3)]
+GOT = lib.measured(JUMPED, "client_ttft_p90", 0.2)
+ok("a bound whose ends are past the cliff factor apart is a jump", GOT == ("jump", (30, 36)), GOT)
+ok("and a jump is never in the mark, even with its bracket inside it", lib.mark(32, *GOT)[1] == "no mark, a bound across a jump",
+   lib.mark(32, *GOT))
+ok("a bracket at exactly the mark's limits, 0.75 and 1.10, is in it", lib.mark(33, "bound", (30, 44))[1] == "in the mark, a bound",
+   lib.mark(33, "bound", (30, 44)))
+ok("an open bracket is never in the mark", lib.mark(35, "bound", (34, math.inf))[1] == "no mark, a bound"
+   and lib.mark(20, "bound", (34, math.inf))[1] == "FAIL, a bound")
 ok("NaN reads no data", lib.measured([step(10, math.nan)], "client_ttft_p90", 1)[0] == "no data")
 ok("no row reads no data", lib.measured([], "client_ttft_p90", 1)[0] == "no data")
 
@@ -132,7 +152,8 @@ ok("a cut step is void", lib.invalid(CUT) and "max-inflight" in lib.validity(CUT
 ok("a cap on its step is void even uncut", lib.invalid(dict(CUT, truncated=False)))
 ok("the p90 rule at a step's end voids nothing", not lib.invalid(dict(CUT, truncated=False, stopped_by=lib.RULE_P90)))
 CUTRUNG = [step(10, 0.1, 1), step(20, 0.2, 2), dict(step(30, 0.4, 3), truncated=True, stopped_by=lib.RULE_INFLIGHT)]
-ok("a crossing on a cut step is a bound", lib.measured(CUTRUNG, "client_ttft_p90", 0.3) == ("bound", (20, 30)))
+# A cut can only raise a reading: it may be the low end, never the high one.
+ok("a crossing on a cut step is a bound, open above", lib.measured(CUTRUNG, "client_ttft_p90", 0.3) == ("bound", (20, math.inf)))
 
 # --- the mark ---------------------------------------------------------------------------
 ok("in the mark", lib.mark(10, "=", 10)[1] == "in the mark")
@@ -254,7 +275,7 @@ ok("a bracket past it fails", lib.mark(70.0, *GOT)[1] == "FAIL, on the cliff")
 ok("the cliff needs a valid step below the crossing: a void one makes a bound", lib.measured(
     [step(47.490, 0.4942, 2, noise_flag=True), step(51.401, 0.5916, 3), step(53.636, 31.5, 4)], "client_ttft_p90", 0.9634)[0] == "cliff"
    and lib.measured([step(47.490, 0.4942, 2), step(51.401, 0.5916, 3, noise_flag=True), step(53.636, 31.5, 4)],
-                    "client_ttft_p90", 0.9634)[0] == "bound")
+                    "client_ttft_p90", 0.9634)[0] == "jump")
 ok("a top step void by send lag brackets no cliff: the client times from the schedule", lib.measured(
     [step(51.401, 0.5916, 3), step(53.636, 31.5, 4, lag_p99=2.0)], "client_ttft_p90", 0.9634)[0] == "bound")
 ok("steps less than the factor apart interpolate", lib.measured(RUNG, "client_ttft_p90", 0.3) == ("=", 25.0))
@@ -393,11 +414,48 @@ with tempfile.TemporaryDirectory() as run:
     GATE_OUT = io.StringIO()
     ok("an all-void bucket stops the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 1)
     ok("and says why", lib.NO_VALID_CROSSING in GATE_OUT.getvalue(), GATE_OUT.getvalue())
-    # In the mark as a bound, 37 over 35 to 40: only the void step can stop it.
+    # A crossing on a void step is a bound, bracketed by 35 and 40 r/s. 37 predicted is
+    # 0.93 to 1.06 of it, wholly in the mark [0.75, 1.10]: the verdict is the same
+    # wherever in the bracket the crossing sits, so it passes.
+    # A top step void by send lag reads high: it closes no bracket, and the gate stops. One
+    # short of its schedule (a load that died) reads low if anything, and closes it.
     TWO = [dict(ROW, rate=35.0, achieved=35.0), dict(ROW, level=2, rate=40.0, achieved=40.0, client_ttft_p90=0.5, lag_p99=1.0)]
     with open(os.path.join(run, "phases", "B-off-r1", "analysis.jsonl"), "w", encoding="utf8") as f:
         f.writelines(json.dumps(r) + "\n" for r in TWO)
-    ok("a crossing on a void step stops the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, io.StringIO()) == 1)
+    GATE_OUT = io.StringIO()
+    ok("a bound open above, its top step void by send lag, stops the gate",
+       analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 1 and "no valid crossing" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    TWO = [dict(ROW, rate=35.0, achieved=35.0), dict(ROW, level=2, rate=40.0, achieved=40.0, client_ttft_p90=0.3, scheduled=1000, recorded=800)]
+    with open(os.path.join(run, "phases", "B-off-r1", "analysis.jsonl"), "w", encoding="utf8") as f:
+        f.writelines(json.dumps(r) + "\n" for r in TWO)
+    GATE_OUT = io.StringIO()
+    ok("a bound wholly in the mark passes the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 0
+       and "1 bounds wholly in the mark, passed" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+
+    def predicting(rate):
+        return dict(buckets=[dict(BUCKET, targets=[dict(BUCKET["targets"][0], predictedOff=rate, predictedOn=rate)])])
+    # 41 predicted is 1.03 to 1.17: across the mark's top edge.
+    GATE_OUT = io.StringIO()
+    ok("a bound across the mark's edge stops the gate", analyze.gate(run, predicting(41.0), GATE_SPEC, 1, GATE_OUT) == 1
+       and lib.NO_VALID_CROSSING in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    # 50 predicted is 1.25 to 1.43: wholly outside.
+    GATE_OUT = io.StringIO()
+    ok("a bound outside the mark stops the gate", analyze.gate(run, predicting(50.0), GATE_SPEC, 1, GATE_OUT) == 1
+       and "FAIL, a bound" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    # The rules written after repeat 1 was seen are named in every gate and report, with
+    # the verdicts from before them that a resume kept.
+    os.makedirs(os.path.join(run, "prior-1"))
+    with open(os.path.join(run, "prior-1", "gate-r1.out"), "w", encoding="utf8") as f:
+        f.write("gate repeat 1: 16 readings, 7 stop the run\n")
+    GATE_OUT = io.StringIO()
+    analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT)
+    with open(os.path.join(run, "gate-r1.md"), encoding="utf8") as f:
+        GATE_MD = f.read()
+    ok("the gate and its report name both post-hoc rules, their date, and the verdict kept from before them",
+       all(analyze.POST_HOC in t and "prior-1/gate-r1.out" in t for t in (GATE_OUT.getvalue(), GATE_MD))
+       and "2026-11-10" in analyze.POST_HOC, GATE_OUT.getvalue())
+    os.remove(os.path.join(run, "prior-1", "gate-r1.out"))
+    os.rmdir(os.path.join(run, "prior-1"))
 
     # The cliff at the gate: r1's C-onset shape, scaled to this bucket's 0.2 s target and 37
     # r/s. Its void top step made a bound, and the bound stopped the gate.
@@ -639,6 +697,33 @@ with tempfile.TemporaryDirectory() as run:
     UNREAD, _ = analyze.analyze_steps(run, "S-off-r1", 180)
     ok("a step read without its schedule is marked, and keeps the band", UNREAD and all(r.get("schedule_unread") and "scheduled" not in r
                                                                          for r in UNREAD), [sorted(r) for r in UNREAD[:1]])
+
+
+# --- the ITL-slope falsifier is judged at the operating point only ----------------------
+# r2's repeat 1: the operating-point phases read 6.18 to 8.23, the onset phases 12.78 and
+# 19.28. The knees are r2's frozen ones: B's lower knee is decode's, B-onset's prefill's.
+def slope_rows(slope):
+    return [dict(rate=10.0 + i, truncated=False, failed=0, client_tpot_mean=0.01 * (i + 1),
+                 engine_decode_mean=slope * 0.01 * (i + 1), hop_mean=0.001) for i in range(4)]
+
+
+SLOPE_FROZEN = {"B": dict(knee=35.63, prefillKnee=58.97, decodeKnee=35.63, operatingRate=1.0, prompt=8000),
+                "B-onset": dict(knee=58.97, prefillKnee=58.97, decodeKnee=71.26, operatingRate=1.0, prompt=8000)}
+SLOPE_SPEC = dict(falsifiers=dict(itlSlope=[5.5, 9.0]))
+TEXT = io.StringIO()
+GOT = analyze.falsifiers({("B", "on"): {1: slope_rows(7.2)}, ("B-onset", "on"): {1: slope_rows(12.78)}},
+                         SLOPE_FROZEN, SLOPE_SPEC, TEXT)
+ok("an onset bucket's ITL slope is printed as reported, not judged",
+   "| ITL slope, B-onset on | 12.78 | 5.5 to 9 | reported, onset phase |" in TEXT.getvalue(), TEXT.getvalue())
+ok("and counts toward nothing, while the operating-point one is judged", GOT == [True], GOT)
+# The ladder of every bucket is in shares of its lower knee (the spec's steps), so the
+# knee comparison is how the ladder was built, not a guess at it: a bucket of any name
+# whose prefill knee is the lower one is on an onset ladder.
+ok("a bucket with no prefill knee frozen is judged", not analyze.onset_ladder(dict(knee=35.6, decodeKnee=35.6)))
+ok("a bucket of any name whose prefill knee is the lower one is on an onset ladder",
+   analyze.onset_ladder(dict(name="H-16k", knee=29.48, prefillKnee=29.48, decodeKnee=30.0)))
+ok("an operating-point slope out of band is still judged, and fails",
+   analyze.falsifiers({("B", "on"): {1: slope_rows(12.78)}}, SLOPE_FROZEN, SLOPE_SPEC, io.StringIO()) == [False])
 
 print("%d checks, %d failed" % (checks, fails))
 if checks != EXPECTED:

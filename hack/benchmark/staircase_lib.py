@@ -279,6 +279,58 @@ def invalid(row):
     return bool(validity(row))
 
 
+def void_direction(row):
+    """Which way a step's flaws can move its reading: "" on a valid step, "up" when each
+    can only raise it (send lag, a cut, failures counted infinitely slow, a Ca^2 burstier
+    than asked), "down" when each can only lower it (the noise floor, rows short of the
+    schedule: a load that died), None when one can go either way or they disagree (a
+    rate off its band, a fleet that moved, a Ca^2 calmer than asked).
+    """
+    if not invalid(row):
+        return ""
+    sent_more = row.get("ca2_sent", 0) > row.get("ca2_asked", 1)
+    up = (row.get("lag_p99", 0) > MAX_LAG_P99 or row.get("truncated") or row.get("stopped_by") == RULE_INFLIGHT
+          or row.get("failed", 0) > MAX_FAILED_SHARE * max(row.get("due", 0), 1) or (row.get("ca2_rerun") and sent_more))
+    short = "scheduled" in row and row["scheduled"] - row["recorded"] > 1 + COMPLETE_SHARE * row["scheduled"]
+    down = row.get("noise_flag") or short
+    either = (row.get("replica_change") or (row.get("ca2_rerun") and not sent_more)
+              or any(w.startswith("achieved ") for w in validity(row)))
+    if either or (up and down):
+        return None
+    return "up" if up else "down"
+
+
+def bracket(rows, values, i, target, x):
+    """The bound of a crossing at step i that some void step touches: (kind, (low, high)).
+
+    The low end is the last step under the target that is valid or void only upward: its
+    true reading is no higher, so the crossing is past it. The high end is the first step
+    over the target that is valid or void only downward, and reads the fleet: its true
+    reading is no lower, so the crossing is before it. A void step whose error points the
+    other way says nothing of where the crossing is, and is passed over. With no high
+    end the bracket is open above (high is inf), and no mark can hold it. Ends more than
+    CLIFF_FACTOR apart in reading, or a jump that wide into step i, make a "jump": a
+    bound no line spans, which the gate never passes.
+    """
+    lo = next((j for j in range(i - 1, -1, -1) if void_direction(rows[j]) in ("", "up")), None)
+    if lo is None:
+        return "void", None
+    hi = None
+    for j in range(i, len(rows)):
+        v = values[j]
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            break
+        if v > target and void_direction(rows[j]) in ("", "down") and reads_the_fleet(rows[j]):
+            hi = j
+            break
+    if hi is None:
+        return "bound", (rows[lo][x], math.inf)
+    y0, y_before = values[lo], values[i - 1]
+    if (y0 > 0 and values[hi] > CLIFF_FACTOR * y0) or (y_before > 0 and values[i] > CLIFF_FACTOR * y_before):
+        return "jump", (rows[lo][x], rows[hi][x])
+    return "bound", (rows[lo][x], rows[hi][x])
+
+
 def reads_the_fleet(row):
     """Whether a step's reading is the fleet's own, void or not.
 
@@ -371,8 +423,10 @@ def measured(rows, key, target, x="rate", bounds=True, used=None):
     """Where the reading meets target along the ladder: (kind, value).
 
     kind is "=" (value interpolated), "below" (the first step misses), "at least"
-    (the top valid step still meets it), "bound" (value a (low, high): the crossing
-    lands on an invalid step), "cliff" (value a (low, high): the step below the
+    (the top valid step still meets it), "bound" (value a (low, high): a void step
+    touches the crossing, and the ends are the steps whose flaws cannot hide it, see
+    bracket; high is inf when no step above can close it), "jump" (a bound whose ends
+    are past CLIFF_FACTOR apart: never in the mark), "cliff" (value a (low, high): the step below the
     crossing is valid, and the one above it reads the fleet (reads_the_fleet) at over
     CLIFF_FACTOR times as much, so no line between them says where the target falls,
     and any target between them crosses there), "void" (no valid step says
@@ -392,7 +446,7 @@ def measured(rows, key, target, x="rate", bounds=True, used=None):
         if used is not None:
             used.extend(m for m in ms if m)
 
-    for row, value, m in zip(rows, values, marks):
+    for i, (row, value, m) in enumerate(zip(rows, values, marks)):
         if value is None or (isinstance(value, float) and math.isnan(value)):
             return "no data", None
         if value > target:
@@ -403,9 +457,10 @@ def measured(rows, key, target, x="rate", bounds=True, used=None):
             jump = y0 > 0 and value > CLIFF_FACTOR * y0
             if jump and not (bounds and (invalid(row_before) or not reads_the_fleet(row))):
                 return "cliff", (x0, row[x])
-            # A jump no line spans, read on a step that is not the fleet's own, is a bound.
+            # A void step at the crossing, or a jump no line spans read on a step that is
+            # not the fleet's own: a bound, its ends the steps whose flaws cannot hide it.
             if bounds and (invalid(row) or invalid(row_before) or jump):
-                return "bound", (x0, row[x])
+                return bracket(rows, values, i, target, x)
             if math.isinf(value):
                 return "=", x0
             return "=", x0 + (target - y0) / (value - y0) * (row[x] - x0)
@@ -427,6 +482,11 @@ def mark(predicted, kind, value):
         if hi < MARK_LOW or lo > MARK_HIGH:
             return "%.2f to %.2f" % (lo, hi), "FAIL, a bound"
         return "%.2f to %.2f" % (lo, hi), "no mark, a bound"
+    if kind == "jump":
+        lo, hi = predicted / value[1], predicted / value[0]
+        if hi < MARK_LOW or lo > MARK_HIGH:
+            return "%.2f to %.2f" % (lo, hi), "FAIL, a bound"
+        return "%.2f to %.2f" % (lo, hi), "no mark, a bound across a jump"
     if kind == "cliff":
         lo, hi = predicted / value[1], predicted / value[0]
         if MARK_LOW <= lo and hi <= MARK_HIGH:
@@ -458,6 +518,8 @@ def show(kind, value):
         return "n/a"
     if kind == "bound":
         return "%.1f to %.1f (bound)" % value
+    if kind == "jump":
+        return "%.1f to %.1f (bound, across a jump)" % value
     if kind == "cliff":
         return "%.1f to %.1f (on the cliff)" % value
     return {"below": "below the ladder (%.1f)", "at least": "at least %.1f", "=": "%.1f"}[kind] % value
