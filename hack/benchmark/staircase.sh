@@ -7,6 +7,8 @@
 #   staircase.sh lapse <image> a short run whose runner is killed with -9, 2 GPUs: the
 #                              deadline Job must delete the workloads on its own
 #   staircase.sh run <image>   stand up, warm up, wait for the freeze, run every phase
+#   staircase.sh resume <image> go on with a stopped run on its frozen prediction: no warm-up,
+#                              no freeze, only the phases that did not finish, then the rest
 #   staircase.sh freeze        the prediction and the ladder, from the warm-up's recording
 #   staircase.sh analyze       one analysis.jsonl per phase, then report.md
 #   staircase.sh redo          re-price at each bucket's measured Ca2, targets held
@@ -74,6 +76,10 @@ READY_WAIT="${STAIRCASE_READY_WAIT:-1200}"
 POLL="${STAIRCASE_POLL:-20}"
 TICK="${STAIRCASE_TICK:-1}"
 KUBE_TIMEOUT="${STAIRCASE_KUBE_TIMEOUT:-45}"
+# The tries at a call the run cannot go on without, and the seconds between, when the
+# API server could not be reached (kretry).
+KUBE_TRIES="${STAIRCASE_KUBE_TRIES:-4}"
+KUBE_RETRY_WAIT="${STAIRCASE_KUBE_RETRY_WAIT:-10}"
 # The standup's tries at the controller's Secret and the EPP's ports, the seconds between,
 # and how many failed EPP scrapes in a row the capture writes to the timeline.
 WITNESS_TRIES="${STAIRCASE_WITNESS_TRIES:-3}"
@@ -100,6 +106,35 @@ kube() { timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TI
 kstream() { local s=$1; shift; timeout -k 10 "$s" kubectl -n "$NS" "$@"; }
 
 gstream() { local s=$1; shift; guarded timeout -k 10 "$s" kubectl -n "$NS" "$@"; }
+
+# What kubectl says when the API server did not answer, as opposed to answering no. r2
+# lost two phases to one "Unable to connect to the server: net/http: request canceled
+# (Client.Timeout exceeded while awaiting headers)" each; the API answered seconds later.
+KUBE_TRANSIENT='Unable to connect to the server|Client\.Timeout exceeded|request canceled|i/o timeout|connection refused|connection reset|broken pipe|TLS handshake timeout|http2: client connection lost|etcdserver: (request timed out|leader changed)|ServiceUnavailable|the server is currently unable|the server was unable to return a response|\(InternalError\)|\(Timeout\)|context deadline exceeded|unexpected EOF'
+# An answer, which a retry cannot change. Read first: it wins over a transient word in
+# the same message.
+KUBE_REFUSED='\((NotFound|Forbidden|Unauthorized|BadRequest|Invalid|AlreadyExists|Conflict|MethodNotAllowed|UnsupportedMediaType)\)|is forbidden|is invalid|not found'
+
+# kretry <kubectl args> : kube, tried again on an API server that did not answer, up to
+# KUBE_TRIES, KUBE_RETRY_WAIT apart; an answer (NotFound, Forbidden, invalid) or a call
+# killed by its timeout fails at once. Each retry is written to the timeline with the
+# error. Only for calls that may run twice: patches, apply, rollout restart, reads. Not
+# in a command substitution: the wait is a nap, which a signal or an abort must reach.
+kretry() {
+    local i rc err="$R/kretry.err.$BASHPID"
+    for ((i = 1; ; i++)); do
+        kube "$@" 2> "$err"
+        rc=$?
+        [ "$rc" = 0 ] && { rm -f "$err"; return 0; }
+        if [ "$i" -ge "$KUBE_TRIES" ] || grep -qE "$KUBE_REFUSED" "$err" || ! grep -qE "$KUBE_TRANSIENT" "$err" || aborted; then
+            cat "$err" >&2
+            rm -f "$err"
+            return "$rc"
+        fi
+        t "kubectl $1 $2 $3: no answer from the API server (try $i of $KUBE_TRIES), again in ${KUBE_RETRY_WAIT}s: $(tr '\n' ' ' < "$err" | cut -c1-200)"
+        nap "$KUBE_RETRY_WAIT"
+    done
+}
 
 # aborted : the run was asked to stop. A teardown is what that asks for, and reads no abort.
 aborted() { [ -z "${TEARDOWN:-}" ] && [ -e "$R/abort" ]; }
@@ -151,13 +186,15 @@ names() { if [ -s "$R/names.sh" ]; then . "$R/names.sh"; fi; }
 # --- ownership and the deadline, before anything else exists ---------------------------
 # claim : mark the namespace as this run's: the lease holds the run's id, and the
 # namespace a label with it. owned reads either: the harness may delete ConfigMaps.
+# claim <id> is a resume's: the run's own id again, over the label it already holds.
 claim() {
-    local id lease
-    id="$(date +%s)-$$-$RANDOM"
+    local id lease over=()
+    id="${1:-$(date +%s)-$$-$RANDOM}"
+    [ -n "${1:-}" ] && over=(--overwrite)
     echo "$id" > "$R/run-id"
     lease=$(($(date +%s) + 5400))
     kube create configmap staircase-lease --from-literal=until="$lease" --from-literal=run="$id" >/dev/null || return 1
-    timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" label namespace "$NS" "$RUN_LABEL=$id" >/dev/null \
+    timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" label "${over[@]}" namespace "$NS" "$RUN_LABEL=$id" >/dev/null \
         || t "namespace label failed: the lease alone marks ownership"
 }
 
@@ -251,7 +288,7 @@ prepare() {
     kube get configmap scaling-manager-scaling-policy-config -o json | jq -r '.data.default' > "$R/policy-orig.yaml"
     "$PY" "$HERE/staircase_config.py" list-slo "$R/policy-orig.yaml" "$R/policy.yaml" "$SLO_TTFT" || { t "list-slo refused"; return 1; }
     jq -n --rawfile d "$R/policy.yaml" '{data: {default: $d}}' > "$R/policy-patch.json"
-    kube patch configmap scaling-manager-scaling-policy-config --type merge --patch-file "$R/policy-patch.json" >/dev/null || { t "policy patch failed"; return 1; }
+    kretry patch configmap scaling-manager-scaling-policy-config --type merge --patch-file "$R/policy-patch.json" >/dev/null || { t "policy patch failed"; return 1; }
     t "slo listed, TTFT target $SLO_TTFT, shadow"
 }
 
@@ -261,7 +298,8 @@ pin_fleet() {
     local np=$1 nd=$2 so sos target want a b end p pinned=0
     names
     # A read that fails must not read as nothing to pin: the fleet would stay as it was.
-    sos=$(kube get scaledobject -o json) || { t "ScaledObjects unreadable"; return 1; }
+    kretry get scaledobject -o json > "$R/scaledobjects.json" || { t "ScaledObjects unreadable"; return 1; }
+    sos=$(cat "$R/scaledobjects.json")
     for so in $(echo "$sos" | jq -r '.items[] | "\(.metadata.name)=\(.spec.scaleTargetRef.name)"'); do
         target=${so#*=}; so=${so%=*}
         case "$target" in
@@ -269,7 +307,7 @@ pin_fleet() {
             "$PRE") want=$np ;;
             *) continue ;;
         esac
-        kube patch scaledobject "$so" --type merge -p "{\"spec\":{\"minReplicaCount\":$want,\"maxReplicaCount\":$want}}" >/dev/null \
+        kretry patch scaledobject "$so" --type merge -p "{\"spec\":{\"minReplicaCount\":$want,\"maxReplicaCount\":$want}}" >/dev/null \
             || { t "ScaledObject $so patch failed"; return 1; }
         pinned=$((pinned + 1))
     done
@@ -299,12 +337,13 @@ flow_control() {
     names
     [ -s "$f" ] || { t "flow_control: $f missing"; return 1; }
     jq -n --rawfile d "$f" '{data: {"pd-config.yaml": $d}}' > "$R/epp-patch-$1.json"
-    kube patch cm "$EPPCM" --type merge --patch-file "$R/epp-patch-$1.json" >/dev/null || { t "EPP config patch failed"; return 1; }
-    got=$(kube get cm "$EPPCM" -o json | jq -r '.data["pd-config.yaml"]' | grep -cE '^(featureGates|flowControl):')
+    kretry patch cm "$EPPCM" --type merge --patch-file "$R/epp-patch-$1.json" >/dev/null || { t "EPP config patch failed"; return 1; }
+    kretry get cm "$EPPCM" -o json > "$R/epp-cm-$1.json" || { t "EPP config unreadable after the patch"; return 1; }
+    got=$(jq -r '.data["pd-config.yaml"]' "$R/epp-cm-$1.json" | grep -cE '^(featureGates|flowControl):')
     if { [ "$1" = on ] && [ "$got" != 2 ]; } || { [ "$1" = off ] && [ "$got" != 0 ]; }; then
         t "flow control $1: the config has $got flow-control keys"; return 1
     fi
-    kube rollout restart "deploy/$EPPD" >/dev/null || { t "EPP restart failed"; return 1; }
+    kretry rollout restart "deploy/$EPPD" >/dev/null || { t "EPP restart failed"; return 1; }
     gstream 330 rollout status "deploy/$EPPD" --timeout=300s >/dev/null || { t "EPP rollout failed"; return 1; }
     nap "${STAIRCASE_SETTLE:-20}"
     t "flow control $1"
@@ -312,7 +351,7 @@ flow_control() {
 
 # recorder_on : the recorder, as the last change before load.
 recorder_on() {
-    kube patch deployment scaling-manager-controller-manager --type strategic \
+    kretry patch deployment scaling-manager-controller-manager --type strategic \
         --patch-file "$ROOT/config/components/learner-recorder/learner-recorder-deployment.yaml" >/dev/null \
         || { t "recorder patch failed"; return 1; }
     gstream 330 rollout status deployment/scaling-manager-controller-manager --timeout=300s >/dev/null || { t "recorder rollout failed"; return 1; }
@@ -402,7 +441,7 @@ witness() {
 
 # witness_up : apply witness.yaml and wait for the pod to be Ready.
 witness_up() {
-    kube apply -f "$R/witness.yaml" >> "$R/timeline.txt" 2>&1 || { t "witness apply failed"; return 1; }
+    kretry apply -f "$R/witness.yaml" >> "$R/timeline.txt" 2>&1 || { t "witness apply failed"; return 1; }
     gstream 200 wait pod witness --for=condition=Ready --timeout=180s >> "$R/timeline.txt" 2>&1 || { t "witness pod not Ready"; return 1; }
 }
 
@@ -551,7 +590,7 @@ load() {
     pod_yaml "$p" loadgen staircase-loadgen /code \
         "python3 -c \"import aiohttp\" 2>/dev/null || pip install -q aiohttp; $cmd $*; sleep 7200" 8 8Gi 16Gi > "$d/load.yaml"
     echo "$d" > "$R/load-dir-$p"
-    kube apply -f "$d/load.yaml" >> "$R/timeline.txt" 2>&1 || { t "$p apply failed"; return 1; }
+    kretry apply -f "$d/load.yaml" >> "$R/timeline.txt" 2>&1 || { t "$p apply failed"; return 1; }
     for i in $(seq 1 60); do
         beat
         aborted && break
@@ -666,7 +705,7 @@ phase() {
     t "phase $n start fc=$fc runaway=$run seed=$seed fleet=$np+$nd"
     pin_fleet "$np" "$nd" || return 1
     flow_control "$fc" || return 1
-    kube rollout restart deployment/scaling-manager-controller-manager >/dev/null
+    kretry rollout restart deployment/scaling-manager-controller-manager >/dev/null || { t "controller restart failed"; return 1; }
     gstream 330 rollout status deployment/scaling-manager-controller-manager --timeout=300s >/dev/null || { t "controller rollout failed"; return 1; }
     controller_pod || return 1
     pod=$CTL
@@ -793,6 +832,77 @@ smoke_verdict() {
     echo "smoke: passed: $R/smoke.txt"
 }
 
+# --- resume ---------------------------------------------------------------------------------
+# same_config : a resume's fleet must be the one the prediction was frozen for. The router's
+# config, the listed policy and the prefill engine's command line, as this standup read
+# them, against the first session's (kept in STAIRCASE_PRIOR).
+same_config() {
+    local f
+    for f in pd-config-on.yaml policy.yaml prefill-args.txt; do
+        [ -s "$STAIRCASE_PRIOR/$f" ] || continue
+        if [ "$(sha256sum < "$STAIRCASE_PRIOR/$f")" != "$(sha256sum < "$R/$f")" ]; then
+            t "resume: $f is not the one the run was frozen on (kept in $STAIRCASE_PRIOR): stopping"
+            return 1
+        fi
+    done
+    t "resume: the router config, the policy and the prefill command line are the frozen run's"
+}
+
+# resume <image> : go on with a run that stopped, on its own frozen prediction. Refuses
+# another image, a directory with nothing frozen or hashes that moved, a runner that may
+# still be alive, a namespace that is another run's or still holds workloads, and a
+# ladder with nothing left to run. Moves the last session's gate scores, exit files and
+# unfinished phases to prior-<n>/, then runs `run` on the run's directory: a fresh
+# standup, no warm-up, no freeze, phases with a done record skipped, every gate scored
+# again over all the phases that finished, in this session or the last.
+cmd_resume() {
+    need
+    [ $# = 1 ] || die "usage: staircase.sh resume <image>"
+    [ -n "$PROM" ] || die "set BENCHMARK_PROMETHEUS_URL"
+    local was f d n todo prior age own job
+    [ -s "$R/timeline.txt" ] || die "$R/timeline.txt: no run to resume here"
+    was=$(sed -n 's/^[^ ]* run start image=//p' "$R/timeline.txt" | head -1)
+    [ "$was" = "$1" ] || die "the run started on image '$was', not '$1': its prediction was frozen on that one"
+    for f in ladder.ready frozen.json frozen.sha256 ladder.txt spec.yaml spec.json run-id; do
+        [ -e "$R/$f" ] || die "$R/$f missing: nothing frozen to resume on"
+    done
+    (cd "$R" && sha256sum --check --status frozen.sha256) || die "the frozen files do not match their hashes"
+    if [ ! -e "$R/STOP" ]; then
+        age=$(($(date +%s) - $(date -r "$R/heartbeat" +%s 2>/dev/null || echo 0)))
+        [ "$age" -ge "$HEART_MAX" ] || die "the run beat ${age}s ago and never stopped: it may still be running"
+    fi
+    todo=$(awk 'NF && $1 != "gate-check" {print $1}' "$R/ladder.txt" | while read -r n; do [ -e "$R/phases/$n/done" ] || echo "$n"; done)
+    [ -n "$todo" ] || die "every phase of the ladder is done: nothing to resume (staircase.sh analyze)"
+    if timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" >/dev/null 2>&1; then
+        own=0; owned || own=$?
+        [ "$own" = 0 ] || die "namespace $NS is not this run's, or who owns it could not be read"
+        n=$(holding) || die "could not read what $NS holds"
+        [ "$n" = 0 ] || die "$NS still holds $n workloads: staircase.sh teardown first"
+        job=$(kube get job staircase-deadline --ignore-not-found -o name) || die "could not read the deadline Job"
+        [ -z "$job" ] || die "the deadline Job stands, so the last teardown was not confirmed: staircase.sh teardown first"
+    fi
+    n=1
+    while [ -e "$R/prior-$n" ]; do n=$((n + 1)); done
+    prior="$R/prior-$n"
+    mkdir -p "$prior/phases" || die "cannot write $prior"
+    for f in STOP abort engine-errors.txt teardown.out final-pods.txt benchmark-teardown.log standup.log "$R"/gate-r*; do
+        f=${f#"$R/"}
+        if [ -e "$R/$f" ]; then mv "$R/$f" "$prior/" || die "cannot move $f"; fi
+    done
+    for f in pd-config-on.yaml policy.yaml prefill-args.txt; do
+        if [ -e "$R/$f" ]; then cp -p "$R/$f" "$prior/" || die "cannot keep $f"; fi
+    done
+    for d in "$R"/phases/*/; do
+        if [ -d "$d" ] && [ ! -e "$d/done" ]; then mv "$d" "$prior/phases/" || die "cannot move $d"; fi
+    done
+    t "resume from $prior: to run $(echo "$todo" | tr '\n' ' ')"
+    if [ "$HERE" != "$R/bin" ]; then
+        cp -f "$HERE"/staircase* "$HERE/closed_loop_sweep.py" "$R/bin/" || die "cannot copy the tooling"
+    fi
+    STAIRCASE_COPY=1 STAIRCASE_RESUME=1 STAIRCASE_PRIOR="$prior" STAIRCASE_ROOT="$ROOT" STAIRCASE_WHATIF="$WHATIF" \
+        exec bash "$R/bin/staircase.sh" run "$1"
+}
+
 cmd_run() {
     need
     [ $# = 1 ] || die "usage: staircase.sh run <image>"
@@ -812,9 +922,22 @@ cmd_run() {
     beat
     trap finish EXIT
     trap 'exit 143' INT TERM HUP
-    t "run start image=$1"
-    timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" create namespace "$NS" >/dev/null || { t "namespace create failed"; exit 1; }
-    claim || { t "claim failed: nothing here marks the namespace as this run's"; exit 1; }
+    if [ -n "${STAIRCASE_RESUME:-}" ]; then
+        # cmd_resume checked the image, the frozen files and that the namespace, if it
+        # stands, is this run's and holds nothing.
+        t "run resume image=$1: the frozen prediction stands, and a phase already done is not run again"
+        if ! timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" get namespace "$NS" >/dev/null 2>&1; then
+            timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" create namespace "$NS" >/dev/null || { t "namespace create failed"; exit 1; }
+        fi
+        # The last session's lease, deadline script and harness ConfigMaps: made again below.
+        kube delete configmap staircase-lease staircase-deadline staircase-witness staircase-loadgen --ignore-not-found >/dev/null \
+            || { t "resume: the last session's ConfigMaps could not be deleted"; exit 1; }
+        claim "$(cat "$R/run-id")" || { t "claim failed: nothing here marks the namespace as this run's"; exit 1; }
+    else
+        t "run start image=$1"
+        timeout -k 5 $((KUBE_TIMEOUT + 5)) kubectl --request-timeout="${KUBE_TIMEOUT}s" create namespace "$NS" >/dev/null || { t "namespace create failed"; exit 1; }
+        claim || { t "claim failed: nothing here marks the namespace as this run's"; exit 1; }
+    fi
     STARTED=1
     arm_deadline || { t "no deadline: refusing to hold GPUs without one"; exit 1; }
     guarded standup_make "$1" > "$R/standup.log" 2>&1 || { t "standup failed"; exit 1; }
@@ -828,6 +951,7 @@ cmd_run() {
     # The prefill engine's command line, for the max_num_seqs the analysis reports beside L.
     kube get deploy "$PRE" -o json 2>/dev/null | jq -r '[.spec.template.spec.containers[]? | select(.name == "vllm")
         | (.command // []) + (.args // []) | .[]] | join(" ")' > "$R/prefill-args.txt" 2>/dev/null || true
+    if [ -n "${STAIRCASE_RESUME:-}" ]; then same_config || exit 1; fi
     capture_loop "$$" > "$R/capture.out" 2>&1 &
     CAP=$!
     [ -n "${STAIRCASE_SMOKE:-}" ] && { smoke_body; exit 1; }
@@ -843,7 +967,11 @@ cmd_run() {
         t "lapse: nobody killed the runner"
         exit 1
     fi
-    warmup || exit 1
+    # A resume's prediction is frozen already, from the first session's warm-up: no
+    # warm-up runs, and nothing is frozen again.
+    if [ -z "${STAIRCASE_RESUME:-}" ]; then
+        warmup || exit 1
+    fi
     t "waiting for the freeze (capped at ${FREEZE_WAIT}s)"
     local end=$(($(date +%s) + FREEZE_WAIT))
     while [ ! -e "$R/ladder.ready" ]; do
@@ -1072,6 +1200,7 @@ if [ "${STAIRCASE_LIB:-}" = 1 ]; then return 0; fi
 
 case "${1:-}" in
     run) shift; cmd_run "$@" ;;
+    resume) shift; cmd_resume "$@" ;;
     lapse) shift; cmd_lapse "$@" ;;
     smoke)
         shift
@@ -1084,5 +1213,5 @@ case "${1:-}" in
     teardown) cmd_teardown ;;
     status) cmd_status ;;
     abort) cmd_abort ;;
-    *) sed -n '3,12p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
+    *) sed -n '3,17p' "${BASH_SOURCE[0]}" >&2; exit 2 ;;
 esac

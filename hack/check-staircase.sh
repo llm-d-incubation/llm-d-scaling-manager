@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=99
+EXPECTED_CHECKS=108
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -92,6 +92,8 @@ cat > "$STUB/make" <<'STUB'
 echo "make $*" >> "$LOG"
 case "$*" in
     *benchmark-standup*)
+        # A fresh standup: the router's config as the chart writes it, nothing torn down.
+        rm -f "$STATE/tearing" "$STATE/fc-off"
         if [ -n "${MAKE_SLEEP:-}" ]; then
             sleep "$MAKE_SLEEP" &
             echo $! > "$STATE/standup-sleep"
@@ -174,6 +176,14 @@ if [ -n "${OWN_FAIL:-}" ]; then
             [ "$n" -lt "$OWN_FAIL" ] && exit 1 ;;
     esac
 fi
+# FLAKY: the first FLAKY_N calls naming it fail with FLAKY_MSG, as the API server says it.
+if [ -n "${FLAKY:-}" ]; then
+    case "$args" in
+        *"$FLAKY"*)
+            n=$(cat "$STATE/flaky" 2>/dev/null || echo 0); echo $((n + 1)) > "$STATE/flaky"
+            [ "$n" -lt "${FLAKY_N:-1}" ] && { echo "$FLAKY_MSG" >&2; exit 1; } ;;
+    esac
+fi
 pd='featureGates:\n- flowControl\nplugins:\n- type: a\nflowControl:\n  maxBytes: 1\nschedulingProfiles:\n- name: b\n'
 [ -e "$STATE/fc-off" ] && pd='plugins:\n- type: a\nschedulingProfiles:\n- name: b\n'
 case "$args" in
@@ -192,7 +202,9 @@ case "$args" in
     *" logs job/staircase-deadline "*)
         [ -n "${ARM_FAIL:-}" ] || echo "t deadline at x"
         [ -e "$STATE/freed" ] && echo "t deadline reached: lease 1 hard 2" ;;
-    *" get job staircase-deadline "*) [ -n "${JOB_DEAD:-}" ] || echo 1 ;;
+    *" get job staircase-deadline "*) [ -n "${JOB_DEAD:-}" ] || [ -e "$STATE/job-gone" ] || echo 1 ;;
+    *" delete job staircase-deadline "*) touch "$STATE/job-gone" ;;
+    *" apply -f "*"deadline.yaml"*) rm -f "$STATE/job-gone" ;;
     *" get deploy -o name "*) printf 'deployment.apps/m-decode\ndeployment.apps/m-prefill\ndeployment.apps/m-epp\n' ;;
     *" get cm -o json "*) printf '{"items":[{"metadata":{"name":"eppcm"},"data":{"pd-config.yaml":"x"}}]}\n' ;;
     *" get cm eppcm -o json "*) printf '{"data":{"pd-config.yaml":"%s"}}\n' "$pd" ;;
@@ -290,7 +302,8 @@ env_line() {
     exec_env=("$TOOLS/env" PATH="$RUN_PATH" WORK="$WORK" BENCHMARK_NAMESPACE=stair-ns STAIRCASE_RUN="$RUN" BENCHMARK_PROMETHEUS_URL=http://p:9090
         STAIRCASE_SPEC="$WORK/spec.yaml" STAIRCASE_ROOT="$WORK" STAIRCASE_WHATIF="$STUB/whatif" FROZEN_FIXTURE="$WORK/frozen.json"
         STAIRCASE_POLL=0.2 STAIRCASE_TICK=0.1 STAIRCASE_SETTLE=0 STAIRCASE_ARM_POLL=0 STAIRCASE_TEARDOWN_POLL=0 STAIRCASE_TEARDOWN_TRIES=3
-        STAIRCASE_LEASE_EVERY=1 STAIRCASE_FREEZE_WAIT=40 STAIRCASE_READY_WAIT=2 STAIRCASE_OWNED_POLL=0 STAIRCASE_WITNESS_RETRY=0)
+        STAIRCASE_LEASE_EVERY=1 STAIRCASE_FREEZE_WAIT=40 STAIRCASE_READY_WAIT=2 STAIRCASE_OWNED_POLL=0 STAIRCASE_WITNESS_RETRY=0
+        STAIRCASE_KUBE_RETRY_WAIT=0)
 }
 
 # base_env <VAR=value...> <command...> : run it to its end under the stubs.
@@ -578,6 +591,60 @@ wait_for 'waiting for the freeze' "$RUN/timeline.txt"
 base_env bash "$B/staircase.sh" abort > /dev/null 2>&1
 wait_run
 expect "abort at the freeze wait tears down" 'tore_down'
+
+echo "an API server that does not answer..."
+# r2 lost B-on-r1 to this on the EPP patch, and C-off-r1 to it on the EPP restart.
+TRANSIENT_MSG='Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded while awaiting headers)'
+on_patches() { grep -c "patch cm eppcm .*epp-patch-on" "$LOG"; }
+# frozen_run <VAR=value...> : a whole run, frozen when it waits.
+frozen_run() {
+    start "$@"
+    wait_for 'waiting for the freeze' "$RUN/timeline.txt"
+    base_env bash "$B/staircase.sh" freeze > /dev/null 2>&1
+    wait_run
+}
+fresh flaky
+frozen_run FLAKY=epp-patch-on FLAKY_N=1 FLAKY_MSG="$TRANSIENT_MSG"
+expect "a patch the API server did not answer is sent again, and the phase goes on" \
+    '[ "$rc" = 0 ] && [ "$(steps)" = 3 ] && [ "$(on_patches)" = 2 ] && grep -q "phase B-on-r1 rc=0" "$RUN/timeline.txt"'
+expect "the retry is in the timeline, with the error" \
+    'grep -q "no answer from the API server (try 1 of 4).*Client.Timeout exceeded while awaiting headers" "$RUN/timeline.txt"'
+
+fresh flakyever
+frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG="$TRANSIENT_MSG"
+expect "one that never answers is tried 4 times, then the phase fails and the gate stops the run" \
+    '[ "$rc" != 0 ] && [ "$(on_patches)" = 4 ] && grep -q "EPP config patch failed" "$RUN/timeline.txt" && grep -q "the gate failed" "$RUN/timeline.txt" && tore_down'
+
+fresh forbidden
+frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG='Error from server (Forbidden): configmaps "eppcm" is forbidden: User "u" cannot patch resource "configmaps"'
+expect "a Forbidden is an answer: sent once, the phase fails and the gate stops the run" \
+    '[ "$rc" != 0 ] && [ "$(on_patches)" = 1 ] && ! grep -q "no answer from the API server" "$RUN/timeline.txt" && grep -q "EPP config patch failed" "$RUN/timeline.txt" && grep -q "the gate failed" "$RUN/timeline.txt" && tore_down'
+
+echo "resume..."
+# On the run the Forbidden stopped: B-off-r1 done, B-on-r1 not, the gate failed, torn down.
+first_steps=$(steps); frozen_sum=$(sha256sum < "$RUN/frozen.json"); run_id=$(cat "$RUN/run-id")
+resume_run() {
+    env_line
+    setsid "${exec_env[@]}" NS_EXISTS=1 "$@" bash "$B/staircase.sh" resume "${RESUME_IMG:-img}" > "$RUN.resume.out" 2>&1 &
+    pid=$!
+    PIDS="$PIDS $pid"
+}
+: > "$LOG"
+RESUME_IMG=other resume_run; wait_run
+expect "another image than the run started on is refused before any call" \
+    '[ "$rc" != 0 ] && grep -q "started on image .img., not .other." "$RUN.resume.out" && [ ! -s "$LOG" ] && [ ! -e "$RUN/prior-1" ]'
+echo tampered >> "$RUN/policy.yaml"
+resume_run; wait_run
+expect "a fleet whose config is not the frozen run's stops before any phase, and tears down" \
+    '[ "$rc" != 0 ] && grep -q "policy.yaml is not the one the run was frozen on" "$RUN/timeline.txt" && [ "$(steps)" = "$first_steps" ] && tore_down'
+: > "$LOG"
+resume_run; wait_run
+expect "a resume runs only what did not finish, and scores the gate over both sessions" \
+    '[ "$rc" = 0 ] && [ "$(($(steps) - first_steps))" = 2 ] && grep -q "phase B-off-r1 already done" "$RUN/timeline.txt" && grep -q "phase B-on-r1 rc=0" "$RUN/timeline.txt" && grep -q "gate, repeat 1: rc=0" "$RUN/timeline.txt"'
+expect "with no warm-up and no freeze: the frozen files are the first session's" \
+    'grep -q "run resume image=img" "$RUN/timeline.txt" && [ "$(sed -n "/run resume image=img/,\$p" "$RUN/timeline.txt" | grep -c "warmup")" = 0 ] && ! grep -q "/warmup/" "$LOG" && [ "$(sha256sum < "$RUN/frozen.json")" = "$frozen_sum" ]'
+expect "the last gate and the unfinished phase are kept apart, the namespace taken back under the same id" \
+    '[ -s "$RUN/prior-1/gate-r1.out" ] && [ -d "$RUN/prior-1/phases/B-on-r1" ] && [ "$(cat "$RUN/run-id")" = "$run_id" ] && grep -q "label --overwrite namespace stair-ns llm-d-scaling-manager/staircase-run=$run_id" "$LOG" && ! grep -q "create namespace" "$LOG" && tore_down'
 
 echo "a dead runner..."
 fresh kill9
