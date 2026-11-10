@@ -49,6 +49,28 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+// With no LLMSM_SCALE_TO_ZERO anywhere -- no flag, no environment, a config
+// file without the key -- scale-to-zero is off: the loader's default is
+// DefaultScaleToZeroEnabled, the value the shipped ConfigMap and the installer
+// write on a first install.
+func TestLoad_ScaleToZeroDefaultsToFalse(t *testing.T) {
+	t.Setenv("LLMSM_SCALE_TO_ZERO", "")
+	_ = os.Unsetenv("LLMSM_SCALE_TO_ZERO")
+	configFile := writeTestConfigFile(t, `
+PROMETHEUS_BASE_URL: "https://prometheus:9090"
+`)
+	cfg, err := Load(nil, configFile)
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.ScaleToZeroEnabled() {
+		t.Error("Expected ScaleToZeroEnabled to default to false")
+	}
+	if cfg.ScaleToZeroEnabled() != DefaultScaleToZeroEnabled {
+		t.Errorf("Expected the loader default to be DefaultScaleToZeroEnabled (%v)", DefaultScaleToZeroEnabled)
+	}
+}
+
 func TestLoad_PrometheusAllowHTTPFromEnv(t *testing.T) {
 	_ = os.Setenv("PROMETHEUS_BASE_URL", "http://prometheus-env:9090")
 	_ = os.Setenv("PROMETHEUS_ALLOW_HTTP", "true")
