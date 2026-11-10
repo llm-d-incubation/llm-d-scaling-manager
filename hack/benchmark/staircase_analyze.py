@@ -32,6 +32,7 @@ Standard library only.
 import argparse
 import collections
 import csv
+import glob
 import gzip
 import json
 import math
@@ -639,6 +640,17 @@ def read_max_num_seqs(run):
     return int(m[1]) if m else None
 
 
+POST_HOC = ("Scored under two rules written on 2026-11-10, after repeat 1 of the second run was seen: "
+            "the ITL slope is judged at the operating point only, and a bound wholly in the mark passes the gate.")
+
+
+def post_hoc_note(run):
+    """The line every report and gate carries: the rules changed after seeing data, and
+    where the verdicts before them are kept (a resume's prior-<n>/gate-r*.out)."""
+    kept = sorted(os.path.relpath(p, run).replace(os.sep, "/") for p in glob.glob(os.path.join(run, "prior-*", "gate-r*.out")))
+    return "**%s** Verdicts from before them: %s." % (POST_HOC, ", ".join(kept) if kept else "none in this run")
+
+
 def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False):
     """The report; returns the verdicts by (bucket, fc, reading). repeats and only_gate narrow it to a gate."""
     frozen = {b["name"]: b for b in frozen_file["buckets"]}
@@ -661,6 +673,7 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
             data[key][n] = [r for r in rows if not lib.is_measure(r["rate"], rates)]
 
     print("# Staircase report\n", file=out)
+    print(post_hoc_note(run) + "\n", file=out)
     if crashed:
         print("**Phases that did not finish, excluded: %s.**\n" % ", ".join(crashed), file=out)
     print("## What the prediction rests on\n", file=out)
@@ -899,6 +912,7 @@ def gate(run, frozen, spec, repeat, out):
         return 1
     cliff = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == lib.CLIFF_IN)
     bounds = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == BOUND_IN)
+    print(post_hoc_note(run), file=out)
     print("gate repeat %d: %d readings, %d stop the run%s%s%s" % (
         repeat, sum(1 for k in verdicts if k[2] == "ttft"), len(bad),
         ", %d bounds wholly in the mark, passed" % bounds if bounds else "",

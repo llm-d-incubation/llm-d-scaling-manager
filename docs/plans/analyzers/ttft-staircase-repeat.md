@@ -192,7 +192,18 @@ the crossing sits, so the gate is not loosened. A bracket across the mark's edge
 outside it, still stops the run, and a crossing on the cliff is still not scored.
 Repeat 1 stopped on three such bounds, all inside the mark (`B-onset` on p95, 0.86 to
 0.87; `C` on p90 and p95, 0.85 to 0.88), beside its four missing readings. Repeat 1's
-recorded result stays as it was: the gate failed.
+recorded result stays as it was: the gate failed. A bracket's ends are the steps whose
+flaws cannot hide the crossing: a low end that is valid or void only upward, a high end
+that is valid or void only downward. With no such high end, or ends past the cliff
+factor apart, no bound passes. Read so, `C` on widens to 0.85 to 0.91 and still passes.
+
+**The run continues because repeat 1 was re-scored under rules written after seeing it.**
+Said plainly: a resume scores repeat 1's data again under both changes above and
+writes a passing `gate-r1` where the first session wrote a failing one. The first
+session's verdict is kept, unchanged, in `prior-1/gate-r1.out` and `prior-1/gate-r1.md`.
+Every report and gate now opens with a line naming both changes, their date and those
+files. The falsifier table pools the repeats, so repeat 1's onset slopes, 12.8 and 19.3,
+show as failing only here and in `prior-1/gate-r1.md`.
 
 ## Per-pod `Ca²`
 

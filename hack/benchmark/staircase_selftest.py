@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 197
+EXPECTED = 200
 checks = fails = 0
 
 
@@ -442,6 +442,20 @@ with tempfile.TemporaryDirectory() as run:
     GATE_OUT = io.StringIO()
     ok("a bound outside the mark stops the gate", analyze.gate(run, predicting(50.0), GATE_SPEC, 1, GATE_OUT) == 1
        and "FAIL, a bound" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    # The rules written after repeat 1 was seen are named in every gate and report, with
+    # the verdicts from before them that a resume kept.
+    os.makedirs(os.path.join(run, "prior-1"))
+    with open(os.path.join(run, "prior-1", "gate-r1.out"), "w", encoding="utf8") as f:
+        f.write("gate repeat 1: 16 readings, 7 stop the run\n")
+    GATE_OUT = io.StringIO()
+    analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT)
+    with open(os.path.join(run, "gate-r1.md"), encoding="utf8") as f:
+        GATE_MD = f.read()
+    ok("the gate and its report name both post-hoc rules, their date, and the verdict kept from before them",
+       all(analyze.POST_HOC in t and "prior-1/gate-r1.out" in t for t in (GATE_OUT.getvalue(), GATE_MD))
+       and "2026-11-10" in analyze.POST_HOC, GATE_OUT.getvalue())
+    os.remove(os.path.join(run, "prior-1", "gate-r1.out"))
+    os.rmdir(os.path.join(run, "prior-1"))
 
     # The cliff at the gate: r1's C-onset shape, scaled to this bucket's 0.2 s target and 37
     # r/s. Its void top step made a bound, and the bound stopped the gate.
@@ -702,6 +716,12 @@ GOT = analyze.falsifiers({("B", "on"): {1: slope_rows(7.2)}, ("B-onset", "on"): 
 ok("an onset bucket's ITL slope is printed as reported, not judged",
    "| ITL slope, B-onset on | 12.78 | 5.5 to 9 | reported, onset phase |" in TEXT.getvalue(), TEXT.getvalue())
 ok("and counts toward nothing, while the operating-point one is judged", GOT == [True], GOT)
+# The ladder of every bucket is in shares of its lower knee (the spec's steps), so the
+# knee comparison is how the ladder was built, not a guess at it: a bucket of any name
+# whose prefill knee is the lower one is on an onset ladder.
+ok("a bucket with no prefill knee frozen is judged", not analyze.onset_ladder(dict(knee=35.6, decodeKnee=35.6)))
+ok("a bucket of any name whose prefill knee is the lower one is on an onset ladder",
+   analyze.onset_ladder(dict(name="H-16k", knee=29.48, prefillKnee=29.48, decodeKnee=30.0)))
 ok("an operating-point slope out of band is still judged, and fails",
    analyze.falsifiers({("B", "on"): {1: slope_rows(12.78)}}, SLOPE_FROZEN, SLOPE_SPEC, io.StringIO()) == [False])
 
