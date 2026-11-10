@@ -120,11 +120,10 @@ share:
       kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
         | grep 'Utilization share: would rebalance'
   live:
-    note: Make every model active, then turn the optimizer on again, because the re-install drops its block.
+    note: Make every model active. The re-install keeps the optimizer block.
     run: |
       make deploy-scaling-manager LLMSM_PASSIVE=false
-      make utilization-share-shadow
-      make utilization-share-activate
+      make utilization-share-status
 
 cleanup:
   uninstall:

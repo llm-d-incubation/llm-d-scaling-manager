@@ -804,8 +804,8 @@ removes the old grant. It does so in each namespace that holds:
 - a pod with a utilization-share transfer mark, of a model that calls this
   controller, or
 - any model that calls this controller, when the utilization-share optimizer
-  is active (not shadow). The re-run also removes the `optimizer:` block
-  ([Re-running the installer resets the default entry](scaling-policy.md#re-running-the-installer-resets-the-default-entry)),
+  is active (not shadow). The re-run of those releases also removes the `optimizer:` block
+  ([what a re-run does to the default entry](scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)),
   so run these again, in order:
   ```bash
   make utilization-share-shadow NAMESPACE=<models namespace> CONTROLLER_NAMESPACE=<controller namespace>

@@ -221,12 +221,10 @@ One `optimizer:` block in the scaling policy's `default` entry, beside the
 limiter. It rolls out in two steps, each one `make` target in the guide:
 **shadow** (it computes and reports, and moves nothing), then **active**.
 
-Re-running `make deploy-scaling-manager` resets the `default` entry in the controller's
-own ConfigMap to the shipped one, without the block; the limiter is kept
-unless `LLMSM_LIMITER` says otherwise. After an upgrade, repeat the check,
-shadow and activate steps. Shadow also clears transfer marks the active
-optimizer left
-([why](../../reference/scaling-policy.md#re-running-the-installer-resets-the-default-entry)).
+Re-running `make deploy-scaling-manager` keeps the block, in the mode it was
+in, and the limiter unless `LLMSM_LIMITER` says otherwise
+([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
+After an upgrade, run the check step again.
 
 Model owners choose a weight on their own policy entry (`weightClass:
 important`, or `weight:`). A weight buys a larger share of the spare, not

@@ -2172,7 +2172,8 @@ EOF
 
         # Passive mode must hold THROUGH the apply, not be put back after it: a
         # pod that starts between the two would start scaling. So the entries
-        # above, and `passive` on the default entry, go into the applied
+        # above, and `passive` with every other key of the default entry the
+        # installer does not render (the optimizer block among them), go into the applied
         # manifest itself (the manager ConfigMap's LLMSM_PASSIVE already went into
         # it, in llmsm_render_manager_config_patch).
         llmsm_render_policy_keep_patch "$tmp_overlay" "$preserved_policy" || exit 1
@@ -2534,18 +2535,22 @@ llmsm_live_get() {
 # llmsm_live_passive reads the passive settings the live controller runs with,
 # before the apply: LLMSM_PASSIVE in scaling-manager-manager-config into LLMSM_LIVE_PASSIVE,
 # and `passive` on the default entry of scaling-manager-scaling-policy-config into
-# LLMSM_LIVE_DEFAULT_PASSIVE. Each is empty when unset or when the ConfigMap does
-# not exist (a first install). A read that fails otherwise returns 1.
+# LLMSM_LIVE_DEFAULT_PASSIVE. The whole default entry goes into LLMSM_LIVE_DEFAULT,
+# for llmsm_render_policy_keep_patch to keep what the installer does not own.
+# Each is empty when unset or when the ConfigMap does not exist (a first
+# install). A read that fails otherwise returns 1.
 llmsm_live_passive() {
     local ns="$1" cfg def
     LLMSM_LIVE_PASSIVE=""
     LLMSM_LIVE_DEFAULT_PASSIVE=""
+    LLMSM_LIVE_DEFAULT=""
     LLMSM_LIVE_PASSIVE_ERR=""
     cfg="$(llmsm_live_get "$ns" scaling-manager-manager-config '{.data.config\.yaml}')" || return 1
     if [ -n "$cfg" ]; then
         LLMSM_LIVE_PASSIVE="$(printf '%s\n' "$cfg" | llmsm_yaml_scalar '.LLMSM_PASSIVE')"
     fi
     def="$(llmsm_live_get "$ns" scaling-manager-scaling-policy-config '{.data.default}')" || return 1
+    LLMSM_LIVE_DEFAULT="$def"
     if [ -n "$def" ]; then
         LLMSM_LIVE_DEFAULT_PASSIVE="$(printf '%s\n' "$def" | llmsm_yaml_scalar '.passive')"
     fi
@@ -2562,27 +2567,77 @@ llmsm_passive_want() {
     esac
 }
 
+# llmsm_merge_live_default <rendered default> <live default> prints the default
+# entry a re-install applies: the rendered entry, plus every top-level key of
+# the live entry that the render does not carry -- the utilization-share
+# `optimizer:` block, `passive`, `defaultPolicy`, anything an operator added.
+# The installer owns the keys it renders and writes them as rendered; one the
+# live entry sets to another value is reported, so a hand edit it overwrites is
+# not lost in silence. `limiters` is not carried: LLMSM_LIMITER decides it after
+# the apply (llmsm_keep_live_limiters keeps it when unset).
+#
+# Prints nothing when there is nothing to keep: no live entry, or one holding
+# only keys the render carries. A live entry that is not a YAML mapping cannot
+# be kept from; it is replaced, with a warning.
+llmsm_merge_live_default() {
+    local rendered="$1" live="$2" rj lj keep conflicts
+    [ -n "$live" ] || return 0
+    rj="$(printf '%s\n' "$rendered" | yq -o=json -I=0 '.')" || return 1
+    lj="$(printf '%s\n' "$live" | yq -o=json -I=0 '.' 2>/dev/null)" || lj=""
+    if [ "$(printf '%s' "$lj" | jq -r 'type' 2>/dev/null)" != object ]; then
+        log_warning "The live default entry of scaling-manager-scaling-policy-config is not a YAML mapping; it is replaced by the rendered one, and nothing in it is kept."
+        return 0
+    fi
+    conflicts="$(jq -rn --argjson l "$lj" --argjson r "$rj" '
+        $r | to_entries[] | select(.key != "passive" and .key != "limiters")
+        | . as $e | select($l | has($e.key)) | select($l[$e.key] != $e.value)
+        | "    \(.key): \($l[.key] | tojson) -> \(.value | tojson)"')" || return 1
+    if [ -n "$conflicts" ]; then
+        log_warning "This install writes keys of the default entry of scaling-manager-scaling-policy-config that the live entry sets otherwise (live -> written):
+${conflicts}
+  Edit them back after the install if you need them. A threshold kept in a named policy that defaultPolicy names, or in a per-model entry, survives a re-install as it is."
+    fi
+    keep="$(jq -cn --argjson l "$lj" --argjson r "$rj" '
+        [$l | keys_unsorted[] | select(. != "limiters") | . as $k | select($r | has($k) | not)]')" || return 1
+    [ "$keep" = '[]' ] && return 0
+    log_info "Keeping the keys of the live default entry this install does not render: $(printf '%s' "$keep" | jq -r 'join(", ")')"
+    printf '%s\n' "$rendered" | LLMSM_KEEP_KEYS="$keep" LLMSM_LIVE_DEF="$live" yq '
+        (strenv(LLMSM_KEEP_KEYS) | from_yaml) as $keep
+        | . * (strenv(LLMSM_LIVE_DEF) | from_yaml | with_entries(select(.key as $k | $keep | any_c(. == $k))))'
+}
+
 # llmsm_render_policy_keep_patch writes, into the overlay, a patch of
 # scaling-manager-scaling-policy-config that carries what the apply would otherwise reset:
 # every entry but `default` the live ConfigMap holds (preserved, a JSON
-# {"data": {...}}), and the default entry as the overlay renders it with the
-# live `passive` set on it. Nothing is written when there is nothing to keep.
+# {"data": {...}}), and the default entry as the overlay renders it plus what
+# the live default entry (LLMSM_LIVE_DEFAULT) carries that the installer does
+# not own -- see llmsm_merge_live_default -- with the live `passive` set on it.
+# Nothing is written when there is nothing to keep.
+#
+# Before, the default entry was the render alone, so a re-install dropped the
+# utilization-share optimizer block (`optimizer:`) and every other key an
+# operator had added there, and turned sharing off without a word.
 llmsm_render_policy_keep_patch() {
-    local tmp_overlay="$1" preserved="${2:-}" data='{}' def
+    local tmp_overlay="$1" preserved="${2:-}" data='{}' def merged=""
     [ -n "$preserved" ] && data="$(printf '%s' "$preserved" | jq -c '.data // {}')"
-    case "${LLMSM_LIVE_DEFAULT_PASSIVE:-}" in
-        true|false)
-            def="$(kubectl kustomize "$tmp_overlay" 2>/dev/null \
-                | yq 'select(.kind == "ConfigMap" and .metadata.name == "scaling-manager-scaling-policy-config") | .data.default')" || def=""
-            if [ -z "$def" ] || [ "$def" = null ]; then
-                log_error "could not render the default entry of scaling-manager-scaling-policy-config to keep its passive: ${LLMSM_LIVE_DEFAULT_PASSIVE}; refusing an apply that would reset it"
-                return 1
-            fi
-            def="$(printf '%s\n' "$def" | yq ".passive = ${LLMSM_LIVE_DEFAULT_PASSIVE}")" || return 1
-            data="$(printf '%s' "$data" | jq -c --arg d "$def" '. + {default: $d}')"
-            log_info "Keeping passive: ${LLMSM_LIVE_DEFAULT_PASSIVE} on the default entry of scaling-manager-scaling-policy-config"
-            ;;
-    esac
+    if [ -n "${LLMSM_LIVE_DEFAULT:-}" ] || [ -n "${LLMSM_LIVE_DEFAULT_PASSIVE:-}" ]; then
+        def="$(kubectl kustomize "$tmp_overlay" 2>/dev/null \
+            | yq 'select(.kind == "ConfigMap" and .metadata.name == "scaling-manager-scaling-policy-config") | .data.default')" || def=""
+        if [ -z "$def" ] || [ "$def" = null ]; then
+            log_error "could not render the default entry of scaling-manager-scaling-policy-config to keep what the live one carries; refusing an apply that would reset it"
+            return 1
+        fi
+        merged="$(llmsm_merge_live_default "$def" "${LLMSM_LIVE_DEFAULT:-}")" || return 1
+        case "${LLMSM_LIVE_DEFAULT_PASSIVE:-}" in
+            true|false)
+                merged="$(printf '%s\n' "${merged:-$def}" | yq ".passive = ${LLMSM_LIVE_DEFAULT_PASSIVE}")" || return 1
+                log_info "Keeping passive: ${LLMSM_LIVE_DEFAULT_PASSIVE} on the default entry of scaling-manager-scaling-policy-config"
+                ;;
+        esac
+        if [ -n "$merged" ]; then
+            data="$(printf '%s' "$data" | jq -c --arg d "$merged" '. + {default: $d}')"
+        fi
+    fi
     [ "$data" = '{}' ] && return 0
     jq -n --argjson data "$data" \
         '{apiVersion: "v1", kind: "ConfigMap", metadata: {name: "scaling-manager-scaling-policy-config"}, data: $data}' \

@@ -104,10 +104,10 @@ editing its own ConfigMap: run out of the tenant's reach (`LLMSM_WATCH_NS`), it
 reads that ConfigMap only at start
 ([why](../../reference/scaling-policy.md#limiters-cluster-default-only-live)).
 
-Re-running `make deploy-scaling-manager` resets the `default` entry of the controller's
-own ConfigMap, and `defaultPolicy` with it: re-apply `defaultPolicy`
-afterwards. The tier entries are other keys, and the installer keeps them
-([why](../../reference/scaling-policy.md#re-running-the-installer-resets-the-default-entry)).
+Re-running `make deploy-scaling-manager` keeps `defaultPolicy` on the `default`
+entry of the controller's own ConfigMap, and the tier entries, which are other
+keys
+([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
 The full field list is in [the scaling policy reference](../../reference/scaling-policy.md).
 
 ### Choosing a tier

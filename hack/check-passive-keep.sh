@@ -5,8 +5,11 @@
 # ConfigMap, `passive` on the scaling-policy default entry, and the operator's
 # other policy entries -- so no applied state is ever active; that a false is
 # kept as false (yq's `//` reads false as absent); that a render or a read that
-# fails stops the install rather than dropping passive mode; and that a
-# controller that read another LLMSM_PASSIVE at start is restarted.
+# fails stops the install rather than dropping passive mode; that a
+# controller that read another LLMSM_PASSIVE at start is restarted; and that a
+# re-install keeps the keys of the live default entry it does not render (the
+# utilization-share optimizer block), writes the ones it does, and reports a
+# rendered key the live entry had set otherwise.
 #
 # It exists because the first version restored all of it AFTER `kubectl apply
 # -k`: a controller pod that started in between ran active, and a
@@ -195,7 +198,78 @@ LIVE_STATUS_PASSIVE=''; RESTARTED=0
 llmsm_passive_restart_if_stale scaling-manager 2>/dev/null
 check "a controller that published nothing is left to the rollout" is "$RESTARTED" 0
 
-EXPECT_CASES=20
+# 6. A re-install keeps the keys of the live default entry it does not render
+#    -- the utilization-share optimizer block first among them -- writes the
+#    keys it renders, and says which of those it changed. Before, the default
+#    entry was the render alone, and a re-install turned sharing off.
+#    The render here is the shipped ConfigMap, comments and all.
+RENDERED_POLICY="$(tr -d '\r' < "$ROOT/config/base/manager/scaling-policy-configmap.yaml" \
+    | yq '.metadata.name = "scaling-manager-scaling-policy-config"')"
+SHIPPED_DEFAULT="$(printf '%s\n' "$RENDERED_POLICY" | yq '.data.default')"
+SHARE_BLOCK='optimizer:
+  type: utilizationShare
+  utilizationShare:
+    shadow: false'
+# keep_run <live default> runs what the install runs before the apply, the way
+# deploy_scaling_manager_controller does, and leaves the patch in $OVERLAY and
+# the warnings in $WORK/keep.err.
+keep_run() {
+    LIVE_DEFAULT="$1"
+    : > "$OVERLAY/kustomization.yaml"
+    rm -f "$OVERLAY/policy-keep-patch.yaml"
+    llmsm_live_passive scaling-manager && llmsm_render_policy_keep_patch "$OVERLAY" '' 2> "$WORK/keep.err"
+}
+kept() { yq '.data.default' "$OVERLAY/policy-keep-patch.yaml" 2>/dev/null | yq "$1"; }
+
+LIVE_READ=ok
+LIVE_MANAGER_CONFIG='GLOBAL_OPT_INTERVAL: "15s"'
+keep_run "$SHIPPED_DEFAULT
+$SHARE_BLOCK"
+check "re-install: the optimizer block is kept" is "$(kept '.optimizer.type')" utilizationShare
+check "re-install: the optimizer block keeps its mode" is "$(kept '.optimizer.utilizationShare.shadow')" false
+check "re-install: the rendered thresholds are written" is "$(kept '.scaleUpThreshold')" 0.85
+check "re-install: the analyzers are written" is "$(kept '.analyzers[0].name')" saturation
+check "re-install: nothing it writes differed, so no conflict is reported" is "$(grep -c 'sets otherwise' "$WORK/keep.err")" 0
+check "re-install: the kept keys are named" grep -q 'does not render: optimizer' "$WORK/keep.err"
+
+keep_run "$(printf '%s\n' "$SHIPPED_DEFAULT" | yq '.scaleUpThreshold = 0.9 | .limiters = [{"type": "gpu-inventory"}] | .defaultPolicy = "batch"')
+$SHARE_BLOCK"
+check "owned key changed: the rendered value is written" is "$(kept '.scaleUpThreshold')" 0.85
+check "owned key changed: the conflict is reported with both values" grep -q 'scaleUpThreshold: 0.9 -> 0.85' "$WORK/keep.err"
+check "owned key changed: the optimizer block is still kept" is "$(kept '.optimizer.type')" utilizationShare
+check "an operator key beside it is kept" is "$(kept '.defaultPolicy')" batch
+check "limiters are left to LLMSM_LIMITER, not carried in the apply" is "$(kept 'has("limiters")')" false
+
+keep_run "$SHIPPED_DEFAULT
+passive: true
+$SHARE_BLOCK"
+check "passive and the optimizer block are kept together" is "$(kept '.passive') $(kept '.optimizer.type')" "true utilizationShare"
+
+keep_run "$SHIPPED_DEFAULT"
+if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ]; then
+    ok "a live entry holding only rendered keys writes no patch"
+else
+    fail "a patch was written for a live entry with nothing of its own"
+fi
+
+LIVE_READ=notfound
+keep_run ''
+if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ] && [ -z "${LLMSM_LIVE_DEFAULT:-}" ]; then
+    ok "first install (no ConfigMap): no patch, the apply creates it as rendered"
+else
+    fail "first install wrote a patch or read a live default ('${LLMSM_LIVE_DEFAULT:-}')"
+fi
+LIVE_READ=ok
+
+keep_run '- not
+- a mapping'
+if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ] && grep -q 'not a YAML mapping' "$WORK/keep.err"; then
+    ok "a live entry that is not a mapping is replaced, with a warning"
+else
+    fail "a live entry that is not a mapping was kept from, or replaced in silence"
+fi
+
+EXPECT_CASES=35
 echo
 echo "passive keep ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
