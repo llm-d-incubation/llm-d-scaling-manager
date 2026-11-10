@@ -200,25 +200,26 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// (heldBy), and ev-shindin/llm-scaling-manager#524's latch-return-excursion cases.
 	saturation.SwitchMuLatchReadsSmoothedRatio: nil,
 
-	// Issue #55: one replica's re-reads within a sample fold to the latest,
-	// not the max. Base: main at 17c3970. Measured alone against all off, it
-	// moves 38 outputs of the 10 fixtures whose replicas read saturated on
-	// consecutive cycles: the measured mu and what prices from it. A
-	// replica's latest reading is never above the max of its readings, so
-	// every mu that moves falls (ServiceRate.Rate, all on against main):
-	// mu-paths by up to 2 %, ttft-saturated 7 %, pd-restart 18 %, the start
-	// fixtures 7-36 %, throughput-sweep-restart up to 60 % on a minute whose
-	// rate fell as it was read. Where the floor raises demand, a lower mu
-	// orders more, the cost side: throughput-sweep-restart's model demand
-	// rises on all 111 rows that move, pd-restart's on 140 of 144,
-	// ttft-saturated's on 68 of 86, the staircases' on 51 of 58. Where
-	// demand falls -- most rows of the four start fixtures -- it is the
-	// floor's trust blend: the floor's own replicas rise with the lower mu,
-	// and lambda x P / mu against the resident KV trusts the floor more, so
-	// more of the queue's residency charge is swapped for the drain price
-	// (issue #54, not this fold; start-seed 21:05:58, floor 8.24 replicas
-	// against 6.99, demand 3265 against 6153 tokens). The unit tests hold the
-	// fold itself (heldBy).
+	// Issue #55: one replica's re-reads within a sample fold to the latest
+	// one read while the row says it is still saturated (QueueMin above zero,
+	// or a running batch not fallen), not to their max. Base: main at
+	// 17c3970. Measured alone against all off, it moves 30 outputs of 8
+	// fixtures: the measured mu and what prices from it. The reading kept is
+	// never above the max of the replica's readings, so every mu that moves
+	// falls (ServiceRate.Rate, all on against main): pd-restart by at most
+	// 0.3 % (its exits, [6.23, 6.235, 5.99, 4.91] at 12:28:02, no longer
+	// count: mu holds 6.208 where the latest alone held 5.061 for 17 min),
+	// mu-paths 2 %, ttft-saturated 7 %, ttft-staircase-b-off 13 %, the start
+	// fixtures 7-29 %, whose replicas complete a few requests a minute and
+	// whose re-reads, read with work queued all minute, differ by up to 38 %.
+	// Model demand rises with the lower mu where the floor raises it
+	// (pd-restart 139 of 143 rows, by at most 0.3 %; ttft-saturated 68 of 86;
+	// ttft-staircase-b-off 20 of 27), the cost side. Where it falls -- every
+	// row of start-seed and start-restored, most of start-seed-restart -- the
+	// floor's own replicas rise and its trust blend swaps more of the queue's
+	// residency charge for the drain price: issue #54, not this fold
+	// (start-restored 23:21:50, 3.78 replicas implied against 3.25, demand 24
+	// against 621 tokens). The unit tests hold the fold itself (heldBy).
 	saturation.SwitchMuRereadTakesLatest: {
 		"mu-paths/learned-state.csv",
 		"mu-paths/variant-capacities.csv",
@@ -242,10 +243,6 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"start-seed/learned-state.csv",
 		"start-seed/results.csv",
 		"start-seed/variant-capacities.csv",
-		"throughput-sweep-restart/composite-results.csv",
-		"throughput-sweep-restart/composite-roles.csv",
-		"throughput-sweep-restart/results.csv",
-		"throughput-sweep-restart/variant-capacities.csv",
 		"ttft-saturated/composite-results.csv",
 		"ttft-saturated/composite-roles.csv",
 		"ttft-saturated/results.csv",
@@ -254,10 +251,6 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-staircase-b-off/composite-roles.csv",
 		"ttft-staircase-b-off/results.csv",
 		"ttft-staircase-b-off/variant-capacities.csv",
-		"ttft-staircase-c-on/composite-results.csv",
-		"ttft-staircase-c-on/composite-roles.csv",
-		"ttft-staircase-c-on/results.csv",
-		"ttft-staircase-c-on/variant-capacities.csv",
 	},
 
 	// Which rows the transfer is read from. It moves no golden: no committed
@@ -1027,11 +1020,14 @@ var startSeedSeamMoves = map[string][]string{
 	saturation.SwitchITLWaitsAfterRestart: {
 		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/lines.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
+	// Since issue #55 (SwitchMuRereadTakesLatest on in all on) it no longer
+	// moves start-restored's results or composite-results: off, k2's first
+	// reading still moves start-restored's mu window and capacities, but
+	// with the latest saturated re-read the floor's demand comes out the same.
 	saturation.SwitchK2FirstReadingWaits: {
 		"start-seed/composite-variants.csv", "start-seed/learned-state.csv", "start-seed/variant-capacities.csv",
 		"start-seed-restart/learned-state.csv", "start-seed-restart/variant-capacities.csv",
-		"start-restored/composite-results.csv", "start-restored/learned-state.csv", "start-restored/results.csv",
-		"start-restored/variant-capacities.csv",
+		"start-restored/learned-state.csv", "start-restored/variant-capacities.csv",
 	},
 	saturation.SwitchK2KeyBucketHeld: {
 		"start-seed/learned-state.csv", "start-seed/variant-capacities.csv", "start-seed-restart-2/learned-state.csv",
@@ -1454,6 +1450,7 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestRereadFold_TheBiasAtTheMeasuredNoise"},
 		{"../saturation", "TestRereadFold_TheCasesFailWithTheSwitchOff"},
 		{"../saturation", "TestRereadFold_AFillKeepsTheFullestWindow"},
+		{"../saturation", "TestRereadFold_AnExitKeepsTheLastSaturatedReading"},
 	},
 	saturation.SwitchMuLatchRestoresSafe: {
 		{"../saturation", "TestMuLatch_ARestoredMeasurementOverDerivedComesBackLatched"},

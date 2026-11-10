@@ -5,8 +5,11 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
 // Issue #55: one replica's re-reads within a sample (SwitchMuRereadTakesLatest).
@@ -241,4 +244,166 @@ func TestRereadFold_ARestoredSampleIsReplacedByTheNextReading(t *testing.T) {
 		}
 		require.InDelta(t, want, m.sampleOf(), 1e-12, "switch on %v", on)
 	}
+}
+
+// readWith is one reading of pod through the rig's write path with the row's
+// evidence of the moment it was read, and the clock moved on a second.
+func (m *analyzerMu) readWith(pod string, rate float64, ev readEvidence) muWrite {
+	w := m.a.recordSaturatedReading(propMuKey, pod, rate, ev)
+	m.clock = m.clock.Add(time.Second)
+	return w
+}
+
+// running is a row whose running batch was read: n requests.
+func running(n int) readEvidence { return readEvidence{running: n, runningKnown: true} }
+
+// queueMin is a row whose least queue over the minute was read: q requests.
+func queueMin(q float64) readEvidence { return readEvidence{queueMin: q, queueMinKnown: true} }
+
+// The way OUT of saturation, which the latest reading alone took and the max
+// never did: the queue drains, the 1m-max queue gate still admits the
+// replica, and its rate[1m] falls as it covers time served under capacity.
+// On pd-restart 12:28:02 a decode replica read [6.23, 6.235, 5.99, 4.91]
+// as its batch fell from 16 running to 9 and 5, and the latest held mu at
+// 5.06 against a settled 6.2 for 17 min. A re-read counts only while the row
+// says the replica is still saturated, so the sample is the last such
+// reading. With no evidence on the row the latest is taken: pinned, since
+// the collector reads the running batch for every vLLM and SGLang replica.
+func TestRereadFold_AnExitKeepsTheLastSaturatedReading(t *testing.T) {
+	reads := []float64{1.0, 1.0, 0.8, 0.5}
+	for _, c := range []struct {
+		name string
+		ev   []readEvidence
+		want float64
+	}{
+		{"running batch falls 16 -> 9 -> 5", []readEvidence{running(16), running(16), running(9), running(5)}, 1.0},
+		{"queue emptied (QueueMin 0)", []readEvidence{queueMin(40), queueMin(30), queueMin(0), queueMin(0)}, 1.0},
+		{"QueueMin wins over a full batch", []readEvidence{
+			{queueMin: 40, queueMinKnown: true, running: 16, runningKnown: true},
+			{queueMin: 30, queueMinKnown: true, running: 16, runningKnown: true},
+			{queueMin: 0, queueMinKnown: true, running: 16, runningKnown: true},
+			{queueMin: 0, queueMinKnown: true, running: 16, runningKnown: true}}, 1.0},
+		{"no evidence: the latest", make([]readEvidence, 4), 0.5},
+	} {
+		m := rereadMu(true)().(*analyzerMu)
+		for i, v := range reads {
+			m.readWith("p0", v, c.ev[i])
+		}
+		require.InDelta(t, c.want, m.sampleOf(), 1e-12, c.name)
+	}
+	// The recorded trace itself.
+	m := rereadMu(true)().(*analyzerMu)
+	for i, v := range []float64{6.23, 6.235, 5.99, 4.91} {
+		m.readWith("p0", v, running([]int{16, 16, 9, 5}[i]))
+	}
+	require.InDelta(t, 6.235, m.sampleOf(), 1e-12, "pd-restart 12:28:02: the last reading with a full batch")
+}
+
+// A low latest reading after a full one is dropped only by the replica's
+// state, never by its value: with the batch still full it is a real
+// reading of the rate and counts; with the batch emptied it does not.
+func TestRereadFold_APartialLowLatestAfterAFullRead(t *testing.T) {
+	m := rereadMu(true)().(*analyzerMu)
+	m.readWith("p0", 1.0, running(16))
+	m.readWith("p0", 0.6, running(4))
+	require.InDelta(t, 1.0, m.sampleOf(), 1e-12, "the batch emptied: the full read stands")
+	m = rereadMu(true)().(*analyzerMu)
+	m.readWith("p0", 1.0, running(16))
+	m.readWith("p0", 0.6, running(16))
+	require.InDelta(t, 0.6, m.sampleOf(), 1e-12, "the batch still full: the low read counts")
+	m = rereadMu(true)().(*analyzerMu)
+	m.readWith("p0", 1.0, running(16))
+	m.readWith("p0", 0.6, running(4))
+	m.readWith("p0", 0.95, running(16))
+	require.InDelta(t, 0.95, m.sampleOf(), 1e-12, "full again: the latest counted reading")
+}
+
+// A replica restarted under the same name within the minute reads its first,
+// partial window with an empty batch: it does not count, and the reading
+// before the restart stands. With no reading of the sample counted, the
+// sample is the replica's highest, the fold as it was before.
+func TestRereadFold_ARestartMidMinute(t *testing.T) {
+	m := rereadMu(true)().(*analyzerMu)
+	m.readWith("p0", 1.0, running(16))
+	m.readWith("p0", 1.0, running(16))
+	m.readWith("p0", 0.3, running(1))
+	require.InDelta(t, 1.0, m.sampleOf(), 1e-12, "the restart's partial window does not count")
+
+	m = rereadMu(true)().(*analyzerMu)
+	for _, v := range []float64{0.9, 1.1, 1.0} {
+		m.readWith("p0", v, queueMin(0))
+	}
+	require.InDelta(t, 1.1, m.sampleOf(), 1e-12, "none counted: the max, as before")
+}
+
+// A sample restored with no per-pod readings, then read by two replicas
+// within the minute, is the mean of their readings: the restored value is no
+// replica's, and leaves no residue in the mean or in a replica's highest.
+func TestRereadFold_ATwoPodRestoredSample(t *testing.T) {
+	for _, ev := range []readEvidence{{}, running(16)} {
+		m := rereadMu(true)().(*analyzerMu)
+		m.readWith("p0", 1.3, ev)
+		m.a.mu.Lock()
+		delete(m.a.throughputPodReads, propMuKey) // a restore carries the sample, not its readings
+		m.a.mu.Unlock()
+		m.readWith("p0", 1.0, ev)
+		m.readWith("p1", 0.8, ev)
+		require.InDelta(t, 0.9, m.sampleOf(), 1e-12, "mean of p0 and p1 (evidence %+v)", ev)
+		m.a.mu.Lock()
+		peak := m.a.throughputPodReads[propMuKey].peaks["p0"]
+		m.a.mu.Unlock()
+		require.InDelta(t, 1.0, peak, 1e-12, "p0's highest is its own reading, not the restored 1.3")
+	}
+}
+
+// Open: a drain burst at the end of an episode. Where the row says the queue
+// emptied over the minute (QueueMin 0) the burst does not count; with only a
+// full running batch, or no evidence, it is the latest reading and is taken,
+// as the max took it (throughput_floor.go, file header).
+func TestRereadFold_ADrainAtTheEndIsStillTaken(t *testing.T) {
+	m := rereadMu(true)().(*analyzerMu)
+	for i, v := range []float64{1.0, 1.0, 1.4} {
+		m.readWith("p0", v, []readEvidence{queueMin(20), queueMin(10), queueMin(0)}[i])
+	}
+	require.InDelta(t, 1.0, m.sampleOf(), 1e-12, "QueueMin 0: the burst does not count")
+	m = rereadMu(true)().(*analyzerMu)
+	for _, v := range []float64{1.0, 1.0, 1.4} {
+		m.readWith("p0", v, running(16))
+	}
+	require.InDelta(t, 1.4, m.sampleOf(), 1e-12, "a full batch through the burst: taken (open)")
+}
+
+// The fold is in processing order, which is cycle order: one reading per
+// replica per cycle. A duplicate read inside the spacing (the same scrape
+// pair read again) folds and changes nothing; a reading lower than the one
+// before it, read later, is the latest whatever its value.
+func TestRereadFold_ADuplicateOrStaleReadInsideTheSpacing(t *testing.T) {
+	m := rereadMu(true)().(*analyzerMu)
+	require.Equal(t, muSampled, m.readWith("p0", 1.0, running(16)))
+	require.Equal(t, muFolded, m.readWith("p0", 1.0, running(16)), "a duplicate folds")
+	require.InDelta(t, 1.0, m.sampleOf(), 1e-12)
+	m.a.mu.Lock()
+	require.Equal(t, 1, m.a.saturatedThroughput[propMuKey].Len(), "and starts no sample")
+	m.a.mu.Unlock()
+	m.readWith("p0", 1.1, running(16))
+	m.readWith("p0", 0.9, running(16))
+	require.InDelta(t, 0.9, m.sampleOf(), 1e-12, "the later reading, read later")
+}
+
+// The spacing's boundary: a reading at exactly ThroughputSampleSpacing after
+// the sample started starts the next one; a nanosecond before, it folds.
+func TestRereadFold_TheBoundaryAtExactlyTheSpacing(t *testing.T) {
+	a := NewSaturationAnalyzer(capacity.NewStore())
+	now := propStart
+	a.now = func() time.Time { return now }
+	require.Equal(t, muSampled, a.recordSaturatedReading(propMuKey, "p0", 1.0, running(16)))
+	now = propStart.Add(ThroughputSampleSpacing - time.Nanosecond)
+	require.Equal(t, muFolded, a.recordSaturatedReading(propMuKey, "p0", 1.2, running(16)))
+	now = propStart.Add(ThroughputSampleSpacing)
+	require.Equal(t, muSampled, a.recordSaturatedReading(propMuKey, "p0", 0.9, running(16)))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ra := a.saturatedThroughput[propMuKey]
+	require.Equal(t, 2, ra.Len())
+	require.Equal(t, []float64{1.2, 0.9}, ra.Snapshot().Values)
 }

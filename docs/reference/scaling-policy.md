@@ -1570,7 +1570,9 @@ llama-8b-prod:
 ```
 
 **The risk goes one way: it can add prefill replicas, never remove them.** The
-bound is low, so prefill can end up larger than its load needs. In the worst
+bound is low, so prefill can end up larger than its load needs. One case can
+still read high: a burst of completions as a replica's queue drains, read
+while its batch is still full. In the worst
 case the extra is the ratio between what prefill can really do and the rate
 it was seen doing behind a full decode. A prefill that large rarely
 queues on its own, so the extra **lasts until you reset the variant's learned

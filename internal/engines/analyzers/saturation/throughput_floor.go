@@ -73,17 +73,22 @@ import (
 // pass of 2026-09-19 (second): 6.67 req/s on the last saturated cycle,
 // 200 completions in 30 s, with token throughput below the plateau the
 // replica held while full (~5.0 req/s sustained), and the window carried
-// 6.67 for the rest of the phase. The max window has always taken these;
-// nothing in it lowers a reading once taken. The fix is upstream of this
-// function -- a reading gated on an instantaneous queue, or a mu priced
-// from the generation-token rate over the bucket's output length, which
-// does not burst on a drain -- and is open.
+// 6.67 for the rest of the phase. With SwitchMuRereadTakesLatest a re-read
+// within the sample counts only while the row says the replica is still
+// saturated (podReads.saturatedAt: its queue never emptied over the minute,
+// or its running batch has not fallen), which drops a drain read where the
+// row carries QueueMin or the batch empties behind it. A reading with
+// neither -- a sample's first, or a row with no QueueMin whose batch
+// stays full through the burst -- is still taken, and that is open: a
+// reading gated on an instantaneous queue everywhere, or a mu priced from
+// the generation-token rate over the bucket's output length, which does not
+// burst on a drain (TestRereadFold_ADrainAtTheEndIsStillTaken).
 //
 // A reading equal to the last one given, at or past the spacing, is the
 // same scrape pair read again across the boundary (a re-read of the
 // previous pair when the next scrape has not landed), or a genuine repeat,
 // and starts no sample; that costs a cycle or two. Compared to the last
-// READING, not to the sample, which the fold may have raised above it. Such
+// READING, not to the sample, which the fold may have held above it. Such
 // a repeat is use, not a write (SwitchMuRepeatIsUse): it touches the
 // window's use clock and leaves its write clock, so a frozen series does
 // not keep an episode alive. The prefill bound keeps the old rule, a write.
@@ -134,21 +139,23 @@ const (
 // A replica's re-reads were folded by their max too, on the view that they
 // are the same moment read again, whose highest reading is the best. They
 // are not: the rate[1m] is evaluated afresh every 15 s cycle, so a replica
-// saturated for the whole minute reads about four overlapping windows, each
-// with its own noise, and their max picks the noise. Measured at four reads
-// a minute and the gauges' AR(1) noise (phi 0.3 per cycle), at one replica
-// and at four, mu read 7.7-8.6 % high at 10 % noise and 11.5-12.9 % at 15 %,
-// and the prefill bound 8.9-9.4 % and 13.4-14.0 %; both read this fold, and
-// ordered too few replicas by as much (issue #55;
-// TestRereadFold_TheBiasAtTheMeasuredNoise). With SwitchMuRereadTakesLatest
-// on, the sample keeps the replica's latest reading. Under stationary noise
-// it is unbiased. On a fill, what the max was kept for, the latest reading is the
-// one whose window holds the most saturated time: the rate rises through the
-// minute, and the latest reading is the max the window kept. A mean of the
-// re-reads would count the minute's first, partial windows, the under-read
-// the file header describes, and errs to the cost side by as much. Where
-// the latest reading is a drain at the end of an episode, the max took it
-// too (file header): that case is still open.
+// saturated for the whole minute reads about four overlapping windows, and
+// a max over noisy reads picks the noise. Simulated at four reads a minute
+// and AR(1) noise (phi 0.3 per cycle), at one replica and at four, mu read
+// 7.7-8.6 % high at 10 % noise and 11.5-12.9 % at 15 %, and the prefill
+// bound 8.9-9.4 % and 13.4-14.0 % (issue #55;
+// TestRereadFold_TheBiasAtTheMeasuredNoise). On the recordings' queued rows
+// latest over max has a median of 0.99-1.00 on the steady fixtures (pd-restart,
+// throughput-sweep-restart, ttft-saturated, mu-paths) and 0.92-0.97 on the
+// staircases and a start fixture, so the simulation is an upper end. With SwitchMuRereadTakesLatest on, the sample
+// keeps the replica's latest reading counted as saturated (podReads.reread):
+// unbiased under stationary noise, and on a fill the reading whose window
+// holds the most saturated time, what the max was kept for. The latest
+// reading alone took the partial window on the way OUT of saturation, which
+// a max never did, so a re-read counts only while the row says the replica
+// is still saturated, and with none counted the sample is the max, as
+// before. A mean of the re-reads would count the minute's first, partial
+// windows, the under-read the file header describes.
 //
 // The mean, not the median: a fleet serves the sum of its replicas' rates,
 // so what one replica serves on average is their mean. A lower median
@@ -164,6 +171,14 @@ const (
 // counts its own value as the reading of the replica that reads next, which
 // that replica's reading then replaces (with the switch off, raises).
 func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate float64) muWrite {
+	return a.recordSaturatedReading(key, pod, rate, readEvidence{})
+}
+
+// recordSaturatedReading is recordSaturatedThroughputFrom for a reading whose
+// row says whether the replica was still saturated when it was read (ev):
+// with SwitchMuRereadTakesLatest on, a re-read within the sample counts only
+// then (podReads.reread).
+func (a *SaturationAnalyzer) recordSaturatedReading(key, pod string, rate float64, ev readEvidence) muWrite {
 	// `!(rate > 0)` rejects a NaN, which `rate <= 0` would admit. +Inf is
 	// excluded too, to match floor.priceable: it passes `rate > 0`, and left in
 	// it would take one of the window's ten slots from a real reading and be
@@ -213,7 +228,7 @@ func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate
 				reads = podReads{at: last, pods: map[string]float64{pod: ra.Last()}}
 			}
 			if a.muRereadLatest {
-				reads.pods[pod] = rate
+				reads.pods[pod] = reads.reread(pod, rate, ev)
 			} else {
 				reads.pods[pod] = max(reads.pods[pod], rate)
 			}
@@ -235,7 +250,9 @@ func (a *SaturationAnalyzer) recordSaturatedThroughputFrom(key, pod string, rate
 		a.paths.add(pathMuWritten, 1)
 	}
 	a.throughputSampledAt[key] = now
-	a.throughputPodReads[key] = podReads{at: now, pods: map[string]float64{pod: rate}}
+	reads := podReads{at: now, pods: map[string]float64{}}
+	reads.pods[pod] = reads.reread(pod, rate, ev)
+	a.throughputPodReads[key] = reads
 	return muSampled
 }
 
@@ -257,6 +274,93 @@ type podReads struct {
 	// floor is the prefill bound's window max when the sample started: the
 	// figure the sample may not fall below (notePrefillBound). Zero for mu.
 	floor float64
+	// peaks, runPeaks and counted are, per replica, its highest reading of
+	// the sample, the most running requests it held at any of them, and
+	// whether any was read while it was still saturated: its own readings
+	// only (a restored sample's value is no replica's), for
+	// SwitchMuRereadTakesLatest (reread).
+	peaks    map[string]float64
+	runPeaks map[string]int
+	counted  map[string]bool
+}
+
+// readEvidence is what a saturated reading's row says about the replica at
+// the moment it was read, beside the 1m-max queue that admitted it: the
+// least its queue held over the last minute, and the requests running in
+// its batch now. The zero value knows neither.
+type readEvidence struct {
+	queueMin      float64
+	queueMinKnown bool
+	running       int
+	runningKnown  bool
+}
+
+// evidenceOf is rm's readEvidence.
+func evidenceOf(rm domain.ReplicaMetrics) readEvidence {
+	return readEvidence{queueMin: rm.QueueMin, queueMinKnown: rm.QueueMinKnown,
+		running: rm.RunningRequests, runningKnown: rm.RunningRequestsKnown}
+}
+
+// RereadBatchDrop is how far under the most it held at a reading of the
+// sample a replica's running batch may fall and the reading still count as
+// saturated (SwitchMuRereadTakesLatest), where its row has no QueueMin.
+const RereadBatchDrop = 0.20
+
+// saturatedAt reports whether pod was still saturated when it read ev. The
+// admission's queue gate is a one-minute max, so it stays up for a minute
+// after the queue empties, and the rate[1m] read then covers time the
+// replica served under its capacity: the partial window on the way out of
+// saturation. Where the row says so, a read that is not saturated now is
+// not counted:
+//
+//   - QueueMin known: its queue held work the whole minute (QueueMin > 0);
+//   - else the running batch known: it holds at least 1 - RereadBatchDrop of
+//     the most it held at a reading of this sample. A queue that drains
+//     empties the batch behind it: pd-restart 12:28:32, 16 running -> 5 and
+//     9; throughput-sweep-restart 22:20:06, 64 -> 2;
+//   - else unknown, and it counts.
+func (r *podReads) saturatedAt(pod string, ev readEvidence) bool {
+	if ev.runningKnown {
+		if r.runPeaks == nil {
+			r.runPeaks = map[string]int{}
+		}
+		r.runPeaks[pod] = max(r.runPeaks[pod], ev.running)
+	}
+	switch {
+	case ev.queueMinKnown:
+		return ev.queueMin > 0
+	case ev.runningKnown:
+		return float64(ev.running) >= (1-RereadBatchDrop)*float64(r.runPeaks[pod])
+	default:
+		return true
+	}
+}
+
+// reread is the sample's reading for pod after it reads rate (ev) within the
+// sample (SwitchMuRereadTakesLatest): the latest reading counted as
+// saturated (saturatedAt), latest in the order the cycles read it -- one
+// reading per replica per cycle, so the processing order is the cycle
+// order. A reading not counted leaves the replica's latest counted one;
+// with none counted in the sample it is the replica's highest reading, the
+// fold as it was before. On the recordings' queued rows a steady replica's
+// latest re-read is within 1 % of its highest (median); the readings this
+// test drops are the exits, where the latest fell 21-63 %
+// (pd-restart 12:28:02 decode [6.23, 6.235, 5.99, 4.91] held mu at 5.06
+// against a settled 6.2 for 17 min).
+func (r *podReads) reread(pod string, rate float64, ev readEvidence) float64 {
+	if r.peaks == nil {
+		r.peaks, r.counted = map[string]float64{}, map[string]bool{}
+	}
+	r.peaks[pod] = max(r.peaks[pod], rate)
+	switch {
+	case r.saturatedAt(pod, ev):
+		r.counted[pod] = true
+		return rate
+	case r.counted[pod]:
+		return r.pods[pod]
+	default:
+		return r.peaks[pod]
+	}
 }
 
 // meanOf is the mean of the readings, zero when there are none.

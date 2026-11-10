@@ -23,7 +23,7 @@
   class: edges
   learner: mu
   expect: flipped
-  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3): the crossing changes the source once; a key's first reading in a noise trough sets the weighing at its start, the provisional set clears within minutes, and the crossing sets it again. The fixes that remove it seal the closed-loop probe (see the 10 % row)."
+  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3), but since issue #55 the reversals are also mid-run: the readers' samples are their latest reads, no longer their max, so the reader's ratio carries its full per-read noise, and the band's 5 min set window dips under the tolerance and sets the weighing again after it cleared (seed 3: reversed at cycles 40 and 72, where it reversed at 14 and 76 before). The first-reading trough of the 10 % row remains. The fixes that remove that seal the closed-loop probe (see the 10 % row)."
   measured: "16/100 seeds; seed 3: the source reversed at cycles 40 and 72 (14/100 before issue #55, when each replica's re-reads folded by their max and read high)"
   owner: "ev-shindin/llm-scaling-manager#495"
 - id: edges/shape-hold/tolerance-excursion-stress
