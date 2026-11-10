@@ -212,14 +212,14 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// mu-paths 2 %, ttft-saturated 7 %, ttft-staircase-b-off 13 %, the start
 	// fixtures 7-29 %, whose replicas complete a few requests a minute and
 	// whose re-reads, read with work queued all minute, differ by up to 38 %.
-	// Model demand rises with the lower mu where the floor raises it
-	// (pd-restart 139 of 143 rows, by at most 0.3 %; ttft-saturated 68 of 86;
-	// ttft-staircase-b-off 20 of 27), the cost side. Where it falls -- every
-	// row of start-seed and start-restored, most of start-seed-restart -- the
-	// floor's own replicas rise and its trust blend swaps more of the queue's
-	// residency charge for the drain price: issue #54, not this fold
-	// (start-restored 23:21:50, 3.78 replicas implied against 3.25, demand 24
-	// against 621 tokens). The unit tests hold the fold itself (heldBy).
+	// Against main with issue #54's SwitchFloorTrustReadsCompletions on
+	// (cea2f9e), model demand rises with the lower mu, the cost side:
+	// pd-restart 109 of 111 rows that move, by at most 0.3 %; ttft-saturated
+	// 68 of 68, by at most 1.8 %; ttft-staircase-b-off 17 of 20, up to
+	// 15.2 %; start-seed 5 of 8, up to 12.1 %. The few rows that fall fall by
+	// at most 1.4 %. Before #54 the start fixtures' demand fell by up to 96 %
+	// through the floor's trust blend; with it, none falls past 1.4 %.
+	// The unit tests hold the fold itself (heldBy).
 	saturation.SwitchMuRereadTakesLatest: {
 		"mu-paths/learned-state.csv",
 		"mu-paths/variant-capacities.csv",
@@ -723,6 +723,40 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
 		"ttft-staircase-c-on/results.csv",
 	},
+
+	// llm-d-incubation/llm-d-scaling-manager#54 (saturation.SwitchFloorTrustReadsCompletions,
+	// throughput_floor.go, queue_drain.go): the floor's trust reads lambda
+	// against what the role completes, not lambda x P / mu against the
+	// resident KV; the swap's drain price is the floor at no more than what
+	// the queued replicas complete; and a standing queue is priced at least at
+	// the growing region's price, capped at occupancy (drainStanding). It
+	// moves role and model demand and nothing else. Down where occupancy
+	// charged a queue as resident KV over its served-rate drain price
+	// (ttft-saturated's prefill, to x0.21; the start fixtures, whose P is 6
+	// tokens), up where the queued replicas serve under mu (pd-restart's
+	// decode, to +61 %). Alone it also moves throughput-sweep-restart; with
+	// SwitchQueuePricedAsDrain on, as all on runs, the drain price holds
+	// those cycles. With SwitchThroughputFloorRaisesVariants on as well, all
+	// on also moves e1's and e1-tuned's variant capacities, which that
+	// switch's row names: an interaction.
+	saturation.SwitchFloorTrustReadsCompletions: {
+		"e1-tuned/results.csv", "e1/results.csv",
+		"pd-restart/composite-results.csv", "pd-restart/composite-roles.csv", "pd-restart/results.csv",
+		"start-restored/composite-results.csv", "start-restored/results.csv",
+		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/results.csv",
+		"start-seed-restart/composite-results.csv", "start-seed-restart/results.csv",
+		"start-seed/composite-results.csv", "start-seed/results.csv",
+		"ttft-saturated/composite-results.csv", "ttft-saturated/composite-roles.csv",
+		"ttft-saturated/results.csv",
+		"throughput-sweep-restart/composite-results.csv", "throughput-sweep-restart/composite-roles.csv",
+		"throughput-sweep-restart/results.csv",
+		"ttft-staircase-b-off/composite-results.csv", "ttft-staircase-b-off/composite-roles.csv",
+		"ttft-staircase-b-off/results.csv",
+		"ttft-staircase-b-on/composite-results.csv", "ttft-staircase-b-on/composite-roles.csv",
+		"ttft-staircase-b-on/results.csv",
+		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/results.csv",
+	},
 })
 
 // learner4b2Seams is learner PR 4b-2's switches, earlier seams now (merged
@@ -1020,14 +1054,11 @@ var startSeedSeamMoves = map[string][]string{
 	saturation.SwitchITLWaitsAfterRestart: {
 		"start-seed-restart-2/learned-state.csv", "start-seed-restart-2/lines.csv", "start-seed-restart-2/variant-capacities.csv",
 	},
-	// Since issue #55 (SwitchMuRereadTakesLatest on in all on) it no longer
-	// moves start-restored's results or composite-results: off, k2's first
-	// reading still moves start-restored's mu window and capacities, but
-	// with the latest saturated re-read the floor's demand comes out the same.
 	saturation.SwitchK2FirstReadingWaits: {
 		"start-seed/composite-variants.csv", "start-seed/learned-state.csv", "start-seed/variant-capacities.csv",
 		"start-seed-restart/learned-state.csv", "start-seed-restart/variant-capacities.csv",
-		"start-restored/learned-state.csv", "start-restored/variant-capacities.csv",
+		"start-restored/composite-results.csv", "start-restored/learned-state.csv", "start-restored/results.csv",
+		"start-restored/variant-capacities.csv",
 	},
 	saturation.SwitchK2KeyBucketHeld: {
 		"start-seed/learned-state.csv", "start-seed/variant-capacities.csv", "start-seed-restart-2/learned-state.csv",
@@ -1721,12 +1752,14 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"pd-restart/composite-roles.csv": "b6629b4b25d4b0d8d20246ec2319ce6e6c596482def6d1fe7634977798918e07",
 	"pd-restart/store-records.csv":   "5f97bd429a7f97b77ea04146f204c2a310c2bd7f8decf32b993db398e99edd46",
 
-	// Issue #55's outputs no earlier switch names, as main holds them at
-	// 17c3970.
+	// llm-d-incubation/llm-d-scaling-manager#54's output no earlier switch
+	// names, as main holds it at 17c3970; issue #55's too.
+	"ttft-saturated/composite-roles.csv": "b66979a9a955650878efd5c410dbdd4cddc08638e1fd58d310c4bb67d29b78d3",
+	// Issue #55's other outputs no earlier switch names, as main holds them
+	// at 17c3970.
 	"start-restored/variant-capacities.csv":     "60110dafe6b3cfabbfff6e77817d6f20a08a437f55c860cc6995a96f4e3f4571",
 	"start-seed-restart/variant-capacities.csv": "a51d5988cc6f7cd34659fca3d492dc53727bbd73c34916a46b30a0127cb78a09",
 	"start-seed/variant-capacities.csv":         "6a99f3797ea08c447a5eb25933c93607f073b7adf819b9188cced35bde1eb3ce",
-	"ttft-saturated/composite-roles.csv":        "b66979a9a955650878efd5c410dbdd4cddc08638e1fd58d310c4bb67d29b78d3",
 })
 
 // The slow tests of this package run in parallel with each other (each

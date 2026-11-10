@@ -527,6 +527,10 @@ type SaturationAnalyzer struct {
 	// queue_drain.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	queuePricedAsDrain bool
+	// floorTrustCompleted is SwitchFloorTrustReadsCompletions
+	// (llm-d-incubation/llm-d-scaling-manager#54, throughput_floor.go): on
+	// from the constructor; a replay turns it off (SetSwitchesForReplay).
+	floorTrustCompleted bool
 	// drainHaircut is FirstReadHaircut; a test sets another to measure what
 	// the haircut buys.
 	drainHaircut float64
@@ -772,6 +776,7 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		itlClearsOnRevision:    true,
 		floorRaisesVariants:    true,
 		queuePricedAsDrain:     true,
+		floorTrustCompleted:    true,
 		drainHaircut:           FirstReadHaircut,
 		itlOneSidedLast:        make(map[string]itlOneSidedRecord),
 		prefillObserver:        prefill.NewObserver(),

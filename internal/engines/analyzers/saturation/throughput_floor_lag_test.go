@@ -19,10 +19,12 @@ import (
 // resident tokens with queued requests charged queueCharge as residency, at
 // arrival rate lambda, with a saturated throughput of 6 req/s from samples
 // readings of its own window, and returns the model's demand after the floor.
+// The replica is full, so it completes its mu (fullReplicaRow), whatever
+// lambda reads.
 func floorOneReplica(lambda float64, samples int, resident, queueCharge float64, queued int) float64 {
 	const mu = 6.0
 	a := NewSaturationAnalyzer(capacity.NewStore())
-	in := makeAnalyzerInput(nil, nil)
+	in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(mu)}, nil)
 	in.ArrivalRate = lambda
 	rcs := []capacity.ReplicaCapacity{{
 		VariantName: "v", PodName: "p", QueueLength: queued, LocalQueueDemand: int64(queueCharge),
@@ -31,6 +33,13 @@ func floorOneReplica(lambda float64, samples int, resident, queueCharge float64,
 	vcs := []domain.VariantCapacity{{VariantName: "v", Role: domain.RoleDecode, ReplicaCount: 1, PerReplicaCapacity: 260_622}}
 	return a.applyThroughputFloor(in, in.Config.(*config.ScalingPolicy), rcs, vcs,
 		resident+queueCharge, nil, nil, 0, false, logr.Discard())
+}
+
+// fullReplicaRow is the row of the one replica "p" of variant "v" the floor
+// cases here price: full, so completing mu requests a second. The floor's
+// trust reads lambda against it (SwitchFloorTrustReadsCompletions).
+func fullReplicaRow(mu float64) domain.ReplicaMetrics {
+	return domain.ReplicaMetrics{PodName: "p", VariantName: "v", RequestRate: mu, RequestRateKnown: true}
 }
 
 // The floor swaps a queue's residency charge for its drain price, which may
@@ -175,7 +184,7 @@ func TestThroughputFloor_AQueueJitterDoesNotFlipTheSwap(t *testing.T) {
 		lo, hi := math.Inf(1), math.Inf(-1)
 		var trace strings.Builder
 		for i := range 12 {
-			in := makeAnalyzerInput(nil, nil)
+			in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(mu)}, nil)
 			in.ArrivalRate = lambda
 			q := 160 + i%2
 			charge := perReq * float64(q)
