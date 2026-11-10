@@ -103,8 +103,10 @@ Read the review first; the implementation design says what was built.
   ConfigMap (passive by default; passive, shadow and active become live
   `kubectl patch` steps), and runs a preflight Job that reports each
   prerequisite as PASS, WARN, FAIL or UNKNOWN. Lists what the install scripts
-  do that a static manifest cannot and where each goes, what `make` keeps, the
-  migration from a `make` install, and what ships in v0.11.0.
+  do that a static manifest cannot and where each goes. `make
+  deploy-scaling-manager` stays a supported second path on the same render,
+  names and settings, so an install can move between the two. Records the
+  2026-11-10 decisions, the migration, and what ships in v0.11.0.
 
 ## Engine and analyzers
 

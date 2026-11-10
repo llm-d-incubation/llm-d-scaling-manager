@@ -8,13 +8,32 @@
 - **Decision (already taken):** the release attaches rendered manifests. The
   operator applies them with `kubectl apply`, edits **one settings
   ConfigMap**, and runs a **preflight Job** that checks the prerequisites and
-  says what is wrong. No Helm, no remote kustomize base, no operator. `make`
-  stays for development, CI and the release.
+  says what is wrong. No Helm, no remote kustomize base, no operator.
+  `make deploy-scaling-manager` stays a supported install path beside it
+  ([Two install paths](#two-install-paths)).
 - **Main path:** utilization share, passive first, then shadow, then active.
   The first apply must give a passive controller.
 - **v0.11.0:** the manifests, the settings ConfigMap, the preflight Job, the
   install and passive guides rewritten on them, and a kind e2e that installs
   from the rendered files. See [Phases](#phases).
+
+## Decisions (2026-11-10)
+
+Taken by the maintainer on review of the first draft. Not open any more.
+
+1. **`make deploy-scaling-manager` stays a supported user path** after
+   v0.11.x, not development-only. There are two supported install paths, both
+   documented and both tested ([Two install paths](#two-install-paths)).
+2. **The settings ConfigMap is the new `scaling-manager-settings`**, with flat
+   keys, and for one release the controller falls back to the old
+   `scaling-manager-manager-config` `config.yaml` for a key it does not hold
+   ([The settings ConfigMap](#the-settings-configmap)).
+3. **The pod-writer grant is made only at activation**, as today. Going active
+   is a settings patch plus applying one small RBAC file,
+   `scaling-manager-activate.yaml`, per model namespace
+   ([Passive, then shadow, then active](#passive-then-shadow-then-active)).
+4. **The namespace is substituted with `sed` on `__NAMESPACE__`.** No render
+   tool.
 
 ## Summary
 
@@ -117,6 +136,7 @@ Attached to every GitHub Release, rendered by CI from the same overlays the
 | `scaling-manager-settings.yaml` | the settings ConfigMap, with defaults and a comment per key | created once, by the namespace owner |
 | `scaling-manager-preflight.yaml` | the preflight Job, its ServiceAccount and its read-only RBAC | whoever installs; the ClusterRole part needs a cluster admin once |
 | `scaling-manager-model-namespace.yaml` | per model namespace: the model-server PodMonitor, and for a controller that manages it from elsewhere, its Role and RoleBinding there. Placeholders `__NAMESPACE__` (controller) and `__MODEL_NAMESPACE__` | namespace owner of the model namespace |
+| `scaling-manager-activate.yaml` | per model namespace, applied only when utilization share goes active: Role `scaling-manager-pod-writer` (`patch` on pods) and its RoleBinding to the controller ([spelled out below](#the-activation-file)). Placeholders as above | namespace owner of the model namespace |
 | `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for mTLS. Placeholders `__NAMESPACE__`, `__KEDA_NAMESPACE__` | cluster admin |
 | `scaling-manager-kueue.yaml` | optional: the Kueue read grants (ClusterQueues, cohorts, flavors; the Role in Kueue's namespace) | cluster admin, only with a Kueue-bounded quota |
 | `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | namespace owner |
@@ -181,7 +201,7 @@ cosign verify-blob scaling-manager-namespaced.yaml \
 Because the manifests carry the digest, the release no longer depends on the
 `newTag` pin in `config/base/manager/kustomization.yaml` for operators. The pin
 still matters for `git checkout <tag> && make deploy-scaling-manager`, so it
-stays for now ([open question 6](#open-questions)).
+stays for now ([open question 3](#open-questions)).
 
 ## The settings ConfigMap
 
@@ -206,7 +226,7 @@ point: an upgrade never touches it.
 | `kueue` | `"false"` | `LLMSM_QUOTA_KUEUE` | live, but needs `scaling-manager-kueue.yaml` |
 | `kueueBorrow` | `"true"` | `LLMSM_QUOTA_KUEUE_BORROW` | live |
 | `kueueNamespace` | `kueue-system` | `KUEUE_NAMESPACE` | live |
-| `scaleToZero` | `"false"` | `ENABLE_SCALE_TO_ZERO` → `LLMSM_SCALE_TO_ZERO` | restart |
+| `scaleToZero` | the default `fix/config-inconsistencies` settles ([open question 4](#open-questions)) | `ENABLE_SCALE_TO_ZERO` → `LLMSM_SCALE_TO_ZERO` | restart |
 | `watchNamespaces` | empty: the controller's own (namespaced) or all (cluster-wide) | `LLMSM_WATCH_NS` | restart, and each namespace needs `scaling-manager-model-namespace.yaml` |
 | `logVerbosity` | `"2"` | `LLMSM_VERBOSITY` → `--v` | restart in v0.11.0, live later |
 
@@ -236,7 +256,7 @@ secret (`kubectl patch serviceaccount`). Documented as one-line commands.
   itself.
 - For one release, a key absent from the settings is read from
   `scaling-manager-manager-config` `config.yaml` if that exists. This is the
-  migration path ([below](#migrating-a-make-install)).
+  migration path ([below](#migrating-an-install-made-before-v0110)).
 
 The scaling-policy ConfigMap stays as it is, for thresholds, tiers and
 per-model overrides. It is optional: with none, the controller uses its
@@ -259,14 +279,14 @@ the command to fix it; nothing is applied for the operator.
 | **Restart on a passive or Prometheus change** | `passive` becomes live. A Prometheus change sets `restartRequired` (above) |
 | **Write the limiter into the policy** (`LLMSM_LIMITER`, `LLMSM_QUOTAS`, the Kueue keys) | Settings keys, live |
 | **Name ClusterRoles per install** with a hash of the namespace | The name carries the namespace instead (rules above) |
-| **Narrow `resourceNames`** on the Kueue and namespace readers to the managed namespaces | Static: the namespaced file names `__NAMESPACE__` and `scaling-manager-policy`. A controller that manages more namespaces (`watchNamespaces`) needs them added, which `scaling-manager-model-namespace.yaml` cannot do since they are on a ClusterRole. Preflight reports the missing names and prints the patch ([open question 3](#open-questions)) |
+| **Narrow `resourceNames`** on the Kueue and namespace readers to the managed namespaces | Static: the namespaced file names `__NAMESPACE__` and `scaling-manager-policy`. A controller that manages more namespaces (`watchNamespaces`) needs them added, which `scaling-manager-model-namespace.yaml` cannot do since they are on a ClusterRole. Preflight reports the missing names and prints the patch ([open question 1](#open-questions)) |
 | **Create PodMonitors and EPP ServiceMonitors, copying the selector labels the Prometheus resource wants** | `scaling-manager-model-namespace.yaml` carries the model-server PodMonitor. Preflight reads the Prometheus resource and says which label the monitor needs, and whether the targets are `up`. EPP scraping and EPP `/metrics` authentication belong to the llm-d stack; preflight checks the EPP metrics are present and links the llm-d guide |
 | **Discover the namespace** (the one namespace with model servers) and `LLMSM_WATCH_NS=auto` | Preflight lists namespaces with model servers and whether another controller manages them. The operator names the namespace |
 | **Single-install guard** (no namespaced install beside a cluster-wide one) | Preflight FAILs on an overlap it can see, and says UNKNOWN when it may not list Deployments cluster-wide |
 | **KEDA version branching** (warn outside tested versions; omit `fallback.behavior` from ScaledObjects before KEDA 2.17; re-wire an unwired HPA) | The manifests create no ScaledObject, so there is nothing to branch. Preflight reports the KEDA version, FAILs below the minimum we test, WARNs on an untested one, and says whether `fallback.behavior` exists. The ScaledObject example in the guide uses no `fallback` |
-| **NetworkPolicy naming KEDA's namespace** (detected from the external-metrics APIService) | In the manifest with `keda` ([open question 4](#open-questions)). Preflight reads KEDA's namespace and FAILs when the policy names another, with the patch. With mTLS, only KEDA can call the scaler whatever the policy says |
+| **NetworkPolicy naming KEDA's namespace** (detected from the external-metrics APIService) | In the manifest with `keda` ([open question 2](#open-questions)). Preflight reads KEDA's namespace and FAILs when the policy names another, with the patch. With mTLS, only KEDA can call the scaler whatever the policy says |
 | **Install Prometheus, KEDA, LWS, Gateway and inference CRDs** | Prerequisites, not part of the install. Preflight checks each. `make` keeps installing them for kind and CI |
-| **Pod-writer grant at `utilization-share activate`** (Role and RoleBinding in each model namespace) | In `scaling-manager-model-namespace.yaml`, so `utilizationShare: active` needs no further step ([open question 5](#open-questions)) |
+| **Pod-writer grant at `utilization-share activate`** (Role and RoleBinding in each model namespace) | Still granted only at activation (decision 3): `scaling-manager-activate.yaml`, applied per model namespace when going active ([the activation file](#the-activation-file)). The install files never grant `patch` on pods |
 | **Publish cluster policy to a policy namespace** (`make enable-physical-limiter`) | Unchanged in v0.11.0: a cluster-admin `make` target. A manifest form later |
 | **Default ScaledObjects** (`LLMSM_DEFAULT_SO=plan`) | Unchanged: off by default today, and `make scaledobjects-plan` stays. The guide shows the one ScaledObject a model needs |
 | **Verify after install** (rollout, log, monitors, KEDA wiring) | The preflight image's second mode, `verify`, after the install: the same Job file with `args: [verify]` ([Preflight](#the-preflight-check)) |
@@ -359,7 +379,9 @@ kubectl patch configmap scaling-manager-settings -n $NS --type merge \
 kubectl patch configmap scaling-manager-settings -n $NS --type merge \
   -p '{"data":{"passive":"false"}}'
 
-# 3. Let sharing act.
+# 3. Let sharing act: first the pod-write grant, in every model namespace that shares,
+#    then the switch.
+kubectl apply -f scaling-manager-activate.yaml     # per model namespace, see below
 kubectl patch configmap scaling-manager-settings -n $NS --type merge \
   -p '{"data":{"utilizationShare":"active"}}'
 ```
@@ -374,6 +396,59 @@ does it, and reports `utilizationShareMode: draining` until it is done.
 
 `make utilization-share-*` stays, as a wrapper over the same patch plus the
 checks it runs.
+
+### The activation file
+
+`scaling-manager-activate.yaml` is the one RBAC change going active needs. It
+is the grant `deploy/lib/pod_writer.sh` makes today at
+`make utilization-share-activate`, as a file. Applied in each model namespace
+that shares the budget, after `sed` fills both placeholders:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-pod-writer
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-manager-pod-writer-__NAMESPACE__
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/part-of: scaling-manager
+    app.kubernetes.io/instance: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaling-manager-pod-writer
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-controller-manager
+  namespace: __NAMESPACE__
+```
+
+Why a file and not part of the install: `patch` on pods can change a live Pod's
+image, so it is granted only where sharing acts, and only once it does. The
+Role is the same in every namespace; the RoleBinding is named for the
+controller's namespace, so two controllers granted in one namespace keep their
+own subjects, as today (today's name carries a hash of the namespace; see
+[naming](#release-artefacts)).
+
+Preflight checks for it: with `utilizationShare: active` set and the grant
+missing in a sharing namespace, it FAILs and prints the `kubectl apply` line.
+
+Turning sharing off: set `utilizationShare: "off"`, wait for the status to leave
+`draining`, then `kubectl delete -f scaling-manager-activate.yaml` in each
+namespace. Deleting the grant first would leave transfer marks on pods the
+controller can no longer clear.
 
 ## Upgrade
 
@@ -399,6 +474,7 @@ controller does not know are ignored.
 ```bash
 kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
 kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found   # per model namespace
+kubectl delete -f scaling-manager-activate.yaml --ignore-not-found          # per model namespace, if active
 # What the controller and the operator wrote, by label:
 kubectl delete configmap,secret -n $NS -l app.kubernetes.io/part-of=scaling-manager
 ```
@@ -411,21 +487,62 @@ operator's and stay; the uninstall guide keeps today's warning that a model
 parked at zero then never wakes. Set `utilizationShare: shadow` and wait a
 cycle before uninstalling, as today, so no transfer marks are left on pods.
 
-## What make keeps
+## Two install paths
+
+Both are supported, documented and tested (decision 1).
+
+| | release files | `make deploy-scaling-manager` |
+| --- | --- | --- |
+| for | operators who install a release | users who build from source, and those who want the scripted extras |
+| needs | `kubectl`, the downloaded files | a checkout, `make`, `kubectl`, `yq`, `jq`, `helm`, sometimes `openssl` |
+| finds Prometheus, CA, KEDA namespace, monitor labels | no: preflight reports, the operator sets | yes, as today |
+| installs Prometheus, KEDA, LWS, CRDs on request | no | yes, as today |
+| renders the admin half for someone else (`RENDER=`) | not needed: the `part=admin` objects of the file | yes |
+
+**How they relate.** They must produce the same install, so an operator can
+move between them in either direction:
+
+- **Same sources.** In v0.11.0 `make deploy-scaling-manager` stops building its
+  own kustomization for the core objects. It renders with the same code as
+  `make release-manifests` (its image instead of the release digest), fills
+  `__NAMESPACE__`, and applies that. Its detection, prerequisite installs and
+  checks run around this apply, as today. One render, so the two cannot drift.
+- **Same names.** `make` moves to the namespace-in-the-name ClusterRoles and
+  pod-writer bindings in the same release, and deletes the hash-named ones it
+  made before ([Migrating](#migrating-an-install-made-before-v0110)).
+- **Same settings ConfigMap.** `make` writes `scaling-manager-settings` instead
+  of `config.yaml`. It creates it when absent; when present, it merge-patches
+  only the keys whose variables were passed on this run (`PROMETHEUS_URL` →
+  `prometheusURL`, `LLMSM_PASSIVE` → `passive`, `LLMSM_LIMITER` → `limiter`,
+  and so on, per the settings table). A key not passed keeps its live value,
+  the rule `LLMSM_PASSIVE` and `LLMSM_LIMITER` follow today. Like the release
+  files, it never applies the scaling-policy ConfigMap, so the PR #59 merge is
+  retired from `make` too.
+- **Switching.** From `make` to the release files: apply the release file for
+  the same namespace; the objects already have those names. From the release
+  files to `make`: run `make deploy-scaling-manager` with the same namespace;
+  it finds the settings and keeps them. The uninstall of either path removes an
+  install made by the other.
+
+**What the guides lead with.** The release files. Each install guide ends with
+"Installing from a checkout instead" naming the `make` command for the same
+result, and `install-options.md` stays the reference for the `make` path.
+
+**What else `make` keeps**, unchanged:
 
 - Development and CI: `deploy-e2e-infra`, every `test-e2e-*`, kind with
   emulated GPUs, the benchmark targets.
 - The release: `release-manifests`, and the checks on it.
 - Tooling the manifests do not cover: `scaledobjects-plan`/`-apply`,
   `enable-physical-limiter`, `prepull`, `weights`, `warmpool`,
-  `workload-patch`, `utilization-share-*` (as wrappers).
-- `deploy-scaling-manager` itself, for v0.11.x, for existing users and for
-  installs that need its detection. The guides stop using it. Whether it goes
-  later is [open question 1](#open-questions).
+  `workload-patch`, `utilization-share-*` (as wrappers over the settings
+  patch and the activation file).
 
-## Migrating a make install
+## Migrating an install made before v0.11.0
 
-An existing install keeps working; nothing forces a move. To move:
+An existing install keeps working; nothing forces a move. Re-running
+`make deploy-scaling-manager` from v0.11.0 does the steps below itself. To move
+to the release files by hand:
 
 1. Create the settings ConfigMap. Preflight's `check` prints a filled-in
    `scaling-manager-settings.yaml` from the live
@@ -465,6 +582,18 @@ policy ConfigMap and the ScaledObjects the installer created.
     ConfigMap after each step and that no replica count moved while passive;
   - an upgrade: apply the previous release's file, then this one, and assert
     the settings and policy are unchanged.
+- **The `make` path keeps its coverage.** The existing e2e jobs
+  (`test-e2e-smoke-with-setup`, `test-e2e-full-with-setup`, the passive,
+  multi-controller and Kueue suites) install through
+  `make deploy-scaling-manager`, as today, and stay. Two additions:
+  - the deploy-script fixture checks (`hack/check-passive-keep.sh` and the
+    rest under `make lint-deploy-scripts`) move to the settings ConfigMap: a
+    re-run keeps every key it was not given, and never applies the policy;
+  - **path equivalence:** render the namespaced install both ways for the
+    same namespace and image, and assert the two object sets are identical.
+    Then, on kind, install with
+    `make`, apply the release file over it, and assert nothing changed; and
+    the reverse.
 - **`hack/check-release-manifests.sh`**, in `make lint-deploy-scripts`: the
   rules above (digest, no operator ConfigMaps, no Namespace, labels, the
   placeholder, the `part` split matching `LLMSM_PREREQ_KINDS`).
@@ -485,7 +614,9 @@ policy ConfigMap and the ScaledObjects the installer created.
    of mTLS or plaintext.
 4. The preflight Job, `check` mode.
 5. The kind e2e from the rendered files.
-6. Docs: `install-in-namespace`, `install-cluster-wide` and
+6. `make deploy-scaling-manager` on the same render, names and settings
+   ConfigMap, with the path-equivalence test.
+7. Docs: `install-in-namespace`, `install-cluster-wide` and
    `try-in-passive-mode` rewritten on the files; a short "install from the
    release" page that replaces most of `install-methods.md`;
    `upgrade-and-uninstall.md` gains the manifest form first.
@@ -500,35 +631,49 @@ policy ConfigMap and the ScaledObjects the installer created.
 - `enable-physical-limiter` as a manifest.
 - The `utilization-share*` guides, the Kueue guide and `install-options.md`
   rewritten on the files.
-- Retiring `deploy-scaling-manager` as a user path, if open question 1 says so.
 
 ## Open questions
 
-1. **Does `make deploy-scaling-manager` stay a supported user path after
-   v0.11.x,** or become development-only? Keeping it means two install paths
-   to document and test.
-2. **One settings ConfigMap, new name.** This proposes `scaling-manager-settings`
-   with flat keys and a one-release fallback to `scaling-manager-manager-config`.
-   The alternative is to keep the old name and add flat keys beside
-   `config.yaml`: no migration step, but one ConfigMap with two formats.
-3. **Narrow or wide reads.** The namespace and Kueue readers are narrowed by
+Each with the proposal's recommendation. The four answered on 2026-11-10 are
+under [Decisions](#decisions-2026-11-10).
+
+1. **Narrow or wide reads.** The namespace and Kueue readers are narrowed by
    `resourceNames` today. A static file can name only the install's own
    namespaces. Accept a `kubectl patch` per extra managed namespace, or grant
    `get namespaces` cluster-wide (labels only, but wider than today)?
-4. **The scaler NetworkPolicy's KEDA namespace.** The file must name one
+   **Recommended:** keep them narrow; preflight names each missing namespace
+   and prints the patch. Most installs manage only their own namespace.
+2. **The scaler NetworkPolicy's KEDA namespace.** The file must name one
    (`keda` is KEDA's chart default; today's shipped default is `keda-system`).
    A wrong name blocks KEDA and scaling stops. Ship it in the main file with a
-   preflight FAIL on mismatch (proposed), or as a separate opt-in file?
-5. **Pod-writer grant at install.** Putting it in the model-namespace file
-   makes `active` a single patch, but grants `patch pods` before sharing is on.
-   Today it is granted only at activate.
-6. **The `newTag` pin.** With digest-pinned manifests, is the pin in
+   preflight FAIL on mismatch, or as a separate opt-in file?
+   **Recommended:** in the main file, naming `keda`, with the preflight FAIL
+   and its patch. The OpenShift files name `openshift-keda`, as today.
+3. **The `newTag` pin.** With digest-pinned manifests, is the pin in
    `config/base/manager/kustomization.yaml` and its release-time check still
    wanted, or only for installs from a checkout?
-7. **`scaleToZero` default.** The installer turns scale-to-zero on by default
+   **Recommended:** keep it. `git checkout <tag> && make deploy-scaling-manager`
+   is a supported path (decision 1), and the pin is what makes it install that
+   release's image.
+4. **`scaleToZero` default.** The installer turns scale-to-zero on by default
    (`ENABLE_SCALE_TO_ZERO=true`); the shipped ConfigMap and a raw `apply -k`
-   leave it off. The settings file must pick one. This proposes off.
-8. **The substitution.** `sed` on `__NAMESPACE__` is plain and visible. The
-   alternative is a `render` subcommand in the image
-   (`kubectl run --rm -i --image=<release> -- render --namespace team-a`),
-   which could also fill the Prometheus URL, but is a tool to learn.
+   leave it off. The settings file must pick one, and both paths must agree.
+   A parallel change (branch `fix/config-inconsistencies`) is unifying the
+   `ENABLE_SCALE_TO_ZERO` default. **Recommended:** the settings file follows
+   whatever default that change settles; this proposal does not pick its own.
+
+## Before you rely on this
+
+Assumptions the design rests on that have not been tried yet:
+
+- **`kubectl apply -f <file> -l <selector>` applies only the matching objects
+  of a file.** The admin/controller split of the namespaced file depends on
+  it. Verify it on kind, with the kubectl version the guides name, before the
+  release files are built around it. If it does not hold, the namespaced
+  release ships the two halves as two files instead.
+- **The migration keeps names.** It works only if the TLS bootstrap uses
+  today's Secret names, and the KEDA step today's ClusterTriggerAuthentication
+  name, both of which this proposal requires.
+- **The built-in policy defaults equal the shipped `default` entry.** The
+  thresholds were checked by reading the code; the unit test that pins the
+  whole entry does not exist yet.
