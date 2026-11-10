@@ -25,7 +25,7 @@ needs and hands that to KEDA, which owns the HPA and does the scaling.
 
 `SCOPE=namespace` (default) or `cluster`. `ENVIRONMENT` is detected; set
 `kubernetes` or `openshift` to force it. Everything else is optional —
-[Configuration reference](../docs/reference/configuration.md).
+[Installer options](../docs/reference/install-options.md).
 
 ## Two things every path shares
 
@@ -46,4 +46,4 @@ is the one command that changes that, and it is an admin's to run.
 > scaling manager's external scaler: `scaling-manager-external-scaler.<controller-namespace>.svc:9090`
 > with an `authenticationRef` on a TLS install (the default), or
 > `scaling-manager-external-scaler.<controller-namespace>.svc.cluster.local:9090` on a plaintext one
-> ([external scaler mutual TLS](../docs/reference/configuration.md#external-scaler-mutual-tls)).
+> ([external scaler mutual TLS](../docs/reference/install-options.md#external-scaler-mutual-tls)).

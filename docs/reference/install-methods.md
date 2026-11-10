@@ -84,7 +84,7 @@ an EPP only (llm-d-router-standalone chart + tokenreview RBAC), run
 `deploy/install-epp.sh` after `install.sh`.
 
 **Environment variables**: every one the script reads is in the
-[Configuration Reference](configuration.md).
+[Installer options](install-options.md).
 
 #### Script deployment examples
 
@@ -229,4 +229,4 @@ Reasoning, configuration and removal: the [warm pool guide](../guides/warm-pool/
 - **[Kind Guide (Local Testing)](../../deploy/kind-emulator/)**: local development and testing with Kind and emulated GPUs
 
 Each has examples, troubleshooting and quick start commands, and uses the same
-[Configuration Reference](configuration.md).
+[Installer options](install-options.md).

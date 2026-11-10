@@ -81,7 +81,7 @@ so it is only a place to retune the unnamed fleet later. Delete it and
 A `scalingPolicy` key in each variant's KEDA trigger metadata selects the
 tier. The trigger is already the registration, so nothing is watched, listed
 or matched. Set it on the trigger, or in the variant's entry in
-[the ScaledObject plan](../../reference/configuration.md#default-scaledobjects)
+[the ScaledObject plan](../../reference/install-options.md#default-scaledobjects)
 before `make scaledobjects-apply`:
 
 ```yaml
@@ -104,10 +104,10 @@ editing its own ConfigMap: run out of the tenant's reach (`LLMSM_WATCH_NS`), it
 reads that ConfigMap only at start
 ([why](../../reference/scaling-policy.md#limiters-cluster-default-only-live)).
 
-Re-running `make deploy-scaling-manager` resets the `default` entry of the controller's
-own ConfigMap, and `defaultPolicy` with it: re-apply `defaultPolicy`
-afterwards. The tier entries are other keys, and the installer keeps them
-([why](../../reference/scaling-policy.md#re-running-the-installer-resets-the-default-entry)).
+Re-running `make deploy-scaling-manager` keeps `defaultPolicy` on the `default`
+entry of the controller's own ConfigMap, and the tier entries, which are other
+keys
+([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
 The full field list is in [the scaling policy reference](../../reference/scaling-policy.md).
 
 ### Choosing a tier

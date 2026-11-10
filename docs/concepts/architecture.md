@@ -1,14 +1,44 @@
 # How the scaling manager fits together
 
-llm-d-scaling-manager decides how many replicas each LLM model server should run.
-It reads how loaded the servers are, works out the replica count every model
-needs, keeps the total inside a GPU budget if you set one, and hands the
-number to KEDA. KEDA and the Kubernetes HPA do the actual scaling; the scaling
-manager never changes a replica count itself.
+llm-d-scaling-manager decides how many replicas each LLM model server should
+run. It reads how loaded the servers are, learns what one replica of each model
+can serve, works out the replica count every model needs, keeps the total
+inside a GPU budget if you set one, and hands the number to KEDA. KEDA and the
+Kubernetes HPA do the actual scaling; the scaling manager never changes a
+replica count itself.
+
+```mermaid
+flowchart LR
+  prom[("Prometheus: vLLM, SGLang and router metrics")] --> coll[Collector]
+  k8s[("Kubernetes: ScaledObjects, pods, nodes, Kueue")] --> coll
+  coll --> learners
+  subgraph learners [Learners]
+    mu["Throughput per replica (mu)"]
+    k2["Batch capacity in tokens (k2)"]
+    itl[Latency line]
+    st[Replica start time]
+    snap[(Learned-state snapshot)]
+  end
+  learners --> ana["Analyzers: saturation sizes, throughput adds, SLO only reports"]
+  ana --> engine
+  subgraph engine [Engine]
+    ss[Per-model sizing]
+    us[Utilization share]
+    lim["Limiters: quota, Kueue, physical GPUs"]
+    wp[Warm pool]
+  end
+  engine --> scaler(["KEDA external scaler<br/>passive switches here"])
+  scaler --> hpa[KEDA and HPA]
+  hpa --> work[Deployments and LeaderWorkerSets]
+```
+
+The same picture with the serving path around it:
 
 ![Where the scaling manager sits: clients reach model servers through the llm-d gateway and EPP; Prometheus scrapes the servers; the scaling manager reads Prometheus and the EPP queue, applies the scaling policy and an optional GPU budget, and answers KEDA, whose HPA scales the workload](figures/how-it-fits.svg)
 
-## The parts, left to right
+## The boxes, left to right
+
+### What it reads
 
 - **The serving path is llm-d's.** Clients send requests to a gateway. The
   EPP (endpoint picker, llm-d's router) chooses a replica for each request,
@@ -16,19 +46,81 @@ manager never changes a replica count itself.
   or SGLang pods, run by a Deployment or a LeaderWorkerSet.
 - **Prometheus** scrapes the model servers (KV-cache use, running and waiting
   requests, token counts, latency) and the EPP (its queue and arrival rate).
-- **The scaling manager** is one Deployment, `scaling-manager-controller-manager`. Every
-  15 seconds it reads those metrics from Prometheus. For a model parked at zero
-  replicas it also reads the EPP's queue directly, so a waiting request wakes
-  the model at once. Its settings (thresholds, tiers, limiters) live in the
-  `scaling-manager-scaling-policy-config` ConfigMap and are re-read without a restart.
-  The exception is a namespace-scoped controller whose policy ConfigMap is
-  outside the namespace it manages: it reads it only at startup.
-- **The GPU budget is optional.** Without one, each model is sized on its own.
-  With one, every decision has to fit: the GPUs physically free on the
-  cluster, a quota you declare, or a quota read from Kueue.
-- **KEDA** asks the scaling manager for each variant's replica count over gRPC
-  (the `scaling-manager-external-scaler` Service, port 9090). The HPA that KEDA creates
-  reads the count and scales the workload to it.
+  The scaling manager reads all of it from Prometheus, never from the pods.
+  For a model parked at zero it also reads the EPP's queue directly, so a
+  waiting request wakes the model at once.
+- **Kubernetes objects.** The ScaledObjects KEDA asks about (that is how a
+  workload registers), the pods behind them, the GPU nodes, and Kueue's queues
+  when you use Kueue.
+- **The collector** turns those into one row per replica every cycle (15
+  seconds by default).
+
+### The learners
+
+Fixed thresholds hold for one model and one request shape. Instead, the
+learners measure each model on its own servers, per variant and per request
+shape, and the analyzers size from what they measured. They are drawn apart
+above, but they live inside the analyzers: most in the saturation analyzer,
+with the throughput and SLO analyzers keeping latency lines of their own.
+
+| Learner | What it measures | What it is used for |
+| --- | --- | --- |
+| Throughput per replica (mu) | The requests per second one full replica completes, per request shape (for prefill, prompt tokens per second). Measured when replicas saturate; for a shape not yet seen saturated, computed from the latency line | Pricing the load: the arrival rate divided by mu is the replicas needed. It can only raise the demand read from KV-cache use, never lower it |
+| Batch capacity in tokens (k2) | The tokens one replica holds when its batch is full: how many requests the engine runs at once, times the tokens each holds. Measured when a replica saturates; until then, derived from the engine's flags (`--max-num-seqs` and its token budget per step) | A replica's capacity is the smaller of this and its KV-cache limit (`kvCacheThreshold`, 0.80, of the KV cache). The KV-cache limit is read from the engine, not learned |
+| Latency line | How inter-token latency rises with KV-cache use, fitted as a straight line between 0.15 and 0.80 of the cache | Computing throughput per replica (mu) for a request shape not yet run saturated |
+| Replica start time | Seconds from a new Pod to Ready | How far ahead to order, and how long a move takes |
+| Learned-state snapshot | Everything above, written to the ConfigMap `scaling-manager-learned-state` | Keeping it across a restart. Off by default (`LEARNED_STATE_SNAPSHOT`); without it a restart relearns from cold |
+
+A learner only counts readings from replicas that have settled, so a replica
+that is starting, restarting or being borrowed from a warm pool does not
+teach it a wrong figure. Until a learner has measured a variant, the variant is
+sized from seeds on its trigger (`replicaStartSeconds`,
+`defaultOutputTokens`) and from KV-cache use. To make it forget a variant, for
+example after a model change, see
+[reset one variant's learned state](../reference/troubleshooting.md#reset-one-variants-learned-state).
+
+### The analyzers
+
+- **Saturation** runs every cycle and sets the units: how full each replica is
+  and how many replicas the model needs to stay under its scale-up threshold.
+- **Throughput** (opt-in) sizes from token throughput and the latency line.
+  When it is listed, the model gets the larger of the two needs.
+- **SLO** (opt-in) reports what a latency target would need. It never changes
+  a replica count.
+
+### The engine
+
+- **Per-model sizing** (the steady-state engine) splits each model's need across its variants. With no
+  limiter it grows the variant with the lowest cost per unit of capacity
+  (`variantCost`) first.
+- **Limiters** bound every decision by a GPU budget: a quota you declare,
+  Kueue's quotas, or the GPUs physically on the nodes. Without one, each model
+  is sized on its own.
+- **Utilization share** (opt-in, experimental) splits one limiter's budget
+  between models: each gets its need, the spare is shared by weight, and GPUs
+  move between models through an ordinary scale-down of one and scale-up of
+  the other. It has its own shadow mode.
+- **Warm pool** (opt-in) keeps models loaded and asleep, and lends one to a
+  variant while its own new replica starts.
+
+### KEDA and the external scaler
+
+KEDA asks the scaling manager for each variant's replica count over gRPC (the
+`scaling-manager-external-scaler` Service, port 9090), and the HPA that KEDA
+created scales the workload to it. **Passive mode switches here**: everything
+before the scaler runs as usual, and every decision is published, but the
+scaler answers with the workload's current replica count (or, beside your own
+triggers, with zero), so nothing moves. Passive is set for the whole
+controller or per namespace, tier or model
+([passive](../reference/scaling-policy.md#passive)).
+
+Package by package, for contributors:
+[which component owns which number](../developer-guide/signal-dataflow.md),
+[the saturation analyzer and its learners](../developer-guide/saturation-analyzer.md),
+[the throughput analyzer](../developer-guide/throughput-analyzer.md),
+[the SLO analyzer](../developer-guide/slo-analyzer.md),
+[how analyzers combine](../developer-guide/multi-analyzer-pipeline.md),
+[how limiters combine](../developer-guide/limiter-composition.md).
 
 ## The unit it scales: one ScaledObject per variant
 
@@ -57,6 +149,10 @@ spec:
         name: scaling-manager-external-scaler-<controller-namespace>
         kind: ClusterTriggerAuthentication
 ```
+
+`modelID` is the only field you must supply. The accelerator, the role
+(prefill or decode), the GPUs per replica and the InferencePool are derived
+from the workload, so they cannot drift from it.
 
 You rarely write this by hand: `make scaledobjects-plan` lists the model
 servers it finds and writes a plan to edit, and `make scaledobjects-apply`

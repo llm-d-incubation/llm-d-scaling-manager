@@ -278,7 +278,7 @@ passive: true    # or false; absent inherits
 | per-model entry | an entry whose body names the model |
 | tier | the tier the variant names, else `default.defaultPolicy` |
 | `default` entry | the namespace's own `scaling-manager-scaling-policy-config` when it has one, else the controller's |
-| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([configuration](configuration.md#deployment-flags)) |
+| `LLMSM_PASSIVE` | `scaling-manager-manager-config`, controller-wide, read at start ([installer options](install-options.md#deployment-flags)) |
 
 The key is live. The external scaler applies an edit at KEDA's next call
 about the variant (every `pollingInterval`, and every HPA sync); the engine
@@ -1266,32 +1266,48 @@ A namespace gets one when the controller reads a ConfigMap of that name there:
   read, no label needed (`internal/controller/predicates.go`). See
   [the security model](security-model.md) for why this is by design.
 
-### Re-running the installer resets the default entry
+### What re-running the installer does to the default entry
 
 `make deploy-scaling-manager` re-applies `scaling-manager-scaling-policy-config` in the controller's
-namespace from the shipped manifest on every run, upgrades included. The
-`default` entry comes back exactly as shipped — thresholds and analyzers, and
-**no** `scaleToZero`, `defaultPolicy`, `optimizer:` block or `limiters:` — while
-every other key (named tiers, per-model entries) is saved before the apply and
-restored after it (`deploy/lib/infra_scaling_manager.sh`). The `limiters:` list is the
-exception: with `LLMSM_LIMITER` unset, the installer reads the live list before
-the apply and writes it back after, and says so. `LLMSM_LIMITER=gpu-inventory|quota`
-replaces it, and `LLMSM_LIMITER=none` removes it. If the live list cannot be read
-and `LLMSM_LIMITER` is unset, the install refuses.
+namespace on every run, upgrades included. The installer owns the keys of the
+`default` entry it renders: in the shipped manifest, `analyzers`,
+`scaleUpThreshold`, `scaleDownBoundary`, `kvCacheThreshold`,
+`queueLengthThreshold` and `enableRescale`. It writes those as rendered. It
+reads every other key of the live `default` entry before the apply and writes
+it into what it applies, so the controller never sees the entry without it:
+the `optimizer:` block, `scaleToZero`, `defaultPolicy`, `passive`, and any key
+you added. Every other entry (named tiers, per-model entries) is kept too
+(`deploy/lib/infra_scaling_manager.sh`, `llmsm_merge_live_default`).
 
-So anything you changed in `default` by hand is gone after a re-run:
+When the live entry sets an owned key to another value, the install writes the
+rendered value and names the key:
+
+```text
+[WARNING] This install writes keys of the default entry of scaling-manager-scaling-policy-config that the live entry sets otherwise (live -> written):
+    scaleUpThreshold: 0.9 -> 0.85
+```
+
+The `limiters:` list is decided by `LLMSM_LIMITER`. Unset, the installer keeps
+the live list, in the apply itself and again after it, and says so.
+`LLMSM_LIMITER=gpu-inventory|quota` replaces it, and `LLMSM_LIMITER=none`
+removes it. If the live policy cannot be read, the install refuses.
 
 | you set, in `default` | after a re-run |
 | --- | --- |
-| `scaleToZero` | repeat it, or set it on a named tier or a per-model entry (an entry whose body names the model); both are kept |
-| `defaultPolicy` | re-apply it; the tiers it names are kept |
-| `optimizer:` (utilization share) | removed: run `make utilization-share-shadow`, then `make utilization-share-activate` again, each with `NAMESPACE=<models namespace> CONTROLLER_NAMESPACE=<controller namespace>` |
+| `optimizer:` (utilization share) | kept, in the mode it was in (shadow or active). With `LLMSM_LIMITER=none` the limiters go, the controller rejects the block and nothing is shared, and a limiter declared later turns it back on in that mode; the install warns. Run `make utilization-share-off` first, while the limiter is in force |
+| `scaleToZero`, `defaultPolicy`, `passive`, other keys the install does not render | kept |
+| a threshold or `analyzers` (owned keys) | the rendered value, with a warning naming the key. Edit it back, or set it on a named tier that `defaultPolicy` names, or on a per-model entry; both are kept |
 | `limiters:` | kept when `LLMSM_LIMITER` is not passed, hand-written entries included; `LLMSM_LIMITER=none` removes it |
+
+Releases up to v0.11.0-rc1 reset the whole `default` entry, so a re-run turned
+the utilization-share optimizer off; after one of those, run
+`make utilization-share-shadow`, then `make utilization-share-activate`.
 
 This touches only the controller's own ConfigMap. A policy published in
 `scaling-manager-policy` by `make enable-physical-limiter` is not re-applied — but that
 command also writes into the own ConfigMap of each admin-owned controller, and
-a re-run of `make deploy-scaling-manager` for one of those controllers resets it there.
+a re-run of `make deploy-scaling-manager` for one of those controllers treats it as
+that controller's `limiters:` list, as above.
 A namespace-local map in a model namespace other than the controller's is not
 touched.
 
@@ -1433,7 +1449,7 @@ It does not control learning: a variant learns from its own readings either
 way, and changing the key clears nothing stored. Nor does it decide what a
 restart keeps: a variant's own ITL line comes back with the learned-state
 snapshot whether this key is on or off
-([learned state across a restart](configuration.md#learned-state-across-a-restart)).
+([learned state across a restart](install-options.md#learned-state-across-a-restart)).
 
 #### What it does not govern
 
@@ -1765,8 +1781,8 @@ is not finite (`.nan`, `.inf`) is skipped and reported.
   `carry` of `5m`, and both go back to `2m` and `5m`. Write
   `{steadyFor: 10m, carry: 15m}` instead.
 
-**No value of these keys raises, floors, ages or resets k2** (the measured KV
-capacity). The `k2Settle` keys only decide which saturated readings k2 may learn
+**No value of these keys raises, floors, ages or resets k2** (the measured
+batch capacity: the tokens a replica holds when its batch is full). The `k2Settle` keys only decide which saturated readings k2 may learn
 from. A stricter value admits fewer readings; a looser one admits more, each of
 them a real measurement.
 
@@ -1799,7 +1815,7 @@ spelling is reported as an unknown key and ignored.
 
 | Key | Default | Range | What it does |
 |-----|---------|-------|--------------|
-| `steadyFor` | `2m` | 1m to 24h | How long a replica's KV fill must hold still before its latency reading may teach the ITL line. The latency is a one-minute average, so a shorter wait pairs this moment's fill with last minute's latency. It is also how long a replica waits after it starts to settle: it joins, its engine restarts under the same Pod name, it is back after more than the absence tolerance without a row (1 minute at the default interval; 2.5 optimize intervals when that is longer), or load returns after `idleRows` idle cycles. A controller restart counts too: every replica waits `steadyFor` from the controller's first cycle, so the line does not refit for that long. A replica missing from one cycle keeps its settle. The slo analyzer's line waits too, and has no snapshot to hold it; see [learned state across a restart](configuration.md#learned-state-across-a-restart). |
+| `steadyFor` | `2m` | 1m to 24h | How long a replica's KV fill must hold still before its latency reading may teach the ITL line. The latency is a one-minute average, so a shorter wait pairs this moment's fill with last minute's latency. It is also how long a replica waits after it starts to settle: it joins, its engine restarts under the same Pod name, it is back after more than the absence tolerance without a row (1 minute at the default interval; 2.5 optimize intervals when that is longer), or load returns after `idleRows` idle cycles. A controller restart counts too: every replica waits `steadyFor` from the controller's first cycle, so the line does not refit for that long. A replica missing from one cycle keeps its settle. The slo analyzer's line waits too, and has no snapshot to hold it; see [learned state across a restart](install-options.md#learned-state-across-a-restart). |
 | `maxKDrift` | `0.10` | (0, 1) | How far the KV fill may move within `steadyFor` and still count as steady. The fill is the one averaged over the latency's minute when the collector has it, else the instant fill; the average is smoother, so the same value admits more readings than it did against the instant fill. |
 | `carry` | `5m` | `steadyFor` to 24h | How long a steady reading is kept past the newest window, so a load step's old level is still there when the new one settles. If the merged policy has `carry` under `steadyFor`, both go back to `2m` and `5m`, and the controller logs a `WARNING: tuning figure not used` line when it reads the ConfigMap. |
 | `idleRows` | `2` | 1 to 1000 | How many idle cycles in a row make a replica idle rather than one missed scrape. A cycle is idle only on evidence: the KV fill was read and is 0, and the latency window was read and is empty, or the generation rate was read and is 0. A prefill replica's latency window is empty however busy it is, so its cycle is idle when the KV fill was read and is 0 and the request rate was read and is 0. A cycle whose gauges were not read (a failed scrape) neither counts nor breaks the run, and two idle cycles further apart than the absence tolerance (1 minute at the default interval) do not make a run. An idle replica waits out `steadyFor` again when load returns. |

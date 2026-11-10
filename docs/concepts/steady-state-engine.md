@@ -154,8 +154,9 @@ teaches the line nothing, and occupancy at light load reads well below the
 share of throughput served. The `itl-line-none` log line says when a variant
 has no line. Once learned, a line is kept through light load, or overload above 0.80, and
 replaced when the replicas next run in the band. It is kept for up to
-`LEARNED_STATE_BUCKET_RETENTION` (7 days by default) after it was fitted, and
-not across a controller restart or a change of the engine's arguments. A
+`LEARNED_STATE_BUCKET_RETENTION` (7 days by default) after it was fitted. It
+is kept across a controller restart only with the learned-state snapshot on
+(`LEARNED_STATE_SNAPSHOT`), and never across a change of the engine's arguments. A
 variant woken from zero inside that time is priced from its own kept line at
 once.
 

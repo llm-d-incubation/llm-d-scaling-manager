@@ -77,7 +77,7 @@ reads it. On a TLS install (the default) its value is
 an `authenticationRef` to ClusterTriggerAuthentication
 `scaling-manager-external-scaler-<controller-namespace>`. On a plaintext install it is
 `scaling-manager-external-scaler.<controller-namespace>.svc.cluster.local:9090`, with no
-`authenticationRef`. See [external scaler mutual TLS](configuration.md#external-scaler-mutual-tls).
+`authenticationRef`. See [external scaler mutual TLS](install-options.md#external-scaler-mutual-tls).
 
 **A bad value freezes the model at its current count.** If `modelID` is empty,
 or `variantCost`, `warmPoolCopies` or `defaultOutputTokens` does not parse, the
@@ -97,7 +97,7 @@ KEDA shows nothing on the ScaledObject. Three things do:
 
 The cause is in a log line at verbosity 4, which the default (2) hides. Add
 `--v=4` to the controller Deployment's `args` (see
-[configuration](configuration.md)) and look for
+[advanced settings](configuration-advanced.md#controller)) and look for
 `Skipping a registered workload with unusable trigger metadata`: the
 ScaledObject is in `scaledObject`, the key and value in `error`. If a registered
 model never gets a decision, check these values first.

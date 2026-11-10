@@ -136,7 +136,7 @@ Prometheus scrapes with its own ServiceAccount token, so that account needs the
 install's metrics-reader ClusterRole (`scaling-manager-metrics-reader-<hash>`, `get` on
 `/metrics`; the suffix is per install). Pass
 `PROMETHEUS_SA=<namespace>/<serviceaccount>` to grant your Prometheus
-([configuration](configuration.md)). On Kubernetes the install binds it to the
+([installer options](install-options.md)). On Kubernetes the install binds it to the
 first of these trusted sources:
 
 1. `PROMETHEUS_SA`, when set;
@@ -205,7 +205,7 @@ does all of this:
 1. **Address.** Picks the Service the certificate names, normally
    `<release>-kube-prometheus-stack-prometheus.<namespace>.svc[.cluster.local]`,
    never `prometheus-operated` when the certificate does not name it
-   ([how the address is chosen](configuration.md#how-the-prometheus-address-is-chosen)).
+   ([how the address is chosen](install-options.md#how-the-prometheus-address-is-chosen)).
 2. **CA.** Copies the CA from the Secret the Prometheus resource's
    `web.tlsConfig` names: key `ca.crt`, else `tls.crt` (a self-signed serving
    certificate is its own CA). Only certificates are copied, never `tls.key`.
@@ -541,7 +541,7 @@ across a restart, are otherwise visible only in the logs.
 
 ### `llmsm_learned_state_restores_total`
 - **Type**: Counter
-- **Description**: Variants whose restored learned state was checked against their engine configuration after a controller restart (`LEARNED_STATE_SNAPSHOT`, see [configuration](configuration.md#learned-state-across-a-restart)), counted on the variant's first cycle.
+- **Description**: Variants whose restored learned state was checked against their engine configuration after a controller restart (`LEARNED_STATE_SNAPSHOT`, see [installer options](install-options.md#learned-state-across-a-restart)), counted on the variant's first cycle.
 - **Labels**: `outcome`, each published at 0 from startup:
   - `whole`: the configuration matched; everything was restored;
   - `args`: the arguments matched on another engine image; everything but the ITL baseline was restored;

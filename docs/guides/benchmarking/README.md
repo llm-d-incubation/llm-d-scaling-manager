@@ -205,7 +205,7 @@ Notes on the defaults:
   ([what it measured](../../well-lit-paths/utilization-share/measured.md))
 - [FMA post-mortem](../../proposals/fma-post-mortem.md)
 - [After the install](../../reference/operations.md): what the metrics mean
-- [Configuration](../../reference/configuration.md): every installer variable
+- [Installer options](../../reference/install-options.md): every installer variable
 - [Side by side with KEDA](#side-by-side-with-keda): KEDA scales, the scaling
   manager only says what it would do
 
@@ -250,7 +250,7 @@ scale and have the scaling manager only report. Nothing else is needed.
 
    To compare every model at once, run the whole controller passive instead
    of step 1: `make deploy-scaling-manager LLMSM_PASSIVE=true`
-   ([configuration](../../reference/configuration.md#deployment-flags)).
+   ([installer options](../../reference/install-options.md#deployment-flags)).
 
 3. Check the mode, then read the two counts side by side over the run:
 

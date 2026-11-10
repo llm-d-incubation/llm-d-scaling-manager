@@ -34,7 +34,7 @@ import (
 // that landed on a standby re-dials and can reach the leader. On election the
 // full server binds the same port alongside it (SO_REUSEPORT, see listen), the
 // standby is stopped, and the full server serves for as long as it runs.
-// Multi-replica HA remains what docs/reference/configuration.md says it is:
+// Multi-replica HA remains what docs/reference/install-options.md#high-availability says it is:
 // standbys wait on the lease; the only thing they now do for KEDA is tell it
 // which metric to carry.
 type Server struct {
