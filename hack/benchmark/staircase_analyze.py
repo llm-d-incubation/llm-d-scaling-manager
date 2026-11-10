@@ -506,15 +506,29 @@ def judge(predicted, per_repeat, missing=()):
     return "median %.1f of %d" % (centre, len(values)) if centre else "n/a", ratio, verdict
 
 
+def onset_ladder(bucket):
+    """True for a frozen bucket whose ladder is in shares of its prefill knee: the prefill
+    knee is the lower one, as in B-onset and C-onset, which double decode so that the steps
+    run up to the prefill flow-control onset. Read from the frozen file, which every run
+    carries, so it needs nothing the spec of a run frozen before it was written lacks."""
+    prefill = bucket.get("prefillKnee")
+    return prefill is not None and prefill <= bucket["knee"]
+
+
 def falsifiers(data, frozen, spec, out):
-    """The falsifiers set before the run: each says whether it held."""
+    """The falsifiers set before the run: each says whether it held. The ITL slope is
+    judged at the operating point only: a bucket on an onset ladder prints its slope as
+    reported, and it counts toward nothing."""
     bands = spec.get("falsifiers", {})
     print("\n## Falsifiers\n", file=out)
     print("| Falsifier | Reading | Band | Held |", file=out)
     print("| --- | --- | --- | --- |", file=out)
     results = []
 
-    def line(name, value, band):
+    def line(name, value, band, judged=True):
+        if not judged:
+            print("| %s | %.2f | %g to %g | reported, onset phase |" % (name, value, band[0], band[1]), file=out)
+            return
         ok = lib.in_band(value, band)
         results.append(ok)
         print("| %s | %.2f | %g to %g | %s |" % (name, value, band[0], band[1], "yes" if ok else "NO"), file=out)
@@ -525,7 +539,8 @@ def falsifiers(data, frozen, spec, out):
                 if "engine_decode_mean" in r and not r["truncated"] and r["failed"] == 0]
         if len(rows) >= 3 and "itlSlope" in bands:
             line("ITL slope, %s %s" % (bucket, fc), lib.ols_slope([r["client_tpot_mean"] for r in rows],
-                                                                  [r["engine_decode_mean"] for r in rows]), bands["itlSlope"])
+                                                                  [r["engine_decode_mean"] for r in rows]), bands["itlSlope"],
+                 judged=not onset_ladder(frozen[bucket]))
         low = [r["hop_mean"] for r in rows if r["rate"] <= frozen[bucket]["operatingRate"]]
         if low:
             hops.setdefault(frozen[bucket]["prompt"], []).extend(low)

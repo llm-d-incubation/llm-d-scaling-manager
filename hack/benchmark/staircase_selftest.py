@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 185
+EXPECTED = 188
 checks = fails = 0
 
 
@@ -639,6 +639,27 @@ with tempfile.TemporaryDirectory() as run:
     UNREAD, _ = analyze.analyze_steps(run, "S-off-r1", 180)
     ok("a step read without its schedule is marked, and keeps the band", UNREAD and all(r.get("schedule_unread") and "scheduled" not in r
                                                                          for r in UNREAD), [sorted(r) for r in UNREAD[:1]])
+
+
+# --- the ITL-slope falsifier is judged at the operating point only ----------------------
+# r2's repeat 1: the operating-point phases read 6.18 to 8.23, the onset phases 12.78 and
+# 19.28. The knees are r2's frozen ones: B's lower knee is decode's, B-onset's prefill's.
+def slope_rows(slope):
+    return [dict(rate=10.0 + i, truncated=False, failed=0, client_tpot_mean=0.01 * (i + 1),
+                 engine_decode_mean=slope * 0.01 * (i + 1), hop_mean=0.001) for i in range(4)]
+
+
+SLOPE_FROZEN = {"B": dict(knee=35.63, prefillKnee=58.97, decodeKnee=35.63, operatingRate=1.0, prompt=8000),
+                "B-onset": dict(knee=58.97, prefillKnee=58.97, decodeKnee=71.26, operatingRate=1.0, prompt=8000)}
+SLOPE_SPEC = dict(falsifiers=dict(itlSlope=[5.5, 9.0]))
+TEXT = io.StringIO()
+GOT = analyze.falsifiers({("B", "on"): {1: slope_rows(7.2)}, ("B-onset", "on"): {1: slope_rows(12.78)}},
+                         SLOPE_FROZEN, SLOPE_SPEC, TEXT)
+ok("an onset bucket's ITL slope is printed as reported, not judged",
+   "| ITL slope, B-onset on | 12.78 | 5.5 to 9 | reported, onset phase |" in TEXT.getvalue(), TEXT.getvalue())
+ok("and counts toward nothing, while the operating-point one is judged", GOT == [True], GOT)
+ok("an operating-point slope out of band is still judged, and fails",
+   analyze.falsifiers({("B", "on"): {1: slope_rows(12.78)}}, SLOPE_FROZEN, SLOPE_SPEC, io.StringIO()) == [False])
 
 print("%d checks, %d failed" % (checks, fails))
 if checks != EXPECTED:
