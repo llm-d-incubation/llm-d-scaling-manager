@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=135
+EXPECTED_CHECKS=136
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -663,6 +663,20 @@ if wait_for 'no answer from the API server (try 1 of 4)' "$RUN/timeline.txt"; th
     expect "an abort in a retry's wait lands at once and sends nothing more: ${took}s" \
         '[ "$took" -lt 15 ] && [ "$(on_patches)" = 1 ] && ! grep -q "try 2 of 4" "$RUN/timeline.txt" && tore_down'
 else bad "an abort in a retry's wait"; fi
+
+fresh kraborted
+mkdir -p "$RUN"
+(
+    export PATH="$RUN_PATH" STAIRCASE_LIB=1 BENCHMARK_NAMESPACE=stair-ns STAIRCASE_RUN="$RUN" FLAKY=epp-patch-on FLAKY_N=99 \
+        FLAKY_MSG="$TRANSIENT_MSG" STAIRCASE_KUBE_RETRY_WAIT=30 STAIRCASE_TICK=0.1
+    # shellcheck source=/dev/null
+    . "$B/staircase.sh"
+    CHILD=
+    touch "$R/abort"
+    kretry patch cm eppcm --type merge --patch-file "$R/epp-patch-on.json" 2> /dev/null
+)
+expect "a run already aborting sends no retry and waits for none" \
+    '[ "$(on_patches)" = 1 ] && ! grep -q "no answer from the API server" "$RUN/timeline.txt" 2>/dev/null'
 
 fresh forbidden
 frozen_run FLAKY=epp-patch-on FLAKY_N=99 FLAKY_MSG='Error from server (Forbidden): configmaps "eppcm" is forbidden: User "u" cannot patch resource "configmaps"'
