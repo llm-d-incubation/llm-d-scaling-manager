@@ -68,9 +68,8 @@ kubectl edit configmap scaling-manager-scaling-policy-config -n <scaling-manager
   skipped, and the model uses the value from the layer below: the tier's,
   then `default`'s, then 10m. The
   `ConfigFieldIgnored` event on the ConfigMap says so.
-- Re-running `make deploy-scaling-manager` resets the `default` entry, which drops
-  `scaleToZero`. Put it on a per-model entry or a named tier to keep it, or
-  repeat the edit.
+- Re-running `make deploy-scaling-manager` keeps `scaleToZero` on the `default`
+  entry: the installer does not render it.
 - Out-of-reach controller: it reads its own ConfigMap only at start, so restart
   it after the edit:
   `kubectl rollout restart deploy/scaling-manager-controller-manager -n <scaling-manager-namespace>`.

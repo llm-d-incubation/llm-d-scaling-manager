@@ -87,7 +87,7 @@ policy lives outside the namespace it manages (marked `WILL BE RESTARTED`), on
 this run and every later one. Leave a namespace out of `LLMSM_LIMITER_TARGETS`
 where that restart is not acceptable now. A later `make deploy-scaling-manager` without
 `LLMSM_LIMITER` keeps the limiter and says so; `LLMSM_LIMITER=none` removes it
-([why](../../reference/scaling-policy.md#re-running-the-installer-resets-the-default-entry)).
+([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
 `make disable-limiter` leaves the node-read RBAC in place.
 
 ### Which limiter
