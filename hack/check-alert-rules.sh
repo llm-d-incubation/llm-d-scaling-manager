@@ -34,6 +34,9 @@
 #      LLMSMMetricsCollectionFailing; a failing learner_recording query, which
 #      feeds only a learner recording, does not, nor does a ttft_inputs one,
 #      which feeds only the shadow TTFT pricing.
+#      scaler-reach-alerts: an external scaler no client reaches pages once
+#      per controller namespace after its for:, and stops once KEDA reaches
+#      it again.
 #
 # PROMTOOL is the promtool binary (make promtool installs a pinned one); YQ is
 # mikefarah yq v4.
@@ -78,8 +81,8 @@ for t in "$TESTS"/*.test.yaml; do
   RAN=$((RAN + 1))
 done
 # Every file, or a rename silently drops one.
-if [ "$RAN" -ne 6 ]; then
-  echo "FAIL: $RAN alert test files ran, not 6. Update the count deliberately." >&2
+if [ "$RAN" -ne 7 ]; then
+  echo "FAIL: $RAN alert test files ran, not 7. Update the count deliberately." >&2
   exit 1
 fi
 echo "ok: alert rules parse and the alert tests pass ($RAN files)"

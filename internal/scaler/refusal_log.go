@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc/credentials"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
 )
 
 // refusalLogInterval is how often a refused TLS handshake from one remote host
@@ -79,7 +81,9 @@ func (r *refusalLog) admit(host string) (bool, int) {
 type refusalLoggingCreds struct {
 	credentials.TransportCredentials
 	refusals *refusalLog
-	logger   logr.Logger
+	// reach, when set, is told of every refused and completed handshake.
+	reach  *reachability
+	logger logr.Logger
 }
 
 // ServerHandshake runs the wrapped handshake and logs a refusal.
@@ -87,13 +91,15 @@ func (c *refusalLoggingCreds) ServerHandshake(raw net.Conn) (net.Conn, credentia
 	conn, info, err := c.TransportCredentials.ServerHandshake(raw)
 	if err != nil {
 		c.refused(raw.RemoteAddr(), err)
+	} else if c.reach != nil {
+		c.reach.served()
 	}
 	return conn, info, err
 }
 
 // Clone keeps the logging on a copy.
 func (c *refusalLoggingCreds) Clone() credentials.TransportCredentials {
-	return &refusalLoggingCreds{TransportCredentials: c.TransportCredentials.Clone(), refusals: c.refusals, logger: c.logger}
+	return &refusalLoggingCreds{TransportCredentials: c.TransportCredentials.Clone(), refusals: c.refusals, reach: c.reach, logger: c.logger}
 }
 
 // refused logs one refused handshake from remote. A connection that closed
@@ -102,6 +108,10 @@ func (c *refusalLoggingCreds) Clone() credentials.TransportCredentials {
 func (c *refusalLoggingCreds) refused(remote net.Addr, err error) {
 	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		return
+	}
+	metrics.IncScalerTLSRefusal()
+	if c.reach != nil {
+		c.reach.refusedHandshake(err.Error())
 	}
 	addr := ""
 	if remote != nil {

@@ -332,6 +332,20 @@ func TestPodListDeniedIsPublishedWhileItHolds(t *testing.T) {
 	}
 }
 
+func TestScalerUnreachableIsPublishedWhileItHolds(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	p.SetScalerUnreachable(true, "refused 12 TLS handshake(s): remote error: tls: bad certificate")
+	if got := p.Data()[KeyScalerUnreachable]; !strings.Contains(got, "bad certificate") {
+		t.Errorf("%s = %q while unreachable, want the detail", KeyScalerUnreachable, got)
+	}
+	p.SetScalerUnreachable(false, "")
+	if got, found := p.Data()[KeyScalerUnreachable]; found {
+		t.Errorf("%s = %q once reached, want it absent", KeyScalerUnreachable, got)
+	}
+	var nilP *Publisher
+	nilP.SetScalerUnreachable(true, "x")
+}
+
 // With a separate policy namespace, policyIgnored comes from the controller's
 // own ConfigMap and the version from the policy namespace's. Recording either
 // must not overwrite the other.

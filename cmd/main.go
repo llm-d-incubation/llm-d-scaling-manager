@@ -1054,6 +1054,9 @@ func main() {
 		// 60 s). The engines read the interval once, when they start, so this
 		// matches what they publish at.
 		DecisionInterval: cfg.OptimizationInterval,
+		// No client reaching the scaler over TLS (every handshake refused)
+		// is a status condition, not only an INFO line per minute.
+		OnReachability: controllerStatus.SetScalerUnreachable,
 	}
 	wirePassive(passiveResolver, passiveComponents{Scaler: externalScaler})
 	// Without leader election this replica is the leader from the start; the

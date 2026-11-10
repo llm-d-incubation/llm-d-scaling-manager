@@ -78,9 +78,19 @@ type Server struct {
 	// and left as is.
 	listening atomic.Bool
 
+	// OnReachability, when set, is called whenever whether any client reaches
+	// the scaler over TLS changes (and once at start): unreachable is true
+	// while every handshake in the last few minutes was refused and no call
+	// was served, detail says how many and why. Only with TLSConfig set.
+	// cmd/main.go publishes it in the controller-status ConfigMap.
+	OnReachability func(unreachable bool, detail string)
+
 	// refusals rate-limits the log line for a refused TLS handshake. Shared by
 	// the standby and the full server, so the hand-off does not reset it.
 	refusals *refusalLog
+	// reach tracks refused and served handshakes and calls, shared like
+	// refusals.
+	reach *reachability
 }
 
 // errNotListening is what Ready reports until the scaler port is bound.
@@ -157,6 +167,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// On every exit, including a cancellation that lands during the hand-off.
 	defer s.listening.Store(false)
 	s.refusals = newRefusalLog(nil)
+	s.reach = newReachability(nil)
+	if s.TLSConfig != nil {
+		reporter := &reachReporter{reach: s.reach, hook: s.OnReachability, logger: logger}
+		go reporter.run(ctx, reachCheckInterval)
+	}
 
 	full := NewHandler(s.Client, nil, s.Registry).WithElected(s.Elected).WithDecisionInterval(s.DecisionInterval).WithPassive(s.Passive)
 	// Only the full handler ever answers without a decision; the standby
@@ -295,11 +310,19 @@ func (s *Server) bind(ctx context.Context, handler pb.ExternalScalerServer, opts
 		if refusals == nil {
 			refusals = newRefusalLog(nil)
 		}
-		opts = append(opts, grpc.Creds(&refusalLoggingCreds{
-			TransportCredentials: credentials.NewTLS(s.TLSConfig),
-			refusals:             refusals,
-			logger:               log.FromContext(ctx).WithName("external-scaler"),
-		}))
+		reach := s.reach
+		if reach == nil {
+			reach = newReachability(nil)
+		}
+		opts = append(opts,
+			grpc.Creds(&refusalLoggingCreds{
+				TransportCredentials: credentials.NewTLS(s.TLSConfig),
+				refusals:             refusals,
+				reach:                reach,
+				logger:               log.FromContext(ctx).WithName("external-scaler"),
+			}),
+			grpc.ChainUnaryInterceptor(reach.unaryInterceptor),
+			grpc.ChainStreamInterceptor(reach.streamInterceptor))
 	}
 	r := &served{srv: grpc.NewServer(opts...), err: make(chan error, 1)}
 	pb.RegisterExternalScalerServer(r.srv, handler)

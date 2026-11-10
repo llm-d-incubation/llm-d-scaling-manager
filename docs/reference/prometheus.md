@@ -743,6 +743,24 @@ across a restart, are otherwise visible only in the logs.
   - `method`: the full gRPC method, for example `/externalscaler.ExternalScaler/GetMetrics`
 - **Use Case**: Alert on any increase.
 
+### `llmsm_scaler_tls_refusals_total`
+- **Type**: Counter
+- **Description**: TLS handshakes the KEDA external scaler refused, with scaler TLS on: a client without an accepted certificate, a plaintext dial, or a client that rejected the scaler's certificate (`remote error: tls: bad certificate`). A connection closed before it sent anything is not counted. The controller log names each refused client, at most once per remote host per minute (`refused a TLS handshake`).
+- **Labels**: optional `controller_instance`
+- **Use Case**: A steady rate beside served calls is a stray client (a ScaledObject without the `authenticationRef`, a probe). A steady rate with nothing served is `llmsm_scaler_keda_unreachable`.
+
+### `llmsm_scaler_keda_unreachable`
+- **Type**: Gauge
+- **Description**: `1` while the external scaler, on mutual TLS, refused every TLS handshake of the last five minutes (refusals going on for at least one) and served no call or open stream: no client, KEDA included, reaches it. KEDA-driven discovery then finds no model (`No active Variants found` every cycle) and nothing scales, while every Pod reads Ready. `scalerUnreachable` in `scaling-manager-controller-status` carries the count and the last reason; the controller logs an error when it turns on. Evaluated every 15 seconds; `0` with TLS off.
+- **Labels**: optional `controller_instance`
+- **Use Case**: Page on it. The shipped rules do, as `LLMSMExternalScalerUnreachable` (see [Alerting Rules](#alerting-rules)). The usual cause is a KEDA operator that kept its connection, with the CA and client certificate of an earlier install, across a reinstall whose CA is new: restart it ([troubleshooting](troubleshooting.md#scaledobject-ready-false-or-targets-unknown)).
+
+  ```yaml
+  - alert: LLMSMExternalScalerUnreachable
+    expr: max by (namespace) (llmsm_scaler_keda_unreachable) == 1
+    for: 5m
+  ```
+
 ### Passive mode
 
 ### `llmsm_passive_mode`
@@ -2109,6 +2127,7 @@ notifications link to it.
 | `LLMSMModelParkedWhileRequestsRefused` | critical | 5m | a model has 0 replicas and EPP returns `ServiceUnavailable` for it: traffic is being dropped. Fires whatever the cause, a missing wake signal (`no-wake-signal`) included | read `llmsm_model_scaling_blocked` for the model first; `wake-no-capacity` means a limiter had no room for the wake | [T: will not wake](troubleshooting.md#a-model-will-not-wake-from-zero) |
 | `LLMSMModelHasNoWakeSignal` | warning | 10m | blocked reason `no-wake-signal`: EPP exports no flow-control queue, so a parked model cannot wake. Quiet while the model is parked and EPP refuses its requests: `LLMSMModelParkedWhileRequestsRefused` pages for that at critical, so one cause pages once | enable the EPP `flowControl` feature gate, then restart the EPP Deployment (it reads its config once at start) | [T: will not wake](troubleshooting.md#a-model-will-not-wake-from-zero) |
 | `LLMSMScalerTargetsUndecided` | warning | 10m | `llmsm_scaler_undecided_targets` above 0 in a namespace: the scaler answers those ScaledObjects their current count, so their replica counts are frozen | `llmsm_scaler_undecided_answers_total` says why; the log line `external scaler has no decision for this target` names each one | [T: ScaledObject](troubleshooting.md#scaledobject-ready-false-or-targets-unknown) |
+| `LLMSMExternalScalerUnreachable` | critical | 5m | `llmsm_scaler_keda_unreachable` is 1: the external scaler (mutual TLS) refused every handshake of five minutes and served no call, so KEDA reaches nothing and no model is discovered | `scalerUnreachable` in `scaling-manager-controller-status` names the last refusal reason; `make verify-deployment` names the cause. KEDA's certificates from before a reinstall: restart KEDA's operator | [T: ScaledObject](troubleshooting.md#scaledobject-ready-false-or-targets-unknown) |
 | `LLMSMModelSLOAttainmentLow` | warning | 2m | over the last 30 minutes fewer of a model's requests met its router-measured TTFT target than the objective promises (90% for `p90`), every judged request counted once, with at least 15 judged minutes holding at least half the requests, and no judged reading of the last 5 minutes meeting the objective, while the analyzer still publishes and the model has replicas | observe-only: a tuning finding, not an outage. Check the target can be met at all, then raise the floor or lower the model-level `scaleUpThreshold` (the `slo` entry's own band moves only its prediction), then find the cause in the runbook | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |
 | `LLMSMModelSLOMissed` | warning | 2m | in at least half of the judged minutes of the last 30, and at least 7 of them (one bad interval of a minute reaches six windows), a model's router-measured TPOT mean was above its declared target, while the analyzer still publishes and the model has replicas | observe-only: a tuning finding, not an outage. Check the target can be met at all, then raise the floor or lower the model-level `scaleUpThreshold` (the `slo` entry's own band moves only its prediction), then find the cause in the runbook | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |
 | `LLMSMModelSLOUnjudged` | info | 15m | a target set for 55 of the last 60 minutes, replicas present, nothing judged in the hour, and a cause to act on: excluded for at least half the hour, the router's series missing, or TPOT without requests while the router serves streaming requests. Not for too little traffic | the runbook's table: a fleet that never holds still, the router not scraped or not in the namespace, clients not streaming or not sending `include_usage` | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |
