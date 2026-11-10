@@ -339,6 +339,12 @@ An example of the page, with the controls and both graphs working, is in
 open it in a browser (GitHub shows its source). Its numbers come from formulas
 shaped like the model, not from the what-if engine, and the page says so.
 
+Above the replica and rate controls, the traffic picker chooses which line the
+limits are read from: the current mix, or one prompt bucket as if all traffic
+were that size. The output length moves TPOT and the decode limit, since a
+longer output keeps each request on a decode replica longer. Under each target,
+the page shows what the rate you set gives, and whether it meets the target.
+
 ![The capacity planner, critical tab: replica and rate controls, the SLO
 percentile and targets, the fleet's limit with prefill and decode and the one
 that binds, and the TTFT and TPOT graphs with the target, the rate set, and

@@ -77,6 +77,9 @@ table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabula
 td, th { padding: 3px 10px; border-bottom: 1px solid var(--grid); text-align: right; }
 th { color: var(--text-secondary); font-weight: 600; }
 .note { font-size: 12px; color: var(--muted); margin-top: 14px; }
+.at { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.at .ok::before { content: "\2713 "; color: var(--good); font-weight: 700; }
+.at .miss::before { content: "\2715 "; color: var(--critical); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -87,13 +90,21 @@ th { color: var(--text-secondary); font-weight: 600; }
     <span class="badge warn">Example UI: illustrative numbers, not a model</span>
   </div>
 
-  <div class="card controls">
-    <div class="ctl"><label>Prefill replicas <b id="npv"></b></label><input id="np" type="range" min="1" max="8" step="1" value="2"></div>
-    <div class="ctl"><label>Decode replicas <b id="ndv"></b></label><input id="nd" type="range" min="1" max="12" step="1" value="2"></div>
-    <div class="ctl"><label>Critical, req/s <b id="lamv"></b></label><input id="lam" type="range" min="1" max="80" step="0.5" value="24"></div>
-    <div class="ctl disabled" title="Regular traffic: later version"><label>Regular, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
-    <div class="ctl disabled" title="Batch traffic: later version"><label>Batch, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
+  <div class="card">
+    <div class="row">
+      <div>Traffic&nbsp; <span class="seg" id="mixsel">
+        <button data-b="mix" aria-pressed="true">Current mix</button><button data-b="0" aria-pressed="false">1k prompts only</button><button data-b="1" aria-pressed="false">4k only</button><button data-b="2" aria-pressed="false">8k only</button><button data-b="3" aria-pressed="false">32k only</button><button data-b="4" aria-pressed="false">128k only</button></span></div>
+      <div class="ctl" style="min-width:240px"><label>Output length, tokens <b id="outv"></b></label><input id="out" type="range" min="100" max="4000" step="50" value="1000"></div>
+    </div>
+    <div class="controls" style="margin-bottom:0">
+      <div class="ctl"><label>Prefill replicas <b id="npv"></b></label><input id="np" type="range" min="1" max="8" step="1" value="2"></div>
+      <div class="ctl"><label>Decode replicas <b id="ndv"></b></label><input id="nd" type="range" min="1" max="12" step="1" value="2"></div>
+      <div class="ctl"><label>Critical, req/s <b id="lamv"></b></label><input id="lam" type="range" min="1" max="80" step="0.5" value="24"></div>
+      <div class="ctl disabled" title="Regular traffic: later version"><label>Regular, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
+      <div class="ctl disabled" title="Batch traffic: later version"><label>Batch, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
+    </div>
   </div>
+  <div style="height:14px"></div>
 
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" aria-selected="true">Critical</button>
@@ -104,8 +115,8 @@ th { color: var(--text-secondary); font-weight: 600; }
     <div class="row">
       <div>SLO percentile&nbsp; <span class="seg" id="pct">
         <button data-q="p50" aria-pressed="false">p50</button><button data-q="p90" aria-pressed="true">p90</button><button data-q="p95" aria-pressed="false">p95</button><button data-q="p99" aria-pressed="false">p99</button></span></div>
-      <div class="ctl" style="min-width:220px"><label>TTFT target <b id="ttv"></b></label><input id="tt" type="range" min="80" max="1500" step="10" value="300"></div>
-      <div class="ctl" style="min-width:220px"><label>TPOT target <b id="tpv"></b></label><input id="tp" type="range" min="15" max="120" step="1" value="45"></div>
+      <div class="ctl" style="min-width:220px"><label>TTFT target <b id="ttv"></b></label><input id="tt" type="range" min="80" max="1500" step="10" value="300"><div class="at" id="ttat"></div></div>
+      <div class="ctl" style="min-width:220px"><label>TPOT target <b id="tpv"></b></label><input id="tp" type="range" min="15" max="120" step="1" value="45"><div class="at" id="tpat"></div></div>
       <div><span class="badge warn" id="rqflag">TPOT percentile: decode spread R_q assumed</span></div>
     </div>
 
@@ -123,7 +134,7 @@ th { color: var(--text-secondary); font-weight: 600; }
     <div class="charts">
       <div class="card chart">
         <h3>TTFT <span id="qa"></span> against request rate</h3>
-        <div class="cap">One line for the current traffic mix; thin lines read "if all traffic were this prompt size".</div>
+        <div class="cap">Bold: the traffic chosen above, which the limits are read from. Thin lines read "if all traffic were this prompt size".</div>
         <svg id="ttft" viewBox="0 0 640 340" role="img" aria-label="TTFT against request rate"></svg>
         <div class="legend" id="lg1"></div>
       </div>
@@ -151,33 +162,35 @@ const BUCKETS = [
   {name: "32k",  P: 32000,  w: 0.12},
   {name: "128k", P: 128000, w: 0.03},
 ];
-const VP = 290000, MU_D = 18, A = 0.020, HOP = 0.012, STEP = 0.030, CAP = 0.85;
+const VP = 290000, A = 0.020, HOP = 0.012, STEP = 0.030, CAP = 0.85, KV = 64000;
 const QF = {p50: 0.7, p90: 1.9, p95: 2.4, p99: 3.6};
 const meanP = BUCKETS.reduce((s, b) => s + b.w * b.P, 0);
+// A decode replica's token rate, set so the mix at 1000 output tokens decodes 18 req/s.
+const TOKS = 18 * 1000 * (1 + meanP / KV);
 const css = n => getComputedStyle(document.querySelector(".viz-root")).getPropertyValue(n).trim();
 const el = id => document.getElementById(id);
-let Q = "p90";
+let Q = "p90", SEL = "mix";
 
-function rhoP(l, np) { return l * meanP / (np * VP); }
-function rhoD(l, nd) { return l / (nd * MU_D); }
-function kneeP(np) { return 0.95 * np * VP / meanP; }
-function kneeD(nd) { return 0.95 * nd * MU_D; }
-function ttftBucket(l, np, nd, P) {
-  const rp = rhoP(l, np), rd = rhoD(l, nd);
+// A traffic shape is a prompt length and how wide its spread is; "mix" is the current mix.
+function shape(b) { return b === "mix" ? {P: meanP, tail: 1.6} : {P: BUCKETS[b].P, tail: 1.0}; }
+// Longer outputs keep a request on the decode replica longer, and longer contexts make
+// each token slower: both lower the rate a decode replica sustains.
+function muD(P, O) { return TOKS / O / (1 + P / KV); }
+function rhoP(l, np, P) { return l * P / (np * VP); }
+function rhoD(l, nd, P, O) { return l / (nd * muD(P, O)); }
+function kneeP(np, P) { return 0.95 * np * VP / P; }
+function kneeD(nd, P, O) { return 0.95 * nd * muD(P, O); }
+function ttft(l, np, nd, b, O) {
+  const s = shape(b), rp = rhoP(l, np, s.P), rd = rhoD(l, nd, s.P, O);
   if (rp >= 0.95 || rd >= 0.95) return NaN;
-  const x = P / VP;
+  const x = s.P / VP * s.tail;           // the tail of a wide prompt mix sits above its mean
   return A + HOP + x * (1 + QF[Q] * rp / (1 - rp)) + STEP * (1 + 0.5 * QF[Q] * rd / (1 - rd));
 }
-function ttftMix(l, np, nd) {
-  const rp = rhoP(l, np), rd = rhoD(l, nd);
-  if (rp >= 0.95 || rd >= 0.95) return NaN;
-  const x = meanP / VP * 1.6;           // the tail of a wide prompt mix sits above its mean
-  return A + HOP + x * (1 + QF[Q] * rp / (1 - rp)) + STEP * (1 + 0.5 * QF[Q] * rd / (1 - rd));
-}
-function tpot(l, nd) {
-  const rd = rhoD(l, nd);
+function tpot(l, nd, b, O) {
+  const s = shape(b), rd = rhoD(l, nd, s.P, O);
   if (rd >= 0.95) return NaN;
-  return 0.012 + 0.006 * (1 + 0.55 * QF[Q]) * Math.sqrt(rd / (1 - rd)) * 2;
+  const base = 0.012 * (1 + 0.5 * (s.P + O / 2) / KV);
+  return base + 0.006 * (1 + 0.55 * QF[Q]) * Math.sqrt(rd / (1 - rd)) * 2;
 }
 function invert(f, target, hi) {           // highest rate in (0, hi) with f(rate) <= target, f rising
   let lo = 0.01;
@@ -188,16 +201,23 @@ function invert(f, target, hi) {           // highest rate in (0, hi) with f(rat
 const fmt = (v, d = 1) => Number.isFinite(v) ? v.toFixed(d) : "refused";
 
 function draw() {
-  const np = +el("np").value, nd = +el("nd").value, lam = +el("lam").value;
+  const np = +el("np").value, nd = +el("nd").value, lam = +el("lam").value, O = +el("out").value;
   const tt = +el("tt").value / 1000, tp = +el("tp").value / 1000;
-  el("npv").textContent = np; el("ndv").textContent = nd; el("lamv").textContent = lam;
+  el("npv").textContent = np; el("ndv").textContent = nd; el("lamv").textContent = lam; el("outv").textContent = O;
   el("ttv").textContent = el("tt").value + " ms"; el("tpv").textContent = el("tp").value + " ms";
   el("qa").textContent = Q; el("qb").textContent = Q;
   el("rqflag").style.visibility = Q === "p50" ? "hidden" : "visible";
 
-  const kP = kneeP(np), kD = kneeD(nd), knee = Math.min(kP, kD);
-  const pLim = invert(l => ttftMix(l, np, nd), tt, kP);
-  const dLim = invert(l => tpot(l, nd), tp, kD);
+  const S = shape(SEL), selName = SEL === "mix" ? "current mix" : BUCKETS[SEL].name + " only";
+  const kP = kneeP(np, S.P), kD = kneeD(nd, S.P, O), knee = Math.min(kP, kD);
+  const pLim = invert(l => ttft(l, np, nd, SEL, O), tt, kP);
+  const dLim = invert(l => tpot(l, nd, SEL, O), tp, kD);
+  // What the rate you set gives, next to each target.
+  const at = (v, target) => Number.isFinite(v)
+    ? `<span class="${v <= target ? "ok" : "miss"}">${Math.round(v * 1000)} ms at ${lam} req/s</span>`
+    : `<span class="miss">past the knee at ${lam} req/s</span>`;
+  el("ttat").innerHTML = at(ttft(lam, np, nd, SEL, O), tt);
+  el("tpat").innerHTML = at(tpot(lam, nd, SEL, O), tp);
   const unc = Math.min(pLim, dLim), capped = Math.min(unc, CAP * knee);
   const pBinds = pLim <= dLim;
   el("fleet").textContent = fmt(capped) + " req/s";
@@ -213,22 +233,24 @@ function draw() {
   el("hrn").textContent = head >= 0 ? `${fmt(lam)} req/s meets both targets` : `${fmt(lam)} req/s misses: add ${pBinds ? "prefill" : "decode"} replicas`;
 
   const xmax = Math.max(10, Math.ceil(Math.max(knee, lam) * 1.15 / 5) * 5);
-  chart(el("ttft"), 640, xmax, tt, lam, kP, kD, [
-    ...BUCKETS.map((b, i) => ({name: b.name + " only", color: css("--series-" + (i + 1)), width: 1.5, f: l => ttftBucket(l, np, nd, b.P)})),
-    {name: "current mix", color: css("--text-primary"), width: 3, f: l => ttftMix(l, np, nd), primary: true},
-  ], pLim, "ms", 1000);
+  // Every traffic shape is drawn; the one selected above is bold, and the limits are read from it.
+  const all = ["mix", 0, 1, 2, 3, 4];
+  const colorOf = b => b === "mix" ? css("--text-primary") : css("--series-" + (b + 1));
+  const nameOf = b => b === "mix" ? "current mix" : BUCKETS[b].name + " only";
+  chart(el("ttft"), 640, xmax, tt, lam, kP, kD, all.map(b => ({name: nameOf(b), color: colorOf(b),
+    width: b === SEL ? 3 : 1.5, primary: b === SEL, f: l => ttft(l, np, nd, b, O)}))
+    .sort((a, c) => a.primary - c.primary), pLim, "ms", 1000);
   chart(el("tpot"), 460, xmax, tp, lam, Infinity, kD, [
-    {name: "decode", color: css("--text-primary"), width: 3, f: l => tpot(l, nd), primary: true},
+    {name: selName, color: colorOf(SEL), width: 3, f: l => tpot(l, nd, SEL, O), primary: true},
   ], dLim, "ms", 1000);
 
-  el("lg1").innerHTML = '<span class="mix" style="--c:' + css("--text-primary") + '">current mix</span>' +
-    BUCKETS.map((b, i) => `<span style="--c:${css("--series-" + (i + 1))}">${b.name} prompts only</span>`).join("") +
+  el("lg1").innerHTML = all.map(b => `<span class="${b === SEL ? "mix" : ""}" style="--c:${colorOf(b)}">${b === "mix" ? "current mix" : BUCKETS[b].name + " prompts only"}${b === SEL ? " (selected)" : ""}</span>`).join("") +
     `<span class="dash" style="--c:${css("--text-secondary")}">target / rate you set</span>`;
-  el("lg2").innerHTML = `<span class="mix" style="--c:${css("--text-primary")}">decode TPOT</span><span class="dash" style="--c:${css("--text-secondary")}">target / rate you set</span>`;
+  el("lg2").innerHTML = `<span class="mix" style="--c:${colorOf(SEL)}">TPOT, ${selName}, ${O} output tokens</span><span class="dash" style="--c:${css("--text-secondary")}">target / rate you set</span>`;
 
-  const rows = [5, 10, 15, 20, 25, 30, 35, 40].filter(r => r < xmax);
-  el("tbl").innerHTML = "<table><tr><th>req/s</th><th>TTFT mix</th>" + BUCKETS.map(b => `<th>${b.name}</th>`).join("") + "<th>TPOT</th></tr>" +
-    rows.map(r => `<tr><td>${r}</td><td>${fmt(ttftMix(r, np, nd) * 1000, 0)}</td>` + BUCKETS.map(b => `<td>${fmt(ttftBucket(r, np, nd, b.P) * 1000, 0)}</td>`).join("") + `<td>${fmt(tpot(r, nd) * 1000, 0)}</td></tr>`).join("") + "</table>";
+  const rows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 60].filter(r => r < xmax);
+  el("tbl").innerHTML = "<table><tr><th>req/s</th>" + all.map(b => `<th>TTFT ${b === "mix" ? "mix" : BUCKETS[b].name}</th>`).join("") + `<th>TPOT ${selName}</th></tr>` +
+    rows.map(r => `<tr><td>${r}</td>` + all.map(b => `<td>${fmt(ttft(r, np, nd, b, O) * 1000, 0)}</td>`).join("") + `<td>${fmt(tpot(r, nd, SEL, O) * 1000, 0)}</td></tr>`).join("") + "</table>";
 }
 
 function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
@@ -238,7 +260,7 @@ function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
   const knee = Math.min(kP, kD);
   let s = "";
   if (knee < xmax) s += `<rect x="${X(knee)}" y="${T}" width="${L + pw - X(knee)}" height="${ph}" fill="${css("--sat")}"/>` +
-    `<text x="${X(knee) + 6}" y="${T + ph - 8}">past the knee</text>`;
+    `<text x="${L + pw - 4}" y="${T + ph - 8}" text-anchor="end">past the knee</text>`;
   for (let i = 0; i <= 4; i++) { const v = ymax * i / 4, y = Y(v);
     s += `<line x1="${L}" x2="${L + pw}" y1="${y}" y2="${y}" stroke="${css(i ? "--grid" : "--axis")}" stroke-width="1"/>` +
          `<text x="${L - 8}" y="${y + 4}" text-anchor="end">${Math.round(v * k)}</text>`; }
@@ -265,7 +287,7 @@ function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
   s += `<line x1="${L}" x2="${L + pw}" y1="${Y(target)}" y2="${Y(target)}" stroke="${css("--text-secondary")}" stroke-width="1.5" stroke-dasharray="5 4"/>` +
        `<text class="lbl" x="${L + 4}" y="${Y(target) - 6}">target ${Math.round(target * k)} ${unit}</text>`;
   if (lam <= xmax) s += `<line x1="${X(lam)}" x2="${X(lam)}" y1="${T}" y2="${T + ph}" stroke="${css("--text-secondary")}" stroke-width="1.5" stroke-dasharray="5 4"/>` +
-       `<text class="lbl" x="${X(lam) + 4}" y="${T + ph - 6}">${lam} req/s</text>`;
+       `<text class="lbl" x="${X(lam) - 4}" y="${T + ph - 6}" text-anchor="end">${lam} req/s</text>`;
   const prim = series.find(x => x.primary), at = prim.f(lam);
   if (Number.isFinite(at) && at <= ymax) s += `<circle cx="${X(lam)}" cy="${Y(at)}" r="5" fill="${css("--surface-1")}" stroke="${prim.color}" stroke-width="2"/>` +
        `<text class="lblp" x="${X(lam) + 8}" y="${Y(at) - 8}">${Math.round(at * k)} ${unit} at ${lam} req/s</text>`;
@@ -288,6 +310,15 @@ function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
 }
 
 document.querySelectorAll("input").forEach(i => i.addEventListener("input", draw));
+document.querySelectorAll("#mixsel button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#mixsel button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  SEL = b.dataset.b === "mix" ? "mix" : +b.dataset.b; draw(); }));
+// A link can open on a view: #traffic=3&out=2000&rate=20 (traffic is the bucket's place, 0 for 1k).
+for (const [k, v] of new URLSearchParams(location.hash.slice(1))) {
+  if (k === "traffic") document.querySelector(`#mixsel button[data-b="${v}"]`)?.click();
+  if (k === "out") el("out").value = v;
+  if (k === "rate") el("lam").value = v;
+}
 document.querySelectorAll("#pct button").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll("#pct button").forEach(x => x.setAttribute("aria-pressed", x === b)); Q = b.dataset.q; draw(); }));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
