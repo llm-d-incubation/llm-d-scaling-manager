@@ -216,7 +216,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// (cea2f9e), model demand rises with the lower mu, the cost side:
 	// pd-restart 109 of 111 rows that move, by at most 0.3 %; ttft-saturated
 	// 68 of 68, by at most 1.8 %; ttft-staircase-b-off 17 of 20, up to
-	// 15.2 %; start-seed 5 of 8, up to 12.1 %. The few rows that fall fall by
+	// 15.2 %; start-seed 5 of 8, up to 12.1 %. The few rows that move down fall by
 	// at most 1.4 %. Before #54 the start fixtures' demand fell by up to 96 %
 	// through the floor's trust blend; with it, none falls past 1.4 %.
 	// The unit tests hold the fold itself (heldBy).
