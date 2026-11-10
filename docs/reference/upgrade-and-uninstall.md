@@ -58,8 +58,9 @@ only to change it. Limiters an admin published in a policy namespace
 
 ## Upgrade
 
-1. **Back up your policy.** The install owns `scaling-manager-scaling-policy-config`; keep a
-   copy of what you tuned
+1. **Back up your policy.** The install writes the keys of the `default` entry of
+   `scaling-manager-scaling-policy-config` that it renders (the thresholds and
+   `analyzers`) and keeps the rest; keep a copy of what you tuned
    ([Changing policy safely](operations.md#changing-policy-safely)).
 2. **Check prerequisites** against the new release. It is read-only:
    ```bash
@@ -83,9 +84,12 @@ only to change it. Limiters an admin published in a policy namespace
      `LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace>` form. The plain
      `make deploy-scaling-manager NAMESPACE=<namespace>` would install a second controller
      in `<namespace>` instead of upgrading the one in `llmsm-<namespace>`.
-   - The re-run keeps the declared limiter (see above) and re-applies the rest
-     of `scaling-manager-scaling-policy-config` from the release. That is why step 1 backs
-     it up.
+   - The re-run keeps the declared limiter (see above), every entry but
+     `default`, and every key of `default` it does not render, the
+     utilization-share `optimizer:` block among them. It writes the keys it
+     renders from the release and warns about any you had changed
+     ([details](scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
+     That is why step 1 backs it up.
 4. **Verify**, naming the namespace as you did for the install. Without it, both
    commands look in the default `scaling-manager-system`:
    ```bash
@@ -804,13 +808,11 @@ removes the old grant. It does so in each namespace that holds:
 - a pod with a utilization-share transfer mark, of a model that calls this
   controller, or
 - any model that calls this controller, when the utilization-share optimizer
-  is active (not shadow). The re-run of those releases also removes the `optimizer:` block
-  ([what a re-run does to the default entry](scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)),
-  so run these again, in order:
-  ```bash
-  make utilization-share-shadow NAMESPACE=<models namespace> CONTROLLER_NAMESPACE=<controller namespace>
-  make utilization-share-activate NAMESPACE=<models namespace> CONTROLLER_NAMESPACE=<controller namespace>
-  ```
+  is active (not shadow). The installer of this release keeps the
+  `optimizer:` block
+  ([what a re-run does to the default entry](scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
+  Releases up to v0.11.0-rc1 removed it; after a re-run of one of those, run
+  `make utilization-share-shadow`, then `make utilization-share-activate`.
 
 It prints each namespace it granted in. Then read its warnings:
 

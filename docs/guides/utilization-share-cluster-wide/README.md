@@ -847,7 +847,7 @@ install again here later, step 12 tells you to restart it then.
 - **Registering resizes.** A model with more replicas than its load needs
   drops to what it needs, after its scale-down window. Nothing restarts.
 - **Upgrading.** Re-running step 9 keeps the optimizer block, in the mode
-  it was in.
+  it was in, unless `LLMSM_LIMITER=none` removes the limiters: the controller then rejects the block and nothing is shared.
 - **OpenShift.** Install the Custom Metrics Autoscaler operator instead of
   KEDA, and drop `KEDA_HELM_INSTALL=true`.
 - **KEDA versions.** 2.18, 2.19 and 2.21 are supported. See

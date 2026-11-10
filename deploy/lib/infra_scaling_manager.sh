@@ -2012,7 +2012,7 @@ EOF
     # Passive mode as the live controller runs it, read before anything is
     # applied so the render below and the policy patch carry it.
     if [ "${LLMSM_APPLY_SCOPE:-all}" != "prereqs" ]; then
-        llmsm_live_passive "$LLMSM_NS" || log_error "Cannot read the passive mode this controller runs with now (${LLMSM_LIVE_PASSIVE_ERR:-}), and this apply resets it. Fix the read, or re-run naming it: LLMSM_PASSIVE=true|false."
+        llmsm_live_passive "$LLMSM_NS" || log_error "Cannot read the passive mode this controller runs with now (${LLMSM_LIVE_PASSIVE_ERR:-}), and the apply would reset it and every key of the policy default entry it keeps. Fix the read (the install needs get on ConfigMaps scaling-manager-manager-config and scaling-manager-scaling-policy-config in $LLMSM_NS) and re-run; naming LLMSM_PASSIVE does not skip it."
     fi
     llmsm_render_manager_config_patch "$tmp_overlay" || log_error "Refusing to apply: passive mode could not be rendered into scaling-manager-manager-config, and the apply would reset the controller to active."
     llmsm_append_prometheus_ca_mount_patch "$tmp_overlay/kustomization.yaml"
@@ -2353,6 +2353,7 @@ llmsm_reconcile_prometheus_scheme() {
                 log_warning "LLMSM_LIMITER=none: the limiter this controller had is REMOVED, and scaling is now UNBOUNDED. It was:"
                 printf '%s\n' "$LLMSM_LIVE_LIMITERS" | yq -P '.' 2>/dev/null | sed 's/^/    /' >&2 || true
             fi
+            llmsm_warn_optimizer_without_limiters
             # Nothing to do, and that is MEASURED rather than assumed. A branch
             # here removed a previously declared limiter, on the theory that
             # re-installing with the default left one in force. It does not: the
@@ -2573,37 +2574,81 @@ llmsm_passive_want() {
 # `optimizer:` block, `passive`, `defaultPolicy`, anything an operator added.
 # The installer owns the keys it renders and writes them as rendered; one the
 # live entry sets to another value is reported, so a hand edit it overwrites is
-# not lost in silence. `limiters` is not carried: LLMSM_LIMITER decides it after
-# the apply (llmsm_keep_live_limiters keeps it when unset).
+# not lost in silence.
+#
+# `limiters` is LLMSM_LIMITER's. Unset, the live list is carried as it is (and
+# written back again after the apply, llmsm_keep_live_limiters), so the applied
+# entry never holds an optimizer block without the limiters it shares. Set,
+# the live list is not carried: the apply resets it and the install declares
+# the one asked for, or none.
 #
 # Prints nothing when there is nothing to keep: no live entry, or one holding
-# only keys the render carries. A live entry that is not a YAML mapping cannot
-# be kept from; it is replaced, with a warning.
+# only keys the render carries, or one that is empty or comments only. A live
+# entry that is not a YAML mapping cannot be kept from; it is replaced, with a
+# warning. A tool that fails is an error naming the step.
 llmsm_merge_live_default() {
-    local rendered="$1" live="$2" rj lj keep conflicts
+    local rendered="$1" live="$2" rj lj keep conflicts carry_limiters=false advice
     [ -n "$live" ] || return 0
-    rj="$(printf '%s\n' "$rendered" | yq -o=json -I=0 '.')" || return 1
+    [ -n "${LLMSM_LIMITER:-}" ] || carry_limiters=true
+    rj="$(printf '%s\n' "$rendered" | yq -o=json -I=0 '.')" \
+        || log_error "could not read the rendered default entry of scaling-manager-scaling-policy-config as YAML; refusing an apply that would reset the live one"
     lj="$(printf '%s\n' "$live" | yq -o=json -I=0 '.' 2>/dev/null)" || lj=""
-    if [ "$(printf '%s' "$lj" | jq -r 'type' 2>/dev/null)" != object ]; then
-        log_warning "The live default entry of scaling-manager-scaling-policy-config is not a YAML mapping; it is replaced by the rendered one, and nothing in it is kept."
-        return 0
-    fi
+    case "$(printf '%s' "$lj" | jq -r 'type' 2>/dev/null)" in
+        object) ;;
+        # Empty, or comments only: there is nothing in it to keep.
+        null) return 0 ;;
+        *)
+            log_warning "The live default entry of scaling-manager-scaling-policy-config is not a YAML mapping; it is replaced by the rendered one, and nothing in it is kept."
+            return 0
+            ;;
+    esac
     conflicts="$(jq -rn --argjson l "$lj" --argjson r "$rj" '
         $r | to_entries[] | select(.key != "passive" and .key != "limiters")
         | . as $e | select($l | has($e.key)) | select($l[$e.key] != $e.value)
-        | "    \(.key): \($l[.key] | tojson) -> \(.value | tojson)"')" || return 1
+        | "    \(.key): \($l[.key] | tojson) -> \(.value | tojson)"')" \
+        || log_error "could not compare the live and rendered default entries of scaling-manager-scaling-policy-config (jq failed); refusing an apply that would reset the live one"
     if [ -n "$conflicts" ]; then
+        advice="  Edit them back after the install if you need them."
+        if printf '%s\n' "$conflicts" | grep -qvE '^    enableRescale:'; then
+            advice="${advice} A threshold or analyzers list set on a named policy that defaultPolicy names, or on a per-model entry, survives a re-install as it is."
+        fi
+        if printf '%s\n' "$conflicts" | grep -qE '^    enableRescale:'; then
+            advice="${advice}
+  enableRescale is read only from the default entry: set it there again after every install."
+        fi
         log_warning "This install writes keys of the default entry of scaling-manager-scaling-policy-config that the live entry sets otherwise (live -> written):
 ${conflicts}
-  Edit them back after the install if you need them. A threshold kept in a named policy that defaultPolicy names, or in a per-model entry, survives a re-install as it is."
+${advice}"
     fi
-    keep="$(jq -cn --argjson l "$lj" --argjson r "$rj" '
-        [$l | keys_unsorted[] | select(. != "limiters") | . as $k | select($r | has($k) | not)]')" || return 1
+    keep="$(jq -cn --argjson l "$lj" --argjson r "$rj" --argjson carry "$carry_limiters" '
+        [$l | keys_unsorted[] | . as $k
+         | select(if $k == "limiters" then $carry else ($r | has($k) | not) end)]')" \
+        || log_error "could not list the keys of the live default entry of scaling-manager-scaling-policy-config to keep (jq failed); refusing an apply that would reset them"
     [ "$keep" = '[]' ] && return 0
     log_info "Keeping the keys of the live default entry this install does not render: $(printf '%s' "$keep" | jq -r 'join(", ")')"
     printf '%s\n' "$rendered" | LLMSM_KEEP_KEYS="$keep" LLMSM_LIVE_DEF="$live" yq '
         (strenv(LLMSM_KEEP_KEYS) | from_yaml) as $keep
-        | . * (strenv(LLMSM_LIVE_DEF) | from_yaml | with_entries(select(.key as $k | $keep | any_c(. == $k))))'
+        | . * (strenv(LLMSM_LIVE_DEF) | from_yaml | with_entries(select(.key as $k | $keep | any_c(. == $k))))' \
+        || log_error "could not merge the live default entry of scaling-manager-scaling-policy-config into the rendered one (yq failed); refusing an apply that would reset it"
+}
+
+# llmsm_warn_optimizer_without_limiters warns, for LLMSM_LIMITER=none, when the
+# live default entry (LLMSM_LIVE_DEFAULT) holds an optimizer block. The install
+# keeps the block and removes the limiters, and the controller rejects an
+# optimizer with no limiters to share (config.UtilizationShare): sharing stops,
+# and a limiter declared later turns the block back on in the mode it was left
+# in, active included, with no step of its own. Returns 0 either way.
+llmsm_warn_optimizer_without_limiters() {
+    local mode
+    [ -n "${LLMSM_LIVE_DEFAULT:-}" ] || return 0
+    mode="$(printf '%s\n' "$LLMSM_LIVE_DEFAULT" | yq '.optimizer.utilizationShare.shadow' 2>/dev/null)" || return 0
+    [ "$(printf '%s\n' "$LLMSM_LIVE_DEFAULT" | yq '.optimizer | tag' 2>/dev/null)" = '!!map' ] || return 0
+    case "$mode" in
+        false) mode=active ;;
+        true) mode=shadow ;;
+        *) mode="its current mode" ;;
+    esac
+    log_warning "LLMSM_LIMITER=none leaves the utilization-share optimizer block (${mode}) in ${LLMSM_NS:-the controller namespace}/scaling-manager-scaling-policy-config with no limiter: the controller rejects it, so nothing is shared, and a limiter declared later turns it back on as ${mode}. To turn sharing off, do it while a limiter is in force: re-run naming the limiter it had (LLMSM_LIMITER=gpu-inventory|quota), run make utilization-share-off NAMESPACE=<models namespace> CONTROLLER_NAMESPACE=${LLMSM_NS:-<controller namespace>}, then re-run with LLMSM_LIMITER=none."
 }
 
 # llmsm_render_policy_keep_patch writes, into the overlay, a patch of
@@ -2630,7 +2675,8 @@ llmsm_render_policy_keep_patch() {
         merged="$(llmsm_merge_live_default "$def" "${LLMSM_LIVE_DEFAULT:-}")" || return 1
         case "${LLMSM_LIVE_DEFAULT_PASSIVE:-}" in
             true|false)
-                merged="$(printf '%s\n' "${merged:-$def}" | yq ".passive = ${LLMSM_LIVE_DEFAULT_PASSIVE}")" || return 1
+                merged="$(printf '%s\n' "${merged:-$def}" | yq ".passive = ${LLMSM_LIVE_DEFAULT_PASSIVE}")" \
+                    || log_error "could not set passive: ${LLMSM_LIVE_DEFAULT_PASSIVE} on the default entry of scaling-manager-scaling-policy-config; refusing an apply that would reset it"
                 log_info "Keeping passive: ${LLMSM_LIVE_DEFAULT_PASSIVE} on the default entry of scaling-manager-scaling-policy-config"
                 ;;
         esac

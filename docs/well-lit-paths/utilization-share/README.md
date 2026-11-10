@@ -222,7 +222,9 @@ limiter. It rolls out in two steps, each one `make` target in the guide:
 **shadow** (it computes and reports, and moves nothing), then **active**.
 
 Re-running `make deploy-scaling-manager` keeps the block, in the mode it was
-in, and the limiter unless `LLMSM_LIMITER` says otherwise
+in, and the limiter unless `LLMSM_LIMITER` says otherwise. With
+`LLMSM_LIMITER=none` the controller rejects the block and nothing is shared;
+run `make utilization-share-off` before removing the limiter
 ([why](../../reference/scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
 After an upgrade, run the check step again.
 

@@ -951,7 +951,7 @@ before step 13. KEDA and Prometheus stay. To remove them too, add
   while a model is saturated. To turn it on, add `featureGates: [flowControl]`
   to the EPP's `EndpointPickerConfig` and re-run your llm-d router install.
 - **Upgrading.** Re-running step 10 keeps the optimizer block, in the mode
-  it was in.
+  it was in, unless `LLMSM_LIMITER=none` removes the limiters: the controller then rejects the block and nothing is shared.
 - **OpenShift.** Install the Custom Metrics Autoscaler operator instead of
   KEDA, and drop `KEDA_HELM_INSTALL=true`.
 

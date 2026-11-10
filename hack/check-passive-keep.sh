@@ -41,7 +41,8 @@ BLUE=''; GREEN=''; YELLOW=''; RED=''; NC=''
 . "$WORK/infra_scaling_manager.sh"
 
 for fn in llmsm_live_passive llmsm_live_get llmsm_passive_want llmsm_render_manager_config_patch \
-          llmsm_render_policy_keep_patch llmsm_passive_restart_if_stale llmsm_yaml_scalar; do
+          llmsm_render_policy_keep_patch llmsm_passive_restart_if_stale llmsm_yaml_scalar \
+          llmsm_merge_live_default llmsm_warn_optimizer_without_limiters; do
     declare -F "$fn" >/dev/null || { echo "FATAL: $fn is not defined after sourcing the library."; exit 2; }
 done
 
@@ -60,11 +61,13 @@ check() {
 is() { [ "$1" = "$2" ]; }
 
 # The live cluster, as the stub kubectl serves it. LIVE_READ is how a read of
-# a ConfigMap goes: ok, notfound or forbidden.
+# a ConfigMap goes: ok, notfound, forbidden or timeout. LIVE_POLICY_READ, when
+# set, overrides it for the scaling-policy ConfigMap alone.
 LIVE_MANAGER_CONFIG=''
 LIVE_DEFAULT=''
 LIVE_STATUS_PASSIVE=''
 LIVE_READ=ok
+LIVE_POLICY_READ=''
 RESTARTED=0
 RENDERED_POLICY='apiVersion: v1
 kind: ConfigMap
@@ -79,9 +82,14 @@ data:
 kubectl() {
     case "$*" in
         "get configmap scaling-manager-manager-config"* | "get configmap scaling-manager-scaling-policy-config"*)
-            case "$LIVE_READ" in
+            local how="$LIVE_READ"
+            case "$*" in
+                *scaling-manager-scaling-policy-config*) how="${LIVE_POLICY_READ:-$LIVE_READ}" ;;
+            esac
+            case "$how" in
                 notfound) echo 'Error from server (NotFound): configmaps "x" not found' >&2; return 1 ;;
                 forbidden) echo 'Error from server (Forbidden): configmaps "x" is forbidden' >&2; return 1 ;;
+                timeout) echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2; return 1 ;;
             esac
             case "$*" in
                 *scaling-manager-manager-config*) printf '%s' "$LIVE_MANAGER_CONFIG" ;;
@@ -211,20 +219,30 @@ SHARE_BLOCK='optimizer:
   utilizationShare:
     shadow: false'
 # keep_run <live default> runs what the install runs before the apply, the way
-# deploy_scaling_manager_controller does, and leaves the patch in $OVERLAY and
-# the warnings in $WORK/keep.err.
+# deploy_scaling_manager_controller does, and leaves the patch in $OVERLAY, the
+# messages in $WORK/keep.err, and the render's exit status in KEEP_RC. The
+# render runs in a subshell: a refusal is log_error, which exits.
+KEEP_RC=0
 keep_run() {
     LIVE_DEFAULT="$1"
     : > "$OVERLAY/kustomization.yaml"
+    : > "$WORK/keep.err"
     rm -f "$OVERLAY/policy-keep-patch.yaml"
-    llmsm_live_passive scaling-manager && llmsm_render_policy_keep_patch "$OVERLAY" '' 2> "$WORK/keep.err"
+    KEEP_RC=0
+    llmsm_live_passive scaling-manager 2>> "$WORK/keep.err" || { KEEP_RC=$?; return "$KEEP_RC"; }
+    (llmsm_render_policy_keep_patch "$OVERLAY" '') 2>> "$WORK/keep.err" || KEEP_RC=$?
+    return "$KEEP_RC"
 }
 kept() { yq '.data.default' "$OVERLAY/policy-keep-patch.yaml" 2>/dev/null | yq "$1"; }
+no_patch() { [ ! -e "$OVERLAY/policy-keep-patch.yaml" ] && ! grep -q policy-keep "$OVERLAY/kustomization.yaml"; }
+warned() { grep -q "^\[WARNING\] .*$1" "$WORK/keep.err"; }
+SHIPPED_POLICY="$RENDERED_POLICY"
 
 LIVE_READ=ok
 LIVE_MANAGER_CONFIG='GLOBAL_OPT_INTERVAL: "15s"'
 keep_run "$SHIPPED_DEFAULT
 $SHARE_BLOCK"
+check "re-install: the render succeeds" is "$KEEP_RC" 0
 check "re-install: the optimizer block is kept" is "$(kept '.optimizer.type')" utilizationShare
 check "re-install: the optimizer block keeps its mode" is "$(kept '.optimizer.utilizationShare.shadow')" false
 check "re-install: the rendered thresholds are written" is "$(kept '.scaleUpThreshold')" 0.85
@@ -235,41 +253,152 @@ check "re-install: the kept keys are named" grep -q 'does not render: optimizer'
 keep_run "$(printf '%s\n' "$SHIPPED_DEFAULT" | yq '.scaleUpThreshold = 0.9 | .limiters = [{"type": "gpu-inventory"}] | .defaultPolicy = "batch"')
 $SHARE_BLOCK"
 check "owned key changed: the rendered value is written" is "$(kept '.scaleUpThreshold')" 0.85
-check "owned key changed: the conflict is reported with both values" grep -q 'scaleUpThreshold: 0.9 -> 0.85' "$WORK/keep.err"
+check "owned key changed: the conflict is a warning" warned 'live entry sets otherwise'
+check "owned key changed: the conflict names both values" grep -q '^    scaleUpThreshold: 0.9 -> 0.85$' "$WORK/keep.err"
 check "owned key changed: the optimizer block is still kept" is "$(kept '.optimizer.type')" utilizationShare
 check "an operator key beside it is kept" is "$(kept '.defaultPolicy')" batch
-check "limiters are left to LLMSM_LIMITER, not carried in the apply" is "$(kept 'has("limiters")')" false
+check "LLMSM_LIMITER unset: the live limiters are carried in the apply" is "$(kept '.limiters[0].type')" gpu-inventory
+LIVE_WITH_LIMITER="$(printf '%s
+' "$SHIPPED_DEFAULT" | yq '.limiters = [{"type": "gpu-inventory"}]')
+$SHARE_BLOCK"
+for lim in none quota; do
+    LLMSM_LIMITER="$lim" keep_run "$LIVE_WITH_LIMITER"
+    check "LLMSM_LIMITER=$lim: the live limiters are not carried" is "$KEEP_RC $(kept 'has("limiters")') $(kept '.optimizer.type')" "0 false utilizationShare"
+done
+
+# The conflict advice fits the key: enableRescale is read only from default,
+# so a named policy cannot hold it.
+keep_run "$(printf '%s
+' "$SHIPPED_DEFAULT" | yq '.enableRescale = true')"
+check "enableRescale conflict: says it is read only from default" grep -q 'enableRescale is read only from the default entry' "$WORK/keep.err"
+check "enableRescale conflict alone: no named-policy advice" is "$(grep -c 'named policy' "$WORK/keep.err")" 0
+keep_run "$(printf '%s
+' "$SHIPPED_DEFAULT" | yq '.scaleUpThreshold = 0.9')"
+check "threshold conflict: named-policy advice, no enableRescale line" is "$(grep -c 'named policy' "$WORK/keep.err") $(grep -c 'enableRescale is read only' "$WORK/keep.err")" "1 0"
+
+# LLMSM_LIMITER=none with an optimizer block: warned, in its mode, with the way off.
+LLMSM_NS=scaling-manager
+for case_ in "false active" "true shadow"; do
+    LLMSM_LIVE_DEFAULT="$(printf '%s
+' "$LIVE_WITH_LIMITER" | yq ".optimizer.utilizationShare.shadow = ${case_% *}")"
+    llmsm_warn_optimizer_without_limiters 2> "$WORK/none.err"
+    check "LLMSM_LIMITER=none, block ${case_#* }: warned in its mode, with utilization-share-off" \
+        grep -qE "^\[WARNING\] .*optimizer block \(${case_#* }\).*make utilization-share-off" "$WORK/none.err"
+done
+grep -A8 '^        none)$' "$WORK/infra_scaling_manager.sh" | grep -q '^ *llmsm_warn_optimizer_without_limiters$' \
+    && ok "the LLMSM_LIMITER=none branch calls the optimizer warning" \
+    || fail "the LLMSM_LIMITER=none branch no longer calls llmsm_warn_optimizer_without_limiters"
+LLMSM_LIVE_DEFAULT="$SHIPPED_DEFAULT"
+llmsm_warn_optimizer_without_limiters 2> "$WORK/none.err"
+check "LLMSM_LIMITER=none, no optimizer block: no warning" is "$(wc -c < "$WORK/none.err" | tr -d ' ')" 0
+
+# A list the installer owns, changed in the live entry: reported by name, and
+# the rendered list written whole.
+keep_run "$(printf '%s\n' "$SHIPPED_DEFAULT" | yq '.analyzers += [{"name": "slo", "score": 0.5}]')
+$SHARE_BLOCK"
+check "a changed analyzers list is a warned conflict" grep -q '^    analyzers: ' "$WORK/keep.err"
+check "a changed analyzers list: the rendered list is written" is "$(kept '.analyzers | length') $(kept '.analyzers[0].name')" "1 saturation"
 
 keep_run "$SHIPPED_DEFAULT
 passive: true
 $SHARE_BLOCK"
 check "passive and the optimizer block are kept together" is "$(kept '.passive') $(kept '.optimizer.type')" "true utilizationShare"
 
-keep_run "$SHIPPED_DEFAULT"
-if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ]; then
+# LLMSM_PASSIVE is the manager ConfigMap's; either value leaves the block alone.
+for want in true false; do
+    LLMSM_PASSIVE="$want" keep_run "$SHIPPED_DEFAULT
+$SHARE_BLOCK"
+    check "LLMSM_PASSIVE=$want keeps the optimizer block" is "$KEEP_RC $(kept '.optimizer.utilizationShare.shadow')" "0 false"
+done
+unset LLMSM_PASSIVE
+
+# A render that itself carries passive and limiters: those two are never
+# reported as conflicts, and the live passive is the one applied.
+RENDERED_POLICY="$(printf '%s\n' "$SHIPPED_POLICY" | yq '.data.default = (.data.default + "passive: false" + "\n" + "limiters: []" + "\n")')"
+keep_run "$SHIPPED_DEFAULT
+passive: true
+limiters:
+  - type: gpu-inventory
+$SHARE_BLOCK"
+check "rendered passive/limiters: no conflict is reported for them" is "$(grep -cE '^    (passive|limiters):' "$WORK/keep.err")" 0
+check "rendered passive/limiters: the live passive is applied" is "$(kept '.passive')" true
+check "rendered limiters, LLMSM_LIMITER unset: the live list replaces the rendered one" is "$(kept '.limiters | length') $(kept '.limiters[0].type')" "1 gpu-inventory"
+RENDERED_POLICY="$SHIPPED_POLICY"
+
+if keep_run "$SHIPPED_DEFAULT" && no_patch; then
     ok "a live entry holding only rendered keys writes no patch"
 else
-    fail "a patch was written for a live entry with nothing of its own"
+    fail "a live entry with nothing of its own wrote a patch, or failed (rc $KEEP_RC)"
 fi
 
 LIVE_READ=notfound
-keep_run ''
-if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ] && [ -z "${LLMSM_LIVE_DEFAULT:-}" ]; then
+if keep_run '' && no_patch && [ -z "${LLMSM_LIVE_DEFAULT:-}" ]; then
     ok "first install (no ConfigMap): no patch, the apply creates it as rendered"
 else
-    fail "first install wrote a patch or read a live default ('${LLMSM_LIVE_DEFAULT:-}')"
+    fail "first install wrote a patch, failed (rc $KEEP_RC) or read a live default ('${LLMSM_LIVE_DEFAULT:-}')"
 fi
 LIVE_READ=ok
 
-keep_run '- not
-- a mapping'
-if [ ! -e "$OVERLAY/policy-keep-patch.yaml" ] && grep -q 'not a YAML mapping' "$WORK/keep.err"; then
-    ok "a live entry that is not a mapping is replaced, with a warning"
+if keep_run '# nothing but a comment' && no_patch && [ ! -s "$WORK/keep.err" ]; then
+    ok "a comment-only live entry has nothing to keep, and says nothing"
 else
-    fail "a live entry that is not a mapping was kept from, or replaced in silence"
+    fail "a comment-only live entry wrote a patch, failed (rc $KEEP_RC), or printed: $(cat "$WORK/keep.err")"
 fi
 
-EXPECT_CASES=35
+if keep_run '- not
+- a mapping' && no_patch && warned 'not a YAML mapping'; then
+    ok "a live entry that is not a mapping is replaced, with a warning"
+else
+    fail "a live entry that is not a mapping was kept from, failed, or replaced without a warning"
+fi
+
+# 7. A policy that cannot be read is not a policy that does not exist: the
+#    read fails, keeps nothing, and the install's call refuses -- it never goes
+#    on to apply the rendered entry over what it could not see.
+grep -q 'llmsm_live_passive "\$LLMSM_NS" || log_error' "$WORK/infra_scaling_manager.sh" \
+    && ok "the install refuses when llmsm_live_passive fails" \
+    || fail "the install no longer refuses on a failed llmsm_live_passive"
+for how in forbidden timeout; do
+    LIVE_POLICY_READ="$how"
+    LLMSM_LIVE_DEFAULT=stale
+    rc=0
+    llmsm_live_passive scaling-manager 2>/dev/null || rc=$?
+    check "policy read $how (manager read ok): the read fails" is "$([ "$rc" -ne 0 ] && echo failed)" failed
+    check "policy read $how: no live default is taken" is "$LLMSM_LIVE_DEFAULT" ""
+    rc=0
+    (llmsm_live_passive scaling-manager || log_error "refusing") >/dev/null 2>&1 || rc=$?
+    check "policy read $how: the install refuses" is "$rc" 1
+done
+LIVE_POLICY_READ=''
+
+# 8. A render or a merge that fails, with something to keep, is a refusal and
+#    writes no patch: the apply would otherwise reset what it could not keep.
+for render in empty null; do
+    case "$render" in
+        empty) RENDERED_POLICY='' ;;
+        null) RENDERED_POLICY="$(printf '%s\n' "$SHIPPED_POLICY" | yq 'del(.data.default)')" ;;
+    esac
+    keep_run "$SHARE_BLOCK"
+    check "render $render, live optimizer block: refused, no patch" is "$KEEP_RC $(no_patch && echo none)" "1 none"
+    keep_run 'passive: true'
+    check "render $render, live passive only: refused, no patch" is "$KEEP_RC $(no_patch && echo none)" "1 none"
+done
+RENDERED_POLICY="$SHIPPED_POLICY"
+
+# The merge's last step is yq with LLMSM_KEEP_KEYS set; make that one fail.
+yq() {
+    if [ -n "${FAIL_MERGE:-}" ] && [ -n "${LLMSM_KEEP_KEYS:-}" ]; then
+        return 1
+    fi
+    command yq "$@"
+}
+FAIL_MERGE=1 keep_run "$SHIPPED_DEFAULT
+$SHARE_BLOCK"
+check "a merge that fails: refused, no patch" is "$KEEP_RC $(no_patch && echo none)" "1 none"
+check "a merge that fails: the error names the step" grep -q '^\[ERROR\] could not merge the live default entry' "$WORK/keep.err"
+unset -f yq
+
+EXPECT_CASES=67
 echo
 echo "passive keep ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

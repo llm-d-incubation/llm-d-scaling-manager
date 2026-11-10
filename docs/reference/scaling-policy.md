@@ -1287,14 +1287,14 @@ rendered value and names the key:
     scaleUpThreshold: 0.9 -> 0.85
 ```
 
-The `limiters:` list is decided by `LLMSM_LIMITER`. Unset, the installer reads
-the live list before the apply and writes it back after, and says so.
+The `limiters:` list is decided by `LLMSM_LIMITER`. Unset, the installer keeps
+the live list, in the apply itself and again after it, and says so.
 `LLMSM_LIMITER=gpu-inventory|quota` replaces it, and `LLMSM_LIMITER=none`
 removes it. If the live policy cannot be read, the install refuses.
 
 | you set, in `default` | after a re-run |
 | --- | --- |
-| `optimizer:` (utilization share) | kept, in the mode it was in (shadow or active) |
+| `optimizer:` (utilization share) | kept, in the mode it was in (shadow or active). With `LLMSM_LIMITER=none` the limiters go, the controller rejects the block and nothing is shared, and a limiter declared later turns it back on in that mode; the install warns. Run `make utilization-share-off` first, while the limiter is in force |
 | `scaleToZero`, `defaultPolicy`, `passive`, other keys the install does not render | kept |
 | a threshold or `analyzers` (owned keys) | the rendered value, with a warning naming the key. Edit it back, or set it on a named tier that `defaultPolicy` names, or on a per-model entry; both are kept |
 | `limiters:` | kept when `LLMSM_LIMITER` is not passed, hand-written entries included; `LLMSM_LIMITER=none` removes it |
