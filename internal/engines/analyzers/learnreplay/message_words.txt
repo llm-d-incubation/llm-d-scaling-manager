@@ -752,6 +752,8 @@ compatible
 compatible-variant-live
 complete
 completed
+completedPerQueuedReplica
+completedRate
 completely
 completes
 completion
@@ -1112,7 +1114,9 @@ flight
 flipped
 float
 floor
+floor-trust-reads-completions
 floorExcessGPUs
+floorTrust
 floorTrust.lagFraction
 floorTrust.lagFraction/trustFraction
 floorTrust.trustFraction

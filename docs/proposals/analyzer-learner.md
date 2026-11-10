@@ -861,8 +861,8 @@ not cover a key.
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
 finding above is in exactly one state:
 
-- **Caught:** 35 findings. For each, a mutant puts the defect back, and its
-  class fails on that mutant. For 27 a mutant runs the production learner
+- **Caught:** 36 findings. For each, a mutant puts the defect back, and its
+  class fails on that mutant. For 28 a mutant runs the production learner
   (a policy key, rows, or a stub); 8 are caught only by a toy, and the code
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
@@ -3924,7 +3924,9 @@ same either way (55.99 requests at 21:22:34), and in replicas the cap is
 min(q / (mu x T), 1) per replica, which never falls as mu does.
 `TestMuSlowPod_TheFloorTrustIsHowALowerMuLowersDemand` pins the cycle. Whether
 a lower mu should lower the demand charged for a measured queue through the
-trust blend is a question for the floor, not this change; it is filed apart.
+trust blend is a question for the floor, not this change; it is filed apart
+(llm-d-incubation/llm-d-scaling-manager#54, "The floor's trust read against
+completions, as built").
 
 - **The sample weighs the fleet (`mu-sample-weighs-the-fleet`).** No served
   rate refuses a reading. While the readers sit under `siblingMuTolerance` of
@@ -4570,6 +4572,66 @@ served by that engine only (`localQueueBacklog`). `e1`, `e1-tuned` and
 `throughput-sweep-restart` price no cycle under need.
 
 Not run on a cluster.
+
+#### The floor's trust read against completions, as built (llm-d-incubation/llm-d-scaling-manager#54)
+
+Behind one replay switch, `saturation.SwitchFloorTrustReadsCompletions`, on
+from the constructor. The trust blend (`flooredDemand`) read lambda x P / mu
+against the resident KV. A lower mu raised that ratio, so more of the queues'
+residency charge was swapped for the floor's drain price, and the same
+measured queue could price lower at a lower mu ("One slow pod, as built").
+
+**No trust that moves with mu can fix it.** As mu grows the floor's tokens
+and the ratio go to zero, so the old trust prices occupancy's figure there,
+queue charge and all. A demand that never rises with mu would then never fall
+under occupancy at any mu, and the swap would be gone. So the trust reads no
+mu now:
+
+- **Trust:** `floorTrust` of lambda over what the role completes: per replica
+  the larger of `RequestRate` and `RunningRequests / AvgServiceTime`, summed.
+  A load step reads as before: 0.8 req/s against a full replica completing 6
+  is 0.13. With no completion on record, the trust is 0 and occupancy's charge
+  stands. `floorTrust.lagFraction` and `trustFraction` keep their defaults and
+  now mean a share of the completions.
+- **Drain price:** the floor again, with each replica's mu capped at what the
+  role's queued replicas complete (the median, from at least half of them).
+  The old ratio also held back trust from a full fleet serving under its
+  learned mu. That case is now priced at the rate the fleet serves:
+  `pd-restart` at 12:46:35 served 2.89 req/s a replica against a learned 6.22.
+
+Both ends of the blend fall as mu rises, and the trust does not move with it.
+`monotonicity/floor/lower-mu-never-prices-less` holds this: eight mu from
+0.25x to 3x on one measured state. It fails on 19 of 20 seeds with the switch
+off, and a stub mutant holds that.
+
+Measured on the goldens, the switch alone moves only role and model demand.
+Most moved cycles go to the SLO side; some go up:
+
+| golden | role | up | down | range |
+| --- | --- | --- | --- | --- |
+| `pd-restart` | decode | 36 | 3 | x0.775 to x1.607 |
+| `ttft-saturated` | prefill | 13 | 19 | x0.213 to x1.320 |
+| `ttft-staircase-b-off` | decode | 5 | 7 | x0.441 to x2.064 |
+| `ttft-staircase-c-on` | decode | 12 | 3 | x0.609 to x1.305 |
+| `e1`, `e1-tuned` | decode | 0 | 98 | x0.889 to x1.000 |
+| start fixtures | model | 2 | 59 | x0.006 to x1.973 |
+
+- **Down, the SLO side.** Cycles where lambda matched what the role completed
+  but mu's ratio read under 0.8: the queued replicas served under their learned
+  mu, or the fleet had room. `ttft-saturated` keeps a standing prefill queue of
+  58 at 3.1 req/s, priced at what one replica drains. Its required capacity
+  goes to 0 on 14 cycles where it was 0.1 to 0.9 of a replica.
+- **Start fixtures.** Their P is 6 tokens, so the residency charge priced a
+  queue of 56 at over a thousand replicas. They now fall to the floor's figure.
+- **Up, the cost side.** Cycles where the queued replicas complete under mu,
+  priced at what they serve.
+
+Three over-priced ledger rows now pass and are removed:
+`liveness/floor/closed-loop-{decode-step,restart-before-step,restored-snapshot}-start-463s`.
+Their `-jsq` twins still fail.
+
+Not run on a cluster. Whether the cut on a standing queue, priced at what the
+fleet drains, holds the SLO is a question for one.
 
 ## 8. Risks and limits
 

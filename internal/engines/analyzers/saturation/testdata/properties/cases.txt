@@ -221,6 +221,7 @@ missing-duplicated/slo-itl/missed-row-keeps-settle
 monotonicity/borrowed-k2/relaxes-upward
 monotonicity/floor/lambda-and-queue-rise
 monotonicity/floor/lambda-rise-timebase
+monotonicity/floor/lower-mu-never-prices-less
 monotonicity/floor/standing-local-queue
 n-dependence/mu/iid-fold
 n-dependence/mu/iid-fold-timebase

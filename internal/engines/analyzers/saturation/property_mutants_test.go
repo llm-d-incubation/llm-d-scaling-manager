@@ -73,6 +73,7 @@ var findings = []finding{
 	{row: "Max across replicas (+13.6 % at 16)", status: statusCaughtToy},
 	{row: "Prefill double scrape", status: statusCaught},
 	{row: "Demand falls when lambda lags a step", status: statusEscaping, why: "the monotonicity trajectory passes on today's code and no pre-fix floor is reproduced"},
+	{row: "A lower mu prices a measured queue less (llm-d-incubation/llm-d-scaling-manager#54)", status: statusCaught},
 	{row: "local queue priced as drainable", status: statusCaughtToy},
 	{row: "Weighted median flapping between modes", status: statusCaughtToy},
 	{row: "IQM breaks at 25 % contamination", status: statusCaughtToy},
@@ -196,6 +197,9 @@ func propertyMutants() []propMutant {
 			check: checkBacklogEdge(tuningWith(func(t *config.AnalyzerTuning) {
 				t.BacklogGrowth.MinRequests, t.BacklogGrowth.Fraction = 1e-9, 1e-9
 			}))},
+		{row: "A lower mu prices a measured queue less (llm-d-incubation/llm-d-scaling-manager#54)", caseID: "monotonicity/floor/lower-mu-never-prices-less", level: levelStub,
+			how:   "SwitchFloorTrustReadsCompletions off: the trust reads lambda x P / mu against the resident KV, so a lower mu trusts the drain price more",
+			check: checkFloorMuMonotone(func(a *SaturationAnalyzer) { a.floorTrustCompleted = false })},
 		{row: "Headroom counted twice (+17.6 %)", caseID: "known-truth/floor/steady-order", level: levelToyOutput,
 			how:   "the floor's order divided by the 0.85 target a second time",
 			check: checkFloorTruth(orderEdit(func(n, _ float64) float64 { return n / floorTarget }))},

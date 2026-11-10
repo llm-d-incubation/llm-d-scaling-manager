@@ -1844,7 +1844,7 @@ collector's one-minute rate window and is not configurable.
 
 | Key | Default | Range | What it does |
 |-----|---------|-------|--------------|
-| `lagFraction` | `0.5` | (0, 1) | Below this share of the resident KV, the arrival rate is taken as lagging and the floor never lowers demand. |
+| `lagFraction` | `0.5` | (0, 1) | Below this share of what the role's replicas complete, the arrival rate is taken as lagging and the floor never lowers demand. |
 | `trustFraction` | `0.8` | (`lagFraction`, 1] | At or above this share, the floor's drain price is trusted in full. In between the two prices are blended. |
 
 If the merged policy has `trustFraction` at or under `lagFraction`, both go
