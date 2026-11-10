@@ -864,7 +864,7 @@ func InitMetrics(registry prometheus.Registerer) error {
 	scalerKEDAUnreachable = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: constants.LLMSMScalerKEDAUnreachable,
-			Help: "1 while the KEDA external scaler refused every TLS handshake of the last 5 minutes and served no call: KEDA reaches nothing and no model is discovered",
+			Help: "1 while the KEDA external scaler kept refusing TLS handshakes (3 or more over a minute or more, within 5 minutes) and served no call: KEDA reaches nothing and no model is discovered",
 		},
 		scalerReachLabels,
 	)
@@ -2002,7 +2002,7 @@ func IncScalerTLSRefusal() {
 }
 
 // SetScalerKEDAUnreachable records whether no client reaches the KEDA external
-// scaler: every TLS handshake of the last few minutes refused, no call served.
+// scaler: TLS handshakes kept being refused for minutes, no call served.
 func SetScalerKEDAUnreachable(unreachable bool) {
 	if scalerKEDAUnreachable == nil {
 		return

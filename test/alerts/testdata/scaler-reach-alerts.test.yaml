@@ -9,9 +9,10 @@ rule_files:
   - rules.yaml
 evaluation_interval: 1m
 tests:
-  # 1. KEDA refused on every call (a reinstall it kept a connection across):
-  #    the gauge holds 1 and the alert fires after its for:, once per
-  #    controller namespace, even from two controller pods.
+  # 1. KEDA refused on every call (it kept a connection across a CA change):
+  #    the gauge turns 1 at 6m and the alert fires at 11m, its for: of 5m and
+  #    not a minute sooner, once per controller namespace, even from two
+  #    controller pods.
   - interval: 1m
     input_series:
       - series: 'llmsm_scaler_keda_unreachable{namespace="scaling-manager",pod="scaling-manager-a"}'
@@ -21,9 +22,13 @@ tests:
       - series: 'llmsm_scaler_keda_unreachable{namespace="other",pod="other-a"}'
         values: '0x35'
     alert_rule_test:
-      - eval_time: 8m
+      - eval_time: 10m
         alertname: LLMSMExternalScalerUnreachable
         exp_alerts: []
+      - eval_time: 11m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: scaling-manager}
       - eval_time: 15m
         alertname: LLMSMExternalScalerUnreachable
         exp_alerts:

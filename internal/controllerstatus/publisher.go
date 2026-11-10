@@ -101,8 +101,9 @@
 //	                       labels of the nodes its pods ran on may drop out
 //	                       until the next decision.
 //	scalerUnreachable      present while the KEDA external scaler (TLS on)
-//	                       refused every TLS handshake of the last five
-//	                       minutes and served no call: KEDA reaches nothing,
+//	                       kept refusing TLS handshakes (three or more
+//	                       over a minute or more, within five minutes)
+//	                       and served no call: KEDA reaches nothing,
 //	                       so no model is discovered. Says how many were
 //	                       refused, the last reason and the fix; absent
 //	                       otherwise. Mirrors llmsm_scaler_keda_unreachable.
@@ -202,7 +203,7 @@ const (
 	// had no active model or resolved none, absent before its first cycle.
 	KeyResolvedAccelerators = "resolvedAccelerators"
 	// KeyScalerUnreachable carries why no client reaches the KEDA external
-	// scaler: every TLS handshake of the last few minutes refused, no call
+	// scaler: TLS handshakes kept being refused for minutes, no call
 	// served. Absent while one is.
 	KeyScalerUnreachable = "scalerUnreachable"
 )
@@ -683,7 +684,7 @@ func (p *Publisher) SetPodListDenied(denied bool) {
 }
 
 // SetScalerUnreachable records whether no client reaches the KEDA external
-// scaler: detail while every TLS handshake is refused and no call is served,
+// scaler: detail while TLS handshakes keep being refused and no call is served,
 // removed when one is.
 func (p *Publisher) SetScalerUnreachable(unreachable bool, detail string) {
 	if p == nil {

@@ -18,10 +18,22 @@ import (
 // (LLMSM_SCALER_REFUSAL_SINCE).
 const reachWindow = 5 * time.Minute
 
-// reachConfirm is how long refusals must have gone on, with nothing served in
-// between, before they count. A client that is refused once and then
-// connects is not "unreachable".
+// reachConfirm is how long refusals must have gone on, first to last within
+// reachWindow, with nothing served in between, before they count. A client
+// refused once, or a burst of re-dials in one second, is not "unreachable".
 const reachConfirm = time.Minute
+
+// reachMinRefusals is how many refusals within reachWindow it takes. A KEDA
+// holding a stale connection re-dials with gRPC's backoff, capped at 120 s,
+// so it is refused several times in any five minutes; one stray connection,
+// or a prober that dials once, is not.
+const reachMinRefusals = 3
+
+// reachMaxRecent bounds the refusal times kept. Past it the oldest is dropped:
+// the condition needs only the count to reach reachMinRefusals and the span to
+// reach reachConfirm, which a full buffer of refusals in one window has long
+// shown.
+const reachMaxRecent = 256
 
 // reachCheckInterval is how often Server re-evaluates reachability.
 const reachCheckInterval = 15 * time.Second
@@ -43,10 +55,9 @@ type reachability struct {
 	// streams counts the calls in flight: an open StreamIsActive is a client
 	// that reaches the scaler, however long ago it started.
 	streams int
-	// firstRefused is the first refusal since lastServed; zero when none.
-	firstRefused time.Time
-	// lastRefused is the most recent refusal.
-	lastRefused time.Time
+	// recent holds the times of the refusals since lastServed, oldest first,
+	// pruned to reachWindow and bounded by reachMaxRecent.
+	recent []time.Time
 	// refused counts the refusals since lastServed.
 	refused int
 	// lastReason is the handshake error of the most recent refusal.
@@ -66,7 +77,7 @@ func (r *reachability) served() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastServed = r.now()
-	r.firstRefused = time.Time{}
+	r.recent = r.recent[:0]
 	r.refused = 0
 }
 
@@ -74,7 +85,7 @@ func (r *reachability) served() {
 func (r *reachability) begin() func() {
 	r.mu.Lock()
 	r.lastServed = r.now()
-	r.firstRefused = time.Time{}
+	r.recent = r.recent[:0]
 	r.refused = 0
 	r.streams++
 	r.mu.Unlock()
@@ -91,35 +102,50 @@ func (r *reachability) refusedHandshake(reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	if r.firstRefused.IsZero() {
-		r.firstRefused = now
+	r.prune(now)
+	if len(r.recent) >= reachMaxRecent {
+		r.recent = r.recent[1:]
 	}
-	r.lastRefused = now
+	r.recent = append(r.recent, now)
 	r.refused++
 	r.lastReason = reason
 }
 
-// state reports whether no client reaches the scaler: a handshake was refused
-// within reachWindow, refusals have gone on for at least reachConfirm, and
-// nothing was served within reachWindow. detail says how many were refused and
-// the last reason, for the status condition.
+// prune drops the refusal times older than reachWindow. Callers hold mu.
+func (r *reachability) prune(now time.Time) {
+	i := 0
+	for i < len(r.recent) && now.Sub(r.recent[i]) > reachWindow {
+		i++
+	}
+	r.recent = r.recent[i:]
+}
+
+// state reports whether no client reaches the scaler: at least
+// reachMinRefusals handshakes were refused within reachWindow, the first and
+// last of them at least reachConfirm apart, no stream is open, and nothing was
+// served within reachWindow. detail says how many were refused, the last
+// reason and the likely causes, for the status condition.
 func (r *reachability) state() (unreachable bool, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	r.prune(now)
+	n := len(r.recent)
 	switch {
 	case r.streams > 0,
-		r.firstRefused.IsZero(),
-		now.Sub(r.lastRefused) > reachWindow,
-		!r.lastServed.IsZero() && now.Sub(r.lastServed) < reachWindow,
-		now.Sub(r.firstRefused) < reachConfirm:
+		n < reachMinRefusals,
+		r.recent[n-1].Sub(r.recent[0]) < reachConfirm,
+		!r.lastServed.IsZero() && now.Sub(r.lastServed) < reachWindow:
 		return false, ""
 	}
-	return true, fmt.Sprintf("the KEDA external scaler refused %d TLS handshake(s) since %s and served no call in the last %s (last refusal: %s). "+
-		"KEDA reaches no call, so no model is discovered and nothing scales. After an uninstall and reinstall in this namespace, "+
-		"KEDA's operator still holds its connection from before: restart it (kubectl rollout restart deployment/keda-operator -n <KEDA namespace>). "+
-		"Otherwise make verify-deployment names the cause",
-		r.refused, r.firstRefused.UTC().Format(time.RFC3339), reachWindow, r.lastReason)
+	return true, fmt.Sprintf("the KEDA external scaler refused %d TLS handshake(s) in the last %s, since %s, and served no call (last refusal: %s). "+
+		"KEDA reaches no call, so no model is discovered and nothing scales. "+
+		"\"remote error: tls: bad certificate\" or \"certificate signed by unknown authority\" from KEDA's Pod: KEDA's operator holds a connection "+
+		"with the CA or client certificate of before the scaler's CA changed (the namespace or the CA Secret was replaced); "+
+		"restart it (kubectl rollout restart deployment/keda-operator -n <KEDA namespace>). "+
+		"\"first record does not look like a TLS handshake\": a ScaledObject dials the TLS address in plaintext, without the installer's authenticationRef. "+
+		"make verify-deployment names the cause",
+		n, reachWindow, r.recent[0].UTC().Format(time.RFC3339), r.lastReason)
 }
 
 // unaryInterceptor records each unary call as served.
@@ -157,7 +183,7 @@ func (p *reachReporter) check() {
 	p.last = &unreachable
 	metrics.SetScalerKEDAUnreachable(unreachable)
 	if unreachable {
-		p.logger.Error(nil, "No client reaches the KEDA external scaler: every TLS handshake is refused", "detail", detail)
+		p.logger.Error(nil, "No client reaches the KEDA external scaler: its TLS handshakes keep being refused and no call is served", "detail", detail)
 	} else if prev != nil {
 		p.logger.Info("A client reaches the KEDA external scaler again")
 	}

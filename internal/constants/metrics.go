@@ -587,11 +587,12 @@ const (
 	LLMSMScalerTLSRefusalsTotal = "llmsm_scaler_tls_refusals_total"
 
 	// LLMSMScalerKEDAUnreachable is 1 while the KEDA external scaler refused
-	// every TLS handshake of the last five minutes (for at least one) and
-	// served no call: KEDA reaches nothing, so KEDA-driven discovery finds no
+	// three or more TLS handshakes within the last five minutes, the first and
+	// last at least a minute apart, and served no call: KEDA reaches nothing, so KEDA-driven discovery finds no
 	// model and nothing scales. The usual cause is a KEDA operator that kept
 	// its pooled connection, with the certificates of an earlier install,
-	// across an uninstall and reinstall. Only with scaler TLS on.
+	// across a change of the scaler's CA. Only with scaler TLS on; absent, not
+	// 0, with it off.
 	// Labels: none (controller_instance when set)
 	LLMSMScalerKEDAUnreachable = "llmsm_scaler_keda_unreachable"
 

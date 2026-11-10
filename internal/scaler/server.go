@@ -80,7 +80,7 @@ type Server struct {
 
 	// OnReachability, when set, is called whenever whether any client reaches
 	// the scaler over TLS changes (and once at start): unreachable is true
-	// while every handshake in the last few minutes was refused and no call
+	// while handshakes kept being refused for minutes and no call
 	// was served, detail says how many and why. Only with TLSConfig set.
 	// cmd/main.go publishes it in the controller-status ConfigMap.
 	OnReachability func(unreachable bool, detail string)
@@ -89,8 +89,8 @@ type Server struct {
 	// the standby and the full server, so the hand-off does not reset it.
 	refusals *refusalLog
 	// reach tracks refused and served handshakes and calls, shared like
-	// refusals.
-	reach *reachability
+	// refusals. Atomic: set in Start, read by tests while it serves.
+	reach atomic.Pointer[reachability]
 }
 
 // errNotListening is what Ready reports until the scaler port is bound.
@@ -167,9 +167,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// On every exit, including a cancellation that lands during the hand-off.
 	defer s.listening.Store(false)
 	s.refusals = newRefusalLog(nil)
-	s.reach = newReachability(nil)
+	reach := newReachability(nil)
+	s.reach.Store(reach)
 	if s.TLSConfig != nil {
-		reporter := &reachReporter{reach: s.reach, hook: s.OnReachability, logger: logger}
+		reporter := &reachReporter{reach: reach, hook: s.OnReachability, logger: logger}
 		go reporter.run(ctx, reachCheckInterval)
 	}
 
@@ -310,7 +311,7 @@ func (s *Server) bind(ctx context.Context, handler pb.ExternalScalerServer, opts
 		if refusals == nil {
 			refusals = newRefusalLog(nil)
 		}
-		reach := s.reach
+		reach := s.reach.Load()
 		if reach == nil {
 			reach = newReachability(nil)
 		}
