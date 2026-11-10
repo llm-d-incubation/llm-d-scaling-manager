@@ -875,6 +875,10 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		// a named model will never park. With no models left, every such assertion
 		// is about a workload that is gone.
 		e.evictAllBlockedModels()
+		// No active model resolves an accelerator: say so, or the status keeps
+		// the last busy cycle's list after a scale-to-zero, and a controller
+		// started with every model at zero never sets the key at all.
+		e.Status.SetResolvedAccelerators(nil)
 
 		// The PHYSICAL picture is not published from here — internal/gpuusage
 		// discovers it independently, precisely so a parked fleet still has one.

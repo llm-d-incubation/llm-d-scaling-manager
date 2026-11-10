@@ -189,3 +189,16 @@ func TestApplyPassPublishesResolvedAccelerators(t *testing.T) {
 	require.True(t, found, "a cycle that resolved none records it")
 	require.Empty(t, got)
 }
+
+// A cycle with no decision still resolves the accelerator from the scale
+// target's nodeSelector, and that one is published too: before the first
+// decision is exactly when the share check reads the key.
+func TestApplyPassPublishesTheAcceleratorOfANoDecisionCycle(t *testing.T) {
+	dep := wiringDeployment()
+	dep.Spec.Template.Spec.NodeSelector = map[string]string{"nvidia.com/gpu.product": "NVIDIA-A100-PCIE-80GB"}
+	e := wiringEngine(t, dep)
+	e.Status = controllerstatus.New(e.client, e.client, "scaling-manager-system")
+
+	cycle(t, e, "fleet-1")
+	require.Equal(t, "NVIDIA-A100-PCIE-80GB", e.Status.Data()[controllerstatus.KeyResolvedAccelerators])
+}

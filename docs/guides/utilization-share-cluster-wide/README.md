@@ -600,10 +600,14 @@ step 15 turns on physical groups.
 
 If not:
 
-- **`the controller resolved no accelerator in its last cycle`.** The
-  controller has not planned the models yet. Rerun the check after a minute;
-  it reads the product from the controller's status, so waiting for the
-  optimizer is not needed.
+- **`the controller records no resolvedAccelerators`.** The controller has
+  not finished a cycle yet. Rerun the check after a minute; it reads the
+  product from the controller's status, so waiting for the optimizer is not
+  needed. (An older controller has no such key, and names the product only
+  once the optimizer decides.)
+- **`the controller resolved no accelerator in its last cycle`.** Every model
+  is at zero replicas, or none of them names its GPU product. Rerunning does
+  not clear the second; the `AcceleratorNotResolved` line below names it.
 - **Option A: the quota has no key for a product.** Run steps 8 and 9 again
   with that exact name.
 

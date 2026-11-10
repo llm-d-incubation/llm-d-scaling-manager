@@ -348,10 +348,11 @@ make utilization-share-check
 <!-- guide:share.check end -->
 
 The check reads the GPU product the controller resolved from its status
-ConfigMap, so it names the product as soon as the controller has planned the
-models once. It warns `resolved no accelerator in its last cycle` until then;
-rerun it after a minute. Go on when `no AcceleratorNotResolved events` reads
-`[OK]`.
+ConfigMap, so it names the product once the controller has finished a cycle.
+Before that it warns `records no resolvedAccelerators`; rerun it after a
+minute. A warning `resolved no accelerator in its last cycle` means every model
+is at zero replicas or none names its GPU product, and rerunning does not
+clear the second. Go on when `no AcceleratorNotResolved events` reads `[OK]`.
 
 Turn the optimizer on in shadow first, then configure it to act. Activate
 refuses a policy that has no optimizer block yet:

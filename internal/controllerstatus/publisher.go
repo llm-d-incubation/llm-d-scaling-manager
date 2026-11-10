@@ -93,8 +93,13 @@
 //	resolvedAccelerators   the accelerator types the steady-state engine
 //	                       resolved for the variants of its last cycle,
 //	                       sorted and joined by ",". Empty when that cycle
-//	                       resolved none; absent until the first cycle. The
-//	                       names are the ones quota keys must match.
+//	                       had no active model, or resolved none for those it
+//	                       had; absent until the first cycle. The names are
+//	                       the ones quota keys must match. It reflects the
+//	                       cycle's decisions: on a cycle without a decision
+//	                       for a variant, an accelerator known only from the
+//	                       labels of the nodes its pods ran on may drop out
+//	                       until the next decision.
 //
 // limiter, limiterWarnings and utilizationShare are recomputed from the applied configuration
 // in the same update that records policyResourceVersion, so they never lag
@@ -188,7 +193,7 @@ const (
 	KeyPassiveDefault = "passiveDefault"
 	// KeyResolvedAccelerators is the accelerator types the steady-state
 	// engine resolved in its last cycle, sorted and joined by ",": "" when it
-	// resolved none, absent before its first cycle.
+	// had no active model or resolved none, absent before its first cycle.
 	KeyResolvedAccelerators = "resolvedAccelerators"
 )
 

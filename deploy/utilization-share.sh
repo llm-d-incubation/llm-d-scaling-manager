@@ -628,7 +628,7 @@ verb_check() {
     if [ -n "$STATUS" ] && [ "$(printf '%s' "$STATUS" | jq -r 'has("resolvedAccelerators")')" = true ]; then
         accels="$(status_field resolvedAccelerators | tr ',' '\n' | grep . || true)"
         if [ -z "$accels" ]; then
-            warn "the controller resolved no accelerator in its last cycle (resolvedAccelerators in $STATUS_CM is empty): no model is planned yet, or none resolves"
+            warn "the controller resolved no accelerator in its last cycle (resolvedAccelerators in $STATUS_CM is empty): every model is at zero replicas, or none of them resolves (see the AcceleratorNotResolved line below)"
         else
             info "accelerators the controller resolves: $(printf '%s' "$accels" | tr '\n' ' ')"
         fi

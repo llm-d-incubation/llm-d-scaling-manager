@@ -194,6 +194,7 @@ ns=""; prev=""
 for a in "$@"; do [ "$prev" = "-n" ] && ns="$a"; prev="$a"; done
 case "$args" in
   *" get configmap scaling-manager-controller-status "*)
+    [ -e "$S/status.forbidden" ] && { echo 'Error from server (Forbidden): configmaps "scaling-manager-controller-status" is forbidden' >&2; exit 1; }
     [ -e "$S/status.json" ] || { echo 'Error from server (NotFound): configmaps "scaling-manager-controller-status" not found' >&2; exit 1; }
     jq '{data: .}' "$S/status.json" ;;
   *" get configmap "*)
@@ -763,8 +764,18 @@ vcase "check: a resolved accelerator in the status with no quota key warns" eval
 fresh "$QUOTA_POLICY"; status_on; status_accels ""; run check
 vcase "check: a status that resolved none says so, not that the log names none" \
     eval 'says "resolved no accelerator in its last cycle" && ! says "log names none"'
+# A status without the key is an older controller (or no cycle yet): its log
+# is read, and says where the name came from.
+fresh "$QUOTA_POLICY"; status_on; echo '{"accelerator": "NVIDIA-H200"}' > "$STATE/logs"; run check
+vcase "check: a status without resolvedAccelerators falls back to the log" \
+    eval '[ $RC -eq 0 ] && says "resolves: NVIDIA-H200 (from its log)"'
+# Unreadable is not absent: a refused status read must not pass as an older
+# controller that publishes nothing.
+fresh "$QUOTA_POLICY"; status_on; touch "$STATE/status.forbidden"; run check
+vcase "check: a Forbidden status read fails, not read as absent" \
+    eval '[ $RC -ne 0 ] && says "could not read team-a/scaling-manager-controller-status"'
 
-CASES_EXPECTED=126
+CASES_EXPECTED=128
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. A case was added or removed; update CASES_EXPECTED deliberately."
 fi

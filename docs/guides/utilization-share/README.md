@@ -135,8 +135,8 @@ kill $PF
 | `quiet-period` for two to three minutes | the group holds still after activation and after a restart |
 | `spare_gpus` below 0 | the quota cannot cover every model's need; no move fixes that |
 | `invalid` mode | the block did not validate, or the policy has no `limiters:` list; the log says which |
-| `resolved no accelerator in its last cycle` from the check | the controller has not planned the models yet; rerun after a minute. `no AcceleratorNotResolved events` is what matters |
-| `records no resolvedAccelerators` from the check | the controller predates that status key and names the product in its log only once the optimizer decides; `no AcceleratorNotResolved events` is what matters |
+| `records no resolvedAccelerators` from the check | no cycle has finished yet (rerun after a minute), or the controller predates that status key and names the product in its log only once the optimizer decides; `no AcceleratorNotResolved events` is what matters |
+| `resolved no accelerator in its last cycle` from the check | no cycle with an active model yet (every model is at zero replicas), or no active model names its GPU product: then `AcceleratorNotResolved` events name it, and rerunning does not help |
 
 It evaluates but never moves anything? Work down [the troubleshooting
 list](../../reference/troubleshooting.md#the-optimizer-evaluates-but-never-moves-anything).
