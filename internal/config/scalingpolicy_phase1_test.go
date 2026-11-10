@@ -219,17 +219,19 @@ var _ = Describe("ResolveScaleToZeroEnabled / ResolveScaleToZeroRetention", func
 	})
 
 	It("falls back to the deployment flag when the entry says nothing", func() {
-		Expect(os.Setenv("LLMSM_SCALE_TO_ZERO", "true")).To(Succeed())
-		Expect(ResolveScaleToZeroEnabled(nil, &ScalingPolicy{})).To(BeTrue())
-		Expect(ResolveScaleToZeroEnabled(nil, nil)).To(BeTrue())
+		cfg := NewTestConfig()
+		cfg.features.scaleToZeroEnabled = true
+		Expect(ResolveScaleToZeroEnabled(cfg, &ScalingPolicy{})).To(BeTrue())
+		Expect(ResolveScaleToZeroEnabled(cfg, nil)).To(BeTrue())
 	})
 
 	It("lets an explicit false beat the deployment flag", func() {
 		// The pointer exists for exactly this: "not set" and "set to false" must
 		// not collapse, or a model could never opt out of a cluster-wide default.
-		Expect(os.Setenv("LLMSM_SCALE_TO_ZERO", "true")).To(Succeed())
+		cfg := NewTestConfig()
+		cfg.features.scaleToZeroEnabled = true
 		sat := &ScalingPolicy{ScaleToZero: &ScaleToZeroEnvelope{Enabled: p1BoolPtr(false)}}
-		Expect(ResolveScaleToZeroEnabled(nil, sat)).To(BeFalse())
+		Expect(ResolveScaleToZeroEnabled(cfg, sat)).To(BeFalse())
 	})
 
 	It("resolves the retention period, defaulting when absent or unparseable", func() {
@@ -510,8 +512,12 @@ var _ = Describe("ResolveScaleToZeroEnabled reads the loaded config", func() {
 			"and opt in where the cluster default is off")
 	})
 
-	It("keeps the environment fallback when there is no loaded config", func() {
+	// The resolver used to read os.Getenv itself when it had no config, and
+	// matched only "true", while the loader (viper) also takes "1", "t" and
+	// "TRUE". Two readers of one setting, disagreeing on what enables it. The
+	// loader is the only reader now: a nil config is the built-in default.
+	It("reads no environment of its own: a nil config is the built-in default", func() {
 		Expect(os.Setenv("LLMSM_SCALE_TO_ZERO", "true")).To(Succeed())
-		Expect(ResolveScaleToZeroEnabled(nil, &ScalingPolicy{})).To(BeTrue())
+		Expect(ResolveScaleToZeroEnabled(nil, &ScalingPolicy{})).To(Equal(DefaultScaleToZeroEnabled))
 	})
 })
