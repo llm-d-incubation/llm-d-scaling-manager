@@ -34,7 +34,14 @@
 #   the Deployment         flags, mounts and the client-CA digest present
 #                          exactly when TLS is on, in every shipped overlay
 #   verify                 the reported mode, expiry, names, and ScaledObjects
-#                          that would still dial plaintext
+#                          that would still dial plaintext; KEDA's copy checked
+#                          against the scaler's certificates (Forbidden is
+#                          "not checked"); a KEDA refused on every call fails
+#   reinstall              an uninstall keeps the CA while KEDA may still trust
+#                          it, so a reinstall's certificates verify against
+#                          what KEDA holds; one with nothing to renew writes
+#                          nothing on KEDA's side; a missing or expiring CA
+#                          rotates every certificate and KEDA's copy together
 #
 # Every case asserts something that a missing function also fails, so a run
 # against code without this feature fails rather than passes empty.
@@ -227,6 +234,8 @@ eps_json() {
 #   STUB_KEDA_DEPLOYS  FORBIDDEN makes the Deployments in KEDA's namespace unreadable
 #   STUB_KEDA_OBJ_NS   KEDA_CLUSTER_OBJECT_NAMESPACE on KEDA's operator (else unset)
 #   STUB_LOGS          FORBIDDEN makes the controller's log unreadable; else $WORK/ctrl.log
+#   STUB_KEDA_SECRETS  FORBIDDEN makes Secrets outside the controller namespace (KEDA's copy)
+#                      unreadable
 #   STUB_KEDA_PODS     FORBIDDEN makes the Pods in KEDA's namespace (keda) unreadable; else
 #                      keda-operator-7f9c at 10.128.5.168 and keda-admission-5d at 10.128.5.170
 # A file $STORE/deployment@<ns>__keda-operator.json is KEDA's operator in <ns>.
@@ -264,6 +273,7 @@ stub_kubectl() {
         "get secret "*" -n "*" -o json")
             set -- $a
             if [ "$5" != "$NS" ]; then
+                [ "${STUB_KEDA_SECRETS:-}" != FORBIDDEN ] || { STUB_FORBID_NS="$5" forbidden; return 1; }
                 store_get "secret@$5" "$3"
             else
                 [ "${STUB_SECRETS:-}" != FORBIDDEN ] || { forbidden; return 1; }
@@ -295,6 +305,30 @@ stub_kubectl() {
         "delete configmap "*" -n $NS "*)
             set -- $a
             rm -f "$STORE/configmap__$3.json"
+            ;;
+        "delete secret -n $NS -l "*)
+            # A label delete: every stored Secret in $NS carrying the label,
+            # except the one a --field-selector metadata.name!=<name> keeps.
+            local keep="" f
+            case "$a" in *"--field-selector metadata.name!="*)
+                keep="${a#*--field-selector metadata.name!=}"
+                keep="${keep%% *}" ;;
+            esac
+            for f in "$STORE"/secret__*.json; do
+                [ -f "$f" ] || continue
+                [ "$(jq -r .metadata.name "$f")" != "$keep" ] || continue
+                if jq -e '.metadata.labels["scaling-manager.llmd.ai/scaler-tls"] // empty' "$f" >/dev/null 2>&1; then
+                    rm -f "$f"
+                    echo "deleted/$(basename "$f" .json)" >>"$WORK/deletes"
+                fi
+            done
+            ;;
+        "annotate secret "*" -n $NS --overwrite "*)
+            set -- $a
+            name="$3"
+            [ -f "$STORE/secret__$name.json" ] || { notfound; return 1; }
+            jq --arg k "${7%%=*}" --arg v "${7#*=}" '.metadata.annotations[$k] = $v' "$STORE/secret__$name.json" >"$WORK/ann.json" \
+                && mv "$WORK/ann.json" "$STORE/secret__$name.json"
             ;;
         "delete secret "*" -n "*" --ignore-not-found")
             set -- $a
@@ -386,6 +420,7 @@ run() {
     : >"$WORK/refusal"
     : >"$WORK/writes"
     : >"$WORK/keda-writes"
+    : >"$WORK/deletes"
     : >"$WORK/patches"
     : >"$WORK/vars"
     : >"$WORK/stdout"
@@ -1637,17 +1672,17 @@ stale_case() {
 }
 RESTART="rollout restart deployment/keda-operator -n keda"
 
-echo "== verify: refusals for an unknown authority from KEDA's Pod: names the ScaledObjects and the restart, does not restart KEDA, does not fail"
-# KEDA is shared: by default the install does not restart it, and does not
-# fail over it either. It names what stays unwired and the exact command.
+echo "== verify: refusals for an unknown authority from KEDA's Pod: names the ScaledObjects and the restart, does not restart KEDA, and fails"
+# KEDA is shared: by default the install does not restart it. It names what
+# stays unwired and the exact command, and fails: nothing scales until then.
 stale_case
 refusal_line 10.128.5.168
 run llmsm_verify_scaler_wiring STUB_UNWIRED=always
-ok '[ "$RC" = 0 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "keda-operator-7f9c" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings" && grep -q "apps/app-so" "$WORK/stderr" && grep -q "stay unwired" "$WORK/warnings" && grep -q "Not restarted" "$WORK/warnings" && ! grep -q "^rollout restart" "$WORK/kubectl.log"' "verify, stale KEDA connection, default: exit $RC (want 0), warnings $(cat "$WORK/warnings"), kubectl $(grep rollout "$WORK/kubectl.log")"
+ok '[ "$RC" = 1 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "keda-operator-7f9c" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings" && grep -q "apps/app-so" "$WORK/stderr" && grep -q "stay unwired" "$WORK/warnings" && grep -q "Not restarted" "$WORK/warnings" && grep -q "reported as a failure" "$WORK/warnings" && ! grep -q "^rollout restart" "$WORK/kubectl.log"' "verify, stale KEDA connection, default: exit $RC (want 1), warnings $(cat "$WORK/warnings"), kubectl $(grep rollout "$WORK/kubectl.log")"
 ok '! grep -q "kubectl patch scaledobject" "$WORK/stderr" && ! grep -q "Change it again" "$WORK/warnings"' "verify, stale KEDA connection: still offers the re-wire: $(cat "$WORK/stderr")"
 # A ScaledObject KEDA wired before the reinstall is refused the same way.
 run llmsm_verify_scaler_wiring
-ok '[ "$RC" = 0 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings"' "verify, stale KEDA connection with a wired HPA: exit $RC (want 0), warnings $(cat "$WORK/warnings")"
+ok '[ "$RC" = 1 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings"' "verify, stale KEDA connection with a wired HPA: exit $RC (want 1), warnings $(cat "$WORK/warnings")"
 # KEDA_RESTART=true: the install restarts KEDA's operator itself.
 run llmsm_verify_scaler_wiring STUB_UNWIRED=always KEDA_RESTART=true
 ok 'grep -q "^rollout restart deployment/keda-operator -n keda" "$WORK/kubectl.log" && grep -q "KEDA_RESTART=true: restarted KEDA.s operator in keda" "$WORK/info" && ! grep -q "Not restarted" "$WORK/warnings"' "verify, stale KEDA connection, KEDA_RESTART=true: KEDA not restarted: $(cat "$WORK/info" "$WORK/warnings"; grep rollout "$WORK/kubectl.log")"
@@ -1662,7 +1697,7 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' 2026-10-19T09:42:57Z INFO external-scaler scal
     '{"remote": "10.128.5.168:45482", "reason": "remote error: tls: bad certificate", "refusedSinceLastLine": 1}' \
     >>"$WORK/ctrl.log"
 run llmsm_verify_scaler_wiring STUB_UNWIRED=always
-ok '[ "$RC" = 0 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings" && ! grep -q "Change it again" "$WORK/warnings"' "verify, KEDA refusing the new serving certificate: exit $RC (want 0), warnings $(cat "$WORK/warnings")"
+ok '[ "$RC" = 1 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings" && ! grep -q "Change it again" "$WORK/warnings"' "verify, KEDA refusing the new serving certificate: exit $RC (want 1), warnings $(cat "$WORK/warnings")"
 
 echo "== verify: the certificate KEDA was given is not from the current CA: setup-prereqs and the restart"
 stale_case
@@ -1699,6 +1734,163 @@ ok '[ "$RC" = 1 ] && [ "$REWIRES" = 0 ] && grep -q "still presents an OLD client
 run 'llmsm_scaler_ensure_wired apps/app-so' STUB_UNWIRED=always LLMSM_SCALER_REWIRE_TRIES=2 STUB_LOGS=FORBIDDEN
 REWIRES="$(grep -c "^patch scaledobject" "$WORK/patches")"
 ok '[ "$RC" = 1 ] && [ "$REWIRES" = 2 ] && grep -q "$RESTART" "$WORK/warnings" && grep -q "kubectl patch scaledobject app-so -n apps --type json" "$WORK/stderr"' "re-wire, log unreadable: exit $RC, $REWIRES re-wire patches (want 2), both fixes not listed: warnings $(cat "$WORK/warnings") stderr $(cat "$WORK/stderr")"
+
+# ---------------------------------------------------------------- a reinstall keeps KEDA reaching the scaler
+# Measured on a GPU cluster: an uninstall removed every scaler Secret, the
+# reinstall minted a new CA, and KEDA's operator, which keeps one connection per
+# scaler address with the CA and client certificate it first read, refused the
+# new serving certificate ("certificate signed by unknown authority") on every
+# call. Both Secrets the cluster held matched each other; KEDA's memory did not.
+# The scaler logged "remote error: tls: bad certificate" at INFO, the controller
+# found no model, and the install had reported success.
+
+# admin_install: the admin and controller phases of a fresh install, with
+# KEDA's operator running.
+admin_install() {
+    reset_store
+    fresh_k
+    echo '{}' >"$STORE/deployment@keda__keda-operator.json"
+    run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent
+}
+# keda_file <key> <out>: a key of KEDA's copy, decoded.
+keda_file() {
+    jq -r --arg k "$1" '.data[$k] // ""' "$STORE/secret@keda__$CTA.json" 2>/dev/null | base64 -d >"$2" 2>/dev/null || : >"$2"
+}
+
+echo "== reinstall with valid certificates: nothing re-issued, nothing written on KEDA's side"
+admin_install
+ok '[ "$RC" = 0 ] && grep -q "secret@keda/$CTA" "$WORK/keda-writes"' "first install: exit $RC, KEDA writes '$(tr '\n' ' ' <"$WORK/keda-writes")': $(cat "$WORK/refusal")"
+cp "$STORE/secret@keda__$CTA.json" "$WORK/keda-copy.before"
+put_deploy openssl
+fresh_k
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent
+ok '[ "$RC" = 0 ] && [ ! -s "$WORK/writes" ] && [ ! -s "$WORK/keda-writes" ]' "reinstall, nothing to renew: exit $RC, wrote '$(tr '\n' ' ' <"$WORK/writes")', KEDA side '$(tr '\n' ' ' <"$WORK/keda-writes")' (want nothing)"
+ok 'cmp -s "$WORK/keda-copy.before" "$STORE/secret@keda__$CTA.json"' "reinstall, nothing to renew: KEDA's copy changed"
+ok 'grep -q -- "--external-scaler-cert-path" "$WORK/k/kustomization.yaml"' "reinstall, nothing to renew: TLS flags not rendered"
+
+echo "== uninstall while ScaledObjects use the TLS address keeps the CA, and only the CA"
+admin_install
+keda_file ca.crt "$WORK/keda-ca.old"
+keda_file tls.crt "$WORK/keda-client.old"
+secret_file "$CA" tls.crt "$WORK/ca.old"
+so_fixture app-so "$SO_TLS_ADDR" "{\"name\":\"$CTA\",\"kind\":\"ClusterTriggerAuthentication\"}"
+run llmsm_scaler_tls_undeploy STUB_CM=absent
+ok '[ -f "$STORE/secret__$CA.json" ] && [ ! -f "$STORE/secret__$SERVING.json" ] && [ ! -f "$STORE/secret__$CLIENT.json" ]' "uninstall, TLS ScaledObjects: CA $([ -f "$STORE/secret__$CA.json" ] && echo kept || echo removed), serving $([ -f "$STORE/secret__$SERVING.json" ] && echo kept || echo removed), client $([ -f "$STORE/secret__$CLIENT.json" ] && echo kept || echo removed) (want kept, removed, removed)"
+ok 'jq -e ".metadata.annotations[\"scaling-manager.llmd.ai/kept-for-keda\"]" "$STORE/secret__$CA.json" >/dev/null 2>&1 && grep -q "Kept Secret $CA in $NS" "$WORK/info" && grep -q "kubectl delete secret $CA -n $NS" "$WORK/info"' "uninstall, TLS ScaledObjects: the kept CA is not annotated, or not said with how to remove it: $(cat "$WORK/info")"
+ok '[ ! -f "$STORE/secret@keda__$CTA.json" ] && [ ! -f "$STORE/clustertriggerauthentications.keda.sh__$CTA.json" ]' "uninstall, admin: KEDA's side not removed"
+
+echo "== reinstall after that uninstall: signed by the kept CA, so KEDA's old connection still works, and no restart is asked for"
+rm -f "$WORK/so.json"
+fresh_k
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent
+secret_file "$CA" tls.crt "$WORK/ca.new"
+secret_file "$SERVING" tls.crt "$WORK/serving.new"
+secret_file "$CLIENT" ca.crt "$WORK/client-ca.new"
+ok '[ "$RC" = 0 ] && cmp -s "$WORK/ca.old" "$WORK/ca.new"' "reinstall: exit $RC, the CA changed (KEDA's pooled connection trusts the old one): $(cat "$WORK/refusal")"
+# What KEDA holds in memory: the CA and client certificate of the first install.
+ok 'openssl verify -CAfile "$WORK/keda-ca.old" "$WORK/serving.new" >/dev/null 2>&1' "reinstall: KEDA's old CA does not verify the new serving certificate: KEDA refuses the scaler (remote error: tls: bad certificate)"
+ok 'openssl verify -CAfile "$WORK/client-ca.new" "$WORK/keda-client.old" >/dev/null 2>&1' "reinstall: the controller's new client CA does not verify KEDA's old client certificate: the scaler refuses KEDA"
+ok 'grep -q "no restart needed" "$WORK/info" && ! grep -q "rollout restart" "$WORK/warnings"' "reinstall over a kept CA: still asks for a KEDA restart, or does not say why none is needed: $(cat "$WORK/info" "$WORK/warnings")"
+
+echo "== uninstall with no ScaledObject on the TLS address removes the CA too"
+admin_install
+run llmsm_scaler_tls_undeploy STUB_CM=absent
+ok '[ ! -f "$STORE/secret__$CA.json" ] && ! grep -q "Kept Secret" "$WORK/info"' "uninstall, no TLS ScaledObject: the CA was kept: $(cat "$WORK/info")"
+
+echo "== a controller-only uninstall keeps the CA: KEDA's side, which stays, chains to it"
+admin_install
+run llmsm_scaler_tls_undeploy STUB_CM=absent LLMSM_APPLY_SCOPE=controller
+ok '[ -f "$STORE/secret__$CA.json" ] && [ ! -f "$STORE/secret__$SERVING.json" ] && [ -f "$STORE/secret@keda__$CTA.json" ]' "controller-only uninstall: CA $([ -f "$STORE/secret__$CA.json" ] && echo kept || echo removed), KEDA copy $([ -f "$STORE/secret@keda__$CTA.json" ] && echo kept || echo removed) (want both kept)"
+
+echo "== cert-manager: the kept CA's Certificate is deleted orphaned, so its Secret is not collected with it"
+admin_install
+so_fixture app-so "$SO_TLS_ADDR" "{\"name\":\"$CTA\",\"kind\":\"ClusterTriggerAuthentication\"}"
+run llmsm_scaler_tls_undeploy STUB_CM=present
+ok 'grep -q "^delete certificates.cert-manager.io,issuers.cert-manager.io -n $NS -l scaling-manager.llmd.ai/scaler-tls --ignore-not-found --cascade=orphan" "$WORK/kubectl.log" && [ -f "$STORE/secret__$CA.json" ]' "cert-manager, CA kept: $(grep '^delete' "$WORK/kubectl.log" | tr '\n' ';')"
+
+echo "== KEDA_RESTART=true: the uninstall restarts KEDA, then removes the kept CA"
+admin_install
+run 'llmsm_scaler_keda_restart_after_undeploy' LLMSM_SCALER_KEDA_RESTART_WANTED=true KEDA_RESTART=true LLMSM_SCALER_CA_KEPT=true
+ok 'grep -q "^rollout restart deployment/keda-operator -n keda" "$WORK/kubectl.log" && grep -q "^delete secret $CA -n $NS" "$WORK/kubectl.log" && [ ! -f "$STORE/secret__$CA.json" ]' "KEDA_RESTART=true with a kept CA: $(grep '^rollout\|^delete' "$WORK/kubectl.log" | tr '\n' ';')"
+admin_install
+run 'llmsm_scaler_keda_restart_after_undeploy' LLMSM_SCALER_KEDA_RESTART_WANTED=true LLMSM_SCALER_CA_KEPT=true
+ok '[ -f "$STORE/secret__$CA.json" ] && grep -q "needs no restart" "$WORK/info"' "no KEDA restart: the kept CA was removed, or the reinstall still promised a restart: $(cat "$WORK/info")"
+
+echo "== a missing CA: every certificate re-issued together, and KEDA's copy rewritten in the same run"
+admin_install
+secret_file "$CA" tls.crt "$WORK/ca.old"
+rm -f "$STORE/secret__$CA.json"
+put_deploy openssl
+fresh_k
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent
+secret_file "$CA" tls.crt "$WORK/ca.new"
+secret_file "$SERVING" tls.crt "$WORK/serving.new"
+secret_file "$CLIENT" tls.crt "$WORK/client.new"
+keda_file ca.crt "$WORK/keda-ca.new"
+keda_file tls.crt "$WORK/keda-client.new"
+ok '[ "$RC" = 0 ] && [ "$(sort "$WORK/writes" | tr "\n" " ")" = "secret/$CA secret/$CLIENT secret/$SERVING " ] && grep -q "secret@keda/$CTA" "$WORK/keda-writes"' "missing CA: exit $RC, wrote '$(sort "$WORK/writes" | tr '\n' ' ')', KEDA side '$(tr '\n' ' ' <"$WORK/keda-writes")'"
+ok '! cmp -s "$WORK/ca.old" "$WORK/ca.new" && cmp -s "$WORK/keda-ca.new" "$WORK/ca.new" && cmp -s "$WORK/keda-client.new" "$WORK/client.new" && openssl verify -CAfile "$WORK/keda-ca.new" "$WORK/serving.new" >/dev/null 2>&1' "missing CA: KEDA's copy does not hold the new CA and client certificate"
+ok 'grep -q "rollout restart deployment/keda-operator -n keda" "$WORK/warnings"' "missing CA: KEDA's copy changed, but no KEDA restart named: $(cat "$WORK/warnings")"
+
+echo "== an expiring CA: every certificate rotated together, and KEDA's copy with them"
+admin_install
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 5 -subj "/CN=llmsm-scaler-ca.$NS" \
+    -keyout "$WORK/short.key" -out "$WORK/short.crt" >/dev/null 2>&1
+jq --arg c "$(base64 <"$WORK/short.crt" | tr -d '\n')" --arg k "$(base64 <"$WORK/short.key" | tr -d '\n')" \
+    '.data["tls.crt"] = $c | .data["tls.key"] = $k | .data["ca.crt"] = $c' "$STORE/secret__$CA.json" >"$WORK/ca.json" \
+    && mv "$WORK/ca.json" "$STORE/secret__$CA.json"
+put_deploy openssl
+fresh_k
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent
+secret_file "$CA" tls.crt "$WORK/ca.new"
+secret_file "$SERVING" tls.crt "$WORK/serving.new"
+secret_file "$CLIENT" tls.crt "$WORK/client.new"
+keda_file ca.crt "$WORK/keda-ca.new"
+ok '[ "$RC" = 0 ] && ! cmp -s "$WORK/short.crt" "$WORK/ca.new" && openssl x509 -in "$WORK/ca.new" -noout -checkend $((300 * 86400)) >/dev/null 2>&1' "expiring CA: exit $RC, not rotated to a full-length CA: $(cat "$WORK/refusal")"
+ok 'openssl verify -CAfile "$WORK/ca.new" "$WORK/serving.new" >/dev/null 2>&1 && openssl verify -CAfile "$WORK/ca.new" "$WORK/client.new" >/dev/null 2>&1 && cmp -s "$WORK/keda-ca.new" "$WORK/ca.new"' "expiring CA: a leaf or KEDA's copy was left on the old CA"
+
+# ---------------------------------------------------------------- verify and the preflight check KEDA's copy against the scaler
+echo "== verify: KEDA's copy matches the scaler: said, not a failure"
+store_tls_controller
+run llmsm_verify_scaler_keda_trust
+ok '[ "$RC" = 0 ] && grep -q "KEDA.s certificates match the scaler" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, matching copy: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")': $(cat "$WORK/refusal")"
+
+echo "== verify: KEDA's copy trusts another CA: a failure, with setup-prereqs and the KEDA restart"
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 30 -subj /CN=another-ca \
+    -keyout "$WORK/other.key" -out "$WORK/other.crt" >/dev/null 2>&1
+jq --arg ca "$(base64 <"$WORK/other.crt" | tr -d '\n')" '.data["ca.crt"] = $ca' "$STORE/secret@keda__$CTA.json" >"$WORK/copy.json" \
+    && mv "$WORK/copy.json" "$STORE/secret@keda__$CTA.json"
+run llmsm_verify_scaler_keda_trust
+ok '[ "$RC" = 1 ] && grep -q "KEDA cannot reach the external scaler" "$WORK/warnings" && grep -q "does not verify the scaler.s serving certificate" "$WORK/warnings" && grep -q "setup-prereqs" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings"' "verify, copy on another CA: exit $RC, warnings '$(cat "$WORK/warnings")'"
+
+echo "== verify: KEDA's copy missing: a failure"
+store_tls_controller
+rm -f "$STORE/secret@keda__$CTA.json"
+run llmsm_verify_scaler_keda_trust
+ok '[ "$RC" = 1 ] && grep -q "does not exist" "$WORK/warnings"' "verify, copy missing: exit $RC, warnings '$(cat "$WORK/warnings")'"
+
+echo "== verify: KEDA's copy unreadable (a tenant): not checked, never ok"
+store_tls_controller
+run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=FORBIDDEN
+ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match" "$WORK/info" && grep -q "Forbidden" "$WORK/info" && ! grep -q "verifies the serving certificate" "$WORK/info"' "verify, copy Forbidden: exit $RC, info '$(cat "$WORK/info")'"
+
+echo "== verify: a plaintext controller is not checked"
+reset_store
+put_deploy plaintext
+run llmsm_verify_scaler_keda_trust
+ok '[ "$RC" = 0 ] && [ ! -s "$WORK/info" ] && [ ! -s "$WORK/warnings" ]' "verify, plaintext: exit $RC, said '$(cat "$WORK/info" "$WORK/warnings")'"
+
+echo "== preflight: a KEDA refused on every call (stale connection) fails the check, with the restart"
+stale_case
+refusal_line 10.128.5.168
+run llmsm_check_scaler_keda
+ok '[ "$RC" = 1 ] && grep -q "still presents an OLD client certificate" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings"' "preflight, stale KEDA connection: exit $RC, warnings '$(cat "$WORK/warnings")'"
+stale_case
+run llmsm_check_scaler_keda
+ok '[ "$RC" = 0 ] && grep -q "refused no handshake from KEDA" "$WORK/info" && grep -q "certificates match the scaler" "$WORK/info"' "preflight, healthy: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")'"
+stale_case
+run llmsm_check_scaler_keda STUB_LOGS=FORBIDDEN STUB_KEDA_SECRETS=FORBIDDEN
+ok '[ "$RC" = 0 ] && grep -q "not checked" "$WORK/info" && grep -q "Could not check" "$WORK/info" && ! grep -q "refused no handshake" "$WORK/info"' "preflight, nothing readable: exit $RC (want 0, said as not checked), info '$(cat "$WORK/info")'"
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

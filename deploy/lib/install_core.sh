@@ -454,6 +454,12 @@ main() {
         # KEDA is as much a prerequisite as the RBAC above: The scaling manager cannot actuate
         # without it, and the install checks it at the same point.
         check_keda_prerequisite
+        # An installed scaler on mutual TLS: KEDA must be able to reach it. A
+        # KEDA holding other certificates is refused on every call, and the
+        # controller then sees no model while every Pod reads Ready.
+        if declare -F llmsm_check_scaler_keda >/dev/null && ! llmsm_check_scaler_keda && [ "$SKIP_CHECKS" != "true" ]; then
+            log_error "KEDA cannot reach the external scaler in $LLMSM_NS (above): nothing scales. Run the fix printed above, or SKIP_CHECKS=true to check the rest anyway."
+        fi
         llmsm_report_prometheus
         # The monitors the admin phase adds are reported as work it will do,
         # not as failures, when the install would run that phase.

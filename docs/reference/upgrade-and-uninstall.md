@@ -1010,25 +1010,34 @@ This is expected and harmless: no ScaledObject uses that connection. KEDA
 keeps one connection per address and closes none until its operator restarts.
 The installer cannot close it without restarting KEDA, so it does not.
 
-**Reinstall in the same namespace: restart KEDA's operator.** After
-`make undeploy-scaling-manager` and a new install in the same namespace, KEDA still holds
-its connection to the same scaler address, with the old client certificate.
-The new CA rejects it, so the HPA stays on `cpu` and the ScaledObject reads
-Ready but not Active. KEDA logs `tls: unknown certificate authority` and
-`got empty metric spec`. The controller logs `refused a TLS handshake` with
+**Reinstall in the same namespace.** After `make undeploy-scaling-manager`,
+KEDA's operator still holds its connection to the same scaler address, with
+the old CA and client certificate, until it restarts. So the uninstall keeps
+the scaler's CA, Secret `scaling-manager-external-scaler-ca`, when
+ScaledObjects used the TLS address, and the reinstall signs its new
+certificates with it: KEDA's old connection keeps working and nothing needs a
+restart ([what it leaves](#what-it-leaves)).
+
+When the CA did change anyway (the namespace was deleted, or the CA was
+removed by hand), KEDA refuses the new serving certificate and the scaler
+refuses KEDA's old client certificate. The HPA stays on `cpu`, the
+ScaledObject reads Ready but not Active, and the controller finds no model
+(`No active Variants found` every cycle). KEDA logs `certificate signed by
+unknown authority` and `got empty metric spec`. The controller logs
+`refused a TLS handshake` with `remote error: tls: bad certificate` or
 `certificate signed by unknown authority`, from KEDA's Pod IP, about once a
-minute. Changing the ScaledObject (`scalingManagerRewire`) does not help. Only a restart
-does:
+minute; after five minutes of that it sets `scalerUnreachable` in
+`scaling-manager-controller-status` and `llmsm_scaler_keda_unreachable` to 1,
+and `LLMSMExternalScalerUnreachable` fires. Changing the ScaledObject
+(`scalingManagerRewire`) does not help. Only a restart does:
 
 ```bash
 kubectl rollout restart deployment/keda-operator -n <KEDA namespace>
 ```
 
-The installer cannot tell a reinstall from a first install: the uninstall
-removed everything it wrote. So `make setup-prereqs` warns on every first
-write of KEDA's side while KEDA runs. `make verify-deployment`, and the
-installer after it moves ScaledObjects, read the controller's log. When they
-find those refusals from a KEDA Pod, they name this cause and the restart.
+`make verify-deployment`, `make check-prereqs`, and the installer after it
+moves ScaledObjects read the controller's log. When they find those refusals
+from a KEDA Pod, they name this cause and the restart, and fail.
 
 - **Split install:** KEDA's side must be in place first. A cluster admin runs
   `make setup-prereqs`; then the tenant runs the command above. A tenant's
@@ -1186,7 +1195,8 @@ make undeploy-scaling-manager NAMESPACE=<namespace> LLMSM_NS=llmsm-<namespace>
 | the namespace `$NS` | it may hold your model servers | `kubectl delete namespace "$NS"` only if nothing else lives there |
 | ScaledObjects you **adopted** (written by you or GitOps, pointed at this scaler) | not the installer's to delete. Their trigger now calls a scaler that is gone, and **a model parked at zero never wakes**: activation only comes from the scaler | see below |
 | Prometheus, KEDA, the EPP | shared; this install may not have created them | `UNDEPLOY_SHARED=true` removes them too, for everything on the cluster |
-| KEDA's connection to the scaler's TLS address, with the old client certificate | KEDA keeps it until its operator restarts. It matters only if you install the scaler in the same namespace again: the HPA then stays on `cpu` until KEDA restarts. The uninstall warns when a ScaledObject used that address, and `make verify-deployment` names it after the reinstall ([details](#external-scaler-tls-on-upgrade)) | (cluster admin) after the reinstall, `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>` |
+| KEDA's connection to the scaler's TLS address, with the old client certificate | KEDA keeps it until its operator restarts. It matters only if you install the scaler in the same namespace again | nothing: the uninstall keeps the CA for it (next row) |
+| Secret `scaling-manager-external-scaler-ca`, the scaler's CA, annotated `scaling-manager.llmd.ai/kept-for-keda` | kept when ScaledObjects used the TLS address (or could not be listed), or when KEDA's side stays (a controller-only uninstall). KEDA's operator still trusts it, so a reinstall in the same namespace signs its new certificates with it and KEDA keeps reaching the scaler with no restart. Without it the reinstall mints a new CA, KEDA refuses every certificate the new install serves, and nothing scales | (cluster admin) restart KEDA's operator first, `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>`, then `kubectl delete secret scaling-manager-external-scaler-ca -n "$NS"`. An uninstall with `KEDA_RESTART=true` does both |
 | the PrometheusRule `controller-manager-alerts` | the uninstall does not render the alerts component | `kubectl delete prometheusrule controller-manager-alerts -n "$NS"` |
 | the dashboard ConfigMap `scaling-manager-operation-dashboard` | shared by every install on the cluster | (cluster admin, if it is in a shared monitoring namespace) `kubectl delete configmap scaling-manager-operation-dashboard -n <dashboard-namespace>` |
 | cluster policy in the policy namespace (`scaling-manager-policy`, or the one a `scaling-manager.llmd.ai/policy-namespace` label names): the ConfigMap, Role `scaling-manager-policy-reader` and this install's RoleBinding `scaling-manager-policy-reader-<suffix>` | the ConfigMap is written by `make enable-physical-limiter`; the Role and RoleBinding by it and by `make setup-prereqs` (for a controller that manages its own namespace, when the policy namespace exists) | (cluster admin) see below |

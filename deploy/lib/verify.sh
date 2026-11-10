@@ -359,6 +359,7 @@ verify_deployment() {
         fi
         llmsm_verify_scaler_networkpolicy
         llmsm_verify_scaler_tls
+        llmsm_verify_scaler_keda_trust || all_good=false
         llmsm_verify_scaler_wiring || all_good=false
     elif [ "$SCALER_BACKEND" = "none" ]; then
         log_info "Scaler backend skipped (SCALER_BACKEND=none) — assuming external metrics API is pre-installed"
@@ -566,6 +567,56 @@ llmsm_verify_scaler_tls() {
     fi
 }
 
+# llmsm_verify_scaler_keda_trust checks, when the controller serves the
+# installer's mutual TLS, that what KEDA was given matches the scaler: the CA in
+# the Secret KEDA's ClusterTriggerAuthentication reads verifies the scaler's
+# serving certificate, and the controller's client CA verifies KEDA's client
+# certificate (llmsm_scaler_keda_trust_state). Returns 1 when they do not, with
+# the fix. Whatever cannot be read (a tenant may not read KEDA's namespace) is
+# said as not checked, and returns 0: never "ok".
+llmsm_verify_scaler_keda_trust() {
+    declare -F llmsm_scaler_keda_trust_state >/dev/null || return 0
+    [ "$(llmsm_scaler_mode_of "$LLMSM_NS")" = tls ] || return 0
+    llmsm_scaler_keda_trust_state
+    case "$LLMSM_SCALER_KEDA_TRUST" in
+        ok)
+            log_success "  KEDA's certificates match the scaler: the CA KEDA trusts verifies the serving certificate, and the controller trusts KEDA's client certificate (ClusterTriggerAuthentication $(llmsm_scaler_keda_auth_name))."
+            return 0 ;;
+        mismatch)
+            log_warning "=================================================================="
+            log_warning "KEDA cannot reach the external scaler: ${LLMSM_SCALER_KEDA_TRUST_WHY}. Every KEDA call is refused, the controller discovers no model, and nothing scales."
+            log_warning "  Fix: a cluster admin runs  $(llmsm_make_cmd setup-prereqs)  (it copies the scaler's current client certificate and CA to KEDA), then restarts KEDA's operator:  $(llmsm_scaler_keda_restart_cmd)"
+            log_warning "=================================================================="
+            return 1 ;;
+        *)
+            log_info "  Could not check that KEDA's certificates match the scaler: ${LLMSM_SCALER_KEDA_TRUST_WHY}. A cluster admin can run this check."
+            return 0 ;;
+    esac
+}
+
+# llmsm_check_scaler_keda is the preflight's (make check-prereqs) look at an
+# installed scaler on mutual TLS: what KEDA was given matches the scaler
+# (llmsm_verify_scaler_keda_trust), and the controller does not log KEDA's Pods
+# being refused (llmsm_scaler_keda_conn_state: a KEDA that kept a connection
+# from before a reinstall). Returns 1 when KEDA cannot reach the scaler, after
+# naming the fix. Nothing installed yet, or plaintext: nothing to check.
+llmsm_check_scaler_keda() {
+    declare -F llmsm_scaler_keda_conn_state >/dev/null || return 0
+    [ "$(llmsm_scaler_mode_of "$LLMSM_NS")" = tls ] || return 0
+    local bad=false
+    llmsm_verify_scaler_keda_trust || bad=true
+    llmsm_scaler_keda_conn_state
+    case "$LLMSM_SCALER_KEDA_CONN" in
+        stale|copy)
+            log_warning "KEDA's calls to the external scaler are refused (the controller log of the last ${LLMSM_SCALER_REFUSAL_SINCE:-5m}):"
+            llmsm_scaler_keda_conn_report || true
+            bad=true ;;
+        none) log_success "  The controller refused no handshake from KEDA's Pods in the last ${LLMSM_SCALER_REFUSAL_SINCE:-5m}." ;;
+        *) log_info "  Whether KEDA's calls are refused is not checked: ${LLMSM_SCALER_KEDA_CONN_WHY}." ;;
+    esac
+    [ "$bad" = false ]
+}
+
 # llmsm_verify_scaler_wiring names every ScaledObject naming this scaler whose
 # HPA KEDA built without the scaler's external metric, or whose
 # status.externalMetricNames lacks it (llmsm_scaler_so_wiring). Such a
@@ -585,10 +636,10 @@ llmsm_verify_scaler_wiring() {
     # re-wire offered.
     llmsm_scaler_keda_conn_state
     # A stale connection after a reinstall: KEDA is shared, so this names the
-    # restart and does not fail the install (llmsm_scaler_keda_stale_act), unless
-    # KEDA_RESTART=true lets it restart KEDA, after which wiring is checked.
+    # restart and fails (llmsm_scaler_keda_stale_act): nothing scales until it
+    # happens. With KEDA_RESTART=true it restarts KEDA, and wiring is checked.
     if [ "$LLMSM_SCALER_KEDA_CONN" = stale ]; then
-        llmsm_scaler_keda_stale_act "$rows" || return 0
+        llmsm_scaler_keda_stale_act "$rows" || return 1
         llmsm_scaler_wait_wired "$rows" "${LLMSM_VERIFY_WIRE_WAIT:-60}"
         return
     fi
@@ -609,7 +660,7 @@ llmsm_verify_scaler_wiring() {
     # case for ScaledObjects created just now.
     llmsm_scaler_keda_conn_state
     if [ "$LLMSM_SCALER_KEDA_CONN" = stale ]; then
-        llmsm_scaler_keda_stale_act "$LLMSM_SCALER_UNWIRED" || return 0
+        llmsm_scaler_keda_stale_act "$LLMSM_SCALER_UNWIRED" || return 1
         llmsm_scaler_wait_wired "$rows" "${LLMSM_VERIFY_WIRE_WAIT:-60}"
         return
     fi
