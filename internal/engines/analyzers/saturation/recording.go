@@ -111,6 +111,7 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchMuRepeatIsUse, SwitchMuUnknownAgeSafe, SwitchMuLatchRestoresSafe,
 // SwitchMuWeighsFleet, SwitchMuYieldCappedAtMeasurement, SwitchMuUnreadAtTarget,
 // SwitchMuMinorityFigureExpires, SwitchMuWeighingBand, SwitchMuLatchReadsSmoothedRatio,
+// SwitchMuRereadTakesLatest,
 // SwitchIdleBand, SwitchK2KeyBucketHeld,
 // SwitchBatchCapDeclared,
 // SwitchBatchCapLearned, SwitchMuKeyBucketHeld, SwitchMuSwapFreeze,
@@ -126,7 +127,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLAggregatedSizes, SwitchPrefillCapacityObserve,
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
 // SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap,
-// SwitchPrefillBoundHeldConfidence and SwitchQueuePricedAsDrain; a name
+// SwitchPrefillBoundHeldConfidence, SwitchQueuePricedAsDrain and
+// SwitchFloorTrustReadsCompletions; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -159,6 +161,7 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		SwitchMuMinorityFigureExpires:    &a.muMinorityExpires,
 		SwitchMuWeighingBand:             &a.muWeighingBand,
 		SwitchMuLatchReadsSmoothedRatio:  &a.muLatchSmoothed,
+		SwitchMuRereadTakesLatest:        &a.muRereadLatest,
 		SwitchIdleBand:                   &a.idleBand,
 		SwitchK2KeyBucketHeld:            &a.k2KeyBucketHeld,
 		SwitchBatchCapDeclared:           &a.batchCapDeclared,
@@ -249,6 +252,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// Issue ev-shindin/llm-scaling-manager#520: queued work priced by drain time before mu, and
 		// while the backlog grows (queue_drain.go).
 		SwitchQueuePricedAsDrain: &a.queuePricedAsDrain,
+		// llm-d-incubation/llm-d-scaling-manager#54: the floor's trust reads
+		// the arrival rate against what the role completes, not against its
+		// resident KV over mu (throughput_floor.go).
+		SwitchFloorTrustReadsCompletions: &a.floorTrustCompleted,
 	}
 }
 

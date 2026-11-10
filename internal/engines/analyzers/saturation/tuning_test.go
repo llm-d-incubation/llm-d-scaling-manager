@@ -126,14 +126,14 @@ func TestTuningIdleKvUsageReachesAnalyze(t *testing.T) {
 }
 
 // analyzerTuning.floorTrust reaches the throughput floor. At lambda 0.8 the
-// arrival half is 0.13 of the resident KV: under the default ramp (0.5-0.8)
-// the floor may not lower demand; with the ramp at 0.05-0.10 it trusts the
-// drain price in full.
+// arrival rate is 0.13 of the 6 req/s the full replica completes: under the
+// default ramp (0.5-0.8) the floor may not lower demand; with the ramp at
+// 0.05-0.10 it trusts the drain price in full.
 func TestTuningFloorTrustReachesTheFloor(t *testing.T) {
 	const resident, charge = 260_123.0, 239_323.0
 	floor := func(cfg *config.ScalingPolicy) float64 {
 		a := NewSaturationAnalyzer(capacity.NewStore())
-		in := makeAnalyzerInput(nil, nil)
+		in := makeAnalyzerInput([]domain.ReplicaMetrics{fullReplicaRow(6)}, nil)
 		in.ArrivalRate = 0.8
 		rcs := []capacity.ReplicaCapacity{{
 			VariantName: "v", PodName: "p", QueueLength: 160, LocalQueueDemand: int64(charge),

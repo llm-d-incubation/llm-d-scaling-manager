@@ -57,7 +57,9 @@ Options:
 
 Environment Variables:
     K8S_VERSION           Kubernetes version to use (default: $DEFAULT_K8S_VERSION)
-    ENABLE_SCALE_TO_ZERO  Enable HPAScaleToZero feature gate (default: true)
+    ENABLE_SCALE_TO_ZERO  Enable the cluster's HPAScaleToZero feature gate (default: true). Not the
+                          installer's ENABLE_SCALE_TO_ZERO, which sets the controller's
+                          LLMSM_SCALE_TO_ZERO and defaults to false
 EOF
 }
 

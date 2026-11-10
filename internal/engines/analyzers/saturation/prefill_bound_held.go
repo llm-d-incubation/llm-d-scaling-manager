@@ -58,13 +58,15 @@ import (
 // turns over, which orders more prefill, not less.
 //
 // The confidence holds only if each minute's sample is an unbiased,
-// roughly independent reading of the rate. In production it is not yet:
-// the within-minute fold keeps a max over one pod's re-reads (ev-shindin/llm-scaling-manager#531), so each
-// sample is biased high, and with four reads a minute at AR(1) noise
-// (phi 0.3) the held figure stood above the true rate on 47 of 50 seeds after
-// an hour and 50 of 50 after a day, at 10 % and at 15 % noise. Until ev-shindin/llm-scaling-manager#531
-// lands, the bound is still high by about that fold's bias (8.8 % at 10 %
-// noise, 13 % at 15 %), though no longer by the running max over minutes.
+// roughly independent reading of the rate. With the within-minute fold's
+// max over one pod's re-reads (SwitchMuRereadTakesLatest off, issue #55) it
+// is not: each sample is biased high, and with four reads a minute at AR(1)
+// noise (phi 0.3) the held figure stood above the true rate on 47 of 50 seeds
+// after an hour and 50 of 50 after a day, at 10 % and at 15 % noise, and the
+// bound was high by about that fold's bias (8.8 % at 10 % noise, 13 % at
+// 15 %, simulated). With the switch on, the constructor's default, a sample
+// is each pod's latest reading taken while it is still saturated, unbiased
+// in that simulation (TestRereadFold_TheBiasAtTheMeasuredNoise).
 //
 // The held figure falls only when the window is evicted, put aside by an
 // engine-argument change, forgotten with the variant (or a flush of the

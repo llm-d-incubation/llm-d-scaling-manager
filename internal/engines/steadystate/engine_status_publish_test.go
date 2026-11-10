@@ -57,3 +57,29 @@ func TestOptimizeCyclePublishesUtilizationShareMode(t *testing.T) {
 		}
 	}
 }
+
+// A cycle with no active model returns before the apply pass, and must still
+// clear resolvedAccelerators: otherwise a fleet scaled to zero keeps naming
+// the accelerator of its last busy cycle, and a controller started with every
+// model at zero never sets the key, so the share check reads it as an older
+// controller.
+func TestOptimizeCycleWithNoActiveModelClearsResolvedAccelerators(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().Build()
+	sources := source.NewSourceRegistry()
+	if err := sources.Register("prometheus", prometheus.NewPrometheusSource(ctx, nil, prometheus.DefaultPrometheusSourceConfig())); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(c, c, c.Scheme(), nil, sources, shadowConfig(t, ""), allocation.NewNoOpLimiter("test"))
+	e.Variants = registry.New(0)
+	e.Status = controllerstatus.New(c, c, "scaling-manager-system")
+	e.Status.SetResolvedAccelerators([]string{"NVIDIA-H100-80GB-HBM3"}) // the last busy cycle
+
+	if err := e.optimize(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("optimize: %v", err)
+	}
+	got, found := e.Status.Data()[controllerstatus.KeyResolvedAccelerators]
+	if !found || got != "" {
+		t.Errorf("after a cycle with no active model resolvedAccelerators = %q (found %v), want present and empty", got, found)
+	}
+}

@@ -16,7 +16,7 @@ on:
   # steps in the repo, and it used to fire on pull_request alone -- so a commit
   # pushed straight to main was never compiled, tested or linted by CI at all.
   # Nothing else covers it: the other push-triggered workflows build the
-  # container image, update docs and run prow automerge.
+  # container image and update docs.
   #
   # Only lint-and-test, docs-check and kustomize-build run here. The e2e jobs are
   # excluded explicitly, at their own `if`, because a post-merge check should not

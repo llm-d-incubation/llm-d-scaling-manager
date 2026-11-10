@@ -1,6 +1,9 @@
 package logging
 
 import (
+	"strings"
+
+	"github.com/go-logr/logr"
 	uberzap "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -15,19 +18,72 @@ const (
 	TRACE   = 5
 )
 
+// LogLevelEnv is the environment variable that names the level the controller
+// logs at: error, warn, info, debug or trace. The shipped Deployment sets it to
+// info, the level --v=2 logs at.
+const LogLevelEnv = "LOG_LEVEL"
+
+// levelNames maps a LOG_LEVEL name to its zap level. info, debug and trace are
+// the levels --v=2, --v=4 and --v=5 log at (logr's V(n) is zap level -n).
+// logr has no warning call -- every line is Info or Error -- so warn and error
+// log the same: only the errors.
+var levelNames = map[string]zapcore.Level{
+	"error":   zapcore.ErrorLevel,
+	"warn":    zapcore.WarnLevel,
+	"warning": zapcore.WarnLevel,
+	"info":    zapcore.Level(-DEFAULT),
+	"debug":   zapcore.Level(-DEBUG),
+	"trace":   zapcore.Level(-TRACE),
+}
+
+// LevelFromName returns the zap level a LOG_LEVEL value names, ignoring case
+// and surrounding space. ok is false for a name it does not know.
+func LevelFromName(name string) (zapcore.Level, bool) {
+	lvl, ok := levelNames[strings.ToLower(strings.TrimSpace(name))]
+	return lvl, ok
+}
+
+// Level resolves the level the controller logs at when --zap-log-level is not
+// given: an explicit --v (verbositySet) wins, then LOG_LEVEL (logLevel), then
+// --v's default (verbosity). A LOG_LEVEL it does not know is ignored, and
+// ignored reports so, for the caller to log once a logger exists.
+func Level(verbosity int, verbositySet bool, logLevel string) (lvl zapcore.Level, ignored bool) {
+	if !verbositySet && strings.TrimSpace(logLevel) != "" {
+		if named, ok := LevelFromName(logLevel); ok {
+			return named, false
+		}
+		ignored = true
+	}
+	// See https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/log/zap#Options.Level
+	return zapcore.Level(int8(-1 * verbosity)), ignored
+}
+
 // InitLogging initializes the controller-runtime logger with zap backend.
-func InitLogging(opts *zap.Options, logVerbosity *int) {
-	// Unless --zap-log-level is explicitly set (via BindFlags), use -v
-	// When BindFlags parses --zap-log-level, it sets opts.Level to a non-nil value.
-	// If opts.Level is still nil, the user didn't set --zap-log-level, so we use -v.
+//
+// The level comes from, in order: --zap-log-level (BindFlags sets opts.Level
+// only when it is given), an explicit --v, the LOG_LEVEL environment variable
+// (logLevel), and --v's default. See Level.
+func InitLogging(opts *zap.Options, verbosity int, verbositySet bool, logLevel string) {
+	ctrl.SetLogger(newLogger(opts, verbosity, verbositySet, logLevel))
+}
+
+// newLogger builds the logger InitLogging installs. It is separate because
+// ctrl.SetLogger takes effect once per process, and the precedence is tested
+// on more than one logger.
+func newLogger(opts *zap.Options, verbosity int, verbositySet bool, logLevel string) logr.Logger {
+	ignored := false
 	if opts.Level == nil {
-		// See https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/log/zap#Options.Level
-		lvl := -1 * (*logVerbosity)
-		opts.Level = uberzap.NewAtomicLevelAt(zapcore.Level(int8(lvl)))
+		var lvl zapcore.Level
+		lvl, ignored = Level(verbosity, verbositySet, logLevel)
+		opts.Level = uberzap.NewAtomicLevelAt(lvl)
 	}
 
 	logger := zap.New(zap.UseFlagOptions(opts), zap.RawZapOpts(uberzap.AddCaller()))
-	ctrl.SetLogger(logger)
+	if ignored {
+		logger.WithName("setup").Info("Ignoring "+LogLevelEnv+": not a level it knows; logging at --v",
+			LogLevelEnv, logLevel, "v", verbosity, "known", "error, warn, info, debug, trace")
+	}
+	return logger
 }
 
 // Sync flushes any buffered log entries.

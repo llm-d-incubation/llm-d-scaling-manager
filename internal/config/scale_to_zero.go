@@ -3,8 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -12,6 +10,11 @@ import (
 
 // Scale-to-zero configuration constants
 const (
+	// DefaultScaleToZeroEnabled is LLMSM_SCALE_TO_ZERO when nothing sets it:
+	// the shipped manager ConfigMap, the installer's ENABLE_SCALE_TO_ZERO on a
+	// first install, and the loader's default all agree on it.
+	DefaultScaleToZeroEnabled = false
+
 	// DefaultScaleToZeroRetentionPeriod is the default time to wait after the last request
 	// before scaling down to zero replicas. This default applies when scale-to-zero is enabled
 	// but no explicit retention period is specified.
@@ -60,9 +63,10 @@ const (
 // so a real environment variable still overrides the file at load time. This only
 // adds the file, which is how the setting is actually delivered.
 //
-// A nil cfg keeps the old environment-only behaviour, for callers that have no
-// loaded configuration to consult (tests, and any path constructed before the
-// config is read).
+// A nil cfg is the built-in default, DefaultScaleToZeroEnabled. It used to read
+// os.Getenv itself, a second reader of the setting that disagreed with the
+// loader on what is true: "1" or "t" enabled the loaded flag and not this one.
+// The loader is now the only reader.
 func ResolveScaleToZeroEnabled(cfg *Config, sat *ScalingPolicy) bool {
 	if sat != nil && sat.ScaleToZero != nil && sat.ScaleToZero.Enabled != nil {
 		return *sat.ScaleToZero.Enabled
@@ -70,7 +74,7 @@ func ResolveScaleToZeroEnabled(cfg *Config, sat *ScalingPolicy) bool {
 	if cfg != nil {
 		return cfg.ScaleToZeroEnabled()
 	}
-	return strings.EqualFold(os.Getenv("LLMSM_SCALE_TO_ZERO"), "true")
+	return DefaultScaleToZeroEnabled
 }
 
 // ResolveScaleToZeroRetention returns how long a model must be idle before it is
