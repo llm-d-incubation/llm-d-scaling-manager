@@ -2003,12 +2003,8 @@ EOF
     # applied so the render below and the policy patch carry it.
     if [ "${LLMSM_APPLY_SCOPE:-all}" != "prereqs" ]; then
         llmsm_live_passive "$LLMSM_NS" || log_error "Cannot read the passive mode this controller runs with now (${LLMSM_LIVE_PASSIVE_ERR:-}), and the apply would reset it and every key of the policy default entry it keeps. Fix the read (the install needs get on ConfigMaps scaling-manager-manager-config and scaling-manager-scaling-policy-config in $LLMSM_NS) and re-run; naming LLMSM_PASSIVE does not skip it."
-        # Scale-to-zero the same way: ENABLE_SCALE_TO_ZERO unset keeps the live
-        # LLMSM_SCALE_TO_ZERO, else the shipped false. Settled here, so the
-        # summary reports what was applied.
-        ENABLE_SCALE_TO_ZERO="$(llmsm_scale_to_zero_want)" || exit 1
-        ENABLE_SCALE_TO_ZERO="${ENABLE_SCALE_TO_ZERO:-false}"
-        export ENABLE_SCALE_TO_ZERO
+        # Scale-to-zero the same way (llmsm_resolve_scale_to_zero).
+        llmsm_resolve_scale_to_zero || exit 1
     fi
     llmsm_render_manager_config_patch "$tmp_overlay" || log_error "Refusing to apply: passive mode or scale-to-zero could not be rendered into scaling-manager-manager-config, and the apply would reset it to the shipped value."
     llmsm_append_prometheus_ca_mount_patch "$tmp_overlay/kustomization.yaml"
@@ -2557,19 +2553,44 @@ llmsm_live_passive() {
     fi
 }
 
-# llmsm_scale_to_zero_want prints the LLMSM_SCALE_TO_ZERO this install writes:
-# ENABLE_SCALE_TO_ZERO when given, else the live value (llmsm_live_passive),
-# else nothing -- the shipped false. ENABLE_SCALE_TO_ZERO must be true or false.
+# llmsm_scale_to_zero_want prints the LLMSM_SCALE_TO_ZERO this install writes,
+# true or false: ENABLE_SCALE_TO_ZERO when given, else the live value
+# (llmsm_live_passive), else nothing -- the shipped false.
+#
+# ENABLE_SCALE_TO_ZERO must be true or false. The live value is written as the
+# controller reads it (viper, strconv.ParseBool): 1, t, T, TRUE, True and true
+# are true; 0, f, F, FALSE, False and false are false. Anything else is refused,
+# naming the live ConfigMap, since the controller reads it as false and the
+# operator meant something else; ENABLE_SCALE_TO_ZERO replaces it.
 #
 # It used to default to true in deploy/install.sh while the controller, the
 # shipped ConfigMap, install-epp.sh and the e2e Makefile all said false, and a
 # re-install that did not name it reset a live true to false through the apply.
 llmsm_scale_to_zero_want() {
     case "${ENABLE_SCALE_TO_ZERO:-}" in
-        ''|true|false) ;;
+        '') ;;
+        true|false) printf '%s' "$ENABLE_SCALE_TO_ZERO"; return 0 ;;
         *) log_error "ENABLE_SCALE_TO_ZERO must be true or false (got: $ENABLE_SCALE_TO_ZERO)"; return 1 ;;
     esac
-    printf '%s' "${ENABLE_SCALE_TO_ZERO:-${LLMSM_LIVE_SCALE_TO_ZERO:-}}"
+    case "${LLMSM_LIVE_SCALE_TO_ZERO:-}" in
+        '') ;;
+        1|t|T|TRUE|True|true) printf true ;;
+        0|f|F|FALSE|False|false) printf false ;;
+        *) log_error "LLMSM_SCALE_TO_ZERO in ConfigMap scaling-manager-manager-config (namespace ${LLMSM_NS:-}) is '$LLMSM_LIVE_SCALE_TO_ZERO', which the controller reads as false. Pass ENABLE_SCALE_TO_ZERO=true or false to replace it."
+           return 1 ;;
+    esac
+}
+
+# llmsm_resolve_scale_to_zero settles ENABLE_SCALE_TO_ZERO for the rest of the
+# install, after llmsm_live_passive: llmsm_scale_to_zero_want, or the shipped
+# false when that is empty (a first install, or a live ConfigMap without the
+# key). The render then writes it, and the summary reports what was applied.
+llmsm_resolve_scale_to_zero() {
+    local want
+    want="$(llmsm_scale_to_zero_want)" || return 1
+    ENABLE_SCALE_TO_ZERO="${want:-false}"
+    LLMSM_SCALE_TO_ZERO_RESOLVED=1
+    export ENABLE_SCALE_TO_ZERO LLMSM_SCALE_TO_ZERO_RESOLVED
 }
 
 # llmsm_passive_want prints the LLMSM_PASSIVE this install writes: the install
