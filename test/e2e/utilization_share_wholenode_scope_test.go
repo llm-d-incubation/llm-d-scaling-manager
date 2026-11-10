@@ -18,8 +18,10 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/test/utils"
 )
 
-// watchNamespaceEnv is the controller's environment variable for the one
-// namespace a namespace-scoped install watches (internal/config/loader.go).
+// watchNamespaceEnv is the controller's environment variable for the
+// namespaces it watches (internal/config/loader.go). The suite's controller is
+// cluster-scoped, so no --watch-namespace flag overrides it; a namespace-scoped
+// install sets the flag from LLMSM_WATCH_NAMESPACE instead.
 const watchNamespaceEnv = "WATCH_NAMESPACE"
 
 // A namespace-scoped controller cannot list nodes, so the utilization-share
