@@ -183,6 +183,17 @@ buckets are read from the frozen file (a prefill knee at or under the lower knee
 a run frozen before the change gets the scope without its spec moving. No falsifier
 stops the run: the gate scores TTFT alone.
 
+**A bound wholly in the mark passes the gate (2026-11-10).** This is a second change
+made after seeing repeat 1's data, and it replaces the strict reading of a void step
+above for that one case. A crossing on a void step is a bound: only the bracket between
+the steps around it is known. When both ends of that bracket's ratio are inside the
+mark, the gate now passes it, because the verdict is the same wherever in the bracket
+the crossing sits, so the gate is not loosened. A bracket across the mark's edge, or
+outside it, still stops the run, and a crossing on the cliff is still not scored.
+Repeat 1 stopped on three such bounds, all inside the mark (`B-onset` on p95, 0.86 to
+0.87; `C` on p90 and p95, 0.85 to 0.88), beside its four missing readings. Repeat 1's
+recorded result stays as it was: the gate failed.
+
 ## Per-pod `Ca²`
 
 The question is whether routing thins bursts: `Ca²` at a pod, against the `Ca²` sent.

@@ -34,7 +34,7 @@ spec_load = importlib.util.spec_from_file_location("staircase_load", os.path.joi
 load = importlib.util.module_from_spec(spec_load)
 spec_load.loader.exec_module(load)
 
-EXPECTED = 188
+EXPECTED = 190
 checks = fails = 0
 
 
@@ -393,11 +393,26 @@ with tempfile.TemporaryDirectory() as run:
     GATE_OUT = io.StringIO()
     ok("an all-void bucket stops the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 1)
     ok("and says why", lib.NO_VALID_CROSSING in GATE_OUT.getvalue(), GATE_OUT.getvalue())
-    # In the mark as a bound, 37 over 35 to 40: only the void step can stop it.
+    # A crossing on a void step is a bound, bracketed by 35 and 40 r/s. 37 predicted is
+    # 0.93 to 1.06 of it, wholly in the mark [0.75, 1.10]: the verdict is the same
+    # wherever in the bracket the crossing sits, so it passes.
     TWO = [dict(ROW, rate=35.0, achieved=35.0), dict(ROW, level=2, rate=40.0, achieved=40.0, client_ttft_p90=0.5, lag_p99=1.0)]
     with open(os.path.join(run, "phases", "B-off-r1", "analysis.jsonl"), "w", encoding="utf8") as f:
         f.writelines(json.dumps(r) + "\n" for r in TWO)
-    ok("a crossing on a void step stops the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, io.StringIO()) == 1)
+    GATE_OUT = io.StringIO()
+    ok("a bound wholly in the mark passes the gate", analyze.gate(run, FROZEN_ONE, GATE_SPEC, 1, GATE_OUT) == 0
+       and "1 bounds wholly in the mark, passed" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+
+    def predicting(rate):
+        return dict(buckets=[dict(BUCKET, targets=[dict(BUCKET["targets"][0], predictedOff=rate, predictedOn=rate)])])
+    # 41 predicted is 1.03 to 1.17: across the mark's top edge.
+    GATE_OUT = io.StringIO()
+    ok("a bound across the mark's edge stops the gate", analyze.gate(run, predicting(41.0), GATE_SPEC, 1, GATE_OUT) == 1
+       and lib.NO_VALID_CROSSING in GATE_OUT.getvalue(), GATE_OUT.getvalue())
+    # 50 predicted is 1.25 to 1.43: wholly outside.
+    GATE_OUT = io.StringIO()
+    ok("a bound outside the mark stops the gate", analyze.gate(run, predicting(50.0), GATE_SPEC, 1, GATE_OUT) == 1
+       and "FAIL, a bound" in GATE_OUT.getvalue(), GATE_OUT.getvalue())
 
     # The cliff at the gate: r1's C-onset shape, scaled to this bucket's 0.2 s target and 37
     # r/s. Its void top step made a bound, and the bound stopped the gate.

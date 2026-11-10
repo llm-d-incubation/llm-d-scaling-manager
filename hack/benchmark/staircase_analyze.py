@@ -455,6 +455,10 @@ def phases_of(run):
     return out, crashed
 
 
+# The verdict of a bound whose whole bracket is in the mark: the gate passes it.
+BOUND_IN = "in the mark, a bound"
+
+
 def fail(verdict):
     return verdict.startswith("FAIL")
 
@@ -495,7 +499,8 @@ def judge(predicted, per_repeat, missing=()):
     elif lib.NO_VALID_CROSSING in verdicts:
         verdict = lib.NO_VALID_CROSSING
     elif all(v.startswith("in the mark") or v == lib.CLIFF_IN for v in verdicts):
-        # A bound outranks the cliff: the gate stops on a bound, and not on the cliff.
+        # A bound outranks the cliff: the gate passes a bound in the mark, and does not
+        # score the cliff.
         verdict = "in the mark, a bound" if bound else lib.CLIFF_IN if cliff else "in the mark"
     else:
         verdict = "no mark, a bound" if bound else "no mark, on the cliff" if cliff else "no mark"
@@ -879,17 +884,22 @@ def gate(run, frozen, spec, repeat, out):
     """Score one repeat of the gate buckets: 0 to go on, 1 to stop. Written beside the report."""
     with open(os.path.join(run, "gate-r%d.md" % repeat), "w", encoding="utf8") as f:
         verdicts = report(run, frozen, spec, None, f, repeats=[repeat], only_gate=True)
-    # A void step can pass no gate: a crossing on one is a bound, not a reading. A crossing
-    # on the cliff stops it unless its whole bracket is in the mark, and passes nothing.
+    # A crossing on a void step is a bound: only its bracket is known. It passes when the
+    # whole bracket is in the mark, since the verdict is then the same wherever in it the
+    # crossing sits; a bracket across the mark's edge, or outside it, stops the run. A
+    # crossing on the cliff stops it unless its whole bracket is in the mark, and passes
+    # nothing.
     bad = {k: v if fail(v) or "missing" in v or "on the cliff" in v else lib.NO_VALID_CROSSING for k, v in verdicts.items()
-           if k[2] == "ttft" and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
-                                  or v == "no mark, on the cliff")}
+           if k[2] == "ttft" and v != BOUND_IN and (fail(v) or "missing" in v or "a bound" in v or v == lib.NO_VALID_CROSSING
+                                                    or v == "no mark, on the cliff")}
     if not verdicts:
         print("gate repeat %d: no gate bucket to score" % repeat, file=out)
         return 1
     cliff = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == lib.CLIFF_IN)
-    print("gate repeat %d: %d readings, %d stop the run%s%s" % (
+    bounds = sum(1 for k, v in verdicts.items() if k[2] == "ttft" and v == BOUND_IN)
+    print("gate repeat %d: %d readings, %d stop the run%s%s%s" % (
         repeat, sum(1 for k in verdicts if k[2] == "ttft"), len(bad),
+        ", %d bounds wholly in the mark, passed" % bounds if bounds else "",
         ", %d on the cliff and in the mark, not scored" % cliff if cliff else "",
         ": " + "; ".join("%s %s p%s %s" % (k[0], k[1], k[3], v) for k, v in sorted(bad.items())) if bad else ""), file=out)
     return 1 if bad else 0

@@ -1950,7 +1950,9 @@ How a reading becomes a crossing:
   restart or engine error in its window. The gate does not stop on a cliff whose whole
   bracket is in the mark, but it does not count it as a pass either. A cliff whose
   bracket crosses or misses the mark stops the gate.
-- **A void step.** A crossing on one is a bound, and the gate stops on it. A step is
+- **A void step.** A crossing on one is a bound: only the bracket between the steps
+  around it is known. The gate passes a bound whose whole bracket is in the mark, and
+  stops on one whose bracket crosses the mark's edge or misses it. A step is
   void when its rows fall short of its seeded schedule by more than one row and 0.1%:
   a load process that died reads low, and would otherwise lower the steps before it.
   A step with no schedule in its log is held to 3 standard deviations of its count of
