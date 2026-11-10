@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/zapr"
@@ -89,5 +91,20 @@ func TestLogLevelInputsReachTheLevel(t *testing.T) {
 			assert.False(t, ignored)
 			assert.Equal(t, zapcore.Level(int8(-tc.want)), lvl)
 		})
+	}
+}
+
+// main() cannot run in a test, so its two calls are held by their text: the
+// inputs must come from the parsed command line and the real environment, and
+// reach InitLogging unchanged. TestLogLevelInputsReachTheLevel covers what the
+// helper does with them.
+func TestMainFeedsLogLevelInputsToInitLogging(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	for _, call := range []string{
+		"verbositySet, logLevel := logLevelInputs(flag.CommandLine, os.Getenv)",
+		"logging.InitLogging(&opts, *loggerVerbosity, verbositySet, logLevel)",
+	} {
+		assert.Equal(t, 1, strings.Count(string(src), call), "main.go must call %q once", call)
 	}
 }
