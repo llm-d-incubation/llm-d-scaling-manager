@@ -861,9 +861,9 @@ not cover a key.
 `D/property_mutants_test.go`, and a test holds it to the mutants. Each
 finding above is in exactly one state:
 
-- **Caught:** 35 findings. For each, a mutant puts the defect back, and its
-  class fails on that mutant. For 27 a mutant runs the production learner
-  (a policy key, rows, or a stub); 8 are caught only by a toy, and the code
+- **Caught:** 38 findings. For each, a mutant puts the defect back, and its
+  class fails on that mutant. For 29 a mutant runs the production learner
+  (a policy key, rows, or a stub); 9 are caught only by a toy, and the code
   table marks them "caught (toy)". "Restart fix stubbed" is caught: its
   mutant stubs the Ready time through the analyzer's `readySince` seam, the
   restart case fails on it, and the per-path counter "joined refusals with a
@@ -3924,7 +3924,9 @@ same either way (55.99 requests at 21:22:34), and in replicas the cap is
 min(q / (mu x T), 1) per replica, which never falls as mu does.
 `TestMuSlowPod_TheFloorTrustIsHowALowerMuLowersDemand` pins the cycle. Whether
 a lower mu should lower the demand charged for a measured queue through the
-trust blend is a question for the floor, not this change; it is filed apart.
+trust blend is a question for the floor, not this change; it is filed apart
+(llm-d-incubation/llm-d-scaling-manager#54, "The floor's trust read against
+completions, as built").
 
 - **The sample weighs the fleet (`mu-sample-weighs-the-fleet`).** No served
   rate refuses a reading. While the readers sit under `siblingMuTolerance` of
@@ -4568,6 +4570,90 @@ the whole queue of 1366, while the drain price caps each replica's queue at
 what it drains in T (937 of it). A request waiting in one engine's queue is
 served by that engine only (`localQueueBacklog`). `e1`, `e1-tuned` and
 `throughput-sweep-restart` price no cycle under need.
+
+Not run on a cluster.
+
+#### The floor's trust read against completions, as built (llm-d-incubation/llm-d-scaling-manager#54)
+
+Behind one replay switch, `saturation.SwitchFloorTrustReadsCompletions`, on
+from the constructor. The trust blend (`flooredDemand`) read lambda x P / mu
+against the resident KV. A lower mu raised that ratio, so more of the queues'
+residency charge was swapped for the floor's drain price, and the same
+measured queue could price lower at a lower mu ("One slow pod, as built").
+
+**No trust that moves with mu can fix it.** As mu grows the floor's tokens
+and the ratio go to zero, so the old trust prices occupancy's figure there,
+queue charge and all. A demand that never rises with mu would then never fall
+under occupancy at any mu, and the swap would be gone. So the trust reads no
+mu now. Three changes:
+
+- **Trust:** `floorTrust` of lambda over what the role completes: per replica
+  the larger of `RequestRate` and `RunningRequests / AvgServiceTime`, summed.
+  A load step reads as before: 0.8 req/s against a full replica completing 6
+  is 0.13. With no completion on record the trust is 0. `floorTrust.lagFraction`
+  and `trustFraction` keep their defaults and now mean a share of the
+  completions.
+- **Drain price at the served rate:** the floor again, with each replica's mu
+  capped at what the role's queued replicas complete (the median, from at
+  least half of them). The old ratio held back trust from a full fleet
+  serving under its learned mu; this prices that fleet at the rate it serves
+  (pd-restart at 12:46:35: 2.89 req/s against a learned 6.22).
+- **A standing queue (`drainStanding`):** where the swap runs on a role the
+  drain price reads, the role is priced at least at the growing region's
+  formula with dB/dt at 0 and the arrivals at least what the role completes,
+  capped at occupancy. A queue that stops growing then costs its arrivals and
+  backlog, not the growth it no longer has: 100, 120, 140, 160, 160 req
+  priced 1.28, 1.56, 1.61, 1.67, 1.44 replicas at mu 6. Main priced it the
+  same once standing. A build that kept occupancy's charge for any standing
+  queue priced it at 1.92, and ttft-saturated's prefill at 10x. Occupancy
+  charges every queued prompt as resident KV, and that is the wrong unit for a
+  queue: priced as resident KV, the queue is charged as many replicas as it
+  holds prompts' worth of KV.
+
+The trust and the prices it blends do not move with mu. The gates around them
+(mayOrder, the hold, the drain regions) read state mu may move. So the claim
+that demand is non-increasing in mu for a fixed measured state is checked by
+sampling, not proved. Two property cases hold it, and stub mutants hold both:
+
+- `monotonicity/floor/lower-mu-never-prices-less` prices one measured state at
+  eight mu from 0.25x to 3x. On main it fails on 19 of 20 seeds.
+- `known-truth/floor/standing-queue-priced-at-drain` has lambda equal to
+  completions and the queue standing a minute. It requires the price to be
+  the drain price at the served rate: (lambda + each queue capped at what its
+  replica drains in 60 s, over 60 s) at that rate, capped at occupancy, and at
+  most 2 % over the uncapped figure. On the build that kept occupancy's charge
+  it fails on 8 of 20 seeds, over the drain price. Two mutants hold it:
+  - a toy-output mutant that cuts the price to what only keeps up with lambda;
+  - dropping the backlog from the served-rate floor and the standing price,
+    which fails on 17 of 20.
+
+Measured on the goldens against main, the switch moves only role and model
+demand:
+
+| golden | role | up | down | range |
+| --- | --- | --- | --- | --- |
+| `pd-restart` | decode | 39 | 3 | x0.775 to x1.607 |
+| `ttft-saturated` | prefill | 13 | 19 | x0.213 to x1.320 |
+| `ttft-staircase-b-off` | decode | 9 | 7 | x0.442 to x2.064 |
+| `ttft-staircase-c-on` | decode | 15 | 3 | x0.609 to x1.305 |
+| `e1`, `e1-tuned` | decode | 4 | 98 | x0.889 to x1.047 |
+| start fixtures | model | 3 | 59 | x0.006 to x1.973 |
+
+Required capacity falls on 85 cycles. On 55 the queue fell over the minute
+before, and on 2 there was none. On 28 it stood or grew inside the noise
+band:
+
+- ttft-saturated's prefill, 12 cycles: a queue of 58 at 3.1 req/s in and out,
+  priced at the served-rate drain price, about 1.2 replicas, where main kept part of
+  occupancy's charge (1.5 to 2.1).
+- The simulator fixtures, 15 cycles: P is 6 tokens, so the residency charge
+  priced a queue of 55 at a thousand replicas.
+- pd-restart 12:46:35: 1008 to 1093 queued. It is priced at 2.99M tokens (8.1
+  replicas) at the served rate, against occupancy's 3.36M (9.1). Lambda read 7.07 against 12.83
+  completed, so the trust is 0.17.
+
+Each is priced at the drain price at the rate served, which is the bound the
+change sets.
 
 Not run on a cluster.
 
