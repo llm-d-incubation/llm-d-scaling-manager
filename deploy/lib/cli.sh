@@ -86,7 +86,7 @@ Environment Variables:
                                within ONE controller's policy. Published to several controllers
                                (make enable-physical-limiter), each enforces the cap on its own,
                                so N controllers permit N x the number.
-  ENABLE_SCALE_TO_ZERO         Allow parking idle models at 0 replicas (default: true)
+  ENABLE_SCALE_TO_ZERO         Allow parking idle models at 0 replicas (default: unset, keep the live value, else false)
   LLMSM_DEFAULT_SO               Create default ScaledObjects for what is already running:
                                false (default) | plan (print and stop) | edit (plan, \$EDITOR, apply) | true (apply all)
   LLMSM_DEFAULT_SO_PLAN          Plan file. If it exists, apply exactly it and skip discovery.

@@ -40,7 +40,7 @@ BLUE=''; GREEN=''; YELLOW=''; RED=''; NC=''
 # shellcheck source=/dev/null
 . "$WORK/infra_scaling_manager.sh"
 
-for fn in llmsm_live_passive llmsm_live_get llmsm_passive_want llmsm_render_manager_config_patch \
+for fn in llmsm_live_passive llmsm_live_get llmsm_passive_want llmsm_scale_to_zero_want llmsm_render_manager_config_patch \
           llmsm_render_policy_keep_patch llmsm_passive_restart_if_stale llmsm_yaml_scalar \
           llmsm_merge_live_default llmsm_warn_optimizer_without_limiters; do
     declare -F "$fn" >/dev/null || { echo "FATAL: $fn is not defined after sourcing the library."; exit 2; }
@@ -398,7 +398,44 @@ check "a merge that fails: refused, no patch" is "$KEEP_RC $(no_patch && echo no
 check "a merge that fails: the error names the step" grep -q '^\[ERROR\] could not merge the live default entry' "$WORK/keep.err"
 unset -f yq
 
-EXPECT_CASES=67
+# 7. Scale-to-zero has one default, false, and a re-install keeps the live
+#    value. deploy/install.sh defaulted ENABLE_SCALE_TO_ZERO to true while the
+#    controller, the shipped ConfigMap, install-epp.sh and the e2e Makefile all
+#    said false; and because the apply re-renders config.yaml from the shipped
+#    file, a re-install with false reset a live true without a word.
+LIVE_READ=ok
+LIVE_POLICY_READ=''
+LIVE_DEFAULT=''
+LIVE_MANAGER_CONFIG='GLOBAL_OPT_INTERVAL: "15s"
+LLMSM_SCALE_TO_ZERO: "true"'
+llmsm_live_passive scaling-manager
+check "scale-to-zero: the live LLMSM_SCALE_TO_ZERO is read" is "$LLMSM_LIVE_SCALE_TO_ZERO" true
+unset ENABLE_SCALE_TO_ZERO LLMSM_PASSIVE PROMETHEUS_URL
+LLMSM_LIVE_PASSIVE=''
+check "scale-to-zero: unset ENABLE_SCALE_TO_ZERO keeps the live true" is "$(llmsm_scale_to_zero_want)" true
+check "scale-to-zero: ENABLE_SCALE_TO_ZERO=false overrides the live true" \
+    is "$(ENABLE_SCALE_TO_ZERO=false llmsm_scale_to_zero_want)" false
+if (ENABLE_SCALE_TO_ZERO=yes llmsm_scale_to_zero_want >/dev/null 2>&1); then
+    fail "scale-to-zero: ENABLE_SCALE_TO_ZERO=yes accepted"
+else
+    ok "scale-to-zero: ENABLE_SCALE_TO_ZERO=yes refused"
+fi
+: > "$OVERLAY/kustomization.yaml"
+rm -f "$OVERLAY/manager-config-patch.yaml"
+llmsm_render_manager_config_patch "$OVERLAY"
+got="$(yq '.data."config.yaml"' "$OVERLAY/manager-config-patch.yaml" 2>/dev/null | yq '.LLMSM_SCALE_TO_ZERO')"
+check "scale-to-zero: the live true is rendered into the apply, with nothing else to render" is "$got" true
+LIVE_MANAGER_CONFIG='GLOBAL_OPT_INTERVAL: "15s"'
+llmsm_live_passive scaling-manager
+check "scale-to-zero: a first install writes nothing over the shipped value" is "$(llmsm_scale_to_zero_want)" ""
+shipped="$(yq '.data."config.yaml"' "$ROOT/config/base/manager/manager-configmap.yaml" | yq '.LLMSM_SCALE_TO_ZERO')"
+ocp="$(yq '.data."config.yaml"' "$ROOT/config/components/openshift/configmap-patch.yaml" | yq '.LLMSM_SCALE_TO_ZERO')"
+check "scale-to-zero: the shipped ConfigMaps say false, as the controller does" is "$shipped $ocp" "false false"
+check "scale-to-zero: install.sh and install-epp.sh give no default but false" is \
+    "$(grep -hE '^ENABLE_SCALE_TO_ZERO=' "$ROOT/deploy/install.sh" "$ROOT/deploy/install-epp.sh" | tr '\n' ' ')" \
+    'ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-} ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-false} '
+
+EXPECT_CASES=75
 echo
 echo "passive keep ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

@@ -67,7 +67,7 @@ from the release notes. See
 | `DEPLOY_ALERTING_RULES` | Install the PrometheusRule alerts | `false` |
 | `LLMSM_FMA_LAUNCHER_METRICS` | Apply a PodMonitor that scrapes FMA launcher pods, which nothing else does — they declare no container ports, so a port-name endpoint generates no target for them. Applied to the **workload** namespace (`LLMSM_WATCH_NS`, else `LLMSM_NS`), and skipped if another PodMonitor already scrapes launchers there. See [FMA launcher pods](operations.md#fma-launcher-pods) | `false` |
 | `DEPLOY_LLMD_NS` | Create an empty llm-d namespace up front, for a demo that wants it before anything is deployed. `deploy/install-epp.sh` creates its own when it deploys EPP, and the scaling manager does not watch namespaces | `false` |
-| `ENABLE_SCALE_TO_ZERO` | Allow a model to be parked at zero replicas, and enable the EPP `flowControl` gate that makes waking it possible | `true` |
+| `ENABLE_SCALE_TO_ZERO` | Allow a model to be parked at zero replicas: written to `LLMSM_SCALE_TO_ZERO` in `scaling-manager-manager-config`, the fleet default for `scaleToZero.enabled`. To `deploy/install-epp.sh` it also enables the EPP `flowControl` gate that makes waking possible. Unset, a re-install keeps the live value. A model still parks only when its ScaledObject's `minReplicaCount` is `0` | unset: keep the live value, else `false` |
 | `LLMSM_PASSIVE` | Run the controller **passive**: it computes, logs and publishes everything and changes no replica count. Written to `LLMSM_PASSIVE` in `scaling-manager-manager-config`, read at start. Unset, a re-install keeps the live value, and keeps `passive` on the scaling-policy `default` entry too, both written into what it applies. A controller that read another value at start is restarted. A scaling-policy entry overrides it per namespace, tier or model ([passive](scaling-policy.md#passive)) | unset: keep the live value, else `false` |
 | `SKIP_CHECKS` | Turn the preflight's refusals (no model servers in the namespace, model servers or EPP not scraped, missing permissions) into warnings: findings are still reported. It does not skip the guard against a second install on the cluster, or the post-install verification | `false` |
 | `SCALER_BACKEND` | `keda` or `none` (use a pre-installed backend) | `keda` |
@@ -94,10 +94,9 @@ from the release notes. See
 | `UNDEPLOY_SHARED` | With `UNDEPLOY=true`, also remove Prometheus, the scaler backend and EPP. **Off by default**: they are shared, and removing them breaks everything else on the cluster that uses them | `false` |
 
 > `make deploy-e2e-infra` passes `ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED)`,
-> whose Makefile default is **`false`** — the opposite of `install.sh`'s. So an
-> e2e deploy has scale-to-zero OFF unless you pass
-> `SCALE_TO_ZERO_ENABLED=true`, while a plain `make deploy-scaling-manager-on-k8s` has it ON.
-> Three e2e suites skip silently when it is off.
+> whose Makefile default is `false`, the same as everywhere else. Pass
+> `SCALE_TO_ZERO_ENABLED=true` to turn it on: three e2e suites skip silently
+> when it is off.
 
 ScaledObjects, HPA stabilization (`spec.advanced.horizontalPodAutoscalerConfig.behavior`) and vLLM ModelService tuning are not controlled by `install.sh`; manage them via `kubectl apply` directly (see the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) for reference manifests).
 

@@ -147,15 +147,12 @@ for every model, on a named tier for a class of models (a trigger picks it with
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |
 | **`scaleToZero.enabled`** | Policy, any entry | inherits `LLMSM_SCALE_TO_ZERO` | Allow this model to be parked at zero. It also needs `minReplicaCount: 0` ([scale to zero](scaling-policy.md#scaletozero)) | live |
-| `LLMSM_SCALE_TO_ZERO`; installer `ENABLE_SCALE_TO_ZERO` | Manager ConfigMap | `false` in the code and the shipped ConfigMap; see the note below | The fleet default for `scaleToZero.enabled` | restart |
+| `LLMSM_SCALE_TO_ZERO`; installer `ENABLE_SCALE_TO_ZERO` | Manager ConfigMap | `false` in the code, the shipped ConfigMap and the installer. A re-install that does not name `ENABLE_SCALE_TO_ZERO` keeps the live value | The fleet default for `scaleToZero.enabled` | restart |
 | `scaleToZero.retentionPeriod` | Policy, any entry | `10m` | Idle time before a model goes to zero | live |
 | `scaleFromZero.requirePrefill` | Policy, any entry | `false` | Under P/D, wake prefill and decode together, never decode alone ([scale from zero](scaling-policy.md#scalefromzero)) | live |
 
-`deploy/install.sh` defaults `ENABLE_SCALE_TO_ZERO` to `true`, so an install
-with `make deploy-scaling-manager` writes `LLMSM_SCALE_TO_ZERO: "true"`.
-`make deploy-e2e-infra` passes `false`. A later run with `false` leaves an
-existing `true` in place. Either way no model reaches zero until its
-ScaledObject's `minReplicaCount` is `0`.
+Whatever the default, no model reaches zero until its ScaledObject's `minReplicaCount`
+is `0`.
 
 ### Seeds the learners replace
 

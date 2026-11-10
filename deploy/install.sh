@@ -95,7 +95,10 @@ LLMSM_IMAGE_PULL_SECRET=${LLMSM_IMAGE_PULL_SECRET:-}
 LLMSM_LOG_LEVEL=${LLMSM_LOG_LEVEL:-}
 # Optional: multi-controller isolation (sets controller_instance on metrics / selectors when non-empty).
 
-ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-true}
+# Scale-to-zero for the fleet (LLMSM_SCALE_TO_ZERO). Unset keeps what the live
+# controller has, and a first install takes the shipped false: the default the
+# controller, the shipped ConfigMap and install-epp.sh all have.
+ENABLE_SCALE_TO_ZERO=${ENABLE_SCALE_TO_ZERO:-}
 
 # Prometheus Configuration
 PROM_CA_CERT_PATH=${PROM_CA_CERT_PATH:-"/tmp/prometheus-ca.crt"}
