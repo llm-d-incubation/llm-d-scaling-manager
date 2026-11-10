@@ -224,8 +224,8 @@ func TestMuSlowPod_TheWeighingHoldsAFallingFleetAndCarriesNoBurst(t *testing.T) 
 	}
 }
 
-// How the weighing moves demand through the floor (analyzer-learner.md, "One
-// slow pod, as built"), pinned on the start-seed-restart-2 golden's cycle at
+// How the weighing moved demand through the floor (analyzer-learner.md, "One
+// slow pod, as built") with SwitchFloorTrustReadsCompletions off, pinned on the start-seed-restart-2 golden's cycle at
 // 21:22:34, the replay's own numbers: occupancy's demand 8193 tokens, of
 // which 48 resident, 2.177 req/s arriving, and the floor's term at mu 0.3506
 // with the weighing on and 0.3657 off. The floor's tokens rise as mu falls
@@ -249,4 +249,15 @@ func TestMuSlowPod_TheFloorTrustIsHowALowerMuLowersDemand(t *testing.T) {
 	require.InDelta(t, 1527.275814274085, off, 0.01)
 	// Without the swap, the same terms floor at occupancy's demand either way.
 	require.Equal(t, measured, tn.flooredDemand(measured, resident, 53.2, lambda*6/0.35, false))
+
+	// That is the trust as it was read before SwitchFloorTrustReadsCompletions
+	// (flooredDemand). On, the trust reads lambda against what the role
+	// completes, which mu does not move, so at any one trust the lower mu
+	// prices at least as much (llm-d-incubation/llm-d-scaling-manager#54).
+	lowMu, highMu := 8.87084602889296*6.0000310445465095, 8.505368067863964*6.011312673169893
+	for _, trust := range []float64{0, 0.25, 0.5, 0.9, 1} {
+		lo := floorBlend(measured, resident, lowMu, lowMu, trust, true)
+		hi := floorBlend(measured, resident, highMu, highMu, trust, true)
+		require.GreaterOrEqual(t, lo, hi, "trust %.2f: the lower mu priced %.2f, the higher %.2f", trust, lo, hi)
+	}
 }

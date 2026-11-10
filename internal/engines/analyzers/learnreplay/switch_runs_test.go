@@ -667,6 +667,40 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
 		"ttft-staircase-c-on/results.csv",
 	},
+
+	// llm-d-incubation/llm-d-scaling-manager#54 (saturation.SwitchFloorTrustReadsCompletions,
+	// throughput_floor.go, queue_drain.go): the floor's trust reads lambda
+	// against what the role completes, not lambda x P / mu against the
+	// resident KV; the swap's drain price is the floor at no more than what
+	// the queued replicas complete; and a standing queue is priced at least at
+	// the growing region's price, capped at occupancy (drainStanding). It
+	// moves role and model demand and nothing else. Down where occupancy
+	// charged a queue as resident KV over its served-rate drain price
+	// (ttft-saturated's prefill, to x0.21; the start fixtures, whose P is 6
+	// tokens), up where the queued replicas serve under mu (pd-restart's
+	// decode, to +61 %). Alone it also moves throughput-sweep-restart; with
+	// SwitchQueuePricedAsDrain on, as all on runs, the drain price holds
+	// those cycles. With SwitchThroughputFloorRaisesVariants on as well, all
+	// on also moves e1's and e1-tuned's variant capacities, which that
+	// switch's row names: an interaction.
+	saturation.SwitchFloorTrustReadsCompletions: {
+		"e1-tuned/results.csv", "e1/results.csv",
+		"pd-restart/composite-results.csv", "pd-restart/composite-roles.csv", "pd-restart/results.csv",
+		"start-restored/composite-results.csv", "start-restored/results.csv",
+		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/results.csv",
+		"start-seed-restart/composite-results.csv", "start-seed-restart/results.csv",
+		"start-seed/composite-results.csv", "start-seed/results.csv",
+		"ttft-saturated/composite-results.csv", "ttft-saturated/composite-roles.csv",
+		"ttft-saturated/results.csv",
+		"throughput-sweep-restart/composite-results.csv", "throughput-sweep-restart/composite-roles.csv",
+		"throughput-sweep-restart/results.csv",
+		"ttft-staircase-b-off/composite-results.csv", "ttft-staircase-b-off/composite-roles.csv",
+		"ttft-staircase-b-off/results.csv",
+		"ttft-staircase-b-on/composite-results.csv", "ttft-staircase-b-on/composite-roles.csv",
+		"ttft-staircase-b-on/results.csv",
+		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/results.csv",
+	},
 })
 
 // learner4b2Seams is learner PR 4b-2's switches, earlier seams now (merged
@@ -1649,6 +1683,10 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	// pd-restart/composite-roles.csv is ev-shindin/llm-scaling-manager#520's too, at the same digest.
 	"pd-restart/composite-roles.csv": "b6629b4b25d4b0d8d20246ec2319ce6e6c596482def6d1fe7634977798918e07",
 	"pd-restart/store-records.csv":   "5f97bd429a7f97b77ea04146f204c2a310c2bd7f8decf32b993db398e99edd46",
+
+	// llm-d-incubation/llm-d-scaling-manager#54's output no earlier switch
+	// names, as main holds it at 17c3970.
+	"ttft-saturated/composite-roles.csv": "b66979a9a955650878efd5c410dbdd4cddc08638e1fd58d310c4bb67d29b78d3",
 })
 
 // The slow tests of this package run in parallel with each other (each

@@ -152,8 +152,9 @@ type AdmissionTuning struct {
 // FloorTrustTuning is the throughput floor's trust ramp
 // (saturation/throughput_floor.go).
 type FloorTrustTuning struct {
-	// LagFraction is the share of the resident KV the arrival rate must
-	// account for before the floor may lower a role's demand at all.
+	// LagFraction is the share of what the role's replicas complete the
+	// arrival rate must account for before the floor may lower a role's
+	// demand at all.
 	LagFraction float64 `yaml:"lagFraction,omitempty"`
 	// TrustFraction is the share at which the floor's drain price is trusted
 	// in full. Between the two the prices are blended.

@@ -173,6 +173,38 @@ the prompt, on `H-16k` above all, means the hop is the wrong name for it. A burs
 at or above the model's says M2's fall was the fleet, and `H-ca2` and `H-ca8` then say
 whether it is any better.
 
+**The ITL slope is judged at the operating point only (2026-11-10).** A bucket whose
+ladder is in shares of its prefill knee, `B-onset` and `C-onset`, which double decode and
+drive the prefill side to its onset and past it, prints its slope as `reported, onset
+phase` and counts toward nothing. This was changed after repeat 1 showed the onset
+phases at 12.8 and 19.3 while the operating-point phases held 6.2 to 8.2: repeat 1's
+result stays recorded as failing, and repeats 2 and on use the scoped check. The onset
+buckets are read from the frozen file (a prefill knee at or under the lower knee), so
+a run frozen before the change gets the scope without its spec moving. No falsifier
+stops the run: the gate scores TTFT alone.
+
+**A bound wholly in the mark passes the gate (2026-11-10).** This is a second change
+made after seeing repeat 1's data, and it replaces the strict reading of a void step
+above for that one case. A crossing on a void step is a bound: only the bracket between
+the steps around it is known. When both ends of that bracket's ratio are inside the
+mark, the gate now passes it, because the verdict is the same wherever in the bracket
+the crossing sits, so the gate is not loosened. A bracket across the mark's edge, or
+outside it, still stops the run, and a crossing on the cliff is still not scored.
+Repeat 1 stopped on three such bounds, all inside the mark (`B-onset` on p95, 0.86 to
+0.87; `C` on p90 and p95, 0.85 to 0.88), beside its four missing readings. Repeat 1's
+recorded result stays as it was: the gate failed. A bracket's ends are the steps whose
+flaws cannot hide the crossing: a low end that is valid or void only upward, a high end
+that is valid or void only downward. With no such high end, or ends past the cliff
+factor apart, no bound passes. Read so, `C` on widens to 0.85 to 0.91 and still passes.
+
+**The run continues because repeat 1 was re-scored under rules written after seeing it.**
+Said plainly: a resume scores repeat 1's data again under both changes above and
+writes a passing `gate-r1` where the first session wrote a failing one. The first
+session's verdict is kept, unchanged, in `prior-1/gate-r1.out` and `prior-1/gate-r1.md`.
+Every report and gate now opens with a line naming both changes, their date and those
+files. The falsifier table pools the repeats, so repeat 1's onset slopes, 12.8 and 19.3,
+show as failing only here and in `prior-1/gate-r1.md`.
+
 ## Per-pod `Ca²`
 
 The question is whether routing thins bursts: `Ca²` at a pod, against the `Ca²` sent.

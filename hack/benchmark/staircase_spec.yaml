@@ -61,7 +61,9 @@ buckets:
 # Set before results. The report says of each whether it held.
 falsifiers:
   # Slope of the decode engine's TTFT on the client's TPOT, per bucket. M2, read by the
-  # report's code: 6.36 to 7.79.
+  # report's code: 6.36 to 7.79. Judged on the operating-point buckets only: one whose
+  # ladder is in shares of its prefill knee (B-onset, C-onset, read from the frozen
+  # file) prints its slope as reported, not judged.
   itlSlope: [5.5, 9.0]
   # The router hop, ms per 1000 prompt tokens, from the buckets' means. M2: about 1.
   hopPerKiloToken: [0.5, 1.5]
