@@ -19,7 +19,8 @@
 
 ## Decisions (2026-11-10)
 
-Taken by the maintainer on review of the first draft. Not open any more.
+Taken by the maintainer on review of the draft. Decisions 1-4 answered open
+questions; 5-8 accept the draft's recommendations. Nothing is open.
 
 1. **`make deploy-scaling-manager` stays a supported user path** after
    v0.11.x, not development-only. There are two supported install paths, both
@@ -34,6 +35,21 @@ Taken by the maintainer on review of the first draft. Not open any more.
    ([Passive, then shadow, then active](#passive-then-shadow-then-active)).
 4. **The namespace is substituted with `sed` on `__NAMESPACE__`.** No render
    tool.
+5. **The namespace and Kueue readers stay narrow** (`resourceNames`), not a
+   cluster-wide `get namespaces`. A controller that manages more namespaces
+   than its own needs each one added; preflight names each missing namespace
+   and prints the `kubectl patch` that adds it.
+6. **The scaler NetworkPolicy ships in the main file**, naming `keda` (KEDA's
+   chart default) in the Kubernetes files and `openshift-keda` in the
+   OpenShift files. Preflight reads KEDA's namespace and FAILs on a mismatch,
+   with the patch.
+7. **The `newTag` pin stays**, with its release-time check. The manifests are
+   pinned by digest, but `git checkout <tag> && make deploy-scaling-manager` is
+   a supported path (decision 1), and the pin is what makes it install that
+   release's image.
+8. **Scale-to-zero is off by default** on both paths. This follows the change
+   that unified the `ENABLE_SCALE_TO_ZERO` default to off everywhere (PR #66);
+   the settings file ships `scaleToZero: "false"`.
 
 ## Summary
 
@@ -201,7 +217,7 @@ cosign verify-blob scaling-manager-namespaced.yaml \
 Because the manifests carry the digest, the release no longer depends on the
 `newTag` pin in `config/base/manager/kustomization.yaml` for operators. The pin
 still matters for `git checkout <tag> && make deploy-scaling-manager`, so it
-stays for now ([open question 3](#open-questions)).
+stays (decision 7).
 
 ## The settings ConfigMap
 
@@ -226,7 +242,7 @@ point: an upgrade never touches it.
 | `kueue` | `"false"` | `LLMSM_QUOTA_KUEUE` | live, but needs `scaling-manager-kueue.yaml` |
 | `kueueBorrow` | `"true"` | `LLMSM_QUOTA_KUEUE_BORROW` | live |
 | `kueueNamespace` | `kueue-system` | `KUEUE_NAMESPACE` | live |
-| `scaleToZero` | the default `fix/config-inconsistencies` settles ([open question 4](#open-questions)) | `ENABLE_SCALE_TO_ZERO` → `LLMSM_SCALE_TO_ZERO` | restart |
+| `scaleToZero` | `"false"` (decision 8) | `ENABLE_SCALE_TO_ZERO` → `LLMSM_SCALE_TO_ZERO` | restart |
 | `watchNamespaces` | empty: the controller's own (namespaced) or all (cluster-wide) | `LLMSM_WATCH_NS` | restart, and each namespace needs `scaling-manager-model-namespace.yaml` |
 | `logVerbosity` | `"2"` | `LLMSM_VERBOSITY` → `--v` | restart in v0.11.0, live later |
 
@@ -279,12 +295,12 @@ the command to fix it; nothing is applied for the operator.
 | **Restart on a passive or Prometheus change** | `passive` becomes live. A Prometheus change sets `restartRequired` (above) |
 | **Write the limiter into the policy** (`LLMSM_LIMITER`, `LLMSM_QUOTAS`, the Kueue keys) | Settings keys, live |
 | **Name ClusterRoles per install** with a hash of the namespace | The name carries the namespace instead (rules above) |
-| **Narrow `resourceNames`** on the Kueue and namespace readers to the managed namespaces | Static: the namespaced file names `__NAMESPACE__` and `scaling-manager-policy`. A controller that manages more namespaces (`watchNamespaces`) needs them added, which `scaling-manager-model-namespace.yaml` cannot do since they are on a ClusterRole. Preflight reports the missing names and prints the patch ([open question 1](#open-questions)) |
+| **Narrow `resourceNames`** on the Kueue and namespace readers to the managed namespaces | Static: the namespaced file names `__NAMESPACE__` and `scaling-manager-policy`. A controller that manages more namespaces (`watchNamespaces`) needs them added, which `scaling-manager-model-namespace.yaml` cannot do since they are on a ClusterRole. Preflight reports the missing names and prints the patch (decision 5) |
 | **Create PodMonitors and EPP ServiceMonitors, copying the selector labels the Prometheus resource wants** | `scaling-manager-model-namespace.yaml` carries the model-server PodMonitor. Preflight reads the Prometheus resource and says which label the monitor needs, and whether the targets are `up`. EPP scraping and EPP `/metrics` authentication belong to the llm-d stack; preflight checks the EPP metrics are present and links the llm-d guide |
 | **Discover the namespace** (the one namespace with model servers) and `LLMSM_WATCH_NS=auto` | Preflight lists namespaces with model servers and whether another controller manages them. The operator names the namespace |
 | **Single-install guard** (no namespaced install beside a cluster-wide one) | Preflight FAILs on an overlap it can see, and says UNKNOWN when it may not list Deployments cluster-wide |
 | **KEDA version branching** (warn outside tested versions; omit `fallback.behavior` from ScaledObjects before KEDA 2.17; re-wire an unwired HPA) | The manifests create no ScaledObject, so there is nothing to branch. Preflight reports the KEDA version, FAILs below the minimum we test, WARNs on an untested one, and says whether `fallback.behavior` exists. The ScaledObject example in the guide uses no `fallback` |
-| **NetworkPolicy naming KEDA's namespace** (detected from the external-metrics APIService) | In the manifest with `keda` ([open question 2](#open-questions)). Preflight reads KEDA's namespace and FAILs when the policy names another, with the patch. With mTLS, only KEDA can call the scaler whatever the policy says |
+| **NetworkPolicy naming KEDA's namespace** (detected from the external-metrics APIService) | In the manifest with `keda`, `openshift-keda` on OpenShift (decision 6). Preflight reads KEDA's namespace and FAILs when the policy names another, with the patch. With mTLS, only KEDA can call the scaler whatever the policy says |
 | **Install Prometheus, KEDA, LWS, Gateway and inference CRDs** | Prerequisites, not part of the install. Preflight checks each. `make` keeps installing them for kind and CI |
 | **Pod-writer grant at `utilization-share activate`** (Role and RoleBinding in each model namespace) | Still granted only at activation (decision 3): `scaling-manager-activate.yaml`, applied per model namespace when going active ([the activation file](#the-activation-file)). The install files never grant `patch` on pods |
 | **Publish cluster policy to a policy namespace** (`make enable-physical-limiter`) | Unchanged in v0.11.0: a cluster-admin `make` target. A manifest form later |
@@ -634,33 +650,8 @@ policy ConfigMap and the ScaledObjects the installer created.
 
 ## Open questions
 
-Each with the proposal's recommendation. The four answered on 2026-11-10 are
-under [Decisions](#decisions-2026-11-10).
-
-1. **Narrow or wide reads.** The namespace and Kueue readers are narrowed by
-   `resourceNames` today. A static file can name only the install's own
-   namespaces. Accept a `kubectl patch` per extra managed namespace, or grant
-   `get namespaces` cluster-wide (labels only, but wider than today)?
-   **Recommended:** keep them narrow; preflight names each missing namespace
-   and prints the patch. Most installs manage only their own namespace.
-2. **The scaler NetworkPolicy's KEDA namespace.** The file must name one
-   (`keda` is KEDA's chart default; today's shipped default is `keda-system`).
-   A wrong name blocks KEDA and scaling stops. Ship it in the main file with a
-   preflight FAIL on mismatch, or as a separate opt-in file?
-   **Recommended:** in the main file, naming `keda`, with the preflight FAIL
-   and its patch. The OpenShift files name `openshift-keda`, as today.
-3. **The `newTag` pin.** With digest-pinned manifests, is the pin in
-   `config/base/manager/kustomization.yaml` and its release-time check still
-   wanted, or only for installs from a checkout?
-   **Recommended:** keep it. `git checkout <tag> && make deploy-scaling-manager`
-   is a supported path (decision 1), and the pin is what makes it install that
-   release's image.
-4. **`scaleToZero` default.** The installer turns scale-to-zero on by default
-   (`ENABLE_SCALE_TO_ZERO=true`); the shipped ConfigMap and a raw `apply -k`
-   leave it off. The settings file must pick one, and both paths must agree.
-   A parallel change (branch `fix/config-inconsistencies`) is unifying the
-   `ENABLE_SCALE_TO_ZERO` default. **Recommended:** the settings file follows
-   whatever default that change settles; this proposal does not pick its own.
+None. All eight were decided on 2026-11-10; see
+[Decisions](#decisions-2026-11-10).
 
 ## Before you rely on this
 
