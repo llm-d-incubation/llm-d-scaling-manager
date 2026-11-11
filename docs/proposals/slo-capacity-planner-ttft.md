@@ -1814,6 +1814,120 @@ at worst in review), but no run has validated it at that spread.
 **Goldens.** No replay golden moves: no committed recording's cycle holds an
 `a`, so S1 stops before it prices a fleet. The CLI's TTFT goldens move.
 
+## Measured: where TTFT goes, and why prefill sizing (S2) is not built yet
+
+The question was whether S2, sizing prefill replicas against a TTFT target,
+could ship as an opt-in. It could only help if a prefill-side term is what
+grows when the target is missed, and if prefill capacity can be learned
+without a prefill queue (there never is one, [above](#as-built-processor-sharing)).
+The second holds. The first does not on a fleet with as many decode as prefill
+pods, so S2 is not built.
+
+**The split.** Second staircase, Qwen3-0.6B, one H200 a pod, 8000-token
+prompts, 200 out, `--max-num-batched-tokens 65536` on prefill, p90 target
+200 ms. Per step, means in ms, from the per-pod vLLM histograms the controller
+recorded (`AvgQueueTime`, `AvgPrefillTime`, `AvgKVTransferTime`, `AvgTTFT`) and
+the router's `llm_d_epp_request_ttft_seconds`. The load generator records no
+pod per request, so the split is of the step's mean, not of its p90. The
+client's mean TTFT is the router's within 1-3 ms at every step, so the gateway
+hop is negligible.
+
+| Fleet, arrivals | req/s | client p90 | router mean | prefill pod TTFT (of it: prefill compute) | decode pod TTFT (of it: KV pull, first token) | rest |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2+2, Poisson | 14.3 | 135 | 110 | 47 (30) | 53 (30, 5) | 9 |
+| 2+2, Poisson | 26.5 | 193 | 141 | 58 (37) | 73 (37, 10) | 10 |
+| 2+2, Poisson, **missed** | 28.3 | 204 | 148 | 60 (39) | 77 (38, 11) | 11 |
+| 2+2, Poisson, **missed** | 35.7 | 254 | 182 | 71 (46) | 100 (44, 18) | 11 |
+| 2+2, bursty (`Ca²` 4) | 14.0 | 159 | 118 | 52 (33) | 57 (32, 6) | 10 |
+| 2+2, bursty, **missed** | 21.3 | 204 | 143 | 64 (41) | 70 (38, 8) | 10 |
+| 2+2, bursty, **missed** | 35.4 | 381 | 242 | 105 (70) | 122 (55, 21) | 15 |
+| 2+4, Poisson, **missed** | 41.2 | 242 | 159 | 80 (53) | 68 (39, 7) | 11 |
+| 2+4, Poisson, **missed** | 61.5 | 574 | 327 | 193 (137) | 117 (64, 14) | 17 |
+
+"Prefill pod TTFT" is the prefill engine's own TTFT: its queue (0 ms at every
+step before overload), the prompt's compute, and 17-25 ms around it on 2+2
+(27-55 ms on 2+4).
+"Decode pod TTFT" is the decode engine's: its queue time, which holds the KV
+pull, and the first token's step. "Rest" is the router's mean less both.
+
+What it says:
+
+- **On 2+2 the decode pod is the larger part and grows faster.** From the
+  first step to the last, the prefill pod adds 23 ms and the decode pod 47 ms
+  (KV pull +15, the decode queue beside the pull +13, the first token +13). At
+  the first step that missed, the decode pod is 52 % of the router's mean and
+  the prefill pod 41 %. The repeat run, and the flow-control-on run of the
+  same load, agree within 4 ms a part at every step.
+- **The same holds at other prompt lengths and fleet sizes**, from the
+  Prometheus split (prefill pod growth vs decode pod growth over each
+  staircase): 3000 tokens +3 vs +31 ms, 16000 tokens +18 vs +54, 3+3 at 8000
+  tokens +38 vs +51. 3+3 missed from 13.2 req/s a pod of each role, 2+2 from
+  14.1.
+- **Prefill dominates only where prefill pods carry more per pod than decode
+  pods**: 2+4 at twice the per-pod rate on prefill. There the prefill pod is
+  the larger part and grows 114 ms against 48.
+- **The KV pull is not a decode-only stage.** Unshared pull work,
+  `S = T/(1 + λT)` with `λ` the decode pod's rate, is 24.4-24.8 ms at every
+  step of 2+2, a clean processor-sharing stage. On 2+4 it rises from 27.7 to
+  32.3 ms with the prefill pods' load, at the same decode per-pod rate as 2+2.
+  The model prices the pull on the decode pods only.
+
+**A queue-free prefill capacity exists.** The same inversion on the prefill
+pod, `S = T/(1 + λT)` with `T` the mean prefill time and `λ` the pod's
+completion rate, reads `S` 24.8-25.3 ms over every Poisson step of 2+2 (7 to
+18 req/s a pod) and 25.4-26.2 ms on 2+4 (21 to 31 req/s a pod): `V_P` 38-40
+req/s a pod, about 310,000 prompt tokens/s, within 5 % across a fourfold load
+range, with the engine queue empty throughout. Bursty arrivals stretch `T`
+more than processor sharing at `Ca²` 1 predicts, so the inversion reads `S`
+27-31 ms there, `V_P` 7-19 % low: the conservative side.
+
+**S2 replayed.** A throwaway build of main (`8affb8c`) supplied that `V_P`
+where P1 refused one, took `a` as the prefill pods' `AvgTTFT` less queue and
+prefill time, and searched the fewest prefill pods whose predicted p90 met
+200 ms, the decode side as priced. Nothing reached the composite; the search
+was printed only.
+
+| Phase | Steps that held (ran 2 prefill) | Steps that missed | Predicted p90 at the fleet that ran, vs the client |
+| --- | --- | --- | --- |
+| 2+2, Poisson, flow control off | ask 1, 2, 2 | step 4 (28.3 req/s, client 204 ms): ask **2**; steps 5-8: ask 3, 3, 4, 5 | 1 % over at step 1, 6-8 % under at steps 2-8 (187 vs 204 at step 4) |
+| 2+2, bursty, flow control on | not priced: `no-decode-side` | not priced | - |
+| same, with that gate bypassed | ask 1 | step 2 (21.3 req/s): ask **2**; steps 3-6: 4 to 7; steps 7-11: no count meets it (`target-below-floor`) on 54-100 % of cycles | 7-11 % under |
+| 2+4, flow control on, gate bypassed | - | steps 1-4: 4, 6, 10, 19 prefill; steps 5-7: no count meets it | 1 % under to 8 % over at steps 1-6 |
+
+Against the bar set for an opt-in (at least one prefill more than ran at every
+step that missed, at most one more where it held, nothing moving with it off):
+it holds where 2+2 held, and fails at the first missed step of each phase
+(asks the 2 that ran), at every bursty step past the sixth (no count meets the
+target, because the decode side alone is over it), and at 2+4's steps 5-7 (no
+count meets it). Where 2+4 does price, it asks 4 to 19 prefill pods: more than
+any measurement supports, because it blames the pull's growth on decode. Bursty
+phases are not priced at all on main without a
+decode line (`no-decode-side`).
+
+**Why it falls short, in order:**
+
+1. On a fleet with as many decode as prefill pods, adding prefill alone buys
+   little: at 2+2's highest step the model's best case, 24 prefill pods,
+   predicts 184 ms against 237 at 2. The decode side would have to grow too,
+   and nothing sizes decode against TTFT either.
+2. The model reads p90 6-11 % under on 2+2 once loaded, so its knee comes
+   one step late. A margin would move it, but tuned on these two phases only.
+3. The pull is priced as sharing the decode pod; on 2+4 it shares with the
+   prefill pods' load as well, so the model blames decode for a prefill cost
+   and asks for many prefill pods to win back a little.
+4. With flow control on, no decode line means no price (`no-decode-side`),
+   which is every flow-control-on phase here.
+
+**What S2 needs before it is built:** a joint search over prefill and decode
+counts, not prefill alone; the pull priced with the prefill pods' load in it;
+the inversion `V_P` as a P1 source, flagged and validated against a staircase
+at another prompt length and arrival burstiness; and a price with flow control
+on and no decode line. Until then the operator advice in
+[the known limitation](../reference/scaling-policy.md#known-limitation-ttft-targets-with-long-prompts)
+stands, with one correction it should carry: on 2+2 and 3+3 the per-pod rate
+that held is a rate for both roles, so a prefill floor alone does not hold the
+target at a higher rate unless decode grows with it.
+
 ## Open questions
 
 1. **Is the per-pod model right above the prefill onset?** *Recommend:* keep it,
