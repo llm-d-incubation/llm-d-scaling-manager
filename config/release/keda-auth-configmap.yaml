@@ -1,0 +1,14 @@
+# The marker: tells the controller, which cannot read KEDA's namespace, that
+# KEDA's side of mutual TLS is in place. Same name and keys the installer
+# writes (deploy/lib/scaler_tls.sh, LLMSM_SCALER_KEDA_MARKER).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-manager-scaler-keda-auth
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/managed-by: llm-d-scaling-manager
+    scaling-manager.llmd.ai/scaler-tls: keda-client
+data:
+  clusterTriggerAuthentication: scaling-manager-external-scaler-__NAMESPACE__
+  secretNamespace: __KEDA_NAMESPACE__

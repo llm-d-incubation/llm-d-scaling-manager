@@ -1,0 +1,19 @@
+# Counting Kueue borrowing reads the Kueue controller's version and liveness,
+# by name, in Kueue's namespace. The grant pl_grant_kueue_controller_read
+# (deploy/lib/physical_limiter.sh) makes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-kueue-controller-reader-__NAMESPACE__
+  namespace: __KUEUE_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["kueue-controller-manager"]
+  verbs: ["get"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  resourceNames: ["c1f6bfd2.kueue.x-k8s.io"]
+  verbs: ["get"]

@@ -1,0 +1,20 @@
+# Grants the Prometheus that scrapes the controller its /metrics
+# (nonResourceURLs, through the metrics-reader ClusterRole the main file
+# ships). The installer binds only an account a trusted source names
+# (PROMETHEUS_SA, the namespace of a PROMETHEUS_URL you passed, or the
+# kube-prometheus-stack it deployed), never a fixed guess; so this file names
+# none until you fill __PROMETHEUS_NAMESPACE__ and __PROMETHEUS_SA__.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scaling-manager-metrics-reader-rolebinding-__NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scaling-manager-metrics-reader-__NAMESPACE__
+subjects:
+- kind: ServiceAccount
+  name: __PROMETHEUS_SA__
+  namespace: __PROMETHEUS_NAMESPACE__

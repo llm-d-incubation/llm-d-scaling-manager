@@ -1,0 +1,54 @@
+# The scaling manager's settings: one flat key per setting, so a change is
+#
+#   kubectl patch configmap scaling-manager-settings -n <namespace> --type merge \
+#     -p '{"data":{"passive":"false"}}'
+#
+# Create it once, with `kubectl create -f`, never `kubectl apply`: a second
+# create fails with AlreadyExists, so an upgrade never resets what you set here.
+# The release manifests do not contain it for the same reason.
+#
+# "live" keys take effect within a cycle; "restart" keys are read when the
+# controller starts (kubectl rollout restart deployment/scaling-manager-controller-manager).
+# See docs/proposals/install-from-release.md, "The settings ConfigMap".
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-manager-settings
+  namespace: __NAMESPACE__
+data:
+  # Prometheus (or Thanos Querier) base URL, https. Required; the preflight
+  # FAILs until it is set. restart.
+  # On OpenShift: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+  prometheusURL: ""
+  # Skip verifying Prometheus's certificate. Leave "false" and create Secret
+  # scaling-manager-prometheus-ca (key ca.crt) instead. restart.
+  prometheusInsecureSkipVerify: "false"
+  # Decide, log and publish, but change no replica count. live.
+  passive: "true"
+  # Utilization share: off, shadow or active. active also needs
+  # scaling-manager-activate.yaml in each model namespace that shares. live.
+  utilizationShare: "off"
+  # Limiter: empty, gpu-inventory, quota, or both comma-separated. live.
+  limiter: ""
+  # Quotas for the quota limiter, e.g. H200=8,A100=4; -1 is no cap. live.
+  quotas: ""
+  # What a quota bounds: namespace. live.
+  quotaScope: "namespace"
+  # Take quotas from Kueue. Needs scaling-manager-kueue.yaml. live.
+  kueue: "false"
+  # Count Kueue cohort borrowing. live.
+  kueueBorrow: "true"
+  # The namespace Kueue runs in. live.
+  kueueNamespace: "kueue-system"
+  # Scale idle models to zero replicas. restart.
+  scaleToZero: "false"
+  # Namespaces to manage, comma-separated. Empty: the controller's own
+  # (namespaced install) or all (cluster-wide). restart. For a namespaced
+  # install each one also needs, from a cluster admin:
+  # scaling-manager-model-namespace.yaml applied in it, and its name added to
+  # the resourceNames of the Namespace reads, which name only the controller's
+  # namespace: ClusterRole scaling-manager-policy-namespace-reader-role-<ns>,
+  # and scaling-manager-kueue-reader-role-<ns> with kueue "true".
+  watchNamespaces: ""
+  # Log verbosity, the controller's --v. restart.
+  logVerbosity: "2"

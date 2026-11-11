@@ -1,6 +1,10 @@
 # Install from the release, not from a checkout
 
-- **Status:** proposed. Nothing here is built.
+- **Status:** in progress. Phase 1 is built: `make release-manifests`
+  (`deploy/release-manifests.sh`), its check, and the release workflow signing
+  and attaching the files. What building it changed in this design is in
+  [Found while building phase 1](#found-while-building-phase-1). The rest is
+  not built.
 - **Problem:** installing takes a checkout, `make`, and about 15,000 lines of
   shell under `deploy/`. A reviewer found the content complete and the
   procedure too complex. An operator should need the image and a short
@@ -65,17 +69,21 @@ curl -fsSLO $URL/scaling-manager-preflight.yaml
 curl -fsSLO $URL/scaling-manager-model-namespace.yaml
 
 # 2. Edit the settings: the Prometheus URL, at least. Passive is the default.
-#    Then put everything in your namespace.
+#    Then put everything in your namespace, and create the settings: the
+#    preflight reads them.
 export NS=<your-namespace>
 for f in scaling-manager-*.yaml; do sed -i "s/__NAMESPACE__/$NS/g" "$f"; done
+kubectl create -f scaling-manager-settings.yaml      # once; never overwritten
 
 # 3. Check. Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
+#    The Job fails on any FAIL; wait for whichever comes first.
 kubectl apply -f scaling-manager-preflight.yaml
-kubectl wait -n $NS --for=condition=complete --timeout=180s job/scaling-manager-preflight
+until kubectl get job scaling-manager-preflight -n $NS \
+    -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
 kubectl logs -n $NS job/scaling-manager-preflight
+kubectl delete clusterrolebinding scaling-manager-preflight-$NS   # the preflight's cluster reads, once read
 
 # 4. Install.
-kubectl create -f scaling-manager-settings.yaml      # once; never overwritten
 kubectl apply  -f scaling-manager-namespaced.yaml
 kubectl apply  -f scaling-manager-model-namespace.yaml
 ```
@@ -152,11 +160,12 @@ Attached to every GitHub Release, rendered by CI from the same overlays the
 | `scaling-manager-settings.yaml` | the settings ConfigMap, with defaults and a comment per key | created once, by the namespace owner |
 | `scaling-manager-preflight.yaml` | the preflight Job, its ServiceAccount and its read-only RBAC | whoever installs; the ClusterRole part needs a cluster admin once |
 | `scaling-manager-model-namespace.yaml` | per model namespace: the model-server PodMonitor, and for a controller that manages it from elsewhere, its Role and RoleBinding there. Placeholders `__NAMESPACE__` (controller) and `__MODEL_NAMESPACE__` | namespace owner of the model namespace |
-| `scaling-manager-activate.yaml` | per model namespace, applied only when utilization share goes active: Role `scaling-manager-pod-writer` (`patch` on pods) and its RoleBinding to the controller ([spelled out below](#the-activation-file)). Placeholders as above | namespace owner of the model namespace |
+| `scaling-manager-activate.yaml` | the only grant of `patch` on pods: Role `scaling-manager-pod-writer` and its RoleBinding to the controller ([spelled out below](#the-activation-file)), applied when utilization share goes active or the warm pool is used, in each namespace where the controller must patch pods (controller namespace, model namespaces). Placeholders as above | owner of that namespace |
 | `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for mTLS. Placeholders `__NAMESPACE__`, `__KEDA_NAMESPACE__` | cluster admin |
 | `scaling-manager-kueue.yaml` | optional: the Kueue read grants (ClusterQueues, cohorts, flavors; the Role in Kueue's namespace) | cluster admin, only with a Kueue-bounded quota |
-| `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | namespace owner |
+| `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | cluster admin (`part=admin`: the stock `admin` role does not grant `monitoring.coreos.com`) |
 | `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap. Not needed: the controller runs on built-in defaults without one | — |
+| `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: the binding that lets the Prometheus scraping the controller read its `/metrics`. Placeholders `__PROMETHEUS_NAMESPACE__`, `__PROMETHEUS_SA__` | cluster admin |
 | `SHA256SUMS`, and a `.sigstore.json` bundle per file | checksums and signatures | — |
 
 Rules every rendered manifest follows. A check in `hack/check-release-manifests.sh`,
@@ -325,15 +334,20 @@ release image and needs nothing else. The release attaches a Job that runs it.
 | check | FAIL when | UNKNOWN when |
 | --- | --- | --- |
 | KEDA | the `scaledobjects.keda.sh` CRD is absent, or the version is below the minimum | KEDA's Deployment cannot be read |
-| KEDA mTLS step | — (WARN when the marker ConfigMap is absent: plaintext) | |
+| KEDA mTLS step | the marker is present and the ClusterTriggerAuthentication is not, or the controller reports KEDA's handshakes refused (`scalerUnreachable`); WARN when the marker is absent (plaintext) | before the install: KEDA's copy of the certificates is a Secret the preflight does not read |
+| Scaler TLS | the chain the scaler serves, read by a handshake, does not verify against the CA the controller publishes (`scalerCACert` in its status) | the controller has not run, or the handshake gets no answer |
+| NetworkPolicy | the scaler policy (or the file's, before it is applied) does not admit KEDA's namespace (decision 6), with the patch or the `sed` | KEDA's namespace cannot be read |
 | Prometheus reachable | `prometheusURL` unset, refused, or its certificate fails against the mounted CA | the Pod cannot be created |
 | Model metrics present | no `vllm:` series for any pod in a managed namespace | the query is denied |
 | PodMonitor port | the PodMonitor names a port no model-server container has, or its targets are not `up` | PodMonitors cannot be read |
 | Prometheus picks the monitor | the Prometheus resource's selectors do not select the PodMonitor | Prometheus resources cannot be read |
-| Permissions | the controller's ServiceAccount lacks a verb the controller needs, by `SubjectAccessReview` per verb and resource | SubjectAccessReview is refused |
+| Permissions | the controller's ServiceAccount lacks a verb the controller needs, by `SubjectAccessReview` per verb and resource | SubjectAccessReview is refused, or the controller is not installed yet |
+| Namespace readers | a `watchNamespaces` namespace is missing from the narrowed readers (decision 5), with the patch per namespace | the ClusterRoles cannot be read |
+| Activation (with `utilizationShare: active`) | the controller may not patch pods in a sharing namespace (decision 3), with the `scaling-manager-activate.yaml` line | the review is refused |
+| OpenShift user monitoring | a checked namespace is labelled `openshift.io/user-monitoring=false`; WARN when the controller's namespace lacks `true` | namespaces cannot be read |
 | Settings | a key does not parse (a bad quota, an unknown mode, `utilizationShare` without a limiter) | |
 | Kueue (when `kueue: "true"`) | the Kueue CRDs are absent | they cannot be read |
-| Overlap | a cluster-wide controller already manages this namespace | Deployments cannot be listed cluster-wide |
+| Overlap | a cluster-wide controller already manages this namespace | Deployments cannot be listed cluster-wide (a namespaced preflight reads the one in `scaling-manager-system` by name) |
 | Accelerator names (with a quota) | — (WARN when a quota key matches no node's accelerator label) | nodes cannot be read |
 
 **Forbidden is not absent.** A refused read is UNKNOWN, with the object and the
@@ -359,13 +373,20 @@ health check to read.
 **What it needs.** Its own ServiceAccount, `scaling-manager-preflight`, never
 the controller's, so a preflight grant never widens the controller:
 
-- a Role in the controller's namespace: get the settings ConfigMap, the
-  Prometheus CA Secret and the TLS marker ConfigMap by name, and create and
-  update `scaling-manager-preflight-result`. The reachability probe runs in the
-  Job's own Pod, so it creates no Pod;
-- a ClusterRole, read-only: `get`/`list` on CRDs, Deployments, PodMonitors,
-  Prometheus resources, nodes, namespaces, Kueue objects; `create` on
-  `subjectaccessreviews` (it answers questions, it grants nothing).
+- a Role in the controller's namespace: get the settings, the TLS marker and
+  the controller status ConfigMaps by name, list pods and PodMonitors there,
+  and create and update `scaling-manager-preflight-result`. It reads no
+  Secret: the Prometheus CA is mounted into the Job, and the scaler's chain is
+  read by a handshake against the CA the controller publishes. The
+  reachability probe runs in the Job's own Pod, so it creates no Pod;
+- a ClusterRole, read-only: `get` by name on CRDs, the external-metrics
+  APIService, the ClusterTriggerAuthentication, KEDA's operator and the
+  cluster-wide controller Deployments, the narrowed reader ClusterRoles;
+  `list` Prometheus resources and nodes; `get` namespaces; `create` on
+  `subjectaccessreviews` (it answers questions, it grants nothing). The
+  cluster-wide file (`scaling-manager-preflight-cluster.yaml`) lists
+  Deployments, pods and PodMonitors in every namespace instead. Delete the
+  binding after the run.
 
 The ClusterRole is the `admin` part of the preflight file. A namespace owner
 without it still gets a useful run: every cluster read shows UNKNOWN, and the
@@ -415,10 +436,13 @@ checks it runs.
 
 ### The activation file
 
-`scaling-manager-activate.yaml` is the one RBAC change going active needs. It
-is the grant `deploy/lib/pod_writer.sh` makes today at
-`make utilization-share-activate`, as a file. Applied in each model namespace
-that shares the budget, after `sed` fills both placeholders:
+`scaling-manager-activate.yaml` is the one RBAC change going active needs, and
+the only grant of `patch` on pods in the release files: the warm pool needs it
+too, in the namespaces it lends pods in. It is the grant
+`deploy/lib/pod_writer.sh` makes today at `make utilization-share-activate`,
+as a file. Applied in each namespace where the controller must patch pods
+(each model namespace that shares the budget, the controller namespace for a
+warm pool there), after `sed` fills both placeholders:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -648,6 +672,72 @@ policy ConfigMap and the ScaledObjects the installer created.
 - The `utilization-share*` guides, the Kueue guide and `install-options.md`
   rewritten on the files.
 
+## Found while building phase 1
+
+Building the render showed where the text above was wrong or incomplete.
+
+- **The overlay's namespaced manager Role carries `patch` on pods**, for the
+  warm pool (`config/components/tenant-installable`), and `make` copies it
+  into each `LLMSM_WATCH_NS` namespace. Copied as is, the model-namespace file
+  would have granted what the activation file grants. Decided 2026-11-11:
+  decision 3 holds, and the release files split it out. Their manager Role,
+  in the controller namespace and in each model namespace, reads pods (get,
+  list, watch) and never patches them; `scaling-manager-activate.yaml` is the
+  only grant of `patch` on pods, applied to turn utilization share active *or*
+  to use the warm pool, in each namespace where the controller must patch
+  pods (the controller namespace, a model namespace, or both). The check
+  fails on `patch` on pods anywhere else. The `make` path keeps the overlay
+  Role, `patch` included, until it renders through the same code (phase 6).
+- **The OpenShift Thanos URL was in `scaling-manager-manager-config`**, which
+  no release file carries. The OpenShift manifests therefore do not carry it;
+  the settings file names it in the comment on the `prometheusURL` key, and the
+  OpenShift guide must set it (or a later release ships an OpenShift settings
+  file).
+- **The controller cannot start from the release files until the settings
+  reader exists (phase 2).** Without the ConfigMap the Deployment's config
+  volume is `optional`, and the kubelet then presents `config.yaml` as an empty
+  directory: today's controller exits with `read /etc/scaling-manager/config.yaml:
+  is a directory` (seen on kind). The reader must treat a missing or directory
+  config file as absent. When `scaling-manager-manager-config` does exist (a
+  migrated install), it is still mounted and read, which is the fallback.
+- **Placeholders beyond `__NAMESPACE__`.** The model-namespace and activation
+  files need `__MODEL_NAMESPACE__`, the KEDA file `__KEDA_NAMESPACE__`, the
+  Kueue file `__KUEUE_NAMESPACE__`. The single `sed` loop in the
+  [Summary](#summary) fills only the first, so the guides need the others.
+- **The Kueue file holds the borrowing read too** (Workloads and LocalQueues
+  in every namespace), since `kueueBorrow` defaults to `"true"`, and the Role
+  in Kueue's namespace. Its ClusterRoles are redundant for a cluster-wide
+  controller, whose manager ClusterRole has the same reads.
+- **No Namespace object costs the OpenShift cluster-wide install a label.**
+  The overlay put `openshift.io/user-monitoring: "true"` on the Namespace it
+  created; the release files create none, so the guide must label it.
+- **The cluster-wide files keep fixed names, and `make` hashes those too.** A
+  cluster-wide install made with `make` has hash-suffixed ClusterRoles, so the
+  migration's step 3 applies to it as well.
+- **The alerts rule is named `controller-manager-alerts`**, unprefixed,
+  because the alerts component is added outside the overlay's `namePrefix`,
+  as the installer adds it.
+- **The base binds the controller's `/metrics` to a fixed account**
+  (`kube-prometheus-stack-prometheus` in `scaling-manager-monitoring`). The
+  installer binds only an account a trusted source names, so the Kubernetes
+  release files ship the metrics-reader ClusterRole without that binding, and
+  `scaling-manager-metrics-reader.yaml` holds it with the account as
+  placeholders. On OpenShift the binding names the install's own
+  `metrics-scraper` account and stays in the main file.
+- **A watched namespace needs more than `scaling-manager-model-namespace.yaml`.**
+  The policy-namespace reader and the Kueue reader name only the controller's
+  namespace (and `scaling-manager-policy`). Phase 2 must make
+  `watchNamespaces` extend them: preflight prints the `kubectl patch` that adds
+  each name, per decision 5. Until then the settings file's comment says so.
+- **The files are a preview until phase 2 lands.** Every file opens with a
+  `PREVIEW:` line and the draft release notes say the same, naming
+  `make deploy-scaling-manager` as the supported install
+  (`PREVIEW_NOTE` in `deploy/release-manifests.sh`; drop it, and its assertion
+  in the check, with phase 2).
+- **A published release's files are never replaced.** A re-run of the release
+  job that renders different files for a published release is refused; with
+  GitHub immutable releases on, a published release refuses uploads anyway.
+
 ## Open questions
 
 None. All eight were decided on 2026-11-10; see
@@ -655,13 +745,14 @@ None. All eight were decided on 2026-11-10; see
 
 ## Before you rely on this
 
-Assumptions the design rests on that have not been tried yet:
+Assumptions the design rests on:
 
 - **`kubectl apply -f <file> -l <selector>` applies only the matching objects
-  of a file.** The admin/controller split of the namespaced file depends on
-  it. Verify it on kind, with the kubectl version the guides name, before the
-  release files are built around it. If it does not hold, the namespaced
-  release ships the two halves as two files instead.
+  of a file.** Verified with kubectl v1.31 on kind (2026-11-11): `-l
+  scaling-manager.llmd.ai/part=admin` created the 25 admin objects of the
+  namespaced file and no Deployment or Service; `part=controller` then
+  created exactly the Deployment and the two Services; a whole-file apply after
+  both changed nothing. The namespaced release stays one file.
 - **The migration keeps names.** It works only if the TLS bootstrap uses
   today's Secret names, and the KEDA step today's ClusterTriggerAuthentication
   name, both of which this proposal requires.

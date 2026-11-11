@@ -73,6 +73,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/passive"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/preflight"
 	prometheusutil "github.com/llm-d-incubation/llm-d-scaling-manager/internal/prometheus"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/registry"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
@@ -274,6 +275,12 @@ const settingsReadTimeout = 60 * time.Second
 
 // nolint:gocyclo
 func main() {
+	// `manager preflight check` runs the install's prerequisite checks and
+	// exits: the release's preflight Job (docs/reference/preflight.md).
+	if len(os.Args) > 1 && os.Args[1] == "preflight" {
+		os.Exit(preflight.Main(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	// Command-line flags
 
 	loggerVerbosity := flag.Int("v", defaultLogVerbosity, "number for the log level verbosity. "+

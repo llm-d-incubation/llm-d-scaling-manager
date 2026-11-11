@@ -3140,6 +3140,47 @@ The `ConfigMapReconciler` watches the `scaling-manager-scaling-policy-config` Co
 Reads are thread-safe (RWMutex) and return defensive copies, so callers cannot
 modify the cache.
 
+## Known limitation: TTFT targets with long prompts
+
+On this release no analyzer sizes prefill replicas against a TTFT target.
+The `slo` analyzer reports TTFT and never changes a replica count, listed or
+not. The saturation analyzer sizes prefill from the KV cache it holds. A long
+prompt fills that cache only briefly, so prefill reads as nearly idle while
+TTFT is already over the target.
+
+What we measured, on a fleet of 2 prefill and 2 decode replicas of a 0.6B
+model (one H200 each, 8000-token prompts, 200-token outputs, vLLM
+`--max-num-batched-tokens 65536` on prefill). Other models and engine
+settings will cross the target at other rates; the pattern is what carries
+over:
+
+- With steady (Poisson) arrivals, p90 TTFT stayed under 200 ms up to 26.7
+  requests/s and missed from 28.5 requests/s. With bursty arrivals it missed
+  from 21.4 requests/s.
+- The prefill engines never had a request waiting. At every rate that missed,
+  the scaling manager asked for 1 prefill replica, so it would have scaled
+  prefill down, not up.
+- More decode did not help: 2 prefill and 4 decode missed at 41 requests/s
+  (p90 242 ms).
+- The TTFT prediction, `llmsm_slo_predicted_ttft_seconds`, was empty on every
+  cycle. `llmsm_slo_ttft_reason` read `no-prefill-capacity` with flow control
+  off and `no-decode-side` with it on.
+- Turning on `enablePrefillThroughputBound` changed no decision below the
+  overload point: it learns only from a prefill pod with requests waiting.
+
+What to do:
+
+- **Set the prefill floor yourself.** Load-test at your prompt length and
+  peak rate, then set `minReplicaCount` on the prefill ScaledObject to the
+  count that meets the target. KEDA holds the floor, and utilization share
+  never takes it. On the fleet above, each prefill replica held the target up
+  to about 13 requests/s with steady arrivals and about 7 with bursty ones.
+- **Watch the target with the router's measurement.** List `slo` with a
+  `ttft` target and alert on `llmsm_slo_attainment_ratio` (the
+  `LLMSMModelSLOAttainmentLow` alert), not on the prediction.
+- **Keep `saturation` in the `analyzers:` list.** A list that holds only `slo`
+  stops the model scaling at all.
+
 ## Troubleshooting
 
 ### ConfigMap Not Found
