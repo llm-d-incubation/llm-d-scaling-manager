@@ -169,6 +169,16 @@ check_dir() {
         else
             [ -z "$n" ] || say "$f grants patch on pods, which only scaling-manager-activate.yaml may: $n"
         fi
+        # Secrets are read by name only: the controller's three scaler TLS
+        # Secrets (scaling-manager-scaler-tls-role). A get, list or watch on
+        # secrets with no resourceNames reads every Secret in reach, service
+        # account tokens included.
+        n="$(q "$f" '.[] | select(.kind == "Role" or .kind == "ClusterRole")
+            | select(any(.rules[]?; ((.resources // []) | (index("secrets") or index("*")))
+                and ((.verbs // []) | (index("get") or index("list") or index("watch") or index("*")))
+                and ((.resourceNames // []) | length) == 0))
+            | .kind + "/" + .metadata.name')"
+        [ -z "$n" ] || say "$f reads Secrets with no resourceNames: $n"
         # The part split. In the main files exactly the installer prereqs
         # phase; elsewhere that, plus every cluster-scoped and every
         # monitoring.coreos.com object (the stock admin role grants neither).
@@ -216,6 +226,20 @@ check_dir() {
         n="$(q "$f" '[.[] | select(.kind == "Deployment") | .spec.template.spec.volumes[]
             | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional] | tojson')"
         [ "$n" = '[true]' ] || say "$f: the scaling-manager-manager-config volume is not optional: $n"
+        # No installer runs to mint the scaler certificates: the controller
+        # provisions them (--external-scaler-tls-bootstrap), never with the
+        # make path's certificate files, under the narrow Role, bound to its
+        # own ServiceAccount.
+        case "$f" in scaling-manager-cluster*) ins=scaling-manager-system ;; *) ins=__NAMESPACE__ ;; esac
+        n="$(q "$f" '[.[] | select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .args[]
+            | select(startswith("--external-scaler-tls-bootstrap") or startswith("--external-scaler-cert-path") or startswith("--external-scaler-client-ca"))] | join(" ")')"
+        [ "$n" = "--external-scaler-tls-bootstrap=true" ] || say "$f: the manager does not provision the scaler TLS itself (scaler TLS flags: '$n')"
+        n="$(q "$f" '[.[] | select(.kind == "Role" and .metadata.name == "scaling-manager-scaler-tls-role") | .rules | map(.resourceNames //= [] | .resourceNames |= sort | .verbs |= sort)] | tojson')"
+        [ "$n" = '[[{"apiGroups":[""],"resources":["secrets"],"resourceNames":["scaling-manager-external-scaler-ca","scaling-manager-external-scaler-client-tls","scaling-manager-external-scaler-tls"],"verbs":["get","update"]},{"apiGroups":[""],"resources":["secrets"],"verbs":["create"],"resourceNames":[]},{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["scaling-manager-scaler-keda-auth"],"verbs":["get"]}]]' ] \
+            || say "$f: the scaler TLS Role grants $n, not get and update on the three scaler Secrets, create on Secrets and get on the KEDA marker"
+        n="$(q "$f" '[.[] | select(.kind == "RoleBinding" and .roleRef.kind == "Role" and .roleRef.name == "scaling-manager-scaler-tls-role")
+            | .subjects[] | .kind + "/" + .namespace + "/" + .name] | join(",")')"
+        [ "$n" = "ServiceAccount/$ins/scaling-manager-controller-manager" ] || say "$f: the scaler TLS Role is bound to '$n', not the controller"
         keda=keda
         case "$f" in *openshift*) keda=openshift-keda ;; esac
         n="$(q "$f" '[.[] | select(.kind == "NetworkPolicy") | .spec.ingress[] | .from[]? | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]] | join(",")')"
@@ -423,6 +447,18 @@ mutate external-subject "ServiceAccount subject" scaling-manager-namespaced.yaml
     '(select(.kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-node-reader-rolebinding-__NAMESPACE__") | .subjects[0].namespace) = "scaling-manager-monitoring"'
 mutate fixed-metrics-subject "binds" scaling-manager-metrics-reader.yaml \
     '(select(.kind == "ClusterRoleBinding") | .subjects[0]) = {"kind": "ServiceAccount", "name": "kube-prometheus-stack-prometheus", "namespace": "scaling-manager-monitoring"}'
+mutate scaler-tls-flag-dropped "provision the scaler TLS itself" scaling-manager-namespaced.yaml \
+    '(select(.kind == "Deployment") | .spec.template.spec.containers[0].args) |= map(select(. != "--external-scaler-tls-bootstrap=true"))'
+mutate scaler-tls-with-files "provision the scaler TLS itself" scaling-manager-cluster.yaml \
+    '(select(.kind == "Deployment") | .spec.template.spec.containers[0].args) += ["--external-scaler-cert-path=/etc/scaling-manager/scaler-tls"]'
+mutate scaler-tls-role-wider "reads Secrets with no resourceNames" scaling-manager-namespaced-openshift.yaml \
+    '(select(.kind == "Role" and .metadata.name == "scaling-manager-scaler-tls-role") | .rules[0]) |= del(.resourceNames)'
+mutate scaler-tls-role-other-name "scaler TLS Role grants" scaling-manager-cluster-openshift.yaml \
+    '(select(.kind == "Role" and .metadata.name == "scaling-manager-scaler-tls-role") | .rules[0].resourceNames[0]) = "epp-metrics-token"'
+mutate scaler-tls-unbound "bound to" scaling-manager-namespaced.yaml \
+    'select((.kind == "RoleBinding" and .metadata.name == "scaling-manager-scaler-tls-rolebinding") | not)'
+mutate secrets-everywhere "reads Secrets with no resourceNames" scaling-manager-kueue.yaml \
+    '(select(.kind == "ClusterRole") | .rules) += [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["list"]}]'
 d="$WORK/m-preview-missing"; rm -rf "$d"; cp -r "$GOOD" "$d"
 sed -i '/^# PREVIEW: /d' "$d/scaling-manager-activate.yaml"
 caught preview-missing "PREVIEW notice" "$d"

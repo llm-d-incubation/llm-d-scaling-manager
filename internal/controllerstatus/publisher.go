@@ -107,6 +107,18 @@
 //	                       so no model is discovered. Says how many were
 //	                       refused, the last reason and the fix; absent
 //	                       otherwise. Mirrors llmsm_scaler_keda_unreachable.
+//	scalerTLS              with --external-scaler-tls-bootstrap (the release
+//	                       files): how the scaler serves, "mutual TLS: ..."
+//	                       with the Secrets, the client identity, the CA's
+//	                       sha256 and the serving certificate's expiry, or
+//	                       "plaintext: <why>". Absent without the flag.
+//	scalerTLSAction        with that flag: what a person must run, steps
+//	                       joined by " | ", each with its command: wire KEDA
+//	                       to certificates the controller minted or issued
+//	                       again, restart the controller once KEDA's side is
+//	                       in place, rotate an expiring CA (the controller
+//	                       never replaces a CA by itself), or fix a Secret it
+//	                       may not write. Absent when there is nothing to do.
 //
 // limiter, limiterWarnings and utilizationShare are recomputed from the applied configuration
 // in the same update that records policyResourceVersion, so they never lag
@@ -206,6 +218,12 @@ const (
 	// scaler: TLS handshakes kept being refused for minutes, no call
 	// served. Absent while one is.
 	KeyScalerUnreachable = "scalerUnreachable"
+	// KeyScalerTLS is how the scaler serves when the controller provisions
+	// its certificates (--external-scaler-tls-bootstrap).
+	KeyScalerTLS = "scalerTLS"
+	// KeyScalerTLSAction is what a person must run about the scaler's
+	// certificates; absent when nothing.
+	KeyScalerTLSAction = "scalerTLSAction"
 )
 
 // PodListDeniedMessage is the KeyPodListDenied value.
@@ -696,6 +714,19 @@ func (p *Publisher) SetScalerUnreachable(unreachable bool, detail string) {
 		} else {
 			delete(d, KeyScalerUnreachable)
 		}
+	})
+}
+
+// SetScalerTLS records how the scaler serves when the controller provisions
+// its certificates, and what a person must run about them ("" removes the
+// action).
+func (p *Publisher) SetScalerTLS(state, action string) {
+	if p == nil {
+		return
+	}
+	p.update(func(d map[string]string) {
+		setOrDelete(d, KeyScalerTLS, state)
+		setOrDelete(d, KeyScalerTLSAction, action)
 	})
 }
 

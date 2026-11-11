@@ -377,6 +377,12 @@ the scaler as KEDA:
 A tenant who can read Secrets in the controller's namespace holds the client
 key and the CA key.
 
+In an install from the release files the controller writes these Secrets
+itself (`scaling-manager-scaler-tls-role`): `get` and `update` on the three by
+name, and `create` on Secrets in its namespace, which Kubernetes cannot narrow
+by name. It reads no other Secret. A `make` install has no such grant: the
+installer writes them.
+
 ## Data handled
 
 Metrics only. The controller reads Prometheus series, EPP and model-server

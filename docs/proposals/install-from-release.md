@@ -3,7 +3,9 @@
 - **Status:** in progress. Phase 1 is built: `make release-manifests`
   (`deploy/release-manifests.sh`), its check, and the release workflow signing
   and attaching the files. What building it changed in this design is in
-  [Found while building phase 1](#found-while-building-phase-1). The rest is
+  [Found while building phase 1](#found-while-building-phase-1). Phase 3, the
+  scaler TLS bootstrap, is built; what it changed is in
+  [Found while building phase 3](#found-while-building-phase-3). The rest is
   not built.
 - **Problem:** installing takes a checkout, `make`, and about 15,000 lines of
   shell under `deploy/`. A reviewer found the content complete and the
@@ -721,6 +723,40 @@ Building the render showed where the text above was wrong or incomplete.
 - **A published release's files are never replaced.** A re-run of the release
   job that renders different files for a published release is refused; with
   GitHub immutable releases on, a published release refuses uploads anyway.
+
+## Found while building phase 3
+
+- **The bootstrap is a flag the release files set,**
+  `--external-scaler-tls-bootstrap`, not something every controller does. A
+  `make` install provisions the certificates from the installer (openssl or
+  cert-manager) and passes the certificate files; the flag refuses those. So
+  the `make` path changes nothing and gets no Secret grant, until phase 6
+  renders it through the same code. The grant is a Role of the release files
+  only, `scaling-manager-scaler-tls-role`.
+- **`create` on Secrets cannot be narrowed by name.** Kubernetes authorizes a
+  create before the object has a name, so the Role grants `create` on any
+  Secret in the controller's namespace, beside `get` and `update` on the three
+  by name. It still reads no other Secret.
+- **A CA Secret that exists is never replaced,** not even an expiring, expired
+  or unreadable one, where the installer re-mints a CA within 30 days of its
+  expiry. KEDA keeps the CA of its first connection until its operator
+  restarts (PR #70), so the controller reports it in `scalerTLSAction` with the
+  command that rotates it, and the operator runs it.
+- **cert-manager's Secrets are left alone.** When any of the three is
+  cert-manager's (its `cert-manager.io/certificate-name` annotation, an owner
+  reference to a Certificate, or the installer's `cert-manager` label value),
+  the controller writes none of them and serves what cert-manager issued. An
+  unlabelled Secret under one of the names is never written either.
+- **The mutual-TLS decision is made once, at start**, from the marker, as the
+  proposal says. The controller verifies clients with the CA it started with:
+  a renewed serving certificate from that CA is served from the next
+  handshake, but one from a new CA is not, and the status asks for a restart.
+- **The controller cannot see whether KEDA was wired.** After it mints a CA or
+  issues KEDA's certificate again, `scalerTLSAction` asks for the copy until a
+  handshake presents the new client certificate.
+- **Secrets the controller writes carry `app.kubernetes.io/part-of`**, so the
+  uninstall by label finds them. Secrets a `make` install wrote do not, and
+  are adopted unchanged; `make undeploy-scaling-manager` removes those.
 
 ## Open questions
 

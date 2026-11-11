@@ -1,0 +1,33 @@
+# The external scaler's certificates, provisioned by the controller itself in
+# an install from the release files (--external-scaler-tls-bootstrap): the CA,
+# the serving certificate and KEDA's client certificate, as three Secrets in
+# the controller's namespace, under the names deploy/lib/scaler_tls.sh uses.
+# get and update are limited to those three by name. create cannot be: the
+# name of an object that does not exist yet is not known to the authorizer.
+# It reads the KEDA marker ConfigMap the release file
+# scaling-manager-keda-auth.yaml writes, by name, to choose mutual TLS.
+# The make install provisions the certificates from the installer and does not
+# carry this Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-scaler-tls-role
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  - scaling-manager-external-scaler-ca
+  - scaling-manager-external-scaler-tls
+  - scaling-manager-external-scaler-client-tls
+  verbs: ["get", "update"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames:
+  - scaling-manager-scaler-keda-auth
+  verbs: ["get"]

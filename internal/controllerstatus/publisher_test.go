@@ -346,6 +346,20 @@ func TestScalerUnreachableIsPublishedWhileItHolds(t *testing.T) {
 	nilP.SetScalerUnreachable(true, "x")
 }
 
+func TestScalerTLSActionIsRemovedWhenNothingIsLeftToDo(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	p.SetScalerTLS("plaintext: no marker", "wire KEDA")
+	if d := p.Data(); d[KeyScalerTLS] != "plaintext: no marker" || d[KeyScalerTLSAction] != "wire KEDA" {
+		t.Errorf("data = %v", d)
+	}
+	p.SetScalerTLS("mutual TLS: ...", "")
+	if got, found := p.Data()[KeyScalerTLSAction]; found || p.Data()[KeyScalerTLS] != "mutual TLS: ..." {
+		t.Errorf("%s = %q with nothing to do, want it absent", KeyScalerTLSAction, got)
+	}
+	var nilP *Publisher
+	nilP.SetScalerTLS("x", "y")
+}
+
 // With a separate policy namespace, policyIgnored comes from the controller's
 // own ConfigMap and the version from the policy namespace's. Recording either
 // must not overwrite the other.

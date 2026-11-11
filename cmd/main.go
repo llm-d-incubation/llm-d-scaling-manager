@@ -311,6 +311,13 @@ func main() {
 			"each matches a client certificate's DNS SAN, URI SAN, or subject Common Name exactly. "+
 			"Empty, the default, accepts any certificate --external-scaler-client-ca signed. "+
 			"Requires --external-scaler-client-ca.")
+	externalScalerTLSBootstrap := flag.Bool("external-scaler-tls-bootstrap", false,
+		"Provision the external scaler's mutual-TLS certificates as Secrets in the controller's namespace "+
+			"(scaling-manager-external-scaler-ca, -tls, -client-tls): adopt valid ones, issue missing or expiring "+
+			"leaves from the CA, mint a CA only when none exists, never replace one. Serve mutual TLS when KEDA's "+
+			"side is in place at start (ConfigMap scaling-manager-scaler-keda-auth), plaintext otherwise. "+
+			"The release files set it; make deploy-scaling-manager provisions the certificates itself and passes "+
+			"--external-scaler-cert-path instead, which this flag refuses.")
 
 	// The warm pool is OFF unless a namespace is named, because it holds GPUs
 	// continuously: that is a cost decision an operator makes, never a default.
@@ -1081,10 +1088,17 @@ func main() {
 		ClientCASet:  flag.CommandLine.Changed("external-scaler-client-ca"),
 		ClientSAN:    *externalScalerClientSAN,
 		ClientSANSet: flag.CommandLine.Changed("external-scaler-client-san"),
+		Bootstrap:    *externalScalerTLSBootstrap,
 	})
 	if err != nil {
 		setupLog.Error(err, "invalid external scaler TLS flags")
 		os.Exit(1)
+	}
+	if *externalScalerTLSBootstrap {
+		if err := setupScalerTLSBootstrap(signalCtx, mgr, externalScaler, controllerStatus, allowedScalerClients[0]); err != nil {
+			setupLog.Error(err, "unable to set up the external scaler TLS bootstrap")
+			os.Exit(1)
+		}
 	}
 	if *externalScalerCertPath != "" {
 		scalerCertWatcher, err := certwatcher.New(

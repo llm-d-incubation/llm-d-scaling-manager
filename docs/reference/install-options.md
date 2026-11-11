@@ -828,6 +828,25 @@ The serving certificate must name the host in `scalerAddress`.
 
 </details>
 
+**From the release files** (a preview until the release files install on
+their own): no installer runs, so the controller provisions the three Secrets
+itself (`--external-scaler-tls-bootstrap`, which the release Deployment sets).
+It adopts the Secrets a `make` install left, issues a missing or expiring
+leaf from the CA, mints a CA only when there is none, and never replaces an
+existing CA. It leaves cert-manager's Secrets, and any Secret without the
+`scaling-manager.llmd.ai/scaler-tls` label, alone. KEDA's side stays a cluster
+admin's step: copy the client Secret into KEDA's namespace, apply
+`scaling-manager-keda-auth.yaml`, and restart the controller, which serves
+mutual TLS only when that file's marker ConfigMap exists at start. The
+controller prints the exact commands, namespaces filled in, in `scalerTLSAction`
+of `scaling-manager-controller-status`
+([status keys](operations.md#what-the-controller-is-running-with)):
+
+```bash
+kubectl get configmap scaling-manager-controller-status -n <namespace> \
+  -o jsonpath='{.data.scalerTLS}{"\n"}{.data.scalerTLSAction}{"\n"}'
+```
+
 What the NetworkPolicy does not cover:
 
 - It is enforced only by a CNI that implements NetworkPolicy. Without one, `:9090`

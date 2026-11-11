@@ -277,6 +277,26 @@ var _ = Describe("Server over TLS", func() {
 			_, err = scaler.CheckTLSFlags(scaler.TLSFlags{CertPath: "/etc/scaling-manager/scaler-tls", ClientSAN: "x", ClientSANSet: true})
 			Expect(err).To(MatchError(ContainSubstring("needs --external-scaler-client-ca")))
 		})
+
+		It("with the bootstrap, pins the default identity, or the one given", func() {
+			allowed, err := scaler.CheckTLSFlags(scaler.TLSFlags{Bootstrap: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(Equal([]string{scaler.DefaultClientIdentity}))
+			allowed, err = scaler.CheckTLSFlags(scaler.TLSFlags{Bootstrap: true, ClientSAN: " keda.example ", ClientSANSet: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(allowed).To(Equal([]string{"keda.example"}))
+		})
+
+		It("with the bootstrap, refuses the certificate files and anything but one DNS name", func() {
+			_, err := scaler.CheckTLSFlags(scaler.TLSFlags{Bootstrap: true, CertPath: "/etc/scaling-manager/scaler-tls"})
+			Expect(err).To(MatchError(ContainSubstring("drop --external-scaler-cert-path")))
+			_, err = scaler.CheckTLSFlags(scaler.TLSFlags{Bootstrap: true, ClientCA: "/ca.crt", ClientCASet: true})
+			Expect(err).To(MatchError(ContainSubstring("drop --external-scaler-cert-path")))
+			for _, san := range []string{"", "a,b", "Keda", "spiffe://x/y"} {
+				_, err = scaler.CheckTLSFlags(scaler.TLSFlags{Bootstrap: true, ClientSAN: san, ClientSANSet: true})
+				Expect(err).To(HaveOccurred(), "client SAN %q", san)
+			}
+		})
 	})
 
 	It("serves a rotated certificate on the next handshake", func() {
