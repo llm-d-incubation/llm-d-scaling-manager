@@ -76,6 +76,7 @@ import (
 	prometheusutil "github.com/llm-d-incubation/llm-d-scaling-manager/internal/prometheus"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/registry"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scalertls"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils/crd"
 	poolutil "github.com/llm-d-incubation/llm-d-scaling-manager/internal/utils/pool"
@@ -1102,7 +1103,7 @@ func main() {
 		os.Exit(1)
 	}
 	if *externalScalerTLSBootstrap {
-		if err := setupScalerTLSBootstrap(signalCtx, mgr, externalScaler, controllerStatus, allowedScalerClients[0]); err != nil {
+		if err := scalertls.Setup(signalCtx, mgr, externalScaler, controllerStatus, allowedScalerClients[0]); err != nil {
 			setupLog.Error(err, "unable to set up the external scaler TLS bootstrap")
 			os.Exit(1)
 		}

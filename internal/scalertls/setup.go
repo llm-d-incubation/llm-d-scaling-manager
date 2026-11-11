@@ -1,4 +1,4 @@
-package main
+package scalertls
 
 import (
 	"context"
@@ -10,21 +10,23 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
-	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scalertls"
 )
 
-// scalerTLSPrepareTimeout bounds the first pass of the scaler TLS bootstrap at
-// start. Past it, a marker or Secrets still unknown stop the controller
-// (Bootstrap.Prepare fails closed); the kubelet restarts it.
-const scalerTLSPrepareTimeout = 30 * time.Second
+// PrepareTimeout bounds the first pass of the bootstrap at start. Past it, a
+// marker or Secrets still unknown stop the controller (Bootstrap.Prepare fails
+// closed); the kubelet restarts it.
+const PrepareTimeout = 30 * time.Second
 
-// setupScalerTLSBootstrap provisions the external scaler's certificates
+// Setup provisions the external scaler's certificates
 // (--external-scaler-tls-bootstrap), sets srv's TLS when the scaler is to serve
-// mutual TLS, and adds the periodic pass to mgr. It reports through status.
-func setupScalerTLSBootstrap(ctx context.Context, mgr manager.Manager, srv *scaler.Server,
-	status scalertls.StatusSink, clientSAN string) error {
-	boot := &scalertls.Bootstrap{
-		Ensurer: scalertls.Ensurer{
+// mutual TLS, and adds the periodic pass to mgr. It reports through status. An
+// error means the controller must not start.
+//
+// It lives here and not in cmd: make build and the Dockerfile compile
+// cmd/main.go alone, so a helper in another file of package main is not built.
+func Setup(ctx context.Context, mgr manager.Manager, srv *scaler.Server, status StatusSink, clientSAN string) error {
+	boot := &Bootstrap{
+		Ensurer: Ensurer{
 			Reader:    mgr.GetAPIReader(),
 			Writer:    mgr.GetClient(),
 			Namespace: config.SystemNamespace(),
@@ -33,7 +35,7 @@ func setupScalerTLSBootstrap(ctx context.Context, mgr manager.Manager, srv *scal
 		Status: status,
 		Log:    ctrl.Log.WithName("scaler-tls"),
 	}
-	prepareCtx, cancel := context.WithTimeout(ctx, scalerTLSPrepareTimeout)
+	prepareCtx, cancel := context.WithTimeout(ctx, PrepareTimeout)
 	defer cancel()
 	setupLog := ctrl.Log.WithName("setup")
 	ca, err := boot.Prepare(prepareCtx)
@@ -45,20 +47,20 @@ func setupScalerTLSBootstrap(ctx context.Context, mgr manager.Manager, srv *scal
 		if err != nil {
 			return err
 		}
-		cfg.VerifyConnection = observed(cfg.VerifyConnection, boot.ObserveHandshake)
+		cfg.VerifyConnection = Observed(cfg.VerifyConnection, boot.ObserveHandshake)
 		srv.TLSConfig = cfg
 		setupLog.Info("KEDA external scaler serves mutual TLS with the certificates the controller provisions",
-			"caSecret", scalertls.CASecretName, "caSha256", scalertls.Fingerprint(ca), "allowedClient", clientSAN)
+			"caSecret", CASecretName, "caSha256", Fingerprint(ca), "allowedClient", clientSAN)
 	} else {
 		setupLog.Info("WARNING: the KEDA external scaler serves plaintext; scalerTLS and scalerTLSAction in "+
 			"ConfigMap scaling-manager-controller-status say why and what to run",
-			"marker", scalertls.MarkerConfigMapName)
+			"marker", MarkerConfigMapName)
 	}
 	return mgr.Add(boot)
 }
 
-// observed runs verify, then, for a connection it accepted, observe.
-func observed(verify func(tls.ConnectionState) error, observe func(tls.ConnectionState)) func(tls.ConnectionState) error {
+// Observed runs verify, then, for a connection it accepted, observe.
+func Observed(verify func(tls.ConnectionState) error, observe func(tls.ConnectionState)) func(tls.ConnectionState) error {
 	return func(cs tls.ConnectionState) error {
 		if verify != nil {
 			if err := verify(cs); err != nil {
