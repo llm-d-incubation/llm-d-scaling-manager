@@ -268,6 +268,10 @@ func logLevelInputs(fs *flag.FlagSet, getenv func(string) string) (verbositySet 
 	return fs.Changed("v"), getenv(logging.LogLevelEnv)
 }
 
+// settingsReadTimeout bounds the read of the settings ConfigMap at start,
+// before the configuration (and its REST timeout) is loaded.
+const settingsReadTimeout = 60 * time.Second
+
 // nolint:gocyclo
 func main() {
 	// Command-line flags
@@ -433,7 +437,11 @@ func main() {
 	}
 	// The settings ConfigMap. Absent is fine (the manager ConfigMap and the
 	// defaults apply); unreadable is not, since it may declare the limiter.
-	settingsCM, err := controller.ReadSettings(signalCtx, policyProbe, config.SystemNamespace())
+	// Bounded: the manager's REST timeout is not loaded yet, and an API server
+	// that never answers must not hold the start forever.
+	readCtx, cancelRead := context.WithTimeout(signalCtx, settingsReadTimeout)
+	settingsCM, err := controller.ReadSettings(readCtx, policyProbe, config.SystemNamespace())
+	cancelRead()
 	if err != nil {
 		os.Exit(startupExitCode(signalCtx, setupLog, err, "unable to read the settings ConfigMap"))
 	}

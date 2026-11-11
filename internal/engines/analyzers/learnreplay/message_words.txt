@@ -103,6 +103,7 @@ Bound
 C0-agree
 C1-single
 C4-no-signal
+CA
 CONFIG_MAP_NAME
 Ca
 Cannot
@@ -480,6 +481,7 @@ above-band
 aboveBand
 aboveBandHeld
 absent
+absolute
 accType
 accelerator
 accelerator-specific
@@ -540,6 +542,7 @@ alone
 already
 already-serving
 also
+among
 amount
 an
 analysis
@@ -813,6 +816,7 @@ constrained
 constrains
 constraint
 constraints
+container
 contains
 contamination-heterogeneity
 context_length
@@ -1480,6 +1484,7 @@ kueue-gate
 kueue-lender-release
 kueue-preempting
 kueue-reclaim
+kueue-system
 kueue.borrowNamespaces
 kueue.enabled
 kueue.releaseToNonReclaimingLenders
@@ -2127,7 +2132,9 @@ production
 products
 projectedBacklog
 prometheus
+prometheusCACertPath
 prometheusInsecureSkipVerify
+prometheusServerName
 prometheusURL
 promised
 promisedOnNodes

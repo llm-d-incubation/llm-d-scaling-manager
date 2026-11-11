@@ -205,8 +205,9 @@ func TestSettingsKeepRejected(t *testing.T) {
 		t.Errorf("kept %+v, want the previous values", got)
 	}
 	got = next.KeepRejected(Settings{}, rep.Rejected)
-	if got.Passive != nil || got.UtilizationShare != "" || got.Limiters != nil || len(got.Restart) != 0 {
-		t.Errorf("kept %+v from nothing, want every key unset", got)
+	// From nothing, passive fails closed; every other key stays unset.
+	if got.Passive == nil || !*got.Passive || got.UtilizationShare != "" || got.Limiters != nil || len(got.Restart) != 0 {
+		t.Errorf("kept %+v from nothing, want passive true and every other key unset", got)
 	}
 }
 
@@ -431,11 +432,11 @@ func TestLoadWithSettingsPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("settings win over a flag and the environment", func(t *testing.T) {
+	t.Run("settings win over the environment and narrow a flag", func(t *testing.T) {
 		t.Setenv("LLMSM_SCALE_TO_ZERO", "true")
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
 		fs.String("watch-namespace", "", "")
-		if err := fs.Parse([]string{"--watch-namespace=from-flag"}); err != nil {
+		if err := fs.Parse([]string{"--watch-namespace=from-flag,from-settings"}); err != nil {
 			t.Fatal(err)
 		}
 		c, err := LoadWithSettings(fs, file, map[string]string{SettingWatchNamespaces: "from-settings",
@@ -451,7 +452,7 @@ func TestLoadWithSettingsPrecedence(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := c2.SettingsSources()
-		if c2.WatchNamespace() != "from-flag" || src[SettingWatchNamespaces] != SettingSourceFlag ||
+		if c2.WatchNamespace() != "from-flag,from-settings" || src[SettingWatchNamespaces] != SettingSourceFlag ||
 			!c2.ScaleToZeroEnabled() || src[SettingScaleToZero] != SettingSourceEnv {
 			t.Errorf("without settings: watch %s scaleToZero %t sources %v", c2.WatchNamespace(), c2.ScaleToZeroEnabled(), src)
 		}

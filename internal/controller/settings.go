@@ -54,6 +54,17 @@ func (r *ConfigMapReconciler) bootstrapSettings(ctx context.Context) error {
 		r.Status.RecordSettings(r.Config)
 		return nil
 	}
+	// A limiter declared with a value that cannot be used, and no earlier
+	// one to keep, would start the controller unbounded: refuse, as an
+	// invalid bounding policy "default" entry does (errUnboundedAtStartup).
+	// Beside a separate policy namespace the limiter settings are not read.
+	if r.Config.SettingsBudgetApplies() {
+		_, rep := config.ParseSettings(cm.Data, r.Config.SettingsQuotaKey())
+		if err := config.RejectedLimiterUnbounded(cm.Data, rep.Rejected, r.Config.LiveSettings()); err != nil {
+			r.reportSettings(ctx, cm, rep)
+			return err
+		}
+	}
 	r.handleSettingsConfigMap(ctx, cm)
 	return nil
 }
@@ -66,6 +77,7 @@ func (r *ConfigMapReconciler) handleSettingsConfigMap(ctx context.Context, cm *c
 	logger := log.FromContext(ctx)
 	prev := r.Config.LiveSettings()
 	s, rep := config.ParseSettings(cm.Data, r.Config.SettingsQuotaKey())
+	r.Config.RestrictSettings(&s, &rep)
 	s = s.KeepRejected(prev, rep.Rejected)
 	r.reportSettings(ctx, cm, rep)
 	if !r.Config.SettingsBudgetApplies() {

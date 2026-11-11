@@ -77,6 +77,42 @@ type settingsState struct {
 	// filePassive: config.yaml's LLMSM_PASSIVE is in force below the
 	// settings and differs from the default.
 	filePassive bool
+	// deploymentWatchNamespace is the watched namespaces the Deployment
+	// names (flag, environment, config.yaml), normalized, before the
+	// watchNamespaces setting narrows them.
+	deploymentWatchNamespace string
+}
+
+// DeploymentWatchNamespace returns the namespaces the controller's Deployment
+// names to watch (--watch-namespace, WATCH_NAMESPACE or config.yaml),
+// normalized, whatever the watchNamespaces setting narrows them to; "" for
+// every namespace. Decisions about who owns the controller are made from this
+// value, never from the setting. Thread-safe.
+func (c *Config) DeploymentWatchNamespace() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.settings.atStart == nil {
+		// Not built by the loader (a test config): nothing narrowed it.
+		return c.infrastructure.watchNamespace
+	}
+	return c.settings.deploymentWatchNamespace
+}
+
+// RestrictSettings rejects, in s and rep, the settings whose value is valid on
+// its own but not for this controller: a watchNamespaces that is not a subset
+// of the namespaces its Deployment names. Thread-safe.
+func (c *Config) RestrictSettings(s *Settings, rep *SettingsReport) {
+	ws, ok := s.Restart["WATCH_NAMESPACE"]
+	if !ok {
+		return
+	}
+	if err := NarrowsWatchNamespaces(c.DeploymentWatchNamespace(), ws); err != nil {
+		delete(s.Restart, "WATCH_NAMESPACE")
+		if rep.Rejected == nil {
+			rep.Rejected = map[string]string{}
+		}
+		rep.Rejected[SettingWatchNamespaces] = err.Error()
+	}
 }
 
 // SettingsQuotaKey is the namespace a namespace-scoped quota built from the
@@ -173,12 +209,12 @@ func (c *Config) SettingsRestartChanged(s Settings) []string {
 	}
 	var out []string
 	for name, loaderKey := range restartSettingKeys {
-		if effective(s.Restart, loaderKey) != effective(c.settings.atStart, loaderKey) {
+		if !sameSettingValue(effective(s.Restart, loaderKey), effective(c.settings.atStart, loaderKey)) {
 			out = append(out, name)
 		}
 	}
 	for _, k := range advancedSettingKeys {
-		if effective(s.Restart, k) != effective(c.settings.atStart, k) {
+		if !sameSettingValue(effective(s.Restart, k), effective(c.settings.atStart, k)) {
 			out = append(out, k)
 		}
 	}

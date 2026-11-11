@@ -177,10 +177,12 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string, setti
 	// Load from config file (mounted in the container) — sits between env and
 	// defaults in precedence. A path that does not exist is not an error: the
 	// manager ConfigMap is optional now that the settings ConfigMap carries
-	// the same values, and its volume is mounted optional.
+	// the same values, and the Deployment mounts its volume optional
+	// (config/base/manager/deployment.yaml). A directory at the path is what a
+	// subPath mount of an absent ConfigMap leaves, so it counts as absent too.
 	fileRead := false
 	if configFilePath != "" {
-		if _, statErr := os.Stat(configFilePath); errors.Is(statErr, fs.ErrNotExist) {
+		if st, statErr := os.Stat(configFilePath); errors.Is(statErr, fs.ErrNotExist) || (statErr == nil && st.IsDir()) {
 			ctrl.Log.Info("No config file at the configured path; reading the settings ConfigMap, flags, environment and defaults",
 				"path", configFilePath)
 		} else {

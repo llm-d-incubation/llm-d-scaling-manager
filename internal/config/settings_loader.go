@@ -35,6 +35,14 @@ func loadSettingsLayer(v *viper.Viper, flagSet *flag.FlagSet, data map[string]st
 	for _, k := range settingsLoaderKeys() {
 		st.otherAtStart[k] = v.GetString(k)
 	}
+	st.deploymentWatchNamespace = NormalizeWatchNamespace(v.GetString("WATCH_NAMESPACE"))
+	if ws, ok := restart["WATCH_NAMESPACE"]; ok {
+		if err := NarrowsWatchNamespaces(st.deploymentWatchNamespace, ws); err != nil {
+			ctrl.Log.Error(err, "Settings value rejected; the namespaces the Deployment names apply",
+				"configMap", SettingsConfigMapName(), "key", SettingWatchNamespaces)
+			delete(restart, "WATCH_NAMESPACE")
+		}
+	}
 	for name, loaderKey := range restartSettingKeys {
 		st.sources[name] = layerSource(v, flagSet, loaderKey)
 	}

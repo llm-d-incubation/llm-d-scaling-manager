@@ -20,7 +20,7 @@ name on the controller Deployment. All of these need a restart.
 | `PROMETHEUS_BEARER_TOKEN` | Environment | empty | avoid it: it puts a secret in plain configuration. Use a token file |
 | `PROMETHEUS_ALLOW_HTTP` | Environment | `false` | your Prometheus serves plain HTTP only |
 | `PROMETHEUS_CLIENT_CERT_PATH`, `PROMETHEUS_CLIENT_KEY_PATH` | Environment | empty | your Prometheus requires a client certificate |
-| `PROMETHEUS_SERVER_NAME` | Environment | empty | Prometheus' certificate names a different host than its URL |
+| `PROMETHEUS_SERVER_NAME`; setting `prometheusServerName` | Environment or settings | empty | Prometheus' certificate names a different host than its URL |
 | `PROMETHEUS_METRICS_CACHE_TTL`, `_CLEANUP_INTERVAL`, `_FETCH_INTERVAL` | Manager ConfigMap | `30s`, `1m`, `30s` | your scrape interval is longer than 30 s |
 | `PROMETHEUS_METRICS_CACHE_FRESH_THRESHOLD`, `_STALE_THRESHOLD`, `_UNAVAILABLE_THRESHOLD` | Manager ConfigMap | `1m`, `2m`, `5m` | the same |
 | `LLMSM_STICKY_SCALE_DOWN` | Environment | `true` | you are comparing behaviour: off, a model idling near the boundary flips N and N-1 |

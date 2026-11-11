@@ -34,6 +34,8 @@ func SettingsConfigMapName() string {
 const (
 	SettingPrometheusURL                = "prometheusURL"
 	SettingPrometheusInsecureSkipVerify = "prometheusInsecureSkipVerify"
+	SettingPrometheusCACertPath         = "prometheusCACertPath"
+	SettingPrometheusServerName         = "prometheusServerName"
 	SettingPassive                      = "passive"
 	SettingUtilizationShare             = "utilizationShare"
 	SettingLimiter                      = "limiter"
@@ -65,6 +67,8 @@ var limiterSettingKeys = []string{
 var restartSettingKeys = map[string]string{
 	SettingPrometheusURL:                "PROMETHEUS_BASE_URL",
 	SettingPrometheusInsecureSkipVerify: "PROMETHEUS_TLS_INSECURE_SKIP_VERIFY",
+	SettingPrometheusCACertPath:         "PROMETHEUS_CA_CERT_PATH",
+	SettingPrometheusServerName:         "PROMETHEUS_SERVER_NAME",
 	SettingScaleToZero:                  "LLMSM_SCALE_TO_ZERO",
 	SettingWatchNamespaces:              "WATCH_NAMESPACE",
 	SettingLogVerbosity:                 "V",
@@ -104,6 +108,11 @@ const (
 // move from one to the other keeps the limiter's name in logs and metrics.
 const SettingsQuotaName = "install-quota"
 
+// defaultKueueControllerNamespace is the Kueue controller's namespace when a
+// quota entry names none (internal/kueue.DefaultControllerNamespace, which this
+// package may not import).
+const defaultKueueControllerNamespace = "kueue-system"
+
 // MaxLogVerbosity bounds the logVerbosity setting. 5 is trace, the most
 // verbose level the controller logs at.
 const MaxLogVerbosity = 10
@@ -141,6 +150,8 @@ type SettingsReport struct {
 var legacySettingNames = map[string]string{
 	"PROMETHEUS_BASE_URL":                 SettingPrometheusURL,
 	"PROMETHEUS_TLS_INSECURE_SKIP_VERIFY": SettingPrometheusInsecureSkipVerify,
+	"PROMETHEUS_CA_CERT_PATH":             SettingPrometheusCACertPath,
+	"PROMETHEUS_SERVER_NAME":              SettingPrometheusServerName,
 	"LLMSM_PASSIVE":                       SettingPassive,
 	"LLMSM_SCALE_TO_ZERO":                 SettingScaleToZero,
 	"ENABLE_SCALE_TO_ZERO":                SettingScaleToZero,
@@ -260,11 +271,22 @@ func validateRestartSetting(key, v string) error {
 		if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return fmt.Errorf("%q is not an http(s) URL with a host, such as https://prometheus.monitoring.svc:9090", v)
 		}
+	case SettingPrometheusCACertPath:
+		if !strings.HasPrefix(v, "/") {
+			return fmt.Errorf("%q is not an absolute path to a CA file in the controller's container", v)
+		}
+	case SettingPrometheusServerName:
+		if strings.ContainsAny(v, " \t/:") {
+			return fmt.Errorf("%q is not a host name", v)
+		}
 	case SettingPrometheusInsecureSkipVerify, SettingScaleToZero:
 		if _, err := strconv.ParseBool(v); err != nil {
 			return fmt.Errorf("%q is not true or false", v)
 		}
 	case SettingWatchNamespaces:
+		if len(ParseWatchNamespaces(v)) == 0 {
+			return fmt.Errorf("%q lists no namespace", v)
+		}
 		for _, ns := range ParseWatchNamespaces(v) {
 			if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
 				return fmt.Errorf("%q is not a namespace name: %s", ns, strings.Join(errs, "; "))
@@ -274,6 +296,27 @@ func validateRestartSetting(key, v string) error {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > MaxLogVerbosity {
 			return fmt.Errorf("%q is not a whole number from 0 to %d (2 is info, 4 debug, 5 trace)", v, MaxLogVerbosity)
+		}
+	}
+	return nil
+}
+
+// NarrowsWatchNamespaces checks the watchNamespaces setting against the
+// namespaces the controller's Deployment names (--watch-namespace or
+// WATCH_NAMESPACE, deployment, "" for every namespace). The setting may only
+// narrow them: every namespace it lists must be one the Deployment names. A
+// setting can never widen what the controller manages, since whoever writes
+// the settings ConfigMap could otherwise reach namespaces the Deployment's
+// RBAC and the policy-namespace decision were not made for.
+func NarrowsWatchNamespaces(deployment, setting string) error {
+	allowed := ParseWatchNamespaces(deployment)
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, ns := range ParseWatchNamespaces(setting) {
+		if !slices.Contains(allowed, ns) {
+			return fmt.Errorf("%q is not among the namespaces the controller's Deployment names (%s); "+
+				"the setting can only narrow them", ns, strings.Join(allowed, ","))
 		}
 	}
 	return nil
@@ -347,9 +390,28 @@ func parseLimiterSettings(get func(string) string, quotaKey string,
 		}
 	}
 
+	// A key at its default changes nothing whatever limiter says: the shipped
+	// file carries the defaults, and they are not worth a warning.
+	setOff := func(k string) bool {
+		v := get(k)
+		if v == "" {
+			return false
+		}
+		switch k {
+		case SettingQuotaScope:
+			return v != string(QuotaScopeNamespace)
+		case SettingKueue:
+			return !sameSettingValue(v, "false")
+		case SettingKueueBorrow:
+			return !sameSettingValue(v, "true")
+		case SettingKueueNamespace:
+			return v != defaultKueueControllerNamespace
+		}
+		return true
+	}
 	if !limiterSet {
 		for _, k := range limiterSettingKeys[1:] {
-			if get(k) != "" {
+			if setOff(k) {
 				warnings = append(warnings, fmt.Sprintf("%s is set but limiter is not, so it has no effect: "+
 					"the limiters of the scaling policy's default entry stay in force", k))
 			}
@@ -358,7 +420,7 @@ func parseLimiterSettings(get func(string) string, quotaKey string,
 	}
 	if !quota {
 		for _, k := range limiterSettingKeys[1:] {
-			if get(k) != "" {
+			if setOff(k) {
 				warnings = append(warnings, fmt.Sprintf("%s is set but limiter has no quota, so it has no effect: "+
 					"the gpu-inventory limiter takes no budget and reads no Kueue quota", k))
 			}
@@ -370,7 +432,7 @@ func parseLimiterSettings(get func(string) string, quotaKey string,
 		}
 		if !kueue {
 			for _, k := range []string{SettingKueueBorrow, SettingKueueNamespace} {
-				if get(k) != "" {
+				if setOff(k) {
 					warnings = append(warnings, k+" is set but kueue is not true, so it has no effect")
 				}
 			}
@@ -441,8 +503,13 @@ func ParseQuotaSetting(v string) (map[string]int, error) {
 
 // KeepRejected returns s with every rejected key's value taken from prev, the
 // settings in force before: a typo keeps the last good value instead of
-// dropping to the next source down. With no previous value the key stays
-// unset. The limiter keys are kept as one.
+// dropping to the next source down. The limiter keys are kept as one.
+//
+// With no previous value -- the first read after a start, or a key set for
+// the first time -- a rejected passive fails closed: it is true, since a typo
+// in it was most likely meant to keep the controller from acting. Every other
+// key stays unset. A rejected limiter with no previous value is not decided
+// here: see RejectedLimiterUnbounded.
 func (s Settings) KeepRejected(prev Settings, rejected map[string]string) Settings {
 	if len(rejected) == 0 {
 		return s
@@ -454,6 +521,10 @@ func (s Settings) KeepRejected(prev Settings, rejected map[string]string) Settin
 	}
 	if _, bad := rejected[SettingPassive]; bad {
 		out.Passive = prev.Passive
+		if out.Passive == nil {
+			on := true
+			out.Passive = &on
+		}
 	}
 	if _, bad := rejected[SettingUtilizationShare]; bad {
 		out.UtilizationShare = prev.UtilizationShare
@@ -479,6 +550,30 @@ func (s Settings) KeepRejected(prev Settings, rejected map[string]string) Settin
 		}
 	}
 	return out
+}
+
+// RejectedLimiterUnbounded returns an error when data sets limiter, one of the
+// limiter keys is rejected, and no limiter list from the settings was in force
+// before (prev): the operator declared a bound and none would apply. At start
+// that refuses startup, the way an invalid bounding policy "default" entry
+// does; a value kept from before cannot outlive a restart, so the same typo
+// refuses the next start too. Nil otherwise.
+func RejectedLimiterUnbounded(data map[string]string, rejected map[string]string, prev Settings) error {
+	if strings.TrimSpace(data[SettingLimiter]) == "" || prev.Limiters != nil {
+		return nil
+	}
+	var bad []string
+	for _, k := range limiterSettingKeys {
+		if reason, ok := rejected[k]; ok {
+			bad = append(bad, k+": "+reason)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing to start unbounded: the settings ConfigMap %s declares limiter %q but %s; "+
+		"fix the value and restart the controller", SettingsConfigMapName(), strings.TrimSpace(data[SettingLimiter]),
+		strings.Join(bad, "; "))
 }
 
 // clone returns a deep copy of s.

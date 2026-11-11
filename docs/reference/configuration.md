@@ -44,17 +44,19 @@ ConfigMap and the scaling policy as before. Create it once, with
 | --- | --- | --- | --- | --- |
 | `prometheusURL` | an `https://` (or `http://`) URL | `PROMETHEUS_BASE_URL` from the manager ConfigMap | `PROMETHEUS_BASE_URL`; installer `PROMETHEUS_URL` | restart |
 | `prometheusInsecureSkipVerify` | `true`, `false` | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`, else `false` | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` | restart |
+| `prometheusCACertPath` | an absolute path in the controller's container | `PROMETHEUS_CA_CERT_PATH`, else none | `PROMETHEUS_CA_CERT_PATH` | restart |
+| `prometheusServerName` | a host name | `PROMETHEUS_SERVER_NAME`, else the URL's host | `PROMETHEUS_SERVER_NAME` | restart |
 | **`passive`** | `true`, `false` | the policy `default` entry's `passive`, else `LLMSM_PASSIVE`, else `false` | `LLMSM_PASSIVE` | **live** |
 | **`utilizationShare`** | `off`, `shadow`, `active` | the policy `default` entry's `optimizer` block | `make utilization-share-shadow`, `-activate`, `-off` | **live** |
-| `limiter` | `gpu-inventory`, `quota`, or `gpu-inventory,quota` | the policy `default` entry's `limiters` | `LLMSM_LIMITER` | live |
+| `limiter` | `gpu-inventory`, `quota`, or `gpu-inventory,quota` | the policy `default` entry's `limiters`. There is no `none`: to drop a limiter the policy declares, edit the policy | `LLMSM_LIMITER` | live |
 | `quotas` | `H200=8,A100=4`; `-1` is no cap on a type | needed when `limiter` has `quota` | `LLMSM_QUOTAS` | live |
 | `quotaScope` | `namespace`, `cluster` | `namespace` | `LLMSM_QUOTA_SCOPE` | live |
 | `kueue` | `true`, `false` | `false` | `LLMSM_QUOTA_KUEUE` | live; needs the Kueue read grant |
 | `kueueBorrow` | `true`, `false` | `true` | `LLMSM_QUOTA_KUEUE_BORROW` | live |
 | `kueueNamespace` | a namespace | `kueue-system` | `KUEUE_NAMESPACE` | live |
 | `scaleToZero` | `true`, `false` | `LLMSM_SCALE_TO_ZERO`, else `false` | `LLMSM_SCALE_TO_ZERO` | restart |
-| `watchNamespaces` | namespaces, comma-separated | the `--watch-namespace` flag: the controller's own namespace (namespaced install) or all (cluster-wide) | `LLMSM_WATCH_NS` | restart; each namespace needs the model-namespace grant |
-| `logVerbosity` | `0` to `10`; `2` info, `4` debug, `5` trace | `--v`, else `LOG_LEVEL` | `LLMSM_VERBOSITY` | restart |
+| `watchNamespaces` | namespaces, comma-separated | the `--watch-namespace` flag: the controller's own namespace (namespaced install) or all (cluster-wide) | `LLMSM_WATCH_NS` | restart. When the Deployment names namespaces, this may only narrow them: a namespace it does not name is rejected. Each namespace needs the model-namespace grant |
+| `logVerbosity` | `0` to `10`; `2` info, `4` debug, `5` trace | `--v`, else `LOG_LEVEL` | `LLMSM_VERBOSITY` | restart. `--zap-log-level` on the Deployment still wins |
 
 It also takes the [advanced](configuration-advanced.md) keys
 `GLOBAL_OPT_INTERVAL`, `PROMETHEUS_METRICS_CACHE_*` and `LEARNED_STATE_*`
@@ -74,7 +76,8 @@ its own budget).
 
 ### Where a value comes from
 
-For a restart key, the first of these that sets it wins:
+For a restart key, the first of these that sets it wins (`watchNamespaces`
+excepted: it can only narrow what the Deployment names):
 
 1. the settings ConfigMap;
 2. a flag on the controller Deployment;
@@ -83,7 +86,9 @@ For a restart key, the first of these that sets it wins:
 5. the built-in default.
 
 The manager ConfigMap is still read **for one release** (v0.11.x), for each key
-the settings ConfigMap does not set. After that it is not read.
+the settings ConfigMap does not set. After that it is not read. The controller
+mounts it as optional: once `settingsSource` says `settings`, delete it and the
+controller still starts.
 
 For a live key, the setting replaces that one field of the cluster `default`
 entry of the scaling policy. A tier or a per-model entry that sets the same
@@ -99,14 +104,32 @@ setting. A namespace map that sets `passive` keeps its own value.
 policy namespace holds the cluster's limiters
 ([policy namespace](../guides/admin-gpu-bounding/#the-policy-namespace)).
 A controller's own settings never raise the bound a cluster admin set; the
-controller logs that it ignores them.
+controller logs that it ignores them. For the same reason, which namespace a
+controller counts as its own (and so where its limits come from) is decided
+from the Deployment's `--watch-namespace`, never from `watchNamespaces`.
+
+`utilizationShare` also wins over `make utilization-share-shadow`, `-activate`
+and `-off`, which write the policy's optimizer block. While the setting is
+set, those commands refuse a mode other than the setting's and print the
+`kubectl patch` that changes it. The shipped settings file sets
+`utilizationShare: "off"`, so on an install that has it, switch the mode there.
 
 ### When a value is wrong
 
 A value that cannot be used is rejected, with the reason, in the log, a
 `SettingRejected` event on the ConfigMap, and `settingsRejected` in the status.
-The value in force before stays. At start, with no value before, the next
-source down applies. The limiter keys are kept or replaced together.
+The value in force before stays. The limiter keys are kept or replaced
+together.
+
+With no value before (at start, or a key set for the first time), a typo
+never makes the controller act or run unbounded:
+
+- a rejected `passive` is `true`: the controller is passive until you fix it;
+- a rejected limiter key while `limiter` is set stops the controller at start
+  (`refusing to start unbounded`), as an invalid policy `default` entry does.
+  At runtime the limiter in force stays. A value kept at runtime is not kept
+  across a restart, so the same typo stops the next start;
+- any other rejected key falls to the next source down.
 
 A key that is no setting is ignored and reported (`SettingsUnknownKeys` event,
 `settingsUnknownKeys` in the status). An old name such as `LLMSM_PASSIVE`
@@ -129,7 +152,7 @@ kubectl get configmap scaling-manager-controller-status -n <controller-namespace
 
 | Key | What it says |
 | --- | --- |
-| `settingsResourceVersion` | the settings ConfigMap version in force. Equal to the one you patched: the live keys of that patch apply |
+| `settingsResourceVersion` | the settings ConfigMap version the controller read. Equal to the one you patched: the live keys of that patch apply, unless `settingsRejected` names them |
 | `passiveDefault` | the controller-wide passive switch in force |
 | `utilizationShare` | the optimizer's mode: `off`, `shadow`, `active` or `invalid` |
 | `settingsSources` | where each setting's value comes from: `settings`, `manager-config`, `policy`, `policy-namespace`, `flag`, `env` or `default` |
@@ -161,7 +184,7 @@ second column, that writes them for you.
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |
 | `PROMETHEUS_BASE_URL`; installer `PROMETHEUS_URL` | Manager ConfigMap | required, no built-in default. The shipped ConfigMap names a kube-prometheus-stack in `scaling-manager-monitoring`; the installer detects one ([how](install-options.md#how-the-prometheus-address-is-chosen)) | The Prometheus every signal is read from. The controller exits at startup when it cannot reach it | restart |
-| `PROMETHEUS_CA_CERT_PATH` | Manager ConfigMap | empty | The CA that signed Prometheus' certificate. The installer copies and mounts it when it can | restart |
+| `PROMETHEUS_CA_CERT_PATH`; setting `prometheusCACertPath` | Manager ConfigMap or settings | empty | The CA that signed Prometheus' certificate. The installer copies and mounts it when it can | restart |
 | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` | Manager ConfigMap | `false`. The installer writes `true` for a Prometheus it deploys itself, with a warning | Skip the certificate check ([TLS](prometheus.md#tls-configuration)) | restart |
 
 ### Observe before it acts

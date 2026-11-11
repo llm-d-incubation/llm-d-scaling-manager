@@ -83,10 +83,13 @@
 //	                       switch in force. It is the settings ConfigMap's
 //	                       passive key when that is set, which is live;
 //	                       otherwise the LLMSM_PASSIVE this process read at
-//	                       start, which is read only then, so a value that
-//	                       differs from scaling-manager-manager-config means
-//	                       the controller needs a restart; the installer
-//	                       compares the two. Absent until set.
+//	                       start. Absent until set.
+//	passiveAtStart         "true" or "false": the LLMSM_PASSIVE this process
+//	                       read at start, whatever the settings say. It is
+//	                       read only then, so a value that differs from
+//	                       scaling-manager-manager-config means the controller
+//	                       needs a restart, unless settingsSources names
+//	                       passive=settings; the installer compares the two.
 //	settingsSource         where the settings come from as a whole:
 //	                       "settings" (the settings ConfigMap, and the
 //	                       manager ConfigMap contributes nothing that differs
@@ -234,6 +237,11 @@ const (
 	// scaler: TLS handshakes kept being refused for minutes, no call
 	// served. Absent while one is.
 	KeyScalerUnreachable = "scalerUnreachable"
+	// KeyPassiveAtStart is the LLMSM_PASSIVE this process read at start from
+	// its flags, environment and config.yaml, "true" or "false", whatever the
+	// settings ConfigMap says. The installer compares it with the manager
+	// ConfigMap to tell a restart is due.
+	KeyPassiveAtStart = "passiveAtStart"
 	// KeySettingsSource says where the settings come from as a whole
 	// (config.Config.SettingsSource).
 	KeySettingsSource = "settingsSource"
@@ -717,6 +725,7 @@ func observe(d map[string]string, cfg *config.Config) {
 // observeSettings sets the values that describe the settings in force.
 func observeSettings(d map[string]string, cfg *config.Config) {
 	d[KeyPassiveDefault] = strconv.FormatBool(cfg.PassiveDefault())
+	d[KeyPassiveAtStart] = strconv.FormatBool(cfg.PassiveAtStart())
 	d[KeySettingsSource] = cfg.SettingsSource()
 	d[KeySettingsSources] = config.SettingsSourcesText(cfg.SettingsSources())
 	setOrDelete(d, KeySettingsFromManagerConfig, strings.Join(cfg.SettingsFromManagerConfig(), ","))
