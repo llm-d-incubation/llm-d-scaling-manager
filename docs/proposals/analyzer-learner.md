@@ -1192,7 +1192,7 @@ restores, exact repeats and unknown ages. Two rules apply to all:
 | --- | --- | --- |
 | k2 | too high | none. The window mean rises on admitted readings only. A too-low k2 is **permanent** on a serving variant: touched on every read, never evicted, and its episode resets only on a write, which needs the saturation a low k2 prevents. The only exit is `llm-d.ai/forget-learned-state`; the runbook says so |
 | borrowed k2 | too high | the upward relaxation over 6 h of serving time |
-| measured mu | too high | the stale yield to a higher derived figure after 30 min (5 min toward a lower one). The restart that drops the latch (see [the mu choice](#the-mu-choice); restored to the safe side since PR 3). An unknown age (above; safe side since PR 3). An exact repeat: since PR 3 it refreshes freshness only under the derived figure, where losing it would let a repeating low rate yield to the higher figure, and not over it, where staleness yields to the lower one. Since ev-shindin/llm-scaling-manager#526 the stale latch sets and releases on the ratio to derived smoothed over 3 min, so the stale yield to a lower figure waits up to 5.4 min (a step to 2.2x) while it prices the higher, measured one; a cycle's own ratio at 2.8x or more sets it at once, and the release, toward the risky side, is never faster than the smoothing (`mu-latch-reads-smoothed-ratio`). Backed by new evidence, so allowed: the **immediate** yield when a Ready replica serves more than 2x it. The sibling yield was on this list; since ev-shindin/llm-scaling-manager#495 it is capped at the measurement (`mu-yield-capped-at-measurement`), so it no longer moves mu up: what the siblings serve reaches mu through the sample instead. Since ev-shindin/llm-scaling-manager#495, with no line, a figure a minority of the fleet wrote, under what the fleet's Ready replicas serve, gives way to that served bound after `lowHoldFor` with no saturated reading agreeing with it (`mu-minority-figure-expires`). The reason is the low hold's: an over-ordered fleet never saturates to correct a low figure. The bound is a lower bound, so the move stops at what the replicas showed they sustain, never at no mu. A figure at or over the bound, the whole fleet's, a borrowed one, or one whose writers are unknown (a restore), stands. And an unread replica under the KV line counts at what it serves over the scale-up target (`mu-unread-replica-at-target`): at most 1 / target over what it served unqueued, so the floor orders the fleet in which it serves that again, and no more ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)) The weighing's band (`mu-weighing-band`) holds a weighing key on the weighed sample until its readers average 0.90 of the unread replicas over 10 min, not 0.80 on one reading: a move toward the higher figure that the readings no longer back on their own. The reason is the noise (one crossing switched the source up to 11 times) and that the weighed figure still counts every replica at what it served |
+| measured mu | too high | the stale yield to a higher derived figure after 30 min (5 min toward a lower one). The restart that drops the latch (see [the mu choice](#the-mu-choice); restored to the safe side since PR 3). An unknown age (above; safe side since PR 3). An exact repeat: since PR 3 it refreshes freshness only under the derived figure, where losing it would let a repeating low rate yield to the higher figure, and not over it, where staleness yields to the lower one. Since ev-shindin/llm-scaling-manager#526 the stale latch sets and releases on the ratio to derived smoothed over 3 min, so the stale yield to a lower figure waits up to 5.4 min (a step to 2.2x) while it prices the higher, measured one; a cycle's own ratio at 2.8x or more sets it at once, and the release, toward the risky side, is never faster than the smoothing (`mu-latch-reads-smoothed-ratio`). Backed by new evidence, so allowed: the **immediate** yield when a Ready replica serves more than 2x it. The sibling yield was on this list; since ev-shindin/llm-scaling-manager#495 it is capped at the measurement (`mu-yield-capped-at-measurement`), so it no longer moves mu up: what the siblings serve reaches mu through the sample instead. A rule that let a minority's figure with no line give way to the fleet's served bound after `lowHoldFor` (`mu-minority-figure-expires`) shipped with ev-shindin/llm-scaling-manager#495 and was removed on 2026-11-10 by the user's decision: a 72-cell sweep with it on and off moved no cell. With no line, a measured figure stands, whoever wrote it. And an unread replica under the KV line counts at what it serves over the scale-up target (`mu-unread-replica-at-target`): at most 1 / target over what it served unqueued, so the floor orders the fleet in which it serves that again, and no more ([one slow pod, as built](#one-slow-pod-as-built-ev-shindinllm-scaling-manager495)) The weighing's band (`mu-weighing-band`) holds a weighing key on the weighed sample until its readers average 0.90 of the unread replicas over 10 min, not 0.80 on one reading: a move toward the higher figure that the readings no longer back on their own. The reason is the noise (one crossing switched the source up to 11 times) and that the weighed figure still counts every replica at what it served |
 | ITL line and derived mu | ITL(kPrice) too low, that is, derived mu too high (with B pinned low, A comes out too high and the prediction is still low) | the 6 ms default B or a stashed B. With B pinned below the true intercept, the pinned A absorbs the error and the prediction at kPrice is low by (B_true − B_pin)(1 − kPrice / k̄): **risky whenever the fleet runs above its pricing point**, the under-provisioned fleet that most needs a correct line |
 | prefill bound | too high | before ev-shindin/llm-scaling-manager#397, its window max only rose, survived the episode reset through `RaiseLast`, and never aged while read: a running max over the bound's life, about 1.5σ above the mean after 10 readings and 3.2σ after a day at one a minute (measured at one pod: +15 % after ten minutes at 10 % noise, +50 % after a day at 15 %). Since ev-shindin/llm-scaling-manager#397 (`prefill-bound-held-confidence`) the window keeps its samples as read and the bound is the larger of their mean and a **held** figure, the max of lower confidence bounds on a window's mean (`mean - t * sd / sqrt(n)`, Student's t), the k-th taken at `1 - alpha/(k(k+1))` with alpha 0.05, so over the bound's life all of them stand under the true rate with 95 % confidence, provided each minute's sample is an unbiased, roughly independent reading (not yet true in production: [#531](https://github.com/ev-shindin/llm-scaling-manager/issues/531), below). The held figure still only rises and carries past a new window after `EpisodeGap`; the reason is the episode test's (a reading behind a full decode falls once the bound grows prefill, and pricing on it grew prefill every episode). It is the move toward the SLO side this row names, bounded: measured at one pod and 19 % stationary noise, one read a minute, the bound is within 0.2 % of the truth after ten minutes and an hour and 1.2 % high after a day. The held figure falls only on eviction, an engine-argument change, a per-variant forget or a restart, as the old max did; a window restored from a build that raised its samples is not tested until its samples are all new. Not in the snapshot: after a restart the bound is the window's mean, the safe side. The within-minute fold took a max over one pod's re-reads, as mu's did: simulated at four reads a minute and AR(1) noise (phi 0.3 per 15 s cycle), the bound read 8.9 % high at 10 % noise and 13.4 % at 15 %, at one pod and at four, and the held figure stood above the true rate on 47-50 of 50 seeds (ev-shindin/llm-scaling-manager#531). Since issue #55 a sample keeps each pod's latest reading taken while the pod is still saturated (`mu-reread-takes-latest`; a re-read on the way out of saturation does not count), and the bound is within 0.5 % of the truth there; mu, which reads the same fold, went from 8-13 % high to within 2.5 % (its window's lower median, under the truth). On the recordings a steady pod's latest re-read is within 1 % of its highest (median), so the simulated bias is an upper end there. A drain burst read with a full batch is still taken |
 | start time | **both** | too low under-orders a fleet that is behind (λ > mu · ready). Too high, in `internal/signals/floor/floor.go`: `DrainHorizon` under-prices the backlog whenever S exceeds 60 s, `startingCredit` credits a stuck pod for up to 2S, and a fleet with spare projects more drain and orders less. Share pacing errs the other way: too low moves GPUs for bursts that end first. PR 5 bounds both sides |
@@ -3906,14 +3906,15 @@ reads only the replicas that queued, so what it meant depended on who queued.
 Without the slow pod it read high: {1, 1, 1, 0.341} priced 1.000 against a mean
 of 0.835, because half the served max refused the slow reading. With only the
 slow pod it read low, and low seals: sixteen replicas, one at 0.55 for 10 min,
-ordered 28 against a need of 18 and stayed there. Four replay switches, all on
-from the constructor (`D/mu_slow_pod.go`). The first two move goldens, named
+ordered 28 against a need of 18 and stayed there. Three replay switches, all on
+from the constructor (`D/mu_slow_pod.go`); a fourth was removed on 2026-11-10
+(below). The first two move goldens, named
 in `replaySwitches`: the weighing ten outputs of `mu-paths`,
 `start-seed-restart-2` and `ttft-staircase-b-off` (a refused reading now a
 sample, and samples counting their unread replicas: priced mu down 3.6 % to
 5.7 % on those cycles), the cap `mu-paths` variant capacities (variant-02
 priced at its measured 8.08 where it had yielded to its siblings' 12.12). The
-last two move none, and `heldBy` names their tests.
+third moves none, and `heldBy` names its tests.
 
 How a lower mu moves demand, measured on those goldens. The floor's tokens
 rise as mu falls, and `ttft-staircase-b-off`'s decode demand is up on four
@@ -3954,19 +3955,18 @@ completions, as built").
   0.674, so 12.8 / 0.667 / 0.85 = 23 against a bound of 21.7). The error is at
   most 1 / target over what it served unqueued, and it corrects itself: a
   replica priced too high queues and is read.
-- **A minority's figure gives way to the fleet's served bound
-  (`mu-minority-figure-expires`).** With no line, a figure whose newest sample
-  was read by fewer than half of the readers and unqueued replicas, and that
-  sits under what the Ready replicas serve weighed as a sample weighs them
-  (queued at their rate, unqueued at the credit), gives way to that bound after
-  `lowHoldFor` with no saturated reading agreeing with it. Never to no mu: a
-  served rate does not overstate what a replica sustains, so the release only
-  lifts mu to what the fleet showed. 3.4 has the reason. A fleet that saturated
-  together keeps its figure, and so does a restored window (no writers on
-  record: the safe side), a borrowed reading, and a figure at or over the
-  bound: a minority that a steering router saturated first read what every
-  replica does, and the fleet at a lower load serves less than that. It logs
-  once per key, on the transition. Review decided both the bound and the gate.
+- **Removed: a minority's figure giving way to the fleet's served bound
+  (`mu-minority-figure-expires`).** As shipped with ev-shindin/llm-scaling-manager#495, with
+  no line, a figure whose newest sample was read by fewer than half of the
+  readers and unqueued replicas, and that sat under what the Ready replicas
+  serve, gave way to that bound after `lowHoldFor` with no saturated reading
+  agreeing with it. It was never the option chosen on review (the choice was
+  the weighing, the cap and the credit above, with the band below), and it
+  was removed on 2026-11-10 by the user's
+  decision: a 72-cell sweep of the slow-pod cases, main against the switch
+  off, moved no cell. With no line a measured figure now stands, whoever
+  wrote it; the weighed sample and the credit are what keep one slow
+  replica's reading from sealing the fleet.
 - **The weighing has a band (`mu-weighing-band`).** The tolerance switches the
   sample's source, and on its bare value one crossing under 4 % AR(1) noise
   switched it 3 to 11 times, 17 of 20 seeds
@@ -3991,38 +3991,35 @@ completions, as built").
 
 Measured on the closed-loop probe (sixteen replicas at 12.8 req/s, one slow for
 its first 10 min; 60 min, past `lowHoldFor` after the recovery and the 5 min
-stabilization), need 18, bound 21.7:
+stabilization), need 18, bound 21.7. "Expiry off" is the removed
+`mu-minority-figure-expires`, measured before its removal:
 
 | case | all on | credit off | expiry off | both off | before ev-shindin/llm-scaling-manager#495 |
 | --- | --- | --- | --- | --- | --- |
 | slow pod at 0.55 | 21 from 1.75 min, 20 from 16.25 to the end; peak 21 | 28 for good, peak 29 | as all on | 28 for good | 28 for good |
 | slow pod at 0.3 | 24 at peak, 20 from 21.5 to the end | 23 for good, peak 27 | as all on | 23 for good | 18 from 27, peak 19 |
 
-- **The minority rule does not act on the probe.** Both cases settle at 20, a
-  fixed point: each of the twenty serves 0.64, which over the target is the
-  figure on record, so the figure sits at the fleet's served bound and is kept.
-  As first built, releasing to no mu without the gate, it brought both to 18;
-  released to the bound, a fleet at 20 is priced at 20. It still releases a
-  figure under the bound (`TestMuSlowPod_OneReplicasFigureExpiresAfterTheHold`).
-  With the credit off it no longer rescues the original defect: the 0.55 figure
-  sits over what 28 replicas serve (0.538), so it is kept.
+- **Both cases settle at 20, a fixed point.** Each of the twenty serves 0.64,
+  which over the target is the figure on record. The removed minority rule
+  never acted here: the figure sat at the fleet's served bound, and it
+  released only a figure under it. With the credit off it did not rescue the
+  original defect either: the 0.55 figure sits over what 28 replicas serve
+  (0.538).
 - **A steering router.** Eighteen replicas, four of them sent twice the share,
   12 req/s, a lull at 2 req/s from 10 to 45 min, then 12 again
   (`TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure`): the four
-  queue and read 1, the right figure, and the rule keeps it (released on no
-  cycle); the fleet meets the return at need (17, final 19, never under need).
-  As first built it released that figure on 45 cycles, and the fleet moved the
-  same way: the first queued reading at the return writes it back within a
-  cycle, and the simulator's floor never binds above occupancy without a queue.
+  queue and read 1, the right figure, and it stands; the fleet meets the
+  return at need (17, final 19, never under need). The removed rule, as first
+  built, released that figure on 45 cycles, and the fleet moved the same way:
+  the first queued reading at the return writes it back within a cycle, and
+  the simulator's floor never binds above occupancy without a queue.
 - **The cost of the fix.** At 0.3 the old served bound refused the slow pod and
   the fleet peaked at 19. Now it counts by its weight, and while the pod is
   slow the fleet peaks at 24, over the bound, and settles at 20, inside it.
   That is the estimand at work on a lower bound: siblings unqueued show less
   than their limit. The weighing's hold is what keeps the peak at 24: read
   fresh it peaked at 28 and ended at 23.
-- **Open.** Not measured on a cluster, and the simulator cannot price a right
-  minority figure released: its floor never binds above occupancy without a
-  queue.
+- **Open.** Not measured on a cluster.
 
 #### Queued work priced by drain time before mu, design (ev-shindin/llm-scaling-manager#520 cause B)
 

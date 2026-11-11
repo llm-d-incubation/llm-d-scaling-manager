@@ -140,7 +140,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	v.SetDefault("METRICS_CERT_PATH", "")
 	v.SetDefault("METRICS_CERT_NAME", "tls.crt")
 	v.SetDefault("METRICS_CERT_KEY", "tls.key")
-	v.SetDefault("LLMSM_SCALE_TO_ZERO", false)
+	v.SetDefault("LLMSM_SCALE_TO_ZERO", DefaultScaleToZeroEnabled)
 	v.SetDefault("LLMSM_LIMITED_MODE", false)
 	v.SetDefault("LLMSM_STICKY_SCALE_DOWN", true)
 	v.SetDefault("LLMSM_PASSIVE", false)

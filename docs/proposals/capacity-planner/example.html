@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Capacity planner (example UI)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+  --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+  --sat: rgba(208,59,59,0.07); --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+    --sat: rgba(208,59,59,0.12);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.viz-root { background: var(--page); color: var(--text-primary); min-height: 100vh; padding: 20px 28px 40px; }
+h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+.sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  border: 1px solid var(--border); color: var(--text-secondary); background: var(--surface-1); margin-right: 6px; }
+.badge.warn::before { content: "\26A0"; color: var(--warning); }
+.badge.src::before { content: "\25CF"; color: var(--good); }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.controls { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.ctl label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.ctl label b { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+.ctl input[type=range] { width: 100%; accent-color: var(--series-1); }
+.ctl.disabled { opacity: 0.45; }
+.tabs { display: flex; gap: 4px; margin: 6px 0 0; }
+.tab { font: inherit; font-size: 14px; padding: 8px 16px; border: 1px solid var(--border); border-bottom: none;
+  border-radius: 8px 8px 0 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.tab[aria-selected=true] { background: var(--surface-1); color: var(--text-primary); font-weight: 600; }
+.tab:disabled { cursor: not-allowed; opacity: 0.5; }
+.panel { border-top-left-radius: 0; }
+.row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; padding: 5px 12px; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.seg button[aria-pressed=true] { background: var(--series-1); color: #fff; }
+.summary { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.hero .k { font-size: 12px; color: var(--text-secondary); }
+.hero .v { font-size: 34px; font-weight: 600; line-height: 1.1; margin: 4px 0; }
+.hero .n { font-size: 12px; color: var(--muted); }
+.stat .k { font-size: 12px; color: var(--text-secondary); }
+.stat .v { font-size: 22px; font-weight: 600; margin-top: 4px; }
+.stat .n { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.binds { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; background: var(--text-primary); color: var(--surface-1); margin-left: 6px; vertical-align: middle; }
+.bar { position: relative; height: 10px; border-radius: 5px; background: var(--grid); margin-top: 8px; }
+.bar > div { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 5px; background: var(--series-1); }
+.charts { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; }
+.chart h3 { margin: 0 0 2px; font-size: 15px; }
+.chart .cap { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: inherit; fill: var(--muted); font-size: 11px; }
+svg .lbl { fill: var(--text-secondary); font-size: 11px; }
+svg .lblp { fill: var(--text-primary); font-size: 11px; font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; background: var(--c); }
+.legend span.mix::before { height: 3px; }
+.legend span.dash::before { background: none; border-top: 2px dashed var(--c); height: 0; }
+.tip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); display: none; min-width: 170px; z-index: 5; }
+.tip .t { font-weight: 600; margin-bottom: 4px; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.tip .r i { display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 6px; }
+details { margin-top: 12px; font-size: 12px; color: var(--text-secondary); }
+table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+td, th { padding: 3px 10px; border-bottom: 1px solid var(--grid); text-align: right; }
+th { color: var(--text-secondary); font-weight: 600; }
+.note { font-size: 12px; color: var(--muted); margin-top: 14px; }
+.at { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.at .ok::before { content: "\2713 "; color: var(--good); font-weight: 700; }
+.at .miss::before { content: "\2715 "; color: var(--critical); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <h1>Capacity planner</h1>
+  <div class="sub">qwen3-32b &middot; namespace llm-serving &middot; P/D fleet
+    &nbsp; <span class="badge src">Source: Prometheus window, last 1 h</span>
+    <span class="badge warn">Example UI: illustrative numbers, not a model</span>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>Traffic&nbsp; <span class="seg" id="mixsel">
+        <button data-b="mix" aria-pressed="true">Current mix</button><button data-b="0" aria-pressed="false">1k prompts only</button><button data-b="1" aria-pressed="false">4k only</button><button data-b="2" aria-pressed="false">8k only</button><button data-b="3" aria-pressed="false">32k only</button><button data-b="4" aria-pressed="false">128k only</button></span></div>
+      <div class="ctl" style="min-width:240px"><label>Output length, tokens <b id="outv"></b></label><input id="out" type="range" min="100" max="4000" step="50" value="1000"></div>
+    </div>
+    <div class="controls" style="margin-bottom:0">
+      <div class="ctl"><label>Prefill replicas <b id="npv"></b></label><input id="np" type="range" min="1" max="8" step="1" value="2"></div>
+      <div class="ctl"><label>Decode replicas <b id="ndv"></b></label><input id="nd" type="range" min="1" max="12" step="1" value="2"></div>
+      <div class="ctl"><label>Critical, req/s <b id="lamv"></b></label><input id="lam" type="range" min="1" max="80" step="0.5" value="24"></div>
+      <div class="ctl disabled" title="Regular traffic: later version"><label>Regular, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
+      <div class="ctl disabled" title="Batch traffic: later version"><label>Batch, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
+    </div>
+  </div>
+  <div style="height:14px"></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true">Critical</button>
+    <button class="tab" role="tab" aria-selected="false" disabled title="Later version">Regular</button>
+    <button class="tab" role="tab" aria-selected="false" disabled title="Later version">Batch</button>
+  </div>
+  <div class="card panel">
+    <div class="row">
+      <div>SLO percentile&nbsp; <span class="seg" id="pct">
+        <button data-q="p50" aria-pressed="false">p50</button><button data-q="p90" aria-pressed="true">p90</button><button data-q="p95" aria-pressed="false">p95</button><button data-q="p99" aria-pressed="false">p99</button></span></div>
+      <div class="ctl" style="min-width:220px"><label>TTFT target <b id="ttv"></b></label><input id="tt" type="range" min="80" max="1500" step="10" value="300"><div class="at" id="ttat"></div></div>
+      <div class="ctl" style="min-width:220px"><label>TPOT target <b id="tpv"></b></label><input id="tp" type="range" min="15" max="120" step="1" value="45"><div class="at" id="tpat"></div></div>
+      <div><span class="badge warn" id="rqflag">TPOT percentile: decode spread R_q assumed</span></div>
+    </div>
+
+    <div class="summary">
+      <div class="card hero">
+        <div class="k">The fleet carries, under these targets</div>
+        <div class="v" id="fleet"></div>
+        <div class="n" id="fleetn"></div>
+      </div>
+      <div class="card stat"><div class="k">Prefill limit (TTFT) <span id="pb"></span></div><div class="v" id="pl"></div><div class="n" id="pln"></div><div class="bar"><div id="plb"></div></div></div>
+      <div class="card stat"><div class="k">Decode limit (TPOT) <span id="db"></span></div><div class="v" id="dl"></div><div class="n" id="dln"></div><div class="bar"><div id="dlb"></div></div></div>
+      <div class="card stat"><div class="k">Headroom at the rate you set</div><div class="v" id="hr"></div><div class="n" id="hrn"></div></div>
+    </div>
+
+    <div class="charts">
+      <div class="card chart">
+        <h3>TTFT <span id="qa"></span> against request rate</h3>
+        <div class="cap">Bold: the traffic chosen above, which the limits are read from. Thin lines read "if all traffic were this prompt size".</div>
+        <svg id="ttft" viewBox="0 0 640 340" role="img" aria-label="TTFT against request rate"></svg>
+        <div class="legend" id="lg1"></div>
+      </div>
+      <div class="card chart">
+        <h3>TPOT <span id="qb"></span> against request rate</h3>
+        <div class="cap">Time per output token on the decode replicas.</div>
+        <svg id="tpot" viewBox="0 0 460 340" role="img" aria-label="TPOT against request rate"></svg>
+        <div class="legend" id="lg2"></div>
+      </div>
+    </div>
+    <details><summary>Table view</summary><div id="tbl"></div></details>
+    <div class="note">Dashed horizontal line: your target. Dashed vertical line: the rate you set. Open circle: TTFT or TPOT at that rate.
+      Filled circle: the highest rate that still meets the target. Shaded: past the knee, where the planner refuses to answer.
+      The fleet figure applies the operating-point cap (85% of the knee); the uncapped figure is shown under it.</div>
+  </div>
+  <div class="tip" id="tip"></div>
+</div>
+
+<script>
+// Illustrative stand-in for the what-if API: shapes like a processor-sharing prefill stage and a decode stage.
+const BUCKETS = [
+  {name: "1k",   P: 1000,   w: 0.20},
+  {name: "4k",   P: 4000,   w: 0.30},
+  {name: "8k",   P: 8000,   w: 0.35},
+  {name: "32k",  P: 32000,  w: 0.12},
+  {name: "128k", P: 128000, w: 0.03},
+];
+const VP = 290000, A = 0.020, HOP = 0.012, STEP = 0.030, CAP = 0.85, KV = 64000;
+const QF = {p50: 0.7, p90: 1.9, p95: 2.4, p99: 3.6};
+const meanP = BUCKETS.reduce((s, b) => s + b.w * b.P, 0);
+// A decode replica's token rate, set so the mix at 1000 output tokens decodes 18 req/s.
+const TOKS = 18 * 1000 * (1 + meanP / KV);
+const css = n => getComputedStyle(document.querySelector(".viz-root")).getPropertyValue(n).trim();
+const el = id => document.getElementById(id);
+let Q = "p90", SEL = "mix";
+
+// A traffic shape is a prompt length and how wide its spread is; "mix" is the current mix.
+function shape(b) { return b === "mix" ? {P: meanP, tail: 1.6} : {P: BUCKETS[b].P, tail: 1.0}; }
+// Longer outputs keep a request on the decode replica longer, and longer contexts make
+// each token slower: both lower the rate a decode replica sustains.
+function muD(P, O) { return TOKS / O / (1 + P / KV); }
+function rhoP(l, np, P) { return l * P / (np * VP); }
+function rhoD(l, nd, P, O) { return l / (nd * muD(P, O)); }
+function kneeP(np, P) { return 0.95 * np * VP / P; }
+function kneeD(nd, P, O) { return 0.95 * nd * muD(P, O); }
+function ttft(l, np, nd, b, O) {
+  const s = shape(b), rp = rhoP(l, np, s.P), rd = rhoD(l, nd, s.P, O);
+  if (rp >= 0.95 || rd >= 0.95) return NaN;
+  const x = s.P / VP * s.tail;           // the tail of a wide prompt mix sits above its mean
+  return A + HOP + x * (1 + QF[Q] * rp / (1 - rp)) + STEP * (1 + 0.5 * QF[Q] * rd / (1 - rd));
+}
+function tpot(l, nd, b, O) {
+  const s = shape(b), rd = rhoD(l, nd, s.P, O);
+  if (rd >= 0.95) return NaN;
+  const base = 0.012 * (1 + 0.5 * (s.P + O / 2) / KV);
+  return base + 0.006 * (1 + 0.55 * QF[Q]) * Math.sqrt(rd / (1 - rd)) * 2;
+}
+function invert(f, target, hi) {           // highest rate in (0, hi) with f(rate) <= target, f rising
+  let lo = 0.01;
+  if (!(f(lo) <= target)) return 0;
+  for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; (f(m) <= target) ? lo = m : hi = m; }
+  return lo;
+}
+const fmt = (v, d = 1) => Number.isFinite(v) ? v.toFixed(d) : "refused";
+
+function draw() {
+  const np = +el("np").value, nd = +el("nd").value, lam = +el("lam").value, O = +el("out").value;
+  const tt = +el("tt").value / 1000, tp = +el("tp").value / 1000;
+  el("npv").textContent = np; el("ndv").textContent = nd; el("lamv").textContent = lam; el("outv").textContent = O;
+  el("ttv").textContent = el("tt").value + " ms"; el("tpv").textContent = el("tp").value + " ms";
+  el("qa").textContent = Q; el("qb").textContent = Q;
+  el("rqflag").style.visibility = Q === "p50" ? "hidden" : "visible";
+
+  const S = shape(SEL), selName = SEL === "mix" ? "current mix" : BUCKETS[SEL].name + " only";
+  const kP = kneeP(np, S.P), kD = kneeD(nd, S.P, O), knee = Math.min(kP, kD);
+  const pLim = invert(l => ttft(l, np, nd, SEL, O), tt, kP);
+  const dLim = invert(l => tpot(l, nd, SEL, O), tp, kD);
+  // What the rate you set gives, next to each target.
+  const at = (v, target) => Number.isFinite(v)
+    ? `<span class="${v <= target ? "ok" : "miss"}">${Math.round(v * 1000)} ms at ${lam} req/s</span>`
+    : `<span class="miss">past the knee at ${lam} req/s</span>`;
+  el("ttat").innerHTML = at(ttft(lam, np, nd, SEL, O), tt);
+  el("tpat").innerHTML = at(tpot(lam, nd, SEL, O), tp);
+  const unc = Math.min(pLim, dLim), capped = Math.min(unc, CAP * knee);
+  const pBinds = pLim <= dLim;
+  el("fleet").textContent = fmt(capped) + " req/s";
+  el("fleetn").textContent = `Uncapped ${fmt(unc)} req/s; capped at 85% of the ${fmt(knee)} req/s knee` + (capped < unc ? " (the cap binds)" : "");
+  el("pl").textContent = fmt(pLim) + " req/s"; el("pln").textContent = `knee ${fmt(kP)} req/s`;
+  el("dl").textContent = fmt(dLim) + " req/s"; el("dln").textContent = `knee ${fmt(kD)} req/s`;
+  el("pb").innerHTML = pBinds ? '<span class="binds">binds</span>' : "";
+  el("db").innerHTML = !pBinds ? '<span class="binds">binds</span>' : "";
+  const m = Math.max(pLim, dLim, 1);
+  el("plb").style.width = (100 * pLim / m) + "%"; el("dlb").style.width = (100 * dLim / m) + "%";
+  const head = capped - lam;
+  el("hr").textContent = (head >= 0 ? "+" : "") + fmt(head) + " req/s";
+  el("hrn").textContent = head >= 0 ? `${fmt(lam)} req/s meets both targets` : `${fmt(lam)} req/s misses: add ${pBinds ? "prefill" : "decode"} replicas`;
+
+  const xmax = Math.max(10, Math.ceil(Math.max(knee, lam) * 1.15 / 5) * 5);
+  // Every traffic shape is drawn; the one selected above is bold, and the limits are read from it.
+  const all = ["mix", 0, 1, 2, 3, 4];
+  const colorOf = b => b === "mix" ? css("--text-primary") : css("--series-" + (b + 1));
+  const nameOf = b => b === "mix" ? "current mix" : BUCKETS[b].name + " only";
+  chart(el("ttft"), 640, xmax, tt, lam, kP, kD, all.map(b => ({name: nameOf(b), color: colorOf(b),
+    width: b === SEL ? 3 : 1.5, primary: b === SEL, f: l => ttft(l, np, nd, b, O)}))
+    .sort((a, c) => a.primary - c.primary), pLim, "ms", 1000);
+  chart(el("tpot"), 460, xmax, tp, lam, Infinity, kD, [
+    {name: selName, color: colorOf(SEL), width: 3, f: l => tpot(l, nd, SEL, O), primary: true},
+  ], dLim, "ms", 1000);
+
+  el("lg1").innerHTML = all.map(b => `<span class="${b === SEL ? "mix" : ""}" style="--c:${colorOf(b)}">${b === "mix" ? "current mix" : BUCKETS[b].name + " prompts only"}${b === SEL ? " (selected)" : ""}</span>`).join("") +
+    `<span class="dash" style="--c:${css("--text-secondary")}">target / rate you set</span>`;
+  el("lg2").innerHTML = `<span class="mix" style="--c:${colorOf(SEL)}">TPOT, ${selName}, ${O} output tokens</span><span class="dash" style="--c:${css("--text-secondary")}">target / rate you set</span>`;
+
+  const rows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 60].filter(r => r < xmax);
+  el("tbl").innerHTML = "<table><tr><th>req/s</th>" + all.map(b => `<th>TTFT ${b === "mix" ? "mix" : BUCKETS[b].name}</th>`).join("") + `<th>TPOT ${selName}</th></tr>` +
+    rows.map(r => `<tr><td>${r}</td>` + all.map(b => `<td>${fmt(ttft(r, np, nd, b, O) * 1000, 0)}</td>`).join("") + `<td>${fmt(tpot(r, nd, SEL, O) * 1000, 0)}</td></tr>`).join("") + "</table>";
+}
+
+function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
+  const H = 340, L = 52, R = 70, T = 14, B = 34, pw = W - L - R, ph = H - T - B;
+  const ymax = Math.max(target * 1.8, target + 0.05);
+  const X = v => L + pw * v / xmax, Y = v => T + ph * (1 - Math.min(v, ymax) / ymax);
+  const knee = Math.min(kP, kD);
+  let s = "";
+  if (knee < xmax) s += `<rect x="${X(knee)}" y="${T}" width="${L + pw - X(knee)}" height="${ph}" fill="${css("--sat")}"/>` +
+    `<text x="${L + pw - 4}" y="${T + ph - 8}" text-anchor="end">past the knee</text>`;
+  for (let i = 0; i <= 4; i++) { const v = ymax * i / 4, y = Y(v);
+    s += `<line x1="${L}" x2="${L + pw}" y1="${y}" y2="${y}" stroke="${css(i ? "--grid" : "--axis")}" stroke-width="1"/>` +
+         `<text x="${L - 8}" y="${y + 4}" text-anchor="end">${Math.round(v * k)}</text>`; }
+  const step = xmax > 60 ? 20 : xmax > 30 ? 10 : 5;
+  for (let v = 0; v <= xmax; v += step) s += `<text x="${X(v)}" y="${T + ph + 18}" text-anchor="middle">${v}</text>`;
+  s += `<text x="${L + pw / 2}" y="${H - 2}" text-anchor="middle">request rate, req/s</text>` +
+       `<text x="12" y="${T + ph / 2}" transform="rotate(-90 12 ${T + ph / 2})" text-anchor="middle">${unit}</text>`;
+  const labels = [];
+  for (const sr of series) {
+    let d = "", pen = false, end = null;
+    for (let i = 0; i <= 240; i++) { const l = xmax * i / 240, v = sr.f(l);
+      if (!Number.isFinite(v) || v > ymax) {           // off the chart: lift the pen, never clamp
+        if (pen && Number.isFinite(v)) { d += "L" + X(l).toFixed(1) + "," + T; end = {x: X(l), y: T}; }
+        pen = false; if (end) break; continue; }
+      d += (pen ? "L" : "M") + X(l).toFixed(1) + "," + Y(v).toFixed(1); pen = true; end = {x: X(l), y: Y(v)}; }
+    s += `<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="${sr.width}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    // Only the line the limits are read from is labelled on the plot; the thin
+    // per-bucket lines are named by the legend and the hover tooltip.
+    if (sr.primary && end) labels.push({x: end.x + 6, y: Math.max(end.y + 4, T + 12), name: sr.name, cls: "lblp"});
+  }
+  labels.sort((a, b) => a.y - b.y);                    // keep labels 13 px apart
+  for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 13) labels[i].y = labels[i - 1].y + 13;
+  for (const lb of labels) s += `<text class="${lb.cls}" x="${Math.min(lb.x, L + pw + 4)}" y="${lb.y}">${lb.name}</text>`;
+  s += `<line x1="${L}" x2="${L + pw}" y1="${Y(target)}" y2="${Y(target)}" stroke="${css("--text-secondary")}" stroke-width="1.5" stroke-dasharray="5 4"/>` +
+       `<text class="lbl" x="${L + 4}" y="${Y(target) - 6}">target ${Math.round(target * k)} ${unit}</text>`;
+  if (lam <= xmax) s += `<line x1="${X(lam)}" x2="${X(lam)}" y1="${T}" y2="${T + ph}" stroke="${css("--text-secondary")}" stroke-width="1.5" stroke-dasharray="5 4"/>` +
+       `<text class="lbl" x="${X(lam) - 4}" y="${T + ph - 6}" text-anchor="end">${lam} req/s</text>`;
+  const prim = series.find(x => x.primary), at = prim.f(lam);
+  if (Number.isFinite(at) && at <= ymax) s += `<circle cx="${X(lam)}" cy="${Y(at)}" r="5" fill="${css("--surface-1")}" stroke="${prim.color}" stroke-width="2"/>` +
+       `<text class="lblp" x="${X(lam) + 8}" y="${Y(at) - 8}">${Math.round(at * k)} ${unit} at ${lam} req/s</text>`;
+  if (limit > 0 && limit <= xmax) s += `<circle cx="${X(limit)}" cy="${Y(target)}" r="5" fill="${prim.color}" stroke="${css("--surface-1")}" stroke-width="2"/>` +
+       `<text class="lblp" x="${X(limit) - 8}" y="${Y(target) + 18}" text-anchor="end">${limit.toFixed(1)} req/s meets it</text>`;
+  s += `<line class="xh" x1="0" x2="0" y1="${T}" y2="${T + ph}" stroke="${css("--axis")}" stroke-width="1" visibility="hidden"/>` +
+       `<rect x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/>`;
+  svg.innerHTML = s;
+  const xh = svg.querySelector(".xh"), tip = el("tip");
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect(), vx = (e.clientX - r.left) * W / r.width;
+    if (vx < L || vx > L + pw) { svg.onmouseleave(); return; }
+    const l = (vx - L) / pw * xmax;
+    xh.setAttribute("x1", vx); xh.setAttribute("x2", vx); xh.setAttribute("visibility", "visible");
+    tip.innerHTML = `<div class="t">${l.toFixed(1)} req/s</div>` + series.slice().reverse().map(sr => {
+      const v = sr.f(l); return `<div class="r"><span><i style="background:${sr.color}"></i>${sr.name}</span><span>${Number.isFinite(v) ? Math.round(v * k) + " " + unit : "refused"}</span></div>`; }).join("");
+    tip.style.display = "block"; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px";
+  };
+  svg.onmouseleave = () => { xh.setAttribute("visibility", "hidden"); el("tip").style.display = "none"; };
+}
+
+document.querySelectorAll("input").forEach(i => i.addEventListener("input", draw));
+document.querySelectorAll("#mixsel button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#mixsel button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  SEL = b.dataset.b === "mix" ? "mix" : +b.dataset.b; draw(); }));
+// A link can open on a view: #traffic=3&out=2000&rate=20 (traffic is the bucket's place, 0 for 1k).
+for (const [k, v] of new URLSearchParams(location.hash.slice(1))) {
+  if (k === "traffic") document.querySelector(`#mixsel button[data-b="${v}"]`)?.click();
+  if (k === "out") el("out").value = v;
+  if (k === "rate") el("lam").value = v;
+}
+document.querySelectorAll("#pct button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#pct button").forEach(x => x.setAttribute("aria-pressed", x === b)); Q = b.dataset.q; draw(); }));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+draw();
+</script>
+</body>
+</html>

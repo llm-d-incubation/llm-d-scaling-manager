@@ -1,25 +1,74 @@
 # Typos configuration for llm-d-scaling-manager
 # https://github.com/crate-ci/typos
+#
+# The org's nightly scan (llm-d/llm-d-infra nightly-org-checks.yaml) runs
+# typos-cli v1.31.1 with this file. Allow a word here only when it is right
+# where it stands; a real misspelling is fixed, not listed.
+
+[default]
+extend-ignore-re = [
+  # Abbreviated commit hashes (`65ba31b`, `780a6daa`): hex with a digit in it.
+  "\\b[0-9a-f]*[0-9][0-9a-f]*\\b",
+  # sed's branch-to-label command in ':a; N; $!ba; ...'.
+  "\\$!ba;",
+  # ls -nd: numeric ids, the directory itself.
+  "\\bls -nd\\b",
+  # Fixtures misspelled on purpose: the tests check they are rejected, or
+  # that a near miss does not match.
+  "gpu-inventry",
+  "\"tema-[ab]\"",
+  "tema-[ab]",
+  "payroll-ded",
+  "\"rror\"",
+]
 
 [default.extend-words]
-# Intentional Go struct field names (ServiceParms, PrefillParms, DecodeParms)
-Parms = "Parms"
-parms = "parms"
 # Short code fragments / false positives
 ot = "ot"
 vas = "vas"
 # "mis-" prefix used as a hyphenated modifier (mis-classified, mis-attributed)
 mis = "mis"
-# Valid English variant (unparseable vs unparsable)
+# Valid English words the dictionary does not know.
 unparseable = "unparseable"
+retuned = "retuned"
+requeried = "requeried"
+# The plural of the borrow governor's per-chunk "until" clocks.
+untils = "untils"
+# Names: Azure Kubernetes Service, Open Model Engine (SGLang), a person.
+aks = "aks"
+ome = "ome"
+ofer = "ofer"
 
-# Pre-existing typos in codebase (to be fixed separately)
-accelarator = "accelarator"
-correcly = "correcly"
-coule = "coule"
-preformance = "preformance"
-servive = "servive"
-throughtput = "throughtput"
+[default.extend-identifiers]
+# The unknown policy key the strict decode must reject.
+scaleUpThreshhold = "scaleUpThreshhold"
+# A boolean AND, in prose ("expressions are ANDed").
+ANDed = "ANDed"
+# Test names: "the policy's" and "another's" without the apostrophe.
+TestLoadImbalanceReadsThePolicysKvThreshold = "TestLoadImbalanceReadsThePolicysKvThreshold"
+TestKVOutputDispersion_TheHoldIsThePolicysWindow = "TestKVOutputDispersion_TheHoldIsThePolicysWindow"
+TestSaturatedOnKvAtThePolicysThreshold = "TestSaturatedOnKvAtThePolicysThreshold"
+TestReservedGatedReplicaIsNotChargedAsAnothers = "TestReservedGatedReplicaIsNotChargedAsAnothers"
+
+# Short local variable names, scoped to the language that uses them.
+[type.go.extend-identifiers]
+ba = "ba"
+typ = "typ"
+nd = "nd"
+thr = "thr"
+brQueueThr = "brQueueThr"
+datas = "datas"
+
+[type.py.extend-identifiers]
+ba = "ba"
+ser = "ser"
+dout = "dout"
+
+[type.sh.extend-identifiers]
+nd = "nd"
+optin = "optin"
+INH = "INH"
+INH_LOG = "INH_LOG"
 
 [files]
 extend-exclude = [

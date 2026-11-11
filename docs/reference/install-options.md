@@ -67,7 +67,7 @@ from the release notes. See
 | `DEPLOY_ALERTING_RULES` | Install the PrometheusRule alerts | `false` |
 | `LLMSM_FMA_LAUNCHER_METRICS` | Apply a PodMonitor that scrapes FMA launcher pods, which nothing else does — they declare no container ports, so a port-name endpoint generates no target for them. Applied to the **workload** namespace (`LLMSM_WATCH_NS`, else `LLMSM_NS`), and skipped if another PodMonitor already scrapes launchers there. See [FMA launcher pods](operations.md#fma-launcher-pods) | `false` |
 | `DEPLOY_LLMD_NS` | Create an empty llm-d namespace up front, for a demo that wants it before anything is deployed. `deploy/install-epp.sh` creates its own when it deploys EPP, and the scaling manager does not watch namespaces | `false` |
-| `ENABLE_SCALE_TO_ZERO` | Allow a model to be parked at zero replicas, and enable the EPP `flowControl` gate that makes waking it possible | `true` |
+| `ENABLE_SCALE_TO_ZERO` | Allow a model to be parked at zero replicas: written to `LLMSM_SCALE_TO_ZERO` in `scaling-manager-manager-config`, the fleet default for `scaleToZero.enabled`. To `deploy/install-epp.sh` it also enables the EPP `flowControl` gate that makes waking possible. Unset, a re-install keeps the live value. A model still parks only when its ScaledObject's `minReplicaCount` is `0` | unset: keep the live value, else `false` |
 | `LLMSM_PASSIVE` | Run the controller **passive**: it computes, logs and publishes everything and changes no replica count. Written to `LLMSM_PASSIVE` in `scaling-manager-manager-config`, read at start. Unset, a re-install keeps the live value, and keeps `passive` on the scaling-policy `default` entry too, both written into what it applies. A controller that read another value at start is restarted. A scaling-policy entry overrides it per namespace, tier or model ([passive](scaling-policy.md#passive)) | unset: keep the live value, else `false` |
 | `SKIP_CHECKS` | Turn the preflight's refusals (no model servers in the namespace, model servers or EPP not scraped, missing permissions) into warnings: findings are still reported. It does not skip the guard against a second install on the cluster, or the post-install verification | `false` |
 | `SCALER_BACKEND` | `keda` or `none` (use a pre-installed backend) | `keda` |
@@ -95,10 +95,9 @@ from the release notes. See
 | `UNDEPLOY_SHARED` | With `UNDEPLOY=true`, also remove Prometheus, the scaler backend and EPP. **Off by default**: they are shared, and removing them breaks everything else on the cluster that uses them | `false` |
 
 > `make deploy-e2e-infra` passes `ENABLE_SCALE_TO_ZERO=$(SCALE_TO_ZERO_ENABLED)`,
-> whose Makefile default is **`false`** — the opposite of `install.sh`'s. So an
-> e2e deploy has scale-to-zero OFF unless you pass
-> `SCALE_TO_ZERO_ENABLED=true`, while a plain `make deploy-scaling-manager-on-k8s` has it ON.
-> Three e2e suites skip silently when it is off.
+> whose Makefile default is `false`, the same as everywhere else. Pass
+> `SCALE_TO_ZERO_ENABLED=true` to turn it on: three e2e suites skip silently
+> when it is off.
 
 ScaledObjects, HPA stabilization (`spec.advanced.horizontalPodAutoscalerConfig.behavior`) and vLLM ModelService tuning are not controlled by `install.sh`; manage them via `kubectl apply` directly (see the [llm-d guides](https://github.com/llm-d/llm-d/tree/main/guides/optimized-baseline) for reference manifests).
 
@@ -509,7 +508,7 @@ namespace-scoped installs side by side each have their own budget.
 |----------|-------------|---------|
 | `SKIP_TLS_VERIFY` | **Inert.** The installer sets it but nothing reads it. To skip or require Prometheus certificate checks, set `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` (see [TLS configuration](prometheus.md#tls-configuration)) | — |
 | `LLMSM_STICKY_SCALE_DOWN` | Hold a published scale-down against demand noise until utilization at the published count would reach the scale-up threshold, so the fleet actually descends. Off, a model idling near the scale-down boundary flips its target N ↔ N−1 cycle to cycle and KEDA's 300 s window keeps the N-th replica for as long as the noise lasts. Turn off only to compare | `true` |
-| `LLMSM_LOG_LEVEL` | **Inert.** The installer sets it but nothing reads it, and the controller's `LOG_LEVEL` env var is not read either. Verbosity is the controller's `--v=N` argument (default `2`; `4` is debug): set it with `LLMSM_VERBOSITY` | `info` |
+| `LLMSM_LOG_LEVEL` | The controller's `LOG_LEVEL`, by name: `error`, `warn`, `info`, `debug` or `trace`. `info` is the level `--v=2` logs at, `debug` is `--v=4`, `trace` is `--v=5`. `warn` and `error` behave the same: the controller logs only errors and info lines, so either one leaves only the errors. Unset, the install applies the shipped `info`, and so does every re-install, replacing a level set by hand on the Deployment. `LLMSM_VERBOSITY` beats it when both are given. Any other name is refused | unset |
 | `LLMSM_VERBOSITY` | The controller's `--v`, an integer from `0` to `5`. Unset keeps the shipped `2`. `3` adds the per-replica capacity lines (`replica-capacity-decision`, `k2-decision`, `derived-mu`, about 1.9 KB per replica per cycle), which `hack/benchmark/dump_k2_decisions.py` reads; `make benchmark-run` installs at `3` (`BENCHMARK_LLMSM_VERBOSITY`). `4` is debug | unset |
 | `LEARNED_STATE_EPISODE_GAP` | How long a gap in saturated observations before the next one starts a **new window** instead of blending into the old one. A variant that goes quiet over a weekend should not average Monday's capacity with Friday's | `24h` |
 | `LEARNED_STATE_VARIANT_TIMEOUT` | How long **per-variant** learned state — the fitted ITL window and its baseline, the replica start estimate — is kept after the variant stops being discovered, i.e. once its scale target or ScaledObject is gone. A variant parked at zero replicas is still discovered and keeps it for as long as it is parked | `24h` |

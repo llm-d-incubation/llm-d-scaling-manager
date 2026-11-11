@@ -27,6 +27,7 @@ name on the controller Deployment. All of these need a restart.
 | `CONTROLLER_INSTANCE` | Environment | empty | several controllers share a cluster. Each then manages only ScaledObjects labelled `scaling-manager.llmd.ai/controller-instance=<value>`, labels its metrics with it, and cleans up only its own transfer marks |
 | `POOL_GROUP` | Environment | `inference.networking.k8s.io` | your InferencePools use another API group |
 | `--v`; installer `LLMSM_VERBOSITY` | Flag | `2` | debugging: `3` adds per-replica capacity lines, `4` is debug |
+| `LOG_LEVEL`; installer `LLMSM_LOG_LEVEL` | Environment | `info` in the manifest, the level `--v=2` logs at | you want the level by name: `error`, `warn`, `info`, `debug` (`--v=4`) or `trace` (`--v=5`). `warn` and `error` are the same: only errors are logged. An explicit `--v` or `--zap-log-level` beats it; an unknown name is logged and ignored. A re-install without `LLMSM_LOG_LEVEL` puts back `info` |
 | `--zap-log-level` and the other `--zap-*` flags | Flag | controller-runtime's | you need another log encoder |
 | `--metrics-bind-address`, `--metrics-secure`, `--metrics-cert-path` and its name and key | Flag | `:8443` in the manifest, HTTPS, an in-memory certificate | your metrics scrape needs another port or certificate |
 | `--health-probe-bind-address` | Flag | `:8081` | the port is taken |

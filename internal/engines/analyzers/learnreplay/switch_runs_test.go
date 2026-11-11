@@ -165,11 +165,9 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	//   - SwitchMuYieldCappedAtMeasurement: a sibling yield never prices
 	//     above the measurement (mu-paths: variant-02 at 09:01 priced at its
 	//     measured 8.08 where it yielded to its siblings' 12.12, on 44 rows).
-	//   - SwitchMuUnreadAtTarget and SwitchMuMinorityFigureExpires move
-	//     nothing: no recording has an unread replica under the KV line
-	//     beside readers under the tolerance of it, nor a minority's figure
-	//     stale past lowHoldFor with no line. The unit tests and the
-	//     closed-loop probe hold them (heldBy).
+	//   - SwitchMuUnreadAtTarget moves nothing: no recording has an unread
+	//     replica under the KV line beside readers under the tolerance of
+	//     it. The unit tests and the closed-loop probe hold it (heldBy).
 	saturation.SwitchMuWeighsFleet: {
 		"mu-paths/learned-state.csv", "mu-paths/variant-capacities.csv",
 		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
@@ -180,8 +178,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	saturation.SwitchMuYieldCappedAtMeasurement: {
 		"mu-paths/variant-capacities.csv",
 	},
-	saturation.SwitchMuUnreadAtTarget:        nil,
-	saturation.SwitchMuMinorityFigureExpires: nil,
+	saturation.SwitchMuUnreadAtTarget: nil,
 
 	// The weighing's band (muChoice.weighs). Alone it moves nothing: with
 	// SwitchMuWeighsFleet off there is no weighing to latch. On top of it,
@@ -1128,8 +1125,8 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestPrefillBoundHeld_AFleetTheBoundGrewGrowsOnceUnderNoise"},
 	},
 	// ev-shindin/llm-scaling-manager#495's one slow pod: each test runs its switch on and off and asserts
-	// both (the ledger cases fail off, as on the parent; the credit and the
-	// expiry move the sample, the expiry and the probe's fleet).
+	// both (the ledger cases fail off, as on the parent; the credit moves the
+	// sample and the probe's fleet).
 	saturation.SwitchMuWeighsFleet: {
 		{"../saturation", "TestMuSlowPod_TheClearedLedgerCasesFailWithTheirSwitchOff"},
 	},
@@ -1140,10 +1137,6 @@ var heldBy = map[string][]heldTest{
 	saturation.SwitchMuUnreadAtTarget: {
 		{"../saturation", "TestMuSlowPod_TheCreditReachesTheSample"},
 		{"../saturation", "TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound"},
-	},
-	saturation.SwitchMuMinorityFigureExpires: {
-		{"../saturation", "TestMuSlowPod_AMinorityFigureExpiresOnlyPastTheHold"},
-		{"../saturation", "TestMuSlowPod_OneReplicasFigureExpiresAfterTheHold"},
 	},
 	// The weighing's band: each runs it on and off and asserts both (the
 	// bare tolerance flaps on the excursion, and seals the probe at 0.65).

@@ -18,26 +18,21 @@ import "time"
 // the readers says nothing about its limit, so it never lowers a sample, and
 // equal replicas read inside the tolerance of each other.
 //
-// Two rules bound what is left (SwitchMuUnreadAtTarget,
-// SwitchMuMinorityFigureExpires):
+// One rule bounds what is left (SwitchMuUnreadAtTarget): an unread replica
+// under the KV line is counted at what it serves over the scale-up target
+// (servedPod.credit). Its rate is what it was offered, not its limit, and
+// the floor charges the target on mu again: counted at what it serves, the
+// floor orders a fleet in which it serves 0.85 of that, a second headroom on
+// a figure that is no limit. Counted at served / target, the floor orders
+// the fleet in which it serves what it served, unqueued. The error is
+// bounded: at most 1 / target over what it served, and it corrects itself,
+// since a replica priced too high queues and is read.
 //
-//   - An unread replica under the KV line is counted at what it serves over
-//     the scale-up target (servedPod.credit). Its rate is what it was offered,
-//     not its limit, and the floor charges the target on mu again: counted at
-//     what it serves, the floor orders a fleet in which it serves 0.85 of
-//     that, a second headroom on a figure that is no limit. Counted at
-//     served / target, the floor orders the fleet in which it serves what it
-//     served, unqueued. The error is bounded: at most 1 / target over what it
-//     served, and it corrects itself, since a replica priced too high queues
-//     and is read.
-//   - A figure no line can replace, written by a minority of the fleet and
-//     under what the fleet's Ready replicas serve, gives way to that served
-//     bound after MuChoice.LowHoldFor without a saturated reading that agrees
-//     with it (minorityFigureExpired).
-//
-// What is still open: the closed-loop simulator cannot price a right
-// minority figure released, since its floor never binds above occupancy
-// without a queue. See the proposal's "One slow pod, as built".
+// A figure no line can replace stands, whoever wrote it. A rule that let a
+// minority's figure give way to the fleet's served bound after
+// MuChoice.LowHoldFor (mu-minority-figure-expires) was removed on
+// 2026-11-10: a 72-cell sweep with it on and off moved no cell. See the
+// proposal's "One slow pod, as built".
 
 // servedPod is one Ready own replica's served rate this cycle, whether it is
 // queued past the threshold, which makes that rate a reading of its limit,
@@ -300,109 +295,6 @@ func (c *muChoice) meanRatioSince(since time.Time) float64 {
 type weighRatio struct {
 	at    time.Time
 	ratio float64
-}
-
-// fleetBound is what the variant's Ready replicas serve, weighed as a sample
-// weighs them: a queued replica at what it serves, its limit, and an unqueued
-// one as an unread replica counts (servedPod.credit). Zero with no replica.
-// A replica serves no more than it sustains, so this errs toward more
-// replicas; the credit's error is bounded as an unread replica's is.
-func (s servedRates) fleetBound() float64 {
-	rates := make(map[string]float64, len(s.pods))
-	for name, p := range s.pods {
-		if p.queued {
-			rates[name] = p.rate
-		} else {
-			rates[name] = p.credit(s.target)
-		}
-	}
-	return meanOf(rates)
-}
-
-// noteSampleWriters records, after a write w to the throughput key, whether
-// the replicas that read its newest sample are a minority of the fleet: fewer
-// than half of them and the unqueued replicas that did not read it together
-// (muChoice.minority). A queued replica that did not read it is no evidence
-// of a faster fleet, and counts on neither side. Every replica queued and
-// read is a fleet that saturated together, and no minority.
-func (a *SaturationAnalyzer) noteSampleWriters(key string, served servedRates, w muWrite) {
-	if w != muSampled && w != muFolded {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	c := a.throughputMuChoice[key]
-	reads := a.throughputPodReads[key]
-	if c == nil || len(reads.pods) == 0 {
-		return
-	}
-	_, n := served.unread(reads.pods)
-	c.minority = 2*len(reads.pods) < len(reads.pods)+n
-}
-
-// minorityRelease is what minorityFigureExpired decided for one replica's
-// reading.
-type minorityRelease struct {
-	// released is set when the measured mu gives way to bound this cycle.
-	released bool
-	// bound is the rate it gives way to (servedRates.fleetBound).
-	bound float64
-	// first is set on the first released cycle of the key's run of them,
-	// the one that logs (the ev-shindin/llm-scaling-manager#303 rule: no line per replica per cycle).
-	first bool
-}
-
-// minorityFigureExpired reports whether the throughput key's measured mu
-// gives way this cycle to what the fleet serves (SwitchMuMinorityFigureExpires):
-// no line prices a derived figure to give way to, a minority of the fleet
-// wrote its newest sample (noteSampleWriters), the bucket has read nothing
-// saturated in agreement with it, nor taken a sample, for MuChoice.LowHoldFor
-// (lowHeldOut), and the figure sits under the Ready replicas' served bound
-// (servedRates.fleetBound). Released, mu is that bound, never no mu.
-//
-// This moves toward the side that breaks the SLO with no new reading, so it
-// states its reason (analyzer-learner.md, 3.4). A figure too low over-orders,
-// and an over-ordered fleet never saturates, so nothing refreshes or replaces
-// it: one slow pod's 0.55, read alone, held sixteen replicas at 28 against a
-// need of 18 after it recovered. With a line, MeasuredLowHoldFor already
-// releases such a figure to the derived one; with none, the fleet's own
-// served rates are the figure it gives way to. They are a lower bound, so the
-// release can only raise mu to what the replicas showed they sustain, and a
-// figure at or over the bound is kept: a minority that saturated first under
-// a steering router read what every replica can do, and the fleet at a lower
-// load serves less than that. A figure the whole fleet wrote is kept: it is
-// what every replica read, not one replica's. So is one whose writers are
-// unknown, a window restored or brought back with no choice on record: an
-// unknown resolves to the safe side, the lower figure. A borrowed reading is
-// no window of this key's, and is never released.
-func (a *SaturationAnalyzer) minorityFigureExpired(key string, reading throughputReading, served servedRates,
-	derivedOK bool, t tuning, now time.Time) (out minorityRelease) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	c := a.throughputMuChoice[key]
-	// Every path records the run's state: one that does not release ends
-	// the run, so the next release logs again.
-	defer func() {
-		if c != nil {
-			out.first = out.released && !c.released
-			c.released = out.released
-		}
-	}()
-	if !a.muMinorityExpires || derivedOK || !(reading.rate > 0) || reading.borrowed {
-		return out
-	}
-	if c == nil || !c.minority {
-		return out
-	}
-	fresh := reading.sampledAt
-	if !c.saturatedAt.IsZero() {
-		fresh = c.saturatedAt
-	}
-	bound := served.fleetBound()
-	if !a.lowHeldOut(fresh, reading, t, now) || !(reading.rate < bound) {
-		return out
-	}
-	return minorityRelease{released: true, bound: bound}
 }
 
 // yieldCapped reports whether a sibling yield to rate is refused by the cap

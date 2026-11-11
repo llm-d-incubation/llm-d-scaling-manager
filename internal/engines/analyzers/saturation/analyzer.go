@@ -371,15 +371,13 @@ type SaturationAnalyzer struct {
 	// (throughput_admission.go): on from the constructor; a replay turns it
 	// off (SetSwitchesForReplay).
 	muLatchSmoothed bool
-	// muWeighsFleet, muYieldCapped, muUnreadAtTarget and
-	// muMinorityExpires are the slow pod's replay switches (mu_slow_pod.go):
-	// SwitchMuWeighsFleet, SwitchMuYieldCappedAtMeasurement, SwitchMuUnreadAtTarget and
-	// SwitchMuMinorityFigureExpires. On from the constructor; a replay turns
-	// them off (SetSwitchesForReplay).
-	muWeighsFleet     bool
-	muYieldCapped     bool
-	muUnreadAtTarget  bool
-	muMinorityExpires bool
+	// muWeighsFleet, muYieldCapped and muUnreadAtTarget are the slow pod's
+	// replay switches (mu_slow_pod.go): SwitchMuWeighsFleet,
+	// SwitchMuYieldCappedAtMeasurement and SwitchMuUnreadAtTarget. On from
+	// the constructor; a replay turns them off (SetSwitchesForReplay).
+	muWeighsFleet    bool
+	muYieldCapped    bool
+	muUnreadAtTarget bool
 	// muWeighingBand is the weighing's band (muChoice.weighs):
 	// SwitchMuWeighingBand. On from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
@@ -731,7 +729,6 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		muWeighsFleet:          true,
 		muYieldCapped:          true,
 		muUnreadAtTarget:       true,
-		muMinorityExpires:      true,
 		muWeighingBand:         true,
 		muRereadLatest:         true,
 		batchCapDeclared:       true,

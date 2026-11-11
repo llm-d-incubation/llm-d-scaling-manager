@@ -272,9 +272,9 @@ type ScalingPolicy struct {
 	SLO *SLOPolicy `yaml:"slo,omitempty"`
 
 	// ScaleToZero optionally enables/disables scaling to zero replicas for this
-	// entry. When set, it overrides the separate scaling-manager-model-scale-to-zero-config
-	// ConfigMap for the matching model/namespace; when nil, that ConfigMap (and
-	// the LLMSM_SCALE_TO_ZERO env fallback) governs — see ResolveScaleToZeroEnabled.
+	// entry. When nil, the entry inherits: from the merged default entry, and
+	// finally from LLMSM_SCALE_TO_ZERO as the loader read it (the manager
+	// ConfigMap, or its environment override) — see ResolveScaleToZeroEnabled.
 	ScaleToZero *ScaleToZeroEnvelope `yaml:"scaleToZero,omitempty"`
 
 	// ScaleFromZero optionally tunes how this entry is woken from zero replicas.
@@ -341,7 +341,7 @@ type ScalingPolicy struct {
 //
 // It replaced a separate scaling-manager-model-scale-to-zero-config ConfigMap that carried
 // the same two settings. Having both meant scale-to-zero was configurable in
-// three places — here, there, and the LLMSM_SCALE_TO_ZERO env — with a precedence
+// three places — here, there, and the LLMSM_SCALE_TO_ZERO flag — with a precedence
 // rule to remember and no single answer to "is it on for this model?". Living on
 // the scaling entry also gives retention the namespace tiering and per-model
 // overrides it never had: the entry is resolved namespace-local → global and
@@ -351,8 +351,8 @@ type ScalingPolicy struct {
 // PolicyEntryKey).
 type ScaleToZeroEnvelope struct {
 	// Enabled turns scale-to-zero on for the entry. A pointer so an absent field
-	// (nil) means "inherit": from the merged default entry, and finally from the
-	// LLMSM_SCALE_TO_ZERO deployment flag. Distinguishing that from an explicit
+	// (nil) means "inherit": from the merged default entry, and finally from
+	// LLMSM_SCALE_TO_ZERO in the manager ConfigMap. Distinguishing that from an explicit
 	// false is what lets an override disable scale-to-zero for one model without
 	// the default entry's value winning.
 	Enabled *bool `yaml:"enabled,omitempty"`
