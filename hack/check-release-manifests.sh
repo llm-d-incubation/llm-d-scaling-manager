@@ -141,8 +141,9 @@ check_dir() {
             *) ins=__NAMESPACE__; safile=scaling-manager-namespaced.yaml ;;
         esac
         [ "$(q "$f" 'length')" -gt 0 ] || say "$f holds no object"
-        # The preview notice, until phase 2 lands (PREVIEW_NOTE in the renderer).
-        head -3 "$d/$f" | grep -q '^# PREVIEW: not yet installable on its own' || say "$f does not open with the PREVIEW notice"
+        # No preview notice: the files install on their own
+        # (make test-e2e-release-manifests).
+        head -3 "$d/$f" | grep -q '^# PREVIEW' && say "$f still opens with the PREVIEW notice"
         n="$(q "$f" '.[] | select(.metadata.labels["app.kubernetes.io/part-of"] != "scaling-manager"
                 or (.metadata.labels["app.kubernetes.io/instance"] // "") == ""
                 or .metadata.labels["app.kubernetes.io/version"] != $v
@@ -556,9 +557,9 @@ mutate preflight-cluster-scope-lost "preflight Job runs" scaling-manager-preflig
     '(select(.kind == "Job") | .spec.template.spec.containers[0].args) = ["preflight", "check"]'
 mutate preflight-cluster-controller "differs from the installer split" scaling-manager-preflight.yaml \
     '(select(.kind == "ClusterRole") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
-d="$WORK/m-preview-missing"; rm -rf "$d"; cp -r "$GOOD" "$d"
-sed -i '/^# PREVIEW: /d' "$d/scaling-manager-activate.yaml"
-caught preview-missing "PREVIEW notice" "$d"
+d="$WORK/m-preview-back"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '1a # PREVIEW: not yet installable on its own.' "$d/scaling-manager-activate.yaml"
+caught preview-back "PREVIEW notice" "$d"
 
 # --- the release workflow: what renders, signs and uploads these files -------
 WF="$ROOT/.github/workflows/ci-release.yaml"
@@ -610,7 +611,7 @@ rm -rf "$WORK/wf/run/dist"/*.yaml "$WORK/wf/run/dist"/*.sigstore.json
 if sign_run; then fail "the sign step passed with no manifest rendered"; else pass; fi
 
 # The attach step, executed with a stub gh: a missing release becomes a draft
-# with the preview note and gets the files; a draft gets them; a published
+# and gets the files; a draft gets them; a published
 # release with the same SHA256SUMS gets nothing; one with different files, or
 # a release that cannot be read, fails the job.
 cat > "$WORK/wf/bin/gh" <<'STUB'
@@ -644,7 +645,7 @@ for c in "absent ok create" "draft ok upload" "published-same ok none" "publishe
     read -r state want acts <<< "$c"
     rc=0; attach "$state" || rc=$?
     uploads="$(grep -c '^release upload' "$WORK/wf/gh.log")"
-    creates="$(grep -c '^release create .*--draft.*PREVIEW' "$WORK/wf/gh.log")"
+    creates="$(grep -c '^release create .*--draft' "$WORK/wf/gh.log")"
     got="ok"; [ "$rc" -eq 0 ] || got="refused"
     case "$acts" in
         create) [ "$creates" = 1 ] && [ "$uploads" = 1 ] || got="$got(create=$creates,upload=$uploads)" ;;

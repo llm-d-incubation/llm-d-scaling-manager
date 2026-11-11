@@ -61,12 +61,6 @@ RELEASE_FILES=(
     scaling-manager-preflight-cluster.yaml
 )
 
-# Until the controller reads scaling-manager-settings (phase 2 of the
-# proposal), these files cannot run a controller on their own: every file says
-# so in its first lines, and the release notes repeat it. Remove this, and the
-# check's assertion on it, when phase 2 lands.
-PREVIEW_NOTE="PREVIEW: not yet installable on its own. Install with make deploy-scaling-manager from a checkout of this tag (docs/guides/install-in-namespace)."
-
 die() { echo "release-manifests: $*" >&2; exit 1; }
 
 usage() {
@@ -237,7 +231,6 @@ per_install_names() {
 # header <file> <what> <how>: the comment every file starts with.
 header() {
     printf '# %s, llm-d-scaling-manager %s\n' "$1" "$VERSION"
-    printf '# %s\n' "$PREVIEW_NOTE"
     printf '# %s\n' "$2"
     [ -z "$3" ] || printf '# %s\n' "$3"
     printf '# Rendered by deploy/release-manifests.sh; see docs/proposals/install-from-release.md.\n'
