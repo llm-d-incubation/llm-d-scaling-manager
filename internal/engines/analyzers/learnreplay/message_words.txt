@@ -2037,6 +2037,9 @@ prefill-capacity-observed
 prefill-catchup
 prefill-demand-held
 prefill-required
+prefill-saturated-at-batch-budget
+prefill-saturated-on-router-queue
+prefill-saturated-without-queue
 prefill-throughput-bound-reading
 prefillBoundHeld
 prefillBounds
@@ -2318,6 +2321,7 @@ run
 running
 running-request
 running-unknown
+runningRequests
 runs
 s
 safety
