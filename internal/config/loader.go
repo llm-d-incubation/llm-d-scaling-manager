@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 	"time"
 
@@ -99,10 +101,19 @@ func learnedHorizon(log logr.Logger, key, raw string, parsed time.Duration) time
 // Returns error if required configuration is missing or invalid (fail-fast).
 // flagSet may be nil (e.g. in tests that don't set CLI flags).
 func Load(flagSet *flag.FlagSet, configFilePath string) (*Config, error) {
+	return LoadWithSettings(flagSet, configFilePath, nil)
+}
+
+// LoadWithSettings is Load with the data of the settings ConfigMap
+// (SettingsConfigMapName), nil when there is none. Its restart and advanced
+// keys that are set and valid take precedence over the flags, the environment
+// and config.yaml: settings > flags > env > config file > defaults. Its live
+// keys are not read here; the ConfigMap reconciler puts them in force
+// (Config.ApplySettings).
+func LoadWithSettings(flagSet *flag.FlagSet, configFilePath string, settings map[string]string) (*Config, error) {
 	cfg := &Config{}
 
-	// Load configuration (flags > env > config file > defaults)
-	if err := loadConfig(cfg, flagSet, configFilePath); err != nil {
+	if err := loadConfig(cfg, flagSet, configFilePath, settings); err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
@@ -115,14 +126,8 @@ func Load(flagSet *flag.FlagSet, configFilePath string) (*Config, error) {
 	return cfg, nil
 }
 
-// loadConfig loads configuration with precedence: flags > env > config file > defaults
-func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error {
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-
-	v := viper.New()
-
-	// Set defaults
+// setLoaderDefaults sets the built-in default of every loader key that has one.
+func setLoaderDefaults(v *viper.Viper) {
 	v.SetDefault("METRICS_BIND_ADDRESS", "0")
 	v.SetDefault("HEALTH_PROBE_BIND_ADDRESS", ":8081")
 	v.SetDefault("LEADER_ELECT", false)
@@ -148,20 +153,50 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	// Matches config/base/manager/manager-configmap.yaml so a deployment without
 	// the ConfigMap key runs at the same cadence as the shipped default.
 	v.SetDefault("GLOBAL_OPT_INTERVAL", DefaultOptimizationInterval.String())
+	// Not read through viper's defaults (parsePrometheusCacheConfigFromViper
+	// defaults them itself), but set here so a config.yaml value can be told
+	// apart from the default (managerConfigContributes).
+	cache := defaultPrometheusCacheConfig()
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_TTL", cache.TTL.String())
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_CLEANUP_INTERVAL", cache.CleanupInterval.String())
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_FETCH_INTERVAL", cache.FetchInterval.String())
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_FRESH_THRESHOLD", cache.FreshnessThresholds.FreshThreshold.String())
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_STALE_THRESHOLD", cache.FreshnessThresholds.StaleThreshold.String())
+	v.SetDefault("PROMETHEUS_METRICS_CACHE_UNAVAILABLE_THRESHOLD", cache.FreshnessThresholds.UnavailableThreshold.String())
+}
 
-	// Load from config file (mounted in the container) — sits between env and defaults in precedence
+// loadConfig loads configuration with precedence:
+// settings > flags > env > config file > defaults.
+func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string, settings map[string]string) error {
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	v := viper.New()
+	setLoaderDefaults(v)
+
+	// Load from config file (mounted in the container) — sits between env and
+	// defaults in precedence. A path that does not exist is not an error: the
+	// manager ConfigMap is optional now that the settings ConfigMap carries
+	// the same values, and its volume is mounted optional.
+	fileRead := false
 	if configFilePath != "" {
-		v.SetConfigFile(configFilePath)
-		if err := v.ReadInConfig(); err != nil {
-			return fmt.Errorf("failed to read config file %s: %w", configFilePath, err)
+		if _, statErr := os.Stat(configFilePath); errors.Is(statErr, fs.ErrNotExist) {
+			ctrl.Log.Info("No config file at the configured path; reading the settings ConfigMap, flags, environment and defaults",
+				"path", configFilePath)
+		} else {
+			v.SetConfigFile(configFilePath)
+			if err := v.ReadInConfig(); err != nil {
+				return fmt.Errorf("failed to read config file %s: %w", configFilePath, err)
+			}
+			fileRead = true
+			ctrl.Log.Info("Loaded config from file", "path", configFilePath)
 		}
-		ctrl.Log.Info("Loaded config from file", "path", configFilePath)
 	}
 
 	// Bind environment variables (precedence above config file, below flags)
 	v.AutomaticEnv()
 
-	// Bind pflag flags (highest precedence for explicitly-set flags)
+	// Bind pflag flags (precedence above env for explicitly-set flags)
 	if flagSet != nil {
 		for viperKey, flagName := range flagBindings {
 			if f := flagSet.Lookup(flagName); f != nil {
@@ -169,6 +204,9 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 			}
 		}
 	}
+
+	// The settings ConfigMap, above everything else.
+	cfg.settings = loadSettingsLayer(v, flagSet, settings, fileRead)
 
 	// Read resolved values into Config. WATCH_NAMESPACE is normalised once, here
 	// (blanks, spaces and repeats dropped), so " , " is cluster scope everywhere
@@ -223,6 +261,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 
 	cfg.saturation = scalingPolicyConfig{
 		global:           make(ScalingPolicySet),
+		globalPolicy:     make(ScalingPolicySet),
 		namespaceConfigs: make(map[string]ScalingPolicySet),
 	}
 
@@ -232,8 +271,8 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string) error
 	// Prometheus connection config from config file / env
 	promBaseURL := v.GetString("PROMETHEUS_BASE_URL")
 	if promBaseURL == "" {
-		return errors.New("prometheus configuration is required but not found. " +
-			"set PROMETHEUS_BASE_URL in config file or environment variable")
+		return fmt.Errorf("prometheus configuration is required but not found: set %s in the %s ConfigMap "+
+			"(or PROMETHEUS_BASE_URL in config.yaml or the environment)", SettingPrometheusURL, SettingsConfigMapName())
 	}
 	cfg.prometheus.baseURL = promBaseURL
 	cfg.prometheus.bearerToken = v.GetString("PROMETHEUS_BEARER_TOKEN")

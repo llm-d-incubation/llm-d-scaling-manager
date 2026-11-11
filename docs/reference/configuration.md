@@ -16,6 +16,7 @@ In the tables, **bold** marks the settings most installs change.
 | Place | What it is | A change applies |
 | --- | --- | --- |
 | **Installer** | `make` and `deploy/install.sh` variables. They write the places below. Every one: [installer options](install-options.md) | on the next install run |
+| **Settings ConfigMap** | `scaling-manager-settings`, flat keys, in the controller's namespace. Wins over every other place for the keys it sets ([below](#the-settings-configmap)) | live or after a restart, per key |
 | **Manager ConfigMap** | `scaling-manager-manager-config`, key `config.yaml`, in the controller's namespace. Every key can also be set as an environment variable of the same name on the controller Deployment. A flag beats an environment variable, which beats the ConfigMap, which beats the built-in default | after a controller restart |
 | **Flag** | an `args` entry on the controller Deployment | after a controller restart |
 | **Policy** | `scaling-manager-scaling-policy-config`: a `default` entry, named tiers, per-model overrides ([scaling policy](scaling-policy.md)). "Policy, `default`" means the cluster `default` entry only | live, within a cycle (\*) |
@@ -24,6 +25,120 @@ In the tables, **bold** marks the settings most installs change.
 
 (\*) A namespace-scoped controller that reads a policy ConfigMap outside the
 namespace it manages reads it only at startup; an edit there needs a restart.
+
+## The settings ConfigMap
+
+`scaling-manager-settings` in the controller's namespace holds one setting per
+key. Change one with a merge patch:
+
+```bash
+kubectl patch configmap scaling-manager-settings -n <controller-namespace> --type merge \
+  -p '{"data":{"utilizationShare":"shadow"}}'
+```
+
+The ConfigMap is optional. Without it, the controller reads the manager
+ConfigMap and the scaling policy as before. Create it once, with
+`kubectl create`; an upgrade never overwrites it.
+
+| Key | Values | Unset means | Replaces | Applies |
+| --- | --- | --- | --- | --- |
+| `prometheusURL` | an `https://` (or `http://`) URL | `PROMETHEUS_BASE_URL` from the manager ConfigMap | `PROMETHEUS_BASE_URL`; installer `PROMETHEUS_URL` | restart |
+| `prometheusInsecureSkipVerify` | `true`, `false` | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY`, else `false` | `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` | restart |
+| **`passive`** | `true`, `false` | the policy `default` entry's `passive`, else `LLMSM_PASSIVE`, else `false` | `LLMSM_PASSIVE` | **live** |
+| **`utilizationShare`** | `off`, `shadow`, `active` | the policy `default` entry's `optimizer` block | `make utilization-share-shadow`, `-activate`, `-off` | **live** |
+| `limiter` | `gpu-inventory`, `quota`, or `gpu-inventory,quota` | the policy `default` entry's `limiters` | `LLMSM_LIMITER` | live |
+| `quotas` | `H200=8,A100=4`; `-1` is no cap on a type | needed when `limiter` has `quota` | `LLMSM_QUOTAS` | live |
+| `quotaScope` | `namespace`, `cluster` | `namespace` | `LLMSM_QUOTA_SCOPE` | live |
+| `kueue` | `true`, `false` | `false` | `LLMSM_QUOTA_KUEUE` | live; needs the Kueue read grant |
+| `kueueBorrow` | `true`, `false` | `true` | `LLMSM_QUOTA_KUEUE_BORROW` | live |
+| `kueueNamespace` | a namespace | `kueue-system` | `KUEUE_NAMESPACE` | live |
+| `scaleToZero` | `true`, `false` | `LLMSM_SCALE_TO_ZERO`, else `false` | `LLMSM_SCALE_TO_ZERO` | restart |
+| `watchNamespaces` | namespaces, comma-separated | the `--watch-namespace` flag: the controller's own namespace (namespaced install) or all (cluster-wide) | `LLMSM_WATCH_NS` | restart; each namespace needs the model-namespace grant |
+| `logVerbosity` | `0` to `10`; `2` info, `4` debug, `5` trace | `--v`, else `LOG_LEVEL` | `LLMSM_VERBOSITY` | restart |
+
+It also takes the [advanced](configuration-advanced.md) keys
+`GLOBAL_OPT_INTERVAL`, `PROMETHEUS_METRICS_CACHE_*` and `LEARNED_STATE_*`
+under those names. They need a restart.
+
+**Live** keys take effect within a cycle. **Restart** keys are read at start:
+after a change, the controller logs `Restart required` and sends a
+`SettingsRestartRequired` event on the ConfigMap. Run
+`kubectl rollout restart deployment/scaling-manager-controller-manager -n <controller-namespace>`.
+
+An empty value is the same as an absent key.
+
+The limiter keys build one quota entry named `install-quota`, the name the
+installer gives it. A namespace-scoped quota is keyed on the managed namespace
+when the controller manages exactly one, else on `default` (each namespace gets
+its own budget).
+
+### Where a value comes from
+
+For a restart key, the first of these that sets it wins:
+
+1. the settings ConfigMap;
+2. a flag on the controller Deployment;
+3. an environment variable on the controller Deployment;
+4. `config.yaml` in the manager ConfigMap `scaling-manager-manager-config`;
+5. the built-in default.
+
+The manager ConfigMap is still read **for one release** (v0.11.x), for each key
+the settings ConfigMap does not set. After that it is not read.
+
+For a live key, the setting replaces that one field of the cluster `default`
+entry of the scaling policy. A tier or a per-model entry that sets the same
+field still wins, as before. So a model whose entry says `passive: false`
+scales while `passive: "true"` is set. When a setting and the `default` entry
+disagree, the setting wins and the controller logs both values once.
+
+`passive` also stands in for `LLMSM_PASSIVE` below the policy: a namespace's
+own scaling-policy map without a `passive` in its `default` entry follows the
+setting. A namespace map that sets `passive` keeps its own value.
+
+`limiter`, its quota keys and `utilizationShare` have no effect when a separate
+policy namespace holds the cluster's limiters
+([policy namespace](../guides/admin-gpu-bounding/#the-policy-namespace)).
+A controller's own settings never raise the bound a cluster admin set; the
+controller logs that it ignores them.
+
+### When a value is wrong
+
+A value that cannot be used is rejected, with the reason, in the log, a
+`SettingRejected` event on the ConfigMap, and `settingsRejected` in the status.
+The value in force before stays. At start, with no value before, the next
+source down applies. The limiter keys are kept or replaced together.
+
+A key that is no setting is ignored and reported (`SettingsUnknownKeys` event,
+`settingsUnknownKeys` in the status). An old name such as `LLMSM_PASSIVE`
+gets a hint naming the new key.
+
+A settings ConfigMap the controller is not allowed to read stops it at start,
+with the missing permission in the error. Not allowed is not the same as
+absent: the ConfigMap may declare the GPU budget. At runtime, a refused read
+keeps the settings in force.
+
+### Confirm a change
+
+`scaling-manager-controller-status` in the controller's namespace says what is
+in force:
+
+```bash
+kubectl get configmap scaling-manager-controller-status -n <controller-namespace> \
+  -o jsonpath='{.data.settingsResourceVersion} {.data.passiveDefault} {.data.utilizationShare}{"\n"}'
+```
+
+| Key | What it says |
+| --- | --- |
+| `settingsResourceVersion` | the settings ConfigMap version in force. Equal to the one you patched: the live keys of that patch apply |
+| `passiveDefault` | the controller-wide passive switch in force |
+| `utilizationShare` | the optimizer's mode: `off`, `shadow`, `active` or `invalid` |
+| `settingsSources` | where each setting's value comes from: `settings`, `manager-config`, `policy`, `policy-namespace`, `flag`, `env` or `default` |
+| `settingsSource` | `settings` when the manager ConfigMap no longer changes anything, so you can delete it; `settings+manager-config`, `manager-config` or `defaults` otherwise |
+| `settingsFromManagerConfig` | the manager ConfigMap keys still in force with a value other than the default |
+| `settingsRejected`, `settingsUnknownKeys` | as above |
+
+The controller reads the settings ConfigMap with the `configmaps` read it
+already has in its own namespace. Both install shapes grant it.
 
 ## Set for your setup
 
@@ -53,13 +168,16 @@ second column, that writes them for you.
 
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |
-| **`LLMSM_PASSIVE`** | Manager ConfigMap; installer `LLMSM_PASSIVE` | `false` | Passive for every model: it decides and publishes, and changes no replica count. The installer restarts the controller when the value changes | restart |
-| **`passive`** | Policy, any entry | inherits `LLMSM_PASSIVE` | Passive for one namespace, tier or model ([passive](scaling-policy.md#passive)) | live |
+| **`passive`** | Settings ConfigMap | unset: `LLMSM_PASSIVE` | Passive for every model, live. Replaces `LLMSM_PASSIVE` ([settings](#the-settings-configmap)) | live |
+| **`LLMSM_PASSIVE`** | Manager ConfigMap; installer `LLMSM_PASSIVE` | `false` | Passive for every model: it decides and publishes, and changes no replica count. The installer restarts the controller when the value changes. Not read while the `passive` setting is set | restart |
+| **`passive`** | Policy, any entry | inherits the `passive` setting, else `LLMSM_PASSIVE`. In the `default` entry the setting wins | Passive for one namespace, tier or model ([passive](scaling-policy.md#passive)) | live |
 
 ### GPU budget
 
 Without a limiter, scaling is bounded only by each ScaledObject's
-`maxReplicaCount`. Utilization share needs one.
+`maxReplicaCount`. Utilization share needs one. The settings keys `limiter`,
+`quotas`, `quotaScope` and `kueue*` replace the `limiters` list below when
+`limiter` is set ([settings](#the-settings-configmap)).
 
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |
@@ -73,7 +191,9 @@ Without a limiter, scaling is bounded only by each ScaledObject's
 
 The main path. Written by `make utilization-share-shadow` and
 `make utilization-share-activate`
-([the journey](../well-lit-paths/utilization-share/)).
+([the journey](../well-lit-paths/utilization-share/)), or switched with the
+`utilizationShare` setting (`off`, `shadow`, `active`), which keeps the rest of
+the block below ([settings](#the-settings-configmap)).
 
 | Name | Where set | Default | What it changes | Applies |
 | --- | --- | --- | --- | --- |

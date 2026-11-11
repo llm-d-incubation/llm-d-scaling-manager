@@ -45,6 +45,10 @@ const (
 	PassiveSourceNamespaceDefault = "namespaceDefault"
 	// PassiveSourceFlag is the LLMSM_PASSIVE controller flag.
 	PassiveSourceFlag = "LLMSM_PASSIVE"
+	// PassiveSourceSettings is the passive key of the settings ConfigMap. It
+	// replaces the controller's own `default` entry's passive and the
+	// LLMSM_PASSIVE flag.
+	PassiveSourceSettings = "settings"
 )
 
 // ResolvePassive reports whether a model is passive -- observed, never scaled
@@ -56,8 +60,11 @@ const (
 //  1. a per-model entry that sets `passive` (FindModelOverride);
 //  2. the tier the variant names, else `default.defaultPolicy`;
 //  3. the `default` entry -- the namespace's own map when it has one, which
-//     replaces the controller's whole;
-//  4. the LLMSM_PASSIVE flag.
+//     replaces the controller's whole; the controller's own entry with the
+//     settings ConfigMap's passive key folded in when that is set;
+//  4. the settings ConfigMap's passive key, else the LLMSM_PASSIVE flag.
+//     This layer is what a namespace map with no `passive` in its `default`
+//     entry falls to.
 //
 // When the variants name different tiers the model is passive if ANY of them
 // resolves passive: a model is scaled whole, and passive is the side that
@@ -79,12 +86,19 @@ func ResolvePassive(cfg *Config, namespace, modelID string, tiers []string) (boo
 			return *o.Passive, PassiveSourcePerModel
 		}
 	}
+	fromSettings := cfg.LiveSettings().Passive != nil
 	base, baseSource := cfg.PassiveDefault(), PassiveSourceFlag
+	if fromSettings {
+		baseSource = PassiveSourceSettings
+	}
 	def, hasDefault := policies[GlobalDefaultsKey]
 	if hasDefault && def.Passive != nil {
 		base, baseSource = *def.Passive, PassiveSourceDefault
-		if cfg.NamespaceHasLocalPolicy(namespace) {
+		switch {
+		case cfg.NamespaceHasLocalPolicy(namespace):
 			baseSource = PassiveSourceNamespaceDefault
+		case fromSettings:
+			baseSource = PassiveSourceSettings
 		}
 	}
 	first, firstSource := false, ""

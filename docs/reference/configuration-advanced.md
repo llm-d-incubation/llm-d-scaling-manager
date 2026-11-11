@@ -9,6 +9,9 @@ most installs need are on that page.
 
 Manager ConfigMap keys can also be set as environment variables of the same
 name on the controller Deployment. All of these need a restart.
+`GLOBAL_OPT_INTERVAL`, the `PROMETHEUS_METRICS_CACHE_*` keys and the
+`LEARNED_STATE_*` keys can also be set, under the same names, in the
+[settings ConfigMap](configuration.md#the-settings-configmap), which wins.
 
 | Name | Where set | Default | Change it when |
 | --- | --- | --- | --- |

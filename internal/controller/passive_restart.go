@@ -17,7 +17,8 @@ import (
 // LLMSM_PASSIVE (config.ManagerConfigPassive, the loader's reading) differs from
 // the value this process read at start: the flag is read only then, so the
 // edit does nothing until the controller restarts. An environment variable
-// overrides the ConfigMap, so then there is nothing to warn about.
+// overrides the ConfigMap, and so does the settings ConfigMap's passive key,
+// which is live: then there is nothing to warn about.
 //
 // r.passiveWarned is not locked: the reconciler runs with the default
 // MaxConcurrentReconciles of 1 (SetupWithManager sets no other), so Reconcile
@@ -26,8 +27,12 @@ func (r *ConfigMapReconciler) warnIfPassiveChanged(ctx context.Context, cm *core
 	if r.Config == nil || os.Getenv("LLMSM_PASSIVE") != "" {
 		return
 	}
+	if r.Config.LiveSettings().Passive != nil {
+		r.passiveWarned = ""
+		return
+	}
 	want, _ := config.ManagerConfigPassive(cm.Data)
-	running := r.Config.PassiveDefault()
+	running := r.Config.PassiveAtStart()
 	if want == running {
 		r.passiveWarned = ""
 		return

@@ -58,12 +58,16 @@
 24ns
 2m
 30
+30s
 394
 3s
+4
+5
 50
 5m
 7
 72dd1cf1.llm-d.ai
+8
 90s
 95
 99
@@ -72,12 +76,14 @@
 :demand
 A
 A-Za-z0-9_.-
+A100
 AMD
 AUncertain
 AboveDecodeOnset
 AboveFlowControlOnset
 AcceleratorNotResolved
 AggregatedServiceTimeIncludesDecode
+An
 Analyze
 Applied
 Applying
@@ -134,6 +140,7 @@ Deleted
 Deployment
 Discarding
 E1-const
+ENABLE_SCALE_TO_ZERO
 EPP
 EffectiveMaxBatchedTokens
 EngineParams
@@ -163,6 +170,7 @@ Grant
 Greedy-by-score
 GreedyByScore
 Grouped
+H200
 HEALTH_PROBE_BIND_ADDRESS
 HPA
 HPA/KEDA
@@ -187,6 +195,7 @@ InvalidInput
 It
 JSON
 KEDA
+KUEUE_NAMESPACE
 KV
 KV-cache
 KVBoundSlots
@@ -202,9 +211,15 @@ LEARNED_STATE_EPISODE_GAP
 LEARNED_STATE_SNAPSHOT
 LEARNED_STATE_VARIANT_TIMEOUT
 LLMSM_LIMITED_MODE
+LLMSM_LIMITER
 LLMSM_PASSIVE
+LLMSM_QUOTAS
+LLMSM_QUOTA_KUEUE
+LLMSM_QUOTA_KUEUE_BORROW
+LLMSM_QUOTA_SCOPE
 LLMSM_SCALE_TO_ZERO
 LLMSM_STICKY_SCALE_DOWN
+LLMSM_WATCH_NS
 LWS
 Leader
 LeaderWorkerSet
@@ -226,6 +241,7 @@ Mimir
 Minimum
 Mode
 Model
+N
 NANOSECONDS
 NVIDIA
 N_dec
@@ -345,6 +361,7 @@ SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY
 SCALING
 SCALING_POLICY_CONFIG_MAP_NAME
 SELECTOR
+SETTINGS_CONFIG_MAP_NAME
 SGLang
 SGLangNoComputedTokens
 STOP
@@ -364,6 +381,7 @@ Selected
 Set
 SetRecordedValue
 SetUsed
+Settings
 SingularFit
 Skipping
 SpreadBeyondProcessorSharing
@@ -380,6 +398,7 @@ TPOT
 TPOTBucketTooWide
 TPOTQuantileUnbounded
 TTFT
+TYPE
 Target
 TargetBelowFloor
 Thanos
@@ -397,6 +416,7 @@ TransferHeld
 TransferOmitted
 TriggeredScaleUp
 UP
+URL
 Unable
 Unexpected
 Unmarshal
@@ -405,6 +425,7 @@ Unusable
 UnvalidatedTTFT
 Updated
 Upgrade
+Use
 Using
 Utilization
 V
@@ -701,6 +722,7 @@ capture
 carries
 carry
 case
+case-sensitive
 cases
 cause
 ceiling
@@ -743,6 +765,7 @@ collect
 collecting
 combined
 comes
+comma-separated
 commit
 comparable
 compared
@@ -834,6 +857,7 @@ data_parallel_size
 data_parallel_size_local
 datastore
 days
+debug
 decay
 decided
 decides
@@ -878,6 +902,7 @@ demandBefore
 demandBeforeFloor
 demandHeld
 demandTokensPerSec
+denies
 deployment
 deployment-derived
 deployment-stored-fallback
@@ -1006,6 +1031,7 @@ entered
 enters
 entries
 entry
+env
 env.VLLM_ALL2ALL_BACKEND
 environment
 ep
@@ -1098,6 +1124,7 @@ fitted
 fitting
 fix
 fixed
+flag
 flags
 flappingWindow
 flavor
@@ -1159,6 +1186,7 @@ generatingMark
 generatingMarkAt
 generationTokenRate
 get
+gets
 givableGPUs
 give
 given
@@ -1249,10 +1277,14 @@ hopPerToken
 hopRefused
 horizon
 horizons
+host
 hot-rank-hold
 hotRankHeld
 hotRankHolds
 hotReplicas
+http
+https
+https://prometheus.monitoring.svc:9090
 huge
 hysteresis
 id
@@ -1293,6 +1325,7 @@ inputTokensNow
 inputTokensWas
 inputs
 inside
+install-quota
 instance
 instant
 instead
@@ -1421,6 +1454,7 @@ keeps
 kept
 key
 keyOutputTokens
+keys
 kind
 knee
 know
@@ -1449,7 +1483,9 @@ kueue-reclaim
 kueue.borrowNamespaces
 kueue.enabled
 kueue.releaseToNonReclaimingLenders
+kueueBorrow
 kueueBorrowedGPUs
+kueueNamespace
 kv-bound
 kv-cache-utilization-scorer
 kv-per-request-hits-resident
@@ -1567,6 +1603,7 @@ loadImbalance.idleKvUsage
 loaded
 localQueueDemand
 locator.New
+logVerbosity
 long
 longer
 longestQueuedRun
@@ -1591,6 +1628,7 @@ makes
 malformed
 managed
 manager
+manager-config
 manages
 map
 maps
@@ -1911,7 +1949,10 @@ overMax
 overQuotaGPUs
 overflows
 overlap
+overridden
+overriddenSource
 override
+overrides
 own
 own-k1
 ownCapacity
@@ -2010,6 +2051,7 @@ point
 pointer
 policies
 policy
+policy-namespace
 polling
 pool
 poolCarve
@@ -2085,6 +2127,8 @@ production
 products
 projectedBacklog
 prometheus
+prometheusInsecureSkipVerify
+prometheusURL
 promised
 promisedOnNodes
 promisedUnplaced
@@ -2123,6 +2167,7 @@ queuedRequests
 quiet
 quota
 quota-limiter
+quotaScope
 quotas
 r
 r/s
@@ -2192,6 +2237,7 @@ refusing
 registered
 registering
 registry
+rejected
 rejoined
 relaxed
 release
@@ -2320,6 +2366,7 @@ running-request
 running-unknown
 runs
 s
+safe
 safety
 same
 sample
@@ -2389,6 +2436,7 @@ scaling-manager-managed
 scaling-manager-manager-config
 scaling-manager-policy
 scaling-manager-scaling-policy-config
+scaling-manager-settings
 scaling-manager-system
 scaling-manager-utilization-share-history
 scaling-policy
@@ -2433,6 +2481,8 @@ servingSet
 set
 sets
 setting
+settings
+settingsValue
 settle
 settle-first-sight-restored
 settle.Hold
@@ -2608,6 +2658,7 @@ static
 stationary
 statistic
 status
+stay
 stayed
 stays
 steadyFor
@@ -2778,6 +2829,7 @@ tpot
 tpot.percentile
 tpot.target
 tpotExcluded
+trace
 traffic
 transfer
 transferPerToken
@@ -2880,7 +2932,6 @@ validation
 value
 valueFrom
 values
-variable
 variant
 variant-capacity-source
 variantCost
@@ -2930,6 +2981,7 @@ wasLifted
 watch
 watch-namespace
 watchNamespace
+watchNamespaces
 way
 webhook-cert-key
 webhook-cert-name
@@ -2997,6 +3049,7 @@ yet
 yield-served
 yield-siblings
 yield-stale
+you
 younger
 zero
 zero-replica-capacity-estimate
