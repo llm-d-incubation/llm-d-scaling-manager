@@ -22,6 +22,7 @@ import (
 	"errors"
 	goflag "flag"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -269,6 +270,10 @@ func logLevelInputs(fs *flag.FlagSet, getenv func(string) string) (verbositySet 
 	return fs.Changed("v"), getenv(logging.LogLevelEnv)
 }
 
+// settingsReadTimeout bounds the read of the settings ConfigMap at start,
+// before the configuration (and its REST timeout) is loaded.
+const settingsReadTimeout = 60 * time.Second
+
 // nolint:gocyclo
 func main() {
 	// `manager preflight check` runs the install's prerequisite checks and
@@ -436,28 +441,56 @@ func main() {
 	// Get REST config early (needed for config loading)
 	restConfig := ctrl.GetConfigOrDie()
 
-	// Load unified configuration (fail-fast if invalid)
-	// Viper resolves precedence: flags > env > config file > defaults
-	// For more information see:
-	// docs/reference/configuration.md
-	cfg, err := config.Load(flag.CommandLine, *configFilePath)
+	// A direct client for the reads that must happen BEFORE the manager exists:
+	// the settings ConfigMap, whose restart keys the configuration is loaded
+	// with, and the policy namespace below.
+	policyProbe, err := client.New(restConfig, client.Options{Scheme: scheme})
 	if err != nil {
-		setupLog.Error(err, "failed to load configuration - this is a fatal error")
+		setupLog.Error(err, "unable to build a client to read the settings and resolve the cluster policy namespace")
 		logging.Sync() //nolint:errcheck
 		os.Exit(1)     //nolint:gocritic // exitAfterDefer: Sync() called explicitly above
 	}
-	setupLog.Info("Configuration loaded successfully")
+	// The settings ConfigMap. Absent is fine (the manager ConfigMap and the
+	// defaults apply); unreadable is not, since it may declare the limiter.
+	// Bounded: the manager's REST timeout is not loaded yet, and an API server
+	// that never answers must not hold the start forever.
+	readCtx, cancelRead := context.WithTimeout(signalCtx, settingsReadTimeout)
+	settingsCM, err := controller.ReadSettings(readCtx, policyProbe, config.SystemNamespace())
+	cancelRead()
+	if err != nil {
+		os.Exit(startupExitCode(signalCtx, setupLog, err, "unable to read the settings ConfigMap"))
+	}
+	var settingsData map[string]string
+	if settingsCM != nil {
+		settingsData = map[string]string{}
+		maps.Copy(settingsData, settingsCM.Data)
+	}
+
+	// Load unified configuration (fail-fast if invalid)
+	// Precedence: settings ConfigMap > flags > env > config file > defaults
+	// For more information see:
+	// docs/reference/configuration.md
+	cfg, err := config.LoadWithSettings(flag.CommandLine, *configFilePath, settingsData)
+	if err != nil {
+		setupLog.Error(err, "failed to load configuration - this is a fatal error")
+		logging.Sync() //nolint:errcheck
+		os.Exit(1)
+	}
+	setupLog.Info("Configuration loaded successfully", "settingsSource", cfg.SettingsSource())
+	if v, ok := cfg.SettingsAtStart("V"); ok {
+		if logging.ApplySettingsVerbosity(&opts, cfg.LoggerVerbosity(), flag.CommandLine.Changed("zap-log-level")) {
+			setupLog.Info("Logging at the settings ConfigMap's logVerbosity", "logVerbosity", v)
+		} else {
+			setupLog.Info("Ignoring the settings ConfigMap's logVerbosity: --zap-log-level sets the level", "logVerbosity", v)
+		}
+	}
 
 	// Where cluster policy comes from has to be settled BEFORE the manager exists,
 	// because the manager's cache is built from the answer — a namespace absent
 	// from the cache is a namespace whose limiters can never be read. It needs a
 	// live lookup (the well-known namespace only wins if it is actually there), so
-	// it uses a direct client rather than the manager's, which is not running yet.
-	policyProbe, err := client.New(restConfig, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "unable to build a client to resolve the cluster policy namespace")
-		os.Exit(1)
-	}
+	// it uses the direct client above rather than the manager's, which is not
+	// running yet.
 	if err := controller.ResolvePolicyNamespace(signalCtx, policyProbe, cfg); err != nil {
 		os.Exit(startupExitCode(signalCtx, setupLog, err, "unable to resolve where cluster policy comes from"))
 	}
@@ -642,7 +675,14 @@ func main() {
 
 		// Configure cache to only watch configmaps with the scaling manager labels
 		// Other resource types are cached normally without filtering
-		cmNamespaces := map[string]cache.Config{}
+		cmNamespaces := map[string]cache.Config{
+			// Every namespace by the label, and the controller's own without
+			// it: the settings ConfigMap is created by hand (kubectl create
+			// configmap) as often as from the shipped file, and an edit of
+			// one without our label must still reach the controller live.
+			cache.AllNamespaces:      {LabelSelector: scalingManagerConfigSelector},
+			config.SystemNamespace(): {LabelSelector: labels.Everything()},
+		}
 		if cfg.PolicyNamespaceIsSeparate() {
 			// Exempt the policy namespace from the label filter. That ConfigMap is
 			// written by a cluster admin, by hand or by their own tooling, and
@@ -653,7 +693,6 @@ func main() {
 			// ByObject.Label, so leaving it unset would silently reapply the very
 			// filter this entry exists to lift.
 			policyNS := cfg.PolicyNamespace()
-			cmNamespaces[cache.AllNamespaces] = cache.Config{LabelSelector: scalingManagerConfigSelector}
 			cmNamespaces[policyNS] = cache.Config{LabelSelector: labels.Everything()}
 			setupLog.Info("Caching the cluster policy namespace without the label filter",
 				"policyNamespace", policyNS)
@@ -724,11 +763,9 @@ func main() {
 	// for tools and operators that would otherwise grep the log. Built before the
 	// bootstrap so the policy it loads is recorded; written only by the leader.
 	controllerStatus := controllerstatus.New(mgr.GetClient(), mgr.GetAPIReader(), config.SystemNamespace())
-	// What this process read, so the installer can tell a restart is due.
+	// What this process read, so the installer can tell a restart is due. The
+	// bootstrap below refreshes it with the settings ConfigMap's live passive.
 	controllerStatus.SetPassiveDefault(cfg.PassiveDefault())
-	if cfg.PassiveDefault() {
-		setupLog.Info("Passive mode is on controller-wide (LLMSM_PASSIVE=true): no replica count is changed unless a scaling-policy entry sets passive: false")
-	}
 	if err := mgr.Add(controllerStatus); err != nil {
 		setupLog.Error(err, "unable to add the controller-status publisher to the manager")
 		os.Exit(1)
@@ -750,6 +787,10 @@ func main() {
 		os.Exit(startupExitCode(ctx, setupLog, err, "unable to bootstrap initial ConfigMaps"))
 	}
 	setupLog.Info("Initial ConfigMap bootstrap completed")
+	if cfg.PassiveDefault() {
+		setupLog.Info("Passive mode is on controller-wide: no replica count is changed unless a scaling-policy entry sets passive: false",
+			"source", cfg.SettingsSources()[config.SettingPassive])
+	}
 
 	// Frozen registration decision: analyzer registration cannot change without
 	// a controller restart, so this value is captured once (after the bootstrap

@@ -67,6 +67,8 @@ is() { [ "$1" = "$2" ]; }
 LIVE_MANAGER_CONFIG=''
 LIVE_DEFAULT=''
 LIVE_STATUS_PASSIVE=''
+LIVE_STATUS_AT_START=''
+LIVE_STATUS_SOURCES=''
 LIVE_READ=ok
 LIVE_POLICY_READ=''
 RESTARTED=0
@@ -96,7 +98,8 @@ kubectl() {
                 *scaling-manager-manager-config*) printf '%s' "$LIVE_MANAGER_CONFIG" ;;
                 *) printf '%s' "$LIVE_DEFAULT" ;;
             esac ;;
-        "get configmap scaling-manager-controller-status"*) printf '%s' "$LIVE_STATUS_PASSIVE" ;;
+        "get configmap scaling-manager-controller-status"*)
+            printf '%s|%s|%s' "$LIVE_STATUS_AT_START" "$LIVE_STATUS_PASSIVE" "$LIVE_STATUS_SOURCES" ;;
         "kustomize "*) printf '%s\n' "$RENDERED_POLICY" ;;
         "rollout restart"*) RESTARTED=$((RESTARTED + 1)) ;;
         *) echo "unexpected kubectl $*" >&2; return 1 ;;
@@ -206,6 +209,23 @@ check "a controller running with the same value is left alone" is "$RESTARTED" 0
 LIVE_STATUS_PASSIVE=''; RESTARTED=0
 llmsm_passive_restart_if_stale scaling-manager 2>/dev/null
 check "a controller that published nothing is left to the rollout" is "$RESTARTED" 0
+# The settings ConfigMap: passiveDefault follows its live passive key, so the
+# value read at start is passiveAtStart, and with passive=settings in force
+# LLMSM_PASSIVE is not read at all.
+LIVE_STATUS_AT_START=true; LIVE_STATUS_PASSIVE=false
+LIVE_STATUS_SOURCES='limiter=default,passive=settings,scaleToZero=default'; RESTARTED=0
+llmsm_passive_restart_if_stale scaling-manager >/dev/null 2>&1
+check "passive from the settings ConfigMap: no restart" is "$RESTARTED" 0
+LIVE_STATUS_AT_START=false; LIVE_STATUS_PASSIVE=true; RESTARTED=0
+llmsm_passive_restart_if_stale scaling-manager >/dev/null 2>&1
+check "passive from the settings ConfigMap, another value at start: no restart" is "$RESTARTED" 0
+LIVE_STATUS_AT_START=true; LIVE_STATUS_PASSIVE=false; LIVE_STATUS_SOURCES='passive=policy'; RESTARTED=0
+llmsm_passive_restart_if_stale scaling-manager >/dev/null 2>&1
+check "passiveAtStart equal to LLMSM_PASSIVE: no restart, whatever passiveDefault says" is "$RESTARTED" 0
+LIVE_STATUS_AT_START=false; LIVE_STATUS_PASSIVE=true; LIVE_STATUS_SOURCES='passive=manager-config'; RESTARTED=0
+llmsm_passive_restart_if_stale scaling-manager >/dev/null 2>&1
+check "passiveAtStart other than LLMSM_PASSIVE: restarted, whatever passiveDefault says" is "$RESTARTED" 1
+LIVE_STATUS_AT_START=''; LIVE_STATUS_PASSIVE=''; LIVE_STATUS_SOURCES=''
 
 # 6. A re-install keeps the keys of the live default entry it does not render
 #    -- the utilization-share optimizer block first among them -- writes the
@@ -479,7 +499,7 @@ check "scale-to-zero: a render whose yq drops the value fails" is "$rc" 1
 check "scale-to-zero: deploy_scaling_manager_controller settles it" \
     is "$(declare -f deploy_scaling_manager_controller | grep -c 'llmsm_resolve_scale_to_zero')" 1
 
-EXPECT_CASES=87
+EXPECT_CASES=91
 echo
 echo "passive keep ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

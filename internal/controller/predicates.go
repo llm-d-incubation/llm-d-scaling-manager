@@ -29,7 +29,8 @@ func ConfigMapPredicate(ds datastore.Datastore, cfg *config.Config) predicate.Pr
 		systemNamespace := config.SystemNamespace()
 
 		// Check if this is a well-known ConfigMap name
-		if name != config.ConfigMapName() && name != config.ScalingPolicyConfigMapName() {
+		if name != config.ConfigMapName() && name != config.ScalingPolicyConfigMapName() &&
+			name != config.SettingsConfigMapName() {
 			return false
 		}
 

@@ -182,6 +182,16 @@ const (
 	// one of whose entries carries keys the schema does not define; the entry
 	// applies with them ignored.
 	K8SEventConfigEntryUnknownKeys = "ConfigEntryUnknownKeys"
+	// K8SEventSettingRejected is a Warning on the settings ConfigMap one of
+	// whose values cannot be used; the value in force before stays.
+	K8SEventSettingRejected = "SettingRejected"
+	// K8SEventSettingsUnknownKeys is a Warning on the settings ConfigMap when
+	// it holds keys that are no setting; they are ignored.
+	K8SEventSettingsUnknownKeys = "SettingsUnknownKeys"
+	// K8SEventSettingsRestartRequired is a Warning on the settings ConfigMap
+	// when a setting read only at start changed: it takes effect on the next
+	// restart of the controller.
+	K8SEventSettingsRestartRequired = "SettingsRestartRequired"
 	// K8SEventConfigFieldIgnored is a Warning on a scaling-policy ConfigMap one
 	// of whose entries has a field whose value cannot be used; that field acts
 	// as unset and the rest of the entry applies.
