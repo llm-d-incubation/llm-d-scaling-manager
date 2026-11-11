@@ -59,6 +59,15 @@ var legacyKeys = map[string][]string{
 	keyAllowHTTP:          {"PROMETHEUS_ALLOW_HTTP"},
 }
 
+// Values the settings keys take.
+const (
+	shareOff     = "off"
+	shareShadow  = "shadow"
+	shareActive  = "active"
+	limiterQuota = "quota"
+	valueTrue    = "true"
+)
+
 // settingsState is the settings as the controller will read them.
 type settingsState struct {
 	// found: the settings ConfigMap exists. legacy: the legacy ConfigMap does.
@@ -86,8 +95,8 @@ func (s *state) loadSettings(ctx context.Context) settingsState {
 		st := settingsState{set: map[string]string{}}
 		cms := s.env.Kube.CoreV1().ConfigMaps(s.env.Namespace)
 		cm, err := cms.Get(ctx, SettingsConfigMap, metav1.GetOptions{})
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			st.found = true
 			for k, v := range cm.Data {
 				st.set[k] = v
@@ -138,7 +147,7 @@ func checkSettings(ctx context.Context, s *state) ([]Result, string) {
 	}
 	us := st.value(keyUtilizationShare)
 	switch us {
-	case "off", "shadow", "active":
+	case shareOff, shareShadow, shareActive:
 	default:
 		bad = append(bad, fmt.Sprintf("%s=%q is not off, shadow or active", keyUtilizationShare, us))
 	}
@@ -146,13 +155,13 @@ func checkSettings(ctx context.Context, s *state) ([]Result, string) {
 	if lerr != nil {
 		bad = append(bad, lerr.Error())
 	}
-	if us != "off" && us != "" && lerr == nil && len(limiters) == 0 {
+	if us != shareOff && us != "" && lerr == nil && len(limiters) == 0 {
 		bad = append(bad, fmt.Sprintf("%s=%q needs a limiter: sharing divides a budget, and %s is empty", keyUtilizationShare, us, keyLimiter))
 	}
 	if _, err := parseQuotas(st.value(keyQuotas)); err != nil {
 		bad = append(bad, err.Error())
 	}
-	if limiters["quota"] && st.value(keyQuotas) == "" && st.value(keyKueue) != "true" {
+	if limiters[limiterQuota] && st.value(keyQuotas) == "" && st.value(keyKueue) != valueTrue {
 		bad = append(bad, fmt.Sprintf("%s names quota, and neither %s nor %s=\"true\" gives it a budget", keyLimiter, keyQuotas, keyKueue))
 	}
 	switch st.value(keyQuotaScope) {
@@ -202,7 +211,7 @@ func parseLimiters(v string) (map[string]bool, error) {
 	out := map[string]bool{}
 	for _, l := range splitList(v) {
 		switch l {
-		case "gpu-inventory", "quota":
+		case "gpu-inventory", limiterQuota:
 			out[l] = true
 		default:
 			return nil, fmt.Errorf("%s names %q; the limiters are gpu-inventory and quota", keyLimiter, l)

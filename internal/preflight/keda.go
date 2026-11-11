@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -113,8 +114,8 @@ func checkKEDANetworkPolicy(ctx context.Context, s *state) ([]Result, string) {
 	}
 	admitted, ruleIndex, source := "", 1, ""
 	np, err := s.env.Kube.NetworkingV1().NetworkPolicies(ns).Get(ctx, ScalerNetworkPolicy, metav1.GetOptions{})
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		admitted, ruleIndex = scalerAdmits(np)
 		source = "NetworkPolicy " + ScalerNetworkPolicy
 		if ruleIndex < 0 {
@@ -272,14 +273,14 @@ func mtlsSteps(ns, keda, copyName string) string {
 // caPEM, at now.
 func verifies(caPEM, leafPEM []byte, now time.Time) error {
 	if len(caPEM) == 0 {
-		return fmt.Errorf("no CA certificate")
+		return errors.New("no CA certificate")
 	}
 	if len(leafPEM) == 0 {
-		return fmt.Errorf("no certificate")
+		return errors.New("no certificate")
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(caPEM) {
-		return fmt.Errorf("the CA is not a PEM certificate")
+		return errors.New("the CA is not a PEM certificate")
 	}
 	var leaf *x509.Certificate
 	inter := x509.NewCertPool()
@@ -300,7 +301,7 @@ func verifies(caPEM, leafPEM []byte, now time.Time) error {
 		}
 	}
 	if leaf == nil {
-		return fmt.Errorf("the certificate is not PEM")
+		return errors.New("the certificate is not PEM")
 	}
 	_, err := leaf.Verify(x509.VerifyOptions{
 		Roots: roots, Intermediates: inter, CurrentTime: now,

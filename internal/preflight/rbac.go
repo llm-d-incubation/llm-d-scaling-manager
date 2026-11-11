@@ -94,14 +94,15 @@ func checkControllerRBAC(ctx context.Context, s *state) ([]Result, string) {
 	if err != nil {
 		return []Result{unknown("a SubjectAccessReview for "+s.ctrlUser(), err)}, ""
 	}
-	reapply := fmt.Sprintf(`sed "s/__NAMESPACE__/%s/g" <the install file> | kubectl apply -f -`, ns)
+	fixes := []string{fmt.Sprintf(`sed "s/__NAMESPACE__/%s/g" <the install file> | kubectl apply -f -`, ns)}
 	if named {
 		for _, m := range nss {
 			if m != ns {
-				reapply += fmt.Sprintf("\n"+`sed -e "s/__NAMESPACE__/%s/g" -e "s/__MODEL_NAMESPACE__/%s/g" scaling-manager-model-namespace.yaml | kubectl apply -f -`, ns, m)
+				fixes = append(fixes, fmt.Sprintf(`sed -e "s/__NAMESPACE__/%s/g" -e "s/__MODEL_NAMESPACE__/%s/g" scaling-manager-model-namespace.yaml | kubectl apply -f -`, ns, m))
 			}
 		}
 	}
+	reapply := strings.Join(fixes, "\n")
 	if len(denied) > 0 {
 		return []Result{{Status: Fail, Detail: fmt.Sprintf("%s may not: %s", ControllerServiceAccount, listText(denied, 8)), Fix: reapply}}, ""
 	}
@@ -112,13 +113,13 @@ func checkControllerRBAC(ctx context.Context, s *state) ([]Result, string) {
 				Fix:    reapply + "   # the node-reader ClusterRole and its binding, part=admin"}}, ""
 		}
 		return []Result{{Status: Warn,
-			Detail: fmt.Sprintf("%s may do what it needs, but not list nodes: accelerators stay unresolved (no gpu-inventory limiter is set, so nothing stops)", ControllerServiceAccount)}}, ""
+			Detail: ControllerServiceAccount + " may do what it needs, but not list nodes: accelerators stay unresolved (no gpu-inventory limiter is set, so nothing stops)"}}, ""
 	}
 	return []Result{{Status: Pass, Detail: fmt.Sprintf("%s may do the %d things it needs, and list nodes", ControllerServiceAccount, len(asks))}}, ""
 }
 
-// checkNamespaceReaders: the ClusterRoles that read Namespaces by name name
-// every managed namespace (decision 5). The shipped ones name only the
+// checkNamespaceReaders: the ClusterRoles that read Namespaces by name must
+// list every managed namespace (decision 5). The shipped ones name only the
 // controller's namespace, so each other one needs a patch, printed here.
 func checkNamespaceReaders(ctx context.Context, s *state) ([]Result, string) {
 	if s.env.Scope == ScopeCluster {
@@ -126,7 +127,7 @@ func checkNamespaceReaders(ctx context.Context, s *state) ([]Result, string) {
 	}
 	nss, _ := s.managed()
 	st := s.loadSettings(ctx)
-	kueue := st.value(keyKueue) == "true"
+	kueue := st.value(keyKueue) == valueTrue
 	var results []Result
 	for _, r := range narrowedReaders {
 		if r.kueueOnly && !kueue {
@@ -136,8 +137,8 @@ func checkNamespaceReaders(ctx context.Context, s *state) ([]Result, string) {
 		var have []string
 		installed := true
 		cr, err := s.env.Kube.RbacV1().ClusterRoles().Get(ctx, name, metav1.GetOptions{})
-		switch {
-		case err == nil:
+		switch err {
+		case nil:
 			var all bool
 			if have, all = namespaceNames(cr); all {
 				have = nss
@@ -195,7 +196,7 @@ func namespaceNames(cr *rbacv1.ClusterRole) ([]string, bool) {
 // controller may read ClusterQueues (scaling-manager-kueue.yaml).
 func checkKueue(ctx context.Context, s *state) ([]Result, string) {
 	st := s.loadSettings(ctx)
-	if st.value(keyKueue) != "true" {
+	if st.value(keyKueue) != valueTrue {
 		return nil, `kueue is "false"`
 	}
 	var missing []string
@@ -231,7 +232,7 @@ func checkKueue(ctx context.Context, s *state) ([]Result, string) {
 // only grant of it; decision 3).
 func checkActivation(ctx context.Context, s *state) ([]Result, string) {
 	st := s.loadSettings(ctx)
-	if st.value(keyUtilizationShare) != "active" {
+	if st.value(keyUtilizationShare) != shareActive {
 		return nil, fmt.Sprintf("utilizationShare is %q", st.value(keyUtilizationShare))
 	}
 	nss, named := s.managed()

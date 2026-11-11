@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -59,7 +60,7 @@ type reaction struct {
 // forbidden is a reaction that refuses verb on resource.
 func forbidden(verb, resource string) reaction {
 	return reaction{verb, resource, func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", fmt.Errorf("RBAC: access denied"))
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", errors.New("RBAC: access denied"))
 	}}
 }
 
@@ -324,7 +325,7 @@ func metaOf(o runtime.Object) (objMeta, error) {
 func metaAccessor(o runtime.Object) (string, error) {
 	m, ok := o.(metav1.Object)
 	if !ok {
-		return "", fmt.Errorf("no metadata")
+		return "", errors.New("no metadata")
 	}
 	return m.GetName(), nil
 }

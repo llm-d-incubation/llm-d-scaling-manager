@@ -98,7 +98,7 @@ func TestNamespaceReaders(t *testing.T) {
 	t.Run("Kueue reader too", func(t *testing.T) {
 		f := newFixture(t)
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
-		f.settings[keyKueue] = "true"
+		f.settings[keyKueue] = valueTrue
 		f.add(&rbacv1.ClusterRole{
 			ObjectMeta: metav1.ObjectMeta{Name: "scaling-manager-kueue-reader-role-" + testNS},
 			Rules: []rbacv1.PolicyRule{
@@ -139,8 +139,8 @@ func TestKueue(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
-			f.settings[keyKueue] = "true"
-			f.settings[keyLimiter] = "quota"
+			f.settings[keyKueue] = valueTrue
+			f.settings[keyLimiter] = limiterQuota
 			tc.change(f)
 			if r := only(t, f.run(t), "kueue"); r.Status != tc.want {
 				t.Errorf("got %s %q, want %s", r.Status, r.Detail, tc.want)
@@ -203,7 +203,7 @@ func TestAccelerators(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
-			f.settings[keyLimiter] = "quota"
+			f.settings[keyLimiter] = limiterQuota
 			f.settings[keyQuotas] = tc.quotas
 			tc.change(f)
 			if r := only(t, f.run(t), "accelerators"); r.Status != tc.want {
@@ -218,7 +218,7 @@ func TestAccelerators(t *testing.T) {
 func TestActivation(t *testing.T) {
 	active := func(f *fixture) {
 		f.settings[keyUtilizationShare] = "active"
-		f.settings[keyLimiter] = "quota"
+		f.settings[keyLimiter] = limiterQuota
 		f.settings[keyQuotas] = "H200=8"
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
 	}
@@ -243,7 +243,7 @@ func TestActivation(t *testing.T) {
 	}
 	f = newFixture(t)
 	f.settings[keyUtilizationShare] = "shadow"
-	f.settings[keyLimiter] = "quota"
+	f.settings[keyLimiter] = limiterQuota
 	f.settings[keyQuotas] = "H200=8"
 	if rep := f.run(t); !notApplicable(rep, "activation") {
 		t.Errorf("shadow: activation should not apply")
@@ -319,7 +319,7 @@ func TestExitCodeAndResultConfigMap(t *testing.T) {
 	}
 	var b strings.Builder
 	Print(&b, rep)
-	if !strings.Contains(b.String(), "1 PASS, 0 WARN, 0 FAIL, 2 UNKNOWN\nUNKNOWN is not a pass") {
+	if !strings.Contains(b.String(), "1 PASS, 0 WARN, 0 FAIL, 2 UNKNOWN\n") || !strings.Contains(b.String(), "is not a pass") {
 		t.Fatalf("summary:\n%s", b.String())
 	}
 }

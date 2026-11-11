@@ -90,7 +90,7 @@ func NewHTTPPrometheus(cfg PrometheusConfig) (Prometheus, error) {
 		pool = x509.NewCertPool()
 	}
 	if len(cfg.CA) > 0 && !pool.AppendCertsFromPEM(cfg.CA) {
-		return nil, fmt.Errorf("Secret %s holds no PEM certificate under ca.crt", PrometheusCASecret)
+		return nil, fmt.Errorf("the CA Secret %s holds no PEM certificate under ca.crt", PrometheusCASecret)
 	}
 	if ca, err := os.ReadFile(serviceCAFile); err == nil {
 		pool.AppendCertsFromPEM(ca)
@@ -193,7 +193,7 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 	if err != nil || u.Host == "" {
 		return []Result{{Status: Fail, Detail: fmt.Sprintf("%s=%q is not a URL with a host", keyPrometheusURL, raw), Fix: setURL("https://...")}}, ""
 	}
-	if u.Scheme == "http" && st.value(keyAllowHTTP) != "true" {
+	if u.Scheme == "http" && st.value(keyAllowHTTP) != valueTrue {
 		return []Result{{Status: Fail,
 			Detail: raw + " is plain HTTP, which the controller refuses: it sends its ServiceAccount token to Prometheus",
 			Fix:    setURL("https://" + u.Host + u.Path)}}, ""
@@ -207,7 +207,7 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 	} else {
 		ca = sec.Data["ca.crt"]
 	}
-	insecure := st.value(keyPrometheusInsecure) == "true"
+	insecure := st.value(keyPrometheusInsecure) == valueTrue
 	prom, err := s.env.NewPrometheus(PrometheusConfig{URL: raw, InsecureSkipVerify: insecure, CA: ca})
 	if err != nil {
 		return []Result{{Status: Fail, Detail: raw + ": " + err.Error(),

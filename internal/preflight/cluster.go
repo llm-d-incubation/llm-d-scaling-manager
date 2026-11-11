@@ -186,7 +186,7 @@ func checkOpenShiftUserMonitoring(ctx context.Context, s *state) ([]Result, stri
 		switch n.Labels[userMonitoringLabel] {
 		case "false":
 			off = append(off, ns)
-		case "true":
+		case valueTrue:
 		default:
 			if ns == s.env.Namespace {
 				unset = append(unset, ns)

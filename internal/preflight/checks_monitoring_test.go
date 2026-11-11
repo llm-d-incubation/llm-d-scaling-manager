@@ -53,7 +53,7 @@ func TestPrometheusCAIsPassed(t *testing.T) {
 	f := newFixture(t)
 	c := newCerts(t)
 	f.add(secret(testNS, PrometheusCASecret, map[string][]byte{"ca.crt": c.caPEM}))
-	f.settings[keyPrometheusInsecure] = "true"
+	f.settings[keyPrometheusInsecure] = valueTrue
 	f.run(t)
 	if f.captured == nil || string(f.captured.CA) != string(c.caPEM) || !f.captured.InsecureSkipVerify {
 		t.Fatalf("client built from %+v", f.captured)
@@ -204,7 +204,7 @@ func TestOpenShiftUserMonitoring(t *testing.T) {
 	}{
 		{"opted out", map[string]string{userMonitoringLabel: "false"}, Fail},
 		{"unlabelled", nil, Warn},
-		{"labelled", map[string]string{userMonitoringLabel: "true"}, Pass},
+		{"labelled", map[string]string{userMonitoringLabel: valueTrue}, Pass},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
