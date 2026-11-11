@@ -15,8 +15,8 @@ import (
 // The horizons, and whether configuring them reaches anything.
 //
 // The last point is the one that matters. This project has shipped a knob that
-// reached nothing at all -- LOG_LEVEL/LLMSM_LOG_LEVEL is read by no code and
-// changes no behaviour -- and an inert knob is worse than no knob, because an
+// reached nothing at all -- LOG_LEVEL/LLMSM_LOG_LEVEL, read by no code until
+// v0.11.0 -- and an inert knob is worse than no knob, because an
 // operator who sets it believes they have changed something. So these specs do
 // not stop at "the field holds the value I set": each one drives the code the
 // horizon governs and asserts the horizon decided the outcome.

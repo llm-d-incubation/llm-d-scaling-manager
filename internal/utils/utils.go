@@ -4,12 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"regexp"
-	"strings"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
-	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,22 +18,6 @@ func FullName(name string, namespace string) string {
 // Helper to check if a value is valid (not NaN or infinite)
 func CheckValue(x float64) bool {
 	return !(math.IsNaN(x) || math.IsInf(x, 0))
-}
-
-func GetZapLevelFromEnv() zapcore.Level {
-	levelStr := strings.ToLower(os.Getenv("LOG_LEVEL"))
-	switch levelStr {
-	case "debug":
-		return zapcore.DebugLevel
-	case "info":
-		return zapcore.InfoLevel
-	case "warn":
-		return zapcore.WarnLevel
-	case "error":
-		return zapcore.ErrorLevel
-	default:
-		return zapcore.InfoLevel // fallback
-	}
 }
 
 func MarshalStructToJsonString(t any) string {

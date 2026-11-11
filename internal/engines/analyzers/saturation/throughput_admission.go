@@ -122,13 +122,9 @@ import (
 // so the measurement is not what one replica does. That is what a confirmed
 // low reading cannot survive once the replica recovers, or a sibling shows
 // it was one replica's. With no line there is no derived figure to give way
-// to, and the measurement stands -- unless a minority of the fleet wrote it
-// and it sits under what the fleet's Ready replicas serve
-// (SwitchMuMinorityFigureExpires): then, stale for MeasuredLowHoldFor, it
-// gives way to that served bound, never to no mu. The reason is the hold's
-// own: an over-ordered fleet never saturates to correct a low figure
-// (minorityFigureExpired). A figure the whole fleet wrote stands, and so does
-// one at or over the bound.
+// to, and the measurement stands, whoever wrote it: the weighed sample
+// (mu_slow_pod.go) is what keeps one slow replica's reading from being the
+// fleet's figure.
 //
 // Nor does a measurement outrank what the variant's Ready replicas serve
 // with a full cache, at least one of them unqueued: under SiblingMuTolerance
@@ -139,8 +135,7 @@ import (
 // the bound nor MeasuredLowHoldFor released it. Since ev-shindin/llm-scaling-manager#495 the yield is
 // capped at the measurement (SwitchMuYieldCappedAtMeasurement), so it no
 // longer prices: the siblings reach mu through the weighed sample
-// (mu_slow_pod.go), and a slow replica's figure under what the fleet serves
-// gives way to it by the minority rule instead.
+// (mu_slow_pod.go) instead.
 //
 // The yield is latched: once a stale measurement has given way it stays given
 // way until the two figures come back within MeasuredDerivedReturnRatio, or
@@ -531,15 +526,6 @@ type muChoice struct {
 	// weighProvisional is set while the weighing was set on less than a set
 	// window of readings (muChoice.weighs): no dwell holds it.
 	weighProvisional bool
-	// minority is set while the replicas that read the window's newest
-	// sample are a minority of the fleet (noteSampleWriters), which lets a
-	// figure no line can replace expire (minorityFigureExpired). Unset for
-	// a window restored or brought back with no choice on record.
-	minority bool
-	// released is set while the minority's figure has given way to the
-	// fleet's served bound (minorityFigureExpired), so the release logs once
-	// per run of released cycles, not per replica per cycle.
-	released bool
 	// low is, per replica, its current run of saturated readings refused as
 	// under MinMeasuredOfDerived of the derived figure.
 	low map[string]lowRun
@@ -549,10 +535,7 @@ type muChoice struct {
 	// restore or is brought back (unknownLatchLocked). The stale latch is
 	// released on it, and set on it unless the cycle's own ratio is past
 	// MuLatchRawSetFactor (SwitchMuLatchReadsSmoothedRatio). The series is
-	// the reading the choice is asked about: where a minority's figure has
-	// expired (minorityFigureExpired) that is the fleet's served bound, so
-	// the ratio moves from the figure to the bound over the time constant,
-	// not on the cycle of the release.
+	// the reading the choice is asked about.
 	ratio   float64
 	ratioAt time.Time
 }

@@ -917,11 +917,13 @@ print_summary() {
         none) echo "    - No GPU limiter: scaling is UNBOUNDED. Set LLMSM_LIMITER=gpu-inventory, quota, or both (gpu-inventory,quota)" ;;
         *)    echo "    - GPU limiters: $(effective_limiter_summary), all in force together. A workload whose accelerator does not resolve gets no budget and will not scale up" ;;
     esac
-    if [ "${ENABLE_SCALE_TO_ZERO:-false}" = "true" ]; then
-        echo "    - Scale-to-zero is ON: an idle model can be parked at 0 and woken on demand"
-    else
-        echo "    - Scale-to-zero is OFF (ENABLE_SCALE_TO_ZERO=false)"
-    fi
+    # Settled by llmsm_resolve_scale_to_zero when this run applied the controller.
+    # Not when it did not (INSTALL_PHASE=prereqs): the live value was never read
+    # and nothing was written, so say nothing rather than OFF.
+    case "${LLMSM_SCALE_TO_ZERO_RESOLVED:-}:${ENABLE_SCALE_TO_ZERO:-}" in
+        1:true) echo "    - Scale-to-zero is ON: an idle model can be parked at 0 and woken on demand" ;;
+        1:false) echo "    - Scale-to-zero is OFF (ENABLE_SCALE_TO_ZERO=false)" ;;
+    esac
     echo ""
 
     echo "  Checking on it:"

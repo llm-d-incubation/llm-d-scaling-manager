@@ -165,11 +165,9 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	//   - SwitchMuYieldCappedAtMeasurement: a sibling yield never prices
 	//     above the measurement (mu-paths: variant-02 at 09:01 priced at its
 	//     measured 8.08 where it yielded to its siblings' 12.12, on 44 rows).
-	//   - SwitchMuUnreadAtTarget and SwitchMuMinorityFigureExpires move
-	//     nothing: no recording has an unread replica under the KV line
-	//     beside readers under the tolerance of it, nor a minority's figure
-	//     stale past lowHoldFor with no line. The unit tests and the
-	//     closed-loop probe hold them (heldBy).
+	//   - SwitchMuUnreadAtTarget moves nothing: no recording has an unread
+	//     replica under the KV line beside readers under the tolerance of
+	//     it. The unit tests and the closed-loop probe hold it (heldBy).
 	saturation.SwitchMuWeighsFleet: {
 		"mu-paths/learned-state.csv", "mu-paths/variant-capacities.csv",
 		"start-seed-restart-2/composite-results.csv", "start-seed-restart-2/learned-state.csv",
@@ -180,8 +178,7 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	saturation.SwitchMuYieldCappedAtMeasurement: {
 		"mu-paths/variant-capacities.csv",
 	},
-	saturation.SwitchMuUnreadAtTarget:        nil,
-	saturation.SwitchMuMinorityFigureExpires: nil,
+	saturation.SwitchMuUnreadAtTarget: nil,
 
 	// The weighing's band (muChoice.weighs). Alone it moves nothing: with
 	// SwitchMuWeighsFleet off there is no weighing to latch. On top of it,
@@ -199,6 +196,59 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// derived figure crosses the 1.6-2.0 band. Its unit tests hold it
 	// (heldBy), and ev-shindin/llm-scaling-manager#524's latch-return-excursion cases.
 	saturation.SwitchMuLatchReadsSmoothedRatio: nil,
+
+	// Issue #55: one replica's re-reads within a sample fold to the latest
+	// one read while the row says it is still saturated (QueueMin above zero,
+	// or a running batch not fallen), not to their max. Base: main at
+	// 17c3970. Measured alone against all off, it moves 30 outputs of 8
+	// fixtures: the measured mu and what prices from it. The reading kept is
+	// never above the max of the replica's readings, so every mu that moves
+	// falls (ServiceRate.Rate, all on against main): pd-restart by at most
+	// 0.3 % (its exits, [6.23, 6.235, 5.99, 4.91] at 12:28:02, no longer
+	// count: mu holds 6.208 where the latest alone held 5.061 for 17 min),
+	// mu-paths 2 %, ttft-saturated 7 %, ttft-staircase-b-off 13 %, the start
+	// fixtures 7-29 %, whose replicas complete a few requests a minute and
+	// whose re-reads, read with work queued all minute, differ by up to 38 %.
+	// Against main with issue #54's SwitchFloorTrustReadsCompletions on
+	// (cea2f9e), model demand rises with the lower mu, the cost side:
+	// pd-restart 109 of 111 rows that move, by at most 0.3 %; ttft-saturated
+	// 68 of 68, by at most 1.8 %; ttft-staircase-b-off 17 of 20, up to
+	// 15.2 %; start-seed 5 of 8, up to 12.1 %. The few rows that move down fall by
+	// at most 1.4 %. Before #54 the start fixtures' demand fell by up to 96 %
+	// through the floor's trust blend; with it, none falls past 1.4 %.
+	// The unit tests hold the fold itself (heldBy).
+	saturation.SwitchMuRereadTakesLatest: {
+		"mu-paths/learned-state.csv",
+		"mu-paths/variant-capacities.csv",
+		"pd-restart/composite-results.csv",
+		"pd-restart/composite-roles.csv",
+		"pd-restart/results.csv",
+		"pd-restart/variant-capacities.csv",
+		"start-restored/composite-results.csv",
+		"start-restored/learned-state.csv",
+		"start-restored/results.csv",
+		"start-restored/variant-capacities.csv",
+		"start-seed-restart-2/composite-results.csv",
+		"start-seed-restart-2/learned-state.csv",
+		"start-seed-restart-2/results.csv",
+		"start-seed-restart-2/variant-capacities.csv",
+		"start-seed-restart/composite-results.csv",
+		"start-seed-restart/learned-state.csv",
+		"start-seed-restart/results.csv",
+		"start-seed-restart/variant-capacities.csv",
+		"start-seed/composite-results.csv",
+		"start-seed/learned-state.csv",
+		"start-seed/results.csv",
+		"start-seed/variant-capacities.csv",
+		"ttft-saturated/composite-results.csv",
+		"ttft-saturated/composite-roles.csv",
+		"ttft-saturated/results.csv",
+		"ttft-saturated/variant-capacities.csv",
+		"ttft-staircase-b-off/composite-results.csv",
+		"ttft-staircase-b-off/composite-roles.csv",
+		"ttft-staircase-b-off/results.csv",
+		"ttft-staircase-b-off/variant-capacities.csv",
+	},
 
 	// Which rows the transfer is read from. It moves no golden: no committed
 	// recording prices a line (the decode term's reason, above). Its unit test
@@ -1075,8 +1125,8 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestPrefillBoundHeld_AFleetTheBoundGrewGrowsOnceUnderNoise"},
 	},
 	// ev-shindin/llm-scaling-manager#495's one slow pod: each test runs its switch on and off and asserts
-	// both (the ledger cases fail off, as on the parent; the credit and the
-	// expiry move the sample, the expiry and the probe's fleet).
+	// both (the ledger cases fail off, as on the parent; the credit moves the
+	// sample and the probe's fleet).
 	saturation.SwitchMuWeighsFleet: {
 		{"../saturation", "TestMuSlowPod_TheClearedLedgerCasesFailWithTheirSwitchOff"},
 	},
@@ -1087,10 +1137,6 @@ var heldBy = map[string][]heldTest{
 	saturation.SwitchMuUnreadAtTarget: {
 		{"../saturation", "TestMuSlowPod_TheCreditReachesTheSample"},
 		{"../saturation", "TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound"},
-	},
-	saturation.SwitchMuMinorityFigureExpires: {
-		{"../saturation", "TestMuSlowPod_AMinorityFigureExpiresOnlyPastTheHold"},
-		{"../saturation", "TestMuSlowPod_OneReplicasFigureExpiresAfterTheHold"},
 	},
 	// The weighing's band: each runs it on and off and asserts both (the
 	// bare tolerance flaps on the excursion, and seals the probe at 0.65).
@@ -1422,6 +1468,14 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestMuLatchBand_AStaleStepLatchesWithinTheStatedTime"},
 		{"../saturation", "TestMuLatchBand_ARatioSmoothedWhileFreshLatchesWhenStale"},
 	},
+	// Issue #55: each runs the switch on and off and asserts both, at the
+	// measured rate noise, and on a fill.
+	saturation.SwitchMuRereadTakesLatest: {
+		{"../saturation", "TestRereadFold_TheBiasAtTheMeasuredNoise"},
+		{"../saturation", "TestRereadFold_TheCasesFailWithTheSwitchOff"},
+		{"../saturation", "TestRereadFold_AFillKeepsTheFullestWindow"},
+		{"../saturation", "TestRereadFold_AnExitKeepsTheLastSaturatedReading"},
+	},
 	saturation.SwitchMuLatchRestoresSafe: {
 		{"../saturation", "TestMuLatch_ARestoredMeasurementOverDerivedComesBackLatched"},
 		{"../saturation", "TestMuLatch_TheRestoredLatchIsKnownAfterItsFirstChoice"},
@@ -1692,8 +1746,13 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"pd-restart/store-records.csv":   "5f97bd429a7f97b77ea04146f204c2a310c2bd7f8decf32b993db398e99edd46",
 
 	// llm-d-incubation/llm-d-scaling-manager#54's output no earlier switch
-	// names, as main holds it at 17c3970.
+	// names, as main holds it at 17c3970; issue #55's too.
 	"ttft-saturated/composite-roles.csv": "b66979a9a955650878efd5c410dbdd4cddc08638e1fd58d310c4bb67d29b78d3",
+	// Issue #55's other outputs no earlier switch names, as main holds them
+	// at 17c3970.
+	"start-restored/variant-capacities.csv":     "60110dafe6b3cfabbfff6e77817d6f20a08a437f55c860cc6995a96f4e3f4571",
+	"start-seed-restart/variant-capacities.csv": "a51d5988cc6f7cd34659fca3d492dc53727bbd73c34916a46b30a0127cb78a09",
+	"start-seed/variant-capacities.csv":         "6a99f3797ea08c447a5eb25933c93607f073b7adf819b9188cced35bde1eb3ce",
 })
 
 // The slow tests of this package run in parallel with each other (each
