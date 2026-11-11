@@ -346,6 +346,34 @@ func TestScalerUnreachableIsPublishedWhileItHolds(t *testing.T) {
 	nilP.SetScalerUnreachable(true, "x")
 }
 
+func TestScalerTLSActionIsRemovedWhenNothingIsLeftToDo(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	p.SetScalerTLS("plaintext: no marker", "wire KEDA")
+	if d := p.Data(); d[KeyScalerTLS] != "plaintext: no marker" || d[KeyScalerTLSAction] != "wire KEDA" {
+		t.Errorf("data = %v", d)
+	}
+	p.SetScalerTLS("mutual TLS: ...", "")
+	if got, found := p.Data()[KeyScalerTLSAction]; found || p.Data()[KeyScalerTLS] != "mutual TLS: ..." {
+		t.Errorf("%s = %q with nothing to do, want it absent", KeyScalerTLSAction, got)
+	}
+	var nilP *Publisher
+	nilP.SetScalerTLS("x", "y")
+}
+
+func TestScalerCAIsPublishedAndRemoved(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	p.SetScalerCA("-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n", "ab")
+	if d := p.Data(); d[KeyScalerCASha256] != "ab" || !strings.HasPrefix(d[KeyScalerCACert], "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("data = %v", d)
+	}
+	p.SetScalerCA("", "")
+	if _, found := p.Data()[KeyScalerCACert]; found {
+		t.Error("scalerCACert stays after it was removed")
+	}
+	var nilP *Publisher
+	nilP.SetScalerCA("x", "y")
+}
+
 // With a separate policy namespace, policyIgnored comes from the controller's
 // own ConfigMap and the version from the policy namespace's. Recording either
 // must not overwrite the other.

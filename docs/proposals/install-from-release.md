@@ -3,7 +3,9 @@
 - **Status:** in progress. Phase 1 is built: `make release-manifests`
   (`deploy/release-manifests.sh`), its check, and the release workflow signing
   and attaching the files. What building it changed in this design is in
-  [Found while building phase 1](#found-while-building-phase-1). The rest is
+  [Found while building phase 1](#found-while-building-phase-1). Phase 3, the
+  scaler TLS bootstrap, is built; what it changed is in
+  [Found while building phase 3](#found-while-building-phase-3). The rest is
   not built.
 - **Problem:** installing takes a checkout, `make`, and about 15,000 lines of
   shell under `deploy/`. A reviewer found the content complete and the
@@ -295,7 +297,7 @@ the command to fix it; nothing is applied for the operator.
 
 | what the scripts do | how it is handled |
 | --- | --- |
-| **Generate the scaler's mTLS certificates** (openssl, or cert-manager when present; CA, serving leaf, KEDA client leaf; re-issue a leaf near expiry or with wrong SANs) | **Controller-side bootstrap.** At start the controller ensures the three Secrets in its namespace (`scaling-manager-external-scaler-ca`, `-tls`, `-client-tls`, same names and label as today). It creates what is missing, adopts what exists and chains, re-issues the serving leaf 30 days before expiry (it already hot-reloads it with `certwatcher`). The client leaf lives as long as the CA, as today, because KEDA never reloads it. Needs `create`/`get`/`update` on those three Secret names only. cert-manager is no longer used for this |
+| **Generate the scaler's mTLS certificates** (openssl, or cert-manager when present; CA, serving leaf, KEDA client leaf; re-issue a leaf near expiry or with wrong SANs) | **Controller-side bootstrap.** At start the controller ensures the three Secrets in its namespace (`scaling-manager-external-scaler-ca`, `-tls`, `-client-tls`, same names and label as today). It creates what is missing, adopts what exists and chains, re-issues the serving leaf 30 days before expiry (it already hot-reloads it with `certwatcher`). The client leaf lives as long as the CA, as today, because KEDA never reloads it. Needs `get`/`update` on those three Secret names only: the release file `scaling-manager-scaler-tls.yaml` creates them empty ([phase 3](#found-while-building-phase-3)). cert-manager is no longer used for this |
 | **Copy KEDA's client Secret into KEDA's namespace and write the ClusterTriggerAuthentication** | **Documented admin step**, once per install: copy the client Secret into KEDA's namespace (the guide gives the command, which keeps only the data keys) and `kubectl apply -f scaling-manager-keda-auth.yaml`. The second file also writes the marker ConfigMap `scaling-manager-scaler-keda-auth` in the controller's namespace. Preflight prints both commands with the namespaces filled in |
 | **Serve mTLS only when KEDA's side is ready, else plaintext with a warning** | **Controller-side**, at start: mTLS when the marker ConfigMap exists, plaintext with a warning otherwise, as the installer decides today. Applying the KEDA step therefore needs one restart of the controller, which the guide says |
 | **Pick the Prometheus URL** (Thanos on OpenShift; else the Prometheus resource whose monitor selectors cover the model namespace, and a Service its certificate names) | **Preflight.** It runs the same selection, prints the URL it would choose and the `kubectl patch` that sets it, and checks the one that is set. The OpenShift manifests carry the Thanos URL already |
@@ -737,6 +739,82 @@ Building the render showed where the text above was wrong or incomplete.
 - **A published release's files are never replaced.** A re-run of the release
   job that renders different files for a published release is refused; with
   GitHub immutable releases on, a published release refuses uploads anyway.
+
+## Found while building phase 3
+
+- **The bootstrap is a flag the release files set,**
+  `--external-scaler-tls-bootstrap`, not something every controller does. A
+  `make` install provisions the certificates from the installer (openssl or
+  cert-manager) and passes the certificate files; the flag refuses those. So
+  the `make` path changes nothing and gets no Secret grant, until phase 6
+  renders it through the same code. The grant is a Role of the release files
+  only, `scaling-manager-scaler-tls-role`.
+- **The controller never creates a Secret.** Kubernetes cannot narrow
+  `create` by name, and `create` with a by-name `get` would let a compromised
+  controller create one of the three names as a
+  `kubernetes.io/service-account-token` Secret for any ServiceAccount in its
+  namespace and read the token. So the Role grants `get` and `update` on the
+  three by name and nothing else on Secrets, and a new release file,
+  `scaling-manager-scaler-tls.yaml`, creates them empty, of type
+  `kubernetes.io/tls` with the installer label. The controller treats an empty
+  one as absent and fills it; a missing one it reports with the command that
+  creates it. The type of an existing Secret cannot change, so update cannot
+  turn one into a token.
+- **The placeholders are created once, never applied.** Verified on kind
+  (v1.31): after the controller fills a Secret, a client-side `kubectl apply`
+  of a file holding the empty placeholder sets its data back to empty (the
+  three-way merge patches every field that differs from the file); a
+  server-side apply conflicts on the controller's fields, and with
+  `--force-conflicts` empties them too. The controller would then mint a new CA
+  into it, which breaks KEDA. So they are not in the main file, which is
+  applied on every upgrade, but in their own file, created with
+  `kubectl create -f`; a second create fails with `AlreadyExists` and leaves the
+  data alone (also verified). The API server warns `tls: failed to find any PEM
+  data in certificate input` on the empty Secrets; it is a warning only.
+- **Uninstall and the CA.** `kubectl delete -f scaling-manager-namespaced.yaml`
+  does not remove the CA, since it is not in that file. The uninstall by label
+  does, and so does `kubectl delete -f scaling-manager-scaler-tls.yaml`. As the
+  installer does since PR #70, keep the CA while ScaledObjects use the TLS
+  address, so a reinstall signs with it and KEDA's open connection keeps
+  working: delete by label without it,
+  `kubectl delete configmap,secret -n $NS -l 'app.kubernetes.io/part-of=scaling-manager,scaling-manager.llmd.ai/scaler-tls!=ca'`.
+  Rotating the CA is emptying its data (`kubectl patch` with empty
+  `tls.crt`, `tls.key`, `ca.crt`); the controller mints a new one into it and
+  says how to rewire KEDA.
+- **Fail closed at start.** When the marker cannot be read, or it is present
+  and the Secrets cannot be read, the controller retries for 30 seconds and
+  then exits rather than serve plaintext to a KEDA that dials TLS. With no
+  marker, an unreadable Secret leaves it on plaintext with the reason in the
+  status.
+- **What is served is verified first** against what KEDA is told to trust:
+  the CA (the client Secret's `ca.crt`), or, for a serving certificate the
+  OpenShift service CA issued (a `make` install on OpenShift), the service CA
+  bundle in ConfigMap `openshift-service-ca.crt`; the copy command then takes
+  `ca.crt` from there.
+- **A CA Secret that exists is never replaced,** not even an expiring, expired
+  or unreadable one, where the installer re-mints a CA within 30 days of its
+  expiry. KEDA keeps the CA of its first connection until its operator
+  restarts (PR #70), so the controller reports it in `scalerTLSAction` with the
+  command that rotates it, and the operator runs it.
+- **cert-manager's Secrets are left alone.** When any of the three is
+  cert-manager's (its `cert-manager.io/certificate-name` annotation, an owner
+  reference to a Certificate, or the installer's `cert-manager` label value),
+  the controller writes none of them and serves what cert-manager issued. An
+  unlabelled Secret under one of the names is never written either.
+- **The mutual-TLS decision is made once, at start**, from the marker, as the
+  proposal says. The controller verifies clients with the CA it started with:
+  a renewed serving certificate from that CA is served from the next
+  handshake, but one from a new CA is not, and the status asks for a restart.
+- **The controller cannot see whether KEDA was wired.** When it issues KEDA's
+  certificate, it marks the client Secret
+  (`scaling-manager.llmd.ai/keda-copy-pending`: `ca` for a new CA, `client`
+  otherwise), so every replica reports the same; `scalerTLSAction` asks for the
+  copy until a handshake presents that certificate, and the replica that sees
+  it removes the mark. The controller cannot read KEDA's namespace either, so
+  the commands use `$KEDA_NS` and stop when it is unset.
+- **Secrets the controller writes carry `app.kubernetes.io/part-of`**, so the
+  uninstall by label finds them. Secrets a `make` install wrote do not, and
+  are adopted unchanged; `make undeploy-scaling-manager` removes those.
 
 ## Open questions
 

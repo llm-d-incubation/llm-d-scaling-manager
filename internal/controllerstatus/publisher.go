@@ -138,6 +138,28 @@
 //	                       so no model is discovered. Says how many were
 //	                       refused, the last reason and the fix; absent
 //	                       otherwise. Mirrors llmsm_scaler_keda_unreachable.
+//	scalerTLS              with --external-scaler-tls-bootstrap (the release
+//	                       files): how the scaler serves, "mutual TLS: ..."
+//	                       with the Secrets, the client identity, the CA's
+//	                       sha256 and the serving certificate's expiry, or
+//	                       "plaintext: <why>". Absent without the flag.
+//	scalerTLSAction        with that flag: what a person must run, steps
+//	                       numbered, one per line, each with its command: wire KEDA
+//	                       to certificates the controller minted or issued
+//	                       again, restart the controller once KEDA's side is
+//	                       in place, rotate an expiring CA (the controller
+//	                       never replaces a CA by itself), or fix a Secret it
+//	                       may not write. Absent when there is nothing to do.
+//	scalerCACert           with that flag: the PEM certificate(s), public only,
+//	                       that the scaler's serving certificate verifies
+//	                       against and KEDA is told to trust: the scaler CA,
+//	                       or the OpenShift service CA bundle when that CA
+//	                       issued the serving certificate. The one in use
+//	                       while mutual TLS is served, else the latest the
+//	                       controller found. Never a private key. Absent when
+//	                       none is usable.
+//	scalerCASha256         the sha256 of the DER of the first certificate in
+//	                       scalerCACert, in hex.
 //
 // limiter, limiterWarnings and utilizationShare are recomputed from the applied configuration
 // in the same update that records policyResourceVersion, so they never lag
@@ -259,6 +281,17 @@ const (
 	// KeySettingsUnknownKeys lists the settings ConfigMap's keys that are no
 	// setting. Absent when none.
 	KeySettingsUnknownKeys = "settingsUnknownKeys"
+	// KeyScalerTLS is how the scaler serves when the controller provisions
+	// its certificates (--external-scaler-tls-bootstrap).
+	KeyScalerTLS = "scalerTLS"
+	// KeyScalerTLSAction is what a person must run about the scaler's
+	// certificates; absent when nothing.
+	KeyScalerTLSAction = "scalerTLSAction"
+	// KeyScalerCACert is the public PEM the scaler's serving certificate
+	// verifies against; KeyScalerCASha256 the sha256 of its first
+	// certificate.
+	KeyScalerCACert   = "scalerCACert"
+	KeyScalerCASha256 = "scalerCASha256"
 )
 
 // PodListDeniedMessage is the KeyPodListDenied value.
@@ -779,6 +812,31 @@ func (p *Publisher) SetScalerUnreachable(unreachable bool, detail string) {
 		} else {
 			delete(d, KeyScalerUnreachable)
 		}
+	})
+}
+
+// SetScalerTLS records how the scaler serves when the controller provisions
+// its certificates, and what a person must run about them ("" removes the
+// action).
+func (p *Publisher) SetScalerTLS(state, action string) {
+	if p == nil {
+		return
+	}
+	p.update(func(d map[string]string) {
+		setOrDelete(d, KeyScalerTLS, state)
+		setOrDelete(d, KeyScalerTLSAction, action)
+	})
+}
+
+// SetScalerCA records the public certificate(s) the scaler's serving
+// certificate verifies against, and the sha256 of the first; "" removes both.
+func (p *Publisher) SetScalerCA(certPEM, sha256Hex string) {
+	if p == nil {
+		return
+	}
+	p.update(func(d map[string]string) {
+		setOrDelete(d, KeyScalerCACert, certPEM)
+		setOrDelete(d, KeyScalerCASha256, sha256Hex)
 	})
 }
 

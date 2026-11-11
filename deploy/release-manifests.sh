@@ -18,6 +18,9 @@
 #     (an underscore is not valid in a name, so an unsubstituted file fails at
 #     once), and the per-install ClusterRole names carrying it rather than a
 #     hash, so `sed` can fill it in;
+#   - the controller provisions the scaler's mutual-TLS certificates itself
+#     (--external-scaler-tls-bootstrap, and the Role that lets it), since no
+#     installer script runs to mint them;
 #   - every object labelled part-of, instance, version, and
 #     scaling-manager.llmd.ai/part: admin or controller. admin is what the
 #     installer's prereqs phase applies (LLMSM_PREREQ_KINDS and
@@ -49,6 +52,7 @@ RELEASE_FILES=(
     scaling-manager-model-namespace.yaml
     scaling-manager-activate.yaml
     scaling-manager-keda-auth.yaml
+    scaling-manager-scaler-tls.yaml
     scaling-manager-kueue.yaml
     scaling-manager-alerts.yaml
     scaling-manager-policy-example.yaml
@@ -181,10 +185,26 @@ main_manifest() {
             or (strenv(PLATFORM) == "kubernetes" and .kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-metrics-reader-rolebinding")
             or ((.kind == "ClusterRole" or .kind == "ClusterRoleBinding") and (.metadata.name | test("^scaling-manager-kueue-reader-")))) | not)
         | (select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional) = true
+        | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .args) += ["--external-scaler-tls-bootstrap=true"]
         | (select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig | select(has("serverName")) | .serverName) |= sub("PLACEHOLDER-NAMESPACE", strenv(NS))
         | (select(.kind == "NetworkPolicy") | .spec.ingress[] | select(has("from")) | .from[] | select(has("namespaceSelector")) | .namespaceSelector.matchLabels | select(has("kubernetes.io/metadata.name")) | .["kubernetes.io/metadata.name"]) = strenv(KEDA_NS)
         | (select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role") | .rules[] | select(.resources[0] == "namespaces") | .resourceNames) = [strenv(NS), "scaling-manager-policy"]
         ' "$raw" | strip_pod_patch
+}
+
+# scaler_tls_rbac <namespace>: the Role and RoleBinding the controller needs to
+# provision the scaler certificates itself (--external-scaler-tls-bootstrap,
+# set on the Deployment above): get and update on the three Secrets by name,
+# never create, and get on the KEDA marker and the OpenShift service CA
+# ConfigMaps. The Secrets are the placeholders of scaling-manager-scaler-tls.yaml.
+# Only the release files carry it: a make install provisions the certificates
+# from the installer and passes the certificate files instead.
+scaler_tls_rbac() {
+    local f
+    for f in scaler-tls-role scaler-tls-rolebinding; do
+        echo '---'
+        sed "s/__NAMESPACE__/$1/g" "$ROOT/config/release/$f.yaml"
+    done
 }
 
 # strip_pod_patch: the namespaced manager Role without patch on pods.
@@ -232,14 +252,14 @@ for platform in kubernetes openshift; do
     [ "$platform" = openshift ] && suffix="-openshift"
 
     render_overlay namespace "$platform" "$PLACEHOLDER" "$WORK/ns-$platform.yaml"
-    main_manifest "$WORK/ns-$platform.yaml" "$PLACEHOLDER" "$platform" \
+    { main_manifest "$WORK/ns-$platform.yaml" "$PLACEHOLDER" "$platform"; scaler_tls_rbac "$PLACEHOLDER"; } \
         | per_install_names "$PLACEHOLDER" | label "$PLACEHOLDER" \
         | write "scaling-manager-namespaced$suffix.yaml" \
             "One controller managing one namespace ($platform). Objects labelled $PART_LABEL=admin are the cluster admin's; =controller the namespace owner's." \
             "$SED_HOW"
 
     render_overlay cluster "$platform" "$CLUSTER_NS" "$WORK/cl-$platform.yaml"
-    main_manifest "$WORK/cl-$platform.yaml" "$CLUSTER_NS" "$platform" | label "$CLUSTER_NS" \
+    { main_manifest "$WORK/cl-$platform.yaml" "$CLUSTER_NS" "$platform"; scaler_tls_rbac "$CLUSTER_NS"; } | label "$CLUSTER_NS" \
         | write "scaling-manager-cluster$suffix.yaml" \
             "One controller for the cluster, in namespace $CLUSTER_NS ($platform). Create that namespace first; applies as is." \
             ""
@@ -289,6 +309,15 @@ label "$PLACEHOLDER" < "$ROOT/config/release/settings-configmap.yaml" \
   | write scaling-manager-keda-auth.yaml \
       "Mutual TLS between KEDA and the scaler: the ClusterTriggerAuthentication and the marker the controller reads. Copy the client Secret into KEDA's namespace first." \
       "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__KEDA_NAMESPACE__/<KEDA namespace>/g\""
+
+# The placeholders are not in the main files: kubectl apply of a file holding
+# them after the controller filled them sets the data back to empty (a
+# client-side apply), or conflicts and then empties it (a server-side apply
+# with --force-conflicts), and the controller would mint a new CA into it.
+label "$PLACEHOLDER" < "$ROOT/config/release/scaler-tls-secret.yaml" \
+    | write scaling-manager-scaler-tls.yaml \
+        "The external scaler's three certificate Secrets, empty: the controller fills them and may not create Secrets. Create them once with kubectl create -f; never apply this file over a running install, and keep the CA while KEDA may use it." \
+        "Before creating: sed -i \"s/$PLACEHOLDER/<controller namespace>/g\" <file>; for the cluster-wide files the namespace is $CLUSTER_NS"
 
 {
     NS="$PLACEHOLDER" yq '
