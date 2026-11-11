@@ -53,7 +53,7 @@ func (r *statusRecorder) publishedCA(t *testing.T) *x509.Certificate {
 			break
 		}
 		c, err := x509.ParseCertificate(block.Bytes)
-		if block.Type != "CERTIFICATE" || err != nil {
+		if block.Type != pemCertificate || err != nil {
 			t.Fatalf("published a %s block (%v)", block.Type, err)
 		}
 		if first == nil {

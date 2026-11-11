@@ -40,6 +40,9 @@ const (
 	backdate = 5 * time.Minute
 )
 
+// pemCertificate is the PEM block type of a certificate.
+const pemCertificate = "CERTIFICATE"
+
 // keyPair is a certificate with its private key, parsed and in PEM.
 type keyPair struct {
 	cert    *x509.Certificate
@@ -87,7 +90,7 @@ func firstCert(b []byte) (*x509.Certificate, error) {
 		if block == nil {
 			return nil, errors.New("no PEM certificate")
 		}
-		if block.Type == "CERTIFICATE" {
+		if block.Type == pemCertificate {
 			return x509.ParseCertificate(block.Bytes)
 		}
 	}
@@ -131,7 +134,7 @@ func encode(der []byte, key *rsa.PrivateKey) (certPEM, keyPEM []byte, err error)
 	if err != nil {
 		return nil, nil, err
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+	return pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: der}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}), nil
 }
 
@@ -250,5 +253,5 @@ func days(d time.Duration) string {
 // never the bytes of a Secret field, which could hold more than the
 // certificate.
 func pemOf(cert *x509.Certificate) []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	return pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: cert.Raw})
 }

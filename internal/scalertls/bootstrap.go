@@ -330,7 +330,7 @@ func publicCerts(b []byte) (string, string) {
 		if block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
+		if block.Type != pemCertificate {
 			continue
 		}
 		c, err := x509.ParseCertificate(block.Bytes)
@@ -340,7 +340,7 @@ func publicCerts(b []byte) (string, string) {
 		if first == nil {
 			first = c
 		}
-		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+		out = append(out, pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: c.Raw})...)
 	}
 	if first == nil {
 		return "", ""
