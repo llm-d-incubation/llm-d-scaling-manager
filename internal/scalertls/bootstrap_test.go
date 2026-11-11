@@ -211,6 +211,18 @@ func TestBootstrap_PlaintextUntilKEDAsSideIsInPlace(t *testing.T) {
 			t.Errorf("action does not hold %q:\n%s", want, action)
 		}
 	}
+	// The wire step ends in its command, so what follows "then restart the
+	// controller: " runs as it stands; the reinstall note is a step of its
+	// own, not prose after a ";" that a shell would try to run.
+	lines := strings.Split(action, "\n")
+	restart := "kubectl rollout restart deployment/scaling-manager-controller-manager -n " + testNS
+	if !strings.HasSuffix(lines[0], " && "+restart) {
+		t.Errorf("the wire step does not end in its command:\n%s", lines[0])
+	}
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], "2. only on a reinstall") ||
+		!strings.HasSuffix(lines[1], `kubectl rollout restart deployment/keda-operator -n "`+kedaNS+`"`) {
+		t.Errorf("the KEDA restart for a new CA is not a step of its own ending in its command:\n%s", action)
+	}
 
 	// KEDA's side appears: the next check asks for a restart, nothing else.
 	if err := cl.Create(context.Background(), marker()); err != nil {

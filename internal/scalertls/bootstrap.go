@@ -386,12 +386,14 @@ func (b *Bootstrap) describe() (state, action string) {
 	case !b.tlsOn && b.markerNow == markerPresent:
 		steps = append(steps, "KEDA's side is in place now; restart the controller to serve mutual TLS: "+b.restartController())
 	case !b.tlsOn:
-		step := "wire KEDA to the scaler's certificates (a cluster admin), then restart the controller: " +
-			b.wireCommand() + " && " + b.restartController()
+		// Each step ends in its command alone, so the text after its last
+		// prose colon can be copied and run as it stands; the note for a
+		// reinstall is a step of its own.
+		steps = append(steps, "wire KEDA to the scaler's certificates (a cluster admin), then restart the controller: "+
+			b.wireCommand()+" && "+b.restartController())
 		if pending == PendingCA {
-			step += " ; the CA is new: if KEDA dialled this scaler before (a reinstall), restart KEDA's operator too: " + restartKEDA()
+			steps = append(steps, "only on a reinstall, when KEDA dialled this scaler before: the CA is new, so restart KEDA's operator too: "+restartKEDA())
 		}
-		steps = append(steps, step)
 	case !bytes.Equal(b.last.CA.Raw, b.clientCA.Raw):
 		steps = append(steps, fmt.Sprintf("the scaler CA in Secret %s changed since the controller started (sha256 %s; "+
 			"it verifies clients with %s): wire KEDA to it, then restart the controller and KEDA's operator: %s && %s && %s",
