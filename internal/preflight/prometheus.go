@@ -25,6 +25,9 @@ import (
 // of them cannot be sized.
 var requiredModelMetrics = []string{"vllm:kv_cache_usage_perc", "vllm:num_requests_waiting", "vllm:num_requests_running"}
 
+// schemeHTTPS is the only scheme the token is sent over.
+const schemeHTTPS = "https"
+
 // thanosURL is the Thanos Querier the OpenShift install reads.
 const thanosURL = "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091"
 
@@ -112,7 +115,7 @@ func NewHTTPPrometheus(cfg PrometheusConfig) (Prometheus, error) {
 // sendsToken reports whether the account's token may go to base: only over
 // https, with the server's certificate verified.
 func sendsToken(base *url.URL, insecureSkipVerify bool) bool {
-	return base.Scheme == "https" && !insecureSkipVerify
+	return base.Scheme == schemeHTTPS && !insecureSkipVerify
 }
 
 type httpPrometheus struct {
@@ -220,7 +223,7 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 	_, err = prom.Query(ctx, "vector(1)")
 	took := time.Since(start).Round(time.Millisecond)
 	note := ""
-	if insecure || u.Scheme != "https" {
+	if insecure || u.Scheme != schemeHTTPS {
 		note = "; certificate NOT verified, so the preflight's token was not sent"
 	}
 	var perr *PromError

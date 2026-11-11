@@ -181,7 +181,7 @@ func checkSettings(ctx context.Context, s *state) ([]Result, string) {
 		bad = append(bad, fmt.Sprintf("%s=%q is not a whole number of 0 or more", keyLogVerbosity, st.value(keyLogVerbosity)))
 	}
 	if u := st.value(keyPrometheusURL); u != "" {
-		if p, err := url.Parse(u); err != nil || p.Host == "" || (p.Scheme != "https" && p.Scheme != "http") {
+		if p, err := url.Parse(u); err != nil || p.Host == "" || (p.Scheme != schemeHTTPS && p.Scheme != "http") {
 			bad = append(bad, fmt.Sprintf("%s=%q is not an http(s) URL with a host", keyPrometheusURL, u))
 		}
 	}
