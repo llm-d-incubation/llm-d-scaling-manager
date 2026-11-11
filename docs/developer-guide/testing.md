@@ -2346,11 +2346,13 @@ make test-e2e-release-manifests           # renders the files, installs, checks,
 works there. In order, and a step that fails stops the run:
 
 1. Fills `__NAMESPACE__` with `sed` (the controller runs in `llm-d-sim`, with
-   the model servers), applies the `part=admin` objects, creates the
+   the model servers), applies what the guide gives the cluster admin (the
+   `part=admin` objects of the main and preflight files, and the
+   model-namespace file), creates the
    Prometheus CA Secret, and creates the settings with `prometheusURL` and
    `prometheusCACertPath` set. A second `kubectl create` must fail with
    `AlreadyExists`.
-2. Runs the preflight Job. The file's NetworkPolicy names `keda`; the e2e KEDA
+2. Runs the preflight Job (the `part=controller` object of its file). The file's NetworkPolicy names `keda`; the e2e KEDA
    runs in `keda-system`, so the Job must fail on `keda.networkpolicy` and
    print a fix. It runs that fix as printed, then the preflight again, which
    must have no FAIL and PASS `settings`, `keda.crd`, `keda.version`,
@@ -2359,7 +2361,7 @@ works there. In order, and a step that fails stops the run:
    `podmonitor.port` WARN, and `overlap` is UNKNOWN (a namespaced preflight
    may not list Deployments in other namespaces).
 3. Creates the empty scaler TLS Secrets, applies the `part=controller` objects,
-   the model-namespace file and the alerts file, and waits for the rollout and for the status
+   and the alerts file, and waits for the rollout and for the status
    ConfigMap to say `passiveDefault: true`, `utilizationShare: off` and
    `settingsSource: settings`.
 4. Runs step 1 of `scalerTLSAction` as printed, with `KEDA_NS` set: the client
@@ -2398,6 +2400,11 @@ works there. In order, and a step that fails stops the run:
   with it.
 - `RELEASE_E2E_SMOKE=false` skips step 5. `KEEP_INSTALL=true` (an environment
   variable of the script) stops before the uninstall.
+- **Re-running on the same cluster.** The script expects no install: a
+  second run fails at `kubectl create` of the settings. After a run that
+  stopped early, run the uninstall block of the script (step 8) by hand,
+  or use a fresh cluster. If the scaler CA changed, restart KEDA's operator
+  too: it keeps the CA of its first connection.
 - The summary, every preflight log and the smoke log are in
   `dist/release-e2e-logs` (`RELEASE_E2E_LOGS`).
 - Not in CI: the e2e workflow's jobs already use their time budget, and this

@@ -15,6 +15,10 @@ failure domains, policy and upgrades stay separate.
 **This scope is work in progress.** The steps are the namespaced guide's, with
 the cluster-wide files; read that guide for what each step does.
 
+Tested: the namespaced files on Kubernetes (kind, `make
+test-e2e-release-manifests`, run before each release). The cluster-wide and
+OpenShift files are not yet tested end to end; each says so in its header.
+
 Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-instead).
 
 ## Prerequisites
@@ -27,7 +31,7 @@ Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-ins
 - [ ] **For scale-from-zero only: the `flowControl` feature gate on every
   EPP** (`featureGates: [flowControl]` in the `EndpointPickerConfig`).
 
-<!-- guide:prerequisites start -->
+<!-- guide:prerequisites.download start -->
 ```bash
 # The release files. Pick the release you install.
 V=<release, for example v0.11.0>
@@ -35,23 +39,46 @@ URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/
 for f in cluster settings preflight-cluster scaler-tls model-namespace keda-auth; do
   curl -fsSLO $URL/scaling-manager-$f.yaml
 done
+```
+<!-- guide:prerequisites.download end -->
 
+Each file is pinned to the release's image by digest, and signed. Check them
+now, before the `sed` below changes them: [Verify the release
+files](../../reference/install-methods.md#verify-the-release-files).
+
+<!-- guide:prerequisites.namespace start -->
+```bash
 # The controller runs in scaling-manager-system. The cluster-wide files already name it.
 kubectl create namespace scaling-manager-system
 for f in scaling-manager-settings.yaml scaling-manager-scaler-tls.yaml scaling-manager-keda-auth.yaml; do
   sed -i "s/__NAMESPACE__/scaling-manager-system/g" "$f"
 done
 ```
-<!-- guide:prerequisites end -->
+<!-- guide:prerequisites.namespace end -->
 
-On OpenShift, use `scaling-manager-cluster-openshift.yaml` in place of
-`scaling-manager-cluster.yaml`, set `prometheusURL` to Thanos Querier (the
+On OpenShift (not yet tested end to end), use
+`scaling-manager-cluster-openshift.yaml` in place of
+`scaling-manager-cluster.yaml` in every command, set `prometheusURL` to Thanos Querier (the
 settings file names it), and label the namespace
 `openshift.io/user-monitoring=true`.
 
 ## Installation Instructions
 
-### 1. Settings and the preflight check
+### 1. KEDA's namespace, settings and the preflight check
+
+The scaler NetworkPolicy in `scaling-manager-cluster.yaml` admits KEDA from
+namespace `keda` (`openshift-keda` in the OpenShift file). If KEDA runs
+elsewhere, name its namespace before you apply the file, and keep the edit for
+every upgrade. Without it, the preflight FAILs `keda.networkpolicy`; the `sed`
+it prints names the namespaced files, so run the one below instead:
+
+<!-- guide:deploy.kedans start -->
+```bash
+# Before applying, name the namespace KEDA runs in in the scaler NetworkPolicy (the file says keda). Keep this edit for every upgrade.
+export KEDA_NS=<the namespace KEDA runs in>
+sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-cluster.yaml
+```
+<!-- guide:deploy.kedans end -->
 
 Set `prometheusURL` in `scaling-manager-settings.yaml`, then:
 
@@ -73,9 +100,28 @@ kubectl logs -n scaling-manager-system job/scaling-manager-preflight
 ```
 <!-- guide:deploy.preflight end -->
 
-Fix every `FAIL` and run it again. For a Prometheus with a private CA, see
-[step 2 of the namespaced guide](../install-in-namespace/#2-settings-and-the-preflight-check).
-Every check: [Preflight check](../../reference/preflight.md).
+Fix every `FAIL` and run it again. Every check: [Preflight
+check](../../reference/preflight.md). If a private CA signed Prometheus's
+certificate, give the controller that CA:
+
+<!-- guide:deploy.promca start -->
+```bash
+# Only when a private CA signed Prometheus's certificate.
+kubectl create secret generic scaling-manager-prometheus-ca -n scaling-manager-system --from-file=ca.crt=<ca file>
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge \
+  -p '{"data":{"prometheusCACertPath":"/etc/scaling-manager-prometheus-ca/ca.crt"}}'
+```
+<!-- guide:deploy.promca end -->
+
+When you are done with the preflight (after step 3), remove its cluster-wide
+reads; applying the preflight file again restores them:
+
+<!-- guide:deploy.preflightdone start -->
+```bash
+# After the last run. The preflight's cluster reads are needed only while it runs.
+kubectl delete clusterrolebinding scaling-manager-preflight --ignore-not-found
+```
+<!-- guide:deploy.preflightdone end -->
 
 ### 2. Install the controller
 
@@ -102,8 +148,7 @@ sed -e "s/__NAMESPACE__/scaling-manager-system/g" -e "s/__MODEL_NAMESPACE__/$MOD
 
 <!-- guide:deploy.kedaauth start -->
 ```bash
-# In this directory. Prints the commands that give KEDA its client certificate; run them.
-export KEDA_NS=<the namespace KEDA runs in>
+# In this directory, with KEDA_NS set as above. Prints the steps that give KEDA its client certificate.
 kubectl get configmap scaling-manager-controller-status -n scaling-manager-system \
   -o jsonpath='{.data.scalerTLSAction}{"\n"}'
 ```
@@ -117,9 +162,8 @@ kubectl get configmap scaling-manager-controller-status -n scaling-manager-syste
 ```
 <!-- guide:deploy.mtls end -->
 
-The release file's scaler NetworkPolicy admits KEDA from namespace `keda`
-(`openshift-keda` on OpenShift). If KEDA runs elsewhere, the preflight FAILs
-`keda.networkpolicy` and prints the patch.
+In this directory, run the text after `then restart the controller:` in
+step 1 of what it prints; step 2 only on a reinstall. Then check:
 
 ### 4. Register the workloads, then let it scale
 

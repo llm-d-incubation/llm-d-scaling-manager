@@ -137,3 +137,6 @@ cleanup:
     run: |
       kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
         -p '{"data":{"utilizationShare":"off"}}'
+  policy:
+    note: The scaling-policy ConfigMap step 3 of "Make one model active" created, if you created it. The label-based uninstall does not find it.
+    run: kubectl delete configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --ignore-not-found

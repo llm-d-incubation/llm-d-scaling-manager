@@ -22,8 +22,11 @@ prerequisites:
 
 deploy:
   admin:
-    note: Cluster admin, once per namespace. RBAC, ServiceAccounts, the monitor and the scaler NetworkPolicy.
-    run: kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+    note: Cluster admin, once per namespace. RBAC, ServiceAccounts, the monitors, the scaler NetworkPolicy, and the preflight's read-only RBAC.
+    run: |
+      kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+      kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin
+      kubectl apply -f scaling-manager-model-namespace.yaml
   settings:
     note: Set prometheusURL in scaling-manager-settings.yaml first. Created once, never applied again.
     run: kubectl create -f scaling-manager-settings.yaml
@@ -37,19 +40,21 @@ deploy:
     note: Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
     run: |
       kubectl delete job scaling-manager-preflight -n $NAMESPACE --ignore-not-found
-      kubectl apply -f scaling-manager-preflight.yaml
+      kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller
       until kubectl get job scaling-manager-preflight -n $NAMESPACE \
           -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
       kubectl logs -n $NAMESPACE job/scaling-manager-preflight
+  preflightdone:
+    note: Cluster admin, after the last run. The preflight's cluster reads are needed only while it runs.
+    run: kubectl delete clusterrolebinding scaling-manager-preflight-$NAMESPACE --ignore-not-found
   controller:
-    note: The scaler's certificate Secrets (created once, empty; the controller fills them), the controller, and the model-server monitor.
+    note: The scaler's certificate Secrets (created once, empty; the controller fills them), then the controller.
     run: |
       kubectl create -f scaling-manager-scaler-tls.yaml
       kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
-      kubectl apply -f scaling-manager-model-namespace.yaml
       kubectl rollout status deployment/scaling-manager-controller-manager -n $NAMESPACE
   kedaauth:
-    note: Cluster admin, in this directory. Prints the commands that give KEDA its client certificate.
+    note: Cluster admin, in this directory. Prints the steps that give KEDA its client certificate.
     run: |
       export KEDA_NS=<the namespace KEDA runs in>
       kubectl get configmap scaling-manager-controller-status -n $NAMESPACE \
@@ -116,15 +121,17 @@ cleanup:
   uninstall:
     note: Your ScaledObjects stay; delete or repoint them first. Keeps the scaler CA, for a reinstall.
     run: |
-      kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
-      kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found
-      kubectl delete -f scaling-manager-preflight.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
+      kubectl delete -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
       kubectl delete secret scaling-manager-prometheus-ca -n $NAMESPACE --ignore-not-found
       kubectl delete configmap,secret -n $NAMESPACE \
         -l 'app.kubernetes.io/part-of=scaling-manager,scaling-manager.llmd.ai/scaler-tls!=ca'
   kedaauth:
-    note: Cluster admin. KEDA's side of mutual TLS.
+    note: Cluster admin. The part=admin objects, the preflight's RBAC, the monitors, and KEDA's side of mutual TLS.
     run: |
+      kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-preflight.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found
       kubectl delete -f scaling-manager-keda-auth.yaml --ignore-not-found
       kubectl delete secret scaling-manager-external-scaler-$NAMESPACE -n $KEDA_NS --ignore-not-found
   model:

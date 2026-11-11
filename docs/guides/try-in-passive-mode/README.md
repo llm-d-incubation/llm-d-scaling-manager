@@ -368,7 +368,15 @@ kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --ty
 
 Then uninstall as in [the install guide](../install-in-namespace/#cleanup),
 and delete `scaling-manager-activate.yaml` from the model namespace with the
-same `sed` and `kubectl delete -f -`.
+same `sed` and `kubectl delete -f -`. Delete the scaling-policy ConfigMap too:
+it carries no label, so the uninstall leaves it.
+
+<!-- guide:cleanup.policy start -->
+```bash
+# The scaling-policy ConfigMap step 3 of "Make one model active" created, if you created it. The label-based uninstall does not find it.
+kubectl delete configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --ignore-not-found
+```
+<!-- guide:cleanup.policy end -->
 
 ## From a checkout instead
 

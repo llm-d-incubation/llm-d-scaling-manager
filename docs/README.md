@@ -39,15 +39,20 @@ follow the guide that path links to. Nothing installed yet? The
    Nothing serving yet? [Install a small llm-d model](guides/install-small-model/) first.
 2. **Install the scaling manager** into that namespace, from the files
    attached to the release, with `kubectl`. A cluster admin applies the
-   `part=admin` objects once; the namespace owner sets the Prometheus URL in
-   the settings file, runs the preflight check and applies the rest. It starts
-   passive: it decides and publishes, and changes no replica count.
+   `part=admin` objects once (and later gives KEDA its client certificate);
+   the namespace owner sets the Prometheus URL in the settings file, runs the
+   preflight check and applies the rest. It starts passive: it decides and
+   publishes, and changes no replica count.
 
    ```bash
-   kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin       # cluster admin
-   kubectl create -f scaling-manager-settings.yaml                                              # once
-   kubectl apply -f scaling-manager-preflight.yaml                                              # read-only check
-   kubectl create -f scaling-manager-scaler-tls.yaml                                            # once
+   # cluster admin, once per namespace
+   kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+   kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin
+   kubectl apply -f scaling-manager-model-namespace.yaml
+   # namespace owner
+   kubectl create -f scaling-manager-settings.yaml                                     # once
+   kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller   # read-only check
+   kubectl create -f scaling-manager-scaler-tls.yaml                                   # once
    kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
    ```
 

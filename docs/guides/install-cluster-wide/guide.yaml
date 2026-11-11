@@ -18,6 +18,11 @@ prerequisites:
       done
 
 deploy:
+  kedans:
+    note: Before applying, name the namespace KEDA runs in in the scaler NetworkPolicy (the file says keda). Keep this edit for every upgrade.
+    run: |
+      export KEDA_NS=<the namespace KEDA runs in>
+      sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-cluster.yaml
   settings:
     note: Set prometheusURL in scaling-manager-settings.yaml first. Created once, never applied again.
     run: kubectl create -f scaling-manager-settings.yaml
@@ -29,6 +34,15 @@ deploy:
       until kubectl get job scaling-manager-preflight -n scaling-manager-system \
           -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
       kubectl logs -n scaling-manager-system job/scaling-manager-preflight
+  promca:
+    note: Only when a private CA signed Prometheus's certificate.
+    run: |
+      kubectl create secret generic scaling-manager-prometheus-ca -n scaling-manager-system --from-file=ca.crt=<ca file>
+      kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge \
+        -p '{"data":{"prometheusCACertPath":"/etc/scaling-manager-prometheus-ca/ca.crt"}}'
+  preflightdone:
+    note: After the last run. The preflight's cluster reads are needed only while it runs.
+    run: kubectl delete clusterrolebinding scaling-manager-preflight --ignore-not-found
   controller:
     run: |
       kubectl create -f scaling-manager-scaler-tls.yaml
@@ -41,9 +55,8 @@ deploy:
       sed -e "s/__NAMESPACE__/scaling-manager-system/g" -e "s/__MODEL_NAMESPACE__/$MODEL_NS/g" \
         scaling-manager-model-namespace.yaml | kubectl apply -f -
   kedaauth:
-    note: In this directory. Prints the commands that give KEDA its client certificate; run them.
+    note: In this directory, with KEDA_NS set as above. Prints the steps that give KEDA its client certificate.
     run: |
-      export KEDA_NS=<the namespace KEDA runs in>
       kubectl get configmap scaling-manager-controller-status -n scaling-manager-system \
         -o jsonpath='{.data.scalerTLSAction}{"\n"}'
   mtls:

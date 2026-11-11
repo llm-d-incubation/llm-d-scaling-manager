@@ -23,8 +23,8 @@ cluster admin for KEDA. Every step is in
 [Install the scaling manager in a namespace](../../guides/install-in-namespace/).
 
 1. Namespace owner: [download the release files and fill in the namespace](../../guides/install-in-namespace/README.md#prerequisites).
-2. Cluster admin, once per namespace: [prepare the namespace](../../guides/install-in-namespace/README.md#1-cluster-admin-prepare-the-namespace).
-3. Namespace owner: [create the settings and run the preflight check](../../guides/install-in-namespace/README.md#2-settings-and-the-preflight-check). The check is read-only; fix every `FAIL` it prints.
+2. Cluster admin, once per namespace: [prepare the namespace](../../guides/install-in-namespace/README.md#1-cluster-admin-prepare-the-namespace): the `part=admin` objects of the main and preflight files, and the model-namespace file.
+3. Namespace owner: [create the settings and run the preflight check](../../guides/install-in-namespace/README.md#2-settings-and-the-preflight-check) (its Job, `part=controller`). The check is read-only; fix every `FAIL` it prints.
 4. Namespace owner (the admin, if the controller runs in `llmsm-<ns>`): [install the controller](../../guides/install-in-namespace/README.md#3-install-the-controller).
 5. Cluster admin: [give KEDA its client certificate](../../guides/install-in-namespace/README.md#4-cluster-admin-give-keda-its-client-certificate), so only KEDA can call the scaler ([details](#details-the-scaler-port)).
 6. Namespace owner: [make the workloads safe to scale](../../guides/install-in-namespace/README.md#make-the-workloads-safe-to-scale), [register them](../../guides/install-in-namespace/README.md#register-the-workloads), then [let it scale](../../guides/install-in-namespace/README.md#let-it-scale). Nothing scales before this step: the install is passive.

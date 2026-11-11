@@ -10,8 +10,14 @@ variant needs and hands that number to KEDA, which does the scaling.
 It installs **passive**: the controller decides and publishes, and changes no
 replica count until you switch it on ([step 5](#let-it-scale)).
 
-A cluster admin applies one part once ([step 1](#1-cluster-admin-prepare-the-namespace)).
-After that, the namespace owner installs and upgrades the controller.
+A cluster admin applies the `part=admin` objects once
+([step 1](#1-cluster-admin-prepare-the-namespace)) and wires KEDA
+([step 4](#4-cluster-admin-give-keda-its-client-certificate)). The namespace
+owner does the rest, and upgrades the controller.
+
+Tested: the namespaced files on Kubernetes (kind, `make
+test-e2e-release-manifests`, run before each release). The cluster-wide and
+OpenShift files are not yet tested end to end.
 
 Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-instead).
 
@@ -28,9 +34,11 @@ Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-ins
 - [ ] **For scale-from-zero only: the EPP's `flowControl` feature gate.** Add
   `featureGates: [flowControl]` to the `EndpointPickerConfig` and restart the
   EPP. Without it, a model at zero never wakes.
-- [ ] `kubectl` and `curl`. A cluster admin for steps 1 and 4.
+- [ ] `kubectl` and `curl`. A cluster admin for steps 1 and 4. On OpenShift,
+  use `scaling-manager-namespaced-openshift.yaml`; it is not yet tested end to
+  end.
 
-<!-- guide:prerequisites start -->
+<!-- guide:prerequisites.download start -->
 ```bash
 # The release files. Pick the release you install.
 V=<release, for example v0.11.0>
@@ -38,35 +46,44 @@ URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/
 for f in namespaced settings preflight scaler-tls model-namespace keda-auth; do
   curl -fsSLO $URL/scaling-manager-$f.yaml
 done
+```
+<!-- guide:prerequisites.download end -->
 
+Each file is pinned to the release's image by digest, and signed. Check them
+now, before the `sed` below changes them: [Verify the release
+files](../../reference/install-methods.md#verify-the-release-files).
+
+<!-- guide:prerequisites.namespace start -->
+```bash
 # The namespace your model servers run in. The controller runs there too.
 export NAMESPACE=<your-namespace>
 for f in scaling-manager-*.yaml; do
   sed -i -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" "$f"
 done
 ```
-<!-- guide:prerequisites end -->
-
-Each file is pinned to the release's image by digest, and signed. To check a
-file before you apply it, see [Verify the release files](../../reference/install-methods.md#verify-the-release-files).
+<!-- guide:prerequisites.namespace end -->
 
 ## Installation Instructions
 
 ### 1. Cluster admin: prepare the namespace
 
-**Needs cluster-admin rights.** Steps 2, 3 and 5 do not.
+**Needs cluster-admin rights.** Steps 2, 3 and 5 do not: a namespace admin runs them.
 
 <!-- guide:deploy.admin start -->
 ```bash
-# Cluster admin, once per namespace. RBAC, ServiceAccounts, the monitor and the scaler NetworkPolicy.
+# Cluster admin, once per namespace. RBAC, ServiceAccounts, the monitors, the scaler NetworkPolicy, and the preflight's read-only RBAC.
 kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin
+kubectl apply -f scaling-manager-model-namespace.yaml
 ```
 <!-- guide:deploy.admin end -->
 
 The namespace must already exist; no release file creates or deletes one. The
 `part=admin` label selects the ClusterRoles and their bindings, the Roles,
-the ServiceAccount, the ServiceMonitor and the NetworkPolicy. Their names carry
-the namespace, so two installs never share one. The full list and why each
+the ServiceAccount, the ServiceMonitor and the NetworkPolicy; in the
+preflight file, its ServiceAccount, Role, ClusterRole and their bindings. The
+model-namespace file is all `part=admin`: the model-server PodMonitor and the
+controller's Role. Names carry the namespace, so two installs never share one. The full list and why each
 needs an admin: [Cluster-admin setup](../admin-cluster-setup/).
 
 ### 2. Settings and the preflight check
@@ -98,13 +115,13 @@ kubectl patch configmap scaling-manager-settings -n $NAMESPACE --type merge \
 <!-- guide:deploy.promca end -->
 
 Now check the prerequisites. The preflight runs as a Job, reads the cluster
-and changes nothing:
+and changes nothing. Its RBAC came with step 1; this applies the Job alone:
 
 <!-- guide:deploy.preflight start -->
 ```bash
 # Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
 kubectl delete job scaling-manager-preflight -n $NAMESPACE --ignore-not-found
-kubectl apply -f scaling-manager-preflight.yaml
+kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller
 until kubectl get job scaling-manager-preflight -n $NAMESPACE \
     -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
 kubectl logs -n $NAMESPACE job/scaling-manager-preflight
@@ -125,14 +142,24 @@ sed -i 's#kubernetes.io/metadata.name: keda$#kubernetes.io/metadata.name: keda-s
 UNKNOWN because the controller does not exist yet. Every check, and what it
 needs: [Preflight check](../../reference/preflight.md).
 
+When you are done with the preflight (after step 4's run), the cluster admin
+removes its cluster-wide reads. To run it again later, they apply its
+`part=admin` objects again, as in step 1:
+
+<!-- guide:deploy.preflightdone start -->
+```bash
+# Cluster admin, after the last run. The preflight's cluster reads are needed only while it runs.
+kubectl delete clusterrolebinding scaling-manager-preflight-$NAMESPACE --ignore-not-found
+```
+<!-- guide:deploy.preflightdone end -->
+
 ### 3. Install the controller
 
 <!-- guide:deploy.controller start -->
 ```bash
-# The scaler's certificate Secrets (created once, empty; the controller fills them), the controller, and the model-server monitor.
+# The scaler's certificate Secrets (created once, empty; the controller fills them), then the controller.
 kubectl create -f scaling-manager-scaler-tls.yaml
 kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
-kubectl apply -f scaling-manager-model-namespace.yaml
 kubectl rollout status deployment/scaling-manager-controller-manager -n $NAMESPACE
 ```
 <!-- guide:deploy.controller end -->
@@ -148,15 +175,16 @@ certificate, the scaler serves plaintext and the controller says what to run:
 
 <!-- guide:deploy.kedaauth start -->
 ```bash
-# Cluster admin, in this directory. Prints the commands that give KEDA its client certificate.
+# Cluster admin, in this directory. Prints the steps that give KEDA its client certificate.
 export KEDA_NS=<the namespace KEDA runs in>
 kubectl get configmap scaling-manager-controller-status -n $NAMESPACE \
   -o jsonpath='{.data.scalerTLSAction}{"\n"}'
 ```
 <!-- guide:deploy.kedaauth end -->
 
-Run the command it prints, in the directory that holds the release files. It
-copies the client certificate into KEDA's namespace, applies
+In the directory that holds the release files, run the text after `then
+restart the controller:` in step 1; step 2 only on a reinstall. It copies the
+client certificate into KEDA's namespace, applies
 `scaling-manager-keda-auth.yaml` (KEDA's ClusterTriggerAuthentication and the
 marker the controller reads), and restarts the controller. Then:
 
@@ -322,30 +350,35 @@ scaling manager](../benchmarking/).
 
 Delete or repoint your ScaledObjects first: a trigger that calls a removed
 scaler fails on every KEDA poll, and a workload parked at zero can never wake.
+If utilization share was active, set it to `shadow` and wait a cycle before
+anything else, so no transfer marks are left on pods; then delete
+`scaling-manager-activate.yaml` in each namespace you applied it in.
+
+The namespace owner removes the controller and what it wrote:
 
 <!-- guide:cleanup.uninstall start -->
 ```bash
 # Your ScaledObjects stay; delete or repoint them first. Keeps the scaler CA, for a reinstall.
-kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
-kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found
-kubectl delete -f scaling-manager-preflight.yaml --ignore-not-found
+kubectl delete -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
+kubectl delete -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
 kubectl delete secret scaling-manager-prometheus-ca -n $NAMESPACE --ignore-not-found
 kubectl delete configmap,secret -n $NAMESPACE \
   -l 'app.kubernetes.io/part-of=scaling-manager,scaling-manager.llmd.ai/scaler-tls!=ca'
 ```
 <!-- guide:cleanup.uninstall end -->
 
+Then the cluster admin removes the rest:
+
 <!-- guide:cleanup.kedaauth start -->
 ```bash
-# Cluster admin. KEDA's side of mutual TLS.
+# Cluster admin. The part=admin objects, the preflight's RBAC, the monitors, and KEDA's side of mutual TLS.
+kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
+kubectl delete -f scaling-manager-preflight.yaml --ignore-not-found
+kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found
 kubectl delete -f scaling-manager-keda-auth.yaml --ignore-not-found
 kubectl delete secret scaling-manager-external-scaler-$NAMESPACE -n $KEDA_NS --ignore-not-found
 ```
 <!-- guide:cleanup.kedaauth end -->
-
-If utilization share was active, set it to `shadow` and wait a cycle first,
-so no transfer marks are left on pods, then delete `scaling-manager-activate.yaml`
-in each namespace you applied it in.
 
 The model servers, EPP and InferencePools keep running. If you deployed the
 model with [Install a small llm-d model](../install-small-model/), remove it
@@ -363,9 +396,8 @@ make benchmark-teardown BENCHMARK_NAMESPACE=${NAMESPACE}
   a reinstall signs with it, so KEDA's open connection keeps working. Delete it
   with `kubectl delete secret scaling-manager-external-scaler-ca -n $NAMESPACE`
   when you will not reinstall.
-- **Cluster-scoped RBAC**, when you are not a cluster admin: `kubectl delete -f
-  scaling-manager-namespaced.yaml` reports the ClusterRoles and
-  ClusterRoleBindings it was refused. Send your admin the same command.
+- **The `part=admin` objects**, until the cluster admin runs their block
+  above: the RBAC, the monitors, the NetworkPolicy and the preflight's RBAC.
 
 ## Configuration
 
