@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scaling-manager-kueue-borrow-reader-rolebinding-__NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scaling-manager-kueue-borrow-reader-role-__NAMESPACE__
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-controller-manager
+  namespace: __NAMESPACE__

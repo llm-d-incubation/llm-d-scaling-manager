@@ -1,0 +1,24 @@
+# How KEDA presents its client certificate to the scaler, for mutual TLS. It
+# reads Secret scaling-manager-external-scaler-__NAMESPACE__ in KEDA's
+# namespace: a copy of scaling-manager-external-scaler-client-tls from the
+# controller's namespace, made by the cluster admin before applying this.
+# Same name and label as the installer writes (deploy/lib/scaler_tls.sh), so an
+# install made with make keeps working.
+apiVersion: keda.sh/v1alpha1
+kind: ClusterTriggerAuthentication
+metadata:
+  name: scaling-manager-external-scaler-__NAMESPACE__
+  labels:
+    app.kubernetes.io/managed-by: llm-d-scaling-manager
+    scaling-manager.llmd.ai/scaler-tls: keda-client
+spec:
+  secretTargetRef:
+  - parameter: caCert
+    name: scaling-manager-external-scaler-__NAMESPACE__
+    key: ca.crt
+  - parameter: tlsClientCert
+    name: scaling-manager-external-scaler-__NAMESPACE__
+    key: tls.crt
+  - parameter: tlsClientKey
+    name: scaling-manager-external-scaler-__NAMESPACE__
+    key: tls.key

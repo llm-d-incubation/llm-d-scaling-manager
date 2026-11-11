@@ -40,6 +40,12 @@ jobs:
       packages: write
       # Keyless cosign signing: the workflow's OIDC identity is the signer.
       id-token: write
+    # For the release-files job, which renders the manifests by this digest.
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - name: Checkout source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -271,5 +277,98 @@ jobs:
             echo "cosign verify $IMAGE@$DIGEST \\"
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
             echo "  --certificate-identity https://github.com/$WORKFLOW_REF"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The files an operator installs from: the manifests rendered by the digest
+  # just pushed, each signed like the image, attached to the GitHub Release
+  # (docs/proposals/install-from-release.md). Its own job, so the only job that
+  # may write the repository's releases builds no image, and the one that
+  # pushes the image cannot touch the release. A re-run renders, signs and
+  # uploads again, replacing what an earlier attempt attached.
+  release-files:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      # Upload to the GitHub Release, creating a draft when none exists.
+      contents: write
+      # Keyless cosign signing, the same identity that signed the image.
+      id-token: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # The same yq pin and retries as the PR checks, so the release renders
+      # with the yq the rendering check ran under.
+      - name: Install yq
+        run: |
+          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Render the release files
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "$DIGEST" ] || { echo "::error::the release job reported no digest"; exit 1; }
+          make release-manifests IMG="$IMAGE@$DIGEST" RELEASE_VERSION="$VERSION" DIST=dist
+
+      # One bundle per file, SHA256SUMS included: <file>.sigstore.json. Signed
+      # by content, so a file changed after signing fails verification.
+      - name: Sign the release files
+        run: |
+          set -euo pipefail
+          n=0
+          for f in dist/*.yaml dist/SHA256SUMS; do
+            [ -f "$f" ] || { echo "::error::$f was not rendered"; exit 1; }
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f" >/dev/null
+            n=$((n + 1))
+          done
+          echo "signed $n files"
+
+      - name: Attach the files to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.release.outputs.version }}
+          PRERELEASE: ${{ needs.release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+            pre=""
+            [ "$PRERELEASE" = true ] && pre="--prerelease"
+            # A draft: publishing, with the release notes, stays a maintainer's step.
+            gh release create "$VERSION" --draft --verify-tag $pre \
+              --title "llm-d-scaling-manager $VERSION" --notes "Release notes to follow."
+          fi
+          gh release upload "$VERSION" --clobber dist/*.yaml dist/SHA256SUMS dist/*.sigstore.json
+          gh release view "$VERSION" --json assets --jq '.assets[].name'
+
+      - name: Summarise
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          {
+            echo "Attached to release $VERSION:"
+            echo '```'
+            (cd dist && cat SHA256SUMS)
+            echo '```'
+            echo "Verify a file:"
+            echo '```'
+            echo "cosign verify-blob scaling-manager-namespaced.yaml \\"
+            echo "  --bundle scaling-manager-namespaced.yaml.sigstore.json \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  --certificate-identity https://github.com/$WORKFLOW_REF"
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

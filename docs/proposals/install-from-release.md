@@ -1,6 +1,10 @@
 # Install from the release, not from a checkout
 
-- **Status:** proposed. Nothing here is built.
+- **Status:** in progress. Phase 1 is built: `make release-manifests`
+  (`deploy/release-manifests.sh`), its check, and the release workflow signing
+  and attaching the files. What building it changed in this design is in
+  [Found while building phase 1](#found-while-building-phase-1). The rest is
+  not built.
 - **Problem:** installing takes a checkout, `make`, and about 15,000 lines of
   shell under `deploy/`. A reviewer found the content complete and the
   procedure too complex. An operator should need the image and a short
@@ -648,6 +652,48 @@ policy ConfigMap and the ScaledObjects the installer created.
 - The `utilization-share*` guides, the Kueue guide and `install-options.md`
   rewritten on the files.
 
+## Found while building phase 1
+
+Building the render showed where the text above was wrong or incomplete.
+
+- **The namespaced files do grant `patch` on pods, in the controller's own
+  namespace.** The namespaced manager Role carries it for the warm pool
+  (`config/components/tenant-installable`), as today. So "the install files
+  never grant `patch` on pods" holds for every ClusterRole and every
+  namespace but the managed one. `scaling-manager-model-namespace.yaml`
+  copies that Role into the model namespace, as `make` does for
+  `LLMSM_WATCH_NS` today, so it carries it there too. The check allows `patch`
+  on pods only in `scaling-manager-pod-writer` and the manager Role.
+- **The OpenShift Thanos URL was in `scaling-manager-manager-config`**, which
+  no release file carries. The OpenShift manifests therefore do not carry it;
+  the settings file names it in the comment on the `prometheusURL` key, and the
+  OpenShift guide must set it (or a later release ships an OpenShift settings
+  file).
+- **The controller cannot start from the release files until the settings
+  reader exists (phase 2).** Without the ConfigMap the Deployment's config
+  volume is `optional`, and the kubelet then presents `config.yaml` as an empty
+  directory: today's controller exits with `read /etc/scaling-manager/config.yaml:
+  is a directory` (seen on kind). The reader must treat a missing or directory
+  config file as absent. When `scaling-manager-manager-config` does exist (a
+  migrated install), it is still mounted and read, which is the fallback.
+- **Placeholders beyond `__NAMESPACE__`.** The model-namespace and activation
+  files need `__MODEL_NAMESPACE__`, the KEDA file `__KEDA_NAMESPACE__`, the
+  Kueue file `__KUEUE_NAMESPACE__`. The single `sed` loop in the
+  [Summary](#summary) fills only the first, so the guides need the others.
+- **The Kueue file holds the borrowing read too** (Workloads and LocalQueues
+  in every namespace), since `kueueBorrow` defaults to `"true"`, and the Role
+  in Kueue's namespace. Its ClusterRoles are redundant for a cluster-wide
+  controller, whose manager ClusterRole has the same reads.
+- **No Namespace object costs the OpenShift cluster-wide install a label.**
+  The overlay put `openshift.io/user-monitoring: "true"` on the Namespace it
+  created; the release files create none, so the guide must label it.
+- **The cluster-wide files keep fixed names, and `make` hashes those too.** A
+  cluster-wide install made with `make` has hash-suffixed ClusterRoles, so the
+  migration's step 3 applies to it as well.
+- **The alerts rule is named `controller-manager-alerts`**, unprefixed,
+  because the alerts component is added outside the overlay's `namePrefix`,
+  as the installer adds it.
+
 ## Open questions
 
 None. All eight were decided on 2026-11-10; see
@@ -655,13 +701,14 @@ None. All eight were decided on 2026-11-10; see
 
 ## Before you rely on this
 
-Assumptions the design rests on that have not been tried yet:
+Assumptions the design rests on:
 
 - **`kubectl apply -f <file> -l <selector>` applies only the matching objects
-  of a file.** The admin/controller split of the namespaced file depends on
-  it. Verify it on kind, with the kubectl version the guides name, before the
-  release files are built around it. If it does not hold, the namespaced
-  release ships the two halves as two files instead.
+  of a file.** Verified with kubectl v1.31 on kind (2026-11-11): `-l
+  scaling-manager.llmd.ai/part=admin` created the 25 admin objects of the
+  namespaced file and no Deployment or Service; `part=controller` then
+  created exactly the Deployment and the two Services; a whole-file apply after
+  both changed nothing. The namespaced release stays one file.
 - **The migration keeps names.** It works only if the TLS bootstrap uses
   today's Secret names, and the KEDA step today's ClusterTriggerAuthentication
   name, both of which this proposal requires.

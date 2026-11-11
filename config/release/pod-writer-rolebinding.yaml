@@ -1,0 +1,17 @@
+# Named for the controller's namespace, so two controllers granted in one model
+# namespace keep their own subjects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-manager-pod-writer-__NAMESPACE__
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaling-manager-pod-writer
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-controller-manager
+  namespace: __NAMESPACE__

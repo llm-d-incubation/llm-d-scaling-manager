@@ -1,0 +1,15 @@
+# The one RBAC change going active needs: patch on pods in a model namespace
+# that shares the budget. The same grant deploy/lib/pod_writer.sh makes at
+# `make utilization-share-activate`. Applied per model namespace, only when
+# utilizationShare goes active; deleted after it is off again.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-pod-writer
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["patch"]

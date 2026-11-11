@@ -15,7 +15,7 @@ instead.
 | 2. Tag | Your clone | Tag the merge commit of the release PR, check it, push the tag |
 | 3. Wait | GitHub Actions | The release run must succeed |
 | 4. Reset PR | PR to `main` | `newTag: main` again, only after the run succeeded |
-| 5. Publish | GitHub | Publish the GitHub Release with the release notes; verify the signature |
+| 5. Publish | GitHub | Publish the draft GitHub Release the run made, with the release notes; verify the signatures |
 | 6. Docs PR | PR to `main` | Point the install, upgrade and benchmark docs at the release and its digest |
 
 ---
@@ -28,6 +28,10 @@ instead.
    i.e. `ghcr.io/llm-d-incubation/llm-d-scaling-manager:<tag>` for this repository.
 3. **Release notes**, in the GitHub Release. They are not kept as a file in
    this repository.
+4. **Release files**, attached to the GitHub Release by the run: the install
+   manifests rendered with the image pinned by digest, `SHA256SUMS`, and a
+   `<file>.sigstore.json` signature bundle for each. See
+   [The release files](#the-release-files).
 
 A tag is released only from `main`, or from its own line's
 `release-MAJOR.MINOR` branch (a `v0.10.2` from `release-0.10`) once that line
@@ -107,8 +111,12 @@ the pin check.
 
 ### 4. Publish the GitHub Release
 
-In **Releases**, choose the tag, paste the release notes, mark it as a
-pre-release if the tag has a prerelease suffix, and publish.
+The run created a **draft** release for the tag, already marked as a
+pre-release for a prerelease tag, with the release files attached. If a
+release for the tag existed before the run, it attached the files to that one
+instead. In **Releases**, open it, check that the files are there (each
+`.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each), paste the release
+notes, and publish.
 
 ### 5. Point the docs at the release
 
@@ -140,6 +148,11 @@ be public under that tag. Do not move or delete the tag.
   at the tag.
 - The fix needs a change to the code or the workflow: release `vX.Y.(Z+1)`
   instead.
+
+**It failed in the `release-files` job.** The image is published and signed;
+only the files are missing or incomplete. Use **Re-run failed jobs**: the job
+renders, signs and uploads again, replacing whatever an earlier attempt
+attached. Do not publish the release until it has succeeded.
 
 ---
 
@@ -253,6 +266,18 @@ docker buildx imagetools inspect "$IMAGE:vX.Y.Z" --format '{{ json .SBOM }}'
 docker buildx imagetools inspect "$IMAGE:vX.Y.Z" --format '{{ json .Provenance }}'
 ```
 
+The release files are signed by the same identity. Download a file, its
+bundle and `SHA256SUMS`, then:
+
+```bash
+V=vX.Y.Z
+cosign verify-blob scaling-manager-namespaced.yaml \
+  --bundle scaling-manager-namespaced.yaml.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
 Deploy by digest (`IMG=$IMAGE@sha256:...`) when you need the exact bytes that
 were verified; a tag can be moved after the fact, a digest cannot.
 
@@ -297,3 +322,63 @@ re-run from the **Actions** tab.
 6. **Sign.** Keyless `cosign sign` of the pushed digest, with the workflow's
    OIDC identity as the signer. The run summary prints the digest and the
    verify command.
+7. **Release files** (job `release-files`, after the image job). Runs
+   `make release-manifests` with the pushed digest, signs each file and
+   `SHA256SUMS` with keyless `cosign sign-blob --bundle`, and uploads them all
+   with `gh release upload --clobber`, creating a draft release when the tag has
+   none. It is the only job with `contents: write`, and it builds no image.
+   `hack/check-release-manifests.sh` checks the job's shape and runs its sign
+   step against a stub cosign.
+
+### The release files
+
+Rendered by `deploy/release-manifests.sh` from the same kustomize overlays
+`make deploy-scaling-manager` applies, plus the sources in `config/release/`.
+Design and rules: [install-from-release.md](../proposals/install-from-release.md).
+
+| file | holds |
+|------|-------|
+| `scaling-manager-namespaced.yaml`, `-namespaced-openshift.yaml` | one controller per namespace; namespace written `__NAMESPACE__` |
+| `scaling-manager-cluster.yaml`, `-cluster-openshift.yaml` | one controller for the cluster, in `scaling-manager-system` |
+| `scaling-manager-settings.yaml` | the `scaling-manager-settings` ConfigMap with every key's default |
+| `scaling-manager-model-namespace.yaml` | per model namespace: the model-server PodMonitor, the controller's Role and RoleBinding |
+| `scaling-manager-activate.yaml` | per model namespace, at `utilizationShare: active`: the pod-writer Role and RoleBinding |
+| `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for scaler mTLS and its marker ConfigMap |
+| `scaling-manager-kueue.yaml` | optional Kueue reads |
+| `scaling-manager-alerts.yaml` | optional PrometheusRule |
+| `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap |
+
+The preflight Job file is not rendered yet: it comes with the `manager
+preflight` command.
+
+Every object carries `app.kubernetes.io/part-of`, `instance`, `version` and
+`scaling-manager.llmd.ai/part: admin|controller`; `admin` is exactly what the
+installer's prereqs phase applies (`LLMSM_PREREQ_KINDS` and
+`LLMSM_PREREQ_NAMED` in `deploy/lib/common.sh`). `make lint-deploy-scripts`
+runs `hack/check-release-manifests.sh`, which renders the files, asserts the
+rules, and then breaks a copy one rule at a time to show each break is caught.
+
+To render them locally, give an image by digest:
+
+```bash
+make release-manifests IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest> \
+  RELEASE_VERSION=vX.Y.Z DIST=dist
+```
+
+To try them on kind, substitute the placeholders and apply each part by its
+label, the way a cluster admin and a namespace owner would. KEDA and
+prometheus-operator CRDs must exist for the KEDA and monitoring objects:
+
+```bash
+kubectl create namespace team-a
+for f in dist/scaling-manager-*.yaml; do
+  sed -e 's/__NAMESPACE__/team-a/g' -e 's/__MODEL_NAMESPACE__/team-a/g' "$f" > "/tmp/$(basename "$f")"
+done
+kubectl apply -f /tmp/scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+kubectl apply -f /tmp/scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
+kubectl create -f /tmp/scaling-manager-settings.yaml
+```
+
+`kubectl apply -f <file> -l <selector>` applies only the matching objects
+(checked with kubectl v1.31 on kind: the admin apply created no Deployment or
+Service, the controller apply created exactly those three objects).

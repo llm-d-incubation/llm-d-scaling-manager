@@ -1,0 +1,18 @@
+# Binds the controller's Role in a model namespace it manages from another
+# namespace. Named for the controller's namespace, so two controllers that
+# manage one model namespace keep their own grants.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-manager-manager-rolebinding-__NAMESPACE__
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaling-manager-manager-role-__NAMESPACE__
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-controller-manager
+  namespace: __NAMESPACE__
