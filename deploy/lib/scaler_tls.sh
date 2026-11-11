@@ -304,6 +304,17 @@ llmsm_scaler_drop_tmp() {
     fi
 }
 
+# llmsm_scaler_same_object succeeds when object $1 (JSON, as read) already has
+# what object $2 (JSON, as it would be applied) sets: field $3 (spec or data)
+# equal, and every label of $2. A write that would change nothing is skipped.
+llmsm_scaler_same_object() {
+    [ -n "$1" ] || return 1
+    jq -e -n --argjson cur "$1" --argjson want "$2" --arg f "$3" '
+        ($cur[$f] // null) == ($want[$f] // null)
+        and ([($want.metadata.labels // {}) | to_entries[] | . as $e | ($cur.metadata.labels // {})[$e.key] == $e.value] | all)' \
+        >/dev/null 2>&1
+}
+
 # llmsm_scaler_sha256 echoes the SHA-256 of file $1.
 llmsm_scaler_sha256() {
     openssl dgst -sha256 "$1" 2>/dev/null | awk '{ print $NF }'
@@ -929,43 +940,63 @@ llmsm_scaler_keda_auth_apply() {
         *) llmsm_scaler_drop_tmp; log_error "Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS was not created by this installer (no $LLMSM_SCALER_TLS_LABEL label); refusing to overwrite it. Remove or rename it, or set LLMSM_SCALER_TLS=false." ;;
     esac
 
-    jq -n --arg n "$name" --arg ns "$LLMSM_SCALER_KEDA_OBJ_NS" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg src "$LLMSM_NS" \
-        --rawfile crt "$d/tls.crt" --rawfile key "$d/tls.key" --rawfile ca "$d/ca.crt" \
-        '{apiVersion: "v1", kind: "Secret", type: "Opaque",
-          metadata: {name: $n, namespace: $ns,
-                     labels: {"app.kubernetes.io/managed-by": "llm-d-scaling-manager", ($l): "keda-client"},
-                     annotations: {"scaling-manager.llmd.ai/copied-from": ($src + "/scaling-manager-external-scaler-client-tls")}},
-          data: {"tls.crt": ($crt | @base64), "tls.key": ($key | @base64), "ca.crt": ($ca | @base64)}}' \
-        | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
-        || { llmsm_scaler_drop_tmp; log_error "Could not write Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS."; }
-    jq -n --arg n "$name" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg s "$name" \
+    # Each of the three is written only when it differs from what is there: a
+    # re-install with nothing to renew writes nothing on KEDA's side.
+    if [ "$obj_state" = ours ] && [ "$changed" = false ]; then
+        :
+    else
+        jq -n --arg n "$name" --arg ns "$LLMSM_SCALER_KEDA_OBJ_NS" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg src "$LLMSM_NS" \
+            --rawfile crt "$d/tls.crt" --rawfile key "$d/tls.key" --rawfile ca "$d/ca.crt" \
+            '{apiVersion: "v1", kind: "Secret", type: "Opaque",
+              metadata: {name: $n, namespace: $ns,
+                         labels: {"app.kubernetes.io/managed-by": "llm-d-scaling-manager", ($l): "keda-client"},
+                         annotations: {"scaling-manager.llmd.ai/copied-from": ($src + "/scaling-manager-external-scaler-client-tls")}},
+              data: {"tls.crt": ($crt | @base64), "tls.key": ($key | @base64), "ca.crt": ($ca | @base64)}}' \
+            | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
+            || { llmsm_scaler_drop_tmp; log_error "Could not write Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS."; }
+    fi
+    local want cur rc_cur=0
+    want="$(jq -nc --arg n "$name" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg s "$name" \
         '{apiVersion: "keda.sh/v1alpha1", kind: "ClusterTriggerAuthentication",
           metadata: {name: $n, labels: {"app.kubernetes.io/managed-by": "llm-d-scaling-manager", ($l): "keda-client"}},
           spec: {secretTargetRef: [
             {parameter: "caCert", name: $s, key: "ca.crt"},
             {parameter: "tlsClientCert", name: $s, key: "tls.crt"},
-            {parameter: "tlsClientKey", name: $s, key: "tls.key"}]}}' \
-        | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
-        || { llmsm_scaler_drop_tmp; log_error "Could not write ClusterTriggerAuthentication $name."; }
+            {parameter: "tlsClientKey", name: $s, key: "tls.key"}]}}')"
+    cur="$(kubectl get clustertriggerauthentications.keda.sh "$name" -o json 2>/dev/null)" || rc_cur=$?
+    if [ "$rc_cur" != 0 ] || ! llmsm_scaler_same_object "$cur" "$want" spec; then
+        printf '%s' "$want" \
+            | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
+            || { llmsm_scaler_drop_tmp; log_error "Could not write ClusterTriggerAuthentication $name."; }
+    fi
 
     sha="$(llmsm_scaler_sha256 "$d/tls.crt")" || sha=""
     not_after="$(openssl x509 -in "$d/tls.crt" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')" || not_after=""
     # The certificate itself (public), so the controller phase checks its
     # expiry with openssl rather than parsing a date. clientSan is the identity
     # it carries: the controller phase compares it with the one it pins.
-    jq -n --arg ns "$LLMSM_NS" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg m "$LLMSM_SCALER_KEDA_MARKER" \
+    want="$(jq -nc --arg ns "$LLMSM_NS" --arg l "$LLMSM_SCALER_TLS_LABEL" --arg m "$LLMSM_SCALER_KEDA_MARKER" \
         --arg cta "$name" --arg on "$LLMSM_SCALER_KEDA_OBJ_NS" --arg sha "$sha" --rawfile crt "$d/tls.crt" \
         --arg cas "$(llmsm_scaler_sha256 "$d/ca.crt")" --arg san "$(llmsm_scaler_cert_sans "$d/tls.crt" | sed 's/ *$//')" \
         '{apiVersion: "v1", kind: "ConfigMap",
           metadata: {name: $m, namespace: $ns, labels: {"app.kubernetes.io/managed-by": "llm-d-scaling-manager", ($l): "keda-client"}},
-          data: {clusterTriggerAuthentication: $cta, secretNamespace: $on, clientCertSha256: $sha, clientCert: $crt, caSha256: $cas, clientSan: $san}}' \
-        | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
-        || { llmsm_scaler_drop_tmp; log_error "Could not write ConfigMap $LLMSM_SCALER_KEDA_MARKER in $LLMSM_NS."; }
+          data: {clusterTriggerAuthentication: $cta, secretNamespace: $on, clientCertSha256: $sha, clientCert: $crt, caSha256: $cas, clientSan: $san}}')"
+    rc_cur=0
+    cur="$(kubectl get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json 2>/dev/null)" || rc_cur=$?
+    if [ "$rc_cur" != 0 ] || ! llmsm_scaler_same_object "$cur" "$want" data; then
+        printf '%s' "$want" \
+            | kubectl apply --server-side --force-conflicts --field-manager=llm-d-scaling-manager -f - >/dev/null \
+            || { llmsm_scaler_drop_tmp; log_error "Could not write ConfigMap $LLMSM_SCALER_KEDA_MARKER in $LLMSM_NS."; }
+    fi
     llmsm_scaler_drop_tmp
     LLMSM_SCALER_KEDA_READY=true
     log_success "KEDA's side of the scaler TLS: ClusterTriggerAuthentication $name, reading Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS (client certificate expires $not_after; KEDA trusts ${ca_src})"
     if [ "$changed" = true ]; then
         log_warning "KEDA's client certificate or the CA it trusts changed. KEDA keeps the TLS of a connection it already has until it restarts, so restart KEDA's operator now:  $(llmsm_scaler_keda_restart_cmd)"
+    elif [ "$obj_state" = absent ] && llmsm_scaler_keda_operator_may_run && llmsm_scaler_ca_was_kept; then
+        # The uninstall kept the CA for exactly this (llmsm_scaler_tls_undeploy).
+        log_info "KEDA's side was written for the first time while KEDA's operator is running. The scaler's CA was kept from an earlier install here (Secret $LLMSM_SCALER_CA_SECRET), and this install's certificates are signed by it, so a connection KEDA's operator still holds from then keeps working: no restart needed."
+        llmsm_scaler_ca_clear_kept
     elif [ "$obj_state" = absent ] && llmsm_scaler_keda_operator_may_run; then
         # A first write while KEDA runs: after an uninstall and reinstall, KEDA
         # still holds the connection it built with the old certificate.
@@ -983,6 +1014,28 @@ llmsm_scaler_keda_auth_apply() {
             log_warning "KEDA's side was written for the first time while KEDA's operator is running. The installer cannot tell a first install from a reinstall. If this namespace had the scaler before, KEDA keeps the old client certificate until its operator restarts, and without a restart the HPAs stay unwired (on the CPU default). On a first install, nothing to do. After the install,  $(llmsm_make_cmd verify-deployment)  tells which. To be safe now, restart KEDA's operator:  $(llmsm_scaler_keda_restart_cmd)"
         fi
     fi
+}
+
+# llmsm_scaler_ca_was_kept succeeds when the scaler CA in LLMSM_NS is this
+# installer's and an uninstall kept it for KEDA (LLMSM_SCALER_CA_KEPT_ANNOTATION).
+llmsm_scaler_ca_was_kept() {
+    local kept d cur=""
+    llmsm_scaler_object_state secret "$LLMSM_SCALER_CA_SECRET"
+    [ "$LLMSM_OBJ_STATE" = ours ] || return 1
+    kept="$(printf '%s' "$LLMSM_OBJ_JSON" | jq -r --arg a "$LLMSM_SCALER_CA_KEPT_ANNOTATION" '.metadata.annotations[$a] // ""' 2>/dev/null)" || kept=""
+    [ -n "$kept" ] || return 1
+    # Only the CA it was put on: one minted since into the same Secret is new.
+    d="$(mktemp -d)"
+    llmsm_scaler_secret_field tls.crt "$d/ca.crt"
+    [ ! -s "$d/ca.crt" ] || cur="$(llmsm_scaler_sha256 "$d/ca.crt")"
+    rm -rf "$d"
+    [ -n "$cur" ] && [ "$cur" = "$kept" ]
+}
+
+# llmsm_scaler_ca_clear_kept removes LLMSM_SCALER_CA_KEPT_ANNOTATION from the
+# scaler CA once a reinstall has used it.
+llmsm_scaler_ca_clear_kept() {
+    kubectl annotate secret "$LLMSM_SCALER_CA_SECRET" -n "$LLMSM_NS" "$LLMSM_SCALER_CA_KEPT_ANNOTATION-" >/dev/null 2>&1 || true
 }
 
 # llmsm_scaler_keda_operator_ns echoes the namespace KEDA's operator runs in,
@@ -1003,7 +1056,7 @@ llmsm_scaler_keda_restart_cmd() {
 # before a reinstall (LLMSM_SCALER_KEDA_CONN=stale): it names the ScaledObjects
 # ($1, one per line, <namespace>/<name> first) that stay unwired, and the exact
 # restart. KEDA is shared, so it restarts the operator only with
-# KEDA_RESTART=true; otherwise the install goes on, with the warning. Returns 0
+# KEDA_RESTART=true; otherwise the caller reports a failure. Returns 0
 # when it restarted KEDA, 1 when it did not.
 llmsm_scaler_keda_stale_act() {
     local rows="$1" ns
@@ -1020,7 +1073,7 @@ llmsm_scaler_keda_stale_act() {
         fi
         log_warning "  KEDA_RESTART=true, but restarting KEDA's operator in $ns failed. Run it yourself:  $(llmsm_scaler_keda_restart_cmd)"
     else
-        log_warning "  Not restarted: KEDA's operator is shared with everything else that uses KEDA. The install goes on. Restart it yourself with the command above, or run this again with KEDA_RESTART=true."
+        log_warning "  Not restarted: KEDA's operator is shared with everything else that uses KEDA. Nothing scales until it restarts, so this is reported as a failure (LLMSM_ALLOW_STALE_KEDA=true makes it a warning, for a tenant who cannot restart KEDA). Restart it yourself with the command above, or run this again with KEDA_RESTART=true."
     fi
     log_warning "=================================================================="
     return 1
@@ -1037,7 +1090,11 @@ llmsm_scaler_keda_restart_after_undeploy() {
     local ns rows rc=0
     ns="$(llmsm_scaler_keda_operator_ns)"
     if [ "${KEDA_RESTART:-false}" != true ]; then
-        log_info "KEDA's operator is not restarted (it is shared; KEDA_RESTART=true lets the uninstall do it). It keeps its connection to the removed scaler. If you install this scaler in $LLMSM_NS again, the install finds that connection and prints the restart. To restart it now:  $(llmsm_scaler_keda_restart_cmd)"
+        if [ "${LLMSM_SCALER_CA_KEPT:-false}" = true ] && [ "${DELETE_NAMESPACES:-false}" != true ] && [ "${DELETE_CLUSTER:-false}" != true ]; then
+            log_info "KEDA's operator is not restarted (it is shared; KEDA_RESTART=true lets the uninstall do it). It keeps its connection to the removed scaler, which trusts the kept CA, so a reinstall in $LLMSM_NS needs no restart. To restart it now:  $(llmsm_scaler_keda_restart_cmd)"
+        else
+            log_info "KEDA's operator is not restarted (it is shared; KEDA_RESTART=true lets the uninstall do it). It keeps its connection to the removed scaler. If you install this scaler in $LLMSM_NS again, the install finds that connection and prints the restart. To restart it now:  $(llmsm_scaler_keda_restart_cmd)"
+        fi
         return 0
     fi
     # Only with no ScaledObject left on the TLS address. One that stays (adopted,
@@ -1051,6 +1108,15 @@ llmsm_scaler_keda_restart_after_undeploy() {
     fi
     if kubectl rollout restart deployment/keda-operator -n "$ns" >/dev/null 2>&1; then
         log_success "Restarted KEDA's operator in $ns, so a reinstall here gets a new connection to the scaler."
+        # Nothing trusts the kept CA any more (llmsm_scaler_tls_undeploy).
+        if [ "${LLMSM_SCALER_CA_KEPT:-false}" = true ]; then
+            if kubectl delete secret "$LLMSM_SCALER_CA_SECRET" -n "$LLMSM_NS" --ignore-not-found >/dev/null 2>&1; then
+                LLMSM_SCALER_CA_KEPT=false
+                log_info "Removed the external scaler's CA, Secret $LLMSM_SCALER_CA_SECRET in $LLMSM_NS, kept until KEDA restarted."
+            else
+                log_warning "Could not remove the external scaler's CA, Secret $LLMSM_SCALER_CA_SECRET in $LLMSM_NS:  kubectl delete secret $LLMSM_SCALER_CA_SECRET -n $LLMSM_NS"
+            fi
+        fi
     else
         log_warning "Could not restart KEDA's operator in $ns. Before installing this scaler in $LLMSM_NS again, restart it:  $(llmsm_scaler_keda_restart_cmd)"
     fi
@@ -1683,6 +1749,79 @@ llmsm_scaler_keda_conn_report() {
     return 1
 }
 
+# llmsm_scaler_keda_trust_state sets LLMSM_SCALER_KEDA_TRUST from what KEDA was
+# actually given, the Secret its ClusterTriggerAuthentication reads in KEDA's
+# namespace, rather than from the marker the admin phase wrote:
+#   ok        its ca.crt verifies the scaler's serving certificate, and the
+#             controller's client CA verifies its tls.crt
+#   mismatch  one of them does not, or the copy is missing
+#             (LLMSM_SCALER_KEDA_TRUST_WHY says which and what KEDA then does)
+#   unread    something could not be read: not checked, never "ok"
+#             (LLMSM_SCALER_KEDA_TRUST_WHY says what)
+# It reads what KEDA reads from the Secret; a KEDA that kept an older
+# connection presents what it read then (llmsm_scaler_keda_conn_state).
+llmsm_scaler_keda_trust_state() {
+    local name copy_ns="" d out rc=0
+    LLMSM_SCALER_KEDA_TRUST=unread
+    LLMSM_SCALER_KEDA_TRUST_WHY=""
+    name="$(llmsm_scaler_keda_auth_name)"
+    if ! command -v openssl >/dev/null 2>&1; then
+        LLMSM_SCALER_KEDA_TRUST_WHY="openssl is not on PATH"
+        return 0
+    fi
+    llmsm_scaler_keda_object_ns
+    copy_ns="$LLMSM_SCALER_KEDA_OBJ_NS"
+    if [ -z "$copy_ns" ]; then
+        out="$(kubectl get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json 2>/dev/null)" || rc=$?
+        [ "$rc" != 0 ] || copy_ns="$(printf '%s' "$out" | jq -r '.data.secretNamespace // ""' 2>/dev/null)" || copy_ns=""
+    fi
+    if [ -z "$copy_ns" ]; then
+        LLMSM_SCALER_KEDA_TRUST_WHY="where KEDA reads its Secrets is not known (${LLMSM_SCALER_KEDA_OBJ_WHY:-set KEDA_NAMESPACE})"
+        return 0
+    fi
+    LLMSM_NS="$copy_ns" llmsm_scaler_object_state secret "$name"
+    case "$LLMSM_OBJ_STATE" in
+        absent)
+            LLMSM_SCALER_KEDA_TRUST=mismatch
+            LLMSM_SCALER_KEDA_TRUST_WHY="KEDA's copy of the client certificate, Secret $name in $copy_ns, does not exist: KEDA presents no certificate and the scaler refuses it"
+            return 0 ;;
+        unreadable)
+            LLMSM_SCALER_KEDA_TRUST_WHY="Secret $name in $copy_ns, which KEDA reads, cannot be read ($LLMSM_OBJ_ERR)"
+            return 0 ;;
+    esac
+    d="$(mktemp -d)"
+    llmsm_scaler_secret_field ca.crt "$d/keda-ca.crt"
+    llmsm_scaler_secret_field tls.crt "$d/keda.crt"
+    llmsm_scaler_object_state secret "$LLMSM_SCALER_TLS_SECRET"
+    if [ "$LLMSM_OBJ_STATE" = unreadable ]; then
+        rm -rf "$d"
+        LLMSM_SCALER_KEDA_TRUST_WHY="the scaler's serving certificate, Secret $LLMSM_SCALER_TLS_SECRET in $LLMSM_NS, cannot be read ($LLMSM_OBJ_ERR)"
+        return 0
+    fi
+    llmsm_scaler_secret_field tls.crt "$d/serving.crt"
+    llmsm_scaler_object_state secret "$LLMSM_SCALER_CLIENT_SECRET"
+    if [ "$LLMSM_OBJ_STATE" = unreadable ]; then
+        rm -rf "$d"
+        LLMSM_SCALER_KEDA_TRUST_WHY="the controller's client CA, Secret $LLMSM_SCALER_CLIENT_SECRET in $LLMSM_NS, cannot be read ($LLMSM_OBJ_ERR)"
+        return 0
+    fi
+    llmsm_scaler_secret_field ca.crt "$d/client-ca.crt"
+    if [ ! -s "$d/serving.crt" ] || [ ! -s "$d/client-ca.crt" ]; then
+        rm -rf "$d"
+        LLMSM_SCALER_KEDA_TRUST_WHY="the scaler's serving certificate (Secret $LLMSM_SCALER_TLS_SECRET) or client CA (Secret $LLMSM_SCALER_CLIENT_SECRET) in $LLMSM_NS is missing"
+        return 0
+    fi
+    LLMSM_SCALER_KEDA_TRUST=mismatch
+    if [ ! -s "$d/keda-ca.crt" ] || ! openssl verify -CAfile "$d/keda-ca.crt" "$d/serving.crt" >/dev/null 2>&1; then
+        LLMSM_SCALER_KEDA_TRUST_WHY="the CA KEDA trusts (ca.crt of Secret $name in $copy_ns) does not verify the scaler's serving certificate (Secret $LLMSM_SCALER_TLS_SECRET in $LLMSM_NS): KEDA rejects the scaler, which logs \"remote error: tls: bad certificate\""
+    elif [ ! -s "$d/keda.crt" ] || ! openssl verify -CAfile "$d/client-ca.crt" "$d/keda.crt" >/dev/null 2>&1; then
+        LLMSM_SCALER_KEDA_TRUST_WHY="the controller's client CA (Secret $LLMSM_SCALER_CLIENT_SECRET in $LLMSM_NS) does not verify KEDA's client certificate (tls.crt of Secret $name in $copy_ns): the scaler refuses KEDA"
+    else
+        LLMSM_SCALER_KEDA_TRUST=ok
+    fi
+    rm -rf "$d"
+}
+
 # llmsm_scaler_tls_stay_plaintext names the ScaledObjects a plaintext scaler
 # strands (llmsm_scaler_tls_warn_stranded), from every phase but the admin's.
 llmsm_scaler_tls_stay_plaintext() {
@@ -2038,17 +2177,82 @@ llmsm_scaler_tls_permission_needs() {
     [ -z "$LLMSM_SCALER_KEDA_OBJ_NS" ] || echo "secrets $LLMSM_SCALER_KEDA_OBJ_NS"
 }
 
+# LLMSM_SCALER_CA_KEPT_ANNOTATION marks a scaler CA an uninstall kept because
+# KEDA's operator may still hold a connection that trusts it. A reinstall that
+# finds it knows KEDA's old connection verifies the new certificates.
+LLMSM_SCALER_CA_KEPT_ANNOTATION=scaling-manager.llmd.ai/kept-for-keda
+
 # llmsm_scaler_tls_undeploy removes what llmsm_scaler_tls_prepare created in LLMSM_NS:
 # only objects carrying its label. The OpenShift service CA's serving Secret is
 # the platform's and goes with the Service.
+#
+# Except the CA, while KEDA may still trust it. KEDA's operator keeps one
+# connection per scaler address, with the CA and client certificate it first
+# read, until it restarts (see "KEDA's side"). Removing the CA and reinstalling
+# mints a new one, and KEDA then refuses every certificate the new install
+# serves: measured on a GPU cluster, a reinstall reached no KEDA call and the
+# controller found no model, for hours. So the CA Secret stays (annotated
+# LLMSM_SCALER_CA_KEPT_ANNOTATION, LLMSM_SCALER_CA_KEPT=true) when ScaledObjects
+# use the TLS address, or cannot be listed, or when KEDA's side stays (a
+# controller-only uninstall). A reinstall signs its new leaves with it, and
+# KEDA's pooled connection keeps working with no restart.
+# llmsm_scaler_keda_restart_after_undeploy removes it once it restarted KEDA.
 llmsm_scaler_tls_undeploy() {
+    local keep_ca=false ca_rows ca_rc=0 ca_sha d
+    LLMSM_SCALER_CA_KEPT=false
+    if [ "${LLMSM_APPLY_SCOPE:-all}" = controller ]; then
+        keep_ca=true
+    else
+        ca_rows="$(llmsm_scaler_plaintext_scaledobjects plaintext)" || ca_rc=$?
+        if [ "$ca_rc" != 0 ] || [ -n "$ca_rows" ]; then keep_ca=true; fi
+    fi
     llmsm_cert_manager_api
     if [ "$LLMSM_CERT_MANAGER_API" = present ]; then
-        kubectl delete certificates.cert-manager.io,issuers.cert-manager.io -n "$LLMSM_NS" \
-            -l "$LLMSM_SCALER_TLS_LABEL" --ignore-not-found >/dev/null 2>&1 || true
+        if [ "$keep_ca" = true ]; then
+            # Everything but the CA's Certificate and Issuer goes as usual, its
+            # CertificateRequests with it. The CA's Certificate is orphaned, not
+            # cascaded: with cert-manager's owner references on, a cascade would
+            # garbage-collect the kept CA Secret with it.
+            kubectl delete certificates.cert-manager.io,issuers.cert-manager.io -n "$LLMSM_NS" \
+                -l "$LLMSM_SCALER_TLS_LABEL" --field-selector "metadata.name!=$LLMSM_SCALER_CA_SECRET" \
+                --ignore-not-found >/dev/null 2>&1 || true
+            kubectl delete certificates.cert-manager.io -n "$LLMSM_NS" -l "$LLMSM_SCALER_TLS_LABEL" \
+                --field-selector "metadata.name=$LLMSM_SCALER_CA_SECRET" --ignore-not-found --cascade=orphan >/dev/null 2>&1 || true
+            kubectl delete issuers.cert-manager.io -n "$LLMSM_NS" -l "$LLMSM_SCALER_TLS_LABEL" \
+                --field-selector "metadata.name=$LLMSM_SCALER_CA_SECRET" --ignore-not-found >/dev/null 2>&1 || true
+        else
+            kubectl delete certificates.cert-manager.io,issuers.cert-manager.io -n "$LLMSM_NS" \
+                -l "$LLMSM_SCALER_TLS_LABEL" --ignore-not-found >/dev/null 2>&1 || true
+        fi
     fi
-    kubectl delete secret -n "$LLMSM_NS" -l "$LLMSM_SCALER_TLS_LABEL" --ignore-not-found >/dev/null 2>&1 \
-        || log_warning "Could not remove the external scaler certificate Secrets (label $LLMSM_SCALER_TLS_LABEL) in $LLMSM_NS."
+    if [ "$keep_ca" = true ]; then
+        kubectl delete secret -n "$LLMSM_NS" -l "$LLMSM_SCALER_TLS_LABEL" \
+            --field-selector "metadata.name!=$LLMSM_SCALER_CA_SECRET" --ignore-not-found >/dev/null 2>&1 \
+            || log_warning "Could not remove the external scaler certificate Secrets (label $LLMSM_SCALER_TLS_LABEL) in $LLMSM_NS."
+        llmsm_scaler_object_state secret "$LLMSM_SCALER_CA_SECRET"
+        if [ "$LLMSM_OBJ_STATE" = ours ]; then
+            # The annotation names the CA it was put on, by digest: a CA minted
+            # later into the same Secret no longer matches it.
+            d="$(mktemp -d)"
+            llmsm_scaler_secret_field tls.crt "$d/ca.crt"
+            ca_sha=""
+            [ ! -s "$d/ca.crt" ] || ca_sha="$(llmsm_scaler_sha256 "$d/ca.crt")"
+            rm -rf "$d"
+            kubectl annotate secret "$LLMSM_SCALER_CA_SECRET" -n "$LLMSM_NS" --overwrite \
+                "$LLMSM_SCALER_CA_KEPT_ANNOTATION=$ca_sha" >/dev/null 2>&1 || true
+            LLMSM_SCALER_CA_KEPT=true
+            if [ "${LLMSM_APPLY_SCOPE:-all}" = controller ]; then
+                log_warning "Kept Secret $LLMSM_SCALER_CA_SECRET in $LLMSM_NS, the external scaler's CA: KEDA's side (the cluster admin's) still holds a client certificate it signed. A reinstall here signs its new certificates with it, so KEDA keeps reaching the scaler. A cluster admin's  $(llmsm_make_cmd undeploy-scaling-manager)  removes both."
+            elif [ "${DELETE_NAMESPACES:-false}" = true ] || [ "${DELETE_CLUSTER:-false}" = true ]; then
+                log_warning "Kept Secret $LLMSM_SCALER_CA_SECRET in $LLMSM_NS for now, the external scaler's CA: KEDA's operator holds a connection that trusts it until it restarts. This uninstall deletes namespaces: if $LLMSM_NS goes, the CA goes with it, and a reinstall mints a new one that KEDA refuses. Restart KEDA's operator before installing again:  $(llmsm_scaler_keda_restart_cmd)"
+            else
+                log_warning "Kept Secret $LLMSM_SCALER_CA_SECRET in $LLMSM_NS, the external scaler's CA: ScaledObjects used the TLS address$([ "$ca_rc" != 0 ] && printf ' (or they cannot be listed)'), so KEDA's operator holds a connection that trusts this CA until it restarts. A reinstall here signs its new certificates with it, so KEDA keeps reaching the scaler with no restart. So an uninstall and reinstall does not rotate the CA. To remove or rotate it, restart KEDA's operator first ($(llmsm_scaler_keda_restart_cmd)), then:  kubectl delete secret $LLMSM_SCALER_CA_SECRET -n $LLMSM_NS  and install again (an uninstall with KEDA_RESTART=true restarts KEDA and removes it)."
+            fi
+        fi
+    else
+        kubectl delete secret -n "$LLMSM_NS" -l "$LLMSM_SCALER_TLS_LABEL" --ignore-not-found >/dev/null 2>&1 \
+            || log_warning "Could not remove the external scaler certificate Secrets (label $LLMSM_SCALER_TLS_LABEL) in $LLMSM_NS."
+    fi
     # KEDA's side, and the marker that records it, are the admin's: only an
     # uninstall that may write them removes them.
     [ "${LLMSM_APPLY_SCOPE:-all}" != controller ] || return 0

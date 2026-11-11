@@ -1,0 +1,50 @@
+# promtool unit tests for the external scaler reachability alert.
+# hack/check-alert-rules.sh copies the shipped PrometheusRule groups,
+# annotations stripped, to rules.yaml beside this file and runs promtool test
+# rules on it.
+#
+# The gauge is the controller's own: namespace is the controller's namespace as
+# scraped, pod the controller pod.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. KEDA refused on every call (it kept a connection across a CA change):
+  #    the gauge turns 1 at 6m and the alert fires at 11m, its for: of 5m and
+  #    not a minute sooner, once per controller namespace, even from two
+  #    controller pods.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_scaler_keda_unreachable{namespace="scaling-manager",pod="scaling-manager-a"}'
+        values: '0x5 1x30'
+      - series: 'llmsm_scaler_keda_unreachable{namespace="scaling-manager",pod="scaling-manager-b"}'
+        values: '0x5 1x30'
+      - series: 'llmsm_scaler_keda_unreachable{namespace="other",pod="other-a"}'
+        values: '0x35'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: scaling-manager}
+      - eval_time: 15m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: scaling-manager}
+
+  # 2. KEDA's operator restarted and reconnects: the gauge drops to 0 and the
+  #    alert resolves.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_scaler_keda_unreachable{namespace="scaling-manager",pod="scaling-manager-a"}'
+        values: '1x15 0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: scaling-manager}
+      - eval_time: 20m
+        alertname: LLMSMExternalScalerUnreachable
+        exp_alerts: []

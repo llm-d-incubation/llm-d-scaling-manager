@@ -526,15 +526,16 @@ You should see one ScaledObject for each model:
 If a model shows `adopt`, it already has a ScaledObject. Keep `adopt`, so the
 model does not get a second one.
 
-If you installed the scaling manager here before (step 19, then again), you
-may instead see:
+If the scaler's certificate authority changed since KEDA's operator last
+started (for example the namespace was deleted and the scaling manager
+installed again), you may instead see:
 
 ```text
 [WARNING] KEDA's operator still holds its connection to the scaler from before a reinstall, so every call it makes is refused. These ScaledObjects stay unwired, with their HPAs on the CPU default and the scaling manager's decisions reaching nothing, until KEDA's operator restarts:
     team-a/model-a-decode-llmsm
     team-b/model-b-decode-llmsm
 [WARNING]   Cause: ... Restart KEDA's operator:  kubectl rollout restart deployment/keda-operator -n keda-system
-[WARNING]   Not restarted: KEDA's operator is shared with everything else that uses KEDA. The install goes on. ...
+[WARNING]   Not restarted: KEDA's operator is shared with everything else that uses KEDA. Nothing scales until it restarts, so this is reported as a failure. ...
 ```
 
 KEDA keeps one connection per scaler and never closes it. Restart KEDA's

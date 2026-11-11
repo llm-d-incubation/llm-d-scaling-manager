@@ -100,6 +100,13 @@
 //	                       for a variant, an accelerator known only from the
 //	                       labels of the nodes its pods ran on may drop out
 //	                       until the next decision.
+//	scalerUnreachable      present while the KEDA external scaler (TLS on)
+//	                       kept refusing TLS handshakes (three or more
+//	                       over a minute or more, within five minutes)
+//	                       and served no call: KEDA reaches nothing,
+//	                       so no model is discovered. Says how many were
+//	                       refused, the last reason and the fix; absent
+//	                       otherwise. Mirrors llmsm_scaler_keda_unreachable.
 //
 // limiter, limiterWarnings and utilizationShare are recomputed from the applied configuration
 // in the same update that records policyResourceVersion, so they never lag
@@ -195,6 +202,10 @@ const (
 	// engine resolved in its last cycle, sorted and joined by ",": "" when it
 	// had no active model or resolved none, absent before its first cycle.
 	KeyResolvedAccelerators = "resolvedAccelerators"
+	// KeyScalerUnreachable carries why no client reaches the KEDA external
+	// scaler: TLS handshakes kept being refused for minutes, no call
+	// served. Absent while one is.
+	KeyScalerUnreachable = "scalerUnreachable"
 )
 
 // PodListDeniedMessage is the KeyPodListDenied value.
@@ -668,6 +679,22 @@ func (p *Publisher) SetPodListDenied(denied bool) {
 			d[KeyPodListDenied] = PodListDeniedMessage
 		} else {
 			delete(d, KeyPodListDenied)
+		}
+	})
+}
+
+// SetScalerUnreachable records whether no client reaches the KEDA external
+// scaler: detail while TLS handshakes keep being refused and no call is served,
+// removed when one is.
+func (p *Publisher) SetScalerUnreachable(unreachable bool, detail string) {
+	if p == nil {
+		return
+	}
+	p.update(func(d map[string]string) {
+		if unreachable {
+			d[KeyScalerUnreachable] = detail
+		} else {
+			delete(d, KeyScalerUnreachable)
 		}
 	})
 }

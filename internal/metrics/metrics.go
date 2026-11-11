@@ -101,6 +101,8 @@ var (
 	podMappingMissTotal                 *prometheus.CounterVec
 	scalerUndecidedAnswersTotal         *prometheus.CounterVec
 	scalerPanicsTotal                   *prometheus.CounterVec
+	scalerTLSRefusalsTotal              *prometheus.CounterVec
+	scalerKEDAUnreachable               *prometheus.GaugeVec
 
 	// Saturation and capacity metrics
 	saturationUtilization *prometheus.GaugeVec
@@ -848,6 +850,24 @@ func InitMetrics(registry prometheus.Registerer) error {
 		},
 		scalerPanicLabels,
 	)
+	scalerReachLabels := []string{}
+	if controllerInstance != "" {
+		scalerReachLabels = append(scalerReachLabels, constants.LabelControllerInstance)
+	}
+	scalerTLSRefusalsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: constants.LLMSMScalerTLSRefusalsTotal,
+			Help: "Total number of TLS handshakes the KEDA external scaler refused (a client without an accepted certificate, or one that rejected the scaler's)",
+		},
+		scalerReachLabels,
+	)
+	scalerKEDAUnreachable = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: constants.LLMSMScalerKEDAUnreachable,
+			Help: "1 while the KEDA external scaler kept refusing TLS handshakes (3 or more over a minute or more, within 5 minutes) and served no call: KEDA reaches nothing and no model is discovered",
+		},
+		scalerReachLabels,
+	)
 
 	// Register metrics with the registry
 	if err := registry.Register(replicaScalingTotal); err != nil {
@@ -972,6 +992,12 @@ func InitMetrics(registry prometheus.Registerer) error {
 	}
 	if err := registry.Register(scalerPanicsTotal); err != nil {
 		return fmt.Errorf("failed to register scalerPanicsTotal metric: %w", err)
+	}
+	if err := registry.Register(scalerTLSRefusalsTotal); err != nil {
+		return fmt.Errorf("failed to register scalerTLSRefusalsTotal metric: %w", err)
+	}
+	if err := registry.Register(scalerKEDAUnreachable); err != nil {
+		return fmt.Errorf("failed to register scalerKEDAUnreachable metric: %w", err)
 	}
 	if err := registry.Register(newScalerUndecidedTargetsCollector(controllerInstance)); err != nil {
 		return fmt.Errorf("failed to register scalerUndecidedTargets metric: %w", err)
@@ -1955,6 +1981,37 @@ func IncScalerPanic(method string) {
 		labels[constants.LabelControllerInstance] = controllerInstance
 	}
 	scalerPanicsTotal.With(labels).Inc()
+}
+
+// scalerReachLabelValues is the label set of the scaler reachability series.
+func scalerReachLabelValues() prometheus.Labels {
+	labels := prometheus.Labels{}
+	if controllerInstance != "" {
+		labels[constants.LabelControllerInstance] = controllerInstance
+	}
+	return labels
+}
+
+// IncScalerTLSRefusal counts one TLS handshake the KEDA external scaler
+// refused.
+func IncScalerTLSRefusal() {
+	if scalerTLSRefusalsTotal == nil {
+		return
+	}
+	scalerTLSRefusalsTotal.With(scalerReachLabelValues()).Inc()
+}
+
+// SetScalerKEDAUnreachable records whether no client reaches the KEDA external
+// scaler: TLS handshakes kept being refused for minutes, no call served.
+func SetScalerKEDAUnreachable(unreachable bool) {
+	if scalerKEDAUnreachable == nil {
+		return
+	}
+	value := 0.0
+	if unreachable {
+		value = 1.0
+	}
+	scalerKEDAUnreachable.With(scalerReachLabelValues()).Set(value)
 }
 
 // SetMetricsPodsDiscovered sets the number of pods discovered in a namespace.

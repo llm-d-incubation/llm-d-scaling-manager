@@ -22,7 +22,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 RAN=0
-EXPECT_CASES=21
+EXPECT_CASES=23
 
 for lib in constants.sh common.sh infra_scaling_manager.sh infra_monitoring.sh verify.sh; do
     tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$TMP/$lib"
@@ -114,6 +114,27 @@ check 'verify: a failed rollout fails'                     '1 not-claimed silent
 # Asked for: LLMSM_REPLICAS=0 is a staged install, warned about and not failed.
 check 'verify: 0/0 with LLMSM_REPLICAS=0 passes, and says it is at 0' '0 not-claimed says-zero' "$(verify 0 '0/' 0)"
 check 'verify: LLMSM_REPLICAS=0 does not excuse a rollout with none Ready' '1 not-claimed silent' "$(verify 0 '1/' 0)"
+
+# verify_keda <trust rc> runs verify_deployment with KEDA as the scaler backend
+# and a Ready controller, the scaler checks answered here except
+# llmsm_verify_scaler_keda_trust, which returns <trust rc>, and echoes the
+# status. KEDA's copy of the certificates not matching the scaler means no
+# KEDA call is ever served: that must fail the verify, and so the install.
+verify_keda() {
+    local rc=0
+    (
+        llmsm_verify_scaler_networkpolicy() { :; }
+        llmsm_verify_scaler_tls() { :; }
+        llmsm_verify_scaler_wiring() { return 0; }
+        llmsm_verify_scaler_keda_trust() { return "$STUB_TRUST"; }
+        STUB_TRUST="$1" STUB_ROLLOUT=0 STUB_COUNTS='1/1' LLMSM_REPLICAS=1 LLMSM_NS=wns LLMSM_SCOPE=cluster LLMSM_WATCH_NS='' \
+            SCALER_BACKEND=keda DEPLOY_PROMETHEUS=false DEPLOY_OPERATIONAL_DASHBOARD=false \
+            KEDA_NAMESPACE=keda LLMSM_VERIFY_TIMEOUT=1s verify_deployment >/dev/null 2>&1
+    ) || rc=$?
+    echo "$rc"
+}
+check 'verify: KEDA with certificates that match the scaler passes' '0' "$(verify_keda 0)"
+check 'verify: KEDA with certificates that do not match the scaler fails' '1' "$(verify_keda 1)"
 
 # Every controller wait uses the same helper; a bare rollout status reports a
 # controller at 0 as rolled out. Comment lines aside.

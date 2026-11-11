@@ -578,6 +578,24 @@ const (
 	// Labels: method (the full gRPC method name)
 	LLMSMScalerPanicsTotal = "llmsm_scaler_panics_total"
 
+	// LLMSMScalerTLSRefusalsTotal is a counter of TLS handshakes the KEDA
+	// external scaler refused: a client without an accepted certificate, a
+	// plaintext dial, or a client that rejected the scaler's certificate
+	// ("remote error: tls: bad certificate"). A connection closed before it
+	// sent anything is not counted.
+	// Labels: none (controller_instance when set)
+	LLMSMScalerTLSRefusalsTotal = "llmsm_scaler_tls_refusals_total"
+
+	// LLMSMScalerKEDAUnreachable is 1 while the KEDA external scaler refused
+	// three or more TLS handshakes within the last five minutes, the first and
+	// last at least a minute apart, and served no call: KEDA reaches nothing, so KEDA-driven discovery finds no
+	// model and nothing scales. The usual cause is a KEDA operator that kept
+	// its pooled connection, with the certificates of an earlier install,
+	// across a change of the scaler's CA. Only with scaler TLS on; absent, not
+	// 0, with it off.
+	// Labels: none (controller_instance when set)
+	LLMSMScalerKEDAUnreachable = "llmsm_scaler_keda_unreachable"
+
 	// LLMSMUnmeasuredQueue is a gauge carrying the number of requests queued for a
 	// model that scaling manager has NO attributed replica to act on.
 	//

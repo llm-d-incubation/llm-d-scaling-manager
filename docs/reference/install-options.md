@@ -77,7 +77,8 @@ from the release notes. See
 | `LLMSM_SCALER_TLS_PROVIDER` | Who issues those certificates: `cert-manager`, `openssl` (a private CA the installer keeps in a Secret), or `auto` — cert-manager when it is installed. On OpenShift the serving certificate always comes from the service CA. Unset, a re-install keeps the running controller's provider | `auto` |
 | `LLMSM_SCALER_TLS_MIGRATE` | `true` moves the ScaledObjects that name this scaler with it when its TLS mode changes: to `scaling-manager-external-scaler.<ns>.svc:9090` with KEDA's `authenticationRef`, or back. Without it, such ScaledObjects keep the default on plaintext, and make an explicit `LLMSM_SCALER_TLS` a refusal | `false` |
 | `KEDA_HELM_INSTALL` | Install KEDA with Helm rather than assuming it is present | `false` |
-| `KEDA_RESTART` | Let the installer restart KEDA's operator (`kubectl rollout restart deployment/keda-operator`). After an uninstall and a reinstall in the same namespace, KEDA keeps its old connection to the scaler and every call is refused, so the ScaledObjects stay unwired. `scaledobjects-apply`, `deploy-scaling-manager` and `verify-deployment` detect that and name the ScaledObjects and the command. With `true` they restart KEDA, and `undeploy-scaling-manager` restarts it once its ScaledObjects are gone; with `false` nothing restarts KEDA, which is shared, and the install goes on with the warning | `false` |
+| `KEDA_RESTART` | Let the installer restart KEDA's operator (`kubectl rollout restart deployment/keda-operator`). KEDA keeps its connection to the scaler, with the CA and client certificate it first read, until it restarts. An uninstall keeps the scaler's CA for it, so a reinstall in the same namespace needs no restart. When the CA changed anyway, every call is refused and the ScaledObjects stay unwired: `scaledobjects-apply`, `deploy-scaling-manager`, `verify-deployment` and `check-prereqs` detect that, name the ScaledObjects and the command, and fail. With `true` they restart KEDA, and `undeploy-scaling-manager` restarts it once its ScaledObjects are gone and then removes the kept CA; with `false` nothing restarts KEDA, which is shared, and the install exits non-zero until KEDA's operator is restarted (see `LLMSM_ALLOW_STALE_KEDA`) | `false` |
+| `LLMSM_ALLOW_STALE_KEDA` | When KEDA cannot reach the scaler (its operator holds a connection from before the scaler's CA changed, or its copy of the certificates does not match the scaler), `deploy-scaling-manager`, `verify-deployment` and `check-prereqs` fail, since nothing scales until a cluster admin restarts KEDA or runs `make setup-prereqs`. `true` reports it as a warning and exits 0, for a tenant or a GitOps pipeline that cannot do either and must not fail on it. The controller still reports it (`scalerUnreachable`, `llmsm_scaler_keda_unreachable`) | `false` |
 | `DEPLOY_LLMD_MONITORS` | In the admin phase (`setup-prereqs`, or `INSTALL_PHASE=all`), add a model-server PodMonitor and an EPP ServiceMonitor in each llm-d namespace where nothing scrapes them yet. Each object is labelled `llm-d.ai/applied-by=scaling-manager-setup-prereqs`, and `undeploy-scaling-manager` removes exactly those. `false` adds nothing, and the preflight then refuses a namespace that is not scraped | `true` |
 | `LLMSM_EPP_METRICS_AUTH` | In the admin phase, let the EPP of each managed InferencePool authenticate `/metrics` scrapes: bind its ServiceAccount to `scaling-manager-epp-metrics-auth` (create tokenreviews and subjectaccessreviews) when it may not already. Without it that EPP answers 500. `false` skips it; `make epp-metrics-auth` runs it on its own. [Details](troubleshooting.md#epp-metrics-returns-500) | `true` |
 | `LLMSM_EPP_METRICS_AUTH_DEFAULT_SA` | Let that grant bind an EPP that runs as the namespace's `default` ServiceAccount. Every pod there that names no ServiceAccount shares it, so they all get the grant. Without it such an EPP is left ungranted, with a warning; giving the EPP its own ServiceAccount is the better fix | `false` |
@@ -728,6 +729,12 @@ plaintext.
 - The serving certificate lasts a year. cert-manager renews it; without
   cert-manager, re-run `make deploy-scaling-manager`. The controller reloads it without a
   restart.
+- The CA lasts 10 years, and an uninstall and reinstall in the same namespace
+  does **not** rotate it: while ScaledObjects use the TLS address, the
+  uninstall keeps Secret `scaling-manager-external-scaler-ca` so that KEDA's
+  operator, which still trusts it, keeps reaching the reinstalled scaler. To
+  rotate it: restart KEDA's operator, delete that Secret, then install again.
+  `make undeploy-scaling-manager KEDA_RESTART=true` does the first two.
 - KEDA's client certificate lasts as long as the CA (10 years). KEDA reads it
   when it first connects and keeps it until KEDA's operator restarts, so it is
   not renewed sooner.
@@ -737,8 +744,9 @@ plaintext.
   the command:
   - after the CA or KEDA's certificate changed (the CA nears its end, you
     switched certificate provider, or changed `LLMSM_SCALER_CLIENT_SAN`);
-  - after a reinstall: KEDA's side is written again while KEDA runs and
-    ScaledObjects already use the TLS address;
+  - after a reinstall whose CA is new: KEDA's side is written again while
+    KEDA runs and ScaledObjects already use the TLS address. A reinstall over
+    the CA the uninstall kept needs no restart, and says so;
   - after KEDA's side was removed. Restart it once the scaler is installed
     again, not before: a restart in between reconnects without TLS.
 
@@ -761,14 +769,27 @@ plaintext.
 - the mode (plaintext, TLS, mutual TLS);
 - the certificates' expiry;
 - whether KEDA's side is in place, and whether KEDA trusts the current CA;
+- whether the Secret KEDA's `ClusterTriggerAuthentication` reads matches the
+  scaler: its CA verifies the serving certificate and the controller's client
+  CA verifies its client certificate. A mismatch fails the check with the fix;
+  a Secret you may not read is said as not checked (`make check-prereqs` runs
+  this too);
 - every ScaledObject whose address or `authenticationRef` does not match the
   mode, in either mode.
 
 The controller log also names each client the scaler refuses in the TLS
-handshake (`refused a TLS handshake`), with its address and the reason.
+handshake (`refused a TLS handshake`), with its address and the reason. When
+handshakes keep being refused (three or more over a minute or more, within
+five minutes) and no call is served, the
+controller logs an error, sets `scalerUnreachable` in
+`scaling-manager-controller-status` and `llmsm_scaler_keda_unreachable` to 1,
+and `LLMSMExternalScalerUnreachable` fires.
 
 **Undo.** `make undeploy-scaling-manager` removes what carries the `scaling-manager.llmd.ai/scaler-tls`
-label. The admin's uninstall also removes KEDA's side, again only what carries
+label, except the CA while KEDA may still trust it: when ScaledObjects used the
+TLS address, or KEDA's side stays, Secret `scaling-manager-external-scaler-ca` is
+kept so a reinstall keeps KEDA reaching the scaler
+([what it leaves](upgrade-and-uninstall.md#what-it-leaves)). The admin's uninstall also removes KEDA's side, again only what carries
 the label, and prints the KEDA restart command. An uninstall that cannot
 remove KEDA's side keeps the `scaling-manager-scaler-keda-auth` ConfigMap, which records
 where it is, and says so. The installer refuses

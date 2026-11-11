@@ -377,6 +377,16 @@ cleanup() {
     # Delete namespaces if requested
     if [ "$DELETE_NAMESPACES" = "true" ] || [ "$DELETE_CLUSTER" = "true" ]; then
         delete_namespaces
+        # The scaler CA kept for KEDA (llmsm_scaler_tls_undeploy) goes with
+        # its namespace, while KEDA's operator still trusts it.
+        if [ "${LLMSM_SCALER_CA_KEPT:-false}" = true ]; then
+            local ca_err=""
+            ca_err="$(kubectl get secret "${LLMSM_SCALER_CA_SECRET:-scaling-manager-external-scaler-ca}" -n "$LLMSM_NS" -o name 2>&1 >/dev/null)" && ca_err=""
+            if printf '%s' "$ca_err" | grep -qF '(NotFound)'; then
+                LLMSM_SCALER_CA_KEPT=false
+                log_warning "The external scaler's CA was deleted with namespace $LLMSM_NS, while KEDA's operator still trusts it. A reinstall mints a new CA that KEDA refuses: restart KEDA's operator before installing again:  kubectl rollout restart deployment/keda-operator -n ${LLMSM_SCALER_KEDA_RUN_NS:-<KEDA namespace>}"
+            fi
+        fi
     else
         log_info "Keeping namespaces (use --delete-namespaces or set DELETE_NAMESPACES=true to remove)"
     fi
@@ -417,6 +427,11 @@ cleanup() {
         echo ""
         echo "Left in place (shared; pass UNDEPLOY_SHARED=true to remove):"
         echo "  - Prometheus, the scaler backend (KEDA${keda_ns:+, in $keda_ns}), EPP"
+    fi
+    if [ "${LLMSM_SCALER_CA_KEPT:-false}" = true ]; then
+        echo ""
+        echo "Left in place (KEDA's operator still trusts it; see the warning above):"
+        echo "  - Secret ${LLMSM_SCALER_CA_SECRET:-scaling-manager-external-scaler-ca} in $LLMSM_NS, the external scaler's CA. A reinstall here reuses it."
     fi
 
     if [ "$DELETE_NAMESPACES" = "true" ]; then
