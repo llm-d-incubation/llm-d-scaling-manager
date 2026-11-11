@@ -71,17 +71,21 @@ curl -fsSLO $URL/scaling-manager-preflight.yaml
 curl -fsSLO $URL/scaling-manager-model-namespace.yaml
 
 # 2. Edit the settings: the Prometheus URL, at least. Passive is the default.
-#    Then put everything in your namespace.
+#    Then put everything in your namespace, and create the settings: the
+#    preflight reads them.
 export NS=<your-namespace>
 for f in scaling-manager-*.yaml; do sed -i "s/__NAMESPACE__/$NS/g" "$f"; done
+kubectl create -f scaling-manager-settings.yaml      # once; never overwritten
 
 # 3. Check. Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
+#    The Job fails on any FAIL; wait for whichever comes first.
 kubectl apply -f scaling-manager-preflight.yaml
-kubectl wait -n $NS --for=condition=complete --timeout=180s job/scaling-manager-preflight
+until kubectl get job scaling-manager-preflight -n $NS \
+    -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
 kubectl logs -n $NS job/scaling-manager-preflight
+kubectl delete clusterrolebinding scaling-manager-preflight-$NS   # the preflight's cluster reads, once read
 
 # 4. Install.
-kubectl create -f scaling-manager-settings.yaml      # once; never overwritten
 kubectl apply  -f scaling-manager-namespaced.yaml
 kubectl apply  -f scaling-manager-model-namespace.yaml
 ```
@@ -332,15 +336,20 @@ release image and needs nothing else. The release attaches a Job that runs it.
 | check | FAIL when | UNKNOWN when |
 | --- | --- | --- |
 | KEDA | the `scaledobjects.keda.sh` CRD is absent, or the version is below the minimum | KEDA's Deployment cannot be read |
-| KEDA mTLS step | — (WARN when the marker ConfigMap is absent: plaintext) | |
+| KEDA mTLS step | the marker is present and the ClusterTriggerAuthentication is not, or the controller reports KEDA's handshakes refused (`scalerUnreachable`); WARN when the marker is absent (plaintext) | before the install: KEDA's copy of the certificates is a Secret the preflight does not read |
+| Scaler TLS | the chain the scaler serves, read by a handshake, does not verify against the CA the controller publishes (`scalerCACert` in its status) | the controller has not run, or the handshake gets no answer |
+| NetworkPolicy | the scaler policy (or the file's, before it is applied) does not admit KEDA's namespace (decision 6), with the patch or the `sed` | KEDA's namespace cannot be read |
 | Prometheus reachable | `prometheusURL` unset, refused, or its certificate fails against the mounted CA | the Pod cannot be created |
 | Model metrics present | no `vllm:` series for any pod in a managed namespace | the query is denied |
 | PodMonitor port | the PodMonitor names a port no model-server container has, or its targets are not `up` | PodMonitors cannot be read |
 | Prometheus picks the monitor | the Prometheus resource's selectors do not select the PodMonitor | Prometheus resources cannot be read |
-| Permissions | the controller's ServiceAccount lacks a verb the controller needs, by `SubjectAccessReview` per verb and resource | SubjectAccessReview is refused |
+| Permissions | the controller's ServiceAccount lacks a verb the controller needs, by `SubjectAccessReview` per verb and resource | SubjectAccessReview is refused, or the controller is not installed yet |
+| Namespace readers | a `watchNamespaces` namespace is missing from the narrowed readers (decision 5), with the patch per namespace | the ClusterRoles cannot be read |
+| Activation (with `utilizationShare: active`) | the controller may not patch pods in a sharing namespace (decision 3), with the `scaling-manager-activate.yaml` line | the review is refused |
+| OpenShift user monitoring | a checked namespace is labelled `openshift.io/user-monitoring=false`; WARN when the controller's namespace lacks `true` | namespaces cannot be read |
 | Settings | a key does not parse (a bad quota, an unknown mode, `utilizationShare` without a limiter) | |
 | Kueue (when `kueue: "true"`) | the Kueue CRDs are absent | they cannot be read |
-| Overlap | a cluster-wide controller already manages this namespace | Deployments cannot be listed cluster-wide |
+| Overlap | a cluster-wide controller already manages this namespace | Deployments cannot be listed cluster-wide (a namespaced preflight reads the one in `scaling-manager-system` by name) |
 | Accelerator names (with a quota) | — (WARN when a quota key matches no node's accelerator label) | nodes cannot be read |
 
 **Forbidden is not absent.** A refused read is UNKNOWN, with the object and the
@@ -366,13 +375,20 @@ health check to read.
 **What it needs.** Its own ServiceAccount, `scaling-manager-preflight`, never
 the controller's, so a preflight grant never widens the controller:
 
-- a Role in the controller's namespace: get the settings ConfigMap, the
-  Prometheus CA Secret and the TLS marker ConfigMap by name, and create and
-  update `scaling-manager-preflight-result`. The reachability probe runs in the
-  Job's own Pod, so it creates no Pod;
-- a ClusterRole, read-only: `get`/`list` on CRDs, Deployments, PodMonitors,
-  Prometheus resources, nodes, namespaces, Kueue objects; `create` on
-  `subjectaccessreviews` (it answers questions, it grants nothing).
+- a Role in the controller's namespace: get the settings, the TLS marker and
+  the controller status ConfigMaps by name, list pods and PodMonitors there,
+  and create and update `scaling-manager-preflight-result`. It reads no
+  Secret: the Prometheus CA is mounted into the Job, and the scaler's chain is
+  read by a handshake against the CA the controller publishes. The
+  reachability probe runs in the Job's own Pod, so it creates no Pod;
+- a ClusterRole, read-only: `get` by name on CRDs, the external-metrics
+  APIService, the ClusterTriggerAuthentication, KEDA's operator and the
+  cluster-wide controller Deployments, the narrowed reader ClusterRoles;
+  `list` Prometheus resources and nodes; `get` namespaces; `create` on
+  `subjectaccessreviews` (it answers questions, it grants nothing). The
+  cluster-wide file (`scaling-manager-preflight-cluster.yaml`) lists
+  Deployments, pods and PodMonitors in every namespace instead. Delete the
+  binding after the run.
 
 The ClusterRole is the `admin` part of the preflight file. A namespace owner
 without it still gets a useful run: every cluster read shows UNKNOWN, and the

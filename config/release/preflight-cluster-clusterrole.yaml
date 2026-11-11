@@ -1,0 +1,47 @@
+# The preflight's cluster reads, for the cluster-wide install in
+# scaling-manager-system: a cluster-wide controller manages every namespace,
+# so the preflight lists pods, Deployments and PodMonitors in all of them.
+# Read-only, bar create on subjectaccessreviews; no Secret. Delete the binding
+# after the run (docs/reference/preflight.md).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaling-manager-preflight
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+rules:
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  resourceNames:
+  - scaledobjects.keda.sh
+  - clusterqueues.kueue.x-k8s.io
+  - localqueues.kueue.x-k8s.io
+  - resourceflavors.kueue.x-k8s.io
+  - workloads.kueue.x-k8s.io
+  verbs: ["get"]
+- apiGroups: ["apiregistration.k8s.io"]
+  resources: ["apiservices"]
+  resourceNames: ["v1beta1.external.metrics.k8s.io"]
+  verbs: ["get"]
+- apiGroups: ["keda.sh"]
+  resources: ["clustertriggerauthentications"]
+  resourceNames: ["scaling-manager-external-scaler-scaling-manager-system"]
+  verbs: ["get"]
+# KEDA's operator and other scaling manager controllers, model-server pods and
+# their PodMonitors, in every namespace.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["pods", "nodes"]
+  verbs: ["list"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["podmonitors", "prometheuses"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
