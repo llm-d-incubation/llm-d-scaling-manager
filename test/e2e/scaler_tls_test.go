@@ -15,6 +15,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/controllerstatus"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/test/e2e/fixtures"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/test/utils"
 )
@@ -30,7 +31,7 @@ func configureScalerTLS() {
 	dep, err := k8sClient.AppsV1().Deployments(cfg.LLMSMNamespace).Get(ctx, utils.ControllerDeploymentName, metav1.GetOptions{})
 	Expect(err).NotTo(HaveOccurred(), "reading the controller Deployment to learn its scaler TLS mode")
 	provider := dep.Spec.Template.Annotations["scaling-manager.llmd.ai/scaler-tls"]
-	certFlag := false
+	certFlag, bootstrap := false, false
 	for _, c := range dep.Spec.Template.Spec.Containers {
 		if c.Name != utils.ControllerContainerName {
 			continue
@@ -39,9 +40,21 @@ func configureScalerTLS() {
 			if strings.HasPrefix(a, "--external-scaler-cert-path") {
 				certFlag = true
 			}
+			if a == "--external-scaler-tls-bootstrap=true" || a == "--external-scaler-tls-bootstrap" {
+				bootstrap = true
+			}
 		}
 	}
 	scalerTLSOn = provider != "" && certFlag
+	if bootstrap {
+		// An install from the release files: no installer annotates the
+		// Deployment or passes certificate files; the controller provisions
+		// the certificates and says how it serves in its status ConfigMap.
+		provider = "controller bootstrap"
+		cm, err := k8sClient.CoreV1().ConfigMaps(cfg.LLMSMNamespace).Get(ctx, controllerstatus.ConfigMapName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred(), "reading the controller status to learn its scaler TLS mode")
+		scalerTLSOn = strings.HasPrefix(cm.Data[controllerstatus.KeyScalerTLS], "mutual TLS")
+	}
 	if !scalerTLSOn {
 		// CI sets this, so an install that quietly fell back to plaintext fails
 		// the run instead of skipping the TLS spec.

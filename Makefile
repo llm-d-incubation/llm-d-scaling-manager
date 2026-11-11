@@ -1537,6 +1537,62 @@ test-e2e-passive-with-setup: ## Deploy e2e infra, then run the passive-mode spec
 	SCALER_BACKEND=keda $(MAKE) deploy-e2e-infra
 	$(MAKE) test-e2e-passive
 
+# Installs the scaling manager from the rendered release files with kubectl
+# only (test/release-manifests/e2e.sh), on a kind cluster whose prerequisites
+# the e2e setup installed without the scaling manager: preflight, settings,
+# scaler mutual TLS by the steps the controller prints, the smoke suite against
+# that install, passive -> shadow -> active, a wrong prometheusURL as the
+# negative control, and the uninstall. The files are rendered with the digest
+# the kind nodes hold for RELEASE_E2E_IMG, as a release pins it.
+# docs/developer-guide/testing.md, "Install from the release files".
+RELEASE_E2E_IMG       ?= ghcr.io/llm-d-incubation/llm-d-scaling-manager:release-e2e
+RELEASE_E2E_DIST      ?= $(CURDIR)/dist/release-e2e
+RELEASE_E2E_LOGS      ?= $(CURDIR)/dist/release-e2e-logs
+RELEASE_E2E_SMOKE     ?= true
+# Smoke specs a namespaced install cannot serve: "Basic Autoscaling" creates
+# its model in a namespace it makes at run time, which only a cluster-scoped
+# controller watches (the reason deploy-e2e-infra installs cluster scope).
+RELEASE_E2E_SMOKE_SKIP ?= KEDA Smoke Tests - Basic Autoscaling
+.PHONY: test-e2e-release-manifests
+test-e2e-release-manifests: kustomize ## Install from the rendered release files with kubectl only, and check it (kind, after test-e2e-release-manifests-setup)
+	@# The release files name the image by digest. The kind nodes hold the
+	@# local build under its tag, and under a digest reference named for the
+	@# import (docker.io/library/import-<date>@sha256:...), not for the
+	@# repository, so a pod naming <repo>@sha256:<digest> would try to pull it.
+	@# Tag that reference on each node, as a registry would serve it.
+	@set -e; \
+	nodes="$$($(KIND) get nodes --name $(CLUSTER_NAME))"; \
+	[ -n "$$nodes" ] || { echo "no kind cluster $(CLUSTER_NAME)"; exit 1; }; \
+	repo="$(RELEASE_E2E_IMG)"; repo="$${repo%:*}"; \
+	first="$$(echo "$$nodes" | head -1)"; \
+	sha="$$(docker exec "$$first" crictl inspecti -o json "$(RELEASE_E2E_IMG)" | jq -r '.status.repoDigests[0] // empty' | sed 's/.*@//')"; \
+	[ -n "$$sha" ] || { echo "kind node $$first holds no digest for $(RELEASE_E2E_IMG); run make test-e2e-release-manifests-setup"; exit 1; }; \
+	digest="$$repo@$$sha"; \
+	for n in $$nodes; do \
+		docker exec "$$n" ctr -n k8s.io images tag --force "$(RELEASE_E2E_IMG)" "$$digest" >/dev/null; \
+		docker exec "$$n" crictl inspecti "$$digest" >/dev/null || { echo "kind node $$n cannot resolve $$digest"; exit 1; }; \
+	done; \
+	echo "Rendering the release files with $$digest"; \
+	rm -rf "$(RELEASE_E2E_DIST)" "$(RELEASE_E2E_LOGS)"; \
+	$(MAKE) --no-print-directory release-manifests IMG="$$digest" RELEASE_VERSION=v0.0.0-e2e DIST="$(RELEASE_E2E_DIST)"; \
+	smoke=""; \
+	if [ "$(RELEASE_E2E_SMOKE)" = true ]; then \
+		smoke="E2E_EXPECT_SCALER_TLS=true $(MAKE) --no-print-directory test-e2e-smoke CONTROLLER_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) KUBECONFIG=$(KUBECONFIG) DEPLOY_ALERTING_RULES=true SKIP='$(RELEASE_E2E_SMOKE_SKIP)'"; \
+	fi; \
+	KUBECONFIG=$(KUBECONFIG) NS=$(E2E_EMULATED_LLMD_NAMESPACE) KEDA_NS=$(E2E_KEDA_NAMESPACE) \
+		MONITORING_NS=$(E2E_MONITORING_NAMESPACE) E2E_LOG_DIR="$(RELEASE_E2E_LOGS)" SMOKE_CMD="$$smoke" \
+		bash test/release-manifests/e2e.sh "$(RELEASE_E2E_DIST)"
+
+# The prerequisites only: kind with emulated GPUs, Prometheus, KEDA, the llm-d
+# CRDs and EPP, and the image loaded into the nodes. DEPLOY_SCALING_MANAGER=false
+# keeps the installer from installing the scaling manager itself.
+.PHONY: test-e2e-release-manifests-setup
+test-e2e-release-manifests-setup: ## Kind prerequisites for test-e2e-release-manifests, without the scaling manager
+	DEPLOY_SCALING_MANAGER=false ENVIRONMENT=kind-emulator $(MAKE) deploy-e2e-infra IMG=$(RELEASE_E2E_IMG)
+
+.PHONY: test-e2e-release-manifests-with-setup
+test-e2e-release-manifests-with-setup: test-e2e-release-manifests-setup test-e2e-release-manifests ## Prerequisites, then the release-files e2e (never deletes the cluster)
+
 # The whole-node utilization-share specs (label utilization-share-wholenode): a
 # large model whose replica is one whole 8-GPU node, or a LeaderWorkerSet group
 # of two, beside 1-GPU models. They need up to five free schedulable nodes of
