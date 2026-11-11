@@ -64,3 +64,6 @@ __pycache__/
 # 'latest' symlink into the repo root. They are run output, not source.
 /latest
 /*-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*/
+
+# make release-manifests output
+/dist/

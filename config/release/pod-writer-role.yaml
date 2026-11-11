@@ -1,0 +1,19 @@
+# The only grant of patch on pods in the release files. Utilization share
+# writes a deletion cost and a transfer mark onto pods it manages; the warm
+# pool writes pool labels and a deletion cost onto the pods it lends. Neither
+# can run without it, and nothing else needs it, so the manager Roles carry
+# get, list and watch on pods only. Apply it per namespace (the controller
+# namespace, a model namespace, or both) when utilizationShare goes active or
+# the warm pool is used, and delete it when neither is. The same grant
+# deploy/lib/pod_writer.sh makes for `make utilization-share-activate`.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-pod-writer
+  namespace: __MODEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["patch"]

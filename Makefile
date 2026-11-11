@@ -3136,6 +3136,8 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@bash -n hack/check-goldens-section.sh
 	@bash -n hack/check-policy-apply-docs.sh
 	@bash -n hack/check-release-latest.sh
+	@bash -n deploy/release-manifests.sh
+	@bash -n hack/check-release-manifests.sh
 	@bash -n hack/check-controller-ready.sh
 	@for script in deploy/lib/*.sh; do bash -n "$$script"; done
 	@for script in deploy/*/install.sh; do if [ -f "$$script" ]; then bash -n "$$script"; fi; done
@@ -3396,6 +3398,12 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@# Runs the release workflow step against a scratch repository. A backport
 	@# tagged after a newer release used to move latest back to the old line.
 	@bash hack/check-release-latest.sh
+	@echo "Checking the release files: digest, names, labels, placeholders..."
+	@# Renders what a GitHub Release attaches and asserts the rules of
+	@# docs/proposals/install-from-release.md, then breaks a copy one rule at a
+	@# time and requires each break to be caught. An image by tag, a Namespace
+	@# in the file, or a hashed ClusterRole name all render and parse cleanly.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-release-manifests.sh
 	@echo "Checking the tenant Role still covers the generated ClusterRole..."
 	@# The ClusterRole is GENERATED from kubebuilder markers; the namespaced Role
 	@# the tenant overlay installs is maintained by hand, so it does not move when
@@ -3490,6 +3498,16 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg GIT_COMMIT=$(GIT_COMMIT) --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm scaling-manager-builder
 	rm Dockerfile.cross
+
+# The files a GitHub Release attaches, rendered from the same overlays the
+# make install applies (docs/proposals/install-from-release.md). IMG must name
+# the image by digest; ci-release.yaml passes the one it pushed. DIST is
+# written in place: only the release files and SHA256SUMS in it are replaced.
+DIST ?= dist
+RELEASE_VERSION ?=
+.PHONY: release-manifests
+release-manifests: kustomize ## Render the release files: make release-manifests IMG=<repo>@sha256:<digest> RELEASE_VERSION=vX.Y.Z [DIST=dist]
+	@KUSTOMIZE=$(KUSTOMIZE) bash deploy/release-manifests.sh --image "$(IMG)" --version "$(RELEASE_VERSION)" --out "$(DIST)"
 
 ##@ Deployment
 
