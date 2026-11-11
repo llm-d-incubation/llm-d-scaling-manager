@@ -397,6 +397,17 @@ the scaler as KEDA:
 A tenant who can read Secrets in the controller's namespace holds the client
 key and the CA key.
 
+In an install from the release files the controller fills these Secrets
+itself (`scaling-manager-scaler-tls-role`): `get` and `update` on the three by
+name, and nothing else on Secrets. It cannot create a Secret: the release file
+`scaling-manager-scaler-tls.yaml` creates the three, empty, of type
+`kubernetes.io/tls`. A grant to create Secrets would let a compromised
+controller create a `kubernetes.io/service-account-token` Secret under one of
+those names, for any ServiceAccount in its namespace, and read the token the
+cluster fills in; the type of a Secret that exists cannot be changed, so
+update by name cannot do that. It reads no other Secret. A `make` install has
+no such grant: the installer writes them.
+
 ## Data handled
 
 Metrics only. The controller reads Prometheus series, EPP and model-server

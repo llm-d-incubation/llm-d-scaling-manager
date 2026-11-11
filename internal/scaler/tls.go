@@ -8,6 +8,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // NewTLSConfig builds the server-side TLS configuration for the external
@@ -49,6 +51,31 @@ func NewTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, e
 	if !pool.AppendCertsFromPEM(pem) {
 		return nil, fmt.Errorf("external scaler client CA %q holds no PEM certificate", clientCAFile)
 	}
+	return withClientCAs(cfg, pool, allowedClients), nil
+}
+
+// NewMutualTLSConfig is NewTLSConfig with the client CA given as a
+// certificate rather than a file: mutual TLS, always. The controller-side
+// certificate bootstrap (internal/scalertls) reads its CA from a Secret.
+func NewMutualTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error), clientCA *x509.Certificate, allowedClients []string) (*tls.Config, error) {
+	if getCertificate == nil {
+		return nil, errors.New("external scaler TLS needs a serving certificate")
+	}
+	if clientCA == nil {
+		return nil, errors.New("external scaler mutual TLS needs a client CA")
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(clientCA)
+	return withClientCAs(&tls.Config{
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: getCertificate,
+	}, pool, allowedClients), nil
+}
+
+// withClientCAs turns on mutual TLS in cfg: every client presents a
+// certificate pool signed, and, when allowedClients is not empty, one that
+// names one of them.
+func withClientCAs(cfg *tls.Config, pool *x509.CertPool, allowedClients []string) *tls.Config {
 	cfg.ClientCAs = pool
 	cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	if len(allowedClients) > 0 {
@@ -60,18 +87,25 @@ func NewTLSConfig(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, e
 			return verifyClientIdentity(cs.PeerCertificates, allowed)
 		}
 	}
-	return cfg, nil
+	return cfg
 }
+
+// DefaultClientIdentity is the identity KEDA's client certificate carries
+// when nothing else is set, here and in the installer
+// (LLMSM_SCALER_CLIENT_SAN_DEFAULT in deploy/lib/scaler_tls.sh).
+const DefaultClientIdentity = "scaling-manager-keda-client"
 
 // TLSFlags are the external scaler's TLS flags as given on the command line.
 // ClientCASet and ClientSANSet say whether --external-scaler-client-ca and
-// --external-scaler-client-san were passed at all, empty or not.
+// --external-scaler-client-san were passed at all, empty or not. Bootstrap is
+// --external-scaler-tls-bootstrap.
 type TLSFlags struct {
 	CertPath     string
 	ClientCA     string
 	ClientCASet  bool
 	ClientSAN    string
 	ClientSANSet bool
+	Bootstrap    bool
 }
 
 // CheckTLSFlags validates the external scaler's TLS flags and returns the
@@ -80,7 +114,30 @@ type TLSFlags struct {
 // serving certificate would serve TLS without mutual TLS, and a
 // --external-scaler-client-san of only commas and spaces would accept any
 // certificate the client CA signed. Both read as a pinned client and are not.
+//
+// With Bootstrap the controller issues the certificates itself, so the file
+// flags are refused, and the identity is exactly one DNS name, the one KEDA's
+// certificate is issued for: --external-scaler-client-san, else
+// DefaultClientIdentity.
 func CheckTLSFlags(f TLSFlags) ([]string, error) {
+	if f.Bootstrap {
+		if f.CertPath != "" || f.ClientCASet {
+			return nil, errors.New("--external-scaler-tls-bootstrap provisions the scaler's certificates itself: " +
+				"drop --external-scaler-cert-path and --external-scaler-client-ca, or drop --external-scaler-tls-bootstrap")
+		}
+		allowed := ParseClientIdentities(f.ClientSAN)
+		if !f.ClientSANSet {
+			allowed = []string{DefaultClientIdentity}
+		}
+		if len(allowed) != 1 {
+			return nil, fmt.Errorf("--external-scaler-client-san=%q: with --external-scaler-tls-bootstrap give exactly one identity, "+
+				"the one KEDA's client certificate is issued for", f.ClientSAN)
+		}
+		if errs := validation.IsDNS1123Subdomain(allowed[0]); len(errs) > 0 {
+			return nil, fmt.Errorf("--external-scaler-client-san=%q is not one lowercase DNS name: %s", allowed[0], strings.Join(errs, "; "))
+		}
+		return allowed, nil
+	}
 	if f.ClientCA != "" && f.CertPath == "" {
 		return nil, errors.New("--external-scaler-client-ca needs --external-scaler-cert-path: mutual TLS needs a serving certificate")
 	}
