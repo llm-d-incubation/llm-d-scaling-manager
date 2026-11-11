@@ -360,12 +360,10 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-alerts.yaml` | optional PrometheusRule |
 | `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap |
 | `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: binds the scraping Prometheus account to the metrics-reader ClusterRole |
+| `scaling-manager-preflight.yaml` | the preflight Job (`manager preflight check`, image by digest), its ServiceAccount, and its read-only Role and ClusterRole ([preflight.md](../reference/preflight.md)) |
 
 Every file opens with a `PREVIEW:` line until the controller reads the
 settings ConfigMap (`PREVIEW_NOTE` in `deploy/release-manifests.sh`).
-
-The preflight Job file is not rendered yet: it comes with the `manager
-preflight` command.
 
 Every object carries `app.kubernetes.io/part-of`, `instance`, `version` and
 `scaling-manager.llmd.ai/part: admin|controller`; `admin` is exactly what the

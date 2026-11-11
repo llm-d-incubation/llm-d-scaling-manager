@@ -1,0 +1,48 @@
+# What the preflight reads in the controller's namespace, each by name, and
+# the one object it writes: its result, scaling-manager-preflight-result.
+# create cannot be narrowed by name, so it may create a ConfigMap here; it
+# creates only that one (internal/preflight, WriteResult).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-preflight
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+rules:
+# The settings, the configuration an install made before v0.11.0 falls back
+# to, and the marker that KEDA's side of mutual TLS is in place.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames:
+  - scaling-manager-settings
+  - scaling-manager-manager-config
+  - scaling-manager-scaler-keda-auth
+  - scaling-manager-preflight-result
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["scaling-manager-preflight-result"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+# The Prometheus CA the controller mounts, and the scaler's certificates,
+# which the KEDA trust check verifies against KEDA's copy.
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  - scaling-manager-prometheus-ca
+  - scaling-manager-external-scaler-tls
+  - scaling-manager-external-scaler-client-tls
+  verbs: ["get"]
+# Whether the controller is installed yet, and the scaler NetworkPolicy.
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  resourceNames: ["scaling-manager-controller-manager"]
+  verbs: ["get"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  resourceNames: ["scaling-manager-external-scaler"]
+  verbs: ["get"]

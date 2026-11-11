@@ -24,9 +24,6 @@
 #     LLMSM_PREREQ_NAMED in deploy/lib/common.sh), plus any cluster-scoped or
 #     monitoring.coreos.com object of the extra files.
 #
-# The preflight Job file (scaling-manager-preflight.yaml) is not written yet:
-# `manager preflight` does not exist. TODO: add it with the preflight command.
-#
 # Needs yq v4, sha256sum, and kustomize (KUSTOMIZE, else kustomize or
 # `kubectl kustomize` on PATH). Reads no cluster.
 
@@ -56,6 +53,7 @@ RELEASE_FILES=(
     scaling-manager-alerts.yaml
     scaling-manager-policy-example.yaml
     scaling-manager-metrics-reader.yaml
+    scaling-manager-preflight.yaml
 )
 
 # Until the controller reads scaling-manager-settings (phase 2 of the
@@ -319,6 +317,22 @@ label "$PLACEHOLDER" < "$ROOT/config/release/metrics-reader-clusterrolebinding.y
     | write scaling-manager-metrics-reader.yaml \
         "Optional, Kubernetes namespaced install: lets the Prometheus that scrapes the controller read its /metrics. Name that Prometheus account; nothing is bound by default. For the cluster-wide file: kubectl create clusterrolebinding scaling-manager-metrics-reader-rolebinding --clusterrole=scaling-manager-metrics-reader --serviceaccount=<prometheus namespace>:<prometheus serviceaccount>" \
         "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__PROMETHEUS_NAMESPACE__/<prometheus namespace>/g\" -e \"s/__PROMETHEUS_SA__/<prometheus serviceaccount>/g\""
+
+# The preflight Job, its ServiceAccount and its read-only RBAC: the Job runs
+# `manager preflight check` from the release image, pinned like the
+# controller's.
+{
+    first=true
+    for f in preflight-serviceaccount preflight-role preflight-rolebinding preflight-clusterrole preflight-clusterrolebinding preflight-job; do
+        [ "$first" = true ] || echo '---'
+        first=false
+        cat "$ROOT/config/release/$f.yaml"
+    done
+} | IMAGE="$IMAGE_REPO@$IMAGE_DIGEST" yq '(select(.kind == "Job") | .spec.template.spec.containers[].image) = strenv(IMAGE)' \
+  | label "$PLACEHOLDER" \
+  | write scaling-manager-preflight.yaml \
+      "The preflight check: a Job that reads the prerequisites and prints PASS, WARN, FAIL or UNKNOWN per check with the fix (docs/reference/preflight.md). Read-only; part=admin is its ServiceAccount and RBAC, part=controller the Job. Delete the Job before applying it again." \
+      "$SED_HOW"
 
 # Every file holds at least one object, or the render went wrong somewhere.
 for f in "${RELEASE_FILES[@]}"; do

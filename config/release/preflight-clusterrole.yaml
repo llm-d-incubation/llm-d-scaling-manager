@@ -1,0 +1,63 @@
+# The preflight's cluster reads. Read-only, bar create on
+# subjectaccessreviews, which asks the API server a question and grants
+# nothing. A namespace owner without this ClusterRole still gets a run: every
+# cluster read is UNKNOWN, and the namespaced checks still run.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaling-manager-preflight-__NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+rules:
+# KEDA's and Kueue's CRDs, by name.
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  resourceNames:
+  - scaledobjects.keda.sh
+  - clusterqueues.kueue.x-k8s.io
+  - localqueues.kueue.x-k8s.io
+  - resourceflavors.kueue.x-k8s.io
+  - workloads.kueue.x-k8s.io
+  verbs: ["get"]
+# Where KEDA runs: the Service behind the external-metrics APIService.
+- apiGroups: ["apiregistration.k8s.io"]
+  resources: ["apiservices"]
+  resourceNames: ["v1beta1.external.metrics.k8s.io"]
+  verbs: ["get"]
+# KEDA's side of mutual TLS: the ClusterTriggerAuthentication, and the copy
+# of the client certificate it reads in KEDA's namespace.
+- apiGroups: ["keda.sh"]
+  resources: ["clustertriggerauthentications"]
+  resourceNames: ["scaling-manager-external-scaler-__NAMESPACE__"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["scaling-manager-external-scaler-__NAMESPACE__"]
+  verbs: ["get"]
+# KEDA's version and other controllers (Deployments in every namespace), the
+# model-server pods, the nodes' accelerators, and namespace labels.
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["pods", "nodes"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+# Which PodMonitor scrapes the model servers, and which Prometheus reads it.
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["podmonitors", "prometheuses"]
+  verbs: ["list"]
+# The namespace readers decision 5 keeps narrow, to name what they miss.
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterroles"]
+  resourceNames:
+  - scaling-manager-policy-namespace-reader-role-__NAMESPACE__
+  - scaling-manager-kueue-reader-role-__NAMESPACE__
+  verbs: ["get"]
+# Whether the controller's account may do what it needs.
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]

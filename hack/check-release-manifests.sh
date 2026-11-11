@@ -52,7 +52,7 @@ PART="scaling-manager.llmd.ai/part"
 NSF="scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml"
 CLF="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
 MAIN_FILES="$NSF $CLF"
-ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml"
+ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml scaling-manager-preflight.yaml"
 
 render() {
     bash "$ROOT/deploy/release-manifests.sh" --image "$1" --version "$VERSION" --out "$2"
@@ -136,6 +136,7 @@ check_dir() {
         case "$f" in
             scaling-manager-cluster*) ins=scaling-manager-system; safile="$f" ;;
             scaling-manager-namespaced-openshift.yaml) ins=__NAMESPACE__; safile="$f" ;;
+            scaling-manager-preflight.yaml) ins=__NAMESPACE__; safile="$f" ;;
             *) ins=__NAMESPACE__; safile=scaling-manager-namespaced.yaml ;;
         esac
         [ "$(q "$f" 'length')" -gt 0 ] || say "$f holds no object"
@@ -149,7 +150,7 @@ check_dir() {
         [ -z "$n" ] || say "$f: objects missing part-of, instance, version or $PART: $(echo $n)"
         n="$(q "$f" '.[] | select(.kind == "Namespace") | .metadata.name')"
         [ -z "$n" ] || say "$f carries a Namespace: $n"
-        n="$(q "$f" '.[] | select(.kind == "Deployment") | .spec.template.spec.containers[]
+        n="$(q "$f" '.[] | select(.kind == "Deployment" or .kind == "Job") | .spec.template.spec.containers[]
             | select(.image != $img or .imagePullPolicy != "IfNotPresent") | .image + " " + (.imagePullPolicy // "unset")')"
         [ -z "$n" ] || say "$f: a container not pinned to $REPO@$DIGEST with IfNotPresent: $n"
         grep -qE 'llm-d-scaling-manager:[A-Za-z0-9]' "$d/$f" && say "$f names the image by tag"
@@ -282,6 +283,26 @@ check_dir() {
     n="$(q scaling-manager-settings.yaml '.[] | select(.kind == "ConfigMap") | .metadata.name + " " + (.data | tojson)')"
     [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
         || say "scaling-manager-settings.yaml: name, keys or defaults differ from the proposal: $n"
+
+    # The preflight file: the Job runs `manager preflight check` as its own
+    # account, never the controller one; its ClusterRole only reads (create on
+    # subjectaccessreviews asks a question and grants nothing), and its Role
+    # writes only the result ConfigMap. Secrets are read by name only.
+    n="$(q scaling-manager-preflight.yaml '[.[] | select(.kind == "Job") | .spec.template.spec
+        | .serviceAccountName + " " + (.containers[0].command | join(",")) + " " + (.containers[0].args | join(","))] | join(";")')"
+    [ "$n" = "scaling-manager-preflight /manager preflight,check" ] || say "scaling-manager-preflight.yaml: the preflight Job runs '$n', not /manager preflight check as scaling-manager-preflight"
+    n="$(q scaling-manager-preflight.yaml '.[] | select(.kind == "ClusterRole") | .rules[]
+        | select(((.verbs - ["get", "list", "watch"]) | length > 0) and ((.resources == ["subjectaccessreviews"] and .verbs == ["create"]) | not))
+        | (.resources | join(",")) + ":" + (.verbs | join(","))')"
+    [ -z "$n" ] || say "scaling-manager-preflight.yaml: the preflight ClusterRole is not read-only: $(echo $n)"
+    n="$(q scaling-manager-preflight.yaml '.[] | select(.kind == "Role") | .rules[]
+        | select((.verbs - ["get", "list", "watch"]) | length > 0)
+        | select((.resources == ["configmaps"] and (.verbs == ["create"] or (.verbs == ["update"] and .resourceNames == ["scaling-manager-preflight-result"]))) | not)
+        | (.resources | join(",")) + ":" + (.verbs | join(","))')"
+    [ -z "$n" ] || say "scaling-manager-preflight.yaml: the preflight Role writes more than its result ConfigMap: $(echo $n)"
+    n="$(q scaling-manager-preflight.yaml '.[] | select(.kind == "Role" or .kind == "ClusterRole") | .rules[]
+        | select((.resources | index("secrets")) and ((.resourceNames // []) | length) == 0) | .verbs | join(",")')"
+    [ -z "$n" ] || say "scaling-manager-preflight.yaml: the preflight reads Secrets without resourceNames: $n"
 
     # Substitute every placeholder as the guide will, then read what is left.
     rm -rf "$sub"; mkdir -p "$sub"
@@ -423,6 +444,18 @@ mutate external-subject "ServiceAccount subject" scaling-manager-namespaced.yaml
     '(select(.kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-node-reader-rolebinding-__NAMESPACE__") | .subjects[0].namespace) = "scaling-manager-monitoring"'
 mutate fixed-metrics-subject "binds" scaling-manager-metrics-reader.yaml \
     '(select(.kind == "ClusterRoleBinding") | .subjects[0]) = {"kind": "ServiceAccount", "name": "kube-prometheus-stack-prometheus", "namespace": "scaling-manager-monitoring"}'
+mutate preflight-image-tag "not pinned" scaling-manager-preflight.yaml \
+    '(select(.kind == "Job") | .spec.template.spec.containers[0].image) = "ghcr.io/llm-d-incubation/llm-d-scaling-manager:v0.11.0"'
+mutate preflight-as-controller "preflight Job runs" scaling-manager-preflight.yaml \
+    '(select(.kind == "Job") | .spec.template.spec.serviceAccountName) = "scaling-manager-controller-manager"'
+mutate preflight-writes "not read-only" scaling-manager-preflight.yaml \
+    '(select(.kind == "ClusterRole") | .rules) += [{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["patch"]}]'
+mutate preflight-role-writes "writes more than its result" scaling-manager-preflight.yaml \
+    '(select(.kind == "Role") | .rules[] | select(.verbs[0] == "update") | .resourceNames) = []'
+mutate preflight-secrets-wide "Secrets without resourceNames" scaling-manager-preflight.yaml \
+    '(select(.kind == "ClusterRole") | .rules[] | select(.resources[0] == "secrets")) |= del(.resourceNames)'
+mutate preflight-cluster-controller "differs from the installer split" scaling-manager-preflight.yaml \
+    '(select(.kind == "ClusterRole") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
 d="$WORK/m-preview-missing"; rm -rf "$d"; cp -r "$GOOD" "$d"
 sed -i '/^# PREVIEW: /d' "$d/scaling-manager-activate.yaml"
 caught preview-missing "PREVIEW notice" "$d"

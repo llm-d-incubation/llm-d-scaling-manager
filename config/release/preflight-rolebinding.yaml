@@ -1,0 +1,16 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-manager-preflight
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaling-manager-preflight
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-preflight
+  namespace: __NAMESPACE__
