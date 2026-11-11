@@ -1,7 +1,10 @@
-# What the preflight reads in the controller's namespace, each by name, and
-# the one object it writes: its result, scaling-manager-preflight-result.
-# create cannot be narrowed by name, so it may create a ConfigMap here; it
-# creates only that one (internal/preflight, WriteResult).
+# What the preflight reads in the controller's namespace, and the one object
+# it writes: its result, scaling-manager-preflight-result. It reads no Secret:
+# the Prometheus CA is mounted into the Job, and the scaler's chain is read by
+# a TLS handshake and checked against the CA certificate the controller
+# publishes in its status ConfigMap. create cannot be narrowed by name, so it
+# may create a ConfigMap here; the code creates only its result
+# (internal/preflight, WriteResult).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -12,13 +15,15 @@ metadata:
     app.kubernetes.io/component: preflight
 rules:
 # The settings, the configuration an install made before v0.11.0 falls back
-# to, and the marker that KEDA's side of mutual TLS is in place.
+# to, the marker that KEDA's side of mutual TLS is in place, the controller's
+# status (scalerCACert, scalerUnreachable), and the result.
 - apiGroups: [""]
   resources: ["configmaps"]
   resourceNames:
   - scaling-manager-settings
   - scaling-manager-manager-config
   - scaling-manager-scaler-keda-auth
+  - scaling-manager-controller-status
   - scaling-manager-preflight-result
   verbs: ["get"]
 - apiGroups: [""]
@@ -28,15 +33,6 @@ rules:
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["create"]
-# The Prometheus CA the controller mounts, and the scaler's certificates,
-# which the KEDA trust check verifies against KEDA's copy.
-- apiGroups: [""]
-  resources: ["secrets"]
-  resourceNames:
-  - scaling-manager-prometheus-ca
-  - scaling-manager-external-scaler-tls
-  - scaling-manager-external-scaler-client-tls
-  verbs: ["get"]
 # Whether the controller is installed yet, and the scaler NetworkPolicy.
 - apiGroups: [""]
   resources: ["serviceaccounts"]
@@ -46,3 +42,12 @@ rules:
   resources: ["networkpolicies"]
   resourceNames: ["scaling-manager-external-scaler"]
   verbs: ["get"]
+# The model-server pods and the PodMonitor that scrapes them, in this
+# namespace only. For a namespace watchNamespaces adds, grant the same two
+# reads there (docs/reference/preflight.md).
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+- apiGroups: ["monitoring.coreos.com"]
+  resources: ["podmonitors"]
+  verbs: ["list"]

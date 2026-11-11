@@ -79,7 +79,10 @@ const (
 )
 
 // NewHTTPPrometheus is the client the Job uses: the system roots, the
-// Prometheus CA and the service CA, and the Pod's ServiceAccount token.
+// Prometheus CA and the service CA. It sends the Pod's ServiceAccount token
+// only over https with the certificate verified: never over plain http and
+// never with InsecureSkipVerify, where whoever answers at the URL the settings
+// name would receive it.
 func NewHTTPPrometheus(cfg PrometheusConfig) (Prometheus, error) {
 	base, err := url.Parse(cfg.URL)
 	if err != nil {
@@ -90,18 +93,26 @@ func NewHTTPPrometheus(cfg PrometheusConfig) (Prometheus, error) {
 		pool = x509.NewCertPool()
 	}
 	if len(cfg.CA) > 0 && !pool.AppendCertsFromPEM(cfg.CA) {
-		return nil, fmt.Errorf("the CA Secret %s holds no PEM certificate under ca.crt", PrometheusCASecret)
+		return nil, fmt.Errorf("the mounted CA (Secret %s, key ca.crt) holds no PEM certificate", PrometheusCASecret)
 	}
 	if ca, err := os.ReadFile(serviceCAFile); err == nil {
 		pool.AppendCertsFromPEM(ca)
 	}
 	token := ""
-	if b, err := os.ReadFile(tokenFile); err == nil {
-		token = strings.TrimSpace(string(b))
+	if sendsToken(base, cfg.InsecureSkipVerify) {
+		if b, err := os.ReadFile(tokenFile); err == nil {
+			token = strings.TrimSpace(string(b))
+		}
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{RootCAs: pool, InsecureSkipVerify: cfg.InsecureSkipVerify, MinVersion: tls.VersionTLS12} //nolint:gosec // the operator's prometheusInsecureSkipVerify, as the controller reads it
 	return &httpPrometheus{base: base, token: token, client: &http.Client{Transport: tr, Timeout: 15 * time.Second}}, nil
+}
+
+// sendsToken reports whether the account's token may go to base: only over
+// https, with the server's certificate verified.
+func sendsToken(base *url.URL, insecureSkipVerify bool) bool {
+	return base.Scheme == "https" && !insecureSkipVerify
 }
 
 type httpPrometheus struct {
@@ -198,15 +209,7 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 			Detail: raw + " is plain HTTP, which the controller refuses: it sends its ServiceAccount token to Prometheus",
 			Fix:    setURL("https://" + u.Host + u.Path)}}, ""
 	}
-	var ca []byte
-	sec, err := s.env.Kube.CoreV1().Secrets(ns).Get(ctx, PrometheusCASecret, metav1.GetOptions{})
-	if err != nil {
-		if absent, why := readVerdict(err, "Secret "+PrometheusCASecret+" in "+ns); !absent {
-			return []Result{{Status: Unknown, Detail: why + ", so the certificate is not checked against the CA the controller will mount"}}, ""
-		}
-	} else {
-		ca = sec.Data["ca.crt"]
-	}
+	ca := s.env.PrometheusCA
 	insecure := st.value(keyPrometheusInsecure) == valueTrue
 	prom, err := s.env.NewPrometheus(PrometheusConfig{URL: raw, InsecureSkipVerify: insecure, CA: ca})
 	if err != nil {
@@ -217,8 +220,8 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 	_, err = prom.Query(ctx, "vector(1)")
 	took := time.Since(start).Round(time.Millisecond)
 	note := ""
-	if insecure {
-		note = "; certificate NOT verified (prometheusInsecureSkipVerify)"
+	if insecure || u.Scheme != "https" {
+		note = "; certificate NOT verified, so the preflight's token was not sent"
 	}
 	var perr *PromError
 	switch {
@@ -231,8 +234,9 @@ func checkPrometheusReachable(ctx context.Context, s *state) ([]Result, string) 
 	case errors.As(err, &perr) && perr.Kind == PromTLS:
 		fix := fmt.Sprintf("kubectl create secret generic %s -n %s --from-file=ca.crt=<the CA that signs Prometheus's certificate>", PrometheusCASecret, ns)
 		if ca != nil {
-			fix = fmt.Sprintf("kubectl create secret generic %s -n %s --from-file=ca.crt=<file> --dry-run=client -o yaml | kubectl apply -f -   # Secret %s holds a CA that does not sign it", PrometheusCASecret, ns, PrometheusCASecret)
+			fix = fmt.Sprintf("kubectl create secret generic %s -n %s --from-file=ca.crt=<file> --dry-run=client -o yaml | kubectl apply -f -   # the mounted CA does not sign it", PrometheusCASecret, ns)
 		}
+		fix += "\nthen delete and re-apply the Job: it mounts the Secret at start"
 		return []Result{{Status: Fail, Detail: fmt.Sprintf("%s: %v", raw, err), Fix: fix}}, ""
 	case errors.As(err, &perr) && perr.Kind == PromBad:
 		return []Result{{Status: Fail, Detail: fmt.Sprintf("%s answered, but not as Prometheus: %v", raw, err), Fix: setURL("<the Prometheus or Thanos Querier base URL>")}}, ""
@@ -293,11 +297,15 @@ func checkModelMetrics(ctx context.Context, s *state) ([]Result, string) {
 		}
 		have[ns][name] = true
 	}
-	var fails, warns, ok []string
+	var fails, warns, unknowns, ok []string
 	for _, ns := range nss {
 		switch {
 		case len(have[ns]) == 0 && pods != nil && len(pods[ns]) == 0:
 			warns = append(warns, ns+": no model-server pod runs here yet, so nothing to check")
+		case len(have[ns]) == 0 && pods == nil:
+			// Whether model servers run there is not known: a refused
+			// pod list is not "none", and not "some" either.
+			unknowns = append(unknowns, ns)
 		case len(have[ns]) == 0:
 			fails = append(fails, ns)
 		case len(have[ns]) < len(requiredModelMetrics):
@@ -316,6 +324,9 @@ func checkModelMetrics(ctx context.Context, s *state) ([]Result, string) {
 		return []Result{{Status: Fail,
 			Detail: "no vllm: series in Prometheus for " + listText(fails, 8) + ": nothing scrapes the model servers there, so the controller has nothing to size from",
 			Fix:    `sed -e "s/__NAMESPACE__/` + s.env.Namespace + `/g" -e "s/__MODEL_NAMESPACE__/<model namespace>/g" scaling-manager-model-namespace.yaml | kubectl apply -f -   # the model-server PodMonitor; see podmonitor.port`}}, ""
+	}
+	if len(unknowns) > 0 {
+		return []Result{{Status: Unknown, Detail: "no vllm: series for " + listText(unknowns, 8) + ", and whether model servers run there is not known: " + podsWhy}}, ""
 	}
 	if len(warns) > 0 {
 		return []Result{{Status: Warn, Detail: strings.Join(warns, "; ")}}, ""

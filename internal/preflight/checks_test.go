@@ -6,17 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // wantChecks is every check `check` mode runs. Written out, not read from
 // checks: a check dropped from the list must fail a test.
 var wantChecks = []string{
-	"settings", "keda.crd", "keda.version", "keda.networkpolicy", "keda.mtls",
+	"settings", "keda.crd", "keda.version", "keda.networkpolicy", "keda.mtls", "scaler.tls",
 	"prometheus.reachable", "metrics.model", "podmonitor.port", "prometheus.selects",
 	"openshift.user-monitoring", "rbac.controller", "rbac.namespaces", "kueue",
 	"overlap", "accelerators", "activation",
@@ -156,12 +154,7 @@ func TestKEDAVersion(t *testing.T) {
 			}
 		})
 	}
-	f := newFixture(t)
-	f.kubeReact = append(f.kubeReact, forbidden("list", "deployments"))
-	if r := only(t, f.run(t), "keda.version"); r.Status != Unknown {
-		t.Errorf("forbidden Deployment list: %s %q, want UNKNOWN", r.Status, r.Detail)
-	}
-	f = newFixture(t).remove("Deployment", "keda-operator")
+	f := newFixture(t).remove("Deployment", "keda-operator")
 	if r := only(t, f.run(t), "keda.version"); r.Status != Unknown {
 		t.Errorf("no operator Deployment: %s %q, want UNKNOWN", r.Status, r.Detail)
 	}
@@ -181,14 +174,6 @@ func scalerPolicy(ns, admits string) *networkingv1.NetworkPolicy {
 }
 
 func TestKEDANetworkPolicy(t *testing.T) {
-	t.Run("not applied, KEDA elsewhere", func(t *testing.T) {
-		f := newFixture(t).remove("APIService", externalMetricsAPIService)
-		f.dyn = append(f.dyn, apiService("keda-system", "keda-operator-metrics-apiserver"))
-		r := only(t, f.run(t), "keda.networkpolicy")
-		if r.Status != Fail || !strings.Contains(r.Fix, `/spec/ingress/1/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name","value":"keda-system"`) {
-			t.Errorf("got %s %q fix %q", r.Status, r.Detail, r.Fix)
-		}
-	})
 	t.Run("applied, mismatch", func(t *testing.T) {
 		f := newFixture(t).add(scalerPolicy(testNS, "keda-system"))
 		r := only(t, f.run(t), "keda.networkpolicy")
@@ -230,65 +215,5 @@ func TestKEDANetworkPolicy(t *testing.T) {
 		if r := only(t, f.run(t), "keda.networkpolicy"); r.Status != Warn {
 			t.Errorf("got %s %q", r.Status, r.Detail)
 		}
-	})
-}
-
-func TestKEDAMTLS(t *testing.T) {
-	copyName := "scaling-manager-external-scaler-" + testNS
-	other := newCerts(t)
-	cases := []struct {
-		name   string
-		change func(*fixture)
-		want   Status
-		detail string
-	}{
-		{"no marker: plaintext", func(f *fixture) { f.remove("ConfigMap", KEDAMarkerConfigMap) }, Warn, "plaintext"},
-		{"marker forbidden", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("get", "configmaps")) }, Unknown, "forbidden"},
-		{"no ClusterTriggerAuthentication", func(f *fixture) { f.remove("ClusterTriggerAuthentication", copyName) }, Fail, "does not exist"},
-		{"no copy in KEDA's namespace", func(f *fixture) { removeSecret(f, "keda", copyName) }, Fail, "does not exist"},
-		{"copy forbidden", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("get", "secrets")) }, Unknown, "forbidden"},
-		{"KEDA trusts another CA", func(f *fixture) {
-			removeSecret(f, "keda", copyName)
-			f.add(secret("keda", copyName, map[string][]byte{"tls.crt": other.clientPEM, "ca.crt": other.caPEM}))
-		}, Fail, "does not verify the scaler's serving certificate"},
-		{"KEDA presents a certificate of another CA", func(f *fixture) {
-			removeSecret(f, "keda", copyName)
-			serving := findSecret(f, testNS, ScalerServingSecret)
-			f.add(secret("keda", copyName, map[string][]byte{"tls.crt": other.clientPEM, "ca.crt": serving.Data["ca.crt"]}))
-		}, Fail, "does not verify KEDA's client certificate"},
-		{"serving certificate not created yet", func(f *fixture) { removeSecret(f, testNS, ScalerServingSecret) }, Unknown, "not created"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t)
-			tc.change(f)
-			r := only(t, f.run(t), "keda.mtls")
-			if r.Status != tc.want || !strings.Contains(r.Detail, tc.detail) {
-				t.Errorf("got %s %q, want %s containing %q", r.Status, r.Detail, tc.want, tc.detail)
-			}
-			if r.Status == Fail || r.Status == Warn {
-				for _, want := range []string{"kubectl create secret generic " + copyName + " -n keda", "scaling-manager-keda-auth.yaml", "rollout restart"} {
-					if !strings.Contains(r.Fix, want) {
-						t.Errorf("fix lacks %q:\n%s", want, r.Fix)
-					}
-				}
-			}
-		})
-	}
-}
-
-func findSecret(f *fixture, ns, name string) *corev1.Secret {
-	for _, o := range f.kube {
-		if s, ok := o.(*corev1.Secret); ok && s.Namespace == ns && s.Name == name {
-			return s
-		}
-	}
-	return nil
-}
-
-func removeSecret(f *fixture, ns, name string) {
-	f.kube = slices.DeleteFunc(f.kube, func(o runtime.Object) bool {
-		s, ok := o.(*corev1.Secret)
-		return ok && s.Namespace == ns && s.Name == name
 	})
 }

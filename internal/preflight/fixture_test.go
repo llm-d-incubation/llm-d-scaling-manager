@@ -50,6 +50,12 @@ type fixture struct {
 	prom       *fakeProm
 	promNewErr error
 	captured   *PrometheusConfig
+	promCA     []byte
+	// dial answers the scaler handshake; certs is what the fixture serves.
+	dial  func(ctx context.Context, addr string) ([]*x509.Certificate, error)
+	certs certs
+	// now overrides the run's clock when set.
+	now time.Time
 }
 
 type reaction struct {
@@ -157,10 +163,6 @@ func cm(ns, name string, data map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Data: data}
 }
 
-func secret(ns, name string, data map[string][]byte) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Data: data}
-}
-
 func namespace(name string, labels map[string]string) *corev1.Namespace {
 	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
 }
@@ -266,9 +268,7 @@ func newFixture(t *testing.T) *fixture {
 			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ControllerServiceAccount}},
 			namespaceReader(ns, ns, "scaling-manager-policy"),
 			cm(ns, KEDAMarkerConfigMap, map[string]string{"clusterTriggerAuthentication": "scaling-manager-external-scaler-" + ns, "secretNamespace": "keda"}),
-			secret(ns, ScalerServingSecret, map[string][]byte{"tls.crt": c.servingPEM, "ca.crt": c.caPEM}),
-			secret(ns, ScalerClientSecret, map[string][]byte{"tls.crt": c.clientPEM, "ca.crt": c.caPEM}),
-			secret("keda", "scaling-manager-external-scaler-"+ns, map[string][]byte{"tls.crt": c.clientPEM, "ca.crt": c.caPEM}),
+			cm(ns, ControllerStatusConfigMap, map[string]string{statusScalerCACert: string(c.caPEM)}),
 		},
 		dyn: []runtime.Object{
 			crd("scaledobjects.keda.sh"),
@@ -280,7 +280,32 @@ func newFixture(t *testing.T) *fixture {
 				"podMonitorNamespaceSelector": map[string]any{},
 			}),
 		},
-		prom: &fakeProm{series: map[string][]string{ns: requiredModelMetrics}, upValue: 1},
+		prom:  &fakeProm{series: map[string][]string{ns: requiredModelMetrics}, upValue: 1},
+		certs: c,
+	}
+}
+
+// dialer is the fixture's scaler: it serves the serving certificate.
+func (f *fixture) dialer() func(context.Context, string) ([]*x509.Certificate, error) {
+	if f.dial != nil {
+		return f.dial
+	}
+	return func(context.Context, string) ([]*x509.Certificate, error) {
+		return parseChain(f.certs.servingPEM), nil
+	}
+}
+
+func parseChain(pemBytes []byte) []*x509.Certificate {
+	var out []*x509.Certificate
+	for rest := pemBytes; ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return out
+		}
+		if c, err := x509.ParseCertificate(b.Bytes); err == nil {
+			out = append(out, c)
+		}
 	}
 }
 
@@ -376,8 +401,15 @@ func (f *fixture) env(t *testing.T) *Env {
 			}
 			return f.prom, nil
 		},
+		PrometheusCA: f.promCA,
+		DialTLS:      f.dialer(),
 		CheckTimeout: 5 * time.Second,
-		Now:          func() time.Time { return testNow },
+		Now: func() time.Time {
+			if !f.now.IsZero() {
+				return f.now
+			}
+			return testNow
+		},
 	}
 }
 

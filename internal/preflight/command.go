@@ -17,6 +17,10 @@ import (
 // namespaceFile is where a Pod reads its own namespace.
 const namespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
+// prometheusCAFile is where the Job mounts PrometheusCASecret (optional), the
+// way the controller does: the preflight reads no Secret through the API.
+const prometheusCAFile = "/etc/scaling-manager/prometheus-ca/ca.crt"
+
 // Main runs `manager preflight [check|verify] [flags]` and returns the exit
 // code: 0 when no check failed, 1 when one did, 2 when it could not run.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -72,6 +76,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "preflight: no Kubernetes configuration: %v\n", err)
 		return 2
 	}
+	// Every API call is bounded, discovery too (ServerGroups takes no
+	// context): a check that hangs is UNKNOWN, never a Job that runs on.
+	cfg.Timeout = *timeout
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "preflight: %v\n", err)
@@ -82,7 +89,12 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "preflight: %v\n", err)
 		return 2
 	}
-	env := &Env{Kube: kube, Dynamic: dyn, Namespace: ns, Scope: sc, NewPrometheus: NewHTTPPrometheus, CheckTimeout: *timeout}
+	var promCA []byte
+	if b, err := os.ReadFile(prometheusCAFile); err == nil {
+		promCA = b
+	}
+	env := &Env{Kube: kube, Dynamic: dyn, Namespace: ns, Scope: sc, NewPrometheus: NewHTTPPrometheus,
+		PrometheusCA: promCA, DialTLS: DialTLS, CheckTimeout: *timeout}
 	return Execute(ctx, env, *writeResult, stdout, stderr)
 }
 

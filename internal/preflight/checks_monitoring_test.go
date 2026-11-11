@@ -33,7 +33,6 @@ func TestPrometheusReachable(t *testing.T) {
 		{"denied for the preflight account", func(f *fixture) {
 			f.prom.reachErr = &PromError{Kind: PromDenied, Err: errors.New("HTTP 403: forbidden")}
 		}, Pass, "network and TLS work", ""},
-		{"CA Secret forbidden", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("get", "secrets")) }, Unknown, "forbidden", ""},
 		{"CA does not parse", func(f *fixture) { f.promNewErr = errors.New("Secret holds no PEM certificate under ca.crt") }, Fail, "no PEM", PrometheusCASecret},
 	}
 	for _, tc := range cases {
@@ -52,7 +51,7 @@ func TestPrometheusReachable(t *testing.T) {
 func TestPrometheusCAIsPassed(t *testing.T) {
 	f := newFixture(t)
 	c := newCerts(t)
-	f.add(secret(testNS, PrometheusCASecret, map[string][]byte{"ca.crt": c.caPEM}))
+	f.promCA = c.caPEM
 	f.settings[keyPrometheusInsecure] = valueTrue
 	f.run(t)
 	if f.captured == nil || string(f.captured.CA) != string(c.caPEM) || !f.captured.InsecureSkipVerify {
@@ -88,7 +87,7 @@ func TestModelMetrics(t *testing.T) {
 		{"pods forbidden, no series", func(f *fixture) {
 			f.prom.series = nil
 			f.kubeReact = append(f.kubeReact, forbidden("list", "pods"))
-		}, Fail, "no vllm: series"},
+		}, Unknown, "not known"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

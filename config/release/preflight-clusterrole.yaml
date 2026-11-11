@@ -1,7 +1,10 @@
-# The preflight's cluster reads. Read-only, bar create on
-# subjectaccessreviews, which asks the API server a question and grants
-# nothing. A namespace owner without this ClusterRole still gets a run: every
-# cluster read is UNKNOWN, and the namespaced checks still run.
+# The preflight's cluster reads, for a namespaced install. Read-only, bar
+# create on subjectaccessreviews, which asks the API server a question and
+# grants nothing. No Secret, and no list of pods or Deployments in other
+# namespaces: those are in the cluster-wide preflight file only. A namespace
+# owner without this ClusterRole still gets a run: every cluster read is
+# UNKNOWN, and the namespaced checks still run. Delete the binding after the
+# run (docs/reference/preflight.md).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -25,30 +28,27 @@ rules:
   resources: ["apiservices"]
   resourceNames: ["v1beta1.external.metrics.k8s.io"]
   verbs: ["get"]
-# KEDA's side of mutual TLS: the ClusterTriggerAuthentication, and the copy
-# of the client certificate it reads in KEDA's namespace.
+# KEDA's side of mutual TLS: this install's ClusterTriggerAuthentication.
 - apiGroups: ["keda.sh"]
   resources: ["clustertriggerauthentications"]
   resourceNames: ["scaling-manager-external-scaler-__NAMESPACE__"]
   verbs: ["get"]
-- apiGroups: [""]
-  resources: ["secrets"]
-  resourceNames: ["scaling-manager-external-scaler-__NAMESPACE__"]
-  verbs: ["get"]
-# KEDA's version and other controllers (Deployments in every namespace), the
-# model-server pods, the nodes' accelerators, and namespace labels.
+# KEDA's version (its operator, by name), and a cluster-wide controller (by
+# name, in scaling-manager-system).
 - apiGroups: ["apps"]
   resources: ["deployments"]
-  verbs: ["list"]
+  resourceNames: ["keda-operator", "scaling-manager-controller-manager"]
+  verbs: ["get"]
+# The nodes' accelerator labels, and namespace labels.
 - apiGroups: [""]
-  resources: ["pods", "nodes"]
+  resources: ["nodes"]
   verbs: ["list"]
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
-# Which PodMonitor scrapes the model servers, and which Prometheus reads it.
+# Which Prometheus reads the PodMonitor.
 - apiGroups: ["monitoring.coreos.com"]
-  resources: ["podmonitors", "prometheuses"]
+  resources: ["prometheuses"]
   verbs: ["list"]
 # The namespace readers decision 5 keeps narrow, to name what they miss.
 - apiGroups: ["rbac.authorization.k8s.io"]

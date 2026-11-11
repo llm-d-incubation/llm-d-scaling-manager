@@ -360,7 +360,8 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-alerts.yaml` | optional PrometheusRule |
 | `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap |
 | `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: binds the scraping Prometheus account to the metrics-reader ClusterRole |
-| `scaling-manager-preflight.yaml` | the preflight Job (`manager preflight check`, image by digest), its ServiceAccount, and its read-only Role and ClusterRole ([preflight.md](../reference/preflight.md)) |
+| `scaling-manager-preflight.yaml` | the preflight Job (`manager preflight check`, image by digest), its ServiceAccount, and its read-only Role and ClusterRole; reads pods and PodMonitors in the controller's namespace only, and no Secret ([preflight.md](../reference/preflight.md)) |
+| `scaling-manager-preflight-cluster.yaml` | the same for the cluster-wide install in `scaling-manager-system` (`--scope=cluster`): lists pods, Deployments and PodMonitors in every namespace. Applies as is |
 
 Every file opens with a `PREVIEW:` line until the controller reads the
 settings ConfigMap (`PREVIEW_NOTE` in `deploy/release-manifests.sh`).

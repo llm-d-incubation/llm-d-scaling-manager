@@ -27,7 +27,7 @@ const userMonitoringLabel = "openshift.io/user-monitoring"
 func checkOverlap(ctx context.Context, s *state) ([]Result, string) {
 	list, err := s.env.Kube.AppsV1().Deployments(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: controllerSelector})
 	if err != nil {
-		return []Result{unknown("deployments in every namespace (to find other scaling manager controllers)", err)}, ""
+		return overlapByName(ctx, s, err)
 	}
 	mine, named := s.managed()
 	var clash, peers []string
@@ -65,6 +65,31 @@ func checkOverlap(ctx context.Context, s *state) ([]Result, string) {
 		return []Result{{Status: Pass, Detail: "other controllers manage other namespaces (" + listText(peers, 5) + "); they share the GPUs, so bound each with a quota"}}, ""
 	}
 	return []Result{{Status: Pass, Detail: "no other scaling manager controller in the cluster"}}, ""
+}
+
+// overlapByName is the check a namespaced preflight can make, which may not
+// list Deployments: read the controller of the cluster-wide release files by
+// name in ClusterNamespace. A cluster-wide controller there is a FAIL; none
+// there leaves other namespaces unread, which is UNKNOWN.
+func overlapByName(ctx context.Context, s *state, listErr error) ([]Result, string) {
+	_, why := readVerdict(listErr, "deployments in every namespace")
+	if s.env.Namespace == ClusterNamespace {
+		return []Result{{Status: Unknown, Detail: why}}, ""
+	}
+	d, err := s.env.Kube.AppsV1().Deployments(ClusterNamespace).Get(ctx, ControllerDeployment, metav1.GetOptions{})
+	if err != nil {
+		absent, gwhy := readVerdict(err, "Deployment "+ControllerDeployment+" in "+ClusterNamespace)
+		if !absent {
+			return []Result{{Status: Unknown, Detail: why + "; " + gwhy}}, ""
+		}
+		return []Result{{Status: Unknown, Detail: "no cluster-wide controller in " + ClusterNamespace + "; controllers in other namespaces are not visible (" + why + ")"}}, ""
+	}
+	if _, scoped := watchedBy(*d); !scoped {
+		return []Result{{Status: Fail,
+			Detail: "a second controller for the same workloads: " + ClusterNamespace + "/" + ControllerDeployment + " is cluster-wide and already manages every namespace",
+			Fix:    "install in a namespace no other controller manages, or remove the other controller first"}}, ""
+	}
+	return []Result{{Status: Unknown, Detail: "the controller in " + ClusterNamespace + " is namespaced; controllers in other namespaces are not visible (" + why + ")"}}, ""
 }
 
 // watchedBy reads what a controller Deployment manages from its
@@ -114,6 +139,9 @@ func watchedBy(d appsv1.Deployment) ([]string, bool) {
 // node carries; a key that matches none bounds nothing.
 func checkAccelerators(ctx context.Context, s *state) ([]Result, string) {
 	st := s.loadSettings(ctx)
+	if st.unread != "" {
+		return []Result{{Status: Unknown, Detail: "whether it applies is not known: " + st.unread}}, ""
+	}
 	quotas, err := parseQuotas(st.value(keyQuotas))
 	if err != nil || len(quotas) == 0 {
 		return nil, "no quotas are set"
@@ -171,7 +199,10 @@ func checkOpenShiftUserMonitoring(ctx context.Context, s *state) ([]Result, stri
 	}
 	nss, named := s.managed()
 	if !named {
-		pods, _ := s.modelServers(ctx)
+		pods, why := s.modelServers(ctx)
+		if pods == nil {
+			return []Result{{Status: Unknown, Detail: "which namespaces run model servers is not known: " + why}}, ""
+		}
 		nss = sortedKeys(pods)
 	}
 	all := append([]string{s.env.Namespace}, nss...)

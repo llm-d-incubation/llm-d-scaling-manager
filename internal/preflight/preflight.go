@@ -14,6 +14,7 @@ package preflight
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,13 +58,17 @@ const (
 	// ResultKey is the data key of ResultConfigMap holding the JSON.
 	ResultKey = "result.json"
 	// PrometheusCASecret holds the CA that signs Prometheus's certificate.
+	// The Job mounts it (optional); the preflight reads no Secret.
 	PrometheusCASecret = "scaling-manager-prometheus-ca"
 	// KEDAMarkerConfigMap says KEDA's side of mutual TLS is in place.
 	KEDAMarkerConfigMap = "scaling-manager-scaler-keda-auth"
 	// ScalerNetworkPolicy admits KEDA to the scaler port.
 	ScalerNetworkPolicy = "scaling-manager-external-scaler"
-	// ScalerServingSecret is the scaler's serving certificate.
-	ScalerServingSecret = "scaling-manager-external-scaler-tls"
+	// ScalerService is the scaler's Service; its port 9090 serves the
+	// external-scaler protocol.
+	ScalerService = "scaling-manager-external-scaler"
+	// ControllerStatusConfigMap is where the controller publishes its state.
+	ControllerStatusConfigMap = "scaling-manager-controller-status"
 	// ScalerClientSecret is KEDA's client certificate and the client CA.
 	ScalerClientSecret = "scaling-manager-external-scaler-client-tls"
 	// ClusterNamespace is the namespace the cluster-wide release files
@@ -98,9 +103,14 @@ type Env struct {
 	// Namespace is the controller's namespace, where the Job runs.
 	Namespace string
 	Scope     Scope
-	// NewPrometheus builds the Prometheus client from the settings and the
-	// CA read from PrometheusCASecret (nil when there is none).
+	// NewPrometheus builds the Prometheus client from the settings and
+	// PrometheusCA.
 	NewPrometheus func(cfg PrometheusConfig) (Prometheus, error)
+	// PrometheusCA is the PEM of PrometheusCASecret's ca.crt, mounted into
+	// the Job; nil when the Secret does not exist.
+	PrometheusCA []byte
+	// DialTLS returns the chain a TLS server presents (DialTLS in scaler.go).
+	DialTLS func(ctx context.Context, addr string) ([]*x509.Certificate, error)
 	// CheckTimeout bounds each check; a check that runs out is UNKNOWN.
 	CheckTimeout time.Duration
 	Now          func() time.Time
@@ -145,6 +155,7 @@ var checks = []check{
 	{"keda.version", checkKEDAVersion},
 	{"keda.networkpolicy", checkKEDANetworkPolicy},
 	{"keda.mtls", checkKEDAMTLS},
+	{"scaler.tls", checkScalerTLS},
 	{"prometheus.reachable", checkPrometheusReachable},
 	{"metrics.model", checkModelMetrics},
 	{"podmonitor.port", checkPodMonitorPort},
@@ -184,9 +195,7 @@ func Run(ctx context.Context, env *Env) Report {
 		Summary:   map[Status]int{Pass: 0, Warn: 0, Fail: 0, Unknown: 0},
 	}
 	for _, c := range checks {
-		cctx, cancel := context.WithTimeout(ctx, env.CheckTimeout)
-		results, na := c.run(cctx, s)
-		cancel()
+		results, na := runOne(ctx, env.CheckTimeout, s, c)
 		if len(results) == 0 {
 			if na == "" {
 				// A check that says nothing has not been made.
@@ -205,6 +214,28 @@ func Run(ctx context.Context, env *Env) Report {
 		}
 	}
 	return rep
+}
+
+// runOne runs one check under its time limit. A check that does not return
+// in time, whatever it is blocked on, is UNKNOWN; the run goes on without it.
+func runOne(ctx context.Context, limit time.Duration, s *state, c check) ([]Result, string) {
+	cctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	type out struct {
+		results []Result
+		na      string
+	}
+	done := make(chan out, 1)
+	go func() {
+		r, na := c.run(cctx, s)
+		done <- out{r, na}
+	}()
+	select {
+	case o := <-done:
+		return o.results, o.na
+	case <-cctx.Done():
+		return []Result{{Status: Unknown, Detail: fmt.Sprintf("did not finish within %s", limit)}}, ""
+	}
 }
 
 // Print writes the report as the Job logs it: one line per check, its fix
@@ -237,7 +268,9 @@ func Print(w io.Writer, rep Report) {
 }
 
 // WriteResult creates or updates ResultConfigMap in the controller's
-// namespace with the report as JSON.
+// namespace with the report as JSON. It is the only object the preflight
+// writes. Its Role may create any ConfigMap (create cannot be narrowed by
+// name), so the name is fixed here and nothing else is ever created.
 func WriteResult(ctx context.Context, env *Env, rep Report) error {
 	body, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {
@@ -278,9 +311,10 @@ func WriteResult(ctx context.Context, env *Env, rep Report) error {
 	return nil
 }
 
-// readVerdict turns a failed API read into a status and a phrase: NotFound is
-// absent (ok=true, absent=true), anything else, Forbidden and timeouts
-// included, is UNKNOWN with what was refused.
+// readVerdict reads a failed API call: absent is true for NotFound only, and
+// why says what was missing or refused. Every other error, Forbidden and
+// timeouts included, is a read that could not be made: the caller reports it
+// as UNKNOWN.
 func readVerdict(err error, what string) (absent bool, why string) {
 	switch {
 	case apierrors.IsNotFound(err):

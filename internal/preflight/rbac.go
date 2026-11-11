@@ -196,6 +196,9 @@ func namespaceNames(cr *rbacv1.ClusterRole) ([]string, bool) {
 // controller may read ClusterQueues (scaling-manager-kueue.yaml).
 func checkKueue(ctx context.Context, s *state) ([]Result, string) {
 	st := s.loadSettings(ctx)
+	if st.unread != "" {
+		return []Result{{Status: Unknown, Detail: "whether it applies is not known: " + st.unread}}, ""
+	}
 	if st.value(keyKueue) != valueTrue {
 		return nil, `kueue is "false"`
 	}
@@ -213,8 +216,11 @@ func checkKueue(ctx context.Context, s *state) ([]Result, string) {
 		return []Result{{Status: Fail, Detail: "kueue is \"true\", and Kueue is not installed: no " + strings.Join(missing, ", "),
 			Fix: fmt.Sprintf(`kubectl patch configmap %s -n %s --type merge -p '{"data":{"kueue":"false"}}'   # or install Kueue`, SettingsConfigMap, s.env.Namespace)}}, ""
 	}
-	if exists, _ := s.controllerSA(ctx); exists != triYes {
+	switch exists, why := s.controllerSA(ctx); exists {
+	case triNo:
 		return []Result{{Status: Pass, Detail: "Kueue's CRDs are installed (the controller's read is checked after the install)"}}, ""
+	case triUnknown:
+		return []Result{{Status: Unknown, Detail: "Kueue's CRDs are installed; whether the controller may read ClusterQueues is not known: " + why}}, ""
 	}
 	ok, err := s.can(ctx, access{verb: "list", group: "kueue.x-k8s.io", resource: "clusterqueues"})
 	if err != nil {
@@ -232,6 +238,9 @@ func checkKueue(ctx context.Context, s *state) ([]Result, string) {
 // only grant of it; decision 3).
 func checkActivation(ctx context.Context, s *state) ([]Result, string) {
 	st := s.loadSettings(ctx)
+	if st.unread != "" {
+		return []Result{{Status: Unknown, Detail: "whether it applies is not known: " + st.unread}}, ""
+	}
 	if st.value(keyUtilizationShare) != shareActive {
 		return nil, fmt.Sprintf("utilizationShare is %q", st.value(keyUtilizationShare))
 	}
