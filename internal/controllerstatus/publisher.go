@@ -258,6 +258,10 @@ const (
 	labelNameValue = "scaling-manager"
 	labelComponent = "app.kubernetes.io/component"
 	componentValue = "controller-status"
+	// labelPartOf lets an uninstall by label find the ConfigMap, as it finds
+	// every other object the controller writes.
+	labelPartOf      = "app.kubernetes.io/part-of"
+	labelPartOfValue = "scaling-manager"
 )
 
 const (
@@ -626,7 +630,7 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      ConfigMapName,
 				Namespace: p.namespace,
-				Labels:    map[string]string{labelName: labelNameValue, labelComponent: componentValue},
+				Labels:    map[string]string{labelName: labelNameValue, labelComponent: componentValue, labelPartOf: labelPartOfValue},
 			},
 			Data: maps.Clone(want),
 		})
@@ -634,7 +638,8 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 	if err != nil {
 		return err
 	}
-	if maps.Equal(cm.Data, want) && cm.Labels[labelName] == labelNameValue && cm.Labels[labelComponent] == componentValue {
+	if maps.Equal(cm.Data, want) && cm.Labels[labelName] == labelNameValue && cm.Labels[labelComponent] == componentValue &&
+		cm.Labels[labelPartOf] == labelPartOfValue {
 		return nil
 	}
 	if cm.Labels == nil {
@@ -642,6 +647,7 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 	}
 	cm.Labels[labelName] = labelNameValue
 	cm.Labels[labelComponent] = componentValue
+	cm.Labels[labelPartOf] = labelPartOfValue
 	cm.Data = maps.Clone(want)
 	return p.writer.Update(ctx, &cm)
 }
