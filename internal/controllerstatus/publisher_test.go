@@ -360,6 +360,20 @@ func TestScalerTLSActionIsRemovedWhenNothingIsLeftToDo(t *testing.T) {
 	nilP.SetScalerTLS("x", "y")
 }
 
+func TestScalerCAIsPublishedAndRemoved(t *testing.T) {
+	p, _ := newTestPublisher(t, &writes{})
+	p.SetScalerCA("-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n", "ab")
+	if d := p.Data(); d[KeyScalerCASha256] != "ab" || !strings.HasPrefix(d[KeyScalerCACert], "-----BEGIN CERTIFICATE-----") {
+		t.Errorf("data = %v", d)
+	}
+	p.SetScalerCA("", "")
+	if _, found := p.Data()[KeyScalerCACert]; found {
+		t.Error("scalerCACert stays after it was removed")
+	}
+	var nilP *Publisher
+	nilP.SetScalerCA("x", "y")
+}
+
 // With a separate policy namespace, policyIgnored comes from the controller's
 // own ConfigMap and the version from the policy namespace's. Recording either
 // must not overwrite the other.

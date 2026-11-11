@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,8 +34,12 @@ var prepareRetry = 2 * time.Second
 
 // StatusSink receives the state of the scaler's TLS for the controller-status
 // ConfigMap: state is always set; action is what a person must run, or "".
+// SetScalerCA receives the public PEM the serving certificate verifies
+// against (certificates only, never a key) and the sha256 of the first, or
+// "" for both when there is none.
 type StatusSink interface {
 	SetScalerTLS(state, action string)
+	SetScalerCA(certPEM, sha256Hex string)
 }
 
 // markerState is what the KEDA marker ConfigMap says.
@@ -77,6 +82,9 @@ type Bootstrap struct {
 	tlsOn bool
 	// clientCA is the CA the scaler verifies clients with, when tlsOn.
 	clientCA *x509.Certificate
+	// servedTrust is what the served certificate verifies against, when
+	// tlsOn: the Trust of the outcome it came from.
+	servedTrust []byte
 	// presented holds the fingerprints of client certificates accepted in a
 	// handshake since the last check.
 	presented map[string]bool
@@ -133,6 +141,7 @@ func (b *Bootstrap) Prepare(ctx context.Context) (*x509.Certificate, error) {
 	if err == nil && o.Usable() && marker == markerPresent {
 		b.tlsOn = true
 		b.clientCA = o.CA
+		b.servedTrust = o.Trust
 		b.serving.Store(o.Serving.tlsCertificate())
 	}
 	ca := b.clientCA
@@ -207,6 +216,7 @@ func (b *Bootstrap) Check(ctx context.Context) {
 	if err == nil && b.tlsOn && o.Serving != nil && o.CA != nil && bytes.Equal(o.CA.Raw, b.clientCA.Raw) {
 		if cur := b.serving.Load(); cur == nil || !bytes.Equal(cur.Leaf.Raw, o.Serving.cert.Raw) {
 			b.serving.Store(o.Serving.tlsCertificate())
+			b.servedTrust = o.Trust
 			b.logger().Info("Scaler TLS: serving a new certificate", "notAfter", o.Serving.cert.NotAfter)
 		}
 	}
@@ -298,8 +308,44 @@ func (b *Bootstrap) publish() {
 	}
 	b.mu.Lock()
 	state, action := b.describe()
+	trust := b.servedTrust
+	if !b.tlsOn && b.last != nil && b.last.Usable() {
+		trust = b.last.Trust
+	}
 	b.mu.Unlock()
 	b.Status.SetScalerTLS(state, action)
+	caPEM, sha := publicCerts(trust)
+	b.Status.SetScalerCA(caPEM, sha)
+}
+
+// publicCerts re-encodes the CERTIFICATE blocks of b, and nothing else, so no
+// key a Secret's field might also hold is ever published; with the sha256 of
+// the first. Both "" when b holds no certificate.
+func publicCerts(b []byte) (string, string) {
+	var out []byte
+	var first *x509.Certificate
+	for {
+		var block *pem.Block
+		block, b = pem.Decode(b)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		if first == nil {
+			first = c
+		}
+		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+	}
+	if first == nil {
+		return "", ""
+	}
+	return string(out), Fingerprint(first)
 }
 
 // describe returns the state and the action, the action as numbered steps,

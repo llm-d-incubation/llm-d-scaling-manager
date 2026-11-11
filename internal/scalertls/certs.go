@@ -245,3 +245,10 @@ func checkCA(ca *x509.Certificate, now time.Time) error {
 func days(d time.Duration) string {
 	return fmt.Sprintf("%d days", int(d/(24*time.Hour)))
 }
+
+// pemOf is the PEM of cert alone: what is written as ca.crt or published,
+// never the bytes of a Secret field, which could hold more than the
+// certificate.
+func pemOf(cert *x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}

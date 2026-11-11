@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"strings"
 	"sync"
@@ -21,10 +22,51 @@ import (
 
 func init() { prepareRetry = time.Millisecond }
 
-// statusRecorder keeps the last state and action Bootstrap published.
+// statusRecorder keeps the last state, action and CA Bootstrap published.
 type statusRecorder struct {
 	mu            sync.Mutex
 	state, action string
+	caPEM, caSha  string
+}
+
+func (r *statusRecorder) SetScalerCA(certPEM, sha256Hex string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.caPEM, r.caSha = certPEM, sha256Hex
+}
+
+// publishedCA checks the published CA and returns its first certificate: it
+// parses, holds nothing but certificates, and its sha256 is the one published.
+func (r *statusRecorder) publishedCA(t *testing.T) *x509.Certificate {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.Contains(r.caPEM, "PRIVATE KEY") || strings.Contains(r.caPEM, "KEY-----") {
+		t.Fatalf("the published CA holds key material:\n%s", r.caPEM)
+	}
+	rest := []byte(r.caPEM)
+	var first *x509.Certificate
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if block.Type != "CERTIFICATE" || err != nil {
+			t.Fatalf("published a %s block (%v)", block.Type, err)
+		}
+		if first == nil {
+			first = c
+		}
+	}
+	if first == nil || strings.TrimSpace(string(rest)) != "" {
+		t.Fatalf("the published CA does not parse as certificates:\n%s", r.caPEM)
+	}
+	if r.caSha != Fingerprint(first) {
+		t.Fatalf("published sha256 %s, the certificate's is %s", r.caSha, Fingerprint(first))
+	}
+	return first
 }
 
 func (r *statusRecorder) SetScalerTLS(state, action string) {
@@ -425,6 +467,90 @@ func TestBootstrap_DoesNotServeACertificateOfAChangedCA(t *testing.T) {
 	if _, action := st.get(); !strings.Contains(action, "changed since the controller started") {
 		t.Fatalf("action %q", action)
 	}
+}
+
+// The status carries the public certificate the served chain verifies
+// against, and no key, whichever path the certificates came from; and it
+// follows what is served, not a CA changed underneath.
+func TestBootstrap_PublishesThePublicCAOnly(t *testing.T) {
+	fixture := certOf(t, installerSecret(t, CASecretName, "ca", "ca.crt", "ca.key"))
+
+	t.Run("adopted, mutual TLS", func(t *testing.T) {
+		var c counter
+		objs := installerSecrets(t)
+		// A tls.crt that also holds the key must not leak it.
+		ca := objs[0].(*corev1.Secret)
+		ca.Data[corev1.TLSCertKey] = append(append([]byte{}, ca.Data[corev1.TLSCertKey]...), ca.Data[corev1.TLSPrivateKeyKey]...)
+		cl := newClient(t, &c, interceptor.Funcs{}, append(objs, marker())...)
+		st := &statusRecorder{}
+		b := newBootstrap(cl, &clock{t: fixtureNow}, st)
+		if prepare(t, b) == nil {
+			t.Fatal("no TLS")
+		}
+		if Fingerprint(st.publishedCA(t)) != Fingerprint(fixture) {
+			t.Fatal("published another CA than the one served")
+		}
+		// The CA emptied under the running controller: the new one is not
+		// served, so the published one stays.
+		s := getSecret(t, cl, CASecretName)
+		s.Data = map[string][]byte{corev1.TLSCertKey: {}, corev1.TLSPrivateKeyKey: {}, corev1.ServiceAccountRootCAKey: {}}
+		if err := cl.Update(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		b.Check(context.Background())
+		if Fingerprint(st.publishedCA(t)) != Fingerprint(fixture) {
+			t.Fatal("published a CA the served certificate does not verify against")
+		}
+	})
+	t.Run("minted, plaintext", func(t *testing.T) {
+		var c counter
+		cl := newClient(t, &c, interceptor.Funcs{}, placeholders()...)
+		st := &statusRecorder{}
+		prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st))
+		if Fingerprint(st.publishedCA(t)) != Fingerprint(certOf(t, getSecret(t, cl, CASecretName))) {
+			t.Fatal("did not publish the minted CA")
+		}
+	})
+	t.Run("cert-manager", func(t *testing.T) {
+		var c counter
+		objs := installerSecrets(t)
+		for _, o := range objs {
+			o.SetAnnotations(map[string]string{"cert-manager.io/certificate-name": o.GetName()})
+		}
+		// A ca.crt that also holds a key must not leak it.
+		cs := objs[2].(*corev1.Secret)
+		cs.Data[corev1.ServiceAccountRootCAKey] = append(append([]byte{}, cs.Data[corev1.ServiceAccountRootCAKey]...),
+			cs.Data[corev1.TLSPrivateKeyKey]...)
+		cl := newClient(t, &c, interceptor.Funcs{}, append(objs, marker())...)
+		st := &statusRecorder{}
+		prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st))
+		if Fingerprint(st.publishedCA(t)) != Fingerprint(fixture) {
+			t.Fatal("did not publish cert-manager's CA")
+		}
+	})
+	t.Run("service CA", func(t *testing.T) {
+		var c counter
+		objs := serviceCASecrets(t, true)
+		cl := newClient(t, &c, interceptor.Funcs{}, append(objs, marker())...)
+		st := &statusRecorder{}
+		prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st))
+		bundle, err := firstCert([]byte(objs[len(objs)-1].(*corev1.ConfigMap).Data[ServiceCAKey]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if Fingerprint(st.publishedCA(t)) != Fingerprint(bundle) {
+			t.Fatal("did not publish the service CA the serving certificate verifies against")
+		}
+	})
+	t.Run("nothing usable", func(t *testing.T) {
+		var c counter
+		cl := newClient(t, &c, interceptor.Funcs{})
+		st := &statusRecorder{}
+		prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st))
+		if st.caPEM != "" || st.caSha != "" {
+			t.Fatalf("published %q %q with no usable certificate", st.caPEM, st.caSha)
+		}
+	})
 }
 
 // cert-manager's Secrets: served as they are, nothing written.

@@ -763,3 +763,25 @@ func TestEnsure_ClearPendingOnlyForTheCertificateInTheSecret(t *testing.T) {
 		t.Fatalf("pending %q after clearing", o.Pending)
 	}
 }
+
+// A CA Secret whose tls.crt also holds the key never passes the key on: the
+// ca.crt written into a leaf Secret, which KEDA's copy carries, is the
+// certificate alone.
+func TestEnsure_NoKeyMaterialIntoTheLeaves(t *testing.T) {
+	var c counter
+	ca := installerSecret(t, CASecretName, "ca", "ca.crt", "ca.key")
+	ca.Data[corev1.TLSCertKey] = append(append([]byte{}, ca.Data[corev1.TLSCertKey]...), ca.Data[corev1.TLSPrivateKeyKey]...)
+	cl := newClient(t, &c, interceptor.Funcs{}, ca, placeholder(ServingSecretName, "serving"), placeholder(ClientSecretName, "client"))
+	o := ensure(t, newEnsurer(cl, fixtureNow))
+	if !o.ServingIssued || !o.ClientIssued {
+		t.Fatalf("outcome %+v", o)
+	}
+	for _, name := range []string{ServingSecretName, ClientSecretName} {
+		if got := string(getSecret(t, cl, name).Data[corev1.ServiceAccountRootCAKey]); strings.Contains(got, "PRIVATE KEY") || got != string(pemOf(o.CA)) {
+			t.Fatalf("%s: ca.crt is not the CA certificate alone:\n%s", name, got)
+		}
+	}
+	if strings.Contains(string(o.Trust), "PRIVATE KEY") {
+		t.Fatal("the trust handed on holds key material")
+	}
+}

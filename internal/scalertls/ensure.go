@@ -316,7 +316,7 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 		// usable, write nothing.
 		return e.external(ctx, o, caSecret, servingSecret, clientSecret, caOwner, now)
 	}
-	o.CA, o.Trust, o.TrustFrom = ca.cert, ca.certPEM, TrustCA
+	o.CA, o.Trust, o.TrustFrom = ca.cert, pemOf(ca.cert), TrustCA
 
 	// The serving certificate.
 	switch ownerOf(servingSecret) {
@@ -333,13 +333,13 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 			x509.ExtKeyUsageServerAuth, ServingValidity, now); err != nil {
 			return nil, fmt.Errorf("issuing the scaler serving certificate: %w", err)
 		}
-		if err := e.write(ctx, servingSecret, leaf, ca.certPEM, nil); err != nil {
+		if err := e.write(ctx, servingSecret, leaf, pemOf(ca.cert), nil); err != nil {
 			return nil, err
 		}
 		o.Serving = leaf
 		o.ServingIssued = true
 	default:
-		if err := e.serveExternal(ctx, o, servingSecret, ca.cert, ca.certPEM, now); err != nil {
+		if err := e.serveExternal(ctx, o, servingSecret, ca.cert, pemOf(ca.cert), now); err != nil {
 			o.Problems = append(o.Problems, fmt.Sprintf(
 				"Secret %s is %s and not usable (%v); the controller does not overwrite it. Replace it with the placeholder "+
 					"and the controller issues one: kubectl delete secret %s -n %s && %s",
@@ -369,7 +369,7 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 			x509.ExtKeyUsageClientAuth, ClientValidity, now); err != nil {
 			return nil, fmt.Errorf("issuing KEDA's client certificate: %w", err)
 		}
-		if err := e.write(ctx, clientSecret, leaf, ca.certPEM, map[string]string{PendingAnnotation: pending}); err != nil {
+		if err := e.write(ctx, clientSecret, leaf, pemOf(ca.cert), map[string]string{PendingAnnotation: pending}); err != nil {
 			return nil, err
 		}
 		o.Client = leaf.cert
