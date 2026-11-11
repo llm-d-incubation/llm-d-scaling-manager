@@ -2,10 +2,15 @@
 # an install from the release files (--external-scaler-tls-bootstrap): the CA,
 # the serving certificate and KEDA's client certificate, as three Secrets in
 # the controller's namespace, under the names deploy/lib/scaler_tls.sh uses.
-# get and update are limited to those three by name. create cannot be: the
-# name of an object that does not exist yet is not known to the authorizer.
-# It reads the KEDA marker ConfigMap the release file
-# scaling-manager-keda-auth.yaml writes, by name, to choose mutual TLS.
+# get and update on those three by name, nothing else on Secrets: the
+# controller fills the empty placeholders scaling-manager-scaler-tls.yaml
+# creates, and never creates a Secret. A grant to create Secrets would let it
+# create one of type kubernetes.io/service-account-token under one of these
+# names and read the token the cluster fills in; the type of a Secret that
+# exists cannot change.
+# It reads, by name, the KEDA marker ConfigMap the release file
+# scaling-manager-keda-auth.yaml writes, to choose mutual TLS, and the
+# OpenShift service CA bundle, to verify a serving certificate that CA issued.
 # The make install provisions the certificates from the installer and does not
 # carry this Role.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -24,10 +29,8 @@ rules:
   - scaling-manager-external-scaler-client-tls
   verbs: ["get", "update"]
 - apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["create"]
-- apiGroups: [""]
   resources: ["configmaps"]
   resourceNames:
   - scaling-manager-scaler-keda-auth
+  - openshift-service-ca.crt
   verbs: ["get"]

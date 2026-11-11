@@ -113,7 +113,7 @@
 //	                       sha256 and the serving certificate's expiry, or
 //	                       "plaintext: <why>". Absent without the flag.
 //	scalerTLSAction        with that flag: what a person must run, steps
-//	                       joined by " | ", each with its command: wire KEDA
+//	                       numbered, one per line, each with its command: wire KEDA
 //	                       to certificates the controller minted or issued
 //	                       again, restart the controller once KEDA's side is
 //	                       in place, rotate an expiring CA (the controller

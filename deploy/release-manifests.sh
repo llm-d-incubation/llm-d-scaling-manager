@@ -55,6 +55,7 @@ RELEASE_FILES=(
     scaling-manager-model-namespace.yaml
     scaling-manager-activate.yaml
     scaling-manager-keda-auth.yaml
+    scaling-manager-scaler-tls.yaml
     scaling-manager-kueue.yaml
     scaling-manager-alerts.yaml
     scaling-manager-policy-example.yaml
@@ -195,9 +196,10 @@ main_manifest() {
 # scaler_tls_rbac <namespace>: the Role and RoleBinding the controller needs to
 # provision the scaler certificates itself (--external-scaler-tls-bootstrap,
 # set on the Deployment above): get and update on the three Secrets by name,
-# create on Secrets, get on the KEDA marker ConfigMap. Only the release files
-# carry it: a make install provisions the certificates from the installer and
-# passes the certificate files instead.
+# never create, and get on the KEDA marker and the OpenShift service CA
+# ConfigMaps. The Secrets are the placeholders of scaling-manager-scaler-tls.yaml.
+# Only the release files carry it: a make install provisions the certificates
+# from the installer and passes the certificate files instead.
 scaler_tls_rbac() {
     local f
     for f in scaler-tls-role scaler-tls-rolebinding; do
@@ -308,6 +310,15 @@ label "$PLACEHOLDER" < "$ROOT/config/release/settings-configmap.yaml" \
   | write scaling-manager-keda-auth.yaml \
       "Mutual TLS between KEDA and the scaler: the ClusterTriggerAuthentication and the marker the controller reads. Copy the client Secret into KEDA's namespace first." \
       "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__KEDA_NAMESPACE__/<KEDA namespace>/g\""
+
+# The placeholders are not in the main files: kubectl apply of a file holding
+# them after the controller filled them sets the data back to empty (a
+# client-side apply), or conflicts and then empties it (a server-side apply
+# with --force-conflicts), and the controller would mint a new CA into it.
+label "$PLACEHOLDER" < "$ROOT/config/release/scaler-tls-secret.yaml" \
+    | write scaling-manager-scaler-tls.yaml \
+        "The external scaler's three certificate Secrets, empty: the controller fills them and may not create Secrets. Create them once with kubectl create -f; never apply this file over a running install, and keep the CA while KEDA may use it." \
+        "Before creating: sed -i \"s/$PLACEHOLDER/<controller namespace>/g\" <file>; for the cluster-wide files the namespace is $CLUSTER_NS"
 
 {
     NS="$PLACEHOLDER" yq '

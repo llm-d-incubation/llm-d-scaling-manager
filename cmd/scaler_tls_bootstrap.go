@@ -14,7 +14,8 @@ import (
 )
 
 // scalerTLSPrepareTimeout bounds the first pass of the scaler TLS bootstrap at
-// start. Past it the scaler serves plaintext and the periodic pass carries on.
+// start. Past it, a marker or Secrets still unknown stop the controller
+// (Bootstrap.Prepare fails closed); the kubelet restarts it.
 const scalerTLSPrepareTimeout = 30 * time.Second
 
 // setupScalerTLSBootstrap provisions the external scaler's certificates
@@ -35,7 +36,11 @@ func setupScalerTLSBootstrap(ctx context.Context, mgr manager.Manager, srv *scal
 	prepareCtx, cancel := context.WithTimeout(ctx, scalerTLSPrepareTimeout)
 	defer cancel()
 	setupLog := ctrl.Log.WithName("setup")
-	if ca := boot.Prepare(prepareCtx); ca != nil {
+	ca, err := boot.Prepare(prepareCtx)
+	if err != nil {
+		return err
+	}
+	if ca != nil {
 		cfg, err := scaler.NewMutualTLSConfig(boot.GetCertificate, ca, []string{clientSAN})
 		if err != nil {
 			return err

@@ -313,8 +313,8 @@ func main() {
 			"Requires --external-scaler-client-ca.")
 	externalScalerTLSBootstrap := flag.Bool("external-scaler-tls-bootstrap", false,
 		"Provision the external scaler's mutual-TLS certificates as Secrets in the controller's namespace "+
-			"(scaling-manager-external-scaler-ca, -tls, -client-tls): adopt valid ones, issue missing or expiring "+
-			"leaves from the CA, mint a CA only when none exists, never replace one. Serve mutual TLS when KEDA's "+
+			"(scaling-manager-external-scaler-ca, -tls, -client-tls): the empty placeholders scaling-manager-scaler-tls.yaml creates (it may not create Secrets): adopt valid ones, issue empty or expiring "+
+			"leaves from the CA, mint a CA only into an empty placeholder, never replace one. Serve mutual TLS when KEDA's "+
 			"side is in place at start (ConfigMap scaling-manager-scaler-keda-auth), plaintext otherwise. "+
 			"The release files set it; make deploy-scaling-manager provisions the certificates itself and passes "+
 			"--external-scaler-cert-path instead, which this flag refuses.")

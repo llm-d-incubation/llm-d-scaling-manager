@@ -11,12 +11,15 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
 )
+
+func init() { prepareRetry = time.Millisecond }
 
 // statusRecorder keeps the last state and action Bootstrap published.
 type statusRecorder struct {
@@ -54,6 +57,15 @@ func newBootstrap(cl client.Client, clk *clock, st *statusRecorder) *Bootstrap {
 	e := newEnsurer(cl, time.Time{})
 	e.Now = clk.now
 	return &Bootstrap{Ensurer: *e, Status: st}
+}
+
+func prepare(t *testing.T, b *Bootstrap) *x509.Certificate {
+	t.Helper()
+	ca, err := b.Prepare(context.Background())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	return ca
 }
 
 // serve starts a TLS listener with the scaler's mutual-TLS configuration over
@@ -126,27 +138,32 @@ func dial(t *testing.T, cl client.Reader, addr string, now time.Time) (*x509.Cer
 	return conn.ConnectionState().PeerCertificates[0], nil
 }
 
-// Without KEDA's side the scaler stays on plaintext and says how to wire it.
+// Without KEDA's side the scaler stays on plaintext and says how to wire it,
+// in numbered steps, with KEDA's namespace left to the operator.
 func TestBootstrap_PlaintextUntilKEDAsSideIsInPlace(t *testing.T) {
 	var c counter
-	cl := newClient(t, &c, interceptor.Funcs{})
+	cl := newClient(t, &c, interceptor.Funcs{}, placeholders()...)
 	st := &statusRecorder{}
-	clk := &clock{t: fixtureNow}
-	b := newBootstrap(cl, clk, st)
-	if ca := b.Prepare(context.Background()); ca != nil {
+	b := newBootstrap(cl, &clock{t: fixtureNow}, st)
+	if ca := prepare(t, b); ca != nil {
 		t.Fatal("serves TLS with no marker")
 	}
 	state, action := st.get()
 	if !strings.HasPrefix(state, "plaintext: KEDA's side") {
 		t.Fatalf("state %q", state)
 	}
+	if !strings.HasPrefix(action, "1. wire KEDA") {
+		t.Fatalf("action is not numbered steps:\n%s", action)
+	}
 	for _, want := range []string{
+		`KEDA_NS="${KEDA_NS:?set KEDA_NS to the namespace KEDA runs in`,
 		"kubectl get secret " + ClientSecretName + " -n " + testNS,
+		`{{index .data "ca.crt"}}`,
 		`-n "$KEDA_NS" -f -`,
 		"--server-side",
 		`sed -e "s/__NAMESPACE__/` + testNS + `/g"`,
 		"kubectl rollout restart deployment/scaling-manager-controller-manager -n " + testNS,
-		"restart KEDA's operator too",
+		"the CA is new",
 	} {
 		if !strings.Contains(action, want) {
 			t.Errorf("action does not hold %q:\n%s", want, action)
@@ -158,8 +175,22 @@ func TestBootstrap_PlaintextUntilKEDAsSideIsInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.Check(context.Background())
-	if _, action := st.get(); !strings.HasPrefix(action, "KEDA's side is in place now; restart the controller") {
+	if _, action := st.get(); !strings.HasPrefix(action, "1. KEDA's side is in place now; restart the controller") {
 		t.Fatalf("action after the marker: %q", action)
+	}
+}
+
+// With a serving certificate the OpenShift service CA issued, KEDA must trust
+// the service CA bundle, and the copy command takes ca.crt from there.
+func TestBootstrap_TheServiceCAIsWhatKEDAIsToldToTrust(t *testing.T) {
+	var c counter
+	cl := newClient(t, &c, interceptor.Funcs{}, serviceCASecrets(t, true)...)
+	st := &statusRecorder{}
+	prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st))
+	_, action := st.get()
+	if !strings.Contains(action, "kubectl get configmap "+ServiceCAConfigMap+" -n "+testNS) ||
+		!strings.Contains(action, `"ca.crt":"__SERVICE_CA__"`) || strings.Contains(action, `{{index .data "ca.crt"}}`) {
+		t.Fatalf("the copy command does not take the service CA:\n%s", action)
 	}
 }
 
@@ -168,13 +199,111 @@ func TestBootstrap_AnUnlabelledMarkerIsNotKEDAsSide(t *testing.T) {
 	var c counter
 	m := marker()
 	m.Labels = nil
-	cl := newClient(t, &c, interceptor.Funcs{}, m)
+	cl := newClient(t, &c, interceptor.Funcs{}, append(placeholders(), m)...)
 	st := &statusRecorder{}
-	if ca := newBootstrap(cl, &clock{t: fixtureNow}, st).Prepare(context.Background()); ca != nil {
+	if ca := prepare(t, newBootstrap(cl, &clock{t: fixtureNow}, st)); ca != nil {
 		t.Fatal("serves TLS on an unlabelled marker")
 	}
 	if state, _ := st.get(); !strings.Contains(state, "has no "+OwnerLabel+" label") {
 		t.Fatalf("state %q", state)
+	}
+}
+
+// failingGets fails the first n reads of the objects named.
+func failingGets(n *int, names ...string) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			for _, name := range names {
+				if key.Name == name && *n > 0 {
+					*n--
+					return apierrors.NewServiceUnavailable("apiserver restarting")
+				}
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+// Prepare fails closed: a marker it cannot read, or Secrets it cannot read
+// while the marker says TLS, are retried, and still unknown stop the start
+// rather than choose plaintext. Unknown Secrets with no marker are plaintext.
+func TestBootstrap_PrepareFailsClosed(t *testing.T) {
+	short := func() context.Context {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		t.Cleanup(cancel)
+		return ctx
+	}
+	t.Run("a transient marker error is retried", func(t *testing.T) {
+		var c counter
+		n := 3
+		cl := newClient(t, &c, failingGets(&n, MarkerConfigMapName), append(installerSecrets(t), marker())...)
+		ca, err := newBootstrap(cl, &clock{t: fixtureNow}, &statusRecorder{}).Prepare(short())
+		if err != nil || ca == nil {
+			t.Fatalf("ca %v, err %v", ca != nil, err)
+		}
+	})
+	t.Run("a marker that stays unknown stops the start", func(t *testing.T) {
+		var c counter
+		n := 1 << 30
+		cl := newClient(t, &c, failingGets(&n, MarkerConfigMapName), installerSecrets(t)...)
+		ca, err := newBootstrap(cl, &clock{t: fixtureNow}, &statusRecorder{}).Prepare(short())
+		if err == nil || ca != nil || !strings.Contains(err.Error(), "cannot tell whether KEDA's side") {
+			t.Fatalf("ca %v, err %v", ca != nil, err)
+		}
+	})
+	t.Run("a transient Secret error with the marker is retried", func(t *testing.T) {
+		var c counter
+		n := 3
+		cl := newClient(t, &c, failingGets(&n, CASecretName), append(installerSecrets(t), marker())...)
+		ca, err := newBootstrap(cl, &clock{t: fixtureNow}, &statusRecorder{}).Prepare(short())
+		if err != nil || ca == nil {
+			t.Fatalf("ca %v, err %v", ca != nil, err)
+		}
+	})
+	t.Run("Secrets that stay unknown with the marker stop the start", func(t *testing.T) {
+		var c counter
+		n := 1 << 30
+		cl := newClient(t, &c, failingGets(&n, ServingSecretName), append(installerSecrets(t), marker())...)
+		ca, err := newBootstrap(cl, &clock{t: fixtureNow}, &statusRecorder{}).Prepare(short())
+		if err == nil || ca != nil || !strings.Contains(err.Error(), "KEDA's side of mutual TLS is in place") {
+			t.Fatalf("ca %v, err %v", ca != nil, err)
+		}
+	})
+	t.Run("Secrets that stay unknown without the marker are plaintext", func(t *testing.T) {
+		var c counter
+		n := 1 << 30
+		cl := newClient(t, &c, failingGets(&n, ServingSecretName), installerSecrets(t)...)
+		st := &statusRecorder{}
+		ca, err := newBootstrap(cl, &clock{t: fixtureNow}, st).Prepare(short())
+		if err != nil || ca != nil {
+			t.Fatalf("ca %v, err %v", ca != nil, err)
+		}
+		if _, action := st.get(); !strings.Contains(action, "the latest check failed") {
+			t.Fatalf("action %q", action)
+		}
+	})
+}
+
+// A failed check is reported, and the report goes once a check succeeds.
+func TestBootstrap_AFailedCheckIsReportedUntilOneSucceeds(t *testing.T) {
+	var c counter
+	n := 0
+	cl := newClient(t, &c, failingGets(&n, CASecretName), append(installerSecrets(t), marker())...)
+	st := &statusRecorder{}
+	b := newBootstrap(cl, &clock{t: fixtureNow}, st)
+	prepare(t, b)
+	if _, action := st.get(); action != "" {
+		t.Fatalf("action %q", action)
+	}
+	n = 1 << 30
+	b.Check(context.Background())
+	if state, action := st.get(); !strings.Contains(action, "the latest check failed") || !strings.HasPrefix(state, "mutual TLS:") {
+		t.Fatalf("after a failed check: state %q action %q", state, action)
+	}
+	n = 0
+	b.Check(context.Background())
+	if _, action := st.get(); action != "" {
+		t.Fatalf("after a good check: action %q", action)
 	}
 }
 
@@ -187,12 +316,11 @@ func TestBootstrap_ServesTheAdoptedCertificatesOverMutualTLS(t *testing.T) {
 	st := &statusRecorder{}
 	clk := &clock{t: fixtureNow}
 	b := newBootstrap(cl, clk, st)
-	ca := b.Prepare(context.Background())
+	ca := prepare(t, b)
 	if ca == nil || c.total() != 0 {
 		t.Fatalf("ca %v, writes %+v", ca != nil, c)
 	}
-	addr := serve(t, b, ca, clk)
-	got, err := dial(t, cl, addr, clk.now())
+	got, err := dial(t, cl, serve(t, b, ca, clk), clk.now())
 	if err != nil {
 		t.Fatalf("KEDA's certificate was refused: %v", err)
 	}
@@ -205,14 +333,14 @@ func TestBootstrap_ServesTheAdoptedCertificatesOverMutualTLS(t *testing.T) {
 	}
 }
 
-// The serving certificate is re-issued near its expiry and served from the
-// next handshake on, with no restart.
+// The serving certificate is issued again near its expiry and served from
+// the next handshake on, with no restart.
 func TestBootstrap_HotReloadsARenewedServingCertificate(t *testing.T) {
 	var c counter
 	cl := newClient(t, &c, interceptor.Funcs{}, append(installerSecrets(t), marker())...)
 	clk := &clock{t: fixtureNow}
 	b := newBootstrap(cl, clk, &statusRecorder{})
-	ca := b.Prepare(context.Background())
+	ca := prepare(t, b)
 	addr := serve(t, b, ca, clk)
 	before, err := dial(t, cl, addr, clk.now())
 	if err != nil {
@@ -236,22 +364,27 @@ func TestBootstrap_HotReloadsARenewedServingCertificate(t *testing.T) {
 	}
 }
 
-// A first start in an empty namespace with KEDA's side in place: the CA is
-// minted, and the status asks for KEDA to be wired and restarted until KEDA
-// presents the new client certificate.
-func TestBootstrap_AMintedCAAsksForKEDAUntilKEDAPresentsIt(t *testing.T) {
+// A first start into empty placeholders with KEDA's side in place: the CA is
+// minted, and every replica, not only the one that minted it, asks for KEDA
+// to be wired and restarted until KEDA presents the new client certificate.
+// Then the mark leaves the Secret.
+func TestBootstrap_AMintedCAAsksForKEDAOnEveryReplicaUntilKEDAPresentsIt(t *testing.T) {
 	var c counter
-	cl := newClient(t, &c, interceptor.Funcs{}, marker())
-	st := &statusRecorder{}
+	cl := newClient(t, &c, interceptor.Funcs{}, append(placeholders(), marker())...)
 	clk := &clock{t: fixtureNow}
+	st := &statusRecorder{}
 	b := newBootstrap(cl, clk, st)
-	ca := b.Prepare(context.Background())
-	if ca == nil || c.creates != 3 {
+	ca := prepare(t, b)
+	if ca == nil || c.updates != 3 {
 		t.Fatalf("ca %v writes %+v", ca != nil, c)
 	}
-	if _, action := st.get(); !strings.Contains(action, "a new scaler CA was minted") ||
-		!strings.Contains(action, "kubectl rollout restart deployment/keda-operator") {
-		t.Fatalf("action %q", action)
+	other := &statusRecorder{}
+	prepare(t, newBootstrap(cl, clk, other))
+	for name, rec := range map[string]*statusRecorder{"minting replica": st, "other replica": other} {
+		if _, action := rec.get(); !strings.Contains(action, "issued for a new CA") ||
+			!strings.Contains(action, "kubectl rollout restart deployment/keda-operator") {
+			t.Fatalf("%s: action %q", name, action)
+		}
 	}
 	if _, err := dial(t, cl, serve(t, b, ca, clk), clk.now()); err != nil {
 		t.Fatal(err)
@@ -259,10 +392,14 @@ func TestBootstrap_AMintedCAAsksForKEDAUntilKEDAPresentsIt(t *testing.T) {
 	if state, action := st.get(); action != "" || !strings.HasPrefix(state, "mutual TLS:") {
 		t.Fatalf("after KEDA presented its certificate: state %q action %q", state, action)
 	}
+	b.Check(context.Background())
+	if _, ok := getSecret(t, cl, ClientSecretName).Annotations[PendingAnnotation]; ok {
+		t.Fatal("the pending mark stays on the Secret after KEDA presented the certificate")
+	}
 }
 
-// The CA Secret deleted under a running controller: a new CA is minted, but
-// the scaler keeps serving the certificate of the CA it verifies clients with,
+// The CA emptied under a running controller: a new CA is minted, but the
+// scaler keeps serving the certificate of the CA it verifies clients with,
 // and says the controller must restart.
 func TestBootstrap_DoesNotServeACertificateOfAChangedCA(t *testing.T) {
 	var c counter
@@ -270,13 +407,14 @@ func TestBootstrap_DoesNotServeACertificateOfAChangedCA(t *testing.T) {
 	st := &statusRecorder{}
 	clk := &clock{t: fixtureNow}
 	b := newBootstrap(cl, clk, st)
-	ca := b.Prepare(context.Background())
-	addr := serve(t, b, ca, clk)
-	before, err := dial(t, cl, addr, clk.now())
+	ca := prepare(t, b)
+	before, err := dial(t, cl, serve(t, b, ca, clk), clk.now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cl.Delete(context.Background(), getSecret(t, cl, CASecretName)); err != nil {
+	s := getSecret(t, cl, CASecretName)
+	s.Data = map[string][]byte{corev1.TLSCertKey: {}, corev1.TLSPrivateKeyKey: {}, corev1.ServiceAccountRootCAKey: {}}
+	if err := cl.Update(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	b.Check(context.Background())
@@ -289,7 +427,7 @@ func TestBootstrap_DoesNotServeACertificateOfAChangedCA(t *testing.T) {
 	}
 }
 
-// cert-manager's Secrets: served as they are, nothing written, nothing to do.
+// cert-manager's Secrets: served as they are, nothing written.
 func TestBootstrap_ServesCertManagerSecretsWithoutWriting(t *testing.T) {
 	var c counter
 	objs := installerSecrets(t)
@@ -299,7 +437,7 @@ func TestBootstrap_ServesCertManagerSecretsWithoutWriting(t *testing.T) {
 	cl := newClient(t, &c, interceptor.Funcs{}, append(objs, marker())...)
 	clk := &clock{t: fixtureNow}
 	b := newBootstrap(cl, clk, &statusRecorder{})
-	ca := b.Prepare(context.Background())
+	ca := prepare(t, b)
 	if ca == nil {
 		t.Fatal("cert-manager's certificates are not served")
 	}

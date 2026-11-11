@@ -831,9 +831,12 @@ The serving certificate must name the host in `scalerAddress`.
 **From the release files** (a preview until the release files install on
 their own): no installer runs, so the controller provisions the three Secrets
 itself (`--external-scaler-tls-bootstrap`, which the release Deployment sets).
-It adopts the Secrets a `make` install left, issues a missing or expiring
-leaf from the CA, mints a CA only when there is none, and never replaces an
-existing CA. It leaves cert-manager's Secrets, and any Secret without the
+It may not create Secrets, so create the three, empty, once:
+`kubectl create -f scaling-manager-scaler-tls.yaml`. Never `apply` that file
+over a running install: it would empty what the controller wrote. The
+controller adopts the Secrets a `make` install left, issues an empty or
+expiring leaf from the CA, mints a CA only into an empty placeholder, and
+never replaces an existing CA. It leaves cert-manager's Secrets, and any Secret without the
 `scaling-manager.llmd.ai/scaler-tls` label, alone. KEDA's side stays a cluster
 admin's step: copy the client Secret into KEDA's namespace, apply
 `scaling-manager-keda-auth.yaml`, and restart the controller, which serves

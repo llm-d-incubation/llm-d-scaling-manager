@@ -1,7 +1,6 @@
 package scalertls
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -231,26 +230,15 @@ func checkLeaf(leaf *keyPair, ca *x509.Certificate, want []string, eku x509.ExtK
 	return nil
 }
 
-// checkCA says why ca cannot sign, or returns nil.
-func checkCA(ca *keyPair, now time.Time) error {
-	if !ca.cert.IsCA || !ca.cert.BasicConstraintsValid {
+// checkCA says why ca cannot sign or be trusted, or returns nil.
+func checkCA(ca *x509.Certificate, now time.Time) error {
+	if !ca.IsCA || !ca.BasicConstraintsValid {
 		return errors.New("is not a CA certificate")
 	}
-	if !now.Before(ca.cert.NotAfter) {
-		return fmt.Errorf("expired %s", ca.cert.NotAfter.UTC().Format(time.RFC3339))
+	if !now.Before(ca.NotAfter) {
+		return fmt.Errorf("expired %s", ca.NotAfter.UTC().Format(time.RFC3339))
 	}
 	return nil
-}
-
-// sameCert reports whether the first certificate in pemBytes is cert.
-func sameCert(pemBytes []byte, cert *x509.Certificate) bool {
-	c, err := firstCert(pemBytes)
-	return err == nil && bytes.Equal(c.Raw, cert.Raw)
-}
-
-// sortedUnique returns names sorted, without duplicates.
-func sortedUnique(names []string) []string {
-	return slices.Compact(slices.Sorted(slices.Values(names)))
 }
 
 // days formats d in whole days.
