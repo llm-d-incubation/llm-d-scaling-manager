@@ -159,8 +159,9 @@ Attached to every GitHub Release, rendered by CI from the same overlays the
 | `scaling-manager-activate.yaml` | per model namespace, applied only when utilization share goes active: Role `scaling-manager-pod-writer` (`patch` on pods) and its RoleBinding to the controller ([spelled out below](#the-activation-file)). Placeholders as above | namespace owner of the model namespace |
 | `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for mTLS. Placeholders `__NAMESPACE__`, `__KEDA_NAMESPACE__` | cluster admin |
 | `scaling-manager-kueue.yaml` | optional: the Kueue read grants (ClusterQueues, cohorts, flavors; the Role in Kueue's namespace) | cluster admin, only with a Kueue-bounded quota |
-| `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | namespace owner |
+| `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | cluster admin (`part=admin`: the stock `admin` role does not grant `monitoring.coreos.com`) |
 | `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap. Not needed: the controller runs on built-in defaults without one | — |
+| `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: the binding that lets the Prometheus scraping the controller read its `/metrics`. Placeholders `__PROMETHEUS_NAMESPACE__`, `__PROMETHEUS_SA__` | cluster admin |
 | `SHA256SUMS`, and a `.sigstore.json` bundle per file | checksums and signatures | — |
 
 Rules every rendered manifest follows. A check in `hack/check-release-manifests.sh`,
@@ -693,6 +694,30 @@ Building the render showed where the text above was wrong or incomplete.
 - **The alerts rule is named `controller-manager-alerts`**, unprefixed,
   because the alerts component is added outside the overlay's `namePrefix`,
   as the installer adds it.
+- **The base binds the controller's `/metrics` to a fixed account**
+  (`kube-prometheus-stack-prometheus` in `scaling-manager-monitoring`). The
+  installer binds only an account a trusted source names, so the Kubernetes
+  release files ship the metrics-reader ClusterRole without that binding, and
+  `scaling-manager-metrics-reader.yaml` holds it with the account as
+  placeholders. On OpenShift the binding names the install's own
+  `metrics-scraper` account and stays in the main file.
+- **A watched namespace needs more than `scaling-manager-model-namespace.yaml`.**
+  The policy-namespace reader and the Kueue reader name only the controller's
+  namespace (and `scaling-manager-policy`). Phase 2 must make
+  `watchNamespaces` extend them: preflight prints the `kubectl patch` that adds
+  each name, per decision 5. Until then the settings file's comment says so.
+- **The files are a preview until phase 2 lands.** Every file opens with a
+  `PREVIEW:` line and the draft release notes say the same, naming
+  `make deploy-scaling-manager` as the supported install
+  (`PREVIEW_NOTE` in `deploy/release-manifests.sh`; drop it, and its assertion
+  in the check, with phase 2).
+- **A published release's files are never replaced.** A re-run of the release
+  job that renders different files for a published release is refused; with
+  GitHub immutable releases on, a published release refuses uploads anyway.
+- **Pod `patch` and activation (open).** Because the namespaced manager Role
+  carries `patch` on pods and the model-namespace file copies it, applying the
+  model-namespace file already grants what `scaling-manager-activate.yaml`
+  grants, which contradicts decision 3. Waiting on a maintainer decision.
 
 ## Open questions
 

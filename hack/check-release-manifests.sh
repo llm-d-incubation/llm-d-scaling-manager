@@ -8,21 +8,24 @@
 #   a Namespace in a file               `kubectl delete -f` deletes the namespace
 #                                       and the model servers in it
 #   the settings or policy ConfigMap    every re-apply resets what an operator set
-#   a hashed ClusterRole name           `sed` cannot compute it
-#   a roleRef left on the old name      the controller has no rights, silently
+#   a hashed or missing name suffix     `sed` cannot compute it, or two installs
+#                                       share one ClusterRole
+#   a binding to a Role not in the file the controller has no rights, silently
+#   a subject outside the install       a grant to an account nobody chose
 #   a missing or wrong part label       `apply -l part=admin` skips an object, or
 #                                       hands a namespace owner a ClusterRole
+#   a wider Namespace read              more than the controller reads
 #   a placeholder left after `sed`      or a name `sed` turns invalid
 #
 # Then it runs the same assertions on broken copies of the render, one fault
-# each, and requires every one to fail: a check that passes everything is
-# worse than none.
+# each, and requires each to fail with the message of the rule it breaks: a
+# check that passes everything is worse than none.
 #
 # Offline: kubectl runs through hack/offline-kubectl. `kubectl apply
 # --dry-run=client` needs a server (it downloads the OpenAPI schema and the
-# REST mapping), so the substituted files are parsed with `kubectl label
-# --local` instead, which reads every object the way apply does and needs none.
-# A kind cluster run is in docs/developer-guide/release-process.md.
+# REST mapping), so the substituted files are read with `kubectl label
+# --local` instead, which decodes every object the way apply does and needs
+# none. A kind run is in docs/developer-guide/release-process.md.
 
 set -u
 
@@ -46,11 +49,23 @@ REPO="ghcr.io/llm-d-incubation/llm-d-scaling-manager"
 DIGEST="sha256:$(printf 'release-manifests-check' | sha256sum | cut -c1-64)"
 VERSION="v0.11.0-check.1"
 PART="scaling-manager.llmd.ai/part"
-MAIN_FILES="scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
-ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml"
+NSF="scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml"
+CLF="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
+MAIN_FILES="$NSF $CLF"
+ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml"
 
 render() {
     bash "$ROOT/deploy/release-manifests.sh" --image "$1" --version "$VERSION" --out "$2"
+}
+
+kustomize_build() {
+    if [ -n "${KUSTOMIZE:-}" ] && [ -x "${KUSTOMIZE}" ]; then
+        "$KUSTOMIZE" build "$1"
+    elif command -v kustomize >/dev/null 2>&1; then
+        kustomize build "$1"
+    else
+        kubectl kustomize "$1"
+    fi
 }
 
 # The admin part as the installer defines it, read by sourcing the installer's
@@ -60,12 +75,43 @@ ADMIN_SELECT="$(cd "$ROOT" && env -i PATH="$PATH" HOME="$WORK" bash -c '
     . deploy/lib/common.sh >/dev/null 2>&1 || exit 1
     llmsm_prereq_kind_filter select')" || ADMIN_SELECT=""
 
+# The cluster-scoped names each main file must hold, from the overlay itself:
+# the overlay's names, less what the release files move out (the Kueue reader,
+# and on Kubernetes the metrics-reader binding with its fixed subject); a
+# namespaced file adds -__NAMESPACE__ to each, a cluster file keeps them.
+expected_names() {
+    local scope="$1" platform="$2" suffix=""
+    [ "$scope" = namespace ] && suffix="-__NAMESPACE__"
+    kustomize_build "$ROOT/config/overlays/$scope-scoped/$platform" \
+        | yq ea -o=json -I=0 '[.] | map(select(.kind != null))' \
+        | jq -r --arg s "$suffix" --arg p "$platform" '.[]
+            | select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding")
+            | select(.metadata.name | startswith("scaling-manager-kueue-reader-") | not)
+            | select(($p == "kubernetes" and .kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-metrics-reader-rolebinding") | not)
+            | .kind + "/" + .metadata.name + $s' | sort
+}
+mkdir -p "$WORK/names"
+for scope in namespace cluster; do
+    for platform in kubernetes openshift; do
+        expected_names "$scope" "$platform" > "$WORK/names/$scope-$platform" 2>"$WORK/names/err"
+        [ -s "$WORK/names/$scope-$platform" ] || { echo "FAIL: could not render config/overlays/$scope-scoped/$platform: $(head -2 "$WORK/names/err")"; exit 1; }
+    done
+done
+expected_file() {
+    case "$1" in
+        scaling-manager-namespaced.yaml) echo namespace-kubernetes ;;
+        scaling-manager-namespaced-openshift.yaml) echo namespace-openshift ;;
+        scaling-manager-cluster.yaml) echo cluster-kubernetes ;;
+        scaling-manager-cluster-openshift.yaml) echo cluster-openshift ;;
+    esac
+}
+
 # check_dir <dir>: every rule, on the files in <dir>. Prints a line per
 # failure and returns how many there were. Each file is read once with yq into
 # a JSON array of its objects; the predicates are jq, whose select and any
 # behave the same on every version CI may have.
 check_dir() {
-    local d="$1" f n bad=0 sub="$WORK/sub" js="$WORK/json" keda want got
+    local d="$1" f n bad=0 sub="$WORK/sub" js="$WORK/json" keda want got ins safile split
     say() { echo "  FAIL: $*"; bad=$((bad + 1)); }
 
     for f in $ALL_FILES SHA256SUMS; do
@@ -82,10 +128,19 @@ check_dir() {
     done
     [ "$bad" = 0 ] || return "$bad"
 
-    q() { jq -r --arg v "$VERSION" --arg p "$PART" --arg img "$REPO@$DIGEST" "$2" "$js/$1.json"; }
+    q() { jq -r --arg v "$VERSION" --arg p "$PART" --arg img "$REPO@$DIGEST" --arg ins "${ins:-}" "$2" "$js/$1.json"; }
 
     for f in $ALL_FILES; do
+        # The install namespace of the file, and the main file whose
+        # ServiceAccounts its subjects may name.
+        case "$f" in
+            scaling-manager-cluster*) ins=scaling-manager-system; safile="$f" ;;
+            scaling-manager-namespaced-openshift.yaml) ins=__NAMESPACE__; safile="$f" ;;
+            *) ins=__NAMESPACE__; safile=scaling-manager-namespaced.yaml ;;
+        esac
         [ "$(q "$f" 'length')" -gt 0 ] || say "$f holds no object"
+        # The preview notice, until phase 2 lands (PREVIEW_NOTE in the renderer).
+        head -3 "$d/$f" | grep -q '^# PREVIEW: not yet installable on its own' || say "$f does not open with the PREVIEW notice"
         n="$(q "$f" '.[] | select(.metadata.labels["app.kubernetes.io/part-of"] != "scaling-manager"
                 or (.metadata.labels["app.kubernetes.io/instance"] // "") == ""
                 or .metadata.labels["app.kubernetes.io/version"] != $v
@@ -101,8 +156,8 @@ check_dir() {
         n="$(q "$f" '.[] | select(.kind | IN("ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"))
             | .metadata.name | select(test("-[0-9a-f]{8}$"))')"
         [ -z "$n" ] || say "$f: a name with a hash suffix, which sed cannot produce: $n"
-        # patch on pods can change a live Pod's image. Never cluster-wide; in a
-        # namespace only through the activation file's pod-writer Role, or the
+        # patch on pods can change a live Pod image. Never cluster-wide; in a
+        # namespace only through the activation file pod-writer Role, or the
         # namespaced manager Role, which carries it for the warm pool in the
         # namespace it manages (config/components/tenant-installable).
         n="$(q "$f" '.[] | select(.kind == "Role" or .kind == "ClusterRole")
@@ -110,64 +165,121 @@ check_dir() {
             | select(.kind == "ClusterRole" or (.metadata.name | test("^scaling-manager-(pod-writer|manager-role(-__NAMESPACE__)?)$") | not))
             | .kind + "/" + .metadata.name')"
         [ -z "$n" ] || say "$f grants patch on pods beyond the pod-writer and namespaced manager Roles: $n"
+        # The part split. In the main files exactly the installer prereqs
+        # phase; elsewhere that, plus every cluster-scoped and every
+        # monitoring.coreos.com object (the stock admin role grants neither).
+        if [ -n "$ADMIN_SELECT" ]; then
+            split="([.] | map($ADMIN_SELECT) | length > 0)"
+            case " $MAIN_FILES " in
+                *" $f "*) ;;
+                *) split="($split or (.kind | IN(\"ClusterRole\", \"ClusterRoleBinding\", \"ClusterTriggerAuthentication\", \"Namespace\")) or ((.apiVersion // \"\") | startswith(\"monitoring.coreos.com/\")))" ;;
+            esac
+            n="$(q "$f" ".[] | $split as \$want
+                | select((\$want and .metadata.labels[\$p] != \"admin\") or ((\$want | not) and .metadata.labels[\$p] != \"controller\"))
+                | .kind + \"/\" + .metadata.name + \"=\" + .metadata.labels[\$p]")"
+            [ -z "$n" ] || say "$f: $PART differs from the installer split (LLMSM_PREREQ_KINDS/NAMED): $(echo $n)"
+        fi
+        # Every binding names a role in the same file: a RoleBinding a Role in
+        # its own namespace, a ClusterRoleBinding a ClusterRole, bar the
+        # platform-owned cluster-monitoring-view. The metrics-reader file binds
+        # the ClusterRole of the namespaced file, checked below.
+        if [ "$f" != scaling-manager-metrics-reader.yaml ]; then
+            n="$(q "$f" '. as $all | .[] | select(.kind == "RoleBinding" or .kind == "ClusterRoleBinding")
+                | . as $b
+                | select(($b.kind == "ClusterRoleBinding" and $b.roleRef.name == "cluster-monitoring-view") | not)
+                | select([$all[] | select(.kind == $b.roleRef.kind and .metadata.name == $b.roleRef.name
+                          and ($b.roleRef.kind == "ClusterRole" or .metadata.namespace == $b.metadata.namespace))] | length == 0)
+                | $b.kind + "/" + $b.metadata.name + " -> " + $b.roleRef.kind + "/" + $b.roleRef.name')"
+            [ -z "$n" ] || say "$f: a binding names no Role or ClusterRole in the file: $n"
+            # Every ServiceAccount subject is one of this install, in its namespace.
+            n="$(jq -r --arg ins "$ins" --slurpfile sa "$js/$safile.json" '
+                [$sa[0][] | select(.kind == "ServiceAccount") | .metadata.name] as $names
+                | .[] | select(.kind == "RoleBinding" or .kind == "ClusterRoleBinding") | . as $b
+                | .subjects[]? | select(.kind == "ServiceAccount")
+                | select(.namespace != $ins or (.name as $n | $names | index($n) | not))
+                | $b.metadata.name + ": " + (.namespace // "-") + "/" + .name' "$js/$f.json")"
+            [ -z "$n" ] || say "$f: a ServiceAccount subject that is not this install own, in $ins: $n"
+        fi
     done
 
     for f in $MAIN_FILES; do
         n="$(q "$f" '.[] | select(.kind == "ConfigMap" and (.metadata.name | IN("scaling-manager-settings",
                 "scaling-manager-scaling-policy-config", "scaling-manager-manager-config"))) | .metadata.name')"
         [ -z "$n" ] || say "$f carries a ConfigMap the operator edits: $n"
-        # Every ClusterRoleBinding names a ClusterRole in the file, or the
-        # platform's own cluster-monitoring-view.
-        n="$(q "$f" '[.[] | select(.kind == "ClusterRole") | .metadata.name] as $roles
-            | .[] | select(.kind == "ClusterRoleBinding" and .roleRef.name != "cluster-monitoring-view")
-            | select(.roleRef.name as $r | $roles | index($r) | not) | .metadata.name + " -> " + .roleRef.name')"
-        [ -z "$n" ] || say "$f: a ClusterRoleBinding whose ClusterRole is not in the file: $n"
-        # The part split is the installer prereqs phase, exactly.
-        if [ -n "$ADMIN_SELECT" ]; then
-            n="$(q "$f" ".[] | ([.] | map($ADMIN_SELECT) | length > 0) as \$want
-                | select((\$want and .metadata.labels[\$p] != \"admin\") or ((\$want | not) and .metadata.labels[\$p] != \"controller\"))
-                | .kind + \"/\" + .metadata.name + \"=\" + .metadata.labels[\$p]")"
-            [ -z "$n" ] || say "$f: $PART differs from the installer split (LLMSM_PREREQ_KINDS/NAMED): $(echo $n)"
-        fi
         n="$(q "$f" '.[] | select(.kind == "Deployment" and .metadata.labels[$p] != "controller") | .metadata.name')"
         [ -z "$n" ] || say "$f: the Deployment is not in the controller part"
-        # KEDA's namespace in the scaler NetworkPolicy (decision 6).
+        # The ConfigMap is not shipped, so its volume must not block the Pod.
+        n="$(q "$f" '[.[] | select(.kind == "Deployment") | .spec.template.spec.volumes[]
+            | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional] | tojson')"
+        [ "$n" = '[true]' ] || say "$f: the scaling-manager-manager-config volume is not optional: $n"
         keda=keda
         case "$f" in *openshift*) keda=openshift-keda ;; esac
         n="$(q "$f" '[.[] | select(.kind == "NetworkPolicy") | .spec.ingress[] | .from[]? | .namespaceSelector.matchLabels["kubernetes.io/metadata.name"]] | join(",")')"
         [ "$n" = "$keda" ] || say "$f: the scaler NetworkPolicy admits '$n', not $keda"
+        # Cluster-scoped names: the overlay ones, suffixed in a namespaced file
+        # and fixed in a cluster file.
+        q "$f" '.[] | select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding") | .kind + "/" + .metadata.name' | sort > "$WORK/got-names"
+        if ! cmp -s "$WORK/got-names" "$WORK/names/$(expected_file "$f")"; then
+            say "$f: cluster-scoped names differ from the overlay ones (+ or - lines): $(diff "$WORK/names/$(expected_file "$f")" "$WORK/got-names" | grep '^[<>]' | tr '\n' ' ')"
+        fi
     done
 
-    # Namespaced files: the placeholder wherever a namespace goes, the
-    # per-install ClusterRole names carrying it, Namespace reads narrowed.
-    for f in scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml; do
+    for f in $NSF; do
         n="$(q "$f" '.[] | select(.metadata.namespace != null and .metadata.namespace != "__NAMESPACE__") | .kind + "/" + .metadata.name')"
         [ -z "$n" ] || say "$f: objects outside __NAMESPACE__: $(echo $n)"
-        n="$(q "$f" '.[] | select((.kind == "ClusterRole" or .kind == "ClusterRoleBinding") and (.metadata.name | endswith("-__NAMESPACE__") | not)) | .metadata.name')"
-        [ -z "$n" ] || say "$f: cluster-scoped names without the namespace: $(echo $n)"
         n="$(q "$f" '.[] | select(.kind == "ClusterRole") | select(any(.rules[]; ((.resources // []) | index("namespaces")) and ((.resourceNames // []) | length) == 0)) | .metadata.name')"
         [ -z "$n" ] || say "$f: a Namespace read with no resourceNames (decision 5 keeps it narrow): $n"
+        n="$(q "$f" '[.[] | select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role-__NAMESPACE__") | .rules[] | select(.resources | index("namespaces")) | .resourceNames] | tojson')"
+        [ "$n" = '[["__NAMESPACE__","scaling-manager-policy"]]' ] || say "$f: the policy-namespace reader reads $n, not exactly __NAMESPACE__ and scaling-manager-policy"
     done
-    for f in scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml; do
+    n="$(q scaling-manager-namespaced-openshift.yaml '[.[] | select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig.serverName] | join(",")')"
+    [ "$n" = "scaling-manager-controller-manager-metrics-service.__NAMESPACE__.svc" ] || say "scaling-manager-namespaced-openshift.yaml: ServiceMonitor serverName is '$n'"
+    n="$(q scaling-manager-cluster-openshift.yaml '[.[] | select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig.serverName] | join(",")')"
+    [ "$n" = "scaling-manager-controller-manager-metrics-service.scaling-manager-system.svc" ] || say "scaling-manager-cluster-openshift.yaml: ServiceMonitor serverName is '$n'"
+    for f in $CLF; do
         grep -q '__[A-Z_]*NAMESPACE__' "$d/$f" && say "$f holds a placeholder; it applies as is"
         n="$(q "$f" '.[] | select(.metadata.namespace != null and .metadata.namespace != "scaling-manager-system") | .kind + "/" + .metadata.name')"
         [ -z "$n" ] || say "$f: objects outside scaling-manager-system: $(echo $n)"
     done
 
-    # The settings: the keys and defaults the proposal documents, no more.
+    # The Kueue file: its Namespace read names the controller namespace only.
+    n="$(q scaling-manager-kueue.yaml '[.[] | select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-kueue-reader-role-__NAMESPACE__") | .rules[] | select(.resources | index("namespaces")) | .resourceNames] | tojson')"
+    [ "$n" = '[["__NAMESPACE__"]]' ] || say "scaling-manager-kueue.yaml: the Kueue Namespace read names $n, not exactly __NAMESPACE__"
+
+    # The KEDA file: the marker names the ClusterTriggerAuthentication, which
+    # reads the Secret of its own name in KEDA namespace.
+    n="$(q scaling-manager-keda-auth.yaml '([.[] | select(.kind == "ClusterTriggerAuthentication")] | first) as $c
+        | ([.[] | select(.kind == "ConfigMap" and .metadata.name == "scaling-manager-scaler-keda-auth")] | first) as $m
+        | [$c.metadata.name, ([$c.spec.secretTargetRef[].name] | unique | join(",")), $m.data.clusterTriggerAuthentication, $m.data.secretNamespace] | join(" ")')"
+    [ "$n" = "scaling-manager-external-scaler-__NAMESPACE__ scaling-manager-external-scaler-__NAMESPACE__ scaling-manager-external-scaler-__NAMESPACE__ __KEDA_NAMESPACE__" ] \
+        || say "scaling-manager-keda-auth.yaml: ClusterTriggerAuthentication, its Secret and the marker disagree (name secret marker secretNamespace): $n"
+
+    # Per-model-namespace files: everything namespaced lands in the model namespace.
+    for f in scaling-manager-model-namespace.yaml scaling-manager-activate.yaml; do
+        n="$(q "$f" '.[] | select(.metadata.namespace != "__MODEL_NAMESPACE__") | .kind + "/" + .metadata.name')"
+        [ -z "$n" ] || say "$f: objects outside __MODEL_NAMESPACE__: $(echo $n)"
+    done
+    n="$(q scaling-manager-activate.yaml '[.[] | select(.kind == "Role") | .rules] | tojson')"
+    [ "$n" = '[[{"apiGroups":[""],"resources":["pods"],"verbs":["patch"]}]]' ] || say "the activation Role grants $n, not patch on pods"
+
+    # The metrics-reader file binds the namespaced ClusterRole to a named
+    # account, and to nothing else.
+    n="$(q scaling-manager-metrics-reader.yaml '[.[] | .kind + " " + .roleRef.name + " " + ([.subjects[] | .namespace + "/" + .name] | join(","))] | join(";")')"
+    [ "$n" = "ClusterRoleBinding scaling-manager-metrics-reader-__NAMESPACE__ __PROMETHEUS_NAMESPACE__/__PROMETHEUS_SA__" ] \
+        || say "scaling-manager-metrics-reader.yaml binds '$n'"
+    grep -qx 'ClusterRole/scaling-manager-metrics-reader-__NAMESPACE__' "$WORK/names/namespace-kubernetes" \
+        || say "scaling-manager-metrics-reader.yaml binds a ClusterRole the namespaced file does not hold"
+
     n="$(q scaling-manager-settings.yaml '.[] | select(.kind == "ConfigMap") | .metadata.name + " " + (.data | tojson)')"
     [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
         || say "scaling-manager-settings.yaml: name, keys or defaults differ from the proposal: $n"
-
-    # The activation file grants patch on pods and nothing else.
-    n="$(q scaling-manager-activate.yaml '[.[] | select(.kind == "Role") | .rules] | tojson')"
-    [ "$n" = '[[{"apiGroups":[""],"resources":["pods"],"verbs":["patch"]}]]' ] || say "the activation Role grants $n, not patch on pods"
 
     # Substitute every placeholder as the guide will, then read what is left.
     rm -rf "$sub"; mkdir -p "$sub"
     for f in $ALL_FILES; do
         sed -e 's/__NAMESPACE__/team-a/g' -e 's/__MODEL_NAMESPACE__/models-b/g' \
-            -e 's/__KEDA_NAMESPACE__/keda/g' -e 's/__KUEUE_NAMESPACE__/kueue-system/g' "$d/$f" > "$sub/$f"
+            -e 's/__KEDA_NAMESPACE__/keda/g' -e 's/__KUEUE_NAMESPACE__/kueue-system/g' \
+            -e 's/__PROMETHEUS_NAMESPACE__/monitoring/g' -e 's/__PROMETHEUS_SA__/prometheus-k8s/g' "$d/$f" > "$sub/$f"
         grep -q '__[A-Z_]*__' "$sub/$f" && say "$f: a placeholder sed does not fill: $(grep -o '__[A-Z_]*__' "$sub/$f" | sort -u | tr '\n' ' ')"
         yq ea -o=json -I=0 '[.] | map(select(.kind != null))' "$sub/$f" > "$js/sub-$f.json" 2>/dev/null \
             || { say "$f after sed does not parse"; continue; }
@@ -197,63 +309,108 @@ else
     fail "the rendered files break the rules above"
 fi
 
-# The renderer refuses what would break a rule at the source.
-for bad_image in "$REPO:v0.11.0" "$REPO:main@$DIGEST" "$REPO@sha256:abc"; do
+# The renderer refuses what would break a rule at the source, and takes a
+# registry with a port.
+for bad_image in "$REPO:v0.11.0" "$REPO:main@$DIGEST" "$REPO@sha256:abc" "localhost:5000/scaling-manager:dev@$DIGEST" "@$DIGEST"; do
     if render "$bad_image" "$WORK/refused" >/dev/null 2>&1; then
         fail "deploy/release-manifests.sh accepted --image $bad_image"
     else
         pass
     fi
 done
+if render "localhost:5000/scaling-manager@$DIGEST" "$WORK/port" >/dev/null 2>&1 \
+    && grep -q "image: localhost:5000/scaling-manager@$DIGEST" "$WORK/port/scaling-manager-namespaced.yaml"; then
+    pass
+else
+    fail "deploy/release-manifests.sh refused or mis-pinned an image from a registry with a port (localhost:5000/scaling-manager@$DIGEST)"
+fi
 if bash "$ROOT/deploy/release-manifests.sh" --image "$REPO@$DIGEST" --version 0.11 --out "$WORK/refused" >/dev/null 2>&1; then
     fail "deploy/release-manifests.sh accepted --version 0.11"
 else
     pass
 fi
 
-# Negative controls: one fault per copy, each of which must be caught.
-mutate() {
-    local name="$1" file="$2" expr="$3" d="$WORK/m-$1"
-    rm -rf "$d"; cp -r "$GOOD" "$d"
-    yq -i "$expr" "$d/$file"
+# Negative controls: one fault per copy. Each must fail with the message of
+# the rule it breaks, not merely fail.
+caught() {
+    local name="$1" expect="$2" d="$3"
     (cd "$d" && sha256sum $ALL_FILES > SHA256SUMS)
     if check_dir "$d" > "$WORK/m-$name.log" 2>&1; then
         fail "negative control '$name' was not caught"
-    else
+    elif grep -q -- "$expect" "$WORK/m-$name.log"; then
         pass
-        echo "  ok: caught '$name': $(grep -m1 FAIL "$WORK/m-$name.log" | sed 's/^ *FAIL: //')"
+        echo "  ok: caught '$name': $(grep -m1 -- "$expect" "$WORK/m-$name.log" | sed 's/^ *FAIL: //' | cut -c1-200)"
+    else
+        fail "negative control '$name' failed, but not for '$expect': $(grep -m1 FAIL "$WORK/m-$name.log")"
     fi
 }
-mutate image-by-tag scaling-manager-namespaced.yaml \
+mutate() {
+    local name="$1" expect="$2" file="$3" expr="$4" d="$WORK/m-$1"
+    rm -rf "$d"; cp -r "$GOOD" "$d"
+    yq -i "$expr" "$d/$file"
+    caught "$name" "$expect" "$d"
+}
+mutate image-by-tag "not pinned" scaling-manager-namespaced.yaml \
     '(select(.kind == "Deployment") | .spec.template.spec.containers[0].image) = "ghcr.io/llm-d-incubation/llm-d-scaling-manager:main"'
-mutate namespace-object scaling-manager-cluster.yaml \
+mutate namespace-object "carries a Namespace" scaling-manager-cluster.yaml \
     '(select(.kind == "ServiceAccount") | .kind) = "Namespace"'
-mutate policy-configmap scaling-manager-namespaced.yaml \
+mutate policy-configmap "ConfigMap the operator edits" scaling-manager-namespaced.yaml \
     '(select(.kind == "Secret") | .kind) = "ConfigMap" | (select(.kind == "ConfigMap") | .metadata.name) = "scaling-manager-scaling-policy-config"'
-mutate hash-name scaling-manager-namespaced.yaml \
+mutate hash-name "hash suffix" scaling-manager-namespaced.yaml \
     '(select(.kind == "ClusterRole") | .metadata.name) |= sub("-__NAMESPACE__$", "-1a2b3c4d")'
-mutate stale-roleref scaling-manager-namespaced-openshift.yaml \
+mutate stale-roleref "names no Role or ClusterRole" scaling-manager-namespaced-openshift.yaml \
     '(select(.kind == "ClusterRoleBinding" and .roleRef.name != "cluster-monitoring-view") | .roleRef.name) |= sub("-__NAMESPACE__$", "")'
-mutate wrong-part scaling-manager-namespaced.yaml \
+mutate wrong-part "differs from the installer split" scaling-manager-namespaced.yaml \
     '(select(.kind == "ClusterRole") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
-mutate missing-label scaling-manager-kueue.yaml \
+mutate missing-label "missing part-of" scaling-manager-kueue.yaml \
     'del(.metadata.labels["app.kubernetes.io/instance"])'
-mutate wrong-keda scaling-manager-namespaced.yaml \
+mutate wrong-keda "admits" scaling-manager-namespaced.yaml \
     '(select(.kind == "NetworkPolicy") | .spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]) = "keda-system"'
-mutate fixed-namespace scaling-manager-namespaced.yaml \
+mutate fixed-namespace "outside __NAMESPACE__" scaling-manager-namespaced.yaml \
     '(select(.kind == "Service") | .metadata.namespace) = "scaling-manager-system"'
-mutate active-by-default scaling-manager-settings.yaml \
+mutate active-by-default "defaults differ" scaling-manager-settings.yaml \
     '(select(.kind == "ConfigMap") | .data.passive) = "false"'
-mutate cluster-pod-write scaling-manager-namespaced.yaml \
+mutate cluster-pod-write "patch on pods" scaling-manager-namespaced.yaml \
     '(select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-node-reader-role-__NAMESPACE__") | .rules) += [{"apiGroups": [""], "resources": ["pods"], "verbs": ["patch"]}]'
-mutate kueue-pod-write scaling-manager-kueue.yaml \
+mutate kueue-pod-write "patch on pods" scaling-manager-kueue.yaml \
     '(select(.kind == "Role") | .rules) += [{"apiGroups": [""], "resources": ["pods"], "verbs": ["*"]}]'
-mutate unfilled-placeholder scaling-manager-keda-auth.yaml \
+mutate unfilled-placeholder "placeholder sed does not fill" scaling-manager-keda-auth.yaml \
     '(select(.kind == "ConfigMap") | .data.secretNamespace) = "__KEDA_NS__"'
-mutate undecodable-object scaling-manager-policy-example.yaml \
+mutate undecodable-object "kubectl read" scaling-manager-policy-example.yaml \
     '(select(.kind == "ConfigMap") | .metadata.annotations.replicas) = 3'
-mutate invalid-name scaling-manager-alerts.yaml \
+mutate invalid-name "not a valid name" scaling-manager-alerts.yaml \
     '(select(.kind == "PrometheusRule") | .metadata.name) = "Alerts_X"'
+mutate cta-controller "differs from the installer split" scaling-manager-keda-auth.yaml \
+    '(select(.kind == "ClusterTriggerAuthentication") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
+mutate monitoring-controller "differs from the installer split" scaling-manager-alerts.yaml \
+    '(select(.kind == "PrometheusRule") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
+mutate podmonitor-controller "differs from the installer split" scaling-manager-model-namespace.yaml \
+    '(select(.kind == "PodMonitor") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
+mutate volume-not-optional "is not optional" scaling-manager-namespaced.yaml \
+    '(select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "scaling-manager-config") | .configMap.optional) = false'
+mutate servername-unfixed "serverName" scaling-manager-namespaced-openshift.yaml \
+    '(select(.kind == "ServiceMonitor") | .spec.endpoints[0].tlsConfig.serverName) = "scaling-manager-controller-manager-metrics-service.PLACEHOLDER-NAMESPACE.svc"'
+mutate kueue-unnarrowed "Kueue Namespace read" scaling-manager-kueue.yaml \
+    '(select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-kueue-reader-role-__NAMESPACE__") | .rules[1].resourceNames) = []'
+mutate policy-reader-wider "policy-namespace reader reads" scaling-manager-namespaced.yaml \
+    '(select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role-__NAMESPACE__") | .rules[0].resourceNames) += ["kube-system"]'
+mutate model-role-wrong-ns "outside __MODEL_NAMESPACE__" scaling-manager-model-namespace.yaml \
+    '(select(.kind == "Role") | .metadata.namespace) = "__NAMESPACE__"'
+mutate model-roleref-stale "names no Role or ClusterRole" scaling-manager-model-namespace.yaml \
+    '(select(.kind == "RoleBinding") | .roleRef.name) = "scaling-manager-manager-role"'
+mutate activate-subject-wrong "ServiceAccount subject" scaling-manager-activate.yaml \
+    '(select(.kind == "RoleBinding") | .subjects[0].namespace) = "__MODEL_NAMESPACE__"'
+mutate cluster-suffixed "cluster-scoped names differ" scaling-manager-cluster.yaml \
+    '(select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding") | .metadata.name) |= . + "-scaling-manager-system" | (select(.kind == "ClusterRoleBinding") | .roleRef.name) |= . + "-scaling-manager-system"'
+mutate cta-secret-mismatch "disagree" scaling-manager-keda-auth.yaml \
+    '(select(.kind == "ClusterTriggerAuthentication") | .spec.secretTargetRef[0].name) = "scaling-manager-external-scaler"'
+mutate external-subject "ServiceAccount subject" scaling-manager-namespaced.yaml \
+    '(select(.kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-node-reader-rolebinding-__NAMESPACE__") | .subjects[0].namespace) = "scaling-manager-monitoring"'
+mutate fixed-metrics-subject "binds" scaling-manager-metrics-reader.yaml \
+    '(select(.kind == "ClusterRoleBinding") | .subjects[0]) = {"kind": "ServiceAccount", "name": "kube-prometheus-stack-prometheus", "namespace": "scaling-manager-monitoring"}'
+d="$WORK/m-preview-missing"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '/^# PREVIEW: /d' "$d/scaling-manager-activate.yaml"
+caught preview-missing "PREVIEW notice" "$d"
 
 # --- the release workflow: what renders, signs and uploads these files -------
 WF="$ROOT/.github/workflows/ci-release.yaml"
@@ -303,6 +460,51 @@ else
 fi
 rm -rf "$WORK/wf/run/dist"/*.yaml "$WORK/wf/run/dist"/*.sigstore.json
 if sign_run; then fail "the sign step passed with no manifest rendered"; else pass; fi
+
+# The attach step, executed with a stub gh: a missing release becomes a draft
+# with the preview note and gets the files; a draft gets them; a published
+# release with the same SHA256SUMS gets nothing; one with different files, or
+# a release that cannot be read, fails the job.
+cat > "$WORK/wf/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+# STUB_STATE: absent, draft, published-same, published-other, forbidden.
+echo "$*" >> "$STUB_LOG"
+case "$1 $2" in
+    "release view")
+        case "$*" in *isDraft*) ;; *) exit 0 ;; esac
+        case "$STUB_STATE" in
+            absent) echo "release not found" >&2; exit 1 ;;
+            forbidden) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
+            draft) echo true ;;
+            *) echo false ;;
+        esac ;;
+    "release download")
+        while [ $# -gt 0 ]; do case "$1" in --dir) dir="$2"; shift 2 ;; *) shift ;; esac; done
+        if [ "$STUB_STATE" = published-same ]; then cp "$STUB_SUMS" "$dir/SHA256SUMS"; else echo "other  x.yaml" > "$dir/SHA256SUMS"; fi ;;
+esac
+exit 0
+STUB
+chmod +x "$WORK/wf/bin/gh"
+yq -r '.jobs."release-files".steps[] | select(.name == "Attach the files to the GitHub Release") | .run' "$WF" > "$WORK/wf/attach.sh"
+rm -rf "$WORK/wf/run"; mkdir -p "$WORK/wf/run"; cp -r "$GOOD" "$WORK/wf/run/dist"
+attach() {
+    : > "$WORK/wf/gh.log"
+    (cd "$WORK/wf/run" && STUB_STATE="$1" STUB_LOG="$WORK/wf/gh.log" STUB_SUMS="$GOOD/SHA256SUMS" VERSION=v0.11.0 PRERELEASE=false \
+        PATH="$WORK/wf/bin:$PATH" bash -e "$WORK/wf/attach.sh") > "$WORK/wf/attach.out" 2>&1
+}
+for c in "absent ok create" "draft ok upload" "published-same ok none" "published-other refused none" "forbidden refused none"; do
+    read -r state want acts <<< "$c"
+    rc=0; attach "$state" || rc=$?
+    uploads="$(grep -c '^release upload' "$WORK/wf/gh.log")"
+    creates="$(grep -c '^release create .*--draft.*PREVIEW' "$WORK/wf/gh.log")"
+    got="ok"; [ "$rc" -eq 0 ] || got="refused"
+    case "$acts" in
+        create) [ "$creates" = 1 ] && [ "$uploads" = 1 ] || got="$got(create=$creates,upload=$uploads)" ;;
+        upload) [ "$creates" = 0 ] && [ "$uploads" = 1 ] || got="$got(create=$creates,upload=$uploads)" ;;
+        none) [ "$uploads" = 0 ] || got="$got(upload=$uploads)" ;;
+    esac
+    if [ "$got" = "$want" ]; then pass; else fail "the attach step with the release $state: $got, want $want ($(tail -1 "$WORK/wf/attach.out"))"; fi
+done
 
 echo ""
 echo "release manifests: $PASS passed, $FAIL failed"

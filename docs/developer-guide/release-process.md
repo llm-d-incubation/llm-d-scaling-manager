@@ -113,10 +113,15 @@ the pin check.
 
 The run created a **draft** release for the tag, already marked as a
 pre-release for a prerelease tag, with the release files attached. If a
-release for the tag existed before the run, it attached the files to that one
-instead. In **Releases**, open it, check that the files are there (each
-`.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each), paste the release
-notes, and publish.
+draft release for the tag existed before the run, it attached the files to
+that one instead. A release that is already **published** is never changed: a
+run whose files differ from the attached ones fails, and one whose files are
+identical uploads nothing. In **Releases**, open the draft, check that the
+files are there (each `.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each),
+paste the release notes, and publish. Keep the draft's first line: until the
+controller reads `scaling-manager-settings`, the files are a **preview** and
+`make deploy-scaling-manager` is the supported install (every file says so in
+its header too).
 
 ### 5. Point the docs at the release
 
@@ -267,7 +272,8 @@ docker buildx imagetools inspect "$IMAGE:vX.Y.Z" --format '{{ json .Provenance }
 ```
 
 The release files are signed by the same identity. Download a file, its
-bundle and `SHA256SUMS`, then:
+bundle and `SHA256SUMS`, then verify with cosign 2.4 or later (earlier
+versions cannot read these bundles):
 
 ```bash
 V=vX.Y.Z
@@ -277,6 +283,10 @@ cosign verify-blob scaling-manager-namespaced.yaml \
   --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
 sha256sum -c SHA256SUMS --ignore-missing
 ```
+
+To accept any release tag of this workflow rather than one, use
+`--certificate-identity-regexp '^https://github\.com/llm-d-incubation/llm-d-scaling-manager/\.github/workflows/ci-release\.yaml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$'`
+in place of `--certificate-identity`.
 
 Deploy by digest (`IMG=$IMAGE@sha256:...`) when you need the exact bytes that
 were verified; a tag can be moved after the fact, a digest cannot.
@@ -326,7 +336,9 @@ re-run from the **Actions** tab.
    `make release-manifests` with the pushed digest, signs each file and
    `SHA256SUMS` with keyless `cosign sign-blob --bundle`, and uploads them all
    with `gh release upload --clobber`, creating a draft release when the tag has
-   none. It is the only job with `contents: write`, and it builds no image.
+   none, and refusing to change a published one. It is the only job with
+   `contents: write`, and it builds no image. Its yq is pinned by sha256 and
+   its Go (for `make kustomize`) comes from `go.mod`.
    `hack/check-release-manifests.sh` checks the job's shape and runs its sign
    step against a stub cosign.
 
@@ -347,6 +359,10 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-kueue.yaml` | optional Kueue reads |
 | `scaling-manager-alerts.yaml` | optional PrometheusRule |
 | `scaling-manager-policy-example.yaml` | an example scaling-policy ConfigMap |
+| `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: binds the scraping Prometheus account to the metrics-reader ClusterRole |
+
+Every file opens with a `PREVIEW:` line until the controller reads the
+settings ConfigMap (`PREVIEW_NOTE` in `deploy/release-manifests.sh`).
 
 The preflight Job file is not rendered yet: it comes with the `manager
 preflight` command.
@@ -367,12 +383,18 @@ make release-manifests IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256
 
 To try them on kind, substitute the placeholders and apply each part by its
 label, the way a cluster admin and a namespace owner would. KEDA and
-prometheus-operator CRDs must exist for the KEDA and monitoring objects:
+prometheus-operator CRDs must exist for the KEDA and monitoring objects.
+Besides `__NAMESPACE__`, the KEDA file needs `__KEDA_NAMESPACE__`, the Kueue
+file `__KUEUE_NAMESPACE__`, the per-model-namespace files
+`__MODEL_NAMESPACE__`, and the metrics-reader file `__PROMETHEUS_NAMESPACE__`
+and `__PROMETHEUS_SA__`:
 
 ```bash
 kubectl create namespace team-a
 for f in dist/scaling-manager-*.yaml; do
-  sed -e 's/__NAMESPACE__/team-a/g' -e 's/__MODEL_NAMESPACE__/team-a/g' "$f" > "/tmp/$(basename "$f")"
+  sed -e 's/__NAMESPACE__/team-a/g' -e 's/__MODEL_NAMESPACE__/team-a/g' \
+      -e 's/__KEDA_NAMESPACE__/keda/g' -e 's/__KUEUE_NAMESPACE__/kueue-system/g' \
+      "$f" > "/tmp/$(basename "$f")"
 done
 kubectl apply -f /tmp/scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
 kubectl apply -f /tmp/scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller

@@ -55,7 +55,14 @@ RELEASE_FILES=(
     scaling-manager-kueue.yaml
     scaling-manager-alerts.yaml
     scaling-manager-policy-example.yaml
+    scaling-manager-metrics-reader.yaml
 )
+
+# Until the controller reads scaling-manager-settings (phase 2 of the
+# proposal), these files cannot run a controller on their own: every file says
+# so in its first lines, and the release notes repeat it. Remove this, and the
+# check's assertion on it, when phase 2 lands.
+PREVIEW_NOTE="PREVIEW: not yet installable on its own. Install with make deploy-scaling-manager from a checkout of this tag (docs/guides/install-in-namespace)."
 
 die() { echo "release-manifests: $*" >&2; exit 1; }
 
@@ -82,8 +89,13 @@ IMAGE_DIGEST="${IMAGE#*@}"
 [ "$IMAGE_REPO" != "$IMAGE" ] || die "--image $IMAGE has no @sha256:<digest>; the release files pin the image by digest"
 printf '%s' "$IMAGE_DIGEST" | grep -qxE 'sha256:[0-9a-f]{64}' \
     || die "--image $IMAGE: '$IMAGE_DIGEST' is not sha256:<64 hex digits>"
+# A tag sits after the last /; a colon before it is a registry port
+# (localhost:5000/repo@sha256:...), which is fine.
+case "${IMAGE_REPO##*/}" in
+    *:*) die "--image $IMAGE: give the repository and the digest, without a tag" ;;
+esac
 case "$IMAGE_REPO" in
-    *:*/*|*/*:*) die "--image $IMAGE: give the repository and the digest, without a tag" ;;
+    ""|*/) die "--image $IMAGE: no repository before the digest" ;;
 esac
 printf '%s' "$VERSION" | grep -qxE 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?' \
     || die "--version $VERSION is not vMAJOR.MINOR.PATCH[-PRERELEASE]"
@@ -157,10 +169,17 @@ label() {
 main_manifest() {
     local raw="$1" ns="$2" platform="$3" keda_ns=keda
     [ "$platform" = openshift ] && keda_ns=openshift-keda
-    NS="$ns" KEDA_NS="$keda_ns" yq '
+    # On Kubernetes the base binds the controller /metrics to a fixed account,
+    # kube-prometheus-stack-prometheus in scaling-manager-monitoring. The
+    # installer binds only a scraper a trusted source names, so the release
+    # files leave the binding out: scaling-manager-metrics-reader.yaml is that
+    # binding with the account as a placeholder. On OpenShift the binding names
+    # the install own metrics-scraper account and stays.
+    NS="$ns" KEDA_NS="$keda_ns" PLATFORM="$platform" yq '
         select((.kind == "Namespace"
             or (.kind == "ConfigMap" and (.metadata.name == "scaling-manager-manager-config" or .metadata.name == "scaling-manager-scaling-policy-config"))
             or .kind == "PrometheusRule"
+            or (strenv(PLATFORM) == "kubernetes" and .kind == "ClusterRoleBinding" and .metadata.name == "scaling-manager-metrics-reader-rolebinding")
             or ((.kind == "ClusterRole" or .kind == "ClusterRoleBinding") and (.metadata.name | test("^scaling-manager-kueue-reader-")))) | not)
         | (select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional) = true
         | (select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig | select(has("serverName")) | .serverName) |= sub("PLACEHOLDER-NAMESPACE", strenv(NS))
@@ -180,6 +199,7 @@ per_install_names() {
 # header <file> <what> <how>: the comment every file starts with.
 header() {
     printf '# %s, llm-d-scaling-manager %s\n' "$1" "$VERSION"
+    printf '# %s\n' "$PREVIEW_NOTE"
     printf '# %s\n' "$2"
     [ -z "$3" ] || printf '# %s\n' "$3"
     printf '# Rendered by deploy/release-manifests.sh; see docs/proposals/install-from-release.md.\n'
@@ -281,6 +301,11 @@ yq 'select(.kind == "ConfigMap" and .metadata.name == "scaling-manager-scaling-p
     | write scaling-manager-policy-example.yaml \
         "An example scaling-policy ConfigMap to start from. Not needed: the controller runs on its built-in defaults without one." \
         "$SED_HOW"
+
+label "$PLACEHOLDER" < "$ROOT/config/release/metrics-reader-clusterrolebinding.yaml" \
+    | write scaling-manager-metrics-reader.yaml \
+        "Optional, Kubernetes namespaced install: lets the Prometheus that scrapes the controller read its /metrics. Name that Prometheus account; nothing is bound by default. For the cluster-wide file: kubectl create clusterrolebinding scaling-manager-metrics-reader-rolebinding --clusterrole=scaling-manager-metrics-reader --serviceaccount=<prometheus namespace>:<prometheus serviceaccount>" \
+        "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__PROMETHEUS_NAMESPACE__/<prometheus namespace>/g\" -e \"s/__PROMETHEUS_SA__/<prometheus serviceaccount>/g\""
 
 # Every file holds at least one object, or the render went wrong somewhere.
 for f in "${RELEASE_FILES[@]}"; do

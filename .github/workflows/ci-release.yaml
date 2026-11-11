@@ -300,14 +300,34 @@ jobs:
         with:
           persist-credentials: false
 
-      # The same yq pin and retries as the PR checks, so the release renders
-      # with the yq the rendering check ran under.
+
+      # The yq the rendering check runs under in the PR checks (v4.44.3),
+      # checked against its digest rather than trusted from the download.
       - name: Install yq
+        env:
+          YQ_VERSION: v4.44.3
+          YQ_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
+
+      # kustomize is installed by `make kustomize` (KUSTOMIZE_VERSION in the
+      # Makefile), which is `go install`: the Go of go.mod, not the runner's.
+      - name: Read the Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache: false
+
+      - name: Install kustomize
+        run: make kustomize
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -335,6 +355,13 @@ jobs:
           done
           echo "signed $n files"
 
+      # A draft is created when the tag has no release, and a draft is
+      # replaced freely. A PUBLISHED release is not changed: operators may
+      # already have downloaded and verified its files, so a re-run whose
+      # SHA256SUMS differs from the attached one is refused, and an identical
+      # one uploads nothing. (With GitHub immutable releases turned on for the
+      # repository, a published release refuses uploads anyway.) Forbidden or
+      # any other error reading the release is a failure, never "no release".
       - name: Attach the files to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -343,12 +370,37 @@ jobs:
           PRERELEASE: ${{ needs.release.outputs.prerelease }}
         run: |
           set -euo pipefail
-          if ! gh release view "$VERSION" >/dev/null 2>&1; then
+          T="$(mktemp -d)"
+          rc=0
+          draft="$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>"$T/view.err")" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            if ! grep -qi 'release not found' "$T/view.err"; then
+              echo "::error::cannot read release $VERSION: $(head -1 "$T/view.err")"
+              exit 1
+            fi
             pre=""
             [ "$PRERELEASE" = true ] && pre="--prerelease"
             # A draft: publishing, with the release notes, stays a maintainer's step.
+            # Until the controller reads scaling-manager-settings the files are a
+            # preview (deploy/release-manifests.sh, PREVIEW_NOTE); the notes say so.
             gh release create "$VERSION" --draft --verify-tag $pre \
-              --title "llm-d-scaling-manager $VERSION" --notes "Release notes to follow."
+              --title "llm-d-scaling-manager $VERSION" \
+              --notes "The attached manifests are a PREVIEW and not yet installable on their own. Install with make deploy-scaling-manager from a checkout of $VERSION. Release notes to follow."
+            draft=true
+          fi
+          if [ "$draft" != true ]; then
+            mkdir -p "$T/published"
+            if ! gh release download "$VERSION" --pattern SHA256SUMS --dir "$T/published" 2>"$T/dl.err"; then
+              echo "::error::release $VERSION is published and its SHA256SUMS cannot be read ($(head -1 "$T/dl.err")); refusing to attach files to it"
+              exit 1
+            fi
+            if ! cmp -s "$T/published"/SHA256SUMS dist/SHA256SUMS; then
+              echo "::error::release $VERSION is published with different files; refusing to replace them. Release a new version instead."
+              diff "$T/published"/SHA256SUMS dist/SHA256SUMS || true
+              exit 1
+            fi
+            echo "release $VERSION is published with these exact files; nothing to upload"
+            exit 0
           fi
           gh release upload "$VERSION" --clobber dist/*.yaml dist/SHA256SUMS dist/*.sigstore.json
           gh release view "$VERSION" --json assets --jq '.assets[].name'
@@ -363,7 +415,7 @@ jobs:
             echo '```'
             (cd dist && cat SHA256SUMS)
             echo '```'
-            echo "Verify a file:"
+            echo "Verify a file (cosign 2.4 or later reads these bundles):"
             echo '```'
             echo "cosign verify-blob scaling-manager-namespaced.yaml \\"
             echo "  --bundle scaling-manager-namespaced.yaml.sigstore.json \\"

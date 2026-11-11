@@ -43,8 +43,12 @@ data:
   # Scale idle models to zero replicas. restart.
   scaleToZero: "false"
   # Namespaces to manage, comma-separated. Empty: the controller's own
-  # (namespaced install) or all (cluster-wide). Each one also needs
-  # scaling-manager-model-namespace.yaml. restart.
+  # (namespaced install) or all (cluster-wide). restart. For a namespaced
+  # install each one also needs, from a cluster admin:
+  # scaling-manager-model-namespace.yaml applied in it, and its name added to
+  # the resourceNames of the Namespace reads, which name only the controller's
+  # namespace: ClusterRole scaling-manager-policy-namespace-reader-role-<ns>,
+  # and scaling-manager-kueue-reader-role-<ns> with kueue "true".
   watchNamespaces: ""
   # Log verbosity, the controller's --v. restart.
   logVerbosity: "2"
