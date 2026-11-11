@@ -102,7 +102,7 @@ rollout() { kubectl rollout status "deployment/$DEPLOY" -n "$NS" --timeout=300s;
 run_preflight() {
     local name="$1" end="" i=0
     kubectl delete job scaling-manager-preflight -n "$NS" --ignore-not-found --wait=true >/dev/null
-    kubectl apply -f scaling-manager-preflight.yaml > "$LOGS/preflight-$name.apply.log" 2>&1 || return 1
+    kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller > "$LOGS/preflight-$name.apply.log" 2>&1 || return 1
     while [ "$i" -lt 600 ]; do
         end="$(kubectl get job scaling-manager-preflight -n "$NS" \
             -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2>/dev/null | grep -oE 'Complete|Failed' | head -1)"
@@ -141,11 +141,18 @@ pass "namespace $NS and placeholders"
 
 # --- 2. the admin part ------------------------------------------------------
 
-kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin > "$LOGS/apply-admin.log" 2>&1 \
-    || { cat "$LOGS/apply-admin.log"; fail admin "kubectl apply -l part=admin failed"; }
+# The cluster admin's step, as the guide splits it: the admin part of the main
+# file and of the preflight file (its ClusterRole and binding), and the
+# model-namespace file, which is all part=admin (a Role in the model namespace).
+{
+    kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin \
+        && kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin \
+        && kubectl apply -f scaling-manager-model-namespace.yaml
+} > "$LOGS/apply-admin.log" 2>&1 || { cat "$LOGS/apply-admin.log"; fail admin "the cluster admin's applies failed"; }
 n="$(grep -c . "$LOGS/apply-admin.log")"
 kubectl get deployment "$DEPLOY" -n "$NS" >/dev/null 2>&1 && fail admin "part=admin created the controller Deployment"
-pass "admin part applied ($n objects), no Deployment"
+kubectl get job scaling-manager-preflight -n "$NS" >/dev/null 2>&1 && fail admin "part=admin of the preflight file created the Job"
+pass "admin part applied ($n objects: main file, preflight RBAC, model-namespace file), no Deployment, no Job"
 
 # --- 3. settings and the Prometheus CA --------------------------------------
 
@@ -207,8 +214,6 @@ pass "scaler TLS Secrets created empty"
 
 kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller > "$LOGS/apply-controller.log" 2>&1 \
     || { cat "$LOGS/apply-controller.log"; fail controller "kubectl apply -l part=controller failed"; }
-kubectl apply -f scaling-manager-model-namespace.yaml > "$LOGS/apply-model-namespace.log" 2>&1 \
-    || { cat "$LOGS/apply-model-namespace.log"; fail "model namespace" "kubectl apply -f scaling-manager-model-namespace.yaml"; }
 # Optional file: the alerting rules. The smoke suite's PrometheusAlerts specs
 # check them (DEPLOY_ALERTING_RULES=true in SMOKE_CMD).
 kubectl apply -f scaling-manager-alerts.yaml > "$LOGS/apply-alerts.log" 2>&1 \

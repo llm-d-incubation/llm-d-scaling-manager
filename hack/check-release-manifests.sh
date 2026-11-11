@@ -144,6 +144,14 @@ check_dir() {
         # No preview notice: the files install on their own
         # (make test-e2e-release-manifests).
         head -3 "$d/$f" | grep -q '^# PREVIEW' && say "$f still opens with the PREVIEW notice"
+        # The files no end-to-end test installs say so, and only they.
+        untested=no
+        head -3 "$d/$f" | grep -q '^# NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes' && untested=yes
+        case "$f" in
+            scaling-manager-cluster.yaml|scaling-manager-cluster-openshift.yaml|scaling-manager-namespaced-openshift.yaml|scaling-manager-preflight-cluster.yaml)
+                [ "$untested" = yes ] || say "$f does not open with the NOT YET TESTED line" ;;
+            *) [ "$untested" = no ] || say "$f is tested end to end but opens with the NOT YET TESTED line" ;;
+        esac
         n="$(q "$f" '.[] | select(.metadata.labels["app.kubernetes.io/part-of"] != "scaling-manager"
                 or (.metadata.labels["app.kubernetes.io/instance"] // "") == ""
                 or .metadata.labels["app.kubernetes.io/version"] != $v
@@ -560,6 +568,12 @@ mutate preflight-cluster-controller "differs from the installer split" scaling-m
 d="$WORK/m-preview-back"; rm -rf "$d"; cp -r "$GOOD" "$d"
 sed -i '1a # PREVIEW: not yet installable on its own.' "$d/scaling-manager-activate.yaml"
 caught preview-back "PREVIEW notice" "$d"
+d="$WORK/m-untested-dropped"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '/^# NOT YET TESTED end to end/d' "$d/scaling-manager-cluster.yaml"
+caught untested-dropped "does not open with the NOT YET TESTED line" "$d"
+d="$WORK/m-untested-on-tested"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '1a # NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests).' "$d/scaling-manager-namespaced.yaml"
+caught untested-on-tested "tested end to end but opens with the NOT YET TESTED line" "$d"
 
 # --- the release workflow: what renders, signs and uploads these files -------
 WF="$ROOT/.github/workflows/ci-release.yaml"
