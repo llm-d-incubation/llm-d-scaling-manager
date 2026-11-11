@@ -185,7 +185,20 @@ main_manifest() {
         | (select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig | select(has("serverName")) | .serverName) |= sub("PLACEHOLDER-NAMESPACE", strenv(NS))
         | (select(.kind == "NetworkPolicy") | .spec.ingress[] | select(has("from")) | .from[] | select(has("namespaceSelector")) | .namespaceSelector.matchLabels | select(has("kubernetes.io/metadata.name")) | .["kubernetes.io/metadata.name"]) = strenv(KEDA_NS)
         | (select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role") | .rules[] | select(.resources[0] == "namespaces") | .resourceNames) = [strenv(NS), "scaling-manager-policy"]
-        ' "$raw"
+        ' "$raw" | strip_pod_patch
+}
+
+# strip_pod_patch: the namespaced manager Role without patch on pods.
+#
+# The overlay Role (config/components/tenant-installable) carries it for the
+# warm pool, so a namespaced make install can patch pods in the namespace it
+# manages from the start. The release files grant it only through
+# scaling-manager-activate.yaml, applied to turn utilization share active or
+# to use the warm pool (decision 3 of the proposal), so this Role and its copy
+# in each model namespace keep get, list and watch. The make install is
+# unchanged until it renders through this script.
+strip_pod_patch() {
+    yq '(select(.kind == "Role" and .metadata.name == "scaling-manager-manager-role") | .rules[] | select(.resources | contains(["pods"])) | .verbs) |= map(select(. != "patch"))'
 }
 
 # per_install_names <namespace>: a namespaced install names its ClusterRoles
@@ -243,10 +256,10 @@ label "$PLACEHOLDER" < "$ROOT/config/release/settings-configmap.yaml" \
 # The controller's Role, copied from the render so it cannot drift from what
 # the controller needs, into a model namespace it manages from elsewhere.
 {
-    NS="$PLACEHOLDER" yq '
+    strip_pod_patch < "$NSRAW" | NS="$PLACEHOLDER" yq '
         select(.kind == "Role" and .metadata.name == "scaling-manager-manager-role")
         | .metadata.name = "scaling-manager-manager-role-" + strenv(NS)
-        | .metadata.namespace = "__MODEL_NAMESPACE__"' "$NSRAW"
+        | .metadata.namespace = "__MODEL_NAMESPACE__"'
     echo '---'
     cat "$ROOT/config/release/model-namespace-rolebinding.yaml"
     echo '---'
@@ -266,8 +279,8 @@ label "$PLACEHOLDER" < "$ROOT/config/release/settings-configmap.yaml" \
     cat "$ROOT/config/release/pod-writer-rolebinding.yaml"
 } | label "$PLACEHOLDER" \
   | write scaling-manager-activate.yaml \
-      "Per model namespace, only when utilizationShare goes active: patch on pods for the controller." \
-      "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__MODEL_NAMESPACE__/<model namespace>/g\""
+      "The only grant of patch on pods: apply it to turn utilization share active, or to use the warm pool, in each namespace where the controller must patch pods: the controller namespace, each model namespace, or both. Delete it when neither is in use." \
+      "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__MODEL_NAMESPACE__/<namespace to grant in>/g\""
 
 {
     cat "$ROOT/config/release/keda-auth-clustertriggerauthentication.yaml"

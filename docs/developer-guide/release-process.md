@@ -354,7 +354,7 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-cluster.yaml`, `-cluster-openshift.yaml` | one controller for the cluster, in `scaling-manager-system` |
 | `scaling-manager-settings.yaml` | the `scaling-manager-settings` ConfigMap with every key's default |
 | `scaling-manager-model-namespace.yaml` | per model namespace: the model-server PodMonitor, the controller's Role and RoleBinding |
-| `scaling-manager-activate.yaml` | per model namespace, at `utilizationShare: active`: the pod-writer Role and RoleBinding |
+| `scaling-manager-activate.yaml` | the only grant of `patch` on pods (the manager Roles only read pods): applied for `utilizationShare: active` or the warm pool, in each namespace where the controller must patch pods |
 | `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for scaler mTLS and its marker ConfigMap |
 | `scaling-manager-kueue.yaml` | optional Kueue reads |
 | `scaling-manager-alerts.yaml` | optional PrometheusRule |

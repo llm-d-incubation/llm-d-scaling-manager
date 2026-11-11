@@ -156,7 +156,7 @@ Attached to every GitHub Release, rendered by CI from the same overlays the
 | `scaling-manager-settings.yaml` | the settings ConfigMap, with defaults and a comment per key | created once, by the namespace owner |
 | `scaling-manager-preflight.yaml` | the preflight Job, its ServiceAccount and its read-only RBAC | whoever installs; the ClusterRole part needs a cluster admin once |
 | `scaling-manager-model-namespace.yaml` | per model namespace: the model-server PodMonitor, and for a controller that manages it from elsewhere, its Role and RoleBinding there. Placeholders `__NAMESPACE__` (controller) and `__MODEL_NAMESPACE__` | namespace owner of the model namespace |
-| `scaling-manager-activate.yaml` | per model namespace, applied only when utilization share goes active: Role `scaling-manager-pod-writer` (`patch` on pods) and its RoleBinding to the controller ([spelled out below](#the-activation-file)). Placeholders as above | namespace owner of the model namespace |
+| `scaling-manager-activate.yaml` | the only grant of `patch` on pods: Role `scaling-manager-pod-writer` and its RoleBinding to the controller ([spelled out below](#the-activation-file)), applied when utilization share goes active or the warm pool is used, in each namespace where the controller must patch pods (controller namespace, model namespaces). Placeholders as above | owner of that namespace |
 | `scaling-manager-keda-auth.yaml` | the ClusterTriggerAuthentication for mTLS. Placeholders `__NAMESPACE__`, `__KEDA_NAMESPACE__` | cluster admin |
 | `scaling-manager-kueue.yaml` | optional: the Kueue read grants (ClusterQueues, cohorts, flavors; the Role in Kueue's namespace) | cluster admin, only with a Kueue-bounded quota |
 | `scaling-manager-alerts.yaml` | optional: the PrometheusRule (`DEPLOY_ALERTING_RULES` today) | cluster admin (`part=admin`: the stock `admin` role does not grant `monitoring.coreos.com`) |
@@ -420,10 +420,13 @@ checks it runs.
 
 ### The activation file
 
-`scaling-manager-activate.yaml` is the one RBAC change going active needs. It
-is the grant `deploy/lib/pod_writer.sh` makes today at
-`make utilization-share-activate`, as a file. Applied in each model namespace
-that shares the budget, after `sed` fills both placeholders:
+`scaling-manager-activate.yaml` is the one RBAC change going active needs, and
+the only grant of `patch` on pods in the release files: the warm pool needs it
+too, in the namespaces it lends pods in. It is the grant
+`deploy/lib/pod_writer.sh` makes today at `make utilization-share-activate`,
+as a file. Applied in each namespace where the controller must patch pods
+(each model namespace that shares the budget, the controller namespace for a
+warm pool there), after `sed` fills both placeholders:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -657,14 +660,18 @@ policy ConfigMap and the ScaledObjects the installer created.
 
 Building the render showed where the text above was wrong or incomplete.
 
-- **The namespaced files do grant `patch` on pods, in the controller's own
-  namespace.** The namespaced manager Role carries it for the warm pool
-  (`config/components/tenant-installable`), as today. So "the install files
-  never grant `patch` on pods" holds for every ClusterRole and every
-  namespace but the managed one. `scaling-manager-model-namespace.yaml`
-  copies that Role into the model namespace, as `make` does for
-  `LLMSM_WATCH_NS` today, so it carries it there too. The check allows `patch`
-  on pods only in `scaling-manager-pod-writer` and the manager Role.
+- **The overlay's namespaced manager Role carries `patch` on pods**, for the
+  warm pool (`config/components/tenant-installable`), and `make` copies it
+  into each `LLMSM_WATCH_NS` namespace. Copied as is, the model-namespace file
+  would have granted what the activation file grants. Decided 2026-11-11:
+  decision 3 holds, and the release files split it out. Their manager Role,
+  in the controller namespace and in each model namespace, reads pods (get,
+  list, watch) and never patches them; `scaling-manager-activate.yaml` is the
+  only grant of `patch` on pods, applied to turn utilization share active *or*
+  to use the warm pool, in each namespace where the controller must patch
+  pods (the controller namespace, a model namespace, or both). The check
+  fails on `patch` on pods anywhere else. The `make` path keeps the overlay
+  Role, `patch` included, until it renders through the same code (phase 6).
 - **The OpenShift Thanos URL was in `scaling-manager-manager-config`**, which
   no release file carries. The OpenShift manifests therefore do not carry it;
   the settings file names it in the comment on the `prometheusURL` key, and the
@@ -714,10 +721,6 @@ Building the render showed where the text above was wrong or incomplete.
 - **A published release's files are never replaced.** A re-run of the release
   job that renders different files for a published release is refused; with
   GitHub immutable releases on, a published release refuses uploads anyway.
-- **Pod `patch` and activation (open).** Because the namespaced manager Role
-  carries `patch` on pods and the model-namespace file copies it, applying the
-  model-namespace file already grants what `scaling-manager-activate.yaml`
-  grants, which contradicts decision 3. Waiting on a maintainer decision.
 
 ## Open questions
 

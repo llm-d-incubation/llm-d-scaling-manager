@@ -156,15 +156,19 @@ check_dir() {
         n="$(q "$f" '.[] | select(.kind | IN("ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"))
             | .metadata.name | select(test("-[0-9a-f]{8}$"))')"
         [ -z "$n" ] || say "$f: a name with a hash suffix, which sed cannot produce: $n"
-        # patch on pods can change a live Pod image. Never cluster-wide; in a
-        # namespace only through the activation file pod-writer Role, or the
-        # namespaced manager Role, which carries it for the warm pool in the
-        # namespace it manages (config/components/tenant-installable).
+        # patch on pods can change a live Pod image. Decision 3: it is granted
+        # only by the Role in scaling-manager-activate.yaml, applied for
+        # utilization share active or the warm pool. Never by a ClusterRole,
+        # and never by the manager Role, which the overlay gives it for the
+        # warm pool (config/components/tenant-installable).
         n="$(q "$f" '.[] | select(.kind == "Role" or .kind == "ClusterRole")
             | select(any(.rules[]?; ((.resources // []) | index("pods")) and ((.verbs // []) | (index("patch") or index("*")))))
-            | select(.kind == "ClusterRole" or (.metadata.name | test("^scaling-manager-(pod-writer|manager-role(-__NAMESPACE__)?)$") | not))
             | .kind + "/" + .metadata.name')"
-        [ -z "$n" ] || say "$f grants patch on pods beyond the pod-writer and namespaced manager Roles: $n"
+        if [ "$f" = scaling-manager-activate.yaml ]; then
+            [ "$n" = "Role/scaling-manager-pod-writer" ] || say "$f: patch on pods should come from Role/scaling-manager-pod-writer alone, not: $n"
+        else
+            [ -z "$n" ] || say "$f grants patch on pods, which only scaling-manager-activate.yaml may: $n"
+        fi
         # The part split. In the main files exactly the installer prereqs
         # phase; elsewhere that, plus every cluster-scoped and every
         # monitoring.coreos.com object (the stock admin role grants neither).
@@ -261,6 +265,11 @@ check_dir() {
     done
     n="$(q scaling-manager-activate.yaml '[.[] | select(.kind == "Role") | .rules] | tojson')"
     [ "$n" = '[[{"apiGroups":[""],"resources":["pods"],"verbs":["patch"]}]]' ] || say "the activation Role grants $n, not patch on pods"
+    # The manager Roles keep reading pods: dropping patch must not drop the rule.
+    for f in $NSF scaling-manager-model-namespace.yaml; do
+        n="$(q "$f" '[.[] | select(.kind == "Role" and (.metadata.name | startswith("scaling-manager-manager-role"))) | .rules[] | select(.resources | index("pods")) | .verbs | sort] | tojson')"
+        [ "$n" = '[["get","list","watch"]]' ] || say "$f: the manager Role pod verbs are $n, not get, list and watch"
+    done
 
     # The metrics-reader file binds the namespaced ClusterRole to a named
     # account, and to nothing else.
@@ -372,6 +381,12 @@ mutate active-by-default "defaults differ" scaling-manager-settings.yaml \
     '(select(.kind == "ConfigMap") | .data.passive) = "false"'
 mutate cluster-pod-write "patch on pods" scaling-manager-namespaced.yaml \
     '(select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-node-reader-role-__NAMESPACE__") | .rules) += [{"apiGroups": [""], "resources": ["pods"], "verbs": ["patch"]}]'
+mutate manager-role-pod-patch "patch on pods" scaling-manager-namespaced.yaml \
+    '(select(.kind == "Role" and .metadata.name == "scaling-manager-manager-role") | .rules[] | select(.resources | contains(["pods"])) | .verbs) += ["patch"]'
+mutate model-role-pod-patch "patch on pods" scaling-manager-model-namespace.yaml \
+    '(select(.kind == "Role") | .rules[] | select(.resources | contains(["pods"])) | .verbs) += ["patch"]'
+mutate manager-role-no-pod-read "pod verbs" scaling-manager-namespaced-openshift.yaml \
+    '(select(.kind == "Role" and .metadata.name == "scaling-manager-manager-role") | .rules) |= map(select(.resources | contains(["pods"]) | not))'
 mutate kueue-pod-write "patch on pods" scaling-manager-kueue.yaml \
     '(select(.kind == "Role") | .rules) += [{"apiGroups": [""], "resources": ["pods"], "verbs": ["*"]}]'
 mutate unfilled-placeholder "placeholder sed does not fill" scaling-manager-keda-auth.yaml \
