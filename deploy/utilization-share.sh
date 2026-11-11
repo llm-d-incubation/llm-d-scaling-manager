@@ -535,9 +535,42 @@ confirm_reload() {
     ok "the controller read the policy and did not refuse it"
 }
 
+# settings_mode -- SETTINGS_MODE is the utilizationShare key of the settings
+# ConfigMap (scaling-manager-settings) in the controller namespace, or empty when
+# the ConfigMap or the key is absent. When set, it wins over the mode of the
+# optimizer block this script writes. A read that fails is reported, never taken
+# as absent.
+SETTINGS_CM=scaling-manager-settings
+SETTINGS_MODE=""
+settings_mode() {
+    local out
+    SETTINGS_MODE=""
+    if kread out get configmap "$SETTINGS_CM" -n "$CONTROLLER_NS" -o json; then
+        SETTINGS_MODE="$(printf '%s' "$out" | jq -r '.data.utilizationShare // ""')" \
+            || die "could not parse $CONTROLLER_NS/$SETTINGS_CM"
+        return 0
+    fi
+    case "$out" in
+        *NotFound*|*"not found"*) return 0 ;;
+        *) warn "could not read $CONTROLLER_NS/$SETTINGS_CM, so it is not known whether its utilizationShare key overrides the block written here: $out" ;;
+    esac
+}
+
 # set_mode <shadow|active|off> [physical] -- from the policy as it is NOW.
 set_mode() {
     local want="$1" updated start got
+    # The settings ConfigMap's utilizationShare replaces the block's mode, so a
+    # block written to another mode would change nothing. Beside a separate
+    # policy namespace the controller does not read that key.
+    if [ "$POLICY_NS" = "$CONTROLLER_NS" ]; then
+        settings_mode
+        if [ -n "$SETTINGS_MODE" ] && [ "$SETTINGS_MODE" != "$want" ]; then
+            die "$CONTROLLER_NS/$SETTINGS_CM sets utilizationShare=$SETTINGS_MODE, which wins over the optimizer block; nothing was written. Switch with: kubectl patch configmap $SETTINGS_CM -n $CONTROLLER_NS --type merge -p '{\"data\":{\"utilizationShare\":\"$want\"}}'"
+        fi
+        if [ -n "$SETTINGS_MODE" ]; then
+            warn "$CONTROLLER_NS/$SETTINGS_CM sets utilizationShare=$SETTINGS_MODE, which wins over the optimizer block; it already says $want. Change the mode there from now on"
+        fi
+    fi
     read_policy
     [ "$POLICY_FOUND" -eq 1 ] || die "$POLICY_NS/$POLICY_CM disappeared; nothing was written"
     updated="$(printf '%s\n' "$POLICY" | us_policy_with_mode "$want" "${2:-}")" \

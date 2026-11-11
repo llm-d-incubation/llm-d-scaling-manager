@@ -2733,18 +2733,31 @@ EOF
 }
 
 # llmsm_passive_restart_if_stale restarts the controller when the LLMSM_PASSIVE it
-# read at start (passiveDefault in scaling-manager-controller-status) is not the one now in
-# scaling-manager-manager-config: the flag is read only at start, so the running pod would
-# go on with the other value. A controller that has not published the key (an
-# older release, or one not yet elected) is left to the rollout.
+# read at start is not the one now in scaling-manager-manager-config: the flag is read
+# only at start, so the running pod would go on with the other value. The value read at
+# start is passiveAtStart in scaling-manager-controller-status, or passiveDefault from a
+# controller older than the settings ConfigMap, where the two were the same. When the
+# passive key of scaling-manager-settings is in force (settingsSources names
+# passive=settings), LLMSM_PASSIVE is not read at all and a restart changes nothing. A
+# controller that has not published the key (an older release, or one not yet
+# elected) is left to the rollout.
 llmsm_passive_restart_if_stale() {
-    local ns="$1" running want
+    local ns="$1" running want status sources
     want="$(llmsm_passive_want)" || return 1
     [ -n "$want" ] || want=false
     if [ "$want" = true ]; then
         log_warning "Passive mode is ON controller-wide (LLMSM_PASSIVE=true): the controller computes and publishes, and changes no replica count. Pass LLMSM_PASSIVE=false to turn it off."
     fi
-    running="$(kubectl get configmap scaling-manager-controller-status -n "$ns" -o jsonpath='{.data.passiveDefault}' 2>/dev/null)" || running=""
+    status="$(kubectl get configmap scaling-manager-controller-status -n "$ns" -o jsonpath='{.data.passiveAtStart}{"|"}{.data.passiveDefault}{"|"}{.data.settingsSources}' 2>/dev/null)" || status=""
+    running="${status%%|*}"
+    status="${status#*|}"
+    [ -n "$running" ] || running="${status%%|*}"
+    sources="${status#*|}"
+    case ",$sources," in
+        *,passive=settings,*)
+            log_info "Passive mode comes from the passive key of scaling-manager-settings, which is live; LLMSM_PASSIVE in scaling-manager-manager-config is not read, so no restart"
+            return 0 ;;
+    esac
     [ -n "$running" ] || return 0
     [ "$running" = "$want" ] && return 0
     log_warning "The controller runs with LLMSM_PASSIVE=$running and scaling-manager-manager-config now says $want; it is read only at start. Restarting the controller."

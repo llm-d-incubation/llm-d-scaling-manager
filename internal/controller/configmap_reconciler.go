@@ -62,6 +62,13 @@ type ConfigMapReconciler struct {
 	// passiveWarned is the LLMSM_PASSIVE value last warned about as differing
 	// from the one this process read at start; "" when none is.
 	passiveWarned string
+
+	// settingsOverrideLogged is the last logged list of live settings that
+	// override a different value in the policy's "default" entry.
+	settingsOverrideLogged string
+	// settingsRestartWarned is the last warned list of settings read only at
+	// start that changed; "" when none is.
+	settingsRestartWarned string
 }
 
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
@@ -120,6 +127,8 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	case name == config.ScalingPolicyConfigMapName():
 		// As above: the error arises at startup only and is already reported.
 		_ = r.handleScalingPolicyConfigMap(ctx, cm, namespace, isGlobal)
+	case isGlobal && name == config.SettingsConfigMapName():
+		r.handleSettingsConfigMap(ctx, cm)
 	case isGlobal && name == config.ConfigMapName():
 		r.warnIfPassiveChanged(ctx, cm)
 	default:
@@ -141,6 +150,11 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *ConfigMapReconciler) handleConfigMapDeletion(ctx context.Context, name, namespace string) {
 	logger := log.FromContext(ctx)
 	systemNamespace := config.SystemNamespace()
+
+	if namespace == systemNamespace && name == config.SettingsConfigMapName() {
+		r.handleSettingsDeleted(ctx)
+		return
+	}
 
 	// A deleted ConfigMap has no rejected entries and no unknown keys. Cleared
 	// for every scaling-policy ConfigMap, before any of the returns below: the
@@ -457,6 +471,7 @@ func (r *ConfigMapReconciler) handleScalingPolicyConfigMap(ctx context.Context, 
 				rejected[config.GlobalDefaultsKey], ignored[config.GlobalDefaultsKey])
 		}
 		logger.Info("Updated global scaling policy from ConfigMap", "entries", count)
+		r.logSettingsOverrides(ctx)
 		r.warnIfThroughputRegistrationDiverged(logger, cm)
 	} else {
 		// Limiters and quotas are CLUSTER-scope: EffectiveLimiterTypes reads them only

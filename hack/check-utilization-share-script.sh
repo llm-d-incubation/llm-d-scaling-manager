@@ -193,6 +193,10 @@ args=" $* "
 ns=""; prev=""
 for a in "$@"; do [ "$prev" = "-n" ] && ns="$a"; prev="$a"; done
 case "$args" in
+  *" get configmap scaling-manager-settings "*)
+    [ -e "$S/settings.forbidden" ] && { echo 'Error from server (Forbidden): configmaps "scaling-manager-settings" is forbidden' >&2; exit 1; }
+    [ -e "$S/settings.mode" ] || { echo 'Error from server (NotFound): configmaps "scaling-manager-settings" not found' >&2; exit 1; }
+    jq -n --arg m "$(cat "$S/settings.mode")" '{data: {utilizationShare: $m}}' ;;
   *" get configmap scaling-manager-controller-status "*)
     [ -e "$S/status.forbidden" ] && { echo 'Error from server (Forbidden): configmaps "scaling-manager-controller-status" is forbidden' >&2; exit 1; }
     [ -e "$S/status.json" ] || { echo 'Error from server (NotFound): configmaps "scaling-manager-controller-status" not found' >&2; exit 1; }
@@ -349,6 +353,19 @@ vcase() { # vcase <name> <condition...>
 fresh "$QUOTA_POLICY"; run shadow
 vcase "shadow: writes shadow true and confirms the reload" \
     eval '[ $RC -eq 0 ] && [ "$(pol .optimizer.utilizationShare.shadow)" = true ] && says "did not refuse it"'
+
+# The settings ConfigMap's utilizationShare wins over the block: a mode it
+# contradicts is refused with the patch to run, one it agrees with is written
+# with a warning, and a settings ConfigMap that cannot be read is said so.
+fresh "$QUOTA_POLICY"; echo active > "$STATE/settings.mode"; run shadow
+vcase "shadow: refused while the settings ConfigMap says active, writes nothing" \
+    eval '[ $RC -ne 0 ] && [ "$(patches)" = 0 ] && says "sets utilizationShare=active" && says "kubectl patch configmap scaling-manager-settings"'
+fresh "$QUOTA_POLICY"; echo shadow > "$STATE/settings.mode"; run shadow
+vcase "shadow: the settings ConfigMap agrees, written with a warning" \
+    eval '[ $RC -eq 0 ] && [ "$(pol .optimizer.utilizationShare.shadow)" = true ] && says "Change the mode there"'
+fresh "$QUOTA_POLICY"; touch "$STATE/settings.forbidden"; run shadow
+vcase "shadow: an unreadable settings ConfigMap is reported, not taken as absent" \
+    eval '[ $RC -eq 0 ] && says "could not read" && says "scaling-manager-settings"'
 
 fresh "$INV_POLICY"; run shadow --physical-groups
 vcase "shadow --physical-groups: plans the inventory" \
@@ -775,7 +792,7 @@ fresh "$QUOTA_POLICY"; status_on; touch "$STATE/status.forbidden"; run check
 vcase "check: a Forbidden status read fails, not read as absent" \
     eval '[ $RC -ne 0 ] && says "could not read team-a/scaling-manager-controller-status"'
 
-CASES_EXPECTED=128
+CASES_EXPECTED=131
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. A case was added or removed; update CASES_EXPECTED deliberately."
 fi
