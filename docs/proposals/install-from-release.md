@@ -5,8 +5,11 @@
   and attaching the files. What building it changed in this design is in
   [Found while building phase 1](#found-while-building-phase-1). Phase 3, the
   scaler TLS bootstrap, is built; what it changed is in
-  [Found while building phase 3](#found-while-building-phase-3). The rest is
-  not built.
+  [Found while building phase 3](#found-while-building-phase-3). Phases 2
+  (the settings reader), 4 (the preflight) and 5 (the kind e2e from the
+  files) are built; what the e2e found is in
+  [Found while building phase 5](#found-while-building-phase-5). The install
+  guides lead with the files. Phase 6 is not built.
 - **Problem:** installing takes a checkout, `make`, and about 15,000 lines of
   shell under `deploy/`. A reviewer found the content complete and the
   procedure too complex. An operator should need the image and a short
@@ -731,11 +734,10 @@ Building the render showed where the text above was wrong or incomplete.
   namespace (and `scaling-manager-policy`). Phase 2 must make
   `watchNamespaces` extend them: preflight prints the `kubectl patch` that adds
   each name, per decision 5. Until then the settings file's comment says so.
-- **The files are a preview until phase 2 lands.** Every file opens with a
-  `PREVIEW:` line and the draft release notes say the same, naming
-  `make deploy-scaling-manager` as the supported install
-  (`PREVIEW_NOTE` in `deploy/release-manifests.sh`; drop it, and its assertion
-  in the check, with phase 2).
+- **The files were a preview until phase 2 landed.** Every file opened with a
+  `PREVIEW:` line and the draft release notes said the same. Both were dropped
+  once the phase 5 e2e installed and ran a controller from the files alone;
+  the check now fails on a file that still carries the notice.
 - **A published release's files are never replaced.** A re-run of the release
   job that renders different files for a published release is refused; with
   GitHub immutable releases on, a published release refuses uploads anyway.
@@ -815,6 +817,50 @@ Building the render showed where the text above was wrong or incomplete.
 - **Secrets the controller writes carry `app.kubernetes.io/part-of`**, so the
   uninstall by label finds them. Secrets a `make` install wrote do not, and
   are adopted unchanged; `make undeploy-scaling-manager` removes those.
+
+## Found while building phase 5
+
+The kind e2e (`make test-e2e-release-manifests`, `test/release-manifests/e2e.sh`)
+installs from the rendered files with `kubectl` only. Building it showed:
+
+- **The Deployment did not mount the Prometheus CA.** The table above says
+  it always mounts Secret `scaling-manager-prometheus-ca`, optional; the
+  release render did not (only the installer patched it in), so a Prometheus
+  with a private CA could not be verified from the files. The render now adds
+  the volume, optional, at `/etc/scaling-manager-prometheus-ca` (the
+  installer's path), and the settings file carries `prometheusCACertPath`,
+  empty: the operator creates the Secret and sets the key. The preflight Job
+  mounts the same Secret at its own path, so it checks with the same CA.
+- **The admin part applies the NetworkPolicy before the preflight runs**, so
+  for a KEDA outside `keda` the preflight's fix is a `kubectl patch` of the
+  live policy, not a `sed` on the file. The guide says to make the same
+  change in the file, or the next apply of it (an upgrade) undoes the patch.
+- **`scaler.tls` cannot PASS on a namespaced install.** It dials the scaler
+  from the preflight Job's Pod, and the shipped NetworkPolicy admits port
+  9090 from KEDA's namespace only, so the handshake times out and the check
+  says UNKNOWN, naming the policy. That is honest but makes the check dead
+  weight here. Mutual TLS is shown instead by `scalerTLS` in the status and
+  by KEDA presenting the controller's client certificate (the
+  `scalerTLSAction` copy step clears). Admitting the preflight Pod by label in
+  the policy would make the check work; not done.
+- **The `scalerTLSAction` wire step was not runnable as printed.** For a new
+  CA the step went on after the command with `; the CA is new: if KEDA ...`,
+  prose a shell then tried to run. The note for a reinstall is now a step of
+  its own, and each step ends in its command.
+- **The status key is `utilizationShare`**, not `utilizationShareMode`, and the
+  limiter in force is `limiter` (`quota/install-quota` for the settings'
+  quota).
+- **The uninstall above misses KEDA's side and the Prometheus CA.** The
+  ClusterTriggerAuthentication and the client Secret copy in KEDA's namespace
+  are removed with `kubectl delete -f scaling-manager-keda-auth.yaml` and a
+  delete of the copy by name; the operator's `scaling-manager-prometheus-ca`
+  carries no label, so it is deleted by name. With those, the e2e finds
+  nothing labelled `part-of=scaling-manager` left but the scaler CA, as
+  intended.
+- **A kind node holds a local build under an import name**
+  (`docker.io/library/import-<date>@sha256:...`), not `<repo>@sha256:...`, so
+  a file pinned by digest would try to pull it. The e2e tags the digest
+  reference on each node (`ctr images tag`), as a registry would serve it.
 
 ## Open questions
 
