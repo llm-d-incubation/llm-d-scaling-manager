@@ -705,6 +705,12 @@ decisions get their own PR, before ev-shindin/llm-scaling-manager#345 step 3.
 | each on alone | the replay reports, per output and per key, the first diverging cycle, the number of changed rows, and the sign and size of the change. Only the outputs that change names may move |
 | all on | equals the goldens the PR commits. An output that moves here and in no single-switch run is an interaction, and the PR names it |
 
+- **A switch the replay did not support stays off in its constructor.** The
+  committed goldens are then its off state, and it moves no golden. It is
+  listed apart (`offByDefaultSwitches` in `learnreplay/switch_runs_test.go`),
+  turned on alone from the committed state, and may move only the outputs
+  its row names. It ships nothing until a later PR turns it on, moves it to
+  that PR's switches and regenerates what it names.
 - **A new recording lands with goldens generated at the base,** in its own
   commit before the change, so the all-off run has something to compare
   against.

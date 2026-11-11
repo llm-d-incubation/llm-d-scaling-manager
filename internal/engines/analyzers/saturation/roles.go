@@ -136,6 +136,10 @@ type replicaRouting struct {
 	// sibling of its role is busy now. Its peak is load that has moved to
 	// that sibling, and the sibling's own reading already counts it.
 	kvFromInstant bool
+	// prefillGate is why a prefill row reads saturated for the gate without
+	// its own queue (prefillGateOpenedBy), "" when it does not
+	// (prefill_saturation_gate.go).
+	prefillGate string
 }
 
 // instantKv is rm's instantaneous KV utilization (KvUsageInstant) and whether

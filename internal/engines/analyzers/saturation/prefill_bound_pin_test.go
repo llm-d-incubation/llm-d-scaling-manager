@@ -41,7 +41,7 @@ var _ = Describe("the prefill bound with two pods in one spacing", func() {
 	read := func(pod string, computed float64) float64 {
 		rm := makeReplicaMetrics(pod, "prefill-v", 300_000, 1_149_312, 30, prompt, 1)
 		rm.PrefillComputedTokenRate = computed
-		got := analyzer.notePrefillBound(rm, cfg, domain.RolePrefill, key, "", prompt, admission{}, GinkgoLogr)
+		got := analyzer.notePrefillBound(rm, rm.BusiestRankQueue(), cfg, domain.RolePrefill, key, "", prompt, admission{}, GinkgoLogr)
 		clock = clock.Add(time.Second)
 		return got.rate * prompt
 	}

@@ -227,13 +227,23 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	if ref <= 0 && derived.OK {
 		ref = derived.Rate
 	}
+	// The queue the saturation gate reads: the busiest rank's, or the
+	// threshold where a prefill row's gate opened without one
+	// (prefill_saturation_gate.go).
+	gq := gateQueue(rm, config.QueueLengthThreshold, routing)
+	if routing.prefillGate != "" {
+		logger.V(perReplicaLogLevel).Info("prefill-saturated-without-queue",
+			"modelID", modelID, "namespace", namespace, "variant", rm.VariantName, "pod", rm.PodName,
+			"reason", routing.prefillGate, "queueLength", rm.BusiestRankQueue(),
+			"queueThreshold", config.QueueLengthThreshold, "runningRequests", rm.RunningRequests)
+	}
 	// Whether a saturated reading is the replica at its limit or a load step
 	// it has just been handed (k2_settle.go). Judged on the busiest rank, as
 	// the reading is.
 	serviceRate, serviceRateOK := saturatedCompletionRate(rm, role, fleetOutput, keyInput)
 	adm.unsettled = a.k2Unsettled(k2SettleInput{
 		namespace: namespace, modelID: modelID, variant: rm.VariantName, pod: rm.PodName,
-		queue: rm.BusiestRankQueue(), tokens: rm.BusiestRankTokens(), ranks: rm.Ranks(),
+		queue: gq, tokens: rm.BusiestRankTokens(), ranks: rm.Ranks(),
 		perRequest: k2SettlePerRequest(rm, role, shapeKeyInput, fleetOutput), threshold: config.QueueLengthThreshold,
 		rate: serviceRate, rateOK: serviceRateOK, ref: ref, k2Ref: k2Ref, ready: rm.Ready, readyAt: a.readySince(rm), bridge: rm.FromWarmPool,
 		tune: tune,
@@ -245,7 +255,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	d := a.computeK2(
 		historyKey,
 		modelID, namespace, rm.VariantName,
-		rm.BusiestRankQueue(), rm.BusiestRankTokens(),
+		gq, rm.BusiestRankTokens(),
 		rm.AvgOutputTokens, rm.AvgInputTokens,
 		// No spread while a shape change is outstanding, as on the mu's path
 		// (resolvePricing): the cycle's own reading of the window.
@@ -468,7 +478,7 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 	// priced on its lower bound when it has one (prefill_bound.go). Only
 	// then: any own reading, however thin, and a previous figure from other
 	// arguments are both measurements, and a measurement outranks a bound.
-	prefillBound := a.notePrefillBound(rm, config, role, throughputKey, args, keyInput, adm, logger)
+	prefillBound := a.notePrefillBound(rm, gq, config, role, throughputKey, args, keyInput, adm, logger)
 	lowerBound := false
 	if reading.rate <= 0 && throughputBucket != derivedBucket && prefillBound.rate > 0 {
 		saturatedThroughput = prefillBound.rate

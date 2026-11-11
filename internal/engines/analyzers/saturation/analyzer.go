@@ -134,6 +134,12 @@ type SaturationAnalyzer struct {
 	// prefillBoundConfident is SwitchPrefillBoundHeldConfidence (issue ev-shindin/llm-scaling-manager#397):
 	// on from the constructor; a replay turns it off (SetSwitchesForReplay).
 	prefillBoundConfident bool
+	// prefillBatchBudget is SwitchPrefillSaturatedAtBatchBudget and
+	// prefillRouterQueue SwitchPrefillSaturatedOnRouterQueue
+	// (prefill_saturation_gate.go): off from the constructor; a replay turns
+	// them on (SetSwitchesForReplay).
+	prefillBatchBudget bool
+	prefillRouterQueue bool
 	// throughputMuChoice is, per saturatedThroughput key, what the choice
 	// between its measured and its derived mu remembers: when the bucket
 	// last read saturated in agreement with its measurement, whether a

@@ -129,7 +129,10 @@ type prefillBoundReading struct {
 // effective prompt length the throughput key was built with this cycle,
 // converts it on the way out, so the bound returned is in the same requests/s,
 // at the shape being served, as the measured window it stands in for.
-func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *config.ScalingPolicy,
+//
+// queue is the queue the gate reads for the row (gateQueue): its busiest
+// rank's, or the threshold where its gate opened without one.
+func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, queue int, cfg *config.ScalingPolicy,
 	role, throughputKey, args string, ileff float64, adm admission, logger logr.Logger) prefillBoundReading {
 	if !cfg.EnablePrefillThroughputBound || domain.CanonicalRole(role) != domain.RolePrefill {
 		return prefillBoundReading{}
@@ -141,7 +144,7 @@ func (a *SaturationAnalyzer) notePrefillBound(rm domain.ReplicaMetrics, cfg *con
 	a.mu.Lock()
 	a.throughputWindowUnderLocked(key, args)
 	a.mu.Unlock()
-	saturated := rm.BusiestRankQueue() >= int(cfg.QueueLengthThreshold) && rm.BusiestRankTokens() > 0
+	saturated := queue >= int(cfg.QueueLengthThreshold) && rm.BusiestRankTokens() > 0
 	// recorded: a serving row's saturated reading, the bound's evidence.
 	recorded := saturated && adm.serving() && rm.PrefillComputedTokenRate > 0 && ileff > 0
 	if recorded && a.prefillBoundConfident {

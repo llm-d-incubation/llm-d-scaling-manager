@@ -193,6 +193,11 @@ type cycle struct {
 	// (domain.VariantReplicaState.StartSeedSeconds); nil when none is.
 	startSeedByVariant map[string]float64
 	decodeSaturated    bool
+	// prefillRouterOpen is the router's flow-control backlog over the
+	// threshold per Ready prefill replica (routerQueueSaturatesPrefill),
+	// decided once over every row; read only with
+	// SwitchPrefillSaturatedOnRouterQueue on.
+	prefillRouterOpen bool
 	// busyNowRoles is the roles with a Ready replica busy NOW by its
 	// instant KV (rolesBusyNow). A sibling idle now is charged its instant
 	// KV, not its one-minute peak, while its role is in it.
@@ -349,6 +354,8 @@ func (a *SaturationAnalyzer) newCycle(
 			cfg.QueueLengthThreshold, cfg.KvCacheThreshold))
 	// Decided over every row before any is priced, for the same reason.
 	c.busyNowRoles = c.tune.rolesBusyNow(input.ReplicaMetrics, c.rolesByVariant)
+	c.prefillRouterOpen = routerQueueSaturatesPrefill(input.SchedulerQueue,
+		readyPrefillReplicas(input.ReplicaMetrics, c.rolesByVariant), cfg.QueueLengthThreshold)
 
 	return c
 }
@@ -815,6 +822,8 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 			c.fleetHitRate, priced, served[rm.VariantName], downstreamSaturated, mixed[rm.VariantName],
 			replicaRouting{
 				kvFromInstant: c.tune.kvFromInstant(raw, c.busyNowRoles[domain.CanonicalRole(role)]),
+				prefillGate: c.a.prefillGateOpenedBy(rm, role, c.cfg.QueueLengthThreshold, engineParams,
+					c.prefillRouterOpen),
 			}, c.shapeChanging, c.logger)
 		if rc != nil {
 			// A derived figure inherits the borrowed-ness of the line it came

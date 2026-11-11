@@ -451,7 +451,7 @@ var _ = Describe("notePrefillBound across the pods of one minute", func() {
 		for i, c := range computed {
 			rm := makeReplicaMetrics(fmt.Sprintf("prefill-%d", i), "prefill-v", 300_000, 1_149_312, 30, prompt, 1)
 			rm.PrefillComputedTokenRate = c
-			got = analyzer.notePrefillBound(rm, cfg, domain.RolePrefill, key, "", prompt, admission{}, GinkgoLogr)
+			got = analyzer.notePrefillBound(rm, rm.BusiestRankQueue(), cfg, domain.RolePrefill, key, "", prompt, admission{}, GinkgoLogr)
 			clock = clock.Add(time.Second)
 		}
 		return got.rate * prompt

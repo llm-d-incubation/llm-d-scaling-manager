@@ -1549,10 +1549,105 @@ func TestGoldens_EverySwitchHasARow(t *testing.T) {
 	for _, name := range names {
 		_, mine := replaySwitches[name]
 		_, earlier := earlierSeams[name]
-		require.True(t, mine || earlier, "%s is accepted by SetSwitchesForReplay and is in neither replaySwitches nor earlierSeams", name)
+		_, offByDefault := offByDefaultSwitches[name]
+		require.True(t, mine || earlier || offByDefault,
+			"%s is accepted by SetSwitchesForReplay and is in none of replaySwitches, earlierSeams and offByDefaultSwitches", name)
 	}
 	for name := range mergedRows() {
 		require.Contains(t, names, name, "%s's seam is gone: delete its row", name)
+		_, offByDefault := offByDefaultSwitches[name]
+		require.False(t, offByDefault, "%s has a row in offByDefaultSwitches and another", name)
+	}
+	for name := range offByDefaultSwitches {
+		require.Contains(t, names, name, "%s's seam is gone: delete its row", name)
+	}
+}
+
+// offByDefaultSwitches is each replay switch that is off from its
+// constructor, and the golden outputs it moves turned on alone. The
+// committed goldens are its off state: the rule's runs above set only
+// replaySwitches, so it stays off in all of them, and
+// TestGoldens_TheOffByDefaultSwitches turns each on alone from the committed
+// state (every other switch at its constructor default) and holds it to
+// exactly the outputs named. A switch here ships nothing until a PR turns it
+// on in its constructor, moves it to replaySwitches, and regenerates the
+// goldens it names.
+//
+// llm-d-incubation/llm-d-scaling-manager#51, a prefill row read saturated
+// without an engine queue (saturation/prefill_saturation_gate.go). Off
+// because the replay of the TTFT staircases did not support it: on the 2+2
+// fleet that missed its TTFT target neither opens the gate below the
+// runaway. Measured on main at d0e2df6, each on alone:
+//
+//   - SwitchPrefillSaturatedAtBatchBudget moves three fixtures, all on
+//     prefill and all toward more prefill (the cost side), none on decode:
+//     ttft-staircase-c-on, where one cycle at 0.98 of the budget (05:15:17,
+//     its third step) is k2's held first reading, and the same reading
+//     writes a measured prefill mu of 15.4 req/s, a minute's mean on a
+//     replica busy for an instant; prefill is then priced at 2 replicas
+//     (utilization 0.85) through the next half hour where it was priced at
+//     1 (2 ran, and missed the TTFT target there); ttft-saturated, where
+//     prefill reads saturated from its second 10-minute bin, before its
+//     queue does, and asks 2 there where it asked 1 (1 ran, closed loop to
+//     prefill saturation); and ttft-three-pods, where 30000-token prompts
+//     fill the budget at two running and prefill learns k2 from its second
+//     bin, asking 4-5 in bins 2-4 where it asked 1 (3 ran, closed loop);
+//     the queue gate learns it in bin 5 and asks 4 there either way.
+//     store-records moves in the last two with the k2 they record.
+//   - SwitchPrefillSaturatedOnRouterQueue moves ttft-staircase-c-on only, in
+//     its runaway step (05:49 onward), the one place a recorded router
+//     queue reached the threshold per prefill replica (1,455 queued); the
+//     engine queue gate opened 30 s later there anyway.
+var offByDefaultSwitches = map[string][]string{
+	saturation.SwitchPrefillSaturatedAtBatchBudget: {
+		"ttft-saturated/composite-results.csv", "ttft-saturated/composite-roles.csv",
+		"ttft-saturated/composite-variants.csv", "ttft-saturated/results.csv",
+		"ttft-saturated/store-records.csv", "ttft-saturated/variant-capacities.csv",
+		"ttft-saturated/warm-pool-pressure.csv",
+		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/results.csv",
+		"ttft-staircase-c-on/variant-capacities.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
+		"ttft-three-pods/composite-results.csv", "ttft-three-pods/composite-roles.csv",
+		"ttft-three-pods/composite-variants.csv", "ttft-three-pods/results.csv",
+		"ttft-three-pods/store-records.csv", "ttft-three-pods/variant-capacities.csv",
+		"ttft-three-pods/warm-pool-pressure.csv",
+	},
+	saturation.SwitchPrefillSaturatedOnRouterQueue: {
+		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/results.csv",
+		"ttft-staircase-c-on/variant-capacities.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
+	},
+}
+
+// Each switch off from its constructor, turned on alone from the committed
+// state, moves exactly the outputs offByDefaultSwitches names; with every
+// switch at its default the replay is the committed goldens, which the
+// golden check holds.
+func TestGoldens_TheOffByDefaultSwitches(t *testing.T) {
+	t.Parallel() // reads the goldens, writes nowhere
+	m, err := ReadManifest(goldenDir)
+	require.NoError(t, err)
+	names := slices.Sorted(maps.Keys(offByDefaultSwitches))
+	sets := make([]map[string]bool, 0, len(names))
+	for _, name := range names {
+		sets = append(sets, map[string]bool{name: true})
+	}
+	runs := replaySets(t, m, sets)
+	for i, name := range names {
+		var got []string
+		for f, b := range runs[i] {
+			committed, err := os.ReadFile(filepath.Join(goldenDir, filepath.FromSlash(f)))
+			require.NoError(t, err)
+			d, err := compareOutput(f, committed, b)
+			require.NoError(t, err)
+			if d != nil {
+				got = append(got, f)
+				t.Logf("%s: %s", name, d)
+			}
+		}
+		slices.Sort(got)
+		require.ElementsMatch(t, offByDefaultSwitches[name], got, "%s on alone must move exactly the outputs it names", name)
+		t.Logf("%s on alone moves %d outputs: %v", name, len(got), got)
 	}
 }
 

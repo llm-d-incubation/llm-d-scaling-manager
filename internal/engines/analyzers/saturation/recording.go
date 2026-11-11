@@ -127,8 +127,9 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLAggregatedSizes, SwitchPrefillCapacityObserve,
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
 // SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap,
-// SwitchPrefillBoundHeldConfidence, SwitchQueuePricedAsDrain and
-// SwitchFloorTrustReadsCompletions; a name
+// SwitchPrefillBoundHeldConfidence, SwitchQueuePricedAsDrain,
+// SwitchFloorTrustReadsCompletions, SwitchPrefillSaturatedAtBatchBudget and
+// SwitchPrefillSaturatedOnRouterQueue; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -255,6 +256,11 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// the arrival rate against what the role completes, not against its
 		// resident KV over mu (throughput_floor.go).
 		SwitchFloorTrustReadsCompletions: &a.floorTrustCompleted,
+		// llm-d-incubation/llm-d-scaling-manager#51: a prefill row reads
+		// saturated for the gate at its running batch's token budget, or on
+		// the router's flow-control backlog (prefill_saturation_gate.go).
+		SwitchPrefillSaturatedAtBatchBudget: &a.prefillBatchBudget,
+		SwitchPrefillSaturatedOnRouterQueue: &a.prefillRouterQueue,
 	}
 }
 

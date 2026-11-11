@@ -101,7 +101,7 @@ func (m *boundMu) read(pod string, rate float64) {
 	if m.edit != nil {
 		m.edit(&rm)
 	}
-	m.last = m.a.notePrefillBound(rm, m.cfg, domain.RolePrefill, propBoundKey, "", propBoundIleff, admission{}, logr.Discard()).rate
+	m.last = m.a.notePrefillBound(rm, rm.BusiestRankQueue(), m.cfg, domain.RolePrefill, propBoundKey, "", propBoundIleff, admission{}, logr.Discard()).rate
 	m.clock = m.clock.Add(time.Second)
 }
 
