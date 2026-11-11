@@ -98,6 +98,17 @@ func SetVerbosity(opts *zap.Options, verbosity int) bool {
 	return true
 }
 
+// ApplySettingsVerbosity applies the settings ConfigMap's logVerbosity at
+// start: it wins over --v and LOG_LEVEL, as every setting wins over the
+// Deployment, and --zap-log-level (zapLevelGiven), a development flag, wins
+// over it. It reports whether the level was changed.
+func ApplySettingsVerbosity(opts *zap.Options, verbosity int, zapLevelGiven bool) bool {
+	if zapLevelGiven {
+		return false
+	}
+	return SetVerbosity(opts, verbosity)
+}
+
 // Sync flushes any buffered log entries.
 func Sync() error {
 	logger := ctrl.Log.WithName("logger-sync").GetSink()

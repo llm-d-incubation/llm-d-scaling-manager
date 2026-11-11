@@ -470,9 +470,7 @@ func main() {
 	}
 	setupLog.Info("Configuration loaded successfully", "settingsSource", cfg.SettingsSource())
 	if v, ok := cfg.SettingsAtStart("V"); ok {
-		// Above --v and LOG_LEVEL, like every setting; --zap-log-level, a
-		// development flag, still wins.
-		if !flag.CommandLine.Changed("zap-log-level") && logging.SetVerbosity(&opts, cfg.LoggerVerbosity()) {
+		if logging.ApplySettingsVerbosity(&opts, cfg.LoggerVerbosity(), flag.CommandLine.Changed("zap-log-level")) {
 			setupLog.Info("Logging at the settings ConfigMap's logVerbosity", "logVerbosity", v)
 		} else {
 			setupLog.Info("Ignoring the settings ConfigMap's logVerbosity: --zap-log-level sets the level", "logVerbosity", v)

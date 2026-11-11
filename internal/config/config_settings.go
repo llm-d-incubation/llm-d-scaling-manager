@@ -171,14 +171,22 @@ func (c *Config) SettingsReport() SettingsReport {
 }
 
 // SettingsBudgetApplies reports whether the limiter and utilizationShare
-// settings take effect: they do unless a separate policy namespace holds the
-// cluster's limiters, which a setting in the controller's own namespace must
-// not override (whoever writes it could otherwise raise their own quota).
-// Thread-safe.
+// settings take effect: only once the policy namespace is resolved
+// (SetPolicyNamespace) and it is the controller's own. A separate policy
+// namespace holds the cluster's limiters, which a setting in the controller's
+// own namespace must not override (whoever writes it could otherwise raise
+// their own quota); before the policy namespace is known it may still turn out
+// separate, so the budget settings wait for it. Thread-safe.
 func (c *Config) SettingsBudgetApplies() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return !c.policyNamespaceIsSeparateLocked()
+	return c.settingsBudgetAppliesLocked()
+}
+
+// settingsBudgetAppliesLocked is SettingsBudgetApplies for a caller holding
+// c.mu.
+func (c *Config) settingsBudgetAppliesLocked() bool {
+	return c.saturation.policyNamespace != "" && !c.policyNamespaceIsSeparateLocked()
 }
 
 // policyNamespaceIsSeparateLocked is PolicyNamespaceIsSeparate for a caller
@@ -191,7 +199,7 @@ func (c *Config) policyNamespaceIsSeparateLocked() bool {
 // the settings in force. Caller holds c.mu for writing.
 func (c *Config) refoldGlobalLocked() {
 	c.saturation.global = applySettings(c.saturation.globalPolicy, c.settings.live,
-		!c.policyNamespaceIsSeparateLocked())
+		c.settingsBudgetAppliesLocked())
 }
 
 // SettingsRestartChanged returns the restart and advanced settings whose
@@ -258,11 +266,13 @@ func (c *Config) SettingsSources() map[string]string {
 		}
 	}
 	separate := c.policyNamespaceIsSeparateLocked()
+	applies := c.settingsBudgetAppliesLocked()
 	budgetSource := func(fromSettings, inPolicy bool) string {
 		switch {
 		case separate:
 			return SettingSourcePolicyNamespace
-		case fromSettings:
+		case fromSettings && applies:
+			// Not before the policy namespace is resolved.
 			return SettingSourceSettings
 		case inPolicy:
 			return SettingSourcePolicy

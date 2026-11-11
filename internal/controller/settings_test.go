@@ -47,6 +47,10 @@ func newSettingsHarness(t *testing.T, cfg *config.Config, funcs *interceptor.Fun
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	c := b.Build()
+	// As main does before the bootstrap: the budget settings wait for it.
+	if cfg.PolicySource() == config.PolicySourceLocal && !cfg.PolicyNamespaceIsSeparate() {
+		cfg.SetPolicyNamespace(settingsTestNS, config.PolicySourceLocal)
+	}
 	rec := record.NewFakeRecorder(100)
 	status := controllerstatus.New(c, c, settingsTestNS)
 	return &settingsHarness{t: t, ctx: context.Background(), c: c, rec: rec, status: status,

@@ -229,6 +229,7 @@ optimizer:
 func precedenceConfig(t *testing.T) *Config {
 	t.Helper()
 	c := NewTestConfig()
+	c.SetPolicyNamespace(SystemNamespace(), PolicySourceLocal)
 	c.UpdateScalingPolicyConfig(ScalingPolicySet{
 		GlobalDefaultsKey: mustPolicy(t, policyDefault),
 		"gold":            mustPolicy(t, "passive: true\n"),
