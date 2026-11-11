@@ -1,0 +1,66 @@
+# Runs `manager preflight check` once: one line per check, PASS, WARN, FAIL or
+# UNKNOWN, with the fix; the same as JSON in ConfigMap
+# scaling-manager-preflight-result. Fails (exit 1) on any FAIL, so both
+# `kubectl wait --for=condition=complete` and `--for=condition=failed` work.
+# A Job's template cannot change: delete it before applying it again.
+# It is deleted an hour after it ends (read its log before), and stopped
+# after ten minutes whatever it is doing.
+# deploy/release-manifests.sh sets the image, by digest.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scaling-manager-preflight
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scaling-manager
+        app.kubernetes.io/component: preflight
+    spec:
+      serviceAccountName: scaling-manager-preflight
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: preflight
+        image: controller:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/manager"]
+        args: ["preflight", "check"]
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        volumeMounts:
+        - name: prometheus-ca
+          mountPath: /etc/scaling-manager/prometheus-ca
+          readOnly: true
+      volumes:
+      # The CA that signs Prometheus's certificate, as the controller mounts
+      # it. Mounted by the kubelet: the preflight's account reads no Secret.
+      - name: prometheus-ca
+        secret:
+          secretName: scaling-manager-prometheus-ca
+          optional: true

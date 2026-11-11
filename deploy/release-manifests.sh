@@ -24,9 +24,6 @@
 #     LLMSM_PREREQ_NAMED in deploy/lib/common.sh), plus any cluster-scoped or
 #     monitoring.coreos.com object of the extra files.
 #
-# The preflight Job file (scaling-manager-preflight.yaml) is not written yet:
-# `manager preflight` does not exist. TODO: add it with the preflight command.
-#
 # Needs yq v4, sha256sum, and kustomize (KUSTOMIZE, else kustomize or
 # `kubectl kustomize` on PATH). Reads no cluster.
 
@@ -56,6 +53,8 @@ RELEASE_FILES=(
     scaling-manager-alerts.yaml
     scaling-manager-policy-example.yaml
     scaling-manager-metrics-reader.yaml
+    scaling-manager-preflight.yaml
+    scaling-manager-preflight-cluster.yaml
 )
 
 # Until the controller reads scaling-manager-settings (phase 2 of the
@@ -319,6 +318,33 @@ label "$PLACEHOLDER" < "$ROOT/config/release/metrics-reader-clusterrolebinding.y
     | write scaling-manager-metrics-reader.yaml \
         "Optional, Kubernetes namespaced install: lets the Prometheus that scrapes the controller read its /metrics. Name that Prometheus account; nothing is bound by default. For the cluster-wide file: kubectl create clusterrolebinding scaling-manager-metrics-reader-rolebinding --clusterrole=scaling-manager-metrics-reader --serviceaccount=<prometheus namespace>:<prometheus serviceaccount>" \
         "Before applying: sed -e \"s/$PLACEHOLDER/<controller namespace>/g\" -e \"s/__PROMETHEUS_NAMESPACE__/<prometheus namespace>/g\" -e \"s/__PROMETHEUS_SA__/<prometheus serviceaccount>/g\""
+
+# The preflight Job, its ServiceAccount and its read-only RBAC: the Job runs
+# `manager preflight check` from the release image, pinned like the
+# controller's. Two files: the namespaced one reads pods and PodMonitors in
+# the controller's namespace only, and other Deployments by name; the
+# cluster-wide one, for the install in scaling-manager-system, lists them in
+# every namespace, which a cluster-wide controller manages.
+preflight_sources() {
+    local first=true f
+    for f in "$@"; do
+        [ "$first" = true ] || echo '---'
+        first=false
+        cat "$ROOT/config/release/$f.yaml"
+    done
+}
+pin_preflight() {
+    IMAGE="$IMAGE_REPO@$IMAGE_DIGEST" yq '(select(.kind == "Job") | .spec.template.spec.containers[].image) = strenv(IMAGE)'
+}
+PREFLIGHT_WHAT="The preflight check: a Job that reads the prerequisites and prints PASS, WARN, FAIL or UNKNOWN per check with the fix (docs/reference/preflight.md). Read-only, and it reads no Secret; part=admin is its ServiceAccount and RBAC, part=controller the Job. Delete the Job before applying it again, and the ClusterRoleBinding after the run."
+preflight_sources preflight-serviceaccount preflight-role preflight-rolebinding preflight-clusterrole preflight-clusterrolebinding preflight-job \
+  | pin_preflight | label "$PLACEHOLDER" \
+  | write scaling-manager-preflight.yaml "$PREFLIGHT_WHAT (Namespaced install.)" "$SED_HOW"
+preflight_sources preflight-serviceaccount preflight-role preflight-rolebinding preflight-cluster-clusterrole preflight-cluster-clusterrolebinding preflight-job \
+  | sed "s/$PLACEHOLDER/$CLUSTER_NS/g" | pin_preflight \
+  | yq '(select(.kind == "Job") | .spec.template.spec.containers[0].args) += ["--scope=cluster"]' \
+  | label "$CLUSTER_NS" \
+  | write scaling-manager-preflight-cluster.yaml "$PREFLIGHT_WHAT (Cluster-wide install, in $CLUSTER_NS; applies as is.)" ""
 
 # Every file holds at least one object, or the render went wrong somewhere.
 for f in "${RELEASE_FILES[@]}"; do

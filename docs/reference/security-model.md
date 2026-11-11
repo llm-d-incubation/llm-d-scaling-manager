@@ -35,6 +35,7 @@ the controller can bound the person who can edit it**. See
 | ServiceAccount `scaling-manager-epp-metrics-reader` | the prereqs phase | scraping EPP `/metrics`. Bound cluster-wide to `get` on the non-resource URL `/metrics` |
 | Secret `scaling-manager-epp-metrics-token` | the prereqs phase | a **legacy, non-expiring** `kubernetes.io/service-account-token` for `scaling-manager-epp-metrics-reader`, mounted into the controller at `/var/run/secrets/epp-metrics` |
 | ServiceAccount `scaling-manager-metrics-scraper` | the prereqs phase, **OpenShift only** | the identity user-workload Prometheus scrapes the controller's `:8443` with. Its only grant is `get` on `/metrics` (the repointed `metrics-reader`) |
+| ServiceAccount `scaling-manager-preflight` | the release's preflight file (`scaling-manager-preflight.yaml`, or `-cluster.yaml`), **only while you run the preflight** | the preflight Job, `manager preflight check`: reads the prerequisites and writes ConfigMap `scaling-manager-preflight-result`. Never the controller's account. Its grants are [below](#the-preflight-account). Delete its ClusterRoleBinding, and the account, after the run |
 | Secret `scaling-manager-metrics-scraper-token` | the prereqs phase, **OpenShift only** | a **legacy, non-expiring** token for `scaling-manager-metrics-scraper`, referenced by the ServiceMonitor's `bearerTokenSecret` (the prometheus-operator can only read a Secret) |
 
 About the token Secrets:
@@ -194,6 +195,25 @@ cluster-wide. The differences that matter for review:
 already covers them. Leases, the leader-election Events and the history and
 status ConfigMaps stay namespaced in the controller's own namespace. On OpenShift the `cluster-monitoring-view`
 binding and the `metrics-reader` repoint are added as above.
+
+### The preflight account
+
+The release's preflight Job ([preflight.md](preflight.md)) runs as
+`scaling-manager-preflight`. It reads no Secret: the Prometheus CA is mounted
+into its Pod by the kubelet, and the scaler's certificate chain is read by a
+TLS handshake and checked against the CA certificate the controller publishes
+in `scaling-manager-controller-status`. It sends its token to Prometheus only
+over `https` with the certificate verified.
+
+| Grant | Scope | What it can see |
+| --- | --- | --- |
+| Role `scaling-manager-preflight` | the controller's namespace | `get` five ConfigMaps by name (settings, legacy configuration, KEDA marker, controller status, its result), the controller's ServiceAccount and the scaler NetworkPolicy; `list` pods and PodMonitors there; `create` ConfigMaps (cannot be narrowed by name; the code creates only its result) and `update` its result |
+| ClusterRole `scaling-manager-preflight-<namespace>` (namespaced file) | cluster | `get` by name: KEDA's and Kueue's CRDs, the external-metrics APIService, this install's ClusterTriggerAuthentication, the `keda-operator` and `scaling-manager-controller-manager` Deployments (in any namespace, by those names), the two namespace-reader ClusterRoles. `get` namespaces; `list` nodes and Prometheus resources; `create` SubjectAccessReviews, which answers what any account may do (the cluster's RBAC) and grants nothing |
+| ClusterRole `scaling-manager-preflight` (cluster-wide file) | cluster | the same, but `list` Deployments, pods and PodMonitors in **every namespace**: their specs, inline `env` values included |
+
+The ClusterRole is a cluster admin's, and the reason to delete its binding
+after the run: while it is bound, whoever can run a Pod as the preflight's
+account in the controller's namespace holds those reads.
 
 ### Grants made after install
 
