@@ -236,6 +236,13 @@ check_dir() {
         n="$(q "$f" '[.[] | select(.kind == "Deployment") | .spec.template.spec.volumes[]
             | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional] | tojson')"
         [ "$n" = '[true]' ] || say "$f: the scaling-manager-manager-config volume is not optional: $n"
+        # The Prometheus CA the operator creates is mounted, optional, where
+        # prometheusCACertPath points: without it a private CA cannot be trusted.
+        n="$(q "$f" '[.[] | select(.kind == "Deployment") | . as $d | .spec.template.spec.volumes[]
+            | select(.secret.secretName == "scaling-manager-prometheus-ca" and .secret.optional == true) | .name as $v
+            | $d.spec.template.spec.containers[] | select(.name == "manager") | .volumeMounts[]
+            | select(.name == $v and .mountPath == "/etc/scaling-manager-prometheus-ca")] | length')"
+        [ "$n" = 1 ] || say "$f: Secret scaling-manager-prometheus-ca is not mounted, optional, at /etc/scaling-manager-prometheus-ca ($n)"
         # No installer runs to mint the scaler certificates: the controller
         # provisions them (--external-scaler-tls-bootstrap), never with the
         # make path's certificate files, under the narrow Role, bound to its
@@ -325,7 +332,7 @@ check_dir() {
         || say "scaling-manager-metrics-reader.yaml binds a ClusterRole the namespaced file does not hold"
 
     n="$(q scaling-manager-settings.yaml '.[] | select(.kind == "ConfigMap") | .metadata.name + " " + (.data | tojson)')"
-    [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
+    [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusCACertPath":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
         || say "scaling-manager-settings.yaml: name, keys or defaults differ from the proposal: $n"
 
     # The preflight files: the Job runs `manager preflight check` as its own
@@ -483,6 +490,8 @@ mutate podmonitor-controller "differs from the installer split" scaling-manager-
     '(select(.kind == "PodMonitor") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
 mutate volume-not-optional "is not optional" scaling-manager-namespaced.yaml \
     '(select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "scaling-manager-config") | .configMap.optional) = false'
+mutate prometheus-ca-unmounted "scaling-manager-prometheus-ca is not mounted" scaling-manager-namespaced.yaml \
+    'del(select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "scaling-manager-prometheus-ca"))'
 mutate servername-unfixed "serverName" scaling-manager-namespaced-openshift.yaml \
     '(select(.kind == "ServiceMonitor") | .spec.endpoints[0].tlsConfig.serverName) = "scaling-manager-controller-manager-metrics-service.PLACEHOLDER-NAMESPACE.svc"'
 mutate kueue-unnarrowed "Kueue Namespace read" scaling-manager-kueue.yaml \

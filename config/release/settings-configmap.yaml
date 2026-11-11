@@ -20,8 +20,13 @@ data:
   # FAILs until it is set. restart.
   # On OpenShift: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
   prometheusURL: ""
-  # Skip verifying Prometheus's certificate. Leave "false" and create Secret
-  # scaling-manager-prometheus-ca (key ca.crt) instead. restart.
+  # The CA that signed Prometheus's certificate, when no public CA did: create
+  # Secret scaling-manager-prometheus-ca (key ca.crt) and set this to
+  # /etc/scaling-manager-prometheus-ca/ca.crt, where the controller mounts it.
+  # Empty: the system roots. restart.
+  prometheusCACertPath: ""
+  # Skip verifying Prometheus's certificate. Leave "false" and set
+  # prometheusCACertPath instead. restart.
   prometheusInsecureSkipVerify: "false"
   # Decide, log and publish, but change no replica count. live.
   passive: "true"

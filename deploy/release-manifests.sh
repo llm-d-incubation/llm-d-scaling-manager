@@ -178,6 +178,10 @@ main_manifest() {
     # files leave the binding out: scaling-manager-metrics-reader.yaml is that
     # binding with the account as a placeholder. On OpenShift the binding names
     # the install own metrics-scraper account and stays.
+    # The Deployment mounts Secret scaling-manager-prometheus-ca, optional, at
+    # /etc/scaling-manager-prometheus-ca (the path the installer uses): the
+    # operator creates it and sets prometheusCACertPath to its ca.crt. Without
+    # the mount, a Prometheus with a private CA could not be verified.
     NS="$ns" KEDA_NS="$keda_ns" PLATFORM="$platform" yq '
         select((.kind == "Namespace"
             or (.kind == "ConfigMap" and (.metadata.name == "scaling-manager-manager-config" or .metadata.name == "scaling-manager-scaling-policy-config"))
@@ -186,6 +190,8 @@ main_manifest() {
             or ((.kind == "ClusterRole" or .kind == "ClusterRoleBinding") and (.metadata.name | test("^scaling-manager-kueue-reader-")))) | not)
         | (select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional) = true
         | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .args) += ["--external-scaler-tls-bootstrap=true"]
+        | (select(.kind == "Deployment") | .spec.template.spec.volumes) += [{"name": "scaling-manager-prometheus-ca", "secret": {"secretName": "scaling-manager-prometheus-ca", "optional": true, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]
+        | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .volumeMounts) += [{"name": "scaling-manager-prometheus-ca", "mountPath": "/etc/scaling-manager-prometheus-ca", "readOnly": true}]
         | (select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig | select(has("serverName")) | .serverName) |= sub("PLACEHOLDER-NAMESPACE", strenv(NS))
         | (select(.kind == "NetworkPolicy") | .spec.ingress[] | select(has("from")) | .from[] | select(has("namespaceSelector")) | .namespaceSelector.matchLabels | select(has("kubernetes.io/metadata.name")) | .["kubernetes.io/metadata.name"]) = strenv(KEDA_NS)
         | (select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role") | .rules[] | select(.resources[0] == "namespaces") | .resourceNames) = [strenv(NS), "scaling-manager-policy"]
