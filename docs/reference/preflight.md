@@ -79,10 +79,10 @@ For the cluster-wide file the binding is `scaling-manager-preflight`.
 
 ```text
 PASS    keda.crd              scaledobjects.keda.sh v1alpha1
-FAIL    keda.networkpolicy    the release file's NetworkPolicy scaling-manager-external-scaler (not applied yet) admits port 9090 from keda, but KEDA runs in keda-system: ...
+WARN    keda.networkpolicy    the release file's NetworkPolicy scaling-manager-external-scaler (not applied yet), as shipped, admits port 9090 from keda, but KEDA runs in keda-system: ...
         fix: sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: keda-system#" scaling-manager-namespaced*.yaml   # before applying it
 UNKNOWN rbac.controller       ServiceAccount scaling-manager-controller-manager does not exist in team-a yet: ...
-11 PASS, 2 WARN, 1 FAIL, 1 UNKNOWN
+11 PASS, 3 WARN, 0 FAIL, 1 UNKNOWN
 UNKNOWN is not a pass: those checks were not made. Each line says what was refused or missing.
 not applicable: kueue (kueue is "false"); activation (utilizationShare is "off")
 ```
@@ -113,7 +113,7 @@ after it.
 | `settings` | the controller's own parser rejects a key (for example a bad quota, a `logVerbosity` above 10, or a `watchNamespaces` wider than the Deployment's), `utilizationShare` is on without a limiter, or there are no settings. The detail says what the controller does with each rejected key | a key is no setting or has no effect, or only the pre-v0.11.0 `scaling-manager-manager-config` exists | the settings cannot be read, or `watchNamespaces` is set and the controller's Deployment cannot be read |
 | `keda.crd` | `scaledobjects.keda.sh` is absent | | the CRD cannot be read |
 | `keda.version` | KEDA is older than 2.18 | an untested minor; before 2.21.0 (CVE-2026-77524); before 2.20.0 (a ScaledObject made just after a controller restart can stay unwired) | KEDA's operator cannot be read, or its image names no version |
-| `keda.networkpolicy` | the scaler NetworkPolicy, applied or in the file (`keda`; `openshift-keda` on OpenShift), does not admit the namespace KEDA runs in. The fix is a `kubectl patch`, or a `sed` on the file before it is applied | the external-metrics APIService is not KEDA's | where KEDA runs cannot be read |
+| `keda.networkpolicy` | the applied scaler NetworkPolicy does not admit the namespace KEDA runs in. The fix is a `kubectl patch` | the policy is not applied yet and the file as shipped (`keda`; `openshift-keda` on OpenShift) does not admit KEDA's namespace. The preflight cannot read the file, so an edited one still warns; the run after the install checks the live policy. The fix is a `sed` on `scaling-manager-namespaced*.yaml`, or on `scaling-manager-cluster*.yaml` with `--scope=cluster`, before the file is applied. Also when the external-metrics APIService is not KEDA's | where KEDA runs cannot be read |
 | `keda.mtls` | the marker says mutual TLS is in place and the ClusterTriggerAuthentication is missing, or the controller reports KEDA's handshakes refused (`scalerUnreachable`) | no marker: the scaler serves plaintext. The fix lists the setup commands | before the install: whether KEDA's copy of the certificates matches is not readable without its Secret. After it, `scalerUnreachable` and the alert `LLMSMExternalScalerUnreachable` say so |
 | `scaler.tls` (with mutual TLS) | the chain the scaler serves, read by a TLS handshake, does not verify against the scaler CA the controller publishes (`scalerCACert` in `scaling-manager-controller-status`): another CA, another host, or expired | | the controller has not run, publishes no CA, or the handshake gets no answer (the NetworkPolicy admits port 9090 from KEDA's namespace only) |
 | `prometheus.reachable` | `prometheusURL` is unset, plain `http://`, refused, times out, or its certificate fails against the mounted Secret `scaling-manager-prometheus-ca` | | the settings cannot be read |

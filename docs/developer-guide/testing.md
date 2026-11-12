@@ -2350,8 +2350,10 @@ guide](../guides/install-cluster-wide/) does: the controller in
 `scaling-manager-system`, which the files name, and the models in `llm-d-sim`,
 another namespace, with the model-namespace file applied there. The steps
 below are the same, with these differences: there is no admin/controller split
-(each file is applied whole, in the guide's order); the NetworkPolicy fix is
-the guide's `sed` on the cluster file, because nothing of it is applied yet; the
+(each file is applied whole, in the guide's order); nothing of the cluster file
+is applied before the preflight, so `keda.networkpolicy` must WARN (not FAIL)
+with a `sed` on `scaling-manager-cluster*.yaml`, which the run applies, and it
+stays WARN in the run before the install, whose Job must complete; the
 smoke suite skips nothing; the activation file grants in `llm-d-sim`; and the
 uninstall also looks for unlabelled objects in `llm-d-sim`, then deletes
 `scaling-manager-system`. Run the two scopes on separate clusters: KEDA keeps
