@@ -266,6 +266,8 @@ func (c *ReplicaMetricsCollector) extractPodMetrics(
 	if result := results[registration.QueryLandedQueueLength]; result != nil && !result.HasError() {
 		for _, value := range result.Values {
 			instanceKey, _, _ := c.buildInstanceKey(ctx, namespace, value.Labels)
+			// A NaN the source turned into 0 passes the range test and keeps
+			// its old value, but is not a reading: the bit needs Finite.
 			if data := podData[instanceKey]; instanceKey != "" && data != nil &&
 				value.Value >= 0 && !math.IsInf(value.Value, 0) {
 				data.landedQueue = int(value.Value)

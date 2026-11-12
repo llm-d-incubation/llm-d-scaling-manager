@@ -28,10 +28,12 @@ import (
 //     max_num_seqs, whether or not that cap was stated, and when a block
 //     cannot be allocated. So below a stated cap, at a default one, and on
 //     a full decode alike, a landed pull is a backlog this replica drains.
-//     Capped at the full count: the two are one-minute peaks, which need not
-//     fall in the same instant, and every landed request is one of the
-//     waiting ones. Without the series the queue is the capacity part
-//     alone, as before.
+//     Capped at the full count, for two reasons. The two are one-minute
+//     peaks, which need not fall in the same instant. And a landed request
+//     the scheduler has promoted but not yet scheduled may be counted in
+//     both the capacity part and completed_waiting; every landed request is
+//     one of the waiting ones, so min(full, ...) bounds that double count.
+//     Without the series the queue is the capacity part alone, as before.
 //   - Except at the sequence cap (maxNumSeqs, the engine's max_num_seqs
 //     when its flag or the llm-d.ai/max-num-seqs annotation states it,
 //     never a default or a learned cap: atCapBatchCap, and
