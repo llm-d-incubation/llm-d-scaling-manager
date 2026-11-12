@@ -3,6 +3,7 @@ package saturation
 import (
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,7 +16,8 @@ import (
 // weighing when the readers' rate over what the unread replicas count at (the
 // ratio), averaged over WeighSetWindow, sits under SiblingMuTolerance (0.80);
 // it stops no sooner than WeighClearWindow after, when the ratio averaged over
-// that window reaches 0.90, and at once with no unread replica.
+// that window reaches 0.90, and at once with no unread replica. Once it has
+// cleared, it sets again only when the clear window's mean sits under 0.80 too.
 
 // weighAt feeds the latch one reading a cycle from start, three unread
 // replicas, h 1, and returns its choices.
@@ -103,6 +105,24 @@ func TestWeighingBand_SetHoldClear(t *testing.T) {
 	require.Equal(t, 55, cleared, "cleared once the clear window's mean is over 0.90")
 	require.False(t, c.weighs(0.85, 1, 3, SiblingMuTolerance, start.Add(time.Duration(len(got))*propCycle)),
 		"cleared, a reading inside the band does not set it again")
+
+	// Cleared, it sets again on the clear window's mean as well (issue #60):
+	// after the same run at 0.92, readings at 0.5 take the set window's mean
+	// under 0.80 at the sixth (0.92 - 0.42 x 6 / 20 = 0.794) but the clear
+	// window's only at the twelfth (0.92 - 0.42 x 12 / 40 = 0.794; 0.8045 at
+	// eleven).
+	c = &muChoice{}
+	run := confirm + 1 + 3*clearCycles
+	got = weighAt(c, start, slices.Concat(repeat(0.5, confirm+1), repeat(0.92, 3*clearCycles), repeat(0.5, setCycles)))
+	require.False(t, got[run-1], "premise: cleared before the readings at 0.5")
+	reset := -1
+	for i := run; i < len(got); i++ {
+		if got[i] {
+			reset = i - run + 1
+			break
+		}
+	}
+	require.Equal(t, 12, reset, "a cleared key sets again once the clear window's mean is under 0.80, not the set window's alone")
 
 	// A provisional set (one reading at 0.5, then 0.95) is not held by the
 	// dwell: it clears once its set-window mean reaches 0.90, at the ninth
@@ -287,23 +307,13 @@ func TestWeighingBand_OneChangePerExcursion(t *testing.T) {
 				}
 			}
 			t.Logf("%s: band on fails %d of 20 seeds (%d changes at the keys' starts), off %d of 20", name, onFail, startChanges, offFail)
-			// One level is held to the seeds measured, not to zero. Until
-			// issue #55 each replica's re-reads within a minute folded by
-			// their max, which read the queued replica about 10 % high at
-			// this noise, and that margin held the recovery's ratio clear of
-			// the tolerance. At its latest reading, at 15 % noise and a
-			// per-cycle lag-one of 0.75 (above the 0.1-0.4 measured on E1),
-			// the set window's 5 min mean of a ratio at 0.95 dips under 0.80
-			// mid-run on seeds 1, 5 and 13 and sets the weighing again after
-			// it cleared (seed 1: cleared at cycle 137, set at 182). Open:
-			// the band's windows at that correlation, not the fold (draft
-			// issue: the weighing band re-sets at a per-cycle lag-one of
-			// 0.75). Any other seed failing, or one of these passing, fails.
-			if nz == (weighNoise{0.15, 0.75}) && !ex.end {
-				require.Equal(t, []uint64{1, 5, 13}, failed, "%s: the seeds the band re-sets on", name)
-			} else {
-				require.Zero(t, onFail, "%s: the band changed source more than once in the excursion, or ended on the wrong side", name)
-			}
+			// Every level holds on every seed. At 15 % noise and a per-cycle
+			// lag-one of 0.75 a set judged on the set window alone re-set the
+			// recovery mid-run on seeds 1, 5 and 13 once it had cleared (seed
+			// 1: cleared at cycle 137, set at 182): the 5 min mean of a ratio
+			// at 0.95 dipped under 0.80. A key that has cleared sets again
+			// only on the clear window's mean as well (issue #60).
+			require.Zero(t, onFail, "%s: the band changed source more than once in the excursion, or ended on the wrong side (failed seeds %v)", name, failed)
 			require.Greater(t, offFail, 10, "%s: negative control: the bare tolerance flaps on most seeds", name)
 		}
 	}
