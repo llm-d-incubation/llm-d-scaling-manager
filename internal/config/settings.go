@@ -79,6 +79,18 @@ func RestartSettingKeys() []string {
 	return slices.Sorted(maps.Keys(restartSettingKeys))
 }
 
+// SettingLoaderKey returns the loader key (flag, environment variable and
+// config.yaml name) a setting falls back to when the settings ConfigMap does
+// not hold it: the restart settings' keys, and LLMSM_PASSIVE for passive.
+// ok is false for a setting that has none.
+func SettingLoaderKey(setting string) (key string, ok bool) {
+	if setting == SettingPassive {
+		return PassiveSourceFlag, true
+	}
+	key, ok = restartSettingKeys[setting]
+	return key, ok
+}
+
 // advancedSettingKeys are the loader keys the settings ConfigMap also takes
 // under their config.yaml names, read only at start. They are absent from the
 // shipped file (docs/reference/configuration-advanced.md).
@@ -130,6 +142,12 @@ type Settings struct {
 	// Restart holds the settings read only at start, and the advanced keys,
 	// by loader key (PROMETHEUS_BASE_URL, V, ...), as written.
 	Restart map[string]string
+}
+
+// LimiterTypes is the limiter set the settings' limiters list selects; empty
+// when the limiter keys build none.
+func (s Settings) LimiterTypes() LimiterTypes {
+	return limiterTypesOf(s.Limiters)
 }
 
 // SettingsReport is what reading the settings ConfigMap found wrong.

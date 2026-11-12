@@ -78,7 +78,7 @@ func checkControllerRBAC(ctx context.Context, s *state) ([]Result, string) {
 		asks = append(asks, namespacedNeeds...) // namespace "": every namespace
 	}
 	st := s.loadSettings(ctx)
-	limiters, _ := parseLimiters(st.value(keyLimiter))
+	limiters := st.parsed.LimiterTypes()
 	nodes := access{verb: "list", resource: "nodes"}
 	var denied []string
 	for _, a := range asks {
@@ -107,7 +107,7 @@ func checkControllerRBAC(ctx context.Context, s *state) ([]Result, string) {
 		return []Result{{Status: Fail, Detail: fmt.Sprintf("%s may not: %s", ControllerServiceAccount, listText(denied, 8)), Fix: reapply}}, ""
 	}
 	if !nodeOK {
-		if limiters["gpu-inventory"] {
+		if limiters.HasPhysical() {
 			return []Result{{Status: Fail,
 				Detail: "the limiter gpu-inventory needs the controller to list nodes, and it may not: every variant then gets no GPU budget and never scales up",
 				Fix:    reapply + "   # the node-reader ClusterRole and its binding, part=admin"}}, ""

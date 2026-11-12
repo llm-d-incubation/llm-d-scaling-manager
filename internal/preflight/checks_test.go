@@ -80,9 +80,9 @@ func TestSettings(t *testing.T) {
 		{"bad bool", func(f *fixture) { f.settings[keyPassive] = "yes" }, Fail, "passive"},
 		{"unknown mode", func(f *fixture) { f.settings[keyUtilizationShare] = "on" }, Fail, "off, shadow or active"},
 		{"sharing without a limiter", func(f *fixture) { f.settings[keyUtilizationShare] = "shadow" }, Fail, "needs a limiter"},
-		{"bad quota", func(f *fixture) { f.settings[keyLimiter] = "quota"; f.settings[keyQuotas] = "H200=eight" }, Fail, "NAME=N"},
+		{"bad quota", func(f *fixture) { f.settings[keyLimiter] = "quota"; f.settings[keyQuotas] = "H200=eight" }, Fail, "whole number of GPUs"},
 		{"quota limiter, no budget", func(f *fixture) { f.settings[keyLimiter] = "quota" }, Fail, "budget"},
-		{"unknown limiter", func(f *fixture) { f.settings[keyLimiter] = "gpu" }, Fail, "gpu-inventory and quota"},
+		{"unknown limiter", func(f *fixture) { f.settings[keyLimiter] = "gpu" }, Fail, "gpu-inventory, quota, or both"},
 		{"bad watch namespace", func(f *fixture) { f.settings[keyWatchNamespaces] = "Team_B" }, Fail, "not a namespace name"},
 		{"legacy only", func(f *fixture) {
 			f.settings = nil
