@@ -1470,24 +1470,28 @@ var _ = Describe("SaturationAnalyzer", func() {
 			// It was 3500 while decode was also charged the 1000-token prompt
 			// that prefill is charged; the queue is now charged once, to the
 			// role that serves each half.
-			// Prefill role demand: replica(3000) only. Its 1000-token share of
-			// the scheduler queue is attributed (see the log line) and then
-			// dropped by the throughput model while prefill has no saturated
-			// throughput: a prefill replica holds a prompt for its prefill
-			// time plus the hand-off (throughput_floor.go).
-			Expect(result.RoleDemand["prefill"]).To(Equal(3000.0))
+			// Prefill role demand: replica(3000) + its 1000-token share of the
+			// scheduler queue. Prefill has no saturated throughput, and keeps
+			// the share (SwitchPrefillKeepsRouterPrompts,
+			// llm-d-incubation/llm-d-scaling-manager#51).
+			Expect(result.RoleDemand["prefill"]).To(Equal(4000.0))
 			Expect(result.RoleDemand["decode"]).To(Equal(2500.0))
 
-			// Replica demand = 3000 + 2000 = 5000. The queue adds its output
-			// (500) and its prompt (1000); the prompt is then dropped, because
-			// prefill has no saturated throughput and a queue at the scheduler
-			// is not resident work for prefill. It leaves the TOTAL with it now
-			// -- while the queue was charged to both roles the total carried it
-			// as decode's share and dropping prefill's copy changed nothing
-			// here, but the total's prompt tokens are prefill's share now and
-			// no other role is carrying them.
-			// Total = 5000 + 500 = 5500, which is exactly prefill's 3000 plus
-			// decode's 2500.
+			// Replica demand = 3000 + 2000 = 5000, and the queue adds its
+			// output (500) and its prompt (1000): 6500, exactly prefill's
+			// 4000 plus decode's 2500.
+			Expect(result.TotalDemand).To(Equal(6500.0))
+			Expect(result.TotalDemand).To(Equal(
+				result.RoleDemand["prefill"]+result.RoleDemand["decode"]),
+				"nothing in the model total is unowned by a role")
+
+			By("dropping the share from prefill and from the total with the switch off, as before")
+			off := NewSaturationAnalyzer(capacity.NewStore())
+			Expect(off.SetSwitchesForReplay(map[string]bool{SwitchPrefillKeepsRouterPrompts: false})).To(Succeed())
+			result, err = off.Analyze(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RoleDemand["prefill"]).To(Equal(3000.0))
+			Expect(result.RoleDemand["decode"]).To(Equal(2500.0))
 			Expect(result.TotalDemand).To(Equal(5500.0))
 			Expect(result.TotalDemand).To(Equal(
 				result.RoleDemand["prefill"]+result.RoleDemand["decode"]),

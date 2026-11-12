@@ -792,13 +792,14 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			"the resident 3M and the six queued requests at 6000 in + 1000 out")
 	})
 
-	It("drops prefill's share of the scheduler queue while prefill has no mu, and prices it once it has", func() {
+	It("keeps prefill's share of the scheduler queue while prefill has no mu, and prices it once it has", func() {
 		saturate()
-		// 200 prompts at the scheduler were charged to prefill as 200 x 6000
-		// tokens of residency -- more than a prefill replica -- and ordered
-		// prefill replicas that had nothing to prefill. A prefill replica holds
-		// a prompt for its prefill time plus the hand-off; the queue is decode's
-		// to drain.
+		// 200 prompts at the scheduler are charged to prefill as 200 x 6000
+		// tokens of residency while prefill has no mu
+		// (SwitchPrefillKeepsRouterPrompts,
+		// llm-d-incubation/llm-d-scaling-manager#51). With the switch off they
+		// are dropped, as before: a prefill replica holds a prompt for its
+		// prefill time plus the hand-off.
 		// Decode is not over its queue threshold here: with decode saturated,
 		// prefill's whole demand is held in the no-order/no-release band
 		// (holdPrefillDemand), which would mask what this spec is about.
@@ -807,10 +808,16 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			states(1, 1))
 		in.ArrivalRate = runLambda
 		in.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 200, QueueBytes: 200 * 6000 * 4}
+		analyzer.prefillKeepsPrompts = false
 		result, err := analyzer.Analyze(ctx, in)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RoleDemand[domain.RolePrefill]).To(BeNumerically("~", 66_183, 1),
-			"prefill keeps only its own resident KV")
+			"off: prefill keeps only its own resident KV")
+		analyzer.prefillKeepsPrompts = true
+		result, err = analyzer.Analyze(ctx, in)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RoleDemand[domain.RolePrefill]).To(BeNumerically("~", 66_183+200*6000, 1),
+			"on: its resident KV and the 200 queued prompts")
 
 		By("pricing it as a backlog once prefill has a saturated throughput of its own")
 		// Learned on a cycle decode is NOT saturated in: a prefill saturation
@@ -902,7 +909,7 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 			"the bridge's queue stays as the residency aggregation charged, and enters no backlog")
 	})
 
-	It("keeps prefill's own engine queue as residency while dropping its scheduler-queue share", func() {
+	It("keeps prefill's own engine queue as residency, and its scheduler-queue share with the switch on", func() {
 		saturate()
 		// Only the share of the scheduler queue goes: requests waiting in a
 		// prefill engine's own queue are work prefill has accepted, and stay
@@ -912,10 +919,16 @@ var _ = Describe("the throughput floor, through Analyze", func() {
 		in := makeAnalyzerInput([]domain.ReplicaMetrics{decode("decode-0", 300_000, 0, runMu), p}, states(1, 1))
 		in.ArrivalRate = runLambda
 		in.SchedulerQueue = &domain.SchedulerQueueMetrics{QueueSize: 200, QueueBytes: 200 * 6000 * 4}
+		analyzer.prefillKeepsPrompts = false
 		result, err := analyzer.Analyze(ctx, in)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RoleDemand[domain.RolePrefill]).To(BeNumerically("~", 66_183+4*6000, 1),
-			"resident KV plus the own queue at prefill's input-only footprint; the 200 x 6000 scheduler share is gone")
+			"off: resident KV plus the own queue at prefill's input-only footprint; the 200 x 6000 scheduler share is gone")
+		analyzer.prefillKeepsPrompts = true
+		result, err = analyzer.Analyze(ctx, in)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RoleDemand[domain.RolePrefill]).To(BeNumerically("~", 66_183+4*6000+200*6000, 1),
+			"on: the 200 x 6000 scheduler share stays as well")
 	})
 
 	It("floors the resident KV at zero when the residency it takes back exceeds what was measured", func() {
