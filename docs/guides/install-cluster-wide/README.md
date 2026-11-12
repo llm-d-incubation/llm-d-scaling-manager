@@ -15,9 +15,10 @@ failure domains, policy and upgrades stay separate.
 **This scope is work in progress.** The steps are the namespaced guide's, with
 the cluster-wide files; read that guide for what each step does.
 
-Tested: the namespaced files on Kubernetes (kind, `make
-test-e2e-release-manifests`, run before each release). The cluster-wide and
-OpenShift files are not yet tested end to end; each says so in its header.
+Tested: the namespaced and the cluster-wide files on Kubernetes (kind, `make
+test-e2e-release-manifests`, in CI and before each release; this guide's steps
+with a model in a namespace other than the controller's). The OpenShift files
+are not yet tested end to end; each says so in its header.
 
 Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-instead).
 
@@ -100,7 +101,10 @@ kubectl logs -n scaling-manager-system job/scaling-manager-preflight
 ```
 <!-- guide:deploy.preflight end -->
 
-Fix every `FAIL` and run it again. Every check: [Preflight
+Fix every `FAIL` and run it again. One stays until step 2: with KEDA outside
+`keda`, `keda.networkpolicy` FAILs even after the `sed` above, because the
+preflight reads the policy as shipped until the cluster file is applied. Run it
+again after step 2, where it must PASS. Every check: [Preflight
 check](../../reference/preflight.md). If a private CA signed Prometheus's
 certificate, give the controller that CA:
 

@@ -2340,7 +2340,23 @@ CREATE_CLUSTER=true make test-e2e-release-manifests-with-setup
 # or, step by step on a cluster you keep:
 make test-e2e-release-manifests-setup     # DEPLOY_SCALING_MANAGER=false deploy-e2e-infra, builds and loads the image
 make test-e2e-release-manifests           # renders the files, installs, checks, uninstalls
+# the cluster-wide files, as the cluster-wide guide installs them:
+make test-e2e-release-manifests RELEASE_E2E_SCOPE=cluster
 ```
+
+`RELEASE_E2E_SCOPE=cluster` installs `scaling-manager-cluster.yaml` and
+`scaling-manager-preflight-cluster.yaml` the way the [cluster-wide
+guide](../guides/install-cluster-wide/) does: the controller in
+`scaling-manager-system`, which the files name, and the models in `llm-d-sim`,
+another namespace, with the model-namespace file applied there. The steps
+below are the same, with these differences: there is no admin/controller split
+(each file is applied whole, in the guide's order); the NetworkPolicy fix is
+the guide's `sed` on the cluster file, because nothing of it is applied yet; the
+smoke suite skips nothing; the activation file grants in `llm-d-sim`; and the
+uninstall also looks for unlabelled objects in `llm-d-sim`, then deletes
+`scaling-manager-system`. Run the two scopes on separate clusters: KEDA keeps
+the scaler CA of its first connection, and the two installs mint different
+ones.
 
 `test/release-manifests/e2e.sh` copies the files to a scratch directory and
 works there. In order, and a step that fails stops the run:
@@ -2407,12 +2423,17 @@ works there. In order, and a step that fails stops the run:
   too: it keeps the CA of its first connection.
 - The summary, every preflight log and the smoke log are in
   `dist/release-e2e-logs` (`RELEASE_E2E_LOGS`).
-- Not in CI: the e2e workflow's jobs already use their time budget, and this
-  one adds a full smoke run. Run it before a release and on any change to
-  `deploy/release-manifests.sh`, `config/release/` or the preflight.
+- In CI: `e2e-tests-release-manifests` in `ci-pr-checks.yaml`, one leg per
+  scope, each on its own runner in parallel with the other e2e jobs. It runs
+  on a PR that touches `deploy/`, `config/`, `internal/`, `cmd/`,
+  `test/release-manifests/`, the smoke suite and what it imports
+  (`test/e2e/`, `test/utils/`, `test/testconfig/`, `test/alerts/`), the Go
+  module, the Dockerfile, the Makefile or the workflow, and on a dispatch with `run_full_tests`. On failure it uploads
+  `dist/release-e2e-logs` (with the cluster's pods, events and the controller
+  and KEDA logs) and the rendered files as the artifact
+  `release-e2e-logs-<scope>`.
 
-Not covered yet: the cluster-wide and OpenShift files, the Kueue and
-metrics-reader files, a model in a namespace other than the controller's, the
+Not covered yet: the OpenShift files, the Kueue and metrics-reader files, the
 passive non-move of a running model, an upgrade from the previous release's
 files, and the path equivalence with `make deploy-scaling-manager`
 ([the proposal's Testing section](../proposals/install-from-release.md#testing)).
