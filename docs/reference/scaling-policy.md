@@ -1279,6 +1279,22 @@ the `optimizer:` block, `scaleToZero`, `defaultPolicy`, `passive`, and any key
 you added. Every other entry (named tiers, per-model entries) is kept too
 (`deploy/lib/infra_scaling_manager.sh`, `llmsm_merge_live_default`).
 
+The install records the keys it rendered, and its release, in two annotations
+on the ConfigMap: `llm-d.ai/installer-rendered-default-keys` and
+`llm-d.ai/installer-rendered-default-release`. When a later release stops
+rendering one of those keys (it renames, removes or moves it), the next
+re-run drops it from the live entry and names it with its live value, instead
+of keeping it as if you had added it:
+
+```text
+[WARNING] Dropping keys of the default entry of scaling-manager-scaling-policy-config that the install before (v0.11.1) rendered and this one does not (live value):
+    retiredKnob: 7
+```
+
+A key no install rendered is yours, and is kept. A ConfigMap written by a
+release before the annotations has none, so the first re-run from it keeps
+every key, as before, and writes the annotations for the next one.
+
 When the live entry sets an owned key to another value, the install writes the
 rendered value and names the key:
 
@@ -1296,6 +1312,7 @@ removes it. If the live policy cannot be read, the install refuses.
 | --- | --- |
 | `optimizer:` (utilization share) | kept, in the mode it was in (shadow or active). With `LLMSM_LIMITER=none` the limiters go, the controller rejects the block and nothing is shared, and a limiter declared later turns it back on in that mode; the install warns. Run `make utilization-share-off` first, while the limiter is in force |
 | `scaleToZero`, `defaultPolicy`, `passive`, other keys the install does not render | kept |
+| a key the install before rendered and this release does not | dropped, with a warning naming the key and its live value |
 | a threshold or `analyzers` (owned keys) | the rendered value, with a warning naming the key. Edit it back, or set it on a named tier that `defaultPolicy` names, or on a per-model entry; both are kept |
 | `limiters:` | kept when `LLMSM_LIMITER` is not passed, hand-written entries included; `LLMSM_LIMITER=none` removes it |
 
