@@ -16,7 +16,8 @@ Prometheus 2 its start too), so a sample read twice is written once.
 Refused, because each would read as a window with less load than it had:
 - a file whose answer is not a success (an error body curl saved), not JSON,
   or not a matrix;
-- a chunk one metric has and another lacks (a request that saved no file);
+- a chunk one metric has and another lacks (a request that saved no file),
+  and a file not named METRIC.CHUNKSTART.json, which that check cannot place;
 - a native histogram sample, which OpenMetrics text cannot carry;
 - answers with no sample at all.
 Files with an empty result are fine: a metric the fleet does not export.
@@ -79,9 +80,8 @@ def check_chunks(paths):
     for path in paths:
         m = CHUNK_FILE.match(os.path.basename(path))
         if not m:
-            print(f"promjson-to-openmetrics: warning: {path} is not named METRIC.CHUNKSTART.json; "
-                  "its chunks are not checked", file=sys.stderr)
-            continue
+            raise ValueError(f"{path} is not named METRIC.CHUNKSTART.json, so a chunk missing beside it "
+                             "cannot be found; give it the name the guide's fetch gives")
         starts.setdefault(m["metric"], set()).add(int(m["start"]))
     every = set().union(*starts.values()) if starts else set()
     missing = sorted(f"{metric}.{start}" for metric, have in starts.items() for start in every - have)

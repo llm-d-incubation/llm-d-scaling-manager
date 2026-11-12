@@ -27,8 +27,9 @@ is the reference for both.
 - [ ] A window of 30 minutes or more in which load rose. A flat, quiet hour
   teaches the planner little.
 - [ ] `kubectl` access to Prometheus' namespace (a port-forward), or its URL.
-- [ ] For the first path: Go and a checkout of the release you run. For the
-  second: bash, `curl` and `jq`.
+- [ ] For Path 1: Go and a checkout of the release you run.
+- [ ] For Path 2: bash, `jq`, and `curl` 7.76 or later (for `--fail-with-body`;
+  `curl --version` says which), plus `kubectl get` on the model Deployments.
 - [ ] kube-state-metrics in the same Prometheus, for readiness and roles,
   with `--metric-labels-allowlist=pods=[llm-d.ai/role],nodes=[nvidia.com/gpu.product]`
   so it exports each Pod's role and each node's accelerator.
@@ -36,10 +37,6 @@ is the reference for both.
 
 <!-- guide:prerequisites start -->
 ```bash
-# From a checkout of the release you run. Needs Go. There is no released whatif binary or image.
-make whatif
-bin/whatif capture -h 2>&1 | head -3
-
 # Reach Prometheus from your machine. Use the Service your Prometheus has; plain http here.
 # For a Prometheus behind a token, see "Prometheus with a token" below.
 export PROM_NS=<prometheus namespace>
@@ -54,6 +51,10 @@ curl -s ${PROM_URL}/api/v1/status/buildinfo | jq -r .data.version
 
 <!-- guide:record start -->
 ```bash
+# From a checkout of the release you run. Needs Go. There is no released whatif binary or image.
+make whatif
+bin/whatif capture -h 2>&1 | head -3
+
 # The namespace your model servers run in, and the window to answer from (UTC).
 export NAMESPACE=<model namespace>
 export FROM=2026-11-01T12:00:00Z
@@ -111,8 +112,8 @@ returns millions of samples, and the usual failure is Prometheus'
 ## Path 2: record with curl and jq
 
 This saves the raw samples of every series the planner reads, nothing else,
-for one namespace. It needs read access to Prometheus' query API, nothing
-more.
+for one namespace. It needs read access to Prometheus' query API, and to read
+the model Deployments; no checkout of this repository, no Go.
 
 <!-- guide:manual start -->
 ```bash
@@ -189,27 +190,41 @@ echo "failed=${failed}"
 # What loading the export needs and Prometheus does not hold: the window, the engine, and the engine
 # arguments of the decode and prefill Deployments (leave PREFILL_DEPLOYMENT empty without one).
 # ENGINE is vllm or sglang; ENGINE_CONTAINER is the engine's container name.
+# It stops, and writes no window.txt, when a Deployment or its container is not found.
 export ENGINE=vllm
 export ENGINE_CONTAINER=vllm
 export DECODE_DEPLOYMENT=<decode deployment>
 export PREFILL_DEPLOYMENT=
 engine_args() {
-  [ -n "$1" ] || return 0
-  kubectl -n "${NAMESPACE}" get deploy "$1" -o json | jq -r --arg c "${ENGINE_CONTAINER}" \
-    '.spec.template.spec.containers[] | select(.name == $c) | ((.command // []) + (.args // [])) | join(" ")'
+  out=$(kubectl -n "${NAMESPACE}" get deploy "$1" -o json | jq -r --arg c "${ENGINE_CONTAINER}" '
+    [.spec.template.spec.containers[] | select(.name == $c) | (.command // []) + (.args // []) | .[]
+     | gsub("\n"; " ")
+     | if test("^[[{]") then (try (fromjson | tojson) catch .) else . end]
+    | join(" ")')
+  [ -n "${out}" ] || { echo "no container ${ENGINE_CONTAINER} with a command or args in Deployment $1" >&2; return 1; }
+  echo "${out}"
 }
-{
-  echo "NAMESPACE=${NAMESPACE}"
-  echo "FROM=${FROM}"
-  echo "TO=${TO}"
-  echo "FROM_ISO=$(jq -rn --argjson t "${FROM}" '$t | todate')"
-  echo "TO_ISO=$(jq -rn --argjson t "${TO}" '$t | todate')"
-  echo "CAPTURE_FROM=$(( FROM + 300 ))"
-  echo "ENGINE=${ENGINE}"
-  echo "DECODE_ARGS=$(engine_args "${DECODE_DEPLOYMENT}")"
-  echo "PREFILL_ARGS=$(engine_args "${PREFILL_DEPLOYMENT}")"
-} > planner-export/window.txt
-cat planner-export/window.txt
+rm -f planner-export/window.txt
+(
+  [ -n "${DECODE_DEPLOYMENT}" ] || { echo "set DECODE_DEPLOYMENT" >&2; exit 1; }
+  decode_args=$(engine_args "${DECODE_DEPLOYMENT}") || exit 1
+  prefill_args=
+  if [ -n "${PREFILL_DEPLOYMENT}" ]; then prefill_args=$(engine_args "${PREFILL_DEPLOYMENT}") || exit 1; fi
+  {
+    echo "NAMESPACE=${NAMESPACE}"
+    echo "FROM=${FROM}"
+    echo "TO=${TO}"
+    echo "FROM_ISO=$(jq -rn --argjson t "${FROM}" '$t | todate')"
+    echo "TO_ISO=$(jq -rn --argjson t "${TO}" '$t | todate')"
+    echo "CAPTURE_FROM=$(( FROM + 300 ))"
+    echo "ENGINE=${ENGINE}"
+    echo "DECODE_ARGS=${decode_args}"
+    echo "PREFILL_ARGS=${prefill_args}"
+  } > planner-export/window.txt
+) && cat planner-export/window.txt || echo "window.txt NOT written: fix the above, then run this step again"
+if grep -E '^[A-Z]+_ARGS=.*([$]|sh -c)' planner-export/window.txt 2>/dev/null; then
+  echo "EDIT planner-export/window.txt: the line above is not expanded (see the guide)"
+fi
 
 # Every chunk saved and a success, then how many series each metric had. It prints bad=0 when nothing is missing.
 # Zero series is fine for a metric your fleet does not export.
@@ -239,6 +254,16 @@ SGLang series on a vLLM fleet, say, or the `inference_extension_` twins on a
 current router. `0` for `vllm:kv_cache_usage_perc` (or `sglang:token_usage`)
 means the namespace or the window is wrong: nothing can be captured from it.
 
+**Check `window.txt` before you pack.** The describe step copies each
+engine container's command and arguments as written in the Deployment. It
+does not expand them: a `$(VAR)` or `${VAR}` stays as typed, and an
+entrypoint like `/bin/sh -c "vllm serve ... --max-num-seqs ${SEQS}"` stays one
+script. Where you see either, edit `DECODE_ARGS` (and `PREFILL_ARGS`) in
+`planner-export/window.txt` to the flags the engine really ran with, for
+example `DECODE_ARGS=--max-num-seqs 256 --tensor-parallel-size 2`. `whatif`
+splits these on whitespace: a JSON value is written compact (no spaces between
+its tokens), but a space inside one of its strings still splits it.
+
 Send `planner-export.tgz`. It holds metric labels (Pod, node and model names)
 and `window.txt`: the window, the engine and the Deployments' engine
 arguments, which loading it needs and Prometheus does not hold. No request
@@ -246,36 +271,51 @@ content.
 
 ### Loading a manual export
 
-On a machine with this repository, Python 3, `promtool` and `prometheus`
-(both are in the Prometheus release, and in the
+On a machine with a checkout of this repository, Go, Python 3, and a
+`prometheus` binary on `PATH` (from the Prometheus release, or the
 `quay.io/prometheus/prometheus` image). The window, the namespace and the
-engine come from the export's `window.txt`.
+engine come from the export's `window.txt`. A `STOP:` line means
+`window.txt` is not what the describe step writes: do not go on.
 
 <!-- guide:load start -->
 ```bash
-# In a checkout of this repository. Merges the answers into one OpenMetrics file, and prints the lookback to serve them with.
-# It reads only the *.json answers. window.txt is read below as data, never sourced: it came from someone else.
-tar xzf planner-export.tgz
+# In a checkout of this repository, with Python 3 and a prometheus binary on PATH (the Prometheus release,
+# or the quay.io/prometheus/prometheus image). Builds whatif and installs promtool.
+make whatif promtool
+export PROMTOOL=$(ls bin/promtool-* | sort -V | tail -1)
+${PROMTOOL} --version | head -1
+
+# The export came from someone else: look before you extract. This lists any entry that is not a plain
+# file name under planner-export/ (a path that climbs out, a link); it should print nothing.
+tar tzvf planner-export.tgz | awk '$1 !~ /^[-d]/ || $NF !~ /^planner-export\/[A-Za-z0-9_.:-]*$/'
+
+# Merges the answers into one OpenMetrics file, and prints the lookback to serve them with.
+# It reads only the *.json answers. window.txt is read as data, never sourced, and checked.
+tar xzf planner-export.tgz --no-same-owner
 python3 hack/promjson-to-openmetrics.py -o planner-export.om planner-export/*.json
 while IFS='=' read -r k v; do
   case "${k}" in NAMESPACE|FROM|TO|FROM_ISO|TO_ISO|CAPTURE_FROM|ENGINE|DECODE_ARGS|PREFILL_ARGS) export "${k}=${v}" ;; esac
 done < planner-export/window.txt
+case "${FROM}:${TO}:${CAPTURE_FROM}" in *[!0-9:]*|:*|*::*|*:) echo "STOP: FROM, TO and CAPTURE_FROM in window.txt must be Unix seconds" ;; esac
+case "${ENGINE}" in vllm|sglang) ;; *) echo "STOP: ENGINE in window.txt must be vllm or sglang" ;; esac
+echo "namespace ${NAMESPACE}, engine ${ENGINE}, decode arguments: ${DECODE_ARGS}"
 
-# Writes TSDB blocks with promtool (make promtool installs it as bin/promtool-<version>).
-promtool tsdb create-blocks-from openmetrics planner-export.om planner-tsdb
+# Writes TSDB blocks.
+${PROMTOOL} tsdb create-blocks-from openmetrics planner-export.om planner-tsdb
 
 # Serve the blocks. A retention longer than their age, or Prometheus deletes them on start.
 # LOOKBACK is the one the converter printed, four scrape intervals: it ends a series about when the original did (see Limits).
 export LOOKBACK=<the lookback the converter printed, e.g. 60s>
 touch empty.yml
 prometheus --config.file=empty.yml --storage.tsdb.path=planner-tsdb \
-  --storage.tsdb.retention.time=10y --query.lookback-delta=${LOOKBACK} \
+  --storage.tsdb.retention.time=10y --query.lookback-delta="${LOOKBACK}" \
   --web.listen-address=127.0.0.1:9091 &
+until curl -sf http://127.0.0.1:9091/-/ready >/dev/null; do sleep 1; done
 
 # Then capture as in the first path, against the local copy, from 5 minutes into the export.
 # whatif takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
-bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace ${NAMESPACE} --kube-state-metrics \
-  --from ${CAPTURE_FROM} --to ${TO} --engine ${ENGINE} --engine-args "${DECODE_ARGS}" \
+bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
+  --from "${CAPTURE_FROM}" --to "${TO}" --engine "${ENGINE}" --engine-args "${DECODE_ARGS}" \
   -o run.capture.jsonl.gz
 ```
 <!-- guide:load end -->

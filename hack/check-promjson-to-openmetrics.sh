@@ -60,6 +60,14 @@ refuse "native histograms" "native.1700000000.json: vllm:time_to_first_token_sec
   "$FIX/mixed.1700000000.json" "$FIX/native.1700000000.json"
 refuse "answers with no sample" "no sample" "$FIX/empty.1700000000.json"
 refuse "series with no sample" "no sample" "$FIX/nosamples.1700000000.json"
+refuse "a series with no name" "noname.1700000000.json: a series has no __name__" \
+  "$FIX/mixed.1700000000.json" "$FIX/noname.1700000000.json"
+refuse "JSON that is not an object" "notobject.1700000000.json: the query did not succeed: not an object" \
+  "$FIX/mixed.1700000000.json" "$FIX/notobject.1700000000.json"
+refuse "a file that does not exist" "gone.1700000000.json" \
+  "$FIX/mixed.1700000000.json" "$TMP/gone.1700000000.json"
+refuse "a file not named METRIC.CHUNKSTART.json" "badname.json is not named METRIC.CHUNKSTART.json" \
+  "$FIX/mixed.1700000000.json" "$FIX/badname.json"
 
 # 3. promtool backfills the output, and the blocks hold every sample.
 if ! command -v "$PROMTOOL" >/dev/null 2>&1; then
@@ -93,4 +101,4 @@ fi
 if [ "$fail" -ne 0 ]; then
   exit 1
 fi
-echo "ok: promjson-to-openmetrics merges chunks, escapes labels, refuses 7 broken exports; promtool backfilled $got of $want samples"
+echo "ok: promjson-to-openmetrics merges chunks, escapes labels, refuses 11 broken exports; promtool backfilled $got of $want samples"
