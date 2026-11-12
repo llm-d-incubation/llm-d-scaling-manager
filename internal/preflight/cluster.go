@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/accelerator"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 )
 
 // controllerSelector finds scaling manager controllers: control-plane is what
@@ -142,7 +143,7 @@ func checkAccelerators(ctx context.Context, s *state) ([]Result, string) {
 	if st.unread != "" {
 		return []Result{{Status: Unknown, Detail: "whether it applies is not known: " + st.unread}}, ""
 	}
-	quotas, err := parseQuotas(st.value(keyQuotas))
+	quotas, err := config.ParseQuotaSetting(st.value(keyQuotas))
 	if err != nil || len(quotas) == 0 {
 		return nil, "no quotas are set"
 	}

@@ -110,7 +110,7 @@ after it.
 
 | check | FAIL when | WARN when | UNKNOWN when |
 | --- | --- | --- | --- |
-| `settings` | a key does not parse (a bad or repeated quota, an unknown mode, a negative `logVerbosity`, `utilizationShare` without a limiter, `quota` with no budget), or there are no settings at all | the settings are absent and the pre-v0.11.0 `scaling-manager-manager-config` is read instead | the settings cannot be read |
+| `settings` | the controller would reject a key (the check uses the controller's own parser: a bad or repeated quota, an unknown mode, a `logVerbosity` outside 0 to 10, `quota` with no budget), `utilizationShare` is on without a limiter, or there are no settings at all | the settings hold a key that is no setting, or a value that has no effect; or the settings are absent and the pre-v0.11.0 `scaling-manager-manager-config` is read instead | the settings cannot be read |
 | `keda.crd` | `scaledobjects.keda.sh` is absent | | the CRD cannot be read |
 | `keda.version` | KEDA is older than 2.18 | an untested minor; before 2.21.0 (CVE-2026-77524); before 2.20.0 (a ScaledObject made just after a controller restart can stay unwired) | KEDA's operator cannot be read, or its image names no version |
 | `keda.networkpolicy` | the scaler NetworkPolicy, applied or in the file (`keda`; `openshift-keda` on OpenShift), does not admit the namespace KEDA runs in. The fix is a `kubectl patch`, or a `sed` on the file before it is applied | the external-metrics APIService is not KEDA's | where KEDA runs cannot be read |
