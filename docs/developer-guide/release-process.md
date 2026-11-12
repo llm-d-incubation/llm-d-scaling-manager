@@ -362,8 +362,11 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-preflight-cluster.yaml` | the same for the cluster-wide install in `scaling-manager-system` (`--scope=cluster`): lists pods, Deployments and PodMonitors in every namespace. Applies as is |
 
 `make test-e2e-release-manifests` installs the namespaced files on kind with
-`kubectl` only and checks them; run it before a release
-([Testing](testing.md#install-from-the-release-files)).
+`kubectl` only and checks them, and `RELEASE_E2E_SCOPE=cluster` does the same
+for the cluster-wide files. CI runs both on PRs that touch what the files are
+made from; run them before a release too
+([Testing](testing.md#install-from-the-release-files)). The OpenShift files
+are not tested end to end and say so in their header.
 
 Every object carries `app.kubernetes.io/part-of`, `instance`, `version` and
 `scaling-manager.llmd.ai/part: admin|controller`; `admin` is exactly what the

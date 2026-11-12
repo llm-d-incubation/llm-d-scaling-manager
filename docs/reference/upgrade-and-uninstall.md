@@ -20,19 +20,19 @@ Pin a release tag or a digest, and deploy with the manifests from the **same**
 release. An image older than the manifests crash-loops on flags it does not
 know. Releases are listed on the
 [Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases);
-the first release in this repository is the release candidate `v0.11.0-rc1`.
+the current one is `v0.11.0`.
 A checked-out release deploys its own tag, so `IMG_TAG` below only makes that
 explicit. Each release's notes list its image digest; a digest names one build,
 and a tag could in principle be re-pushed.
 
 ```bash
-git checkout v0.11.0-rc1
-make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=v0.11.0-rc1
-# or by digest (v0.11.0-rc1's, from its release notes)
+git checkout v0.11.0
+make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=v0.11.0
+# or by digest (v0.11.0's, from its release notes)
 make deploy-scaling-manager NAMESPACE=<namespace> \
-  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:80bf8573906df7c4f43d5307bd47282e3d930a63962b19663d8b61bd3212f78f
+  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:ec3af197ba63ff2e5f7bc214c90fbb7cf25bb6f442c832a05cfbf74b9c50cd6e
 # out-of-reach shape (the cluster admin runs it): the controller runs in llmsm-<namespace>
-NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=v0.11.0-rc1
+NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=v0.11.0
 ```
 
 `IMG_TAG` sets the tag of the default `IMG`; `IMG` replaces the whole reference.
@@ -128,6 +128,41 @@ changed, and there is no compatibility path. Reinstall.
    ```
 3. Install from this tree and re-create what you need. Learned state, tuned
    policy, labels on namespaces and ScaledObject addresses are not carried over.
+
+### Upgrading from v0.11.0-rc1 to v0.11.0
+
+Follow [Upgrade](#upgrade) above: back up the policy, check out `v0.11.0`, and
+re-run the `make deploy-scaling-manager` command you installed rc1 with. What
+changes for an rc1 install:
+
+1. **Settings have a new home.** v0.11.0 reads the
+   [settings ConfigMap](configuration.md#the-settings-configmap),
+   `scaling-manager-settings`. It is optional, and the upgrade does not create
+   it. Until you create it, the controller reads
+   `scaling-manager-manager-config` as before. That ConfigMap is read for one
+   release only (v0.11.x), so move your settings over before the next one.
+   `settingsSource` in `scaling-manager-controller-status` says `settings`
+   once the old ConfigMap no longer changes anything.
+2. **Scale-to-zero is off by default, but only on a first install.** rc1's
+   installer turned it on. An upgrade keeps the value the running controller
+   has, so an rc1 install keeps scale-to-zero on. Pass
+   `ENABLE_SCALE_TO_ZERO=false` to turn it off, and `ENABLE_SCALE_TO_ZERO=true`
+   on a new install that wants it. Either way a model parks only when its
+   ScaledObject's `minReplicaCount` is `0`.
+3. **A re-install keeps more.**
+   - The re-run keeps the utilization-share `optimizer:` block of the policy's
+     `default` entry. rc1 removed it, so you no longer re-run
+     `make utilization-share-shadow` and `-activate` after an upgrade
+     ([details](scaling-policy.md#what-re-running-the-installer-does-to-the-default-entry)).
+   - An uninstall keeps the scaler's CA, Secret
+     `scaling-manager-external-scaler-ca`, so a reinstall in the same
+     namespace keeps working with KEDA and needs no KEDA restart
+     ([what it leaves](#what-it-leaves)).
+4. **Release files are new.** v0.11.0 is the first release with
+   [rendered manifests](install-methods.md#the-release-files) attached. rc1
+   had none, so an install from them is a new install: follow the
+   [install guide](../guides/install-in-namespace/). To upgrade an rc1
+   install, use `make deploy-scaling-manager` as above.
 
 ### Upgrading from v0.10.2 to v0.11.0-rc1
 

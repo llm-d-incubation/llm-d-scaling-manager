@@ -1544,15 +1544,25 @@ test-e2e-passive-with-setup: ## Deploy e2e infra, then run the passive-mode spec
 # that install, passive -> shadow -> active, a wrong prometheusURL as the
 # negative control, and the uninstall. The files are rendered with the digest
 # the kind nodes hold for RELEASE_E2E_IMG, as a release pins it.
+# RELEASE_E2E_SCOPE=cluster installs the cluster-wide files instead, with the
+# models in another namespace than the controller. CI runs both
+# (e2e-tests-release-manifests in ci-pr-checks.yaml), each on a fresh cluster.
 # docs/developer-guide/testing.md, "Install from the release files".
 RELEASE_E2E_IMG       ?= ghcr.io/llm-d-incubation/llm-d-scaling-manager:release-e2e
 RELEASE_E2E_DIST      ?= $(CURDIR)/dist/release-e2e
 RELEASE_E2E_LOGS      ?= $(CURDIR)/dist/release-e2e-logs
 RELEASE_E2E_SMOKE     ?= true
+# namespace: scaling-manager-namespaced.yaml, the controller in the model
+# namespace. cluster: scaling-manager-cluster.yaml, the controller in
+# scaling-manager-system (the files name it) and the models in
+# E2E_EMULATED_LLMD_NAMESPACE.
+RELEASE_E2E_SCOPE     ?= namespace
+RELEASE_E2E_CONTROLLER_NS = $(if $(filter cluster,$(RELEASE_E2E_SCOPE)),scaling-manager-system,$(E2E_EMULATED_LLMD_NAMESPACE))
 # Smoke specs a namespaced install cannot serve: "Basic Autoscaling" creates
 # its model in a namespace it makes at run time, which only a cluster-scoped
 # controller watches (the reason deploy-e2e-infra installs cluster scope).
-RELEASE_E2E_SMOKE_SKIP ?= KEDA Smoke Tests - Basic Autoscaling
+# The cluster-wide install serves it, so it skips nothing.
+RELEASE_E2E_SMOKE_SKIP ?= $(if $(filter cluster,$(RELEASE_E2E_SCOPE)),,KEDA Smoke Tests - Basic Autoscaling)
 .PHONY: test-e2e-release-manifests
 test-e2e-release-manifests: kustomize ## Install from the rendered release files with kubectl only, and check it (kind, after test-e2e-release-manifests-setup)
 	@# The release files name the image by digest. The kind nodes hold the
@@ -1561,6 +1571,7 @@ test-e2e-release-manifests: kustomize ## Install from the rendered release files
 	@# repository, so a pod naming <repo>@sha256:<digest> would try to pull it.
 	@# Tag that reference on each node, as a registry would serve it.
 	@set -e; \
+	case "$(RELEASE_E2E_SCOPE)" in namespace|cluster) ;; *) echo "RELEASE_E2E_SCOPE must be namespace or cluster, not '$(RELEASE_E2E_SCOPE)'"; exit 1 ;; esac; \
 	nodes="$$($(KIND) get nodes --name $(CLUSTER_NAME))"; \
 	[ -n "$$nodes" ] || { echo "no kind cluster $(CLUSTER_NAME)"; exit 1; }; \
 	repo="$(RELEASE_E2E_IMG)"; repo="$${repo%:*}"; \
@@ -1577,9 +1588,10 @@ test-e2e-release-manifests: kustomize ## Install from the rendered release files
 	$(MAKE) --no-print-directory release-manifests IMG="$$digest" RELEASE_VERSION=v0.0.0-e2e DIST="$(RELEASE_E2E_DIST)"; \
 	smoke=""; \
 	if [ "$(RELEASE_E2E_SMOKE)" = true ]; then \
-		smoke="E2E_EXPECT_SCALER_TLS=true $(MAKE) --no-print-directory test-e2e-smoke CONTROLLER_NAMESPACE=$(E2E_EMULATED_LLMD_NAMESPACE) KUBECONFIG=$(KUBECONFIG) DEPLOY_ALERTING_RULES=true SKIP='$(RELEASE_E2E_SMOKE_SKIP)'"; \
+		smoke="E2E_EXPECT_SCALER_TLS=true $(MAKE) --no-print-directory test-e2e-smoke CONTROLLER_NAMESPACE=$(RELEASE_E2E_CONTROLLER_NS) KUBECONFIG=$(KUBECONFIG) DEPLOY_ALERTING_RULES=true SKIP='$(RELEASE_E2E_SMOKE_SKIP)'"; \
 	fi; \
-	KUBECONFIG=$(KUBECONFIG) NS=$(E2E_EMULATED_LLMD_NAMESPACE) KEDA_NS=$(E2E_KEDA_NAMESPACE) \
+	KUBECONFIG=$(KUBECONFIG) RELEASE_E2E_SCOPE=$(RELEASE_E2E_SCOPE) NS=$(RELEASE_E2E_CONTROLLER_NS) \
+		MODEL_NS=$(E2E_EMULATED_LLMD_NAMESPACE) KEDA_NS=$(E2E_KEDA_NAMESPACE) \
 		MONITORING_NS=$(E2E_MONITORING_NAMESPACE) E2E_LOG_DIR="$(RELEASE_E2E_LOGS)" SMOKE_CMD="$$smoke" \
 		bash test/release-manifests/e2e.sh "$(RELEASE_E2E_DIST)"
 

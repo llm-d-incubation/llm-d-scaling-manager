@@ -32,6 +32,12 @@ import (
 
 const testNS = "team-a"
 
+// otherNS is a second model namespace, and testQuota a quota on one type.
+const (
+	otherNS   = "team-b"
+	testQuota = "H200=8"
+)
+
 var testNow = time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
 
 // fixture is an install where every applicable check passes. Tests change

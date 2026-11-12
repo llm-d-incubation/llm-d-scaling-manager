@@ -17,14 +17,14 @@
   learner: mu
   expect: flipped
   finding: "The crossing is fixed: with the weighing's band (mu-weighing-band) it changes the source once. What still flips is a key's first reading landing in a noise trough (sigma 10 %, lag-one 0.3): the first set is on the first reading, it sets the weighing while the noise-free reader is at 0.95 of h, it is provisional and lets go once its own set-window mean is back at 0.90 (about 3 min, where the 10 min dwell held it before), and the crossing sets it again. The fix for that seals the closed-loop probe: 45 s of readings before a first set took a replica slow at 0.3 from the start to a peak of 27 against the 21.7 bound (105 s: 57), and setting a young key only under 0.75 sealed a replica slow at 0.65 mid-run at 24 (0/20 and 2/20 flips here then)."
-  measured: "3/100 seeds; seed 3: set on the first reading at 0.796 of h, cleared at cycle 11, set again at 76"
+  measured: "3/100 seeds, the same seeds before and after issue #60; seed 3: the source reversed at cycles 40 and 89 (40 and 72 before issue #60, whose re-set on the clear window as well puts the crossing's set 7 to 20 cycles later)"
   owner: "ev-shindin/llm-scaling-manager#495"
 - id: edges/mu/sibling-tolerance-excursion-sigma15
   class: edges
   learner: mu
   expect: flipped
-  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3), but since issue #55 the reversals are also mid-run: the readers' samples are their latest reads, no longer their max, so the reader's ratio carries its full per-read noise, and the band's 5 min set window dips under the tolerance and sets the weighing again after it cleared (seed 3: reversed at cycles 40 and 72, where it reversed at 14 and 76 before). The first-reading trough of the 10 % row remains. The fixes that remove that seal the closed-loop probe (see the 10 % row)."
-  measured: "16/100 seeds; seed 3: the source reversed at cycles 40 and 72 (14/100 before issue #55, when each replica's re-reads folded by their max and read high)"
+  finding: "As edges/mu/sibling-tolerance-excursion at the high end of the measured rate noise (sigma 15 %, lag-one 0.3): every failing seed is the 10 % row's first-reading trough, a set in the key's first cycles that clears (at the provisional clear, or after the dwell) before the crossing sets it again. Since issue #55 the readers' samples are their latest reads, no longer their max, so the reader's ratio carries its full per-read noise; since issue #60 a key that has cleared sets again only once the clear window's mean is under the tolerance too, so that noise no longer re-sets it mid-run, and the crossing's set comes 7 to 20 cycles later. The fixes that remove the first-reading trough seal the closed-loop probe (see the 10 % row)."
+  measured: "16/100 seeds, the same seeds before and after issue #60; seed 3: the source reversed at cycles 40 and 89 (40 and 72 before issue #60; 14/100 before issue #55, when each replica's re-reads folded by their max and read high)"
   owner: "ev-shindin/llm-scaling-manager#495"
 - id: edges/shape-hold/tolerance-excursion-stress
   class: edges

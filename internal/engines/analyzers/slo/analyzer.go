@@ -178,6 +178,9 @@ type Analyzer struct {
 	// ttftProcessorSharing is SwitchTTFTProcessorSharing (ttft.go): on from
 	// the constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftProcessorSharing bool
+	// ttftJointInputs is SwitchTTFTJointInputs (ttft_joint.go): on from the
+	// constructor; a replay turns it off (SetSwitchesForReplay).
+	ttftJointInputs bool
 	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#276,
 	// output_dispersion.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
@@ -189,6 +192,9 @@ type Analyzer struct {
 	imbalance   map[string]*imbalanceWindow
 	decodeTTFT  map[string]*decodeTTFTWindow
 	decodeTerms map[string]*decodeTermWindow
+	// joint is each prefill variant's joint TTFT readings
+	// (ttft_joint.go), under the same key. Under mu.
+	joint map[string]*jointWindow
 	// prompts is each prefill variant's prompt window (ttft.go), under the
 	// same key, from the first row to carry a computed-token histogram.
 	prompts map[string]*promptSpreadWindow
@@ -262,11 +268,13 @@ func New(router RouterLatencySource, store *capacity.Store) *Analyzer {
 		ttftQuietTransfer:    true,
 		ttftDecodeTerm:       true,
 		ttftProcessorSharing: true,
+		ttftJointInputs:      true,
 		kvOutputDispersion:   true,
 		imbalance:            make(map[string]*imbalanceWindow),
 		prompts:              make(map[string]*promptSpreadWindow),
 		decodeTTFT:           make(map[string]*decodeTTFTWindow),
 		decodeTerms:          make(map[string]*decodeTermWindow),
+		joint:                make(map[string]*jointWindow),
 	}
 }
 
@@ -875,6 +883,12 @@ func (a *Analyzer) evictStale(now time.Time) Evicted {
 			ev.TTFTWindows++
 		}
 	}
+	for key, w := range a.joint {
+		if now.Sub(w.seen) > a.stateTimeout {
+			delete(a.joint, key)
+			ev.TTFTWindows++
+		}
+	}
 	a.evictOwnSettleLocked(now)
 	return ev
 }
@@ -932,6 +946,9 @@ func (a *Analyzer) noteVariantsPresent(namespace, modelID string, variantNames [
 			w.seen = now
 		}
 		if w := a.prompts[ttftWindowKey(namespace, modelID, name)]; w != nil {
+			w.seen = now
+		}
+		if w := a.joint[ttftWindowKey(namespace, modelID, name)]; w != nil {
 			w.seen = now
 		}
 	}

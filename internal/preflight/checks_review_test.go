@@ -225,7 +225,7 @@ func TestNetworkPolicyShapes(t *testing.T) {
 		f := newFixture(t).remove("APIService", externalMetricsAPIService)
 		f.dyn = append(f.dyn, apiService("keda-system", "keda-operator-metrics-apiserver"))
 		r := only(t, f.run(t), "keda.networkpolicy")
-		if r.Status != Fail || strings.Contains(r.Fix, "kubectl patch") || !strings.Contains(r.Fix, `kubernetes.io/metadata.name: keda-system#`) {
+		if r.Status != Warn || strings.Contains(r.Fix, "kubectl patch") || !strings.Contains(r.Fix, `kubernetes.io/metadata.name: keda-system#`) {
 			t.Errorf("got %s fix %q", r.Status, r.Fix)
 		}
 	})
@@ -291,7 +291,7 @@ func TestOverlapByName(t *testing.T) {
 
 func TestSettingsEdges(t *testing.T) {
 	for _, tc := range []struct{ key, value, detail string }{
-		{keyLogVerbosity, "-1", "0 or more"},
+		{keyLogVerbosity, "-1", "from 0 to"},
 		{keyQuotas, "H200=8,H200=4", "twice"},
 	} {
 		f := newFixture(t)
@@ -300,13 +300,32 @@ func TestSettingsEdges(t *testing.T) {
 			t.Errorf("%s=%s: %s %q", tc.key, tc.value, r.Status, r.Detail)
 		}
 	}
-	// ENABLE_SCALE_TO_ZERO, the older name of the legacy key, is read too.
+	// The legacy configuration is read under the controller's loader keys:
+	// LLMSM_SCALE_TO_ZERO, not the installer's ENABLE_SCALE_TO_ZERO, which
+	// the controller never reads.
+	for legacyKey, want := range map[string]string{"LLMSM_SCALE_TO_ZERO": "true", "ENABLE_SCALE_TO_ZERO": "false"} {
+		f := newFixture(t)
+		f.settings = nil
+		f.add(cm(testNS, LegacyConfigMap, map[string]string{"config.yaml": legacyKey + ": \"true\"\n"}))
+		s := &state{env: f.env(t)}
+		if v := s.loadSettings(context.Background()).value(keyScaleToZero); v != want {
+			t.Errorf("scaleToZero from %s: %q, want %q", legacyKey, v, want)
+		}
+	}
+}
+
+// A key the controller does not take from the settings is reported, and not
+// read: PROMETHEUS_ALLOW_HTTP comes from the environment or config.yaml.
+func TestSettingsUnknownKeyIsNotRead(t *testing.T) {
 	f := newFixture(t)
-	f.settings = nil
-	f.add(cm(testNS, LegacyConfigMap, map[string]string{"config.yaml": "ENABLE_SCALE_TO_ZERO: \"true\"\n"}))
-	s := &state{env: f.env(t)}
-	if v := s.loadSettings(context.Background()).value(keyScaleToZero); v != "true" {
-		t.Errorf("scaleToZero from ENABLE_SCALE_TO_ZERO: %q", v)
+	f.settings[keyPrometheusURL] = "http://prometheus.monitoring.svc:9090"
+	f.settings[keyAllowHTTP] = valueTrue
+	rep := f.run(t)
+	if r := only(t, rep, "settings"); r.Status != Warn || !strings.Contains(r.Detail, keyAllowHTTP+" is no setting") {
+		t.Errorf("settings: %s %q", r.Status, r.Detail)
+	}
+	if r := only(t, rep, "prometheus.reachable"); r.Status != Fail || !strings.Contains(r.Detail, "plain HTTP") {
+		t.Errorf("prometheus.reachable: %s %q", r.Status, r.Detail)
 	}
 }
 
@@ -342,6 +361,7 @@ func TestUnnarrowedReaderCoversAll(t *testing.T) {
 		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"namespaces"}, Verbs: []string{"get"}}},
 	})
 	f.settings[keyWatchNamespaces] = testNS + ",team-b"
+	f.add(controllerDeployment(testNS, "--watch-namespace="+testNS+",team-b"))
 	if r := only(t, f.run(t), "rbac.namespaces"); r.Status != Pass {
 		t.Errorf("got %s %q", r.Status, r.Detail)
 	}
@@ -351,6 +371,7 @@ func TestKueueControllerSAUnread(t *testing.T) {
 	f := newFixture(t)
 	f.settings[keyKueue] = valueTrue
 	f.settings[keyLimiter] = limiterQuota
+	f.settings[keyQuotas] = "H200=8"
 	for _, n := range []string{"clusterqueues", "localqueues", "resourceflavors", "workloads"} {
 		f.dyn = append(f.dyn, crd(n+".kueue.x-k8s.io"))
 	}

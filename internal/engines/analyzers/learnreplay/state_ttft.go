@@ -3,6 +3,7 @@ package learnreplay
 import (
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
@@ -114,12 +115,50 @@ type ttftSamples struct {
 	engineTTFT map[string][]whatif.DecodeTTFT
 	transfers  map[string]*prefill.TransferWindow
 	terms      map[string]*prefill.DecodeTermWindow
+	// joint is the model's joint TTFT readings (noteJoint).
+	joint *prefill.JointWindow
 }
 
 func newTTFTSamples() *ttftSamples {
 	return &ttftSamples{prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
 		engineTTFT: map[string][]whatif.DecodeTTFT{}, transfers: map[string]*prefill.TransferWindow{},
-		terms: map[string]*prefill.DecodeTermWindow{}}
+		terms: map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow()}
+}
+
+// noteJoint folds one cycle's prefill and decode rows into the model's joint
+// window as S1 does (slo.noteJoint): only for a model with exactly one
+// prefill and one decode variant, keyed to their accelerators and engine
+// arguments (args, "" unknown), with the prompt read SGLang's way where the
+// prefill variant runs SGLang (sglang). One difference stands: no settle
+// tracker. S1 drops a replica's rows until it has been settled for
+// prefill.SteadyFor; here every Ready row reads, so the CLI's inputs can
+// include a replica's first two minutes after a start or an idle spell.
+func (t *ttftSamples) noteJoint(in domain.AnalyzerInput, now time.Time, args func(variant string) string,
+	sglang func(variant string) bool) {
+	roles := rolesOf(in)
+	var prefills, decodes []string
+	for _, v := range slices.Sorted(maps.Keys(roles)) {
+		switch domain.CanonicalRole(roles[v]) {
+		case domain.RolePrefill:
+			prefills = append(prefills, v)
+		case domain.RoleDecode:
+			decodes = append(decodes, v)
+		}
+	}
+	if len(prefills) != 1 || len(decodes) != 1 {
+		return
+	}
+	var tag strings.Builder
+	for _, v := range []string{prefills[0], decodes[0]} {
+		for _, vs := range in.VariantStates {
+			if vs.VariantName == v {
+				tag.WriteString(vs.AcceleratorName + "|" + args(v) + "|")
+			}
+		}
+	}
+	t.joint.Under(tag.String())
+	t.joint.Observe(prefill.JointCycle{Now: now, Prefill: rowsOfVariant(in.ReplicaMetrics, prefills[0]),
+		Decode: rowsOfVariant(in.ReplicaMetrics, decodes[0]), SGLang: sglang(prefills[0])})
 }
 
 // keepLast is s with v appended, holding the last n.
@@ -331,6 +370,18 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 	}
 	st.FlowControlSeries = in.FlowControlSeries()
+	st.Joint, st.JointRate = t.joint.Estimate(), in.ArrivalRate
+	for _, rm := range in.ReplicaMetrics {
+		if !prefill.Serving(rm) {
+			continue
+		}
+		switch domain.CanonicalRole(roles[rm.VariantName]) {
+		case domain.RolePrefill:
+			st.JointPrefillPods++
+		case domain.RoleDecode:
+			st.JointDecodePods++
+		}
+	}
 }
 
 // estimateAt is a variant's estimate read through read, when it was stashed

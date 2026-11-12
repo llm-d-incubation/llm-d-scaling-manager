@@ -16,6 +16,8 @@
 //	                       --tpot 4ms[@p90] [--assume-tpot-ratio R] [--headroom H]
 //	                       [--ttft 200ms[@p95]] [--prefill N] [--prefill-variant V] [--assume-vp TOKENS]
 //	                       [--assume-a D] [--assume-prompt-cv CV] [--arrival-cv2 C] [--assume-router-hop D] [-o json]
+//	whatif joint-ttft      --recording FILE [--cycle N|last] [--model M] [--prefill N] [--decode N]
+//	                       [--rate R] [--prompt I] [--hop D] [-o json]
 //	whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...)
 //	                       --from T0 --to T1 [capture's flags] [the question's flags]
 //
@@ -29,7 +31,8 @@
 // memory along the same path, so that the answer is the files' answer.
 //
 // A TTFT is asked for by a TTFT flag; with none, the answers are decode's
-// alone. It prices a P/D fleet (ttft.go), and prints UNVALIDATED. Aggregated
+// alone. It prices a P/D fleet (ttft.go), and prints UNVALIDATED. joint-ttft
+// prices the joint prefill and decode model's mean at a fleet (joint.go). Aggregated
 // TTFT and per-bucket answers are not built (the planner's M1).
 //
 // Exit codes: 0 done, and every role answered; 3 a role refused (the
@@ -92,7 +95,7 @@ func exitCode(err error) int {
 	return 1
 }
 
-const usage = "usage: whatif capture|freeze|generate|replicas-to-slo|slo-to-rate [flags]; -h after a command lists its flags"
+const usage = "usage: whatif capture|freeze|generate|joint-ttft|replicas-to-slo|slo-to-rate [flags]; -h after a command lists its flags"
 
 // command is one subcommand: it parses its own flags from args and writes
 // what it reports to out, and its warnings to warn (stderr).
@@ -103,6 +106,7 @@ var commands = map[string]command{
 	"capture":         runCapture,
 	"freeze":          runFreeze,
 	"generate":        runGenerate,
+	"joint-ttft":      runJointTTFT,
 	"replicas-to-slo": runReplicasToSLO,
 	"slo-to-rate":     runSLOToRate,
 }

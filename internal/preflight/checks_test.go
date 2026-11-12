@@ -80,9 +80,9 @@ func TestSettings(t *testing.T) {
 		{"bad bool", func(f *fixture) { f.settings[keyPassive] = "yes" }, Fail, "passive"},
 		{"unknown mode", func(f *fixture) { f.settings[keyUtilizationShare] = "on" }, Fail, "off, shadow or active"},
 		{"sharing without a limiter", func(f *fixture) { f.settings[keyUtilizationShare] = "shadow" }, Fail, "needs a limiter"},
-		{"bad quota", func(f *fixture) { f.settings[keyLimiter] = "quota"; f.settings[keyQuotas] = "H200=eight" }, Fail, "NAME=N"},
+		{"bad quota", func(f *fixture) { f.settings[keyLimiter] = "quota"; f.settings[keyQuotas] = "H200=eight" }, Fail, "whole number of GPUs"},
 		{"quota limiter, no budget", func(f *fixture) { f.settings[keyLimiter] = "quota" }, Fail, "budget"},
-		{"unknown limiter", func(f *fixture) { f.settings[keyLimiter] = "gpu" }, Fail, "gpu-inventory and quota"},
+		{"unknown limiter", func(f *fixture) { f.settings[keyLimiter] = "gpu" }, Fail, "gpu-inventory, quota, or both"},
 		{"bad watch namespace", func(f *fixture) { f.settings[keyWatchNamespaces] = "Team_B" }, Fail, "not a namespace name"},
 		{"legacy only", func(f *fixture) {
 			f.settings = nil
@@ -160,10 +160,10 @@ func TestKEDAVersion(t *testing.T) {
 	}
 }
 
-func scalerPolicy(ns, admits string) *networkingv1.NetworkPolicy {
+func scalerPolicy(admits string) *networkingv1.NetworkPolicy {
 	p8443, p9090 := intstr.FromInt32(8443), intstr.FromInt32(9090)
 	return &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: ScalerNetworkPolicy},
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: ScalerNetworkPolicy},
 		Spec: networkingv1.NetworkPolicySpec{Ingress: []networkingv1.NetworkPolicyIngressRule{
 			{Ports: []networkingv1.NetworkPolicyPort{{Port: &p8443}}},
 			{Ports: []networkingv1.NetworkPolicyPort{{Port: &p9090}}, From: []networkingv1.NetworkPolicyPeer{{
@@ -175,14 +175,14 @@ func scalerPolicy(ns, admits string) *networkingv1.NetworkPolicy {
 
 func TestKEDANetworkPolicy(t *testing.T) {
 	t.Run("applied, mismatch", func(t *testing.T) {
-		f := newFixture(t).add(scalerPolicy(testNS, "keda-system"))
+		f := newFixture(t).add(scalerPolicy("keda-system"))
 		r := only(t, f.run(t), "keda.networkpolicy")
 		if r.Status != Fail || !strings.Contains(r.Detail, "keda-system") || !strings.Contains(r.Fix, `"value":"keda"`) {
 			t.Errorf("got %s %q fix %q", r.Status, r.Detail, r.Fix)
 		}
 	})
 	t.Run("applied, match", func(t *testing.T) {
-		f := newFixture(t).add(scalerPolicy(testNS, "keda"))
+		f := newFixture(t).add(scalerPolicy("keda"))
 		if r := only(t, f.run(t), "keda.networkpolicy"); r.Status != Pass {
 			t.Errorf("got %s %q", r.Status, r.Detail)
 		}
@@ -216,4 +216,51 @@ func TestKEDANetworkPolicy(t *testing.T) {
 			t.Errorf("got %s %q", r.Status, r.Detail)
 		}
 	})
+}
+
+// TestKEDANetworkPolicyByScope: with KEDA outside the namespace the file
+// ships, a policy not applied yet only warns, since the preflight cannot see
+// an edited file, and its sed names the scope's own files; an applied policy
+// that does not admit KEDA fails in either scope.
+func TestKEDANetworkPolicyByScope(t *testing.T) {
+	for _, tc := range []struct {
+		scope      Scope
+		files      string
+		otherFiles string
+	}{
+		{ScopeNamespace, "scaling-manager-namespaced*.yaml", "scaling-manager-cluster"},
+		{ScopeCluster, "scaling-manager-cluster*.yaml", "scaling-manager-namespaced"},
+	} {
+		kedaElsewhere := func(t *testing.T) *fixture {
+			f := newFixture(t).remove("APIService", externalMetricsAPIService)
+			f.dyn = append(f.dyn, apiService("keda-system", "keda-operator-metrics-apiserver"))
+			f.scope = tc.scope
+			return f
+		}
+		t.Run(string(tc.scope)+", not applied yet", func(t *testing.T) {
+			r := only(t, kedaElsewhere(t).run(t), "keda.networkpolicy")
+			if r.Status != Warn {
+				t.Errorf("status %s, want WARN: %q", r.Status, r.Detail)
+			}
+			for _, want := range []string{"not applied yet", "admits port 9090 from keda,", "KEDA runs in keda-system", "the run after the install checks it live"} {
+				if !strings.Contains(r.Detail, want) {
+					t.Errorf("detail %q does not say %q", r.Detail, want)
+				}
+			}
+			if !strings.HasPrefix(r.Fix, "sed -i ") || !strings.Contains(r.Fix, `metadata.name: keda-system#" `+tc.files) || strings.Contains(r.Fix, tc.otherFiles) {
+				t.Errorf("fix %q, want a sed on %s", r.Fix, tc.files)
+			}
+		})
+		t.Run(string(tc.scope)+", applied, mismatch", func(t *testing.T) {
+			r := only(t, kedaElsewhere(t).add(scalerPolicy("keda")).run(t), "keda.networkpolicy")
+			if r.Status != Fail || !strings.Contains(r.Detail, "KEDA runs in keda-system") || !strings.HasPrefix(r.Fix, "kubectl patch networkpolicy") || !strings.Contains(r.Fix, `"value":"keda-system"`) {
+				t.Errorf("got %s %q fix %q, want FAIL with a kubectl patch", r.Status, r.Detail, r.Fix)
+			}
+		})
+		t.Run(string(tc.scope)+", applied, match", func(t *testing.T) {
+			if r := only(t, kedaElsewhere(t).add(scalerPolicy("keda-system")).run(t), "keda.networkpolicy"); r.Status != Pass {
+				t.Errorf("got %s %q, want PASS", r.Status, r.Detail)
+			}
+		})
+	}
 }

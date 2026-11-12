@@ -20,6 +20,12 @@ func deny(verb, resource, ns string) func(authorizationv1.ResourceAttributes) bo
 	}
 }
 
+// watchBoth makes the controller's Deployment name team-a and team-b, so the
+// watchNamespaces setting may name both (the controller only lets it narrow).
+func watchBoth(f *fixture) {
+	f.add(controllerDeployment(testNS, "--watch-namespace="+testNS+",team-b"))
+}
+
 func TestControllerRBAC(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -32,6 +38,7 @@ func TestControllerRBAC(t *testing.T) {
 		{"cannot list deployments", func(f *fixture) { f.sar = deny("list", "deployments", "") }, Fail, "list deployments.apps in " + testNS},
 		{"cannot read a watched namespace", func(f *fixture) {
 			f.settings[keyWatchNamespaces] = testNS + ",team-b"
+			watchBoth(f)
 			f.sar = deny("list", "pods", "team-b")
 		}, Fail, "list pods in team-b"},
 		{"SubjectAccessReview forbidden", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("create", "subjectaccessreviews")) }, Unknown, "forbidden"},
@@ -54,6 +61,7 @@ func TestControllerRBAC(t *testing.T) {
 	// The fix for a watched namespace names its model-namespace file.
 	f := newFixture(t)
 	f.settings[keyWatchNamespaces] = testNS + ",team-b"
+	watchBoth(f)
 	f.sar = deny("list", "pods", "team-b")
 	if r := only(t, f.run(t), "rbac.controller"); !strings.Contains(r.Fix, `s/__MODEL_NAMESPACE__/team-b/g`) {
 		t.Errorf("fix %q", r.Fix)
@@ -67,6 +75,7 @@ func TestNamespaceReaders(t *testing.T) {
 	t.Run("missing namespace", func(t *testing.T) {
 		f := newFixture(t)
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
+		watchBoth(f)
 		r := only(t, f.run(t), "rbac.namespaces")
 		if r.Status != Fail || r.Fix != patch {
 			t.Errorf("got %s %q\nfix  %q\nwant %q", r.Status, r.Detail, r.Fix, patch)
@@ -75,6 +84,7 @@ func TestNamespaceReaders(t *testing.T) {
 	t.Run("not applied yet", func(t *testing.T) {
 		f := newFixture(t).remove("ClusterRole", "scaling-manager-policy-namespace-reader-role-"+testNS)
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
+		watchBoth(f)
 		r := only(t, f.run(t), "rbac.namespaces")
 		if r.Status != Warn || !strings.Contains(r.Fix, patch) {
 			t.Errorf("got %s %q fix %q", r.Status, r.Detail, r.Fix)
@@ -84,6 +94,7 @@ func TestNamespaceReaders(t *testing.T) {
 		f := newFixture(t).remove("ClusterRole", "scaling-manager-policy-namespace-reader-role-"+testNS)
 		f.add(namespaceReader(testNS, testNS, "scaling-manager-policy", "team-b"))
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
+		watchBoth(f)
 		if r := only(t, f.run(t), "rbac.namespaces"); r.Status != Pass {
 			t.Errorf("got %s %q", r.Status, r.Detail)
 		}
@@ -98,6 +109,7 @@ func TestNamespaceReaders(t *testing.T) {
 	t.Run("Kueue reader too", func(t *testing.T) {
 		f := newFixture(t)
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
+		watchBoth(f)
 		f.settings[keyKueue] = valueTrue
 		f.add(&rbacv1.ClusterRole{
 			ObjectMeta: metav1.ObjectMeta{Name: "scaling-manager-kueue-reader-role-" + testNS},
@@ -141,6 +153,7 @@ func TestKueue(t *testing.T) {
 			f := newFixture(t)
 			f.settings[keyKueue] = valueTrue
 			f.settings[keyLimiter] = limiterQuota
+			f.settings[keyQuotas] = testQuota
 			tc.change(f)
 			if r := only(t, f.run(t), "kueue"); r.Status != tc.want {
 				t.Errorf("got %s %q, want %s", r.Status, r.Detail, tc.want)
@@ -194,11 +207,11 @@ func TestAccelerators(t *testing.T) {
 		change func(*fixture)
 		want   Status
 	}{
-		{"family matches the product", "H200=8", func(f *fixture) { f.add(gpuNode) }, Pass},
+		{"family matches the product", testQuota, func(f *fixture) { f.add(gpuNode) }, Pass},
 		{"product spelled as the node does", "NVIDIA-H200=8", func(f *fixture) { f.add(gpuNode) }, Pass},
 		{"key matches nothing", "H100=8", func(f *fixture) { f.add(gpuNode) }, Warn},
-		{"no GPU node", "H200=8", func(*fixture) {}, Warn},
-		{"nodes forbidden", "H200=8", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("list", "nodes")) }, Unknown},
+		{"no GPU node", testQuota, func(*fixture) {}, Warn},
+		{"nodes forbidden", testQuota, func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("list", "nodes")) }, Unknown},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,8 +232,9 @@ func TestActivation(t *testing.T) {
 	active := func(f *fixture) {
 		f.settings[keyUtilizationShare] = "active"
 		f.settings[keyLimiter] = limiterQuota
-		f.settings[keyQuotas] = "H200=8"
+		f.settings[keyQuotas] = testQuota
 		f.settings[keyWatchNamespaces] = testNS + ",team-b"
+		watchBoth(f)
 	}
 	f := newFixture(t)
 	active(f)
@@ -244,7 +258,7 @@ func TestActivation(t *testing.T) {
 	f = newFixture(t)
 	f.settings[keyUtilizationShare] = "shadow"
 	f.settings[keyLimiter] = limiterQuota
-	f.settings[keyQuotas] = "H200=8"
+	f.settings[keyQuotas] = testQuota
 	if rep := f.run(t); !notApplicable(rep, "activation") {
 		t.Errorf("shadow: activation should not apply")
 	}

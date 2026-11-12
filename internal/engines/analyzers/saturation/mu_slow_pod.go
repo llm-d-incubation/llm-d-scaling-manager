@@ -152,8 +152,10 @@ const (
 	WeighSetWindow = 5 * time.Minute
 	// WeighClearWindow is how long a key weighs at least, once it starts,
 	// and how far back the ratio it clears on reaches: it stops when the
-	// ratio's mean over the last WeighClearWindow reaches weighClear. The
-	// dwell is on the clear only: a set is never delayed past its window.
+	// ratio's mean over the last WeighClearWindow reaches weighClear. A key
+	// that has cleared sets again only once the ratio's mean over this
+	// window sits under SiblingMuTolerance as well as its mean over
+	// WeighSetWindow (issue #60). The dwell is on the clear only.
 	WeighClearWindow = 10 * time.Minute
 	// WeighClearMargin is how far over SiblingMuTolerance the ratio's mean
 	// must rise before a weighing sample stops counting the unread replicas:
@@ -179,7 +181,9 @@ func weighClear(tol float64) float64 {
 // weighs is the weighing's latch (SwitchMuWeighingBand): whether the newest
 // sample counts the n replicas its readers did not read, given the readers'
 // mean read and the rate h those count at. A key not weighing starts when the
-// ratio read / h, averaged over WeighSetWindow, sits under tol. A key weighing
+// ratio read / h, averaged over WeighSetWindow, sits under tol; one that has
+// cleared in this window, once the ratio averaged over WeighClearWindow does
+// as well (below). A key weighing
 // stops no sooner than WeighClearWindow after it started, when the ratio
 // averaged over WeighClearWindow reaches weighClear(tol), and at once when no
 // replica is left unread: the band holds a source, never a replica that is
@@ -195,6 +199,18 @@ func weighClear(tol float64) float64 {
 // clear value, not the set point: at the set point the next noise trough
 // would set it again on the same few readings, a flip each way.
 //
+// A key that has cleared sets again on both windows (issue #60). It cleared
+// on the clear window's mean, and the set window's mean is the noisier of the
+// two: at 15 % rate noise with a per-cycle lag-one of 0.75, five minutes of a
+// ratio at 0.95 averaged under 0.80 and set the weighing again mid-recovery,
+// on 3 of 20 seeds of TestWeighingBand_OneChangePerExcursion; on both windows
+// none did. For a clean step of the ratio from r <= 1 to x the clear window's
+// mean crosses tol no sooner than the set window's, so a re-set waits
+// 10 x (r - 0.8) / (r - x) min where a first set waits half that: 2.9 min at
+// 0.3, 4.4 at 0.55, 8 at 0.75 from a ratio of 1, never past the clear window.
+// A key's first set is not delayed, nor is a set after no replica was left
+// unread (its ratios forgotten, both windows hold the same readings).
+//
 // A NaN ratio makes the window's mean NaN: a key not weighing does not set
 // (NaN < tol is false), and one weighing lets go at its next clear test (the
 // test is !(mean < clear)): at once if provisional, past its dwell if not.
@@ -209,8 +225,9 @@ func weighClear(tol float64) float64 {
 //   - Set later, toward the lower figure, the cost side: a slow replica is
 //     weighed once the set window's mean crosses tol, from a step of its
 //     ratio from 1 to x after 5 x 0.2 / (1 - x) min (1.4 min at 0.3, 2.2 at
-//     0.55, 4 at 0.75) where the bare tolerance took the next sample. A key's
-//     first set is not delayed, and is provisional (above).
+//     0.55, 4 at 0.75) where the bare tolerance took the next sample, and
+//     twice that once the key has cleared. A key's first set is not delayed,
+//     and is provisional (above).
 //   - Clear later, toward the higher figure: a weighing key keeps the
 //     weighed sample for at least WeighClearWindow and while its readers
 //     average under 0.90 of the unread replicas, where the bare tolerance
@@ -245,7 +262,13 @@ func (c *muChoice) weighs(read, h float64, n int, tol float64, now time.Time) bo
 	c.weighRatios = c.weighRatios[i:]
 	full := now.Sub(c.weighRatios[0].at) >= weighFullSpan
 	if !c.weighing {
-		if c.meanRatioSince(now.Add(-WeighSetWindow)) < tol {
+		set := c.meanRatioSince(now.Add(-WeighSetWindow)) < tol
+		if set && !c.weighChanged.IsZero() {
+			// It has cleared in this window: it sets again on the window
+			// it cleared on as well (issue #60).
+			set = c.meanRatioSince(now.Add(-WeighClearWindow)) < tol
+		}
+		if set {
 			c.weighing, c.weighChanged, c.weighProvisional = true, now, !full
 		}
 		return c.weighing
