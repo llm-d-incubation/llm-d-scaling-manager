@@ -220,7 +220,7 @@ type SLOTTFTJointReading struct {
 	MeanSeconds float64
 	// Reason is one of constants.SLOTTFTJointReasons.
 	Reason string
-	// Flags is the flags on the mean, in constants.SLOTTFTFlags order.
+	// Flags is the flags on the mean, in constants.SLOTTFTJointFlags order.
 	Flags []string
 }
 

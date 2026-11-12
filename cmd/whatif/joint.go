@@ -49,91 +49,12 @@ type jointAnswer struct {
 	RanDecode       int     `json:"ranDecodeReplicas"`
 	RanRate         float64 `json:"ranRate"`
 	// Inputs is the joint inputs, Refused why there is no mean ("" with
-	// one), and Mean the mean and its parts, nil when refused.
-	Inputs  jointInputs `json:"inputs"`
-	Refused string      `json:"refused,omitempty"`
-	Mean    *jointMean  `json:"mean,omitempty"`
-	Note    string      `json:"note"`
-
-	// est and mean are what Inputs and Mean are read from, for the text.
-	est  prefill.JointEstimate
-	mean *whatif.JointTTFT
-}
-
-// jointInputs is prefill.JointEstimate as joint-ttft's JSON holds it.
-type jointInputs struct {
-	PrefillWorkSeconds      float64           `json:"prefillWorkSeconds"`
-	PromptTokens            float64           `json:"promptTokens"`
-	VPTokensPerSecond       float64           `json:"vpTokensPerSecond"`
-	PrefillWorkSamples      int               `json:"prefillWorkSamples"`
-	PrefillWorkRefused      string            `json:"prefillWorkRefused,omitempty"`
-	OverheadSeconds         float64           `json:"overheadSeconds"`
-	OverheadSamples         int               `json:"overheadSamples"`
-	OverheadRefused         string            `json:"overheadRefused,omitempty"`
-	Pull                    []jointPullBucket `json:"pull"`
-	PullRefused             string            `json:"pullRefused,omitempty"`
-	ITLAlphaSeconds         float64           `json:"itlAlphaSeconds"`
-	ITLBetaSeconds          float64           `json:"itlBetaSeconds"`
-	ITLSamples              int               `json:"itlSamples"`
-	ITLRefused              string            `json:"itlRefused,omitempty"`
-	DecodeSteps             float64           `json:"decodeSteps"`
-	DecodeFixedSeconds      float64           `json:"decodeFixedSeconds"`
-	DecodeSamples           int               `json:"decodeSamples"`
-	DecodeRefused           string            `json:"decodeRefused,omitempty"`
-	OutputTokens            float64           `json:"outputTokens"`
-	PrefillUtilization      float64           `json:"prefillUtilization"`
-	PrefillUtilizationKnown bool              `json:"prefillUtilizationKnown"`
-}
-
-// jointPullBucket is one bucket of the pull table, as the JSON holds it.
-type jointPullBucket struct {
-	Utilization  float64 `json:"utilization"`
-	Seconds      float64 `json:"seconds"`
-	PromptTokens float64 `json:"promptTokens"`
-	Samples      int     `json:"samples"`
-}
-
-// jointMean is whatif.JointTTFT as joint-ttft's JSON holds it.
-type jointMean struct {
-	Seconds            float64       `json:"seconds"`
-	Engine             float64       `json:"engineSeconds"`
-	Overhead           float64       `json:"overheadSeconds"`
-	Prefill            float64       `json:"prefillSeconds"`
-	Pull               float64       `json:"pullSeconds"`
-	Decode             float64       `json:"decodeSeconds"`
-	Hop                float64       `json:"hopSeconds"`
-	PrefillUtilization float64       `json:"prefillUtilization"`
-	PullWork           float64       `json:"pullWorkSeconds"`
-	PullUtilization    float64       `json:"pullUtilization"`
-	Batch              float64       `json:"batch"`
-	ITL                float64       `json:"itlSeconds"`
-	Flags              []whatif.Flag `json:"flags"`
-}
-
-// inputsJSON is e as the JSON holds it.
-func inputsJSON(e prefill.JointEstimate) jointInputs {
-	out := jointInputs{
-		PrefillWorkSeconds: e.PrefillWork, PromptTokens: e.PrefillWorkPrompt, VPTokensPerSecond: e.VP,
-		PrefillWorkSamples: e.PrefillWorkSamples, PrefillWorkRefused: string(e.PrefillWorkRefused),
-		OverheadSeconds: e.Overhead, OverheadSamples: e.OverheadSamples, OverheadRefused: string(e.OverheadRefused),
-		Pull: []jointPullBucket{}, PullRefused: string(e.PullRefused),
-		ITLAlphaSeconds: e.ITLAlpha, ITLBetaSeconds: e.ITLBeta, ITLSamples: e.ITLSamples, ITLRefused: string(e.ITLRefused),
-		DecodeSteps: e.DecodeSteps, DecodeFixedSeconds: e.DecodeFixed, DecodeSamples: e.DecodeSamples,
-		DecodeRefused: string(e.DecodeRefused), OutputTokens: e.OutputTokens,
-		PrefillUtilization: e.PrefillUtilization, PrefillUtilizationKnown: e.PrefillUtilizationKnown,
-	}
-	for _, b := range e.Pull {
-		out.Pull = append(out.Pull, jointPullBucket{Utilization: b.Utilization, Seconds: b.Seconds,
-			PromptTokens: b.PromptTokens, Samples: b.Samples})
-	}
-	return out
-}
-
-// meanJSON is m as the JSON holds it.
-func meanJSON(m whatif.JointTTFT) *jointMean {
-	return &jointMean{Seconds: m.Seconds, Engine: m.Engine, Overhead: m.Overhead, Prefill: m.Prefill, Pull: m.Pull,
-		Decode: m.Decode, Hop: m.Hop, PrefillUtilization: m.PrefillUtilization, PullWork: m.PullWork,
-		PullUtilization: m.PullUtilization, Batch: m.Batch, ITL: m.ITL, Flags: m.Flags}
+	// one), and Mean the mean and its parts, nil when refused. Both carry
+	// their own JSON names.
+	Inputs  prefill.JointEstimate `json:"inputs"`
+	Refused string                `json:"refused,omitempty"`
+	Mean    *whatif.JointTTFT     `json:"mean,omitempty"`
+	Note    string                `json:"note"`
 }
 
 // jointNote is printed on every answer.
@@ -194,7 +115,7 @@ func priceJoint(st *learnreplay.State, f jointFlags) jointAnswer {
 	a := jointAnswer{SchemaVersion: jointSchemaVersion, Model: st.Namespace + "/" + st.ModelID, Cycle: st.Cycle,
 		PrefillReplicas: st.JointPrefillPods, DecodeReplicas: st.JointDecodePods, Rate: st.JointRate,
 		RanPrefill: st.JointPrefillPods, RanDecode: st.JointDecodePods, RanRate: st.JointRate,
-		Inputs: inputsJSON(st.Joint), est: st.Joint, Note: jointNote}
+		Inputs: st.Joint, Note: jointNote}
 	if f.prefill > 0 {
 		a.PrefillReplicas = f.prefill
 	}
@@ -211,26 +132,34 @@ func priceJoint(st *learnreplay.State, f jointFlags) jointAnswer {
 	}
 	m, refused := whatif.JointTTFTMean(st.Joint, q)
 	if refused != "" {
-		a.Refused = refused
+		a.Refused = string(refused)
 		return a
 	}
 	if q.HopAssumed {
 		m.Flags = append(m.Flags, whatif.RouterHopAssumed)
 	}
-	a.Mean, a.mean = meanJSON(m), &m
+	a.Mean = &m
 	return a
+}
+
+// inputRefusalText is an input's refusal as the text prints it: nothing with none.
+func inputRefusalText(r prefill.Refusal) string {
+	if r == "" {
+		return ""
+	}
+	return ", refused: " + string(r)
 }
 
 // text is the answer for a reader.
 func (a jointAnswer) text() string {
 	var b strings.Builder
-	e := a.est
+	e := a.Inputs
 	fmt.Fprintf(&b, "joint TTFT, %s at cycle %d: %d prefill + %d decode at %.2f req/s (ran %d + %d at %.2f)\n",
 		a.Model, a.Cycle, a.PrefillReplicas, a.DecodeReplicas, a.Rate, a.RanPrefill, a.RanDecode, a.RanRate)
 	if a.Refused != "" {
 		fmt.Fprintf(&b, "  refused: %s\n", a.Refused)
 	} else {
-		m := a.mean
+		m := a.Mean
 		fmt.Fprintf(&b, "  mean TTFT %s (engines %s, hop %s)\n", msText(m.Seconds), msText(m.Engine), msText(m.Hop))
 		fmt.Fprintf(&b, "    overhead a(rho_p) %s, prefill T_P %s at rho_p %.3f\n", msText(m.Overhead), msText(m.Prefill),
 			m.PrefillUtilization)
@@ -239,12 +168,12 @@ func (a jointAnswer) text() string {
 		fmt.Fprintf(&b, "    decode m_d*ITL(k) + d %s, batch k %.1f, ITL %s\n", msText(m.Decode), m.Batch, msText(m.ITL))
 		fmt.Fprintf(&b, "    flags: %v\n", m.Flags)
 	}
-	fmt.Fprintf(&b, "  inputs: S %s at %.0f tokens (%d readings) %s; a0 %s (%d) %s; pull table %d buckets %s\n",
-		msText(e.PrefillWork), e.PrefillWorkPrompt, e.PrefillWorkSamples, e.PrefillWorkRefused, msText(e.Overhead),
-		e.OverheadSamples, e.OverheadRefused, len(e.Pull), e.PullRefused)
-	fmt.Fprintf(&b, "          ITL(k) %.3f ms + %.4f ms*k (%d) %s; decode own %.2f*ITL + %s (%d) %s; n_out %.0f\n",
-		1000*e.ITLAlpha, 1000*e.ITLBeta, e.ITLSamples, e.ITLRefused, e.DecodeSteps, msText(e.DecodeFixed),
-		e.DecodeSamples, e.DecodeRefused, e.OutputTokens)
+	fmt.Fprintf(&b, "  inputs: S %s at %.0f tokens (%d readings%s); a0 %s (%d%s); pull table %d buckets%s\n",
+		msText(e.PrefillWork), e.PrefillWorkPrompt, e.PrefillWorkSamples, inputRefusalText(e.PrefillWorkRefused),
+		msText(e.Overhead), e.OverheadSamples, inputRefusalText(e.OverheadRefused), len(e.Pull), inputRefusalText(e.PullRefused))
+	fmt.Fprintf(&b, "          ITL(k) %.3f ms + %.4f ms*k (%d%s); decode own %.2f*ITL + %s (%d%s); n_out %.0f\n",
+		1000*e.ITLAlpha, 1000*e.ITLBeta, e.ITLSamples, inputRefusalText(e.ITLRefused), e.DecodeSteps,
+		msText(e.DecodeFixed), e.DecodeSamples, inputRefusalText(e.DecodeRefused), e.OutputTokens)
 	fmt.Fprintf(&b, "  note: %s\n", a.Note)
 	return b.String()
 }

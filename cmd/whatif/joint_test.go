@@ -86,17 +86,18 @@ func TestJointTTFT_AnotherFleet(t *testing.T) {
 
 	past := jointJSON(t, "--cycle", "120", "--rate", "90")
 	assert.Nil(t, past.Mean)
-	assert.Equal(t, whatif.JointSaturated, past.Refused)
+	assert.Equal(t, string(whatif.JointSaturated), past.Refused)
 }
 
 // Before any input is learned the answer is a refusal, and the text says why.
 func TestJointTTFT_RefusedAndText(t *testing.T) {
 	a := jointJSON(t, "--cycle", "1")
 	assert.Nil(t, a.Mean)
-	assert.Equal(t, whatif.JointNoPrefillCapacity, a.Refused)
+	assert.Equal(t, string(whatif.JointNoPrefillCapacity), a.Refused)
 	out, code := runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "1")
 	assert.Equal(t, 3, code, "a refusal exits 3: %s", out)
-	assert.Contains(t, out, "refused: "+whatif.JointNoPrefillCapacity)
+	assert.Contains(t, out, "refused: "+string(whatif.JointNoPrefillCapacity))
+	assert.Contains(t, out, "(0 readings, refused: NoQueueFreeMinutes)", "an input names its refusal")
 
 	out, code = runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "120")
 	require.Equal(t, 0, code, out)

@@ -311,10 +311,11 @@ const SLOTTFTPredictionCaveat = "Not a bound, and which way it errs depends on t
 
 // SLOTTFTFlags is every flag the flag series zero-fills, in the order they are
 // published: the TTFT model's, the decode flags a TTFT answer can carry, and
-// the SLO analyzer's own. The joint model's are SLOTTFTJointFlags. The names are whatif.Flag values, spelled here
-// because this package imports nothing; a test in the slo package holds them
-// to whatif's. AssumedVP and DecodeOnsetUnchecked always read 0: the analyzer
-// assumes no V_P and publishes no unchecked answer.
+// the SLO analyzer's own. The joint model's are SLOTTFTJointFlags. The names
+// are whatif.Flag values, spelled here because this package imports nothing;
+// a test in the slo package holds them to whatif's. AssumedVP and
+// DecodeOnsetUnchecked always read 0: the analyzer assumes no V_P and
+// publishes no unchecked answer.
 var SLOTTFTFlags = []string{
 	"UnvalidatedTTFT", "AssumedVP", "VPLowerBound", "VPAboveSlopeBound", "AssumedImbalance",
 	"AssumedPromptSpread", "TransferOmitted", "DecodeSideOmitted", "DecodeTTFTUnmeasured",

@@ -1,6 +1,7 @@
 package prefill
 
 import (
+	"cmp"
 	"math"
 	"slices"
 	"time"
@@ -17,7 +18,7 @@ import (
 //   - the prefill pod's unshared work S, by inverting processor sharing,
 //     S = T/(1 + λT), on a pod whose engine queue was empty;
 //   - the prefill pod's overhead around its compute, unstretched: a₀, a
-//     high quantile (OverheadQuantile) of
+//     high quantile (overheadQuantile) of
 //     (AvgTTFT − AvgQueueTime − AvgPrefillTime)·(1 − ρ_p);
 //   - the KV pull's unshared work on the decode pods, by the same inversion,
 //     by the prefill pods' utilization in buckets of PullBucketWidth;
@@ -34,37 +35,37 @@ import (
 const SourceInverted Source = "inverted"
 
 const (
-	// JointRetention is how long a joint reading is kept. A staircase of
+	// jointRetention is how long a joint reading is kept. A staircase of
 	// ten-minute steps spans about an hour, and the ITL line and the pull
 	// table need the spread of loads it holds.
-	JointRetention = time.Hour
+	jointRetention = time.Hour
 	// PullBucketWidth is the width of a pull-table bucket, in prefill
 	// utilization.
 	PullBucketWidth = 0.1
 	// MinJointReadings is the fewest readings an input is learned from.
 	MinJointReadings = 4
-	// OverheadQuantile is the share of overhead readings at or under a₀: the
+	// overheadQuantile is the share of overhead readings at or under a₀: the
 	// highest past one reading in ten, so that one scrape does not set it.
 	// The highest reading errs high, the side that asks for more replicas;
 	// one scrape's spike read 17.4 ms on the staircase where its step read
 	// 13.6 to 14.6 ms.
-	OverheadQuantile = 0.9
+	overheadQuantile = 0.9
 	// pullWaitingSlack bounds a decode pod's waiting requests, in units of
 	// the requests its own pulls hold (1 + λ·T): more than that is a pod
 	// behind on its batch, whose pull and steps say nothing of the line. The
 	// staircase's decode pods held 1 to 5 waiting below the knee and 61 to
 	// 106 once past it.
 	pullWaitingSlack = 4.0
-	// QueueFreeSeconds is the most mean engine queue time a prefill pod may
+	// queueFreeSeconds is the most mean engine queue time a prefill pod may
 	// read and still count as queue-free. vLLM's queue time is never quite
 	// 0: the staircase's prefill pods read 5 to 10 microseconds below the
 	// knee, and a pod that truly queues reads milliseconds.
-	QueueFreeSeconds = 0.001
-	// MinJointSpread is the least spread of x, (max − min)/mean, a line is
+	queueFreeSeconds = 0.001
+	// minJointSpread is the least spread of x, (max − min)/mean, a line is
 	// fitted over: flat load gives ordinary least squares no slope to read,
 	// and the fit is noise. The staircase's first step alone spreads the
 	// batch by about 0.5 and ITL by about 0.15 per pod.
-	MinJointSpread = 0.1
+	minJointSpread = 0.1
 )
 
 // The joint inputs' refusals.
@@ -78,7 +79,7 @@ const (
 	// transfer time, in a cycle whose prefill utilization was read.
 	NoPullReadings Refusal = "NoPullReadings"
 	// NoITLLine is no ITL(k) fit: too few decode readings, too little spread
-	// in the batch (MinJointSpread), a fit with no positive slope, or a
+	// in the batch (minJointSpread), a fit with no positive slope, or a
 	// negative α.
 	NoITLLine Refusal = "NoITLLine"
 	// NoDecodeOwnLine is no m_d and d: too few decode readings with a TTFT
@@ -105,17 +106,18 @@ type JointCycle struct {
 type jointRead struct {
 	at   time.Time
 	x, y float64
+	// prompt is the cycle's prompt beside a pull reading; 0 on the others.
+	prompt float64
 }
 
-// JointWindow is a model's joint readings, kept for JointRetention.
+// JointWindow is a model's joint readings, kept for jointRetention.
 type JointWindow struct {
 	// work is (S, prompt) per queue-free prefill pod; overhead the stretched
 	// overhead per queue-free prefill pod (x only).
 	work, overhead []jointRead
 	// pull is (the cycle's prefill utilization, S of the pull) per decode
-	// pod, and pullPrompt the cycle's prompt beside each.
-	pull       []jointRead
-	pullPrompt []float64
+	// pod, with the cycle's prompt beside each.
+	pull []jointRead
 	// itl is (k, ITL) and own (ITL, TTFT less the pull) per decode pod;
 	// output is the decode pods' mean output length (x only).
 	itl, own, output []jointRead
@@ -156,7 +158,7 @@ func (w *JointWindow) Observe(c JointCycle) {
 		rhoSum += rho
 		rhoN++
 		if ieff, ok := effectivePrompt(rm, c.SGLang); ok {
-			w.work = append(w.work, jointRead{c.Now, s, ieff})
+			w.work = append(w.work, jointRead{at: c.Now, x: s, y: ieff})
 		}
 		if rm.AvgTTFTKnown && finitePositive(rm.AvgTTFT) {
 			if o := (rm.AvgTTFT - rm.AvgQueueTime - rm.AvgPrefillTime) * (1 - rho); finitePositive(o) {
@@ -178,20 +180,19 @@ func (w *JointWindow) Observe(c JointCycle) {
 		pull := rm.AvgKVTransferTime
 		pullOK := rm.AvgKVTransferTimeKnown && finitePositive(pull)
 		if pullOK && rhoN > 0 && prompt > 0 {
-			w.pull = append(w.pull, jointRead{c.Now, w.utilization, pull / (1 + lambda*pull)})
-			w.pullPrompt = append(w.pullPrompt, prompt)
+			w.pull = append(w.pull, jointRead{at: c.Now, x: w.utilization, y: pull / (1 + lambda*pull), prompt: prompt})
 		}
 		if !rm.AvgITLKnown || !finitePositive(rm.AvgITL) {
 			continue
 		}
 		if k, out, ok := minuteBatch(rm, lambda); ok {
-			w.itl = append(w.itl, jointRead{c.Now, k, rm.AvgITL})
+			w.itl = append(w.itl, jointRead{at: c.Now, x: k, y: rm.AvgITL})
 			outSum += out
 			outN++
 		}
 		if pullOK && rm.AvgTTFTKnown && finitePositive(rm.AvgTTFT) {
 			if own := rm.AvgTTFT - pull; finitePositive(own) {
-				w.own = append(w.own, jointRead{c.Now, rm.AvgITL, own})
+				w.own = append(w.own, jointRead{at: c.Now, x: rm.AvgITL, y: own})
 			}
 		}
 	}
@@ -225,10 +226,10 @@ func minuteBatch(rm domain.ReplicaMetrics, lambda float64) (k, out float64, ok b
 
 // queueFreeWork is a prefill row's unshared work S = T/(1 + λT) and its
 // utilization ρ = λS, read only on a settled serving pod whose engine queue
-// was empty over the minute (QueueFreeSeconds): under processor sharing the
+// was empty over the minute (queueFreeSeconds): under processor sharing the
 // pod admits every prompt, and a queue says it stopped.
 func queueFreeWork(rm domain.ReplicaMetrics, s *Settle, now time.Time) (work, rho float64, ok bool) {
-	if !Serving(rm) || !s.Settled(rm, now) || !rm.AvgQueueTimeKnown || !(rm.AvgQueueTime <= QueueFreeSeconds) ||
+	if !Serving(rm) || !s.Settled(rm, now) || !rm.AvgQueueTimeKnown || !(rm.AvgQueueTime <= queueFreeSeconds) ||
 		!rm.AvgPrefillTimeKnown || !finitePositive(rm.AvgPrefillTime) {
 		return 0, 0, false
 	}
@@ -261,19 +262,18 @@ func decodeAdmitted(rm domain.ReplicaMetrics, s *Settle, now time.Time) (float64
 	return lambda, true
 }
 
-// age drops the readings older than JointRetention at now.
+// age drops the readings older than jointRetention at now.
 func (w *JointWindow) age(now time.Time) {
 	keep := func(reads []jointRead) int {
 		i := 0
-		for i < len(reads) && now.Sub(reads[i].at) > JointRetention {
+		for i < len(reads) && now.Sub(reads[i].at) > jointRetention {
 			i++
 		}
 		return i
 	}
 	w.work = w.work[keep(w.work):]
 	w.overhead = w.overhead[keep(w.overhead):]
-	n := keep(w.pull)
-	w.pull, w.pullPrompt = w.pull[n:], w.pullPrompt[n:]
+	w.pull = w.pull[keep(w.pull):]
 	w.itl = w.itl[keep(w.itl):]
 	w.own = w.own[keep(w.own):]
 	w.output = w.output[keep(w.output):]
@@ -283,10 +283,10 @@ func (w *JointWindow) age(now time.Time) {
 // a decode pod while the prefill pods ran at a utilization in [Utilization,
 // Utilization + PullBucketWidth), read at PromptTokens.
 type PullBucket struct {
-	Utilization  float64
-	Seconds      float64
-	PromptTokens float64
-	Samples      int
+	Utilization  float64 `json:"utilization"`
+	Seconds      float64 `json:"seconds"`
+	PromptTokens float64 `json:"promptTokens"`
+	Samples      int     `json:"samples"`
 }
 
 // JointEstimate is what a joint window supports. A refused input is zero
@@ -295,32 +295,36 @@ type JointEstimate struct {
 	// PrefillWork is S, a prefill pod's unshared work per request, at
 	// PrefillWorkPrompt tokens: the median of the queue-free readings. VP is
 	// the capacity it gives, PrefillWorkPrompt / PrefillWork tokens/s.
-	PrefillWork, PrefillWorkPrompt, VP float64
-	PrefillWorkSamples                 int
-	PrefillWorkRefused                 Refusal
-	// Overhead is a₀ (OverheadQuantile of the readings).
-	Overhead        float64
-	OverheadSamples int
-	OverheadRefused Refusal
+	PrefillWork        float64 `json:"prefillWorkSeconds"`
+	PrefillWorkPrompt  float64 `json:"promptTokens"`
+	VP                 float64 `json:"vpTokensPerSecond"`
+	PrefillWorkSamples int     `json:"prefillWorkSamples"`
+	PrefillWorkRefused Refusal `json:"prefillWorkRefused,omitempty"`
+	// Overhead is a₀ (overheadQuantile of the readings).
+	Overhead        float64 `json:"overheadSeconds"`
+	OverheadSamples int     `json:"overheadSamples"`
+	OverheadRefused Refusal `json:"overheadRefused,omitempty"`
 	// Pull is the pull table, by utilization; nil when refused.
-	Pull        []PullBucket
-	PullRefused Refusal
+	Pull        []PullBucket `json:"pull"`
+	PullRefused Refusal      `json:"pullRefused,omitempty"`
 	// ITLAlpha and ITLBeta are ITL(k) = α + β·k, seconds, k in requests.
-	ITLAlpha, ITLBeta float64
-	ITLSamples        int
-	ITLRefused        Refusal
+	ITLAlpha   float64 `json:"itlAlphaSeconds"`
+	ITLBeta    float64 `json:"itlBetaSeconds"`
+	ITLSamples int     `json:"itlSamples"`
+	ITLRefused Refusal `json:"itlRefused,omitempty"`
 	// DecodeSteps and DecodeFixed are m_d and d: the decode pod's TTFT less
 	// its pull is m_d·ITL + d.
-	DecodeSteps, DecodeFixed float64
-	DecodeSamples            int
-	DecodeRefused            Refusal
+	DecodeSteps   float64 `json:"decodeSteps"`
+	DecodeFixed   float64 `json:"decodeFixedSeconds"`
+	DecodeSamples int     `json:"decodeSamples"`
+	DecodeRefused Refusal `json:"decodeRefused,omitempty"`
 	// OutputTokens is n_out, the decode pods' mean output length; 0 unread.
-	OutputTokens float64
+	OutputTokens float64 `json:"outputTokens"`
 	// PrefillUtilization is ρ_p in the latest cycle, the mean of its
 	// queue-free prefill pods; PrefillUtilizationKnown is false, and it is 0,
 	// when none read. No NaN: an estimate is compared and encoded whole.
-	PrefillUtilization      float64
-	PrefillUtilizationKnown bool
+	PrefillUtilization      float64 `json:"prefillUtilization"`
+	PrefillUtilizationKnown bool    `json:"prefillUtilizationKnown"`
 }
 
 // Estimate is what the window supports now.
@@ -337,7 +341,7 @@ func (w *JointWindow) Estimate() JointEstimate {
 		est.PrefillWorkRefused = NoQueueFreeMinutes
 	}
 	if n := len(w.overhead); n >= MinJointReadings {
-		est.Overhead, est.OverheadSamples = quantileOf(w.overhead, OverheadQuantile), n
+		est.Overhead, est.OverheadSamples = quantileOf(w.overhead, overheadQuantile), n
 	} else {
 		est.OverheadRefused = NoOverheadReadings
 	}
@@ -358,48 +362,30 @@ func (w *JointWindow) Estimate() JointEstimate {
 // pullTable is the pull readings by bucket: each bucket's median work and
 // prompt, for a bucket with MinJointReadings; nil with none.
 func (w *JointWindow) pullTable() []PullBucket {
-	type acc struct {
-		reads   []jointRead
-		prompts []jointRead
-	}
-	byBucket := map[int]*acc{}
-	for i, r := range w.pull {
+	byBucket := map[int][]jointRead{}
+	for _, r := range w.pull {
 		b := min(int(r.x/PullBucketWidth+1e-9), int(1/PullBucketWidth)-1)
-		a := byBucket[b]
-		if a == nil {
-			a = &acc{}
-			byBucket[b] = a
-		}
-		a.reads = append(a.reads, r)
-		a.prompts = append(a.prompts, jointRead{x: w.pullPrompt[i]})
+		byBucket[b] = append(byBucket[b], r)
 	}
 	var out []PullBucket
-	for b, a := range byBucket {
-		if len(a.reads) < MinJointReadings {
+	for b, reads := range byBucket {
+		if len(reads) < MinJointReadings {
 			continue
 		}
 		out = append(out, PullBucket{
 			Utilization:  float64(b) * PullBucketWidth,
-			Seconds:      medianOf(a.reads, func(r jointRead) float64 { return r.y }),
-			PromptTokens: medianOf(a.prompts, func(r jointRead) float64 { return r.x }),
-			Samples:      len(a.reads),
+			Seconds:      medianOf(reads, func(r jointRead) float64 { return r.y }),
+			PromptTokens: medianOf(reads, func(r jointRead) float64 { return r.prompt }),
+			Samples:      len(reads),
 		})
 	}
-	slices.SortFunc(out, func(x, y PullBucket) int {
-		switch {
-		case x.Utilization < y.Utilization:
-			return -1
-		case x.Utilization > y.Utilization:
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(out, func(x, y PullBucket) int { return cmp.Compare(x.Utilization, y.Utilization) })
 	return out
 }
 
 // fitJointLine is y = intercept + slope·x by ordinary least squares
 // (itl.Fit), refused with refusal on fewer than MinJointReadings readings, on
-// x spread less than MinJointSpread, on a fit itl.Fit rejects (no positive
+// x spread less than minJointSpread, on a fit itl.Fit rejects (no positive
 // slope), or on one valid rejects. valid is given the intercept, the slope
 // and the least x read. itl.ValidModel's own guard on the intercept is for a
 // line over KV fill, and admits a negative intercept on these.
@@ -414,7 +400,7 @@ func fitJointLine(reads []jointRead, refusal Refusal, valid func(intercept, slop
 		obs[i] = itl.Observation{K: r.x, ITLSec: r.y}
 		lo, hi, sum = min(lo, r.x), max(hi, r.x), sum+r.x
 	}
-	if mean := sum / float64(len(reads)); !(mean > 0) || !((hi-lo)/mean >= MinJointSpread) {
+	if mean := sum / float64(len(reads)); !(mean > 0) || !((hi-lo)/mean >= minJointSpread) {
 		return 0, 0, len(reads), refusal
 	}
 	m, ok := itl.Fit(obs)

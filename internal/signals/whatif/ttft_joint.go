@@ -39,21 +39,38 @@ const (
 	OverheadMeasured Flag = "OverheadMeasured"
 )
 
-// The joint model's refusals, in the vocabulary of llmsm_slo_ttft_reason.
+// JointRefusal is why the joint model has no mean, in the vocabulary of
+// llmsm_slo_ttft_joint_reason. It is not a Reason: these are published as
+// they read, kebab case, and none of them is one of S1's.
+type JointRefusal string
+
+// The joint model's refusals.
 const (
-	JointNoPrefillCapacity = "no-prefill-capacity"
-	JointNoOverhead        = "no-overhead"
-	JointNoPull            = "no-pull"
-	JointNoITLLine         = "no-itl-line"
-	JointNoDecodeOwnLine   = "no-decode-own-line"
-	JointNoOutputLength    = "no-output-length"
-	JointNoReplicas        = "no-replicas"
+	// JointNoPrefillCapacity is no unshared prefill work learned: no prefill
+	// pod has read an empty queue with a prefill time.
+	JointNoPrefillCapacity JointRefusal = "no-prefill-capacity"
+	// JointNoOverhead is no a₀ learned.
+	JointNoOverhead JointRefusal = "no-overhead"
+	// JointNoPull is no pull table learned.
+	JointNoPull JointRefusal = "no-pull"
+	// JointNoITLLine is no ITL(k) line, or one that prices an ITL at or
+	// below 0.
+	JointNoITLLine JointRefusal = "no-itl-line"
+	// JointNoDecodeOwnLine is no m_d and d, or a line that prices the
+	// decode pod's own part at or below 0.
+	JointNoDecodeOwnLine JointRefusal = "no-decode-own-line"
+	// JointNoOutputLength is no output length read.
+	JointNoOutputLength JointRefusal = "no-output-length"
+	// JointNoReplicas is a fleet with no pod of a role.
+	JointNoReplicas JointRefusal = "no-replicas"
 	// JointSaturated is a prefill pod or a pull at or past its knee.
-	JointSaturated = "saturated"
+	JointSaturated JointRefusal = "saturated"
 	// JointBatchUnheld is n_out·λ_d·β ≥ 1: the decode batch grows without
 	// bound at that rate.
-	JointBatchUnheld  = "batch-unheld"
-	JointInvalidInput = "input-invalid"
+	JointBatchUnheld JointRefusal = "batch-unheld"
+	// JointInvalidInput is a question or an answer that is not a finite,
+	// non-negative figure.
+	JointInvalidInput JointRefusal = "input-invalid"
 )
 
 // JointQuestion is the fleet and load the joint model is priced at.
@@ -72,15 +89,24 @@ type JointQuestion struct {
 
 // JointTTFT is the joint model's mean TTFT and its parts, seconds.
 type JointTTFT struct {
-	Seconds float64
+	Seconds float64 `json:"seconds"`
 	// Overhead is a(ρ_p), Prefill T_P, Pull T_X, Decode m_d·ITL(k) + d, and
 	// Hop R. Engine is the sum less R: what the engines' own TTFT histograms
 	// measure, the prefill pod's and the decode pod's.
-	Overhead, Prefill, Pull, Decode, Hop, Engine float64
+	Overhead float64 `json:"overheadSeconds"`
+	Prefill  float64 `json:"prefillSeconds"`
+	Pull     float64 `json:"pullSeconds"`
+	Decode   float64 `json:"decodeSeconds"`
+	Hop      float64 `json:"hopSeconds"`
+	Engine   float64 `json:"engineSeconds"`
 	// PrefillUtilization is ρ_p, PullWork X, PullUtilization λ_d·X, Batch k,
 	// and ITL ITL(k).
-	PrefillUtilization, PullWork, PullUtilization, Batch, ITL float64
-	Flags                                                     []Flag
+	PrefillUtilization float64 `json:"prefillUtilization"`
+	PullWork           float64 `json:"pullWorkSeconds"`
+	PullUtilization    float64 `json:"pullUtilization"`
+	Batch              float64 `json:"batch"`
+	ITL                float64 `json:"itlSeconds"`
+	Flags              []Flag  `json:"flags"`
 }
 
 // HasFlag reports whether the mean carries f.
@@ -90,7 +116,7 @@ func (j JointTTFT) HasFlag(f Flag) bool {
 
 // JointTTFTMean is the joint model's mean TTFT at q, or why it has none: one
 // of the Joint* refusals.
-func JointTTFTMean(est prefill.JointEstimate, q JointQuestion) (JointTTFT, string) {
+func JointTTFTMean(est prefill.JointEstimate, q JointQuestion) (JointTTFT, JointRefusal) {
 	switch {
 	case q.PrefillReplicas < 1 || q.DecodeReplicas < 1:
 		return JointTTFT{}, JointNoReplicas
@@ -174,11 +200,4 @@ func pullAt(table []prefill.PullBucket, rho float64) (prefill.PullBucket, bool) 
 		}
 	}
 	return table[len(table)-1], true
-}
-
-// HopAt is R at a prompt of i tokens, as the decode term prices it: its
-// fixed part and its per-token part at i (PromptLine.split).
-func (t DecodeTerm) HopAt(i float64) float64 {
-	fixed, perToken := t.Hop.split(i)
-	return fixed + perToken*i
 }

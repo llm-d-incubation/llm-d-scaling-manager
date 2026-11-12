@@ -55,6 +55,10 @@ const (
 	stepRise      = 0.04
 )
 
+// jointLooseBound is how far C, bursty and not held to the band, may read
+// from the measured mean below its knee.
+const jointLooseBound = 0.15
+
 // jointBand is the model row's bar on 2+2 Poisson below the knee.
 const jointBandLow, jointBandHigh = -0.05, 0.10
 
@@ -242,11 +246,14 @@ func TestGoldens_TTFTJointModelRow(t *testing.T) {
 	for _, c := range []struct {
 		fixture string
 		band    bool
+		// priced is the steps priced below the knee, frozen: a change that
+		// prices fewer of them moves it.
+		priced int
 	}{
-		{"ttft-staircase-a-off", true},
-		{"ttft-staircase-b-off", true},
-		{"ttft-staircase-b-on", true},
-		{"ttft-staircase-c-on", false},
+		{"ttft-staircase-a-off", true, 2},
+		{"ttft-staircase-b-off", true, 6},
+		{"ttft-staircase-b-on", true, 7},
+		{"ttft-staircase-c-on", false, 6},
 	} {
 		steps := jointModelRow(t, c.fixture)
 		require.NotEmpty(t, steps, c.fixture)
@@ -261,6 +268,9 @@ func TestGoldens_TTFTJointModelRow(t *testing.T) {
 			}
 			below++
 			if !c.band {
+				// C is not held to the band, only kept from running away: a
+				// burst term on the batch is open.
+				assert.Less(t, math.Abs(s.bucketErr), jointLooseBound, "%s step %d", c.fixture, i+1)
 				continue
 			}
 			if miss, ok := jointKnownMisses[c.fixture][i+1]; ok {
@@ -272,10 +282,14 @@ func TestGoldens_TTFTJointModelRow(t *testing.T) {
 			assert.GreaterOrEqual(t, s.bucketErr, jointBandLow, "%s step %d", c.fixture, i+1)
 			assert.LessOrEqual(t, s.bucketErr, jointBandHigh, "%s step %d", c.fixture, i+1)
 		}
-		// Two at least: a-off ran three steps, and its first is not priced. Its
-		// load held flat there, ITL within prefill.MinJointSpread, so neither
+		// a-off ran three steps, and its first is not priced: its load held
+		// flat there, ITL within the joint lines' least spread, so neither
 		// decode line is fitted until the second.
-		assert.GreaterOrEqual(t, below, 2, "%s: too few steps below the knee to read the row", c.fixture)
+		assert.Equal(t, c.priced, below, "%s: the steps priced below the knee", c.fixture)
+		for step := range jointKnownMisses[c.fixture] {
+			require.Less(t, step-1, len(steps), "%s: known miss at step %d is not priced", c.fixture, step)
+			assert.False(t, steps[step-1].pastKnee, "%s: known miss at step %d is past the knee", c.fixture, step)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package whatif
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,7 +109,7 @@ func TestJointTTFTMean_Refusals(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		edit func(*prefill.JointEstimate, *JointQuestion)
-		want string
+		want JointRefusal
 	}{
 		{"no prefill pods", func(_ *prefill.JointEstimate, q *JointQuestion) { q.PrefillReplicas = 0 }, JointNoReplicas},
 		{"no decode pods", func(_ *prefill.JointEstimate, q *JointQuestion) { q.DecodeReplicas = 0 }, JointNoReplicas},
@@ -123,6 +124,13 @@ func TestJointTTFTMean_Refusals(t *testing.T) {
 		{"no output length", func(e *prefill.JointEstimate, _ *JointQuestion) { e.OutputTokens = 0 }, JointNoOutputLength},
 		// 2 pods at S 25 ms hold 80 r/s.
 		{"the prefill knee", func(_ *prefill.JointEstimate, q *JointQuestion) { q.Rate = 80 }, JointSaturated},
+		// rho exactly 1: one pod at S 250 ms and 4 r/s.
+		{"rho at 1", func(e *prefill.JointEstimate, q *JointQuestion) {
+			e.PrefillWork, q.PrefillReplicas, q.Rate = 0.25, 1, 4
+		}, JointSaturated},
+		{"a negative prompt", func(_ *prefill.JointEstimate, q *JointQuestion) { q.PromptTokens = -1 }, JointInvalidInput},
+		{"a hop that is not a number", func(_ *prefill.JointEstimate, q *JointQuestion) { q.HopSeconds = math.NaN() },
+			JointInvalidInput},
 		{"the pull's knee", func(e *prefill.JointEstimate, _ *JointQuestion) {
 			e.Pull = []prefill.PullBucket{{Utilization: 0, Seconds: 0.1, PromptTokens: 8000, Samples: 4}}
 		}, JointSaturated},

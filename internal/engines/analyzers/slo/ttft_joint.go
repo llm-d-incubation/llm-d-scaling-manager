@@ -2,7 +2,6 @@ package slo
 
 import (
 	"math"
-	"slices"
 	"strings"
 	"time"
 
@@ -95,13 +94,10 @@ func (a *Analyzer) noteJoint(input domain.AnalyzerInput, fleet fleetReading, pre
 	q := whatif.JointQuestion{
 		PrefillReplicas: fleet.ready[prefills[0]], DecodeReplicas: fleet.ready[decodes[0]], Rate: arrival,
 	}
-	q.HopSeconds, q.HopAssumed = whatif.AssumedRouterHopSeconds, true
-	if term != nil && !term.HopAssumed {
-		q.HopSeconds, q.HopAssumed = term.HopAt(est.PrefillWorkPrompt), false
-	}
+	q.HopSeconds, q.HopAssumed = jointHop(term, est.PrefillWorkPrompt)
 	out := &jointCycle{est: est, question: q, engineMeasured: math.NaN(), routerMeasured: math.NaN()}
 	price, refused := whatif.JointTTFTMean(est, q)
-	out.price, out.reason = price, refused
+	out.price, out.reason = price, string(refused)
 	if refused == "" {
 		out.reason = constants.SLOTTFTJointReasonPriced
 		if q.HopAssumed {
@@ -117,6 +113,16 @@ func (a *Analyzer) noteJoint(input domain.AnalyzerInput, fleet fleetReading, pre
 		out.routerMeasured = r.TTFTSumRate / r.TTFTCountRate
 	}
 	return out
+}
+
+// jointHop is R at prompt tokens, and whether it is assumed: the decode
+// term's fitted hop where it has one, whatif.AssumedRouterHopSeconds
+// otherwise.
+func jointHop(term *whatif.DecodeTerm, prompt float64) (float64, bool) {
+	if term == nil || term.HopAssumed {
+		return whatif.AssumedRouterHopSeconds, true
+	}
+	return term.HopAt(prompt), false
 }
 
 // withInvertedVP is est with the inverted V_P where P1 refused V_P and the
@@ -159,7 +165,7 @@ func (j *jointCycle) reading() *metrics.SLOTTFTJointReading {
 	if j.reason == constants.SLOTTFTJointReasonPriced {
 		out.MeanSeconds = j.price.Seconds
 		for _, name := range constants.SLOTTFTJointFlags {
-			if slices.Contains(j.price.Flags, whatif.Flag(name)) {
+			if j.price.HasFlag(whatif.Flag(name)) {
 				out.Flags = append(out.Flags, name)
 			}
 		}

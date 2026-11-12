@@ -138,7 +138,7 @@ func TestJointWindow_APodThatQueuesReadsNoWork(t *testing.T) {
 	assert.Zero(t, est.PrefillUtilization)
 
 	// vLLM's queue time is never quite 0: microseconds read queue-free.
-	w.Observe(JointCycle{Now: now, Prefill: []domain.ReplicaMetrics{jointPrefillRow("p0", 10, 0.04, QueueFreeSeconds, 0.06)}})
+	w.Observe(JointCycle{Now: now, Prefill: []domain.ReplicaMetrics{jointPrefillRow("p0", 10, 0.04, queueFreeSeconds, 0.06)}})
 	assert.InDelta(t, 0.04/(1+10*0.04), w.work[len(w.work)-1].x, 1e-12)
 }
 
@@ -206,7 +206,7 @@ func TestJointWindow_ThePullTableIsByPrefillUtilization(t *testing.T) {
 }
 
 // A change of engine drops every reading; an unknown tag keeps them; and a
-// reading ages out at JointRetention.
+// reading ages out at jointRetention.
 func TestJointWindow_UnderAndRetention(t *testing.T) {
 	w := stairWindow(t, func(k float64) int { return int(k) })
 	w.Under("")
@@ -220,10 +220,9 @@ func TestJointWindow_UnderAndRetention(t *testing.T) {
 
 	w = stairWindow(t, func(k float64) int { return int(k) })
 	last := time.Unix(1_700_000_000, 0).Add(59 * 15 * time.Second)
-	w.Observe(JointCycle{Now: last.Add(JointRetention + time.Second)})
+	w.Observe(JointCycle{Now: last.Add(jointRetention + time.Second)})
 	assert.Empty(t, w.work, "an hour and a second after the last reading, none is kept")
 	assert.Empty(t, w.pull)
-	assert.Empty(t, w.pullPrompt)
 }
 
 // jointReads is readings at x with y.
@@ -256,7 +255,7 @@ func TestJointWindow_TheOwnLineRefusesANonPositivePart(t *testing.T) {
 	assert.Empty(t, w.Estimate().DecodeRefused, "a line positive over its range stands")
 }
 
-// Flat load gives least squares no slope to read: under MinJointSpread of x
+// Flat load gives least squares no slope to read: under minJointSpread of x
 // neither line is fitted.
 func TestJointWindow_FlatLoadFitsNoLine(t *testing.T) {
 	w := NewJointWindow()
@@ -300,4 +299,15 @@ func TestJointWindow_ANaNQueueTimeIsNotQueueFree(t *testing.T) {
 	rm := jointPrefillRow("p0", 10, 0.03, math.NaN(), 0.05)
 	_, _, ok := queueFreeWork(rm, nil, time.Unix(1_700_000_000, 0))
 	assert.False(t, ok)
+}
+
+// a0 is the 0.9 quantile of the overhead readings, interpolated between
+// order statistics: over 20 readings evenly from 10 to 20 ms, position 17.1
+// of 19, 19 ms.
+func TestJointWindow_TheOverheadIsTheNinetiethPercentile(t *testing.T) {
+	w := NewJointWindow()
+	for i := range 20 {
+		w.overhead = append(w.overhead, jointRead{x: 0.010 + 0.010*float64(i)/19})
+	}
+	assert.InDelta(t, 0.019, w.Estimate().Overhead, 1e-12)
 }
