@@ -57,7 +57,7 @@ func TestPDDecodeChargesLandedPullsAtADefaultCap(t *testing.T) {
 // they are charged beside the requests that wait for capacity.
 func TestPDDecodeChargesLandedPullsOnAFullDecode(t *testing.T) {
 	const capacityWait, landed = 10, 30
-	full := int64(runKvCapacity * 95 / 100)
+	full := runKvCapacity * 95 / 100
 	_, res := analyzePD(t, []domain.ReplicaMetrics{withLanded(withReason(pdDecodeRow(full), capacityWait), landed), pdPrefillRow()}, pdStates)
 	assert.InDelta(t, float64(full)+(capacityWait+landed)*(pdIn+pdOut), decodeDemand(t, res), 1,
 		"capacity + completed_waiting")
