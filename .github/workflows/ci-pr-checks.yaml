@@ -82,6 +82,7 @@ jobs:
       pull-requests: read
     outputs:
       has_code_changes: ${{ steps.set-output.outputs.has_code_changes }}
+      release_install: ${{ steps.set-output.outputs.release_install }}
     steps:
       - name: Checkout source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -104,6 +105,30 @@ jobs:
               - '!OWNERS'
               - '!PROJECT'
 
+      # What the release files are made from or installed by: the renderer and
+      # the overlays (deploy/, config/), the controller and the preflight in the
+      # image (internal/, cmd/, the Go module, the Dockerfile), the e2e itself,
+      # and the Makefile and this workflow, which drive it. A separate step
+      # because the filter above is predicate-quantifier 'every', under which a
+      # list of positive patterns would have to match all at once.
+      - name: Check for release-install changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: release-filter
+        with:
+          filters: |
+            release_install:
+              - 'deploy/**'
+              - 'config/**'
+              - 'internal/**'
+              - 'cmd/**'
+              - 'test/release-manifests/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - 'Makefile'
+              - '.github/workflows/ci-pr-checks.yaml'
+
       - name: Set output
         id: set-output
         run: |
@@ -113,6 +138,14 @@ jobs:
             echo "has_code_changes=${{ steps.filter.outputs.code }}" >> $GITHUB_OUTPUT
           else
             echo "has_code_changes=true" >> $GITHUB_OUTPUT
+          fi
+          # Fails closed like has_code_changes: an empty filter result runs it.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "release_install=true" >> $GITHUB_OUTPUT
+          elif [ -n "${{ steps.release-filter.outputs.release_install }}" ]; then
+            echo "release_install=${{ steps.release-filter.outputs.release_install }}" >> $GITHUB_OUTPUT
+          else
+            echo "release_install=true" >> $GITHUB_OUTPUT
           fi
 
   lint-and-test:
@@ -661,6 +694,153 @@ jobs:
 
       # Disk left at the end of the run, pass or fail, and the lowest free
       # space the job reached (sampled since Free runner disk).
+      - name: Disk usage after the e2e run
+        if: ${{ always() && steps.decide.outputs.run == 'true' }}
+        run: deploy/ci-pr-checks/disk-report.sh
+
+  # The install from the rendered release files (make test-e2e-release-manifests,
+  # test/release-manifests/e2e.sh): kubectl only, nothing from deploy/, the way
+  # the install guides tell an operator. One leg per scope, each on its own kind
+  # cluster in parallel with the other e2e jobs: namespace installs
+  # scaling-manager-namespaced.yaml with the models, cluster installs
+  # scaling-manager-cluster.yaml in scaling-manager-system with the models in
+  # llm-d-sim. Fresh clusters, because KEDA keeps the scaler CA of its first
+  # connection and the two legs mint different ones.
+  #
+  # Runs on a PR that touches what the files are made from or installed by
+  # (check-code-changes' release_install), and on a manual dispatch that asks
+  # for the full suite. Like e2e-tests-full it decides inside the job, so each
+  # leg always reports a conclusion and could be a required check.
+  #
+  # Budget: on a 22-CPU kind host the setup took 9.5 minutes with the image
+  # build and a namespace leg 11.7 (the smoke suite 4 of them). It is the
+  # smoke job's work (60m budget) plus about 8 minutes of preflight runs,
+  # rollouts and the uninstall, each bounded by its own wait in the script,
+  # so the job gets 75m.
+  e2e-tests-release-manifests:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-code-changes]
+    if: >-
+      !cancelled() && needs.lint-and-test.result == 'success'
+      && (github.event_name == 'pull_request'
+      || (github.event_name == 'workflow_dispatch' && inputs.run_full_tests))
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [namespace, cluster]
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - name: Decide whether the release-files e2e is needed
+        id: decide
+        env:
+          RELEASE_INSTALL: ${{ needs.check-code-changes.outputs.release_install }}
+        run: |
+          if [ "${{ github.event_name }}" != 'pull_request' ]; then
+            echo 'Manual dispatch asked for the full suite.'
+            echo 'run=true' >> $GITHUB_OUTPUT
+          elif [ "$RELEASE_INSTALL" = 'false' ]; then
+            echo 'Nothing the release files are made from or installed by changed; skipping.'
+            echo 'run=false' >> $GITHUB_OUTPUT
+          else
+            echo "release_install='$RELEASE_INSTALL': running the release-files e2e."
+            echo 'run=true' >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout source
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Free runner disk
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/free-disk.sh
+
+      - name: Extract Go version from go.mod
+        if: steps.decide.outputs.run == 'true'
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go with cache
+        if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
+        run: go mod download
+
+      # The renderer (deploy/release-manifests.sh) needs yq; same pin and
+      # retries as deploy-scripts-check.
+      - name: Install yq
+        if: steps.decide.outputs.run == 'true'
+        run: |
+          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Install Kind
+        if: steps.decide.outputs.run == 'true'
+        run: deploy/ci-pr-checks/install-kind.sh
+
+      - name: Set up Docker Buildx
+        if: steps.decide.outputs.run == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the scaling manager image locally
+        if: steps.decide.outputs.run == 'true'
+        id: build-image
+        env:
+          CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: deploy/ci-pr-checks/build-scaling-manager-image-local.sh
+
+      # Prerequisites without the scaling manager, then the install from the
+      # files rendered with the digest the kind nodes hold for the image. The
+      # target fails on a 0-spec smoke run, and on any step of the script.
+      - name: Run the release-files e2e (${{ matrix.scope }})
+        if: steps.decide.outputs.run == 'true'
+        shell: bash
+        env:
+          ENVIRONMENT: kind-emulator
+          KIND_PRUNE_HOST_IMAGES: "true"
+          USE_SIMULATOR: "true"
+          SCALE_TO_ZERO_ENABLED: "false"
+          CREATE_CLUSTER: "true"
+          SCALER_BACKEND: keda
+          LLM_D_ROUTER_VERSION: "v0.9.0"
+          RELEASE_E2E_IMG: ${{ steps.build-image.outputs.image }}
+          RELEASE_E2E_SCOPE: ${{ matrix.scope }}
+          SKIP_BUILD: "true"
+        run: |
+          make test-e2e-release-manifests-with-setup
+
+      # The script's summary, every preflight log and the smoke log are in
+      # dist/release-e2e-logs; add what the cluster showed at the end.
+      - name: Collect cluster state on failure
+        if: ${{ failure() && steps.decide.outputs.run == 'true' }}
+        run: |
+          d=dist/release-e2e-logs/cluster
+          mkdir -p "$d"
+          kubectl get pods,deployments,jobs,configmaps,scaledobjects,hpa -A -o wide > "$d/objects.txt" 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$d/events.txt" 2>&1 || true
+          for ns in llm-d-sim scaling-manager-system; do
+            kubectl logs -n "$ns" deployment/scaling-manager-controller-manager --tail=2000 > "$d/controller-$ns.log" 2>&1 || true
+          done
+          kubectl logs -n keda-system deployment/keda-operator --tail=2000 > "$d/keda-operator.log" 2>&1 || true
+
+      - name: Upload the release-files e2e logs
+        if: ${{ failure() && steps.decide.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-e2e-logs-${{ matrix.scope }}
+          path: |
+            dist/release-e2e-logs
+            dist/release-e2e
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Disk usage after the e2e run
         if: ${{ always() && steps.decide.outputs.run == 'true' }}
         run: deploy/ci-pr-checks/disk-report.sh
