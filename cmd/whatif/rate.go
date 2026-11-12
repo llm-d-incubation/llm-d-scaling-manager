@@ -160,16 +160,30 @@ func decodeRate(pv pricedVariant, query whatif.RateQuery, r resolvedRatio) whati
 
 // priceTTFT prices the prefill role's rate at the target, and the fleet's.
 func (a *rateAnswer) priceTTFT(t ttftQuestion, headroom float64) {
+	corners := a.priceTTFTRate(t)
+	a.fleetRate = a.fleetAt(t, headroom, a.result, corners)
+}
+
+// priceTTFTRate prices the prefill role's rate at the target, with its span,
+// and returns the rate at each corner of the span.
+func (a *rateAnswer) priceTTFTRate(t ttftQuestion) []whatif.Result {
 	price := func(fl whatif.TTFTFleet) whatif.Result {
 		return whatif.RateForTTFT(fl, whatif.TTFTTarget{Seconds: t.seconds, Percentile: t.q})
 	}
 	corners := a.fleet.corners(price)
 	a.ttft = withSpan(a.fleet.priced(price), corners)
 	a.fleet.noteAssumedTerm(a.ttft, price)
+	return corners
+}
+
+// fleetAt is the fleet's rate at headroom, from decode's rate (nil with no
+// TPOT asked) and the prefill role's, spanned over the prefill role's corners.
+func (a *rateAnswer) fleetAt(t ttftQuestion, headroom float64, decode whatif.Result, corners []whatif.Result) whatif.Result {
+	spans := make([]whatif.Result, len(corners))
 	for i, c := range corners {
-		corners[i] = fleetRate(t, headroom, a.result, c)
+		spans[i] = fleetRate(t, headroom, decode, c)
 	}
-	a.fleetRate = withSpan(fleetRate(t, headroom, a.result, a.ttft), corners)
+	return withSpan(fleetRate(t, headroom, decode, a.ttft), spans)
 }
 
 // wireTTFT is the answer's prefill and fleet roles, none with no TTFT asked.
