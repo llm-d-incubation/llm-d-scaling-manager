@@ -2,6 +2,7 @@ package slo
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -157,7 +158,11 @@ func (j *jointCycle) reading() *metrics.SLOTTFTJointReading {
 	out := &metrics.SLOTTFTJointReading{Inputs: inputs, MeanSeconds: math.NaN(), Reason: j.reason}
 	if j.reason == constants.SLOTTFTJointReasonPriced {
 		out.MeanSeconds = j.price.Seconds
-		out.Flags = publishedFlags(j.price.Flags)
+		for _, name := range constants.SLOTTFTJointFlags {
+			if slices.Contains(j.price.Flags, whatif.Flag(name)) {
+				out.Flags = append(out.Flags, name)
+			}
+		}
 	}
 	return out
 }

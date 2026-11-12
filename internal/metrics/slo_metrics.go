@@ -33,6 +33,7 @@ var (
 	sloTTFTJointInput  *prometheus.GaugeVec
 	sloTTFTJointMean   *prometheus.GaugeVec
 	sloTTFTJointReason *prometheus.GaugeVec
+	sloTTFTJointFlag   *prometheus.GaugeVec
 )
 
 // registerSLOMetrics creates and registers the SLO analyzer's gauges. Called
@@ -120,21 +121,30 @@ func registerSLOMetrics(registry prometheus.Registerer) error {
 	sloTTFTFlag = gauge(constants.LLMSMSLOTTFTFlag,
 		"SLO analyzer: 1 for each flag on a prefill variant's TTFT answer, 0 for the others.",
 		ttftLabels(constants.LabelFlag))
+	// The joint series are means: no statistic label.
+	jointLabels := func(more ...string) []string {
+		return withInstance(append([]string{constants.LabelNamespace, constants.LabelModelName,
+			constants.LabelVariantName}, more...)...)
+	}
 	sloTTFTJointInput = gauge(constants.LLMSMSLOTTFTJointInput,
 		"SLO analyzer, shadow only: one input of the joint prefill and decode TTFT model, learned from the "+
-			"engines' histograms. Absent while the input is not learned. Nothing acts on it.",
-		ttftLabels(constants.LabelJointInput))
+			"engines' histograms. Absent while the input is not learned; pull-seconds only while the mean is "+
+			"priced. Nothing acts on it.",
+		jointLabels(constants.LabelJointInput))
 	sloTTFTJointMean = gauge(constants.LLMSMSLOTTFTJointMeanSeconds,
 		"SLO analyzer, shadow only: the joint prefill and decode model's mean TTFT at the running fleet and "+
 			"rate, in seconds. Absent unless llmsm_slo_ttft_joint_reason is priced.",
-		ttftLabels())
+		jointLabels())
 	sloTTFTJointReason = gauge(constants.LLMSMSLOTTFTJointReason,
 		"SLO analyzer, shadow only: 1 for why the joint TTFT model has no mean, or priced, 0 for the others.",
-		ttftLabels(constants.LabelReason))
+		jointLabels(constants.LabelReason))
+	sloTTFTJointFlag = gauge(constants.LLMSMSLOTTFTJointFlag,
+		"SLO analyzer, shadow only: 1 for each flag on the joint mean, 0 for the others.",
+		jointLabels(constants.LabelFlag))
 	for _, g := range []*prometheus.GaugeVec{sloTarget, sloObserved, sloAttainment, sloObjective, sloFill,
 		sloPredictedITL, sloSource, sloRequests, sloExcluded, sloPredictedTTFT, sloTTFTUnmet, sloTTFTReplicaRate,
 		sloTTFTVPSource, sloTTFTReason, sloTTFTRefused, sloTTFTFlag, sloTTFTJointInput, sloTTFTJointMean,
-		sloTTFTJointReason} {
+		sloTTFTJointReason, sloTTFTJointFlag} {
 		if err := registry.Register(g); err != nil {
 			return err
 		}
@@ -334,17 +344,23 @@ func PublishSLO(snap SLOModelSnapshot, now time.Time) {
 		oneHot(sloTTFTVPSource, constants.LabelVPSource, constants.SLOTTFTVPSources, func(v string) bool { return v == t.VPSource })
 		oneHot(sloTTFTReason, constants.LabelReason, constants.SLOTTFTReasons, func(v string) bool { return v == t.Reason })
 		oneHot(sloTTFTRefused, constants.LabelReason, constants.SLOTTFTRefusedReasons, func(v string) bool { return v == t.Refused })
-		oneHot(sloTTFTFlag, constants.LabelFlag, constants.SLOTTFTFlags, func(v string) bool {
-			return slices.Contains(t.Flags, v) || t.Joint != nil && slices.Contains(t.Joint.Flags, v)
-		})
+		oneHot(sloTTFTFlag, constants.LabelFlag, constants.SLOTTFTFlags, func(v string) bool { return slices.Contains(t.Flags, v) })
 		if j := t.Joint; j != nil {
+			jl := func(pairs ...string) prometheus.Labels {
+				return labels(append([]string{constants.LabelVariantName, t.Variant}, pairs...)...)
+			}
 			for _, name := range constants.SLOTTFTJointInputs {
 				if v, ok := j.Inputs[name]; ok {
-					set(sloTTFTJointInput, tl(constants.LabelJointInput, name), v)
+					set(sloTTFTJointInput, jl(constants.LabelJointInput, name), v)
 				}
 			}
-			set(sloTTFTJointMean, tl(), j.MeanSeconds)
-			oneHot(sloTTFTJointReason, constants.LabelReason, constants.SLOTTFTJointReasons, func(v string) bool { return v == j.Reason })
+			set(sloTTFTJointMean, jl(), j.MeanSeconds)
+			for _, v := range constants.SLOTTFTJointReasons {
+				set(sloTTFTJointReason, jl(constants.LabelReason, v), boolValue(v == j.Reason))
+			}
+			for _, v := range constants.SLOTTFTJointFlags {
+				set(sloTTFTJointFlag, jl(constants.LabelFlag, v), boolValue(slices.Contains(j.Flags, v)))
+			}
 		}
 	}
 
@@ -399,4 +415,12 @@ func deleteGone(prev, current map[*prometheus.GaugeVec]map[string]prometheus.Lab
 			}
 		}
 	}
+}
+
+// boolValue is a one-hot series' value: 1 for true, 0 for false.
+func boolValue(on bool) float64 {
+	if on {
+		return 1
+	}
+	return 0
 }

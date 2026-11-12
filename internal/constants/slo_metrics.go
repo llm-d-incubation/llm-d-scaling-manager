@@ -96,18 +96,26 @@ const (
 	// model, learned in shadow (SLOTTFTJointInputs): a prefill variant's
 	// unshared work, its overhead a0, the pull at the running prefill
 	// utilization, the decode ITL line and the decode pod's own part. Absent
-	// while the input is not learned. Nothing acts on it.
-	// Labels: namespace, model_name, variant_name, statistic, input.
+	// while the input is not learned; pull-seconds is read at the running
+	// utilization, so it is present only while the mean is priced. Nothing
+	// acts on it. The joint series carry no statistic: they are means, the
+	// same whatever percentile the objective names.
+	// Labels: namespace, model_name, variant_name, input.
 	LLMSMSLOTTFTJointInput = "llmsm_slo_ttft_joint_input"
 	// LLMSMSLOTTFTJointMeanSeconds is the joint model's mean TTFT at the
 	// running fleet and rate, in seconds, the router hop included. Shadow
 	// only; absent when llmsm_slo_ttft_joint_reason is not priced.
-	// Labels: namespace, model_name, variant_name, statistic.
+	// Labels: namespace, model_name, variant_name.
 	LLMSMSLOTTFTJointMeanSeconds = "llmsm_slo_ttft_joint_mean_seconds"
 	// LLMSMSLOTTFTJointReason is 1 for why the joint model has no mean, or
 	// priced, and 0 for the others (SLOTTFTJointReasons).
-	// Labels: namespace, model_name, variant_name, statistic, reason.
+	// Labels: namespace, model_name, variant_name, reason.
 	LLMSMSLOTTFTJointReason = "llmsm_slo_ttft_joint_reason"
+	// LLMSMSLOTTFTJointFlag is 1 for each flag on the joint mean and 0 for
+	// the others (SLOTTFTJointFlags); all 0 with no mean. Apart from
+	// llmsm_slo_ttft_flag, which is S1's answer's alone.
+	// Labels: namespace, model_name, variant_name, flag.
+	LLMSMSLOTTFTJointFlag = "llmsm_slo_ttft_joint_flag"
 
 	// LabelObjective names an SLO objective: "ttft" or "tpot".
 	LabelObjective = "objective"
@@ -203,8 +211,8 @@ const (
 	SLOTTFTJointPrefillWork = "prefill-work-seconds"
 	// SLOTTFTJointPromptTokens is the prompt S was read at.
 	SLOTTFTJointPromptTokens = "prompt-tokens"
-	// SLOTTFTJointOverhead is a0, the prefill pod's stretched overhead,
-	// seconds.
+	// SLOTTFTJointOverhead is a0, the prefill pod's overhead around its
+	// compute, unstretched (its stretch at rho_p is a0/(1 - rho_p)), seconds.
 	SLOTTFTJointOverhead = "overhead-seconds"
 	// SLOTTFTJointPrefillUtilization is the prefill pods' utilization now.
 	SLOTTFTJointPrefillUtilization = "prefill-utilization"
@@ -241,6 +249,11 @@ var SLOTTFTJointReasons = []string{
 	SLOTTFTJointReasonPriced, "no-prefill-capacity", "no-overhead", "no-pull", "no-itl-line",
 	"no-decode-own-line", "no-output-length", "no-replicas", "saturated", "batch-unheld", "input-invalid",
 }
+
+// SLOTTFTJointFlags is every flag the joint flag series zero-fills, in the
+// order they are published: whatif.Flag values, held to whatif's by a test in
+// the slo package.
+var SLOTTFTJointFlags = []string{"OverheadMeasured", "PullUnseen", "RouterHopAssumed"}
 
 // The reasons of a prefill variant's TTFT pricing.
 const (
@@ -297,9 +310,8 @@ const SLOTTFTPredictionCaveat = "Not a bound, and which way it errs depends on t
 	"9 of 14, worst 33% under."
 
 // SLOTTFTFlags is every flag the flag series zero-fills, in the order they are
-// published: the TTFT model's, the decode flags a TTFT answer can carry, the
-// SLO analyzer's own, and the joint model's (PullUnseen, OverheadMeasured),
-// which sit on its mean and never on S1's answer. The names are whatif.Flag values, spelled here
+// published: the TTFT model's, the decode flags a TTFT answer can carry, and
+// the SLO analyzer's own. The joint model's are SLOTTFTJointFlags. The names are whatif.Flag values, spelled here
 // because this package imports nothing; a test in the slo package holds them
 // to whatif's. AssumedVP and DecodeOnsetUnchecked always read 0: the analyzer
 // assumes no V_P and publishes no unchecked answer.
@@ -313,7 +325,6 @@ var SLOTTFTFlags = []string{
 	"SpreadBeyondProcessorSharing", "BelowFittedBand", "KVBoundSlots",
 	"AssumedPoissonArrivals", "PromptSpreadClamped", "FlowControlMismatch",
 	"PromptSpreadAbovePeak", "ImbalanceNotSustained", "OutputSpreadUnread",
-	"PullUnseen", "OverheadMeasured",
 }
 
 // SLOSources is every SLO source value, in the order they are published.

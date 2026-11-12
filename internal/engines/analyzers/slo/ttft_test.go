@@ -1396,7 +1396,7 @@ func TestTTFT_TheFlagListIsTheModels(t *testing.T) {
 		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.HeldByDecodeAdmission,
 		whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
 		AssumedPoissonArrivals, PromptSpreadClamped, FlowControlMismatch, PromptSpreadAbovePeak, ImbalanceNotSustained,
-		whatif.OutputSpreadUnread, whatif.PullUnseen, whatif.OverheadMeasured}
+		whatif.OutputSpreadUnread}
 	want := make([]string, len(flags))
 	for i, f := range flags {
 		want[i] = string(f)

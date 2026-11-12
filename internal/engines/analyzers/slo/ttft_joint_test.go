@@ -110,4 +110,6 @@ func TestTTFTJoint_ConstantsAreWhatifs(t *testing.T) {
 		whatif.JointNoReplicas, whatif.JointSaturated, whatif.JointBatchUnheld, whatif.JointInvalidInput},
 		constants.SLOTTFTJointReasons)
 	assert.Equal(t, constants.SLOTTFTVPInverted, string(prefill.SourceInverted))
+	assert.Equal(t, []string{string(whatif.OverheadMeasured), string(whatif.PullUnseen), string(whatif.RouterHopAssumed)},
+		constants.SLOTTFTJointFlags)
 }
