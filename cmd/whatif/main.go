@@ -20,6 +20,8 @@
 //	                       [--rate R] [--prompt I] [--hop D] [-o json]
 //	whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...)
 //	                       --from T0 --to T1 [capture's flags] [the question's flags]
+//	whatif serve           [--recordings DIR] [--prometheus URL capture's flags --namespace NS [--allowed-namespaces NS,...]]
+//	                       [--listen 127.0.0.1:8080] [--auth none|kubernetes --tls-cert-file F --tls-key-file F [--token-audiences A,...]]
 //
 // capture writes the window's cycle inputs (internal/whatifsource);
 // generate plays them through the analyzers in the engine's order
@@ -34,6 +36,9 @@
 // alone. It prices a P/D fleet (ttft.go), and prints UNVALIDATED. joint-ttft
 // prices the joint prefill and decode model's mean at a fleet (joint.go). Aggregated
 // TTFT and per-bucket answers are not built (the planner's M1).
+//
+// serve runs the capacity planner's HTTP API on the same code paths
+// (serve.go, internal/whatifapi; docs/developer-guide/whatif-serve.md).
 //
 // Exit codes: 0 done, and every role answered; 3 a role refused (the
 // output is still printed); 2 a usage or input error (a bad flag, an
@@ -95,7 +100,7 @@ func exitCode(err error) int {
 	return 1
 }
 
-const usage = "usage: whatif capture|freeze|generate|joint-ttft|replicas-to-slo|slo-to-rate [flags]; -h after a command lists its flags"
+const usage = "usage: whatif capture|freeze|generate|joint-ttft|replicas-to-slo|serve|slo-to-rate [flags]; -h after a command lists its flags"
 
 // command is one subcommand: it parses its own flags from args and writes
 // what it reports to out, and its warnings to warn (stderr).

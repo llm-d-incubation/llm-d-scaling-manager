@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,4 +80,14 @@ func TestServeEndsRequestsAtTheDeadline(t *testing.T) {
 	default:
 		t.Fatal("the request's context did not end")
 	}
+}
+
+// The usage line names every command the CLI runs.
+func TestUsageNamesEveryCommand(t *testing.T) {
+	names, _, _ := strings.Cut(strings.TrimPrefix(usage, "usage: whatif "), " ")
+	listed := strings.Split(names, "|")
+	for name := range commands {
+		assert.Contains(t, listed, name)
+	}
+	assert.Len(t, listed, len(commands))
 }
