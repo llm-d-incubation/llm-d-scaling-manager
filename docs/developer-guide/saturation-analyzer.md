@@ -831,7 +831,7 @@ Add a row when you add such a threshold.
 | threshold | set | clear | dwell | safe side | after a restart |
 | --- | --- | --- | --- | --- | --- |
 | ITL tier: full fit or pinned fit (`itl/tier_latch.go`, on the saturation, slo and throughput lines) | 10 steady readings, spread 0.30 of `k` | under 8 steady readings or spread 0.18, or a pinned fit pricing 3 % more | 10 min after the last change, unless the new line prices 3 % more replicas | the line that prices more replicas, from either tier, judged by what the line sustains where the analyzer prices it | the latch is not kept: a key with a restored slope stands at the pinned fit |
-| Mu's weighing: a sample of the readers alone, or counting the replicas they did not read (`saturation/mu_slow_pod.go`, `muChoice.weighs`) | the readers' rate over the unread replicas', averaged over 5 min, under `siblingMuTolerance` (0.80) | that average over 10 min at 0.90 or over (the tolerance plus 0.10, never past 1), or no unread replica (at once) | 10 min after a set, on the clear only; none for a set made on under 5 min of readings, which clears on its own 5 min mean at 0.90; a set is never held | neither source is the safe side alone: the readers alone are the lower mu, but a slow replica read alone seals the fleet over need (3.4), so the set is kept fast and the clear slow | the latch is not kept: a key starts not weighing, and its first reading under 0.80 sets it |
+| Mu's weighing: a sample of the readers alone, or counting the replicas they did not read (`saturation/mu_slow_pod.go`, `muChoice.weighs`) | the readers' rate over the unread replicas', averaged over 5 min, under `siblingMuTolerance` (0.80); once the key has cleared, the 10 min average under 0.80 as well | that average over 10 min at 0.90 or over (the tolerance plus 0.10, never past 1), or no unread replica (at once) | 10 min after a set, on the clear only; none for a set made on under 5 min of readings, which clears on its own 5 min mean at 0.90; a set is never held | neither source is the safe side alone: the readers alone are the lower mu, but a slow replica read alone seals the fleet over need (3.4), so the set is kept fast and the clear slow | the latch is not kept: a key starts not weighing, and its first reading under 0.80 sets it |
 | Mu's stale latch: measured or derived mu (`measuredYield`, `muChoice`) | the ratio of measured to derived mu, smoothed over `MuLatchRatioSmoothing` (3 min), past `muChoice.maxRatio` (2.0), or one cycle's own ratio at or past `MuLatchRawSetFactor` times it (2.8x); under 1/2.0, smoothed only, once stale for `lowHoldFor` | the smoothed ratio back within `muChoice.returnRatio` (1.6) | none: the smoothing is the delay. A stale ratio stepping from 1x to 2.8x or more sets on the step, to 2.5x on the 14th cycle at 15 s, to 2.2x on the 22nd | the lower figure: latched over the derived one, unlatched under it | the latch is not kept, and restores to the safe side (`SwitchMuLatchRestoresSafe`); the smoothed ratio starts over with a restored, brought-back or new window |
 
 **Price.** A line's price is sequences over ITL at the fill the analyzer reads
@@ -888,8 +888,14 @@ replica in a settled fleet is weighed once the 5 min average crosses 0.80,
 tolerance took the next sample. Longer set windows seal the closed-loop probe:
 at 10 min a slow replica at 0.3 appearing at 20 min took the fleet to 56
 against a need of 18. A recovered replica stops being weighed after at least
-10 min. On 20 seeds of one crossing (`TestWeighingBand_OneChangePerExcursion`)
-the source changes once at 4 % (phi 0.9), 10 % and 15 % (phi 0.3 and 0.75);
+10 min. A key that has cleared sets again only once the 10 min average, the
+one it cleared on, is under 0.80 as well as the 5 min one (issue #60): at 15 %
+noise and a per-cycle lag-one of 0.75 the 5 min average of a recovered
+replica at 0.95 dipped under 0.80 and set it again mid-recovery on 3 of 20
+seeds. That re-set is the slower one: 2.9 min after a step from 1 to 0.3, 4.4
+to 0.55, 8 to 0.75, on the cost side; a key's first set is not delayed. On 20
+seeds of one crossing (`TestWeighingBand_OneChangePerExcursion`) the source
+changes once at 4 % (phi 0.9), 10 % and 15 % (phi 0.3 and 0.75);
 at 10 % to 15 % a key whose first reading falls in a noise trough sets and
 clears once at its start. `SwitchMuWeighingBand` turns the band off for a
 replay.
