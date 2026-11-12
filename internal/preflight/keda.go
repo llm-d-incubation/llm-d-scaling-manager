@@ -132,7 +132,9 @@ func checkKEDAVersion(ctx context.Context, s *state) ([]Result, string) {
 
 // checkKEDANetworkPolicy: the scaler NetworkPolicy admits the namespace KEDA
 // runs in (decision 6). Before the install it compares with what the release
-// file will apply: keda, or openshift-keda on OpenShift.
+// file will apply as shipped (keda, or openshift-keda on OpenShift) and warns
+// on a mismatch, since it cannot see an edited file; the live policy after the
+// install fails on one.
 func checkKEDANetworkPolicy(ctx context.Context, s *state) ([]Result, string) {
 	ns := s.env.Namespace
 	keda, kind, why := s.kedaNamespace(ctx)
@@ -163,11 +165,18 @@ func checkKEDANetworkPolicy(ctx context.Context, s *state) ([]Result, string) {
 			return []Result{{Status: Pass, Detail: fmt.Sprintf("the release file's NetworkPolicy %s (not applied yet) admits %s, where KEDA runs", ScalerNetworkPolicy, keda)}}, ""
 		}
 		// The policy does not exist yet, so a kubectl patch would answer
-		// NotFound: change the file before applying it.
-		return []Result{{Status: Fail,
-			Detail: fmt.Sprintf("the release file's NetworkPolicy %s (not applied yet) admits port 9090 from %s, but KEDA runs in %s: KEDA's calls would be dropped and no ScaledObject would scale",
+		// NotFound: change the file before applying it. The preflight cannot
+		// read the file, so it judges the file as shipped and only warns: an
+		// operator who already edited it could not clear a FAIL until the
+		// install, and the run after the install checks the live policy.
+		files := "scaling-manager-namespaced*.yaml"
+		if s.env.Scope == ScopeCluster {
+			files = "scaling-manager-cluster*.yaml"
+		}
+		return []Result{{Status: Warn,
+			Detail: fmt.Sprintf("the release file's NetworkPolicy %s (not applied yet), as shipped, admits port 9090 from %s, but KEDA runs in %s: unless the file is changed, KEDA's calls would be dropped and no ScaledObject would scale; if you edited it, the run after the install checks it live",
 				ScalerNetworkPolicy, shipped, keda),
-			Fix: fmt.Sprintf(`sed -i "s#kubernetes.io/metadata.name: %s\$#kubernetes.io/metadata.name: %s#" scaling-manager-namespaced*.yaml   # before applying it`, shipped, keda)}}, ""
+			Fix: fmt.Sprintf(`sed -i "s#kubernetes.io/metadata.name: %s\$#kubernetes.io/metadata.name: %s#" %s   # before applying it`, shipped, keda, files)}}, ""
 	}
 	admitted, rule := scalerAdmits(np)
 	source := "NetworkPolicy " + ScalerNetworkPolicy

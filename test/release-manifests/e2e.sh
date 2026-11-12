@@ -225,21 +225,33 @@ pass "settings created (prometheusURL, prometheusCACertPath set); a second creat
 # --- 4. preflight before the install ----------------------------------------
 #
 # The release file's scaler NetworkPolicy admits KEDA from namespace keda
-# (KEDA's chart default); the e2e KEDA runs in keda-system. The admin part
-# applied that policy, so the preflight must FAIL keda.networkpolicy and print
-# the kubectl patch that fixes the live object. The operator runs it, and makes
-# the same change in the file so a later apply of the file does not undo it.
+# (KEDA's chart default); the e2e KEDA runs in keda-system.
+#
+# Scope namespace: the admin part applied that policy, so the preflight must
+# FAIL keda.networkpolicy and print the kubectl patch that fixes the live
+# object. The operator runs it, and makes the same change in the file so a
+# later apply of the file does not undo it.
+#
+# Scope cluster: nothing of the cluster file is applied yet. The preflight
+# cannot see the file, so it judges it as shipped and must WARN
+# keda.networkpolicy, printing a sed on the cluster files; the Job does not
+# fail on it. The run after the install checks the live policy.
 
 run_preflight before-fix
 pf="$LOGS/preflight-before-fix.log"
-[ "$(status_of "$pf" keda.networkpolicy)" = FAIL ] \
-    || fail "preflight before the install" "expected keda.networkpolicy FAIL for KEDA in $KEDA_NS, got '$(status_of "$pf" keda.networkpolicy)'"
-fix="$(grep -A1 -E '^FAIL +keda.networkpolicy' "$pf" | sed -n 's/^ *fix: //p')"
+if [ "$SCOPE" = namespace ]; then
+    want=FAIL
+else
+    want=WARN
+fi
+[ "$(status_of "$pf" keda.networkpolicy)" = "$want" ] \
+    || { cat "$pf"; fail "preflight before the install" "expected keda.networkpolicy $want for KEDA in $KEDA_NS, got '$(status_of "$pf" keda.networkpolicy)'"; }
+fix="$(grep -A1 -E "^$want +keda.networkpolicy" "$pf" | sed -n 's/^ *fix: //p')"
 [ -n "$fix" ] || fail "preflight before the install" "keda.networkpolicy printed no fix"
-[ "$(cat "$LOGS/preflight-before-fix.end")" = Failed ] || fail "preflight before the install" "a FAIL did not fail the Job"
-pass "preflight names keda.networkpolicy FAIL with a fix; the Job failed"
 
 if [ "$SCOPE" = namespace ]; then
+    [ "$(cat "$LOGS/preflight-before-fix.end")" = Failed ] || fail "preflight before the install" "a FAIL did not fail the Job"
+    pass "preflight names keda.networkpolicy FAIL with a fix; the Job failed"
     log "running the preflight's fix: $fix"
     bash -c "$fix" > "$LOGS/networkpolicy-fix.log" 2>&1 || { cat "$LOGS/networkpolicy-fix.log"; fail "preflight fix" "the printed fix did not run: $fix"; }
     kubectl get networkpolicy scaling-manager-external-scaler -n "$NS" -o yaml | grep -q "kubernetes.io/metadata.name: $KEDA_NS" \
@@ -247,37 +259,34 @@ if [ "$SCOPE" = namespace ]; then
     sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" "$MAIN"
     pass "the printed fix admits $KEDA_NS (and the file says the same)"
 else
-    # Nothing of the cluster file is applied yet, so the fix is an edit of
-    # the file. The cluster-wide guide gives its own sed for it (the printed
-    # one names the namespaced files); run the guide's.
-    log "running the cluster-wide guide's sed for KEDA in $KEDA_NS"
-    sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" "$MAIN"
+    grep -E '^WARN +keda.networkpolicy' "$pf" | grep -q 'not applied yet' \
+        || fail "preflight before the install" "the keda.networkpolicy WARN is not about the policy not applied yet: $(grep -m1 -E '^WARN +keda.networkpolicy' "$pf")"
+    case "$fix" in
+        *scaling-manager-cluster\*.yaml*) ;;
+        *) fail "preflight before the install" "the keda.networkpolicy fix does not name the cluster files: $fix" ;;
+    esac
+    pass "preflight WARNs keda.networkpolicy (not applied yet) with a sed on the cluster files"
+    # The fix edits the files in the working directory, as the guide's sed does.
+    log "running the preflight's fix: $fix"
+    bash -c "$fix" > "$LOGS/networkpolicy-fix.log" 2>&1 || { cat "$LOGS/networkpolicy-fix.log"; fail "preflight fix" "the printed fix did not run: $fix"; }
     [ "$(grep -c "kubernetes.io/metadata.name: $KEDA_NS\$" "$MAIN")" -ge 1 ] \
-        || fail "preflight fix" "after the guide's sed $MAIN does not name $KEDA_NS"
-    pass "the guide's sed makes $MAIN admit $KEDA_NS"
+        || fail "preflight fix" "after the printed sed $MAIN does not name $KEDA_NS"
+    pass "the printed sed makes $MAIN admit $KEDA_NS"
 fi
 
 run_preflight before-install
 pf="$LOGS/preflight-before-install.log"
 fails="$(fails_in "$pf")"
 before_pass="settings keda.crd keda.version keda.networkpolicy prometheus.reachable"
-if [ "$SCOPE" = cluster ] && [ "$fails" = keda.networkpolicy ] \
-    && grep -A1 -E '^FAIL +keda.networkpolicy' "$pf" | grep -q 'not applied yet'; then
-    # The preflight cannot read the edited file: until the NetworkPolicy is
-    # applied it judges the file as shipped (keda), so this FAIL stays until
-    # the install. The run after the install must PASS it.
-    grep -E '^FAIL +keda.networkpolicy' "$pf" | grep -q "KEDA runs in $KEDA_NS:" \
-        || fail "preflight before the install" "the keda.networkpolicy FAIL does not name $KEDA_NS: $(grep -m1 -E '^FAIL +keda.networkpolicy' "$pf")"
-    [ "$(cat "$LOGS/preflight-before-install.end")" = Failed ] \
-        || fail "preflight before the install" "keda.networkpolicy FAILed, but the Job ended '$(cat "$LOGS/preflight-before-install.end")', not Failed"
-    note "scope cluster: keda.networkpolicy FAILs until the cluster file is applied (the preflight reads the shipped file, not the edited one); the run after the install must PASS it"
-    fails=""
+if [ "$SCOPE" = cluster ]; then
+    # Still not applied: the preflight judges the file as shipped and WARNs
+    # again. The run after the install must PASS it.
+    [ "$(status_of "$pf" keda.networkpolicy)" = WARN ] \
+        || { cat "$pf"; fail "preflight before the install" "expected keda.networkpolicy WARN until the cluster file is applied, got '$(status_of "$pf" keda.networkpolicy)'"; }
     before_pass="settings keda.crd keda.version prometheus.reachable"
 fi
 [ -z "$fails" ] || { cat "$pf"; fail "preflight before the install" "FAIL: $(echo $fails)"; }
-if [ -z "$(fails_in "$pf")" ]; then
-    [ "$(cat "$LOGS/preflight-before-install.end")" = Complete ] || fail "preflight before the install" "the Job did not complete"
-fi
+[ "$(cat "$LOGS/preflight-before-install.end")" = Complete ] || fail "preflight before the install" "the Job did not complete"
 for c in $before_pass; do
     [ "$(status_of "$pf" "$c")" = PASS ] || fail "preflight before the install" "$c is $(status_of "$pf" "$c"), not PASS"
 done

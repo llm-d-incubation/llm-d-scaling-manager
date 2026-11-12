@@ -225,7 +225,7 @@ func TestNetworkPolicyShapes(t *testing.T) {
 		f := newFixture(t).remove("APIService", externalMetricsAPIService)
 		f.dyn = append(f.dyn, apiService("keda-system", "keda-operator-metrics-apiserver"))
 		r := only(t, f.run(t), "keda.networkpolicy")
-		if r.Status != Fail || strings.Contains(r.Fix, "kubectl patch") || !strings.Contains(r.Fix, `kubernetes.io/metadata.name: keda-system#`) {
+		if r.Status != Warn || strings.Contains(r.Fix, "kubectl patch") || !strings.Contains(r.Fix, `kubernetes.io/metadata.name: keda-system#`) {
 			t.Errorf("got %s fix %q", r.Status, r.Fix)
 		}
 	})

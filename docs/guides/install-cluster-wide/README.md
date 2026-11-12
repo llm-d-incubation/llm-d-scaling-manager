@@ -70,8 +70,7 @@ settings file names it), and label the namespace
 The scaler NetworkPolicy in `scaling-manager-cluster.yaml` admits KEDA from
 namespace `keda` (`openshift-keda` in the OpenShift file). If KEDA runs
 elsewhere, name its namespace before you apply the file, and keep the edit for
-every upgrade. Without it, the preflight FAILs `keda.networkpolicy`; the `sed`
-it prints names the namespaced files, so run the one below instead:
+every upgrade:
 
 <!-- guide:deploy.kedans start -->
 ```bash
@@ -101,11 +100,11 @@ kubectl logs -n scaling-manager-system job/scaling-manager-preflight
 ```
 <!-- guide:deploy.preflight end -->
 
-Fix every `FAIL` and run it again. One stays until step 2: with KEDA outside
-`keda`, `keda.networkpolicy` FAILs even after the `sed` above, because the
-preflight reads the policy as shipped until the cluster file is applied. Run it
-again after step 2, where it must PASS. Every check: [Preflight
-check](../../reference/preflight.md). If a private CA signed Prometheus's
+Fix every `FAIL` and run it again. A `keda.networkpolicy` WARN is expected
+until step 2 when KEDA is outside `keda`, even after the `sed` above: the
+preflight cannot read the file, so it judges the policy as shipped. Run it
+again after step 2, where it checks the applied policy and must PASS. Every
+check: [Preflight check](../../reference/preflight.md). If a private CA signed Prometheus's
 certificate, give the controller that CA:
 
 <!-- guide:deploy.promca start -->
