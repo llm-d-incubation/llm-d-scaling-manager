@@ -794,8 +794,8 @@ points, bounds, flags and refusals.
   bisections.
 
 **Latency, measured** on the server, per request
-(`go test ./cmd/whatif -run '^$' -bench Plan -benchtime 3x`, on one Intel
-Core Ultra 9 185H, on the goldens' recordings). Cold is a new fleet: a replica
+(`go test ./cmd/whatif -run '^$' -bench Plan -benchtime 3x`, on one 22-core
+laptop, on the goldens' recordings). Cold is a new fleet: a replica
 count, a statistic or an assumption moved.
 
 | Fleet | Cold plan | Rate move | TTFT target move |

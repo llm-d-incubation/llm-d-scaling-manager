@@ -36,7 +36,7 @@ Resolve the inputs. A recording is named by its file name in `--recordings`,
 never by a path:
 
 ```
-curl -s localhost:8080/v1/inputs -d '{"model": "model-02",
+curl -s localhost:8080/v1/inputs -H 'Content-Type: application/json' -d '{"model": "model-02",
   "source": {"kind": "recording", "name": "ols-sweep.jsonl.gz"}}'
 ```
 
@@ -44,7 +44,7 @@ With no `source`, the inputs are a Prometheus window of the last hour, ending
 now. A window of your own:
 
 ```
-curl -s localhost:8080/v1/inputs -d '{"model": "qwen3-32b",
+curl -s localhost:8080/v1/inputs -H 'Content-Type: application/json' -d '{"model": "qwen3-32b",
   "source": {"kind": "prometheus", "namespace": "llm",
              "from": "2026-11-09T10:00:00Z", "to": "2026-11-09T11:00:00Z"}}'
 ```
@@ -52,7 +52,7 @@ curl -s localhost:8080/v1/inputs -d '{"model": "qwen3-32b",
 The answer carries an `inputsId`. Price a scenario against it:
 
 ```
-curl -s localhost:8080/v1/plan -d '{"inputsId": "sha256:...",
+curl -s localhost:8080/v1/plan -H 'Content-Type: application/json' -d '{"inputsId": "sha256:...",
   "fleet": {"prefill": 1, "decode": 1},
   "traffic": {"classes": {"critical": {"rate": 6}}, "mix": {"promptTokens": 1000, "outputTokens": 1000}},
   "slo": {"ttft": {"statistic": "p95", "target": 0.2}, "tpot": {"statistic": "mean", "target": 0.004}},
@@ -70,10 +70,12 @@ point (headroom times the lower knee).
 | `--recordings DIR` | Recordings a `recording` source names by file name. |
 | `--prometheus URL` | The Prometheus a `prometheus` source reads. With it, every [capture flag](whatif-capture.md) but `--from`, `--to` and `-o` applies: the role map, `--step`, `--policy`, the engine, TLS and the bearer token. The window comes with each request. |
 | `--namespace NS` | The namespace a `prometheus` source reads when the request names none. |
+| `--allowed-namespaces NS,...` | The namespaces a `prometheus` source may read. Default `--namespace` alone; with `--prometheus` one of the two is required. A request for any other namespace is 403, and a namespace that is not a DNS-1123 label a 400. |
 | `--batch-cap N` | The engine's batch cap a window is captured with, as `capture --batch-cap`. |
 | `--listen ADDR` | Where to serve. Default `127.0.0.1:8080`. Any address that is not loopback needs `--auth=kubernetes`; serve refuses to start without it. |
-| `--auth none\|kubernetes` | `none` (the default) is loopback only. `kubernetes` checks a bearer token with TokenReview, then asks a SubjectAccessReview for `get` on the non-resource URL `/whatif` plus the path (`/whatif/v1/plan`). A missing or unauthenticated token is 401, a user not allowed is 403. The client comes from `KUBECONFIG`, `~/.kube/config` or the in-cluster config. |
+| `--auth none\|kubernetes` | `none` (the default) is loopback only. `kubernetes` checks a bearer token with TokenReview, then asks a SubjectAccessReview for `get` on the non-resource URL `/whatif` plus the path (`/whatif/v1/plan`). A missing or unauthenticated token is 401, a user not allowed is 403. A `prometheus` source's namespace is checked too: the user must be allowed `get` on `pods` in it. Reviews are reused for 30 s; a review that fails is a 500 that names no client error (the error goes to stderr). The client comes from `KUBECONFIG`, `~/.kube/config` or the in-cluster config. |
 | `--tls-cert-file`, `--tls-key-file` | The server's certificate and key. Required with `--auth=kubernetes`: a token is not sent in the clear. |
+| `--token-audiences A,...` | The audiences a TokenReview checks a token for. Default: the API server's own. |
 | `--shutdown-timeout` | How long requests in flight may run after Ctrl-C. Default 10s. |
 
 An RBAC rule that grants the API:
@@ -86,6 +88,22 @@ rules:
 
 No request can name a host or a file path: the Prometheus URL is a flag, and a
 recording is a file name inside `--recordings`. An error names no server path.
+
+The server reads Prometheus with its own credentials, so a namespace is the
+server's to allow (`--allowed-namespaces`), and with `--auth=kubernetes` the
+user's too (`get` on `pods` there). An RBAC rule for that:
+
+```yaml
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get"]
+```
+
+With `--auth=none` the server answers only requests addressed to
+`localhost`, `127.0.0.1` or `[::1]`, so a web page that rebinds its own name to
+127.0.0.1 cannot read it, and every request body must be sent as
+`Content-Type: application/json` (else 415), so no cross-site form reaches it.
 
 ## Endpoints
 
@@ -150,7 +168,11 @@ The full key list is pinned in
 | `views.allTrafficPerBucket` | off | The per-bucket view. |
 
 A field asked wrongly is a 400 naming it, and an `inputsId` the server no
-longer holds a 404: resolve the inputs again.
+longer holds a 404: resolve the inputs again. The server prices as many plans at
+once as it has CPUs, and two inputs at once; past that a request is 503 with
+`Retry-After: 1`. A plan whose client goes away stops between figures. Reading
+a request may take 30 s, an idle connection is closed after 2 minutes, and a
+response may take 10 minutes (a cold plan, or a capture).
 
 ## Caching and latency
 
