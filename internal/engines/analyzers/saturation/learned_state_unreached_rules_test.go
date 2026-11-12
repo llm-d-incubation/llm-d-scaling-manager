@@ -37,7 +37,7 @@ func TestExportDropsAPutAsideITLBaselineLearnedWithNoConfigurationKnown(t *testi
 	}
 	// stash is a baseline put aside under arguments the variant ran before,
 	// filed as mu_from_itl.go files it under the variant's itlWindowKey.
-	stash := stashKey("test-ns|test-model|variant-a|H100|1", "live-args")
+	stash := stashKey("test-ns|test-model|variant-a|H100|1", "older-args")
 	putAside := func(a *SaturationAnalyzer) {
 		a.mu.Lock()
 		a.itlBaselineStash[stash] = 0.03
