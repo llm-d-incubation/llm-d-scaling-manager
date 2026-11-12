@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=140
+EXPECTED_CHECKS=141
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -358,6 +358,8 @@ expect "nothing ran before the freeze" '[ ! -e "$STATE/steps" ]'
 base_env bash "$B/staircase.sh" freeze > "$WORK/freeze.out" 2>&1
 expect "freeze writes the hashes, spec.json among them" '[ -e "$RUN/ladder.ready" ] && grep -q spec.json "$RUN/frozen.sha256"'
 expect "the plan and its assumptions are printed" 'grep -q "GPU-hours" "$RUN/plan.md" && grep -q "What the prediction assumes" "$RUN/plan.md"'
+gpuh() { STAIRCASE_TP="$1" "$PY" "$B/staircase_freeze.py" plan "$RUN/frozen.json" "$RUN/spec.json" | awk -F'|' '/^\| gate,/ { gsub(/ /, "", $5); print $5 }'; }
+expect "at TP 2 the plan counts twice the GPU-hours" 'awk -v a="$(gpuh 1)" -v b="$(gpuh 2)" "BEGIN { d = b - 2 * a; exit !(a > 0 && d <= 1 && d >= -1) }"'
 wait_run
 expect "the run exits 0" '[ "$rc" = 0 ]'
 expect "all three phases ran" '[ "$(steps)" = 3 ]'

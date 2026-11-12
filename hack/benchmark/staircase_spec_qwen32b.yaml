@@ -2,9 +2,9 @@
 # A, B and C of staircase_spec.yaml, flow control off and on, one repeat. It asks whether
 # the prediction holds on a model whose engine step is far slower than Qwen3-0.6B's, the
 # "another engine step time" the plan (docs/plans/analyzers/ttft-staircase-repeat.md)
-# lists first to cut. Run it with
-#   STAIRCASE_SPEC=hack/benchmark/staircase_spec_qwen32b.yaml STAIRCASE_MODEL=Qwen/Qwen3-32B
-#   STAIRCASE_TP=2
+# lists first to cut. Run it with (an absolute path: the run copies the spec)
+#   STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
+#   STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
 # Every line not named below is staircase_spec.yaml's. Nothing here may change once the
 # warm-up starts: the frozen file carries this file's hash.
 #
