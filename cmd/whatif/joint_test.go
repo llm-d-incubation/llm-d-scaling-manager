@@ -14,14 +14,44 @@ import (
 // prompts, Poisson arrivals.
 const stairBOff = "../../internal/engines/analyzers/learnreplay/testdata/goldens/ttft-staircase-b-off/recording.jsonl.gz"
 
-// jointJSON runs joint-ttft with -o json and decodes its answer.
+// jointJSON runs joint-ttft with -o json and decodes its answer: exit 0
+// with a mean, 3 with a refusal.
 func jointJSON(t *testing.T, args ...string) jointAnswer {
 	t.Helper()
 	out, code := runCmd(t, append([]string{"joint-ttft", "--recording", stairBOff, "-o", "json"}, args...)...)
-	require.Equal(t, 0, code, out)
 	var a jointAnswer
 	require.NoError(t, json.Unmarshal([]byte(out), &a), out)
+	want := 0
+	if a.Refused != "" {
+		want = 3
+	}
+	require.Equal(t, want, code, out)
 	return a
+}
+
+// The JSON's keys are lowerCamel throughout, schemaVersion's included.
+func TestJointTTFT_JSONKeys(t *testing.T) {
+	out, code := runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "120", "-o", "json")
+	require.Equal(t, 0, code, out)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &raw))
+	var check func(prefix string, v any)
+	check = func(prefix string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, c := range x {
+				assert.Regexp(t, `^[a-z][A-Za-z0-9]*$`, k, "%s.%s", prefix, k)
+				check(prefix+"."+k, c)
+			}
+		case []any:
+			for _, c := range x {
+				check(prefix+"[]", c)
+			}
+		}
+	}
+	check("", raw)
+	assert.Contains(t, raw, "mean")
+	assert.Contains(t, raw["inputs"], "itlBetaSeconds")
 }
 
 // At the fleet that ran, at B's third step (30.5 r/s), the joint mean prices
@@ -64,8 +94,11 @@ func TestJointTTFT_RefusedAndText(t *testing.T) {
 	a := jointJSON(t, "--cycle", "1")
 	assert.Nil(t, a.Mean)
 	assert.Equal(t, whatif.JointNoPrefillCapacity, a.Refused)
+	out, code := runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "1")
+	assert.Equal(t, 3, code, "a refusal exits 3: %s", out)
+	assert.Contains(t, out, "refused: "+whatif.JointNoPrefillCapacity)
 
-	out, code := runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "120")
+	out, code = runCmd(t, "joint-ttft", "--recording", stairBOff, "--cycle", "120")
 	require.Equal(t, 0, code, out)
 	assert.Contains(t, out, "mean TTFT")
 	assert.Contains(t, out, "UNVALIDATED")

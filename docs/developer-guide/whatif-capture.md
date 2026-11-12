@@ -103,6 +103,26 @@ Exit codes are `0`, `3` for a refusal, `2` for a usage error and `1` for an
 internal one. The inputs, the rows and the JSON are in
 [TTFT, as built](../proposals/slo-capacity-planner.md#ttft-as-built).
 
+## The joint TTFT model
+
+```bash
+whatif joint-ttft --recording run.jsonl [--cycle N|last] [--model M] [--prefill N] [--decode N] [--rate R] [--prompt I] [--hop D] [-o json]
+```
+
+Prices the joint prefill and decode model's mean TTFT at a fleet, from the
+inputs the recording's rows support at the cycle: the fleet and rate that ran
+by default, or the ones the flags give. The hop is assumed (20 ms, flagged
+`RouterHopAssumed`) unless `--hop` states it. A refusal (`no-prefill-capacity`
+until a prefill pod has read an empty queue, `saturated`, `batch-unheld`, and
+the rest) is printed and exits `3`. The JSON is `schemaVersion` 1, its keys
+lowerCamel.
+
+The inputs are fed as the slo analyzer feeds them (only one prefill and one
+decode variant, swept on a change of accelerator or engine arguments, the
+prompt read SGLang's way on SGLang) with one difference: no settle tracker, so
+a replica's first two minutes after a start or an idle spell are read too. See
+[As built (J1)](../proposals/slo-capacity-planner-ttft.md#as-built-j1).
+
 ## Reading the line check
 
 Every answer on an ITL line prints a `line check` row: the token rate the line
