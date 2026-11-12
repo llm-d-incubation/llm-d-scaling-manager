@@ -1855,6 +1855,20 @@ make benchmark-staircase-redo                               # re-prices bursty b
 make benchmark-staircase-analyze                            # writes $STAIRCASE_RUN/report.md
 ```
 
+**On another model.** `STAIRCASE_MODEL` picks the model and `STAIRCASE_TP` the
+tensor-parallel size of both roles, so a pod holds that many GPUs; the run stops before
+any load if the engines do not ask for them. `STAIRCASE_PREFILL_MEMORY` sets the prefill
+pod's memory, as `STAIRCASE_DECODE_MEMORY` does decode's. A model needs its own spec,
+since the warm-up's loads are sized to the engine:
+[`staircase_spec_qwen32b.yaml`](../../hack/benchmark/staircase_spec_qwen32b.yaml) is a
+shortened run on Qwen3-32B at TP 2, buckets A, B and C, one repeat:
+
+```bash
+export STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
+export STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
+export STAIRCASE_PREFILL_MEMORY=64Gi STAIRCASE_DECODE_MEMORY=64Gi
+```
+
 Read what the freeze prints: its last lines are what the prediction assumes. A refused
 freeze aborts the run. After repeat 1 of the gate buckets the run scores them itself,
 and a fail stops it and frees the GPUs.
