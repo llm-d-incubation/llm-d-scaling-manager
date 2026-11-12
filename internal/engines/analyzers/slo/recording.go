@@ -100,7 +100,7 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchITLRestartUnderName, SwitchITLIdleOnEvidence and
 // SwitchITLForgetReachesTheLine, SwitchITLOneSidedAtCap, SwitchTTFTPrice,
 // SwitchTTFTMeasuredSpread, SwitchTTFTMeasuredTransfer,
-// SwitchTTFTProcessorSharing and SwitchKVPerRequestOutputDispersion; a name it does not know is an error, and sets nothing. Never called on a production
+// SwitchTTFTProcessorSharing, SwitchTTFTJointInputs and SwitchKVPerRequestOutputDispersion; a name it does not know is an error, and sets nothing. Never called on a production
 // path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
 	rest := maps.Clone(switches)
@@ -167,6 +167,9 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// The prefill pod and the KV pull as processor-sharing stages
 		// (ttft.go).
 		SwitchTTFTProcessorSharing: &a.ttftProcessorSharing,
+		// J1: the joint prefill and decode model's inputs, in shadow
+		// (ttft_joint.go).
+		SwitchTTFTJointInputs: &a.ttftJointInputs,
 
 		// Issue ev-shindin/llm-scaling-manager#276: the spread of output lengths in the KV per request
 		// (output_dispersion.go).

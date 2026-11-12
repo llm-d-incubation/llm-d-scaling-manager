@@ -97,8 +97,8 @@ th { color: var(--text-secondary); font-weight: 600; }
       <div class="ctl" style="min-width:240px"><label>Output length, tokens <b id="outv"></b></label><input id="out" type="range" min="100" max="4000" step="50" value="1000"></div>
     </div>
     <div class="controls" style="margin-bottom:0">
-      <div class="ctl"><label>Prefill replicas <b id="npv"></b></label><input id="np" type="range" min="1" max="8" step="1" value="2"></div>
-      <div class="ctl"><label>Decode replicas <b id="ndv"></b></label><input id="nd" type="range" min="1" max="12" step="1" value="2"></div>
+      <div class="ctl"><label>Prefill replicas <b id="npv"></b></label><input id="nP" type="range" min="1" max="8" step="1" value="2"></div>
+      <div class="ctl"><label>Decode replicas <b id="ndv"></b></label><input id="nD" type="range" min="1" max="12" step="1" value="2"></div>
       <div class="ctl"><label>Critical, req/s <b id="lamv"></b></label><input id="lam" type="range" min="1" max="80" step="0.5" value="24"></div>
       <div class="ctl disabled" title="Regular traffic: later version"><label>Regular, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
       <div class="ctl disabled" title="Batch traffic: later version"><label>Batch, req/s <b>0</b></label><input type="range" min="0" max="80" value="0" disabled></div>
@@ -176,18 +176,18 @@ function shape(b) { return b === "mix" ? {P: meanP, tail: 1.6} : {P: BUCKETS[b].
 // Longer outputs keep a request on the decode replica longer, and longer contexts make
 // each token slower: both lower the rate a decode replica sustains.
 function muD(P, O) { return TOKS / O / (1 + P / KV); }
-function rhoP(l, np, P) { return l * P / (np * VP); }
-function rhoD(l, nd, P, O) { return l / (nd * muD(P, O)); }
-function kneeP(np, P) { return 0.95 * np * VP / P; }
-function kneeD(nd, P, O) { return 0.95 * nd * muD(P, O); }
-function ttft(l, np, nd, b, O) {
-  const s = shape(b), rp = rhoP(l, np, s.P), rd = rhoD(l, nd, s.P, O);
+function rhoP(l, nP, P) { return l * P / (nP * VP); }
+function rhoD(l, nD, P, O) { return l / (nD * muD(P, O)); }
+function kneeP(nP, P) { return 0.95 * nP * VP / P; }
+function kneeD(nD, P, O) { return 0.95 * nD * muD(P, O); }
+function ttft(l, nP, nD, b, O) {
+  const s = shape(b), rp = rhoP(l, nP, s.P), rd = rhoD(l, nD, s.P, O);
   if (rp >= 0.95 || rd >= 0.95) return NaN;
   const x = s.P / VP * s.tail;           // the tail of a wide prompt mix sits above its mean
   return A + HOP + x * (1 + QF[Q] * rp / (1 - rp)) + STEP * (1 + 0.5 * QF[Q] * rd / (1 - rd));
 }
-function tpot(l, nd, b, O) {
-  const s = shape(b), rd = rhoD(l, nd, s.P, O);
+function tpot(l, nD, b, O) {
+  const s = shape(b), rd = rhoD(l, nD, s.P, O);
   if (rd >= 0.95) return NaN;
   const base = 0.012 * (1 + 0.5 * (s.P + O / 2) / KV);
   return base + 0.006 * (1 + 0.55 * QF[Q]) * Math.sqrt(rd / (1 - rd)) * 2;
@@ -201,23 +201,23 @@ function invert(f, target, hi) {           // highest rate in (0, hi) with f(rat
 const fmt = (v, d = 1) => Number.isFinite(v) ? v.toFixed(d) : "refused";
 
 function draw() {
-  const np = +el("np").value, nd = +el("nd").value, lam = +el("lam").value, O = +el("out").value;
+  const nP = +el("nP").value, nD = +el("nD").value, lam = +el("lam").value, O = +el("out").value;
   const tt = +el("tt").value / 1000, tp = +el("tp").value / 1000;
-  el("npv").textContent = np; el("ndv").textContent = nd; el("lamv").textContent = lam; el("outv").textContent = O;
+  el("npv").textContent = nP; el("ndv").textContent = nD; el("lamv").textContent = lam; el("outv").textContent = O;
   el("ttv").textContent = el("tt").value + " ms"; el("tpv").textContent = el("tp").value + " ms";
   el("qa").textContent = Q; el("qb").textContent = Q;
   el("rqflag").style.visibility = Q === "p50" ? "hidden" : "visible";
 
   const S = shape(SEL), selName = SEL === "mix" ? "current mix" : BUCKETS[SEL].name + " only";
-  const kP = kneeP(np, S.P), kD = kneeD(nd, S.P, O), knee = Math.min(kP, kD);
-  const pLim = invert(l => ttft(l, np, nd, SEL, O), tt, kP);
-  const dLim = invert(l => tpot(l, nd, SEL, O), tp, kD);
+  const kP = kneeP(nP, S.P), kD = kneeD(nD, S.P, O), knee = Math.min(kP, kD);
+  const pLim = invert(l => ttft(l, nP, nD, SEL, O), tt, kP);
+  const dLim = invert(l => tpot(l, nD, SEL, O), tp, kD);
   // What the rate you set gives, next to each target.
   const at = (v, target) => Number.isFinite(v)
     ? `<span class="${v <= target ? "ok" : "miss"}">${Math.round(v * 1000)} ms at ${lam} req/s</span>`
     : `<span class="miss">past the knee at ${lam} req/s</span>`;
-  el("ttat").innerHTML = at(ttft(lam, np, nd, SEL, O), tt);
-  el("tpat").innerHTML = at(tpot(lam, nd, SEL, O), tp);
+  el("ttat").innerHTML = at(ttft(lam, nP, nD, SEL, O), tt);
+  el("tpat").innerHTML = at(tpot(lam, nD, SEL, O), tp);
   const unc = Math.min(pLim, dLim), capped = Math.min(unc, CAP * knee);
   const pBinds = pLim <= dLim;
   el("fleet").textContent = fmt(capped) + " req/s";
@@ -238,10 +238,10 @@ function draw() {
   const colorOf = b => b === "mix" ? css("--text-primary") : css("--series-" + (b + 1));
   const nameOf = b => b === "mix" ? "current mix" : BUCKETS[b].name + " only";
   chart(el("ttft"), 640, xmax, tt, lam, kP, kD, all.map(b => ({name: nameOf(b), color: colorOf(b),
-    width: b === SEL ? 3 : 1.5, primary: b === SEL, f: l => ttft(l, np, nd, b, O)}))
+    width: b === SEL ? 3 : 1.5, primary: b === SEL, f: l => ttft(l, nP, nD, b, O)}))
     .sort((a, c) => a.primary - c.primary), pLim, "ms", 1000);
   chart(el("tpot"), 460, xmax, tp, lam, Infinity, kD, [
-    {name: selName, color: colorOf(SEL), width: 3, f: l => tpot(l, nd, SEL, O), primary: true},
+    {name: selName, color: colorOf(SEL), width: 3, f: l => tpot(l, nD, SEL, O), primary: true},
   ], dLim, "ms", 1000);
 
   el("lg1").innerHTML = all.map(b => `<span class="${b === SEL ? "mix" : ""}" style="--c:${colorOf(b)}">${b === "mix" ? "current mix" : BUCKETS[b].name + " prompts only"}${b === SEL ? " (selected)" : ""}</span>`).join("") +
@@ -250,7 +250,7 @@ function draw() {
 
   const rows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 60].filter(r => r < xmax);
   el("tbl").innerHTML = "<table><tr><th>req/s</th>" + all.map(b => `<th>TTFT ${b === "mix" ? "mix" : BUCKETS[b].name}</th>`).join("") + `<th>TPOT ${selName}</th></tr>` +
-    rows.map(r => `<tr><td>${r}</td>` + all.map(b => `<td>${fmt(ttft(r, np, nd, b, O) * 1000, 0)}</td>`).join("") + `<td>${fmt(tpot(r, nd, SEL, O) * 1000, 0)}</td></tr>`).join("") + "</table>";
+    rows.map(r => `<tr><td>${r}</td>` + all.map(b => `<td>${fmt(ttft(r, nP, nD, b, O) * 1000, 0)}</td>`).join("") + `<td>${fmt(tpot(r, nD, SEL, O) * 1000, 0)}</td></tr>`).join("") + "</table>";
 }
 
 function chart(svg, W, xmax, target, lam, kP, kD, series, limit, unit, k) {
