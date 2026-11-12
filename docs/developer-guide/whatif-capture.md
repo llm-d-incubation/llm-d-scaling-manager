@@ -247,6 +247,7 @@ present, absent and NaN.
 | --- | --- |
 | `KvCacheUsage`, `QueueLength` (and their presence bits); the busiest rank's | `KvCacheUsage`, `QueueLength`, `MaxRankKvCacheUsage`, `MaxRankQueueLength` |
 | `CapacityQueueLength`, `MaxRankCapacityQueueLength`, `CapacityQueueKnown` | `CapacityQueueLength`, `MaxRankCapacityQueueLength` |
+| `LandedQueueLength`, `MaxRankLandedQueueLength`, `LandedQueueKnown` | `LandedQueueLength`, `MaxRankLandedQueueLength` |
 | `NumGpuBlocks`, `BlockSize`, `TotalKvCapacityTokens`, `EngineRanks`, `TokensInUse` | `CacheConfigInfo` |
 | Length means; `OutputTokensBuckets`, `AvgOutputTokensSquared` | `AvgInputTokens(Recent)`, `AvgOutputTokens(Recent)`, `OutputTokensBuckets` |
 | `PrefixCacheHitRate` | `PrefixCacheHitRate` |

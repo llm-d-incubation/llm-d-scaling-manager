@@ -355,6 +355,16 @@ tests:
         values: '4x15'
       - series: 'vllm:num_requests_waiting_by_reason{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="1",model_name="glm",job="b",reason="deferred"}'
         values: '1x15'
+      - series: 'vllm:num_requests_kv_fetch_by_stage{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="0",model_name="glm",job="a",stage="completed_waiting"}'
+        values: '1x15'
+      - series: 'vllm:num_requests_kv_fetch_by_stage{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="0",model_name="glm",job="b",stage="completed_waiting"}'
+        values: '1x15'
+      - series: 'vllm:num_requests_kv_fetch_by_stage{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="0",model_name="glm",job="a",stage="in_flight"}'
+        values: '1x15'
+      - series: 'vllm:num_requests_kv_fetch_by_stage{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="1",model_name="glm",job="a",stage="completed_waiting"}'
+        values: '0x5 2x10'
+      - series: 'vllm:num_requests_kv_fetch_by_stage{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="1",model_name="glm",job="b",stage="completed_waiting"}'
+        values: '0x5 2x10'
       - series: 'vllm:cache_config_info{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="0",num_gpu_blocks="2000",block_size="16",cache_dtype="auto",job="a"}'
         values: '1x15'
       - series: 'vllm:cache_config_info{namespace="llm",pod="dup-2",instance="10.0.0.2:8000",engine="0",num_gpu_blocks="2000",block_size="16",cache_dtype="auto",job="b"}'
@@ -500,6 +510,18 @@ tests:
         exp_samples:
           - labels: '{model_name="glm",instance="10.0.0.2:8000",pod="dup-2"}'
             value: 4
+      # landed_queue_length: the completed_waiting stage of the KV fetches only (dup-2: 1 + 2; the in_flight stage is left out); a second scrape is not counted twice
+      - expr: 'sum by (model_name, instance, pod) (max by (model_name, instance, pod, engine) (max_over_time(vllm:num_requests_kv_fetch_by_stage{namespace="llm",stage="completed_waiting"}[1m])))'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{model_name="glm",instance="10.0.0.2:8000",pod="dup-2"}'
+            value: 3
+      # max_rank_landed_queue_length: the busiest rank's landed requests
+      - expr: 'max by (model_name, instance, pod) (max_over_time(vllm:num_requests_kv_fetch_by_stage{namespace="llm",stage="completed_waiting"}[1m]))'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{model_name="glm",instance="10.0.0.2:8000",pod="dup-2"}'
+            value: 2
       # cache_config_info: the value counts the ranks; num_gpu_blocks is already the total and is kept as is; a second scrape (solo-0, dup-2) counts no rank twice
       - expr: 'count by (instance, pod, num_gpu_blocks, block_size) (max by (instance, pod, num_gpu_blocks, block_size, engine) (vllm:cache_config_info{namespace="llm"}))'
         eval_time: 10m

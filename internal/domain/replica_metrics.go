@@ -216,6 +216,18 @@ type ReplicaMetrics struct {
 	MaxRankCapacityQueueLength int
 	CapacityQueueKnown         bool
 
+	// LandedQueueLength and MaxRankLandedQueueLength are the requests whose
+	// KV has arrived from prefill and that wait to be scheduled: vLLM's
+	// num_requests_kv_fetch_by_stage{stage="completed_waiting"}, published
+	// since v0.32.0. vLLM counts them in the "deferred" part of the waiting
+	// count until they are scheduled, though they wait on this replica, not
+	// on the network. LandedQueueKnown says the series was collected;
+	// without it (an older vLLM, SGLang) both are zero and mean nothing. Read
+	// the busiest rank's through BusiestRankLandedQueue.
+	LandedQueueLength        int
+	MaxRankLandedQueueLength int
+	LandedQueueKnown         bool
+
 	// TokensInUse is the derived current token demand on this replica.
 	// Computed as KvCacheUsage × TotalKvCapacityTokens.
 	// Zero when TotalKvCapacityTokens is unavailable.
@@ -735,6 +747,15 @@ func (m ReplicaMetrics) BusiestRankCapacityQueue() int {
 		return 0
 	}
 	return busiestRank(m.CapacityQueueLength, m.MaxRankCapacityQueueLength, m.Ranks())
+}
+
+// BusiestRankLandedQueue is BusiestRankQueue for the requests whose KV has
+// landed (see LandedQueueLength). Zero when LandedQueueKnown is false.
+func (m ReplicaMetrics) BusiestRankLandedQueue() int {
+	if !m.LandedQueueKnown {
+		return 0
+	}
+	return busiestRank(m.LandedQueueLength, m.MaxRankLandedQueueLength, m.Ranks())
 }
 
 // busiestRank is the busiest rank's share of a queue summed over ranks
