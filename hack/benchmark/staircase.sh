@@ -20,7 +20,9 @@
 # (the run's directory, absolute: run refuses one a run has used) and
 # BENCHMARK_PROMETHEUS_URL. Optional: STAIRCASE_MODEL, STAIRCASE_ACCELERATOR_KEY and
 # _VALUE (a node label the engines select), STAIRCASE_DECODE_CPU and _MEMORY,
-# STAIRCASE_MAX_MODEL_LEN, STAIRCASE_LOAD_IMAGE, STAIRCASE_POD_HEADER, STAIRCASE_SLO_TTFT.
+# STAIRCASE_PREFILL_MEMORY, STAIRCASE_TP (the tensor-parallel size of both roles, and
+# so the GPUs a pod holds), STAIRCASE_MAX_MODEL_LEN, STAIRCASE_LOAD_IMAGE,
+# STAIRCASE_POD_HEADER, STAIRCASE_SLO_TTFT.
 #
 # THE SAFETY THIS CARRIES, each paid for on a shared GPU cluster:
 #   - An in-cluster Job deletes the workloads when the lease lapses, so a dead runner
@@ -61,6 +63,8 @@ SCENARIO="${BENCHMARK_SPEC:-guides/pd-disaggregation}"
 WHATIF="${STAIRCASE_WHATIF:-$ROOT/bin/whatif}"
 # The longest held-out prompt, its spread and the answer must fit.
 MAX_MODEL_LEN="${STAIRCASE_MAX_MODEL_LEN:-40960}"
+# Unset: the scenario's own tensor-parallel size and prefill memory, as before.
+TP="${STAIRCASE_TP:-}"
 # The fleet a standup makes. The smoke run asks for the smallest.
 START_P="${STAIRCASE_START_PREFILL:-2}"
 START_D="${STAIRCASE_START_DECODE:-2}"
@@ -259,6 +263,10 @@ standup_make() {
         set="$set,decode.acceleratorType.labelKey=$STAIRCASE_ACCELERATOR_KEY,decode.acceleratorType.labelValue=${STAIRCASE_ACCELERATOR_VALUE:-}"
         set="$set,prefill.acceleratorType.labelKey=$STAIRCASE_ACCELERATOR_KEY,prefill.acceleratorType.labelValue=${STAIRCASE_ACCELERATOR_VALUE:-}"
     fi
+    [ -n "$TP" ] && set="$set,prefill.parallelism.tensor=$TP,decode.parallelism.tensor=$TP"
+    if [ -n "${STAIRCASE_PREFILL_MEMORY:-}" ]; then
+        set="$set,prefill.resources.requests.memory=$STAIRCASE_PREFILL_MEMORY,prefill.resources.limits.memory=$STAIRCASE_PREFILL_MEMORY"
+    fi
     cd "$ROOT" || exit 1
     LLMDBENCH_SET="$set" exec timeout --signal=TERM -k 30 2700 make --no-print-directory benchmark-standup \
         BENCHMARK_NAMESPACE="$NS" BENCHMARK_SPEC="$SCENARIO" MODEL_ID="$MODEL" IMG="$1" \
@@ -269,7 +277,7 @@ standup_make() {
 
 # prepare : read the names, keep the originals, list slo, flow control off.
 prepare() {
-    local dec pre epp cm router d len
+    local dec pre epp cm router d len gpus
     dec=$(kube get deploy -o name | sed 's#.*/##' | grep -- '-decode$')
     pre=$(kube get deploy -o name | sed 's#.*/##' | grep -- '-prefill$')
     epp=$(kube get deploy -o name | sed 's#.*/##' | grep -- '-epp$')
@@ -286,9 +294,17 @@ prepare() {
     } > "$R/names.sh"
     t "names: $(tr '\n' ' ' < "$R/names.sh")"
     for d in "$dec" "$pre"; do
-        len=$(kube get deploy "$d" -o json | jq -r '.spec.template.spec.containers[] | select(.name=="vllm") | .env[] | select(.name=="VLLM_MAX_MODEL_LEN") | .value')
+        kube get deploy "$d" -o json > "$R/deploy.json" || { t "$d unreadable"; return 1; }
+        len=$(jq -r '.spec.template.spec.containers[] | select(.name=="vllm") | .env[] | select(.name=="VLLM_MAX_MODEL_LEN") | .value' "$R/deploy.json")
         [ "$len" = "$MAX_MODEL_LEN" ] || { t "$d VLLM_MAX_MODEL_LEN is '$len', not $MAX_MODEL_LEN"; return 1; }
+        # A --set key the chart ignores would leave the scenario's size: the run would
+        # measure another fleet than the one asked for, and say nothing.
+        if [ -n "$TP" ]; then
+            gpus=$(jq -r '.spec.template.spec.containers[] | select(.name=="vllm") | .resources.limits["nvidia.com/gpu"] // empty' "$R/deploy.json")
+            [ "$gpus" = "$TP" ] || { t "$d asks for '$gpus' GPUs, not the tensor-parallel size $TP"; return 1; }
+        fi
     done
+    rm -f "$R/deploy.json"
     kube get cm "$cm" -o json | jq -r '.data["pd-config.yaml"]' > "$R/pd-config-on.yaml"
     "$PY" "$HERE/staircase_config.py" fc-off "$R/pd-config-on.yaml" "$R/pd-config-off.yaml" || { t "fc-off refused"; return 1; }
     kube get configmap scaling-manager-scaling-policy-config -o json | jq -r '.data.default' > "$R/policy-orig.yaml"
