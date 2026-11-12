@@ -11,8 +11,10 @@ To record a window, follow
 ## What your Prometheus must keep
 
 - **Scrape every 15 s,** 30 s at most. The planner reads one-minute rates and
-  the least queue in each minute; at 60 s a minute holds one sample and both
-  read nothing.
+  the least queue in each minute. At 60 s a minute holds one sample: the
+  rates read nothing, and the least queue is that one reading, so a minute
+  with a queue at the scrape reads as busy throughout and prefill capacity
+  `V_P` is learned from minutes that were not.
 - **Keep the histograms.** Many setups drop `_bucket` series, or keep them for
   days rather than weeks. Without them the TTFT answers fall back to assumed
   figures.
@@ -157,6 +159,12 @@ Deployment and role each belongs to, and its GPUs. Labels: `namespace` and
 and `--gpus-per-replica`/`--accelerator`: every Pod then reads as Ready, and the
 capture says so.
 
+kube-state-metrics exports a Pod's or a node's labels only when its
+`--metric-labels-allowlist` names them. The planner reads two:
+`--metric-labels-allowlist=pods=[llm-d.ai/role],nodes=[nvidia.com/gpu.product]`.
+Without the first every variant reads as both roles; without the second, give
+`--accelerator`.
+
 | Series | Type | Extra labels | Feeds | Need |
 | --- | --- | --- | --- | --- |
 | `kube_pod_info` | gauge | `node` | the Pods that existed; their node | optional |
@@ -170,7 +178,7 @@ capture says so.
 | `kube_pod_start_time` | gauge | | start time | optional |
 | `kube_pod_deletion_timestamp` | gauge | | a Pod being deleted, dropped | optional |
 | `kube_pod_container_resource_requests` | gauge | `resource="nvidia_com_gpu"` | GPUs per replica | optional |
-| `kube_node_labels` | gauge | `node`, `label_nvidia_com_gpu_product` (no `namespace`, no `pod`) | the accelerator | optional |
+| `kube_node_labels` | gauge | `node`, `label_nvidia_com_gpu_product` (no `namespace`, no `pod`) | the accelerator; needs kube-state-metrics' `--metric-labels-allowlist=nodes=[nvidia.com/gpu.product]` | optional |
 | `kube_deployment_spec_replicas` | gauge | `deployment` (no `pod`) | desired replicas; variants parked at zero | optional |
 
 ## Counts

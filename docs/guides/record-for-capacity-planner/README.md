@@ -29,7 +29,9 @@ is the reference for both.
 - [ ] `kubectl` access to Prometheus' namespace (a port-forward), or its URL.
 - [ ] For the first path: Go and a checkout of the release you run. For the
   second: bash, `curl` and `jq`.
-- [ ] kube-state-metrics in the same Prometheus, for readiness and roles.
+- [ ] kube-state-metrics in the same Prometheus, for readiness and roles,
+  with `--metric-labels-allowlist=pods=[llm-d.ai/role],nodes=[nvidia.com/gpu.product]`
+  so it exports each Pod's role and each node's accelerator.
   Without it, see [Without kube-state-metrics](#without-kube-state-metrics).
 
 <!-- guide:prerequisites start -->
@@ -120,12 +122,14 @@ export PROM_URL=http://localhost:9090
 export NAMESPACE=<model namespace>
 export FROM=$(date -u -d 2026-11-01T11:55:00Z +%s)
 export TO=$(date -u -d 2026-11-01T13:00:00Z +%s)
+export CHUNK=3600
 export CURL_OPTS=""
 
-# Saves the raw samples of every series the planner reads, one file per series and hour.
+# Saves the raw samples of every series the planner reads, one file per series and CHUNK seconds.
 # Each is one instant query for a range, metric{namespace=...}[1h]: it returns stored samples, not a resampled grid.
-# Needs bash, curl and jq. Lower CHUNK (seconds) if a query fails with "too many samples".
-METRICS="
+# A failed query saves its error, so the check below and the converter refuse it. Needs bash, jq and curl 7.76 or later.
+# Lower CHUNK if a query fails with "too many samples".
+export METRICS="
 vllm:kv_cache_usage_perc vllm:cache_config_info vllm:inter_token_latency_seconds_sum
 vllm:inter_token_latency_seconds_count vllm:generation_tokens_total vllm:num_requests_running
 vllm:num_requests_waiting vllm:num_requests_waiting_by_reason vllm:request_prompt_tokens_sum
@@ -164,7 +168,7 @@ kube_pod_status_ready kube_pod_status_ready_time kube_pod_created kube_pod_start
 kube_pod_deletion_timestamp kube_pod_container_resource_requests kube_node_labels
 kube_deployment_spec_replicas
 "
-CHUNK=3600
+rm -rf planner-export
 mkdir -p planner-export
 failed=0
 for m in ${METRICS}; do
@@ -174,7 +178,7 @@ for m in ${METRICS}; do
   while [ "${t}" -lt "${TO}" ]; do
     end=$(( t + CHUNK )); [ "${end}" -gt "${TO}" ] && end=${TO}
     out="planner-export/${m//:/_}.${t}.json"
-    curl -sS --fail ${CURL_OPTS} -G "${PROM_URL}/api/v1/query" -o "${out}" \
+    curl -sS --fail-with-body ${CURL_OPTS} -G "${PROM_URL}/api/v1/query" -o "${out}" \
       --data-urlencode "query=${sel}[$(( end - t ))s]" --data-urlencode "time=${end}" \
       || { echo "FAILED: ${m} at ${t}"; failed=1; }
     t=${end}
@@ -182,65 +186,111 @@ for m in ${METRICS}; do
 done
 echo "failed=${failed}"
 
-# Every file a success, and how many series each metric had. Zero is fine for a series your fleet does not export.
-jq -r 'select(.status != "success") | input_filename' planner-export/*.json
-for f in planner-export/*.json; do
-  echo "$(jq '.data.result | length' "${f}") $(basename "${f}" | cut -d. -f1)"
-done | sort -k2 | awk '{n[$2] += $1} END {for (m in n) print n[m], m}' | sort -n
+# What loading the export needs and Prometheus does not hold: the window, the engine, and the engine
+# arguments of the decode and prefill Deployments (leave PREFILL_DEPLOYMENT empty without one).
+# ENGINE is vllm or sglang; ENGINE_CONTAINER is the engine's container name.
+export ENGINE=vllm
+export ENGINE_CONTAINER=vllm
+export DECODE_DEPLOYMENT=<decode deployment>
+export PREFILL_DEPLOYMENT=
+engine_args() {
+  [ -n "$1" ] || return 0
+  kubectl -n "${NAMESPACE}" get deploy "$1" -o json | jq -r --arg c "${ENGINE_CONTAINER}" \
+    '.spec.template.spec.containers[] | select(.name == $c) | ((.command // []) + (.args // [])) | join(" ")'
+}
+{
+  echo "NAMESPACE=${NAMESPACE}"
+  echo "FROM=${FROM}"
+  echo "TO=${TO}"
+  echo "FROM_ISO=$(jq -rn --argjson t "${FROM}" '$t | todate')"
+  echo "TO_ISO=$(jq -rn --argjson t "${TO}" '$t | todate')"
+  echo "CAPTURE_FROM=$(( FROM + 300 ))"
+  echo "ENGINE=${ENGINE}"
+  echo "DECODE_ARGS=$(engine_args "${DECODE_DEPLOYMENT}")"
+  echo "PREFILL_ARGS=$(engine_args "${PREFILL_DEPLOYMENT}")"
+} > planner-export/window.txt
+cat planner-export/window.txt
 
-# One file to send. It holds your metric labels (Pod, node, model names), no request content.
+# Every chunk saved and a success, then how many series each metric had. It prints bad=0 when nothing is missing.
+# Zero series is fine for a metric your fleet does not export.
+want=$(( (TO - FROM + CHUNK - 1) / CHUNK ))
+bad=0
+for m in ${METRICS}; do
+  have=$(ls planner-export/"${m//:/_}".*.json 2>/dev/null | wc -l)
+  [ "${have}" -eq "${want}" ] || { echo "MISSING: ${m} has ${have} of ${want} chunks"; bad=1; }
+done
+for f in planner-export/*.json; do
+  jq -e '.status == "success"' "${f}" >/dev/null 2>&1 || { echo "FAILED: ${f}"; bad=1; }
+done
+echo "bad=${bad}"
+for f in planner-export/*.json; do
+  echo "$(jq '.data.result | length' "${f}" 2>/dev/null || echo 0) $(basename "${f}" | cut -d. -f1)"
+done | awk '{n[$2] += $1} END {for (m in n) print n[m], m}' | sort -n
+
+# One file to send. It holds your metric labels (Pod, node, model names) and engine arguments, no request content.
 tar czf planner-export.tgz planner-export
 ```
 <!-- guide:manual end -->
 
-The check prints nothing for the first command when every file is a success,
-then a count per metric. A metric your fleet does not export reads `0`: the
+The check names every chunk that is missing or failed, then prints `bad=0`
+when there is none, then a count of series per metric. Fetch a failed chunk
+again before you pack. A metric your fleet does not export reads `0`: the
 SGLang series on a vLLM fleet, say, or the `inference_extension_` twins on a
 current router. `0` for `vllm:kv_cache_usage_perc` (or `sglang:token_usage`)
 means the namespace or the window is wrong: nothing can be captured from it.
 
 Send `planner-export.tgz`. It holds metric labels (Pod, node and model names)
-and no request content.
+and `window.txt`: the window, the engine and the Deployments' engine
+arguments, which loading it needs and Prometheus does not hold. No request
+content.
 
 ### Loading a manual export
 
 On a machine with this repository, Python 3, `promtool` and `prometheus`
 (both are in the Prometheus release, and in the
-`quay.io/prometheus/prometheus` image). Set `NAMESPACE` and `ENGINE_ARGS` as in
-Path 1.
+`quay.io/prometheus/prometheus` image). The window, the namespace and the
+engine come from the export's `window.txt`.
 
 <!-- guide:load start -->
 ```bash
-# In a checkout of this repository. Merges the files into one OpenMetrics file.
+# In a checkout of this repository. Merges the answers into one OpenMetrics file, and prints the lookback to serve them with.
+# It reads only the *.json answers. window.txt is read below as data, never sourced: it came from someone else.
 tar xzf planner-export.tgz
 python3 hack/promjson-to-openmetrics.py -o planner-export.om planner-export/*.json
+while IFS='=' read -r k v; do
+  case "${k}" in NAMESPACE|FROM|TO|FROM_ISO|TO_ISO|CAPTURE_FROM|ENGINE|DECODE_ARGS|PREFILL_ARGS) export "${k}=${v}" ;; esac
+done < planner-export/window.txt
 
 # Writes TSDB blocks with promtool (make promtool installs it as bin/promtool-<version>).
 promtool tsdb create-blocks-from openmetrics planner-export.om planner-tsdb
 
 # Serve the blocks. A retention longer than their age, or Prometheus deletes them on start.
-# The short lookback ends a series about when the original did (see Limits).
+# LOOKBACK is the one the converter printed, four scrape intervals: it ends a series about when the original did (see Limits).
+export LOOKBACK=<the lookback the converter printed, e.g. 60s>
 touch empty.yml
 prometheus --config.file=empty.yml --storage.tsdb.path=planner-tsdb \
-  --storage.tsdb.retention.time=10y --query.lookback-delta=1m \
+  --storage.tsdb.retention.time=10y --query.lookback-delta=${LOOKBACK} \
   --web.listen-address=127.0.0.1:9091 &
 
-# Then capture as in the first path, against the local copy. Use the window you want answered, not the export's.
+# Then capture as in the first path, against the local copy, from 5 minutes into the export.
+# whatif takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
 bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace ${NAMESPACE} --kube-state-metrics \
-  --from 2026-11-01T12:00:00Z --to 2026-11-01T13:00:00Z --engine vllm --engine-args "${ENGINE_ARGS}" \
+  --from ${CAPTURE_FROM} --to ${TO} --engine ${ENGINE} --engine-args "${DECODE_ARGS}" \
   -o run.capture.jsonl.gz
 ```
 <!-- guide:load end -->
 
-The converter refuses a file whose query failed, and an export with no sample
-at all, so a broken export is not read as a window with no load.
+The converter refuses a file whose query failed, a chunk one metric has and
+another lacks, native histograms (which it cannot write), and an export with no
+sample at all, so a broken export is not read as a window with less load.
 
 ### Limits of a manual export
 
 - **A series' end is blurred by up to the lookback.** Prometheus marks a series
   stale when its target goes away; the query API does not return those marks.
   The local copy instead holds the last value for `--query.lookback-delta`, so
-  keep it short: about four scrape intervals (`1m` at 15 s). In a test of
+  keep it short: four scrape intervals, which the converter prints from the
+  samples (`60s` at 15 s, `120s` at 30 s). In a test of
   this path, the copy's capture matched the original's on every step but the
   three, 45 s, after a Pod left, where the copy still listed it; with the
   default `5m` lookback, 19 steps differed.

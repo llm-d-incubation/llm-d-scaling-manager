@@ -1,0 +1,3 @@
+{"status":"success","data":{"resultType":"matrix","result":[
+{"metric":{"__name__":"vllm:kv_cache_usage_perc","namespace":"demo","pod":"p-1"},"values":[]}
+]}}
