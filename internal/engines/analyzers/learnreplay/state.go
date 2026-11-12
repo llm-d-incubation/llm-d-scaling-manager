@@ -16,6 +16,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
@@ -78,6 +79,14 @@ type State struct {
 	// the model at the cycle, by S1's rule (domain.AnalyzerInput.FlowControlSeries).
 	// False is no queue series, which a scrape gap reads as too.
 	FlowControlSeries bool
+	// Joint is the joint TTFT model's inputs at the cycle: a
+	// prefill.JointWindow fed every cycle up to it, the model's prefill rows
+	// and decode rows, with no settle tracker. JointPrefillPods and
+	// JointDecodePods are the serving pods of each role at the cycle, and
+	// JointRate its arrival rate: the fleet and the load that ran.
+	Joint                             prefill.JointEstimate
+	JointPrefillPods, JointDecodePods int
+	JointRate                         float64
 }
 
 // VariantState is one variant's learned state at the cycle: everything the
@@ -235,6 +244,7 @@ func StateAt(ctx context.Context, recording []byte, opts Options, q StateQuery) 
 		}
 		noteShapes(shapes, in.ReplicaMetrics, n)
 		ttft.note(in, n, ev.Now)
+		ttft.noteJoint(in, ev.Now)
 		lines.note(in, n, ev.Now)
 		ttft.noteTerm(in, ev.Now, func(variant string) string {
 			if rec := r.store.Get(in.Namespace, in.ModelID, variant); rec != nil {

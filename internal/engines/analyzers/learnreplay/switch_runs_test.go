@@ -144,6 +144,25 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// priced. Its unit tests hold it (heldBy); the CLI, which has no switch,
 	// moves its own goldens.
 	slo.SwitchTTFTProcessorSharing: nil,
+	// J1 of the joint prefill and decode TTFT sizing: the joint inputs in
+	// shadow, and the inverted V_P where P1 refused V_P. Base: main at
+	// 90d1489. Alone it moves no golden: it runs inside S1's pricing, which
+	// all off (slo.SwitchTTFTPrice off) never reaches. With S1 on, as
+	// committed, it moves the slo-published output of every fixture with one
+	// prefill and one decode variant under a TTFT target, six, every row of
+	// each, all of them outputs another switch already names: the TTFT
+	// reading gains its Joint field. ols-sweep-slo (83 rows) and
+	// ols-sweep-slo-restart (143) read no-prefill-capacity there: no prefill
+	// pod of theirs reads a queue time. The four staircases price the joint
+	// mean on 115 of 128 (a-off), 276 of 289 (b-off, b-on) and 279 of 292
+	// (c-on) rows; where P1 refused V_P the inverted V_P stands, so S1's
+	// vp_source reads inverted on 116, 247, 276 and 243 rows, and its reason
+	// moves from no-prefill-capacity to no-fixed-latency (116, 247, 34 rows;
+	// no-decode-side stays on 242 and 243). Nothing else of S1 moves: no
+	// cycle of them holds P1's a, so S1 prices none either way. Shadow only:
+	// no ask, no composite. Its unit tests and the model row hold it
+	// (heldBy).
+	slo.SwitchTTFTJointInputs: nil,
 	// ev-shindin/llm-scaling-manager#495's one slow pod (mu_slow_pod.go), four switches, measured each
 	// alone against all off:
 	//
@@ -1180,6 +1199,13 @@ var heldBy = map[string][]heldTest{
 	slo.SwitchTTFTProcessorSharing: {
 		{"../slo", "TestTTFT_TheProcessorSharingSwitch"},
 		{"../slo", "TestTTFT_TheProcessorSharingSwitchOnALine"},
+	},
+	// The first runs the switch on and off through Analyze and asserts both;
+	// the model row replays the staircase goldens with it on.
+	slo.SwitchTTFTJointInputs: {
+		{"../slo", "TestTTFTJoint_TheInvertedVPStandsWhereP1Refused"},
+		{"../slo", "TestTTFTJoint_PublishedBesideP1"},
+		{".", "TestGoldens_TTFTJointModelRow"},
 	},
 	// It runs the switch on and off through Analyze and asserts both.
 	saturation.SwitchITLClearsOnNewRevision: {

@@ -1396,7 +1396,7 @@ func TestTTFT_TheFlagListIsTheModels(t *testing.T) {
 		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.HeldByDecodeAdmission,
 		whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
 		AssumedPoissonArrivals, PromptSpreadClamped, FlowControlMismatch, PromptSpreadAbovePeak, ImbalanceNotSustained,
-		whatif.OutputSpreadUnread}
+		whatif.OutputSpreadUnread, whatif.PullUnseen, whatif.OverheadMeasured}
 	want := make([]string, len(flags))
 	for i, f := range flags {
 		want[i] = string(f)
@@ -1839,12 +1839,14 @@ func TestTTFT_TheWindowsAreForgottenAndEvicted(t *testing.T) {
 		require.Len(t, r.a.imbalance, 1)
 		require.Len(t, r.a.decodeTTFT, 1)
 		require.Len(t, r.a.decodeTerms, 1)
+		require.Len(t, r.a.joint, 1)
 		return r
 	}
 	r := rig()
 	n, _ := r.a.forgetVariant("ns", "m", "pre")
 	assert.Positive(t, n)
 	assert.Empty(t, r.a.imbalance)
+	assert.Empty(t, r.a.joint, "the joint window is the prefill variant's")
 	assert.Len(t, r.a.decodeTTFT, 1, "another variant's stays")
 	assert.Len(t, r.a.decodeTerms, 1, "another variant's stays")
 	r.a.forgetVariant("ns", "m", "dec")
@@ -1852,10 +1854,16 @@ func TestTTFT_TheWindowsAreForgottenAndEvicted(t *testing.T) {
 	assert.Empty(t, r.a.decodeTerms)
 
 	r = rig()
+	r.a.forgetVariant("ns", "m", "dec")
+	assert.Empty(t, r.a.joint, "the joint window holds the decode variant's readings too")
+	assert.Len(t, r.a.imbalance, 1, "the prefill variant's own window stays")
+
+	r = rig()
 	r.now = r.now.Add(r.a.stateTimeout + time.Minute)
 	ev := r.a.evictStale(r.now)
-	assert.Equal(t, 3, ev.TTFTWindows)
+	assert.Equal(t, 4, ev.TTFTWindows)
 	assert.True(t, ev.Any())
+	assert.Empty(t, r.a.joint)
 	assert.Empty(t, r.a.imbalance)
 	assert.Empty(t, r.a.decodeTTFT)
 	assert.Empty(t, r.a.decodeTerms)

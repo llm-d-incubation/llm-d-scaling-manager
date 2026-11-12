@@ -103,6 +103,37 @@ var _ = Describe("PublishSLO", func() {
 			Expect(oneHot(constants.LLMSMSLOTTFTRefused, constants.LabelReason)).To(BeEmpty())
 		})
 
+		It("publishes the joint model beside the reading, its flags on the flag series", func() {
+			publish(reading())
+			Expect(family(constants.LLMSMSLOTTFTJointInput)).To(BeEmpty(), "no joint reading, no joint series")
+			Expect(family(constants.LLMSMSLOTTFTJointReason)).To(BeEmpty())
+
+			r := reading()
+			r.Joint = &SLOTTFTJointReading{
+				Inputs: map[string]float64{constants.SLOTTFTJointPrefillWork: 0.025, constants.SLOTTFTJointOverhead: 0.014,
+					"not-an-input": 1},
+				MeanSeconds: 0.15, Reason: constants.SLOTTFTJointReasonPriced, Flags: []string{"OverheadMeasured"},
+			}
+			publish(r)
+			inputs := map[string]float64{}
+			for _, m := range family(constants.LLMSMSLOTTFTJointInput) {
+				inputs[label(m, constants.LabelJointInput)] = m.GetGauge().GetValue()
+			}
+			Expect(inputs).To(Equal(map[string]float64{constants.SLOTTFTJointPrefillWork: 0.025,
+				constants.SLOTTFTJointOverhead: 0.014}), "only the listed inputs, only those learned")
+			Expect(value(constants.LLMSMSLOTTFTJointMeanSeconds)).To(Equal([]float64{0.15}))
+			Expect(family(constants.LLMSMSLOTTFTJointReason)).To(HaveLen(len(constants.SLOTTFTJointReasons)))
+			Expect(oneHot(constants.LLMSMSLOTTFTJointReason, constants.LabelReason)).To(ConsistOf(constants.SLOTTFTJointReasonPriced))
+			Expect(oneHot(constants.LLMSMSLOTTFTFlag, constants.LabelFlag)).To(
+				ConsistOf("UnvalidatedTTFT", "AssumedPoissonArrivals", "OverheadMeasured"))
+
+			r.Joint = &SLOTTFTJointReading{Inputs: map[string]float64{}, MeanSeconds: math.NaN(), Reason: "no-pull"}
+			publish(r)
+			Expect(family(constants.LLMSMSLOTTFTJointMeanSeconds)).To(BeEmpty(), "no mean, no series")
+			Expect(family(constants.LLMSMSLOTTFTJointInput)).To(BeEmpty(), "inputs no longer learned are deleted")
+			Expect(oneHot(constants.LLMSMSLOTTFTJointReason, constants.LabelReason)).To(ConsistOf("no-pull"))
+		})
+
 		It("names a refused rate, and keeps the reason", func() {
 			r := reading()
 			r.Predicted, r.Unmet, r.Refused = math.NaN(), true, constants.SLOTTFTReasonSaturated

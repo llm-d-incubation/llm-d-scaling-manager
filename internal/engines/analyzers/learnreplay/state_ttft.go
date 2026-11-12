@@ -114,12 +114,30 @@ type ttftSamples struct {
 	engineTTFT map[string][]whatif.DecodeTTFT
 	transfers  map[string]*prefill.TransferWindow
 	terms      map[string]*prefill.DecodeTermWindow
+	// joint is the model's joint TTFT readings (noteJoint).
+	joint *prefill.JointWindow
 }
 
 func newTTFTSamples() *ttftSamples {
 	return &ttftSamples{prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
 		engineTTFT: map[string][]whatif.DecodeTTFT{}, transfers: map[string]*prefill.TransferWindow{},
-		terms: map[string]*prefill.DecodeTermWindow{}}
+		terms: map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow()}
+}
+
+// noteJoint folds one cycle's prefill and decode rows into the model's joint
+// window, as S1 does (slo.noteJoint) but with no settle tracker.
+func (t *ttftSamples) noteJoint(in domain.AnalyzerInput, now time.Time) {
+	roles := rolesOf(in)
+	c := prefill.JointCycle{Now: now}
+	for _, rm := range in.ReplicaMetrics {
+		switch domain.CanonicalRole(roles[rm.VariantName]) {
+		case domain.RolePrefill:
+			c.Prefill = append(c.Prefill, rm)
+		case domain.RoleDecode:
+			c.Decode = append(c.Decode, rm)
+		}
+	}
+	t.joint.Observe(c)
 }
 
 // keepLast is s with v appended, holding the last n.
@@ -331,6 +349,18 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 	}
 	st.FlowControlSeries = in.FlowControlSeries()
+	st.Joint, st.JointRate = t.joint.Estimate(), in.ArrivalRate
+	for _, rm := range in.ReplicaMetrics {
+		if !prefill.Serving(rm) {
+			continue
+		}
+		switch domain.CanonicalRole(roles[rm.VariantName]) {
+		case domain.RolePrefill:
+			st.JointPrefillPods++
+		case domain.RoleDecode:
+			st.JointDecodePods++
+		}
+	}
 }
 
 // estimateAt is a variant's estimate read through read, when it was stashed

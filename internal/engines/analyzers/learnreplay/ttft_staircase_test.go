@@ -68,16 +68,16 @@ var ttftStaircase = []struct {
 	series  staircaseSeries
 }{
 	{"ttft-staircase-a-off", false,
-		staircaseCycles{cycles: 128},
+		staircaseCycles{cycles: 128, vp: 116},
 		staircaseSeries{noGauge: 128}},
 	{"ttft-staircase-b-off", false,
-		staircaseCycles{cycles: 289, vp: 29},
+		staircaseCycles{cycles: 289, vp: 276},
 		staircaseSeries{noGauge: 289, waitBuckets: 15}},
 	{"ttft-staircase-b-on", true,
-		staircaseCycles{cycles: 289, decodeLine: 34},
+		staircaseCycles{cycles: 289, vp: 276, decodeLine: 34, vpAndDecode: 34},
 		staircaseSeries{gaugeEmpty: 281, gaugeQueued: 4, gaugeEmptyIdle: 3, noGauge: 4, waitBuckets: 284}},
 	{"ttft-staircase-c-on", true,
-		staircaseCycles{cycles: 292, vp: 36},
+		staircaseCycles{cycles: 292, vp: 279},
 		staircaseSeries{gaugeEmpty: 245, gaugeQueued: 43, gaugeEmptyIdle: 3, noGauge: 4, waitBuckets: 288}},
 }
 
@@ -145,6 +145,11 @@ func readGate(t *testing.T, raw []byte) staircaseCycles {
 // validation rests on the warm-up's state and the frozen prediction, not on
 // these replays. The counts are frozen: a change that lets a phase price one
 // moves them, which is the moment to read the phase as S2's evidence.
+//
+// Since J1 (slo.SwitchTTFTJointInputs) V_P is there on almost every loaded
+// cycle: the inverted V_P stands where P1 refused one (b-off's 29 and c-on's
+// 36 cycles of P1's V_P are P1's still). What is missing is a: P1 refuses it
+// on every cycle of all four, and the joint model's a0 is not P1's a.
 func TestGoldens_TTFTStaircaseHoldsNoS2GateCycle(t *testing.T) {
 	t.Parallel() // reads the goldens, writes nowhere
 	for _, c := range ttftStaircase {

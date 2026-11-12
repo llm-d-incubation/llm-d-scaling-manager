@@ -29,6 +29,10 @@ var (
 	sloTTFTReason      *prometheus.GaugeVec
 	sloTTFTRefused     *prometheus.GaugeVec
 	sloTTFTFlag        *prometheus.GaugeVec
+
+	sloTTFTJointInput  *prometheus.GaugeVec
+	sloTTFTJointMean   *prometheus.GaugeVec
+	sloTTFTJointReason *prometheus.GaugeVec
 )
 
 // registerSLOMetrics creates and registers the SLO analyzer's gauges. Called
@@ -116,9 +120,21 @@ func registerSLOMetrics(registry prometheus.Registerer) error {
 	sloTTFTFlag = gauge(constants.LLMSMSLOTTFTFlag,
 		"SLO analyzer: 1 for each flag on a prefill variant's TTFT answer, 0 for the others.",
 		ttftLabels(constants.LabelFlag))
+	sloTTFTJointInput = gauge(constants.LLMSMSLOTTFTJointInput,
+		"SLO analyzer, shadow only: one input of the joint prefill and decode TTFT model, learned from the "+
+			"engines' histograms. Absent while the input is not learned. Nothing acts on it.",
+		ttftLabels(constants.LabelJointInput))
+	sloTTFTJointMean = gauge(constants.LLMSMSLOTTFTJointMeanSeconds,
+		"SLO analyzer, shadow only: the joint prefill and decode model's mean TTFT at the running fleet and "+
+			"rate, in seconds. Absent unless llmsm_slo_ttft_joint_reason is priced.",
+		ttftLabels())
+	sloTTFTJointReason = gauge(constants.LLMSMSLOTTFTJointReason,
+		"SLO analyzer, shadow only: 1 for why the joint TTFT model has no mean, or priced, 0 for the others.",
+		ttftLabels(constants.LabelReason))
 	for _, g := range []*prometheus.GaugeVec{sloTarget, sloObserved, sloAttainment, sloObjective, sloFill,
 		sloPredictedITL, sloSource, sloRequests, sloExcluded, sloPredictedTTFT, sloTTFTUnmet, sloTTFTReplicaRate,
-		sloTTFTVPSource, sloTTFTReason, sloTTFTRefused, sloTTFTFlag} {
+		sloTTFTVPSource, sloTTFTReason, sloTTFTRefused, sloTTFTFlag, sloTTFTJointInput, sloTTFTJointMean,
+		sloTTFTJointReason} {
 		if err := registry.Register(g); err != nil {
 			return err
 		}
@@ -177,6 +193,24 @@ type SLOTTFTReading struct {
 	// while Unmet is set.
 	Refused string `learnrec:"omitzero"`
 	// Flags is the flags on the answer, in constants.SLOTTFTFlags order.
+	Flags []string
+	// Joint is the joint prefill and decode model in shadow; nil with the
+	// slo-ttft-joint-inputs replay switch off, or not one variant per role.
+	Joint *SLOTTFTJointReading `learnrec:"omitzero"`
+}
+
+// SLOTTFTJointReading is the joint prefill and decode TTFT model of one
+// prefill variant, in shadow: its inputs, and its mean at the running fleet.
+// A NaN figure is not learned and not published.
+type SLOTTFTJointReading struct {
+	// Inputs is each input by its constants.SLOTTFTJointInputs name.
+	Inputs map[string]float64
+	// MeanSeconds is the mean TTFT at the running fleet and rate, NaN
+	// unless Reason is constants.SLOTTFTJointReasonPriced.
+	MeanSeconds float64
+	// Reason is one of constants.SLOTTFTJointReasons.
+	Reason string
+	// Flags is the flags on the mean, in constants.SLOTTFTFlags order.
 	Flags []string
 }
 
@@ -300,7 +334,18 @@ func PublishSLO(snap SLOModelSnapshot, now time.Time) {
 		oneHot(sloTTFTVPSource, constants.LabelVPSource, constants.SLOTTFTVPSources, func(v string) bool { return v == t.VPSource })
 		oneHot(sloTTFTReason, constants.LabelReason, constants.SLOTTFTReasons, func(v string) bool { return v == t.Reason })
 		oneHot(sloTTFTRefused, constants.LabelReason, constants.SLOTTFTRefusedReasons, func(v string) bool { return v == t.Refused })
-		oneHot(sloTTFTFlag, constants.LabelFlag, constants.SLOTTFTFlags, func(v string) bool { return slices.Contains(t.Flags, v) })
+		oneHot(sloTTFTFlag, constants.LabelFlag, constants.SLOTTFTFlags, func(v string) bool {
+			return slices.Contains(t.Flags, v) || t.Joint != nil && slices.Contains(t.Joint.Flags, v)
+		})
+		if j := t.Joint; j != nil {
+			for _, name := range constants.SLOTTFTJointInputs {
+				if v, ok := j.Inputs[name]; ok {
+					set(sloTTFTJointInput, tl(constants.LabelJointInput, name), v)
+				}
+			}
+			set(sloTTFTJointMean, tl(), j.MeanSeconds)
+			oneHot(sloTTFTJointReason, constants.LabelReason, constants.SLOTTFTJointReasons, func(v string) bool { return v == j.Reason })
+		}
 	}
 
 	key := snap.Namespace + "/" + snap.ModelName

@@ -261,6 +261,8 @@ var keyRules = map[string]rule{
 	"RoleStartSeeded":     {class: classVocab},
 	"AnalyzerDefinitions": {class: classVocab}, "Engines": {class: classVocab},
 	"Parameters": {class: classVocab},
+	// The joint TTFT model's inputs, keyed by input (J1).
+	"Inputs": {class: classVocab},
 	// The composite's per-role maps, keyed by role.
 	"Holds": {class: classVocab}, "HoldReasons": {class: classVocab}, "ReleaseBound": {class: classVocab},
 	"OtherFrames": {class: classVocab}, "RoleCapacities": {class: classVocab}, "RoleSpare": {class: classVocab},
@@ -311,9 +313,11 @@ func withWords(words []string, set map[string]bool) map[string]bool {
 	return set
 }
 
-// ttftWords is what the slo analyzer's TTFT readings hold.
+// ttftWords is what the slo analyzer's TTFT readings hold, the joint
+// model's included.
 func ttftWords() []string {
-	return slices.Concat(constants.SLOTTFTReasons, constants.SLOTTFTVPSources, constants.SLOTTFTFlags)
+	return slices.Concat(constants.SLOTTFTReasons, constants.SLOTTFTVPSources, constants.SLOTTFTFlags,
+		constants.SLOTTFTJointInputs, constants.SLOTTFTJointReasons)
 }
 
 func setOf(names ...string) map[string]bool {
