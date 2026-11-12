@@ -75,6 +75,12 @@ func apiPlan(t testing.TB, h http.Handler, req whatifapi.PlanRequest) (whatifapi
 	return out, body
 }
 
+// The words a plan request and a golden's roles use.
+const (
+	statMean   = "mean"
+	roleDecode = "decode"
+)
+
 func fp(x float64) *float64 { return &x }
 func ip(n int) *int         { return &n }
 
@@ -223,40 +229,40 @@ func parityCases() []parityCase {
 				Assume: &whatifapi.Assume{TPOTRatio: fp(1.3)}}
 		}, replicasQuestion},
 		{"slo-to-rate-worked-json", "ols-sweep.jsonl.gz", "", func(float64) whatifapi.PlanRequest {
-			return whatifapi.PlanRequest{Traffic: worked, SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj("mean", 0.004)}}
+			return whatifapi.PlanRequest{Traffic: worked, SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.004)}}
 		}, rateQuestion},
 		{"replicas-to-slo-output-spread-json", "throughput-sweep.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
-			return whatifapi.PlanRequest{Traffic: at(r, nil), SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj("mean", 0.01)}}
+			return whatifapi.PlanRequest{Traffic: at(r, nil), SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 		{"ttft-replicas-worked-json", "ols-sweep.jsonl.gz", "model-02", func(r float64) whatifapi.PlanRequest {
 			return whatifapi.PlanRequest{Fleet: workedFleet, Traffic: at(r, worked), Assume: vp(30000),
-				SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj("mean", 0.01)}}
+				SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 		{"ttft-rate-worked-json", "ols-sweep.jsonl.gz", "model-02", func(float64) whatifapi.PlanRequest {
 			return whatifapi.PlanRequest{Fleet: workedFleet, Traffic: worked, Assume: vp(30000),
-				SLO: &whatifapi.SLORequest{TTFT: obj("p95", 0.2), TPOT: obj("mean", 0.004)}}
+				SLO: &whatifapi.SLORequest{TTFT: obj("p95", 0.2), TPOT: obj(statMean, 0.004)}}
 		}, rateQuestion},
 		{"ttft-replicas-stated-inputs-json", "ols-sweep.jsonl.gz", "model-02", func(r float64) whatifapi.PlanRequest {
 			stated := &whatifapi.Traffic{Mix: worked.Mix, ArrivalCV2: fp(1.5)}
 			return whatifapi.PlanRequest{Fleet: workedFleet, Traffic: at(r, stated), Assume: &whatifapi.Assume{VP: fp(30000), PromptCV: fp(1)},
-				SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj("mean", 0.01)}}
+				SLO: &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 		{"ttft-replicas-short-json", "short.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
-			return whatifapi.PlanRequest{Traffic: at(r, nil), Assume: vp(130000), SLO: &whatifapi.SLORequest{TTFT: obj("", 1), TPOT: obj("mean", 0.01)}}
+			return whatifapi.PlanRequest{Traffic: at(r, nil), Assume: vp(130000), SLO: &whatifapi.SLORequest{TTFT: obj("", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 		{"ttft-no-vp-json", "short.jsonl.gz", "", func(float64) whatifapi.PlanRequest {
 			// Neither knee is answered, so the rate is given; the limits do not
 			// read it.
-			return whatifapi.PlanRequest{Traffic: at(1, nil), SLO: &whatifapi.SLORequest{TTFT: obj("mean", 1), TPOT: &whatifapi.Objective{Statistic: "none"}}}
+			return whatifapi.PlanRequest{Traffic: at(1, nil), SLO: &whatifapi.SLORequest{TTFT: obj(statMean, 1), TPOT: &whatifapi.Objective{Statistic: "none"}}}
 		}, rateQuestion},
 		{"ttft-replicas-pull-json", "throughput-sweep.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
 			return whatifapi.PlanRequest{Fleet: &whatifapi.FleetKnob{Prefill: ip(2)}, Traffic: at(r, nil),
 				Assume: &whatifapi.Assume{VP: fp(30000), A: fp(0.009), PromptCV: fp(0.06)},
-				SLO:    &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj("mean", 0.01)}}
+				SLO:    &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 		{"ttft-assume-a-json", "saturated.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
 			return whatifapi.PlanRequest{Traffic: at(r, nil), Assume: &whatifapi.Assume{A: fp(0.011)},
-				SLO: &whatifapi.SLORequest{TTFT: obj("p95", 1), TPOT: obj("mean", 0.01)}}
+				SLO: &whatifapi.SLORequest{TTFT: obj("p95", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
 	}
 }
@@ -265,12 +271,13 @@ func parityCases() []parityCase {
 func TestServeParityCoversEveryJSONGolden(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("testdata", "*-json.golden"))
 	require.NoError(t, err)
-	var names []string
+	names := make([]string, 0, len(paths))
 	for _, p := range paths {
 		names = append(names, strings.TrimSuffix(filepath.Base(p), ".golden"))
 	}
-	var covered []string
-	for _, c := range parityCases() {
+	cases := parityCases()
+	covered := make([]string, 0, len(cases))
+	for _, c := range cases {
 		covered = append(covered, c.golden)
 	}
 	slices.Sort(names)
@@ -294,7 +301,7 @@ func TestServeParity(t *testing.T) {
 				req.InputsID = in.InputsID
 				out, body := apiPlan(t, h, req)
 				assert.Empty(t, apitest.CheckFigures(body))
-				if i := slices.IndexFunc(w.Roles, func(r wireRole) bool { return r.Role == "decode" }); i >= 0 {
+				if i := slices.IndexFunc(w.Roles, func(r wireRole) bool { return r.Role == roleDecode }); i >= 0 {
 					require.NotNil(t, out.Limits.Decode)
 					sameFigure(t, "decode limit", wantOf(w.Roles[i].Results.Rate), *out.Limits.Decode)
 					sameFigure(t, "TPOT point B", wantOf(w.Roles[i].Results.Rate), out.TPOT.AtTarget.Rate)
@@ -321,7 +328,7 @@ func TestServeParity(t *testing.T) {
 // operating rate: the knees, the TTFT and the TPOTs there.
 func parityAtRate(t *testing.T, h http.Handler, in whatifapi.InputsResponse, c parityCase, w wireOutput) {
 	t.Helper()
-	d := role(t, w, "decode")
+	d := role(t, w, roleDecode)
 	var rate float64
 	var pr *wireRole
 	if i := slices.IndexFunc(w.Roles, func(r wireRole) bool { return r.Role == rolePrefill }); i >= 0 {
@@ -350,13 +357,13 @@ func parityAtRate(t *testing.T, h http.Handler, in whatifapi.InputsResponse, c p
 		}
 	}
 	tpot := d.Results.MeanTPOT
-	if req.SLO.TPOT.Statistic != "mean" {
+	if req.SLO.TPOT.Statistic != statMean {
 		tpot = d.Results.PercentileTPOT
 	}
 	sameAtHeadroomRate(t, "TPOT point A", wantOf(tpot), out.TPOT.AtRate.Figure, lent)
-	if req.SLO.TPOT.Statistic != "mean" {
+	if req.SLO.TPOT.Statistic != statMean {
 		// The mean too, asked as its own plan.
-		req.SLO.TPOT = &whatifapi.Objective{Statistic: "mean", Target: req.SLO.TPOT.Target}
+		req.SLO.TPOT = &whatifapi.Objective{Statistic: statMean, Target: req.SLO.TPOT.Target}
 		req.Assume = nil
 		mean, _ := apiPlan(t, h, req)
 		sameAtHeadroomRate(t, "mean TPOT point A", wantOf(d.Results.MeanTPOT), mean.TPOT.AtRate.Figure, lent)

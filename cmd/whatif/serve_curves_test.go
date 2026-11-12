@@ -36,14 +36,14 @@ func curveFleets() map[string]struct {
 			Traffic: &whatifapi.Traffic{Mix: &whatifapi.Mix{PromptTokens: 1000, OutputTokens: 1000}},
 			Assume:  &whatifapi.Assume{VP: fp(30000)},
 			SLO: &whatifapi.SLORequest{TTFT: &whatifapi.Objective{Statistic: "p95", Target: fp(0.2)},
-				TPOT: &whatifapi.Objective{Statistic: "mean", Target: fp(0.004)}},
+				TPOT: &whatifapi.Objective{Statistic: statMean, Target: fp(0.004)}},
 			Views: &whatifapi.ViewRequest{AllTrafficPerBucket: true},
 		}},
 		"pull": {"throughput-sweep.jsonl.gz", "", whatifapi.PlanRequest{
 			Fleet:  &whatifapi.FleetKnob{Prefill: ip(2)},
 			Assume: &whatifapi.Assume{VP: fp(30000), A: fp(0.009), PromptCV: fp(0.06)},
 			SLO: &whatifapi.SLORequest{TTFT: &whatifapi.Objective{Statistic: "p90", Target: fp(0.5)},
-				TPOT: &whatifapi.Objective{Statistic: "mean", Target: fp(0.02)}},
+				TPOT: &whatifapi.Objective{Statistic: statMean, Target: fp(0.02)}},
 		}},
 	}
 }
@@ -58,7 +58,7 @@ func servedFleetOf(t *testing.T, src *servedSources, recording, model string, sc
 	if !sc.Mix.Observed {
 		k.PromptTokens, k.OutputTokens = sc.Mix.PromptTokens, sc.Mix.OutputTokens
 	}
-	if sc.TTFT.Statistic != "mean" {
+	if sc.TTFT.Statistic != statMean {
 		k.TTFTPercentile = percentOf(t, sc.TTFT.Statistic)
 	}
 	fl, err := res.Pricer.Fleet(k)
@@ -144,7 +144,7 @@ func TestServeFleetLimitIsCapped(t *testing.T) {
 	req := c.req
 	req.InputsID, req.Views = in.InputsID, nil
 	req.SLO = &whatifapi.SLORequest{TTFT: &whatifapi.Objective{Statistic: "p95", Target: fp(10)},
-		TPOT: &whatifapi.Objective{Statistic: "mean", Target: fp(1)}}
+		TPOT: &whatifapi.Objective{Statistic: statMean, Target: fp(1)}}
 	out, body := apiPlan(t, h, req)
 	assert.Empty(t, apitest.CheckFigures(body))
 	capRate := out.TTFT.Markers.OperatingCap

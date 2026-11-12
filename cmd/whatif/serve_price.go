@@ -390,7 +390,10 @@ func (sf *servedFleet) Assumed() []string { return sf.assumed }
 
 // flagStrings is flags as strings, nil with none.
 func flagStrings(flags []whatif.Flag) []string {
-	var out []string
+	if len(flags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(flags))
 	for _, f := range flags {
 		out = append(out, string(f))
 	}

@@ -16,6 +16,10 @@ const (
 	reasonNoPerRequestLengths = "NoPerRequestLengths"
 )
 
+// sideLine is a decode side priced by the decode variant's line
+// (pricedFleet.decodeSide).
+const sideLine = "line"
+
 // inputsDoc is the inputs document of a fleet read at the recorded counts:
 // what the source saw, the policy's SLO, and every term with its source, in
 // the words and figures the CLI's JSON gives them (wireTTFT, wireInputs). A
@@ -113,7 +117,7 @@ func termsOf(f *answerFlags, st *learnreplay.State, pv *pricedVariant, pf *price
 		add("promptTokens", in.PromptSource, figure(in.PromptTokens, "tokens"))
 		add("promptCV", in.PromptCVSource, figure(in.PromptCV, ""))
 		add("transferSecondsPerToken", in.TransferSource, figure(in.TransferSecondsPerToken, "s"))
-		if in.DecodeSide == "line" {
+		if in.DecodeSide == sideLine {
 			add("routerHop", in.RouterHopSource, figure(in.RouterHopBaseSeconds, "s"))
 		}
 	case pf.refused.Reason == whatif.NoFixedLatency:

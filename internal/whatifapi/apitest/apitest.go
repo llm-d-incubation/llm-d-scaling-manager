@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -47,7 +48,7 @@ func walk(v any, path string, bad *[]string) {
 			case err != nil || math.IsNaN(f) || math.IsInf(f, 0):
 				*bad = append(*bad, fmt.Sprintf("%s: value %v is not finite", path, n))
 			case f == 0 && !slices.Contains(zeroAllowed, last) && !strings.HasPrefix(path, ".terms[") && !strings.HasPrefix(path, ".observed."):
-				*bad = append(*bad, fmt.Sprintf("%s: value 0, where a refusal would be written as one", path))
+				*bad = append(*bad, path+": value 0, where a refusal would be written as one")
 			}
 		}
 		for k, x := range t {
@@ -55,7 +56,7 @@ func walk(v any, path string, bad *[]string) {
 		}
 	case []any:
 		for i, x := range t {
-			walk(x, fmt.Sprintf("%s[%d]", path, i), bad)
+			walk(x, path+"["+strconv.Itoa(i)+"]", bad)
 		}
 	}
 }
