@@ -3142,10 +3142,10 @@ modify the cache.
 
 ## Known limitation: TTFT targets with long prompts
 
-On this release no analyzer sizes prefill replicas against a TTFT target.
-The `slo` analyzer reports TTFT and never changes a replica count, listed or
-not. The saturation analyzer sizes prefill from the KV cache it holds. A long
-prompt fills that cache only briefly, so prefill reads as nearly idle while
+On this release no analyzer sizes replicas against a TTFT target. The `slo`
+analyzer reports TTFT and never changes a replica count, listed or not. The
+saturation analyzer sizes each role from the KV cache it holds. A long prompt
+fills that cache only briefly, so both roles read as lightly loaded while
 TTFT is already over the target.
 
 What we measured, on a fleet of 2 prefill and 2 decode replicas of a 0.6B
@@ -3160,8 +3160,14 @@ over:
 - The prefill engines never had a request waiting. At every rate that missed,
   the scaling manager asked for 1 prefill replica, so it would have scaled
   prefill down, not up.
-- More decode did not help: 2 prefill and 4 decode missed at 41 requests/s
-  (p90 242 ms).
+- Most of the growth in TTFT was on the decode pods, not the prefill pods.
+  Between 14 and 36 requests/s the prefill pods added about 23 ms and the
+  decode pods about 47 ms: pulling the KV cache from prefill, waiting beside
+  that pull, and the first decoded token. The KV pull was the largest single
+  part.
+- More decode alone did not hold the target at higher rates either: 2 prefill
+  and 4 decode missed at 41 requests/s (p90 242 ms), where prefill had become
+  the larger part.
 - The TTFT prediction, `llmsm_slo_predicted_ttft_seconds`, was empty on every
   cycle. `llmsm_slo_ttft_reason` read `no-prefill-capacity` with flow control
   off and `no-decode-side` with it on.
@@ -3170,11 +3176,14 @@ over:
 
 What to do:
 
-- **Set the prefill floor yourself.** Load-test at your prompt length and
-  peak rate, then set `minReplicaCount` on the prefill ScaledObject to the
-  count that meets the target. KEDA holds the floor, and utilization share
-  never takes it. On the fleet above, each prefill replica held the target up
-  to about 13 requests/s with steady arrivals and about 7 with bursty ones.
+- **Set both floors yourself.** Load-test at your prompt length, burstiness
+  and peak rate, then set `minReplicaCount` on the prefill and the decode
+  ScaledObjects to the counts that meet the target together. Raising one role
+  alone may not be enough: TTFT is spent on both. KEDA holds the floors, and
+  utilization share never takes them. On the fleet above, 1 prefill and 1
+  decode replica per 13 requests/s held the target with steady arrivals, and
+  per 7 requests/s with bursty ones; that ratio does not carry over to other
+  prompt lengths or models.
 - **Watch the target with the router's measurement.** List `slo` with a
   `ttft` target and alert on `llmsm_slo_attainment_ratio` (the
   `LLMSMModelSLOAttainmentLow` alert), not on the prediction.
