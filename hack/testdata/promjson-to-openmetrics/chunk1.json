@@ -1,0 +1,5 @@
+{"status":"success","data":{"resultType":"matrix","result":[
+{"metric":{"__name__":"vllm:kv_cache_usage_perc","namespace":"demo","pod":"p-1","model_name":"m"},"values":[[1700000000,"0.25"],[1700000015,"0.5"],[1700000030.5,"NaN"]]},
+{"metric":{"__name__":"vllm:request_prompt_tokens_bucket","namespace":"demo","pod":"p-1","model_name":"m","le":"+Inf"},"values":[[1700000000,"10"],[1700000015,"12"]]},
+{"metric":{"__name__":"kube_pod_labels","namespace":"demo","pod":"p-1","label_note":"a\"b\\c\nd"},"values":[[1700000000,"1"]]}
+]}}

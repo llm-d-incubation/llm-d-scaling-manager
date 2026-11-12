@@ -3323,6 +3323,11 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@# and returns a plausible number; only evaluating it on per-rank series
 	@# shows it priced the busiest rank.
 	@PROMTOOL=$(PROMTOOL) bash hack/check-collector-queries.sh
+	@echo "Checking the capacity planner's manual recording converter..."
+	@# Converts fixture query answers and backfills them with promtool. A
+	@# sample written twice at a chunk edge, an unescaped label value, or a
+	@# failed chunk skipped all parse, and the last reads as a window with no load.
+	@PROMTOOL=$(PROMTOOL) bash hack/check-promjson-to-openmetrics.sh
 	@echo "Checking what warmpool.sh actually emits..."
 	@# Renders the pool manifests and asserts their shape. Every bug this covers
 	@# parses fine: one container with the proxy image under the supervisor's
