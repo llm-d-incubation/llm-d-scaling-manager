@@ -1943,7 +1943,7 @@ The measured split says the decode pod grows faster than the prefill pod on
 2+2 (+47 ms against +23 ms from the first step to the last of B). The
 suggestion was that the KV pull, priced with the prefill pods' load in it,
 explains that. It does not. Checked against the per-pod histograms of the
-three phases with a controller recording (B-off-r1 2+2 Poisson, B-onset-on-r1
+three recorded phases in this data set (B-off-r1 2+2 Poisson, B-onset-on-r1
 2+4 Poisson, C-on-r1 2+2 bursty):
 
 - **On 2+2 the pull does not depend on prefill load.** Its unshared work
@@ -1951,26 +1951,32 @@ three phases with a controller recording (B-off-r1 2+2 Poisson, B-onset-on-r1
   the prefill pods' utilization goes from 0.18 to 0.45. A pull priced on the
   decode pods alone, at that `S`, reproduces the pull to 1 ms. The pull is
   +15 ms of the decode pod's +47.
-- **The rest of the decode side is decode steps.** The decode pod's queue
-  beside the pull is 2.03 x ITL, and its first token 2.01 x ITL (both within
-  0.1 ms at every step of B-off and B-onset). ITL is a line in the running
-  batch, `ITL = 2.09 ms + 0.218 ms x running` (within 0.3 ms). The batch
-  closes the loop: `k = n·λ_d·a / (1 − n·λ_d·b)` with `n` the output length,
-  `a` and `b` the line. At B's last step `n·λ_d·b` is 0.78: the decode batch
-  is near its own knee, and that is why the decode pod grows faster.
+- **The rest of the decode side is decode steps.** At every step of B-off and
+  B-onset, within 0.1 ms: the decode pod's queue beside the pull is
+  `2.03 x ITL − 0.8 ms`, and its first token `2.01 x ITL − 0.2 ms`. What is
+  left of the decode pod's TTFT is `1.14 x ITL + 12.5 ms` (within −2.7 to +5.0 ms;
+  +6.1 ms over B-off). ITL is a line in the running batch,
+  `ITL = α + β·k` with `α` 2.09 ms and `β` 0.218 ms (within 0.3 ms). The
+  batch closes the loop: `k = n·λ_d·α / (1 − n·λ_d·β)` with `n` the output
+  length. At B's last step `n·λ_d·β` is 0.78: the decode batch is near its
+  own knee, and that is why the decode pod grows faster.
 - **The prefill load does reach the pull on 2+4.** There the pull's unshared
   work rises from 27.7 to 32.3 ms, and a decode-only pull reads 6-25 ms
-  short. No single closed form fits both fleets:
+  short. Closed forms that fit the level of both fleets within 10 % miss the
+  growth on 2+2:
 
-| Pull model, fitted on B-off and B-onset together | 2+2 error | 2+4 error |
-| --- | --- | --- |
-| Decode pods only | +10 to +14 % | −31 to −6 % |
-| One stage, decode load plus a share of prefill utilization | +3 to +13 % | −20 to −4 % |
-| Two stages in a row, decode receive and prefill send | −9 to +9 % | −6 to +10 % |
+| Pull model, fitted on B-off and B-onset together | 2+2 error | 2+4 error | 2+2 growth, measured +15 ms |
+| --- | --- | --- | --- |
+| Decode pods only | +10 to +14 % | −31 to −6 % | +17.5 ms |
+| One stage, decode load plus 0.43 x prefill utilization (`S` 20.8 ms) | −9 to +8 % | −4 to +1 % | +21.1 ms |
+| Two stages in a row, decode receive and prefill send | −9 to +9 % | −6 to +10 % | +8.5 ms |
+
+That is why the model below learns the prefill load's effect on the pull as
+a table rather than a formula.
 
 The model built from per-pod rates alone (prefill as processor sharing at
 `S` 25.0 ms, the pull on decode at 24.6 ms, the decode term as
-`5.2 x ITL(k) + 12.5 ms`):
+`5.18 x ITL(k) + 11.5 ms`):
 
 | Phase, first step to last | Decode pod, measured | Decode pod, model | Prefill compute, measured | Prefill compute, model |
 | --- | --- | --- | --- | --- |
@@ -1978,13 +1984,17 @@ The model built from per-pod rates alone (prefill as processor sharing at
 | B-onset-on-r1, 2+4 | +48.0 ms | +19.8 ms | +83.8 ms | +56.7 ms |
 | C-on-r1, 2+2 bursty | +64.2 ms | +46.2 ms | +36.7 ms | +14.6 ms |
 
-On 2+2 Poisson the split is reproduced, each step's decode pod within −1 to
-+5 ms. On 2+4 the miss is the pull (above) and the prefill stage near its
-knee, where a 4 % error in `S` moves the stretch a lot. The bursty phase reads
-short because this check is of means at `Ca²` 1; the processor-sharing burst
-rule ([above](#as-built-processor-sharing)) is what prices it. The prefill
-pod's own overhead around the compute (17 to 25 ms on 2+2) also grows, by
-7.5 ms, and the model holds it fixed.
+On 2+2 Poisson the split is reproduced, each step's decode pod within +1 to
++5 ms (the model reads high). On 2+4 the miss is the pull (above) and the
+prefill stage near its knee, where a 4 % error in `S` moves the stretch a
+lot. The bursty phase reads short on both sides. On prefill, this check is of
+means at `Ca²` 1, and the processor-sharing burst rule
+([above](#as-built-processor-sharing)) is what prices bursts. On decode, the
+batch itself runs larger than the closed loop says (running 38.5 against
+32.8 at C's last step, `4 x ITL` 42.5 against 37.0 ms), and nothing in the
+model prices that yet (below). The prefill pod's own overhead around the
+compute (17 to 25 ms on 2+2) also grows, by 7.5 ms, and the model holds it
+fixed.
 
 So the model has three parts that matter, in this order on a fleet with as
 many decode as prefill pods: the decode steps, the pull, the prefill stage.
@@ -1993,7 +2003,7 @@ phase's controller recording, after the step's first 180 s.
 
 ### The model
 
-    TTFT(N_p, N_d) = a + T_P(λ/N_p) + T_X(λ/N_d, λ/N_p) + c·ITL(k(λ/N_d)) + d + R
+    TTFT(N_p, N_d) = a + T_P(λ/N_p) + T_X(λ/N_d, λ/N_p) + m·ITL(k(λ/N_d)) + d + R
 
 - `T_P` is the prefill pod as processor sharing, as built. Its capacity
   `V_P` comes from a new P1 source, the queue-free inversion
@@ -2004,17 +2014,26 @@ phase's controller recording, after the step's first 180 s.
 - `T_X` is the pull as processor sharing on the decode pod, its unshared work
   learned by the same inversion on the decode pods. The prefill load enters
   as a learned table, not a formula: unshared pull work by prefill
-  utilization, in buckets of 0.1. A count that puts prefill past the highest
-  bucket seen takes that bucket's figure and is flagged. Taking the highest
-  seen errs toward more replicas.
-- `c·ITL(k) + d` is the decode pod's own part: the wait for a step and the
-  first token. `ITL(k)` is fitted from the decode pods' (running, ITL)
-  pairs, not from the ITL learner's band, which needs a KV fill the decode
-  pods here never reach (the reason S1 refused as `no-decode-side`). `c` and
-  `d` are fitted from the decode pod's own histograms (queue less pull, first
-  token, TTFT). `k` comes from the closed loop above, and a count where
-  `n·λ_d·b ≥ 1` cannot hold the batch and is refused.
-- `a` and `R` are as built. The percentile is priced as built (the gammas of
+  utilization, in buckets of 0.1. The pull grows with prefill utilization,
+  and a smaller prefill fleet raises it, so a count that puts prefill past
+  the highest bucket seen cannot be shown to meet the target. It is treated
+  as not meeting it and flagged `pull-unseen`. The running count may be such
+  a count; it is then priced at its own measured pull.
+- `m·ITL(k) + d` is the decode pod's own part: the wait for a step, the first
+  token and the rest of the decode pod. `ITL(k) = α + β·k` is fitted from the
+  decode pods' (running, ITL) pairs, not from the ITL learner's band, which
+  needs a KV fill the decode pods here never reach (the reason S1 refused as
+  `no-decode-side`). `m` and `d` are fitted from the decode pod's own
+  histograms (queue less pull, first token, TTFT). `k` comes from the closed
+  loop above, and a count where `n·λ_d·β ≥ 1` cannot hold the batch and is
+  refused.
+- `a` is the prefill pod's overhead around its compute, not P1's `a`. P1
+  refuses `a` on long prompts (`MaxAShortestPrompt`, 2500 tokens, in
+  `internal/signals/prefill/fixed.go`), and where it has one it is 8-11 ms,
+  not the 17-25 ms the prefill pods showed on 2+2. Here `a` is the prefill
+  pod's `AvgTTFT − AvgQueueTime − AvgPrefillTime` at the lowest load seen,
+  flagged `overhead-measured`.
+- `R` is as built. The percentile is priced as built (the gammas of
   processor sharing). The decode term is near-constant at a given load, so it
   shifts the distribution and adds no spread.
 
@@ -2022,36 +2041,67 @@ phase's controller recording, after the step's first 180 s.
 
 Find the cheapest `(N_p, N_d)` whose predicted p90 meets the target:
 
-- Cost is replicas times each role's accelerator count.
-- Each role moves at most its step limit per cycle from where it runs (the
-  scale-up step and `maxReplicas` the policy already has), so the search box
-  is small.
+- Cost is replicas times each role's accelerator count, or the share's GPU
+  units under utilization share (below).
+- Each role moves at most `slo.ttft.maxStep` replicas a cycle from where it
+  runs, a new knob, by default `max(1, half the running count)`, and never
+  past the variant's `maxReplicas`. The search box is small.
 - The TTFT falls as either count rises, so for each `N_p` in the box a
   bisection finds the least `N_d`. Ties go to fewer replicas in all, then to
   the shape that runs.
-- If no count in the box meets the target, the ask is the box's corner on
-  the role that buys the most TTFT per replica, flagged `out-of-reach-this-step`.
-  The next cycle asks again from there.
-- If no count meets it even unbounded (the fixed parts alone are over the
-  target), the analyzer abstains with `target-below-floor`.
+- No cycle trades one role down for the other up: a role's ask goes below its
+  running count only if that lower count, with the other role at its running
+  count, meets the target. A partial grant (a limiter, quota, the share
+  optimizer, `maxReplicas`) then cannot scale the fleet into a miss.
+- If no count in the box meets the target, the ask is the box's corner for
+  the role whose step lowers the predicted p90 more: that role at the top of
+  its step, the other at its least count in the box that still meets the
+  no-trade rule. It is flagged `out-of-reach-this-step`, and the next cycle
+  asks again from there.
+- If no count up to each role's `maxReplicas` meets it (the fixed parts alone
+  are over the target), the analyzer abstains with `target-below-floor`. If
+  the cheapest pair that meets it costs more than twice what saturation asks,
+  it abstains with `diminishing-return`: the target is not worth that fleet
+  without an operator saying so.
 
 ### How the SLO analyzer acts
 
-- **Opt-in.** `slo.mode: enforce` ([SLO tiers](slo-tiers.md)) plus
-  `slo.ttft.sizing: joint`. Without both, the engine drops `slo` before the
-  composite as it does today, and nothing changes.
+- **Opt-in.** `slo.mode: enforce` ([SLO tiers](slo-tiers.md), phase 1, not
+  parsed yet) plus a new `slo.ttft.sizing: joint`. Observe stays the default
+  mode. J3 also needs SLO tiers' step 2c (TTFT enforce). Without both
+  settings, the engine drops `slo` before the composite as it does today,
+  and nothing changes.
 - **Per role.** The result carries a `RoleDemand` for prefill and for decode,
-  each the count it asks, in its own frame. The composite takes the frame
-  needing most per role, as it does for every analyzer. Saturation still
-  sizes for throughput; the SLO analyzer can only raise a role above it.
+  each the count it asks, in its own frame. Today `RoleDemand` carries decode
+  only (`internal/engines/analyzers/slo/analyzer.go`, where it is set). The
+  composite takes the frame needing most per role, as it does for every
+  analyzer. Saturation still sizes for throughput; the SLO analyzer can only
+  raise a role above it.
 - **Scale-down.** Its ask is honest at lower counts too, so it agrees to a
-  scale-down only to a count it predicts meets the target.
-- **Abstain.** Any missing input (no `V_P`, no pull figure, no `ITL(k)` fit,
-  too few cycles), or a prediction at the running fleet more than 15 % off the
-  router's measured p90 for 3 cycles, gives a NaN need for both roles: no
-  opinion, so saturation sizes alone. The 3-cycle grace on scale-down applies
-  as for any live analyzer that goes quiet. The reason is published per
-  variant.
+  scale-down only to a count it predicts meets the target, and only one role
+  at a time (the no-trade rule above).
+- **Utilization share.** The ask enters the share optimizer as per-role
+  demand, as any composite-raised role demand does, priced in the share's
+  GPU units. A pair the share cannot grant whole is reported
+  `out-of-reach-this-step`, not half-applied.
+- **Abstain.** A NaN need for both roles comes from either of two things:
+  - a missing input: no `V_P`, no `a`, no pull figure, no `ITL(k)` fit, too
+    few cycles;
+  - the self-check. It compares the model's mean TTFT at the running fleet
+    with the router's (`llm_d_epp_request_ttft_seconds` sum over count,
+    within 1-3 ms of the client's). The router's p90 cannot be used: near
+    the target it sits in a histogram bucket 51-79 % wide. The check is
+    one-sided by design: it abstains after 3 cycles more than 5 % under, or
+    more than 15 % over, and re-enters after 3 cycles back inside that band.
+
+  The reason is published per variant.
+- **What abstaining does.** Today the engine keeps `slo` out of the
+  composite (`eligibleEntries`) and out of the scale-down grace
+  (`listedInGrace`, both in `internal/engines/steadystate/engine_v2.go`).
+  J3 removes both exclusions. A NaN abstain then holds scale-down for both
+  roles until 3 intervals after its last informative result, as for any live
+  analyzer whose result is not informative (`composite.go`); after that,
+  saturation sizes alone.
 
 ### Validation against the staircase
 
@@ -2067,28 +2117,37 @@ fixtures) with the joint mode on, priced at the fleet that ran. The bar:
 | The mode off | every replay golden byte for byte |
 | Mutants | without the `ITL(k)` term 2+2 fails the missed-step bar; with a decode-only pull 2+4 fails it |
 
-The phases with no recording (B-off-r2, B-on, C-off, H-*) are checked on the
-Prometheus split only: the predicted growth per part against the measured. A
-live staircase with the mode on comes after the replays pass.
+C (bursty) is expected to fail the model row until a burst term on `k`
+exists (below), and it is reported, not tuned away. The phases with no
+recording (B-off-r2, B-on, B-onset-on-r2, C-off, H-*) are checked on the
+Prometheus split only: the predicted growth per part against the measured.
+A live staircase with the mode on comes after the replays pass.
 
 ### Phases
 
-1. **J1, inputs in shadow.** The inverted `V_P`, the pull table, the `ITL(k)`
-   fit and `c`, `d`, published on the SLO status; the what-if CLI prices
-   the joint model. Gate: the model row of the bar.
+1. **J1, inputs in shadow.** The inverted `V_P`, the measured `a`, the pull
+   table, the `ITL(k)` fit and `m`, `d`, published on the SLO status; the
+   what-if CLI prices the joint model. Gate: the model row of the bar.
 2. **J2, the search in shadow.** The ask per role published, nothing acted
    on. Gate: the whole bar on the replays.
-3. **J3, opt-in.** `slo.ttft.sizing: joint` enters the composite under
-   `enforce`. Gate: a kind e2e with the emulator and one live staircase with
-   the mode on.
-4. **Default on** only after a second shape passes: another prompt length
-   and bursty arrivals.
+3. **J3, opt-in.** Under `slo.mode: enforce` with SLO tiers' step 2c,
+   `slo.ttft.sizing: joint` enters the composite. Gate: a kind e2e with the
+   emulator and one live staircase with the mode on.
+4. **Joint by default.** `joint` becomes the default value of
+   `slo.ttft.sizing` under `enforce`, only after a second shape passes:
+   another prompt length and bursty arrivals. Observe stays the default
+   mode.
 
 ### What it leaves out
 
+- Bursts on decode: the batch runs larger than the closed loop says (C's
+  last step, running 38.5 against 32.8), so bursty fleets read short on the
+  decode side. A burst term on `k` is open.
 - The prefill pod's overhead around its compute grows with load (+7.5 ms on
-  2+2) and is held fixed: the model reads a little short there.
-- The pull past the prefill utilization seen is a guess on the safe side.
+  2+2) and is held at its lowest-load value: the model reads a little short
+  there.
+- The pull past the prefill utilization seen is not priced: such counts are
+  not asked for.
 - The burst rule reads high at light load, as built: the cost side.
 
 ## Open questions
