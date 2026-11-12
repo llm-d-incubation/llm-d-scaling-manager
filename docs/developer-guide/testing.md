@@ -2349,14 +2349,21 @@ make test-e2e-release-manifests RELEASE_E2E_SCOPE=cluster
 guide](../guides/install-cluster-wide/) does: the controller in
 `scaling-manager-system`, which the files name, and the models in `llm-d-sim`,
 another namespace, with the model-namespace file applied there. The steps
-below are the same, with these differences: there is no admin/controller split
-(each file is applied whole, in the guide's order); nothing of the cluster file
-is applied before the preflight, so `keda.networkpolicy` must WARN (not FAIL)
-with a `sed` on `scaling-manager-cluster*.yaml`, which the run applies, and it
-stays WARN in the run before the install, whose Job must complete; the
-smoke suite skips nothing; the activation file grants in `llm-d-sim`; and the
-uninstall also looks for unlabelled objects in `llm-d-sim`, then deletes
-`scaling-manager-system`. Run the two scopes on separate clusters: KEDA keeps
+below are the same, with these differences:
+
+- There is no admin/controller split: each file is applied whole, in the
+  guide's order.
+- Nothing of the cluster file is applied before the preflight, so
+  `keda.networkpolicy` must WARN, not FAIL, and print a `sed` on
+  `scaling-manager-cluster*.yaml`. The run applies that `sed`.
+- In the run before the install `keda.networkpolicy` is still WARN, and the
+  Job must complete.
+- The smoke suite skips nothing.
+- The activation file grants in `llm-d-sim`.
+- The uninstall also looks for unlabelled objects in `llm-d-sim`, then
+  deletes `scaling-manager-system`.
+
+Run the two scopes on separate clusters: KEDA keeps
 the scaler CA of its first connection, and the two installs mint different
 ones.
 
@@ -2372,7 +2379,8 @@ works there. In order, and a step that fails stops the run:
    `AlreadyExists`.
 2. Runs the preflight Job (the `part=controller` object of its file). The file's NetworkPolicy names `keda`; the e2e KEDA
    runs in `keda-system`, so the Job must fail on `keda.networkpolicy` and
-   print a fix. It runs that fix as printed, then the preflight again, which
+   print a fix (the cluster scope expects a WARN instead; see the differences
+   above). It runs that fix as printed, then the preflight again, which
    must have no FAIL and PASS `settings`, `keda.crd`, `keda.version`,
    `keda.networkpolicy` and `prometheus.reachable`. The WARN and UNKNOWN lines
    go into the summary: before the install `keda.mtls`, `metrics.model` and
