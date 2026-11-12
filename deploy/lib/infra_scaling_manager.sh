@@ -2170,6 +2170,10 @@ EOF
         # installer does not render (the optimizer block among them), go into the applied
         # manifest itself (the manager ConfigMap's LLMSM_PASSIVE already went into
         # it, in llmsm_render_manager_config_patch).
+        # The keys this release renders into the default entry are recorded
+        # first, from the render alone, for the next install
+        # (llmsm_render_policy_owned_patch).
+        llmsm_render_policy_owned_patch "$tmp_overlay"
         llmsm_render_policy_keep_patch "$tmp_overlay" "$preserved_policy" || exit 1
 
         # And the limiter the live `default` declares, which the same apply resets
@@ -2531,15 +2535,19 @@ llmsm_live_get() {
 # before the apply: LLMSM_PASSIVE in scaling-manager-manager-config into LLMSM_LIVE_PASSIVE,
 # and `passive` on the default entry of scaling-manager-scaling-policy-config into
 # LLMSM_LIVE_DEFAULT_PASSIVE. The whole default entry goes into LLMSM_LIVE_DEFAULT,
-# for llmsm_render_policy_keep_patch to keep what the installer does not own.
-# Each is empty when unset or when the ConfigMap does not exist (a first
+# for llmsm_render_policy_keep_patch to keep what the installer does not own, and
+# the keys the install before rendered into it, with its release, into
+# LLMSM_LIVE_DEFAULT_OWNED and LLMSM_LIVE_DEFAULT_OWNED_BY (empty when an older
+# release wrote it). Each is empty when unset or when the ConfigMap does not exist (a first
 # install). A read that fails otherwise returns 1.
 llmsm_live_passive() {
-    local ns="$1" cfg def
+    local ns="$1" cfg def owned
     LLMSM_LIVE_PASSIVE=""
     LLMSM_LIVE_SCALE_TO_ZERO=""
     LLMSM_LIVE_DEFAULT_PASSIVE=""
     LLMSM_LIVE_DEFAULT=""
+    LLMSM_LIVE_DEFAULT_OWNED=""
+    LLMSM_LIVE_DEFAULT_OWNED_BY=""
     LLMSM_LIVE_PASSIVE_ERR=""
     cfg="$(llmsm_live_get "$ns" scaling-manager-manager-config '{.data.config\.yaml}')" || return 1
     if [ -n "$cfg" ]; then
@@ -2551,7 +2559,20 @@ llmsm_live_passive() {
     if [ -n "$def" ]; then
         LLMSM_LIVE_DEFAULT_PASSIVE="$(printf '%s\n' "$def" | llmsm_yaml_scalar '.passive')"
     fi
+    # The two annotations LLMSM_OWNED_KEYS_ANNOTATION and LLMSM_OWNED_BY_ANNOTATION.
+    owned="$(llmsm_live_get "$ns" scaling-manager-scaling-policy-config \
+        '{.metadata.annotations.llm-d\.ai/installer-rendered-default-keys}{"|"}{.metadata.annotations.llm-d\.ai/installer-rendered-default-release}')" || return 1
+    LLMSM_LIVE_DEFAULT_OWNED="${owned%%|*}"
+    LLMSM_LIVE_DEFAULT_OWNED_BY="${owned#*|}"
 }
+
+# The annotations on scaling-manager-scaling-policy-config that record what the
+# install rendered into the default entry: the top-level keys, comma-separated,
+# and the release (image tag) that rendered them. A re-install tells the keys
+# an earlier release rendered from the ones an operator added by them
+# (llmsm_merge_live_default).
+LLMSM_OWNED_KEYS_ANNOTATION="llm-d.ai/installer-rendered-default-keys"
+LLMSM_OWNED_BY_ANNOTATION="llm-d.ai/installer-rendered-default-release"
 
 # llmsm_scale_to_zero_want prints the LLMSM_SCALE_TO_ZERO this install writes,
 # true or false: ENABLE_SCALE_TO_ZERO when given, else the live value
@@ -2618,12 +2639,20 @@ llmsm_passive_want() {
 # the live list is not carried: the apply resets it and the install declares
 # the one asked for, or none.
 #
+# <owned>, the keys the install before rendered (LLMSM_LIVE_DEFAULT_OWNED,
+# comma-separated), tells a key an earlier release shipped from one an operator
+# added: a live key it names that this render does not carry is a key a release
+# stopped rendering, and is dropped, with a warning naming its live value. A key
+# it does not name is an operator's, and is kept. `passive` and `limiters`
+# keep their own rules. Empty -- a ConfigMap an older release wrote -- every
+# key the render does not carry is kept.
+#
 # Prints nothing when there is nothing to keep: no live entry, or one holding
 # only keys the render carries, or one that is empty or comments only. A live
 # entry that is not a YAML mapping cannot be kept from; it is replaced, with a
 # warning. A tool that fails is an error naming the step.
 llmsm_merge_live_default() {
-    local rendered="$1" live="$2" rj lj keep conflicts carry_limiters=false advice
+    local rendered="$1" live="$2" owned="${3:-}" rj lj keep dropped conflicts carry_limiters=false advice
     [ -n "$live" ] || return 0
     [ -n "${LLMSM_LIMITER:-}" ] || carry_limiters=true
     rj="$(printf '%s\n' "$rendered" | yq -o=json -I=0 '.')" \
@@ -2656,9 +2685,23 @@ llmsm_merge_live_default() {
 ${conflicts}
 ${advice}"
     fi
-    keep="$(jq -cn --argjson l "$lj" --argjson r "$rj" --argjson carry "$carry_limiters" '
-        [$l | keys_unsorted[] | . as $k
-         | select(if $k == "limiters" then $carry else ($r | has($k) | not) end)]')" \
+    dropped="$(jq -rn --argjson l "$lj" --argjson r "$rj" --arg owned "$owned" '
+        ($owned | split(",") | map(select(. != ""))) as $o
+        | $l | to_entries[] | select(.key != "passive" and .key != "limiters")
+        | . as $e | select($r | has($e.key) | not) | select($o | index([$e.key]))
+        | "    \(.key): \(.value | tojson)"')" \
+        || log_error "could not compare the live default entry of scaling-manager-scaling-policy-config with the keys the install before rendered (jq failed); refusing an apply that would reset it"
+    if [ -n "$dropped" ]; then
+        log_warning "Dropping keys of the default entry of scaling-manager-scaling-policy-config that the install before (${LLMSM_LIVE_DEFAULT_OWNED_BY:-an earlier release}) rendered and this one does not (live value):
+${dropped}
+  Set one again after the install if you need it; a key the installer never rendered is kept."
+    fi
+    keep="$(jq -cn --argjson l "$lj" --argjson r "$rj" --argjson carry "$carry_limiters" --arg owned "$owned" '
+        ($owned | split(",") | map(select(. != ""))) as $o
+        | [$l | keys_unsorted[] | . as $k
+         | select(if $k == "limiters" then $carry
+                  elif $k == "passive" then ($r | has($k) | not)
+                  else (($r | has($k) | not) and ($o | index([$k]) | not)) end)]')" \
         || log_error "could not list the keys of the live default entry of scaling-manager-scaling-policy-config to keep (jq failed); refusing an apply that would reset them"
     [ "$keep" = '[]' ] && return 0
     log_info "Keeping the keys of the live default entry this install does not render: $(printf '%s' "$keep" | jq -r 'join(", ")')"
@@ -2708,7 +2751,7 @@ llmsm_render_policy_keep_patch() {
             log_error "could not render the default entry of scaling-manager-scaling-policy-config to keep what the live one carries; refusing an apply that would reset it"
             return 1
         fi
-        merged="$(llmsm_merge_live_default "$def" "${LLMSM_LIVE_DEFAULT:-}")" || return 1
+        merged="$(llmsm_merge_live_default "$def" "${LLMSM_LIVE_DEFAULT:-}" "${LLMSM_LIVE_DEFAULT_OWNED:-}")" || return 1
         case "${LLMSM_LIVE_DEFAULT_PASSIVE:-}" in
             true|false)
                 merged="$(printf '%s\n' "${merged:-$def}" | yq ".passive = ${LLMSM_LIVE_DEFAULT_PASSIVE}")" \
@@ -2726,6 +2769,41 @@ llmsm_render_policy_keep_patch() {
         | yq -P '.' > "$tmp_overlay/policy-keep-patch.yaml"
     cat >> "$tmp_overlay/kustomization.yaml" <<EOF
 - path: policy-keep-patch.yaml
+  target:
+    kind: ConfigMap
+    name: scaling-manager-scaling-policy-config
+EOF
+}
+
+# llmsm_render_policy_owned_patch writes, into the overlay, a patch that
+# annotates scaling-manager-scaling-policy-config with the top-level keys this
+# install renders into the default entry (LLMSM_OWNED_KEYS_ANNOTATION) and the
+# release that renders them (LLMSM_OWNED_BY_ANNOTATION: the image tag, else the
+# digest). The next install reads them (llmsm_live_passive) to drop a key this
+# release rendered and that one does not (llmsm_merge_live_default).
+#
+# It must run before llmsm_render_policy_keep_patch: the keys are the render's
+# own, and the keep patch adds the live entry's to it. A render it cannot read
+# writes no annotation, with a warning: the next install then keeps every key,
+# as an install from a release before the annotation does.
+llmsm_render_policy_owned_patch() {
+    local tmp_overlay="$1" def keys release
+    def="$(kubectl kustomize "$tmp_overlay" 2>/dev/null \
+        | yq 'select(.kind == "ConfigMap" and .metadata.name == "scaling-manager-scaling-policy-config") | .data.default')" || def=""
+    keys=""
+    if [ -n "$def" ] && [ "$def" != null ]; then
+        keys="$(printf '%s\n' "$def" | yq -o=json -I=0 '.' 2>/dev/null | jq -r 'if type == "object" then keys_unsorted | join(",") else empty end' 2>/dev/null)" || keys=""
+    fi
+    if [ -z "$keys" ]; then
+        log_warning "could not read the keys this install renders into the default entry of scaling-manager-scaling-policy-config; the next install keeps every key of it that it does not render"
+        return 0
+    fi
+    release="${LLMSM_IMAGE_TAG:-${LLMSM_IMAGE_DIGEST:-unknown}}"
+    jq -n --arg k "$LLMSM_OWNED_KEYS_ANNOTATION" --arg keys "$keys" --arg b "$LLMSM_OWNED_BY_ANNOTATION" --arg rel "$release" \
+        '{apiVersion: "v1", kind: "ConfigMap", metadata: {name: "scaling-manager-scaling-policy-config", annotations: {($k): $keys, ($b): $rel}}}' \
+        | yq -P '.' > "$tmp_overlay/policy-owned-patch.yaml"
+    cat >> "$tmp_overlay/kustomization.yaml" <<EOF
+- path: policy-owned-patch.yaml
   target:
     kind: ConfigMap
     name: scaling-manager-scaling-policy-config

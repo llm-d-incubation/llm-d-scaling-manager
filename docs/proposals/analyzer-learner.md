@@ -3977,7 +3977,10 @@ completions, as built").
   than 10 min later, once that average over 10 min reaches 0.90. The set is
   later than the bare tolerance's, toward the lower mu, by 5 x 0.2 / (1 - x)
   min for a step to x (1.4 min at 0.3, 2.2 at 0.55); a key's first set is on
-  its first reading. The clear is later, toward the higher, weighed figure,
+  its first reading. A key that has cleared sets again only once the 10 min
+  average is under 0.80 too (issue #60), twice the delay: at 15 % noise and
+  a per-cycle lag-one of 0.75 the 5 min average alone re-set a recovered
+  replica mid-recovery on 3 of 20 seeds. The clear is later, toward the higher, weighed figure,
   which still counts every replica at what it served. A set window of 10 min
   sealed the probe (a slow replica at 0.3 appearing at 20 min: 56 against a
   need of 18); at 5 min the probe's peaks are the bare tolerance's, and at

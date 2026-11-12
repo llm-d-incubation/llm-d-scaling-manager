@@ -110,7 +110,7 @@ after it.
 
 | check | FAIL when | WARN when | UNKNOWN when |
 | --- | --- | --- | --- |
-| `settings` | a key does not parse (a bad or repeated quota, an unknown mode, a negative `logVerbosity`, `utilizationShare` without a limiter, `quota` with no budget), or there are no settings at all | the settings are absent and the pre-v0.11.0 `scaling-manager-manager-config` is read instead | the settings cannot be read |
+| `settings` | the controller's own parser rejects a key (for example a bad quota, a `logVerbosity` above 10, or a `watchNamespaces` wider than the Deployment's), `utilizationShare` is on without a limiter, or there are no settings. The detail says what the controller does with each rejected key | a key is no setting or has no effect, or only the pre-v0.11.0 `scaling-manager-manager-config` exists | the settings cannot be read, or `watchNamespaces` is set and the controller's Deployment cannot be read |
 | `keda.crd` | `scaledobjects.keda.sh` is absent | | the CRD cannot be read |
 | `keda.version` | KEDA is older than 2.18 | an untested minor; before 2.21.0 (CVE-2026-77524); before 2.20.0 (a ScaledObject made just after a controller restart can stay unwired) | KEDA's operator cannot be read, or its image names no version |
 | `keda.networkpolicy` | the scaler NetworkPolicy, applied or in the file (`keda`; `openshift-keda` on OpenShift), does not admit the namespace KEDA runs in. The fix is a `kubectl patch`, or a `sed` on the file before it is applied | the external-metrics APIService is not KEDA's | where KEDA runs cannot be read |
@@ -158,6 +158,15 @@ and not with `prometheusInsecureSkipVerify`.
   grants nothing.
 - A ClusterRole, cluster-wide file: the same, but `list` Deployments, pods and
   PodMonitors in every namespace instead of by name.
+
+The checks read the namespaces the controller will manage. After the install,
+that is what its Deployment names, read the way the controller reads it: the
+`--watch-namespace` flag (empty means every namespace), else the container's
+`WATCH_NAMESPACE`, else `WATCH_NAMESPACE` in the config.yaml of
+`scaling-manager-manager-config`. Before the install there is no Deployment,
+and the checks read what the install files name: the controller's own
+namespace for the namespaced file, every namespace for the cluster-wide one.
+Either way, `watchNamespaces` may only narrow it.
 
 ## Not yet
 

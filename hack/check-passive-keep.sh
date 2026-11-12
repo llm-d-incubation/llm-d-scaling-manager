@@ -9,7 +9,9 @@
 # controller that read another LLMSM_PASSIVE at start is restarted; and that a
 # re-install keeps the keys of the live default entry it does not render (the
 # utilization-share optimizer block), writes the ones it does, and reports a
-# rendered key the live entry had set otherwise.
+# rendered key the live entry had set otherwise; and that a key the install
+# before rendered (the annotation it wrote) and this one does not is dropped,
+# while a key no install rendered is kept.
 #
 # It exists because the first version restored all of it AFTER `kubectl apply
 # -k`: a controller pod that started in between ran active, and a
@@ -42,7 +44,7 @@ BLUE=''; GREEN=''; YELLOW=''; RED=''; NC=''
 
 for fn in llmsm_live_passive llmsm_live_get llmsm_passive_want llmsm_scale_to_zero_want llmsm_resolve_scale_to_zero \
           llmsm_render_manager_config_patch deploy_scaling_manager_controller \
-          llmsm_render_policy_keep_patch llmsm_passive_restart_if_stale llmsm_yaml_scalar \
+          llmsm_render_policy_keep_patch llmsm_render_policy_owned_patch llmsm_passive_restart_if_stale llmsm_yaml_scalar \
           llmsm_merge_live_default llmsm_warn_optimizer_without_limiters; do
     declare -F "$fn" >/dev/null || { echo "FATAL: $fn is not defined after sourcing the library."; exit 2; }
 done
@@ -66,6 +68,8 @@ is() { [ "$1" = "$2" ]; }
 # set, overrides it for the scaling-policy ConfigMap alone.
 LIVE_MANAGER_CONFIG=''
 LIVE_DEFAULT=''
+LIVE_OWNED=''
+LIVE_OWNED_BY=''
 LIVE_STATUS_PASSIVE=''
 LIVE_STATUS_AT_START=''
 LIVE_STATUS_SOURCES=''
@@ -95,6 +99,7 @@ kubectl() {
                 timeout) echo 'Unable to connect to the server: dial tcp 10.0.0.1:6443: i/o timeout' >&2; return 1 ;;
             esac
             case "$*" in
+                *installer-rendered-default-keys*) printf '%s|%s' "$LIVE_OWNED" "$LIVE_OWNED_BY" ;;
                 *scaling-manager-manager-config*) printf '%s' "$LIVE_MANAGER_CONFIG" ;;
                 *) printf '%s' "$LIVE_DEFAULT" ;;
             esac ;;
@@ -373,6 +378,87 @@ else
     fail "a live entry that is not a mapping was kept from, failed, or replaced without a warning"
 fi
 
+# 6b. Owned means rendered by the install before, not by this one. The install
+#     before records the keys it rendered (an annotation); a live key it
+#     rendered that this render does not carry is a key a release stopped
+#     shipping, and is dropped with a warning. A key no install rendered is an
+#     operator key and is kept. With no annotation (a ConfigMap an older
+#     release wrote) every key is kept, as before.
+SHIPPED_KEYS="$(printf '%s\n' "$SHIPPED_DEFAULT" | yq 'keys | join(",")')"
+LIVE_OWNED="$SHIPPED_KEYS,retiredKnob"
+LIVE_OWNED_BY=v0.11.0
+keep_run "$SHIPPED_DEFAULT
+retiredKnob: 7
+defaultPolicy: batch
+$SHARE_BLOCK"
+check "owned keys: the annotation is read" is "$LLMSM_LIVE_DEFAULT_OWNED|$LLMSM_LIVE_DEFAULT_OWNED_BY" "$SHIPPED_KEYS,retiredKnob|v0.11.0"
+check "owned keys: a key the install before rendered and this one does not is dropped" is "$KEEP_RC $(kept 'has("retiredKnob")')" "0 false"
+check "owned keys: the drop is a warning naming the key and its live value" \
+    grep -qE '^    retiredKnob: 7$' "$WORK/keep.err"
+check "owned keys: the warning names the release that rendered it" warned 'install before .v0.11.0. rendered'
+check "owned keys: an operator key beside it is kept" is "$(kept '.defaultPolicy') $(kept '.optimizer.type')" "batch utilizationShare"
+check "owned keys: the kept keys do not name the dropped one" is "$(grep -c 'does not render: .*retiredKnob' "$WORK/keep.err")" 0
+
+LIVE_OWNED=''
+LIVE_OWNED_BY=''
+keep_run "$SHIPPED_DEFAULT
+retiredKnob: 7"
+check "no annotation (an older release): every key it does not render is kept" is "$KEEP_RC $(kept '.retiredKnob')" "0 7"
+check "no annotation: nothing is dropped" is "$(grep -c 'Dropping keys' "$WORK/keep.err")" 0
+
+# Only a retired key to drop: nothing is kept, so no patch; the apply writes
+# the render, which does not carry the key.
+LIVE_OWNED="$SHIPPED_KEYS,retiredKnob"
+LIVE_OWNED_BY=v0.11.0
+if keep_run "$SHIPPED_DEFAULT
+retiredKnob: 7" && no_patch && warned 'Dropping keys'; then
+    ok "owned keys: a retired key alone is dropped by applying the render, with a warning"
+else
+    fail "owned keys: a retired key alone was kept, failed (rc $KEEP_RC), or dropped in silence"
+fi
+
+# passive and limiters keep their own rules, whatever the annotation names.
+LIVE_OWNED="$SHIPPED_KEYS,passive,limiters"
+keep_run "$SHIPPED_DEFAULT
+passive: true
+limiters:
+  - type: gpu-inventory"
+check "owned keys: an owned passive is kept from the live entry" is "$(kept '.passive')" true
+check "owned keys: owned limiters are carried with LLMSM_LIMITER unset" is "$(kept '.limiters[0].type')" gpu-inventory
+check "owned keys: passive and limiters are never dropped" is "$(grep -c 'Dropping keys' "$WORK/keep.err")" 0
+LIVE_OWNED=''
+LIVE_OWNED_BY=''
+
+# The annotation this install writes: the keys of the render alone, and the
+# release, in a patch the apply carries.
+: > "$OVERLAY/kustomization.yaml"
+rm -f "$OVERLAY/policy-owned-patch.yaml"
+LLMSM_IMAGE_TAG=v0.11.1 llmsm_render_policy_owned_patch "$OVERLAY" 2> "$WORK/owned.err"
+owned_ann() { yq ".metadata.annotations.\"$1\"" "$OVERLAY/policy-owned-patch.yaml" 2>/dev/null; }
+check "owned patch: records the rendered keys" is "$(owned_ann llm-d.ai/installer-rendered-default-keys)" "$SHIPPED_KEYS"
+check "owned patch: records the release" is "$(owned_ann llm-d.ai/installer-rendered-default-release)" v0.11.1
+check "owned patch: targets the policy ConfigMap" is "$(yq '.metadata.name' "$OVERLAY/policy-owned-patch.yaml" 2>/dev/null)" scaling-manager-scaling-policy-config
+check "owned patch: is in the kustomization" grep -q 'policy-owned-patch.yaml' "$OVERLAY/kustomization.yaml"
+: > "$OVERLAY/kustomization.yaml"
+rm -f "$OVERLAY/policy-owned-patch.yaml"
+RENDERED_POLICY=''
+if llmsm_render_policy_owned_patch "$OVERLAY" 2> "$WORK/owned.err" && [ ! -e "$OVERLAY/policy-owned-patch.yaml" ] \
+    && grep -q '^\[WARNING\] could not read the keys' "$WORK/owned.err"; then
+    ok "owned patch: an unreadable render writes no annotation, with a warning, and does not stop the install"
+else
+    fail "owned patch: an unreadable render wrote an annotation, failed, or said nothing"
+fi
+RENDERED_POLICY="$SHIPPED_POLICY"
+# The keys must come from the render alone, so the annotation is written before the
+# keep patch adds the live entry to the default.
+order="$(declare -f deploy_scaling_manager_controller | grep -nE 'llmsm_render_policy_(owned|keep)_patch ' | cut -d: -f1 | tr '\n' ' ')"
+case "$order" in
+    *' '*' ') [ "${order%% *}" -lt "$(printf '%s' "$order" | cut -d' ' -f2)" ] \
+        && ok "the install records the owned keys before it adds the live ones" \
+        || fail "the install records the owned keys after the keep patch: $order" ;;
+    *) fail "the install no longer calls both policy patches: $order" ;;
+esac
+
 # 7. A policy that cannot be read is not a policy that does not exist: the
 #    read fails, keeps nothing, and the install's call refuses -- it never goes
 #    on to apply the rendered entry over what it could not see.
@@ -499,7 +585,7 @@ check "scale-to-zero: a render whose yq drops the value fails" is "$rc" 1
 check "scale-to-zero: deploy_scaling_manager_controller settles it" \
     is "$(declare -f deploy_scaling_manager_controller | grep -c 'llmsm_resolve_scale_to_zero')" 1
 
-EXPECT_CASES=91
+EXPECT_CASES=109
 echo
 echo "passive keep ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then
