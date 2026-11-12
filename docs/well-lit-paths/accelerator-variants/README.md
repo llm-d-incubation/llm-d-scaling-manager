@@ -20,7 +20,7 @@ You need [the saturation path](../scale-on-saturation/#start-here) in place,
 and two deployments of the same model behind one InferencePool (the set of pods one router serves) and one EPP
 (the llm-d request router). The namespace owner runs the steps.
 
-1. [Plan the registration](../../guides/install-in-namespace/README.md#4-register-the-workloads) with `make scaledobjects-plan`, and give both entries the same `modelID`.
+1. [Plan the registration](../../guides/install-in-namespace/README.md#register-the-workloads) with `make scaledobjects-plan`, and give both entries the same `modelID`.
 2. Set each entry's `variantCost` to the price of one replica ([what that means](#what-it-needs)), then run `make scaledobjects-apply`.
 3. Check it works: `llmsm_desired_replicas{exported_namespace="<ns>"}` has one series per variant, and the cheaper one per unit of capacity grows first.
 

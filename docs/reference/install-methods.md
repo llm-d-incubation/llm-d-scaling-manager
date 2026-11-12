@@ -5,6 +5,32 @@ a direct Kustomize apply, or seeing exactly what the script does.
 
 > The guides are the supported paths. This page is reference.
 
+## The release files
+
+Each release attaches rendered manifests, pinned to its image by digest:
+`kubectl` installs them with no checkout. The guides lead with them
+([in a namespace](../guides/install-in-namespace/),
+[cluster-wide](../guides/install-cluster-wide/)). What each file holds:
+[the release process](../developer-guide/release-process.md).
+
+### Verify the release files
+
+The files are signed by the release workflow's identity, as the image is.
+Download a file, its `.sigstore.json` bundle and `SHA256SUMS`, then, with
+cosign 2.4 or later:
+
+```bash
+V=<release>
+cosign verify-blob scaling-manager-namespaced.yaml \
+  --bundle scaling-manager-namespaced.yaml.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Verify before the `sed` that fills in the namespace: the signature covers the
+file as downloaded.
+
 ## Deployment methods
 
 ### Method 1: Automated Deployment Script (Recommended)

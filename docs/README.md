@@ -37,34 +37,37 @@ follow the guide that path links to. Nothing installed yet? The
 1. **Have a model to scale.** llm-d serving in a namespace, with the EPP's
    `flowControl` feature gate on, plus KEDA and Prometheus on the cluster.
    Nothing serving yet? [Install a small llm-d model](guides/install-small-model/) first.
-2. **Install the scaling manager** into that namespace. A cluster admin runs
-   the one-time setup; the namespace owner runs the rest. That default suits a
-   single team or a trusted cluster. On a shared cluster, the admin runs the
-   controller out of the tenant's reach: `LLMSM_NS=llmsm-<ns> LLMSM_WATCH_NS=<ns>`
-   on `setup-prereqs` and `deploy-scaling-manager`
+2. **Install the scaling manager** into that namespace, from the files
+   attached to the release, with `kubectl`. A cluster admin applies the
+   `part=admin` objects once (and later gives KEDA its client certificate);
+   the namespace owner sets the Prometheus URL in the settings file, runs the
+   preflight check and applies the rest. It starts passive: it decides and
+   publishes, and changes no replica count.
+
+   ```bash
+   # cluster admin, once per namespace
+   kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+   kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin
+   kubectl apply -f scaling-manager-model-namespace.yaml
+   # namespace owner
+   kubectl create -f scaling-manager-settings.yaml                                     # once
+   kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller   # read-only check
+   kubectl create -f scaling-manager-scaler-tls.yaml                                   # once
+   kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
+   ```
+
+   From a checkout, `make deploy-scaling-manager` installs the same thing and
+   finds Prometheus and KEDA itself. On a shared cluster, the admin runs the
+   controller out of the tenant's reach
    ([cluster-admin setup](guides/admin-cluster-setup/README.md#keeping-the-controller-out-of-the-tenants-reach)).
    Either way, the bound that holds is a GPU ResourceQuota on the namespace
    ([bound at admission](guides/admin-cluster-setup/README.md#bound-the-namespaces-gpus-at-admission)).
 
-   ```bash
-   export NAMESPACE=<the namespace running llm-d>
-   make check-prereqs          # read-only: your permissions, the namespace, Prometheus
-   make setup-prereqs          # once per namespace, by a cluster admin
-   make deploy-scaling-manager             # the scaling manager itself
-   ```
+3. **Register your model servers, then let it scale.** Nothing is sized until
+   it has a KEDA ScaledObject naming the scaler; then set `passive: "false"`
+   in the settings.
 
-3. **Prepare and register your model servers.** Nothing is scaled until it has a ScaledObject:
-
-   ```bash
-   make workload-patch         # writes a patch (drain hook, weights, engine cache); apply it through your model-server chart
-   make scaledobjects-plan     # lists your model servers, writes an editable plan
-   make scaledobjects-apply    # creates the ScaledObjects
-   ```
-
-   With the controller out of your reach, add `LLMSM_NS=llmsm-<ns> LLMSM_WATCH_NS=<ns>`
-   to both, so every trigger names the controller in `llmsm-<ns>`.
-
-The full walk-through, with what each step checks:
+The full walk-through, with the download, the namespace and each check:
 [install the scaling manager in a namespace](guides/install-in-namespace/).
 
 ### What success looks like

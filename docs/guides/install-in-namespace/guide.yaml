@@ -4,26 +4,95 @@
 name: install-in-namespace
 
 prerequisites:
+  download:
+    note: The release files. Pick the release you install.
+    run: |
+      V=<release, for example v0.11.0>
+      URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+      for f in namespaced settings preflight scaler-tls model-namespace keda-auth; do
+        curl -fsSLO $URL/scaling-manager-$f.yaml
+      done
   namespace:
-    note: The namespace your model servers run in.
-    run: export NAMESPACE=<your-namespace>
-  check:
-    note: Read-only. Reports the namespace, its model servers and the Prometheus it found.
-    run: make check-prereqs
+    note: The namespace your model servers run in. The controller runs there too.
+    run: |
+      export NAMESPACE=<your-namespace>
+      for f in scaling-manager-*.yaml; do
+        sed -i -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" "$f"
+      done
 
 deploy:
-  prereqs:
-    run: make setup-prereqs
+  admin:
+    note: Cluster admin, once per namespace. RBAC, ServiceAccounts, the monitors, the scaler NetworkPolicy, and the preflight's read-only RBAC.
+    run: |
+      kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin
+      kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=admin
+      kubectl apply -f scaling-manager-model-namespace.yaml
+  settings:
+    note: Set prometheusURL in scaling-manager-settings.yaml first. Created once, never applied again.
+    run: kubectl create -f scaling-manager-settings.yaml
+  promca:
+    note: Only when a private CA signed Prometheus's certificate.
+    run: |
+      kubectl create secret generic scaling-manager-prometheus-ca -n $NAMESPACE --from-file=ca.crt=<ca file>
+      kubectl patch configmap scaling-manager-settings -n $NAMESPACE --type merge \
+        -p '{"data":{"prometheusCACertPath":"/etc/scaling-manager-prometheus-ca/ca.crt"}}'
+  preflight:
+    note: Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
+    run: |
+      kubectl delete job scaling-manager-preflight -n $NAMESPACE --ignore-not-found
+      kubectl apply -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller
+      until kubectl get job scaling-manager-preflight -n $NAMESPACE \
+          -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
+      kubectl logs -n $NAMESPACE job/scaling-manager-preflight
+  preflightdone:
+    note: Cluster admin, after the last run. The preflight's cluster reads are needed only while it runs.
+    run: kubectl delete clusterrolebinding scaling-manager-preflight-$NAMESPACE --ignore-not-found
   controller:
-    run: make deploy-scaling-manager
+    note: The scaler's certificate Secrets (created once, empty; the controller fills them), then the controller.
+    run: |
+      kubectl create -f scaling-manager-scaler-tls.yaml
+      kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
+      kubectl rollout status deployment/scaling-manager-controller-manager -n $NAMESPACE
+  kedaauth:
+    note: Cluster admin, in this directory. Prints the steps that give KEDA its client certificate.
+    run: |
+      export KEDA_NS=<the namespace KEDA runs in>
+      kubectl get configmap scaling-manager-controller-status -n $NAMESPACE \
+        -o jsonpath='{.data.scalerTLSAction}{"\n"}'
+  mtls:
+    note: Prints "mutual TLS" once KEDA's side is in place and the controller restarted.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n $NAMESPACE \
+        -o jsonpath='{.data.scalerTLS}{"\n"}'
   readiness:
-    note: Report what the model servers still need. Changes nothing.
+    note: From a checkout of the same release. Reports what the model servers still need. Changes nothing.
     run: make workload-patch NAMESPACE=${NAMESPACE}
   register:
+    note: One ScaledObject per model-server Deployment. Edit the names, the modelID and the bounds.
     run: |
-      make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
-      # edit scaling-manager-plan.yaml: apply: yes|no|adopt, the modelID, the replica bounds
-      make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+      cat > scaledobject.yaml <<EOF
+      apiVersion: keda.sh/v1alpha1
+      kind: ScaledObject
+      metadata:
+        name: <deployment>-llmsm
+        namespace: ${NAMESPACE}
+      spec:
+        scaleTargetRef:
+          name: <deployment>
+        minReplicaCount: 1
+        maxReplicaCount: 10
+        triggers:
+        - type: external-push
+          name: scaling-manager-external-scaler
+          metricType: AverageValue
+          metadata:
+            scalerAddress: scaling-manager-external-scaler.${NAMESPACE}.svc:9090
+            modelID: <the model it serves>
+          authenticationRef:
+            name: scaling-manager-external-scaler-${NAMESPACE}
+            kind: ClusterTriggerAuthentication
+      EOF
+      kubectl apply -f scaledobject.yaml
 
 verify:
   objects:
@@ -38,8 +107,32 @@ visualize:
   smoke:
     run: make benchmark-smoke NAMESPACE=${NAMESPACE}
 
+checkout:
+  install:
+    note: The same install from a checkout of the release tag.
+    run: |
+      git checkout <release>
+      export NAMESPACE=<your-namespace>
+      make check-prereqs
+      make setup-prereqs           # cluster admin
+      make deploy-scaling-manager
+
 cleanup:
   uninstall:
-    run: make undeploy-scaling-manager
+    note: Your ScaledObjects stay; delete or repoint them first. Keeps the scaler CA, for a reinstall.
+    run: |
+      kubectl delete -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
+      kubectl delete -f scaling-manager-preflight.yaml -l scaling-manager.llmd.ai/part=controller --ignore-not-found
+      kubectl delete secret scaling-manager-prometheus-ca -n $NAMESPACE --ignore-not-found
+      kubectl delete configmap,secret -n $NAMESPACE \
+        -l 'app.kubernetes.io/part-of=scaling-manager,scaling-manager.llmd.ai/scaler-tls!=ca'
+  kedaauth:
+    note: Cluster admin. The part=admin objects, the preflight's RBAC, the monitors, and KEDA's side of mutual TLS.
+    run: |
+      kubectl delete -f scaling-manager-namespaced.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-preflight.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-model-namespace.yaml --ignore-not-found
+      kubectl delete -f scaling-manager-keda-auth.yaml --ignore-not-found
+      kubectl delete secret scaling-manager-external-scaler-$NAMESPACE -n $KEDA_NS --ignore-not-found
   model:
     run: make benchmark-teardown BENCHMARK_NAMESPACE=${NAMESPACE}

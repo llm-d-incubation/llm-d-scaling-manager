@@ -61,11 +61,10 @@ RELEASE_FILES=(
     scaling-manager-preflight-cluster.yaml
 )
 
-# Until the controller reads scaling-manager-settings (phase 2 of the
-# proposal), these files cannot run a controller on their own: every file says
-# so in its first lines, and the release notes repeat it. Remove this, and the
-# check's assertion on it, when phase 2 lands.
-PREVIEW_NOTE="PREVIEW: not yet installable on its own. Install with make deploy-scaling-manager from a checkout of this tag (docs/guides/install-in-namespace)."
+# The files no end-to-end test installs yet. Each says so in its header;
+# hack/check-release-manifests.sh asserts the line on exactly these files.
+UNTESTED_FILES="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml scaling-manager-namespaced-openshift.yaml scaling-manager-preflight-cluster.yaml"
+UNTESTED_NOTE="NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests)."
 
 die() { echo "release-manifests: $*" >&2; exit 1; }
 
@@ -178,6 +177,10 @@ main_manifest() {
     # files leave the binding out: scaling-manager-metrics-reader.yaml is that
     # binding with the account as a placeholder. On OpenShift the binding names
     # the install own metrics-scraper account and stays.
+    # The Deployment mounts Secret scaling-manager-prometheus-ca, optional, at
+    # /etc/scaling-manager-prometheus-ca (the path the installer uses): the
+    # operator creates it and sets prometheusCACertPath to its ca.crt. Without
+    # the mount, a Prometheus with a private CA could not be verified.
     NS="$ns" KEDA_NS="$keda_ns" PLATFORM="$platform" yq '
         select((.kind == "Namespace"
             or (.kind == "ConfigMap" and (.metadata.name == "scaling-manager-manager-config" or .metadata.name == "scaling-manager-scaling-policy-config"))
@@ -186,6 +189,8 @@ main_manifest() {
             or ((.kind == "ClusterRole" or .kind == "ClusterRoleBinding") and (.metadata.name | test("^scaling-manager-kueue-reader-")))) | not)
         | (select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional) = true
         | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .args) += ["--external-scaler-tls-bootstrap=true"]
+        | (select(.kind == "Deployment") | .spec.template.spec.volumes) += [{"name": "scaling-manager-prometheus-ca", "secret": {"secretName": "scaling-manager-prometheus-ca", "optional": true, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]
+        | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .volumeMounts) += [{"name": "scaling-manager-prometheus-ca", "mountPath": "/etc/scaling-manager-prometheus-ca", "readOnly": true}]
         | (select(.kind == "ServiceMonitor") | .spec.endpoints[].tlsConfig | select(has("serverName")) | .serverName) |= sub("PLACEHOLDER-NAMESPACE", strenv(NS))
         | (select(.kind == "NetworkPolicy") | .spec.ingress[] | select(has("from")) | .from[] | select(has("namespaceSelector")) | .namespaceSelector.matchLabels | select(has("kubernetes.io/metadata.name")) | .["kubernetes.io/metadata.name"]) = strenv(KEDA_NS)
         | (select(.kind == "ClusterRole" and .metadata.name == "scaling-manager-policy-namespace-reader-role") | .rules[] | select(.resources[0] == "namespaces") | .resourceNames) = [strenv(NS), "scaling-manager-policy"]
@@ -231,7 +236,7 @@ per_install_names() {
 # header <file> <what> <how>: the comment every file starts with.
 header() {
     printf '# %s, llm-d-scaling-manager %s\n' "$1" "$VERSION"
-    printf '# %s\n' "$PREVIEW_NOTE"
+    case " $UNTESTED_FILES " in *" $1 "*) printf '# %s\n' "$UNTESTED_NOTE" ;; esac
     printf '# %s\n' "$2"
     [ -z "$3" ] || printf '# %s\n' "$3"
     printf '# Rendered by deploy/release-manifests.sh; see docs/proposals/install-from-release.md.\n'

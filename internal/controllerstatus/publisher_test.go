@@ -83,8 +83,9 @@ func TestFlushCreatesOnceAndSkipsUnchanged(t *testing.T) {
 		t.Fatalf("first flush: %v", err)
 	}
 	cm := stored(t, c)
-	if cm.Labels[labelName] != labelNameValue || cm.Labels[labelComponent] != componentValue {
-		t.Errorf("labels = %v", cm.Labels)
+	if cm.Labels[labelName] != labelNameValue || cm.Labels[labelComponent] != componentValue ||
+		cm.Labels["app.kubernetes.io/part-of"] != "scaling-manager" {
+		t.Errorf("labels = %v; the uninstall by part-of label would not find it", cm.Labels)
 	}
 	if got := cm.Data[KeyFormatVersion]; got != FormatVersion {
 		t.Errorf("formatVersion = %q", got)
@@ -145,7 +146,7 @@ func TestFlushUpdatesExistingConfigMap(t *testing.T) {
 	if _, ok := cm.Data["stale"]; ok || cm.Data[KeyFormatVersion] != FormatVersion {
 		t.Errorf("data = %v, want the desired content only", cm.Data)
 	}
-	if cm.Labels[labelComponent] != componentValue {
+	if cm.Labels[labelComponent] != componentValue || cm.Labels["app.kubernetes.io/part-of"] != "scaling-manager" {
 		t.Errorf("labels = %v", cm.Labels)
 	}
 	if w.creates != 0 || w.updates != 1 {

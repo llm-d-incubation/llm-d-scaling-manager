@@ -9,26 +9,13 @@ prerequisites:
     run: |
       export NAMESPACE=<your-namespace>
       export CONTROLLER_NAMESPACE=${NAMESPACE}
-  check:
-    note: Read-only. Reports the namespace, its model servers and the Prometheus it found.
-    run: make check-prereqs
 
 deploy:
-  prereqs:
-    run: make setup-prereqs
-  controller:
-    note: The controller, passive for every model. It computes and publishes, and changes no replica count.
-    run: make deploy-scaling-manager LLMSM_PASSIVE=true
   passivedefault:
-    note: Prints true when the running controller started passive.
+    note: Prints true while the controller is passive.
     run: |
       kubectl get configmap scaling-manager-controller-status -n ${CONTROLLER_NAMESPACE} \
         -o jsonpath='{.data.passiveDefault}{"\n"}'
-  register:
-    run: |
-      make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
-      # edit passive-plan.yaml: apply: yes for a model scaled by hand, no for one KEDA scales
-      make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
   observevars:
     note: The model KEDA scales today, its ScaledObject, and the model it serves.
     run: |
@@ -66,13 +53,13 @@ verify:
 
 active:
   readiness:
-    note: Report what the model servers still need. Changes nothing.
+    note: From a checkout of the same release. Report what the model servers still need. Changes nothing.
     run: make workload-patch NAMESPACE=${NAMESPACE}
   model:
     note: The model to make active.
     run: export MODEL_ID=<the model it serves>
   switch:
-    note: Make one model active. The rest stay passive.
+    note: Make one model active. The rest stay passive. Creates the scaling-policy ConfigMap when there is none.
     run: |
       cat > passive-trial.yaml <<EOF
       data:
@@ -81,15 +68,18 @@ active:
           namespace: ${NAMESPACE}
           passive: false
       EOF
+      kubectl create configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} 2>/dev/null || true
       kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --patch-file passive-trial.yaml
   back:
-    note: Make it passive again. It inherits LLMSM_PASSIVE=true.
+    note: Make it passive again. It inherits the passive setting.
     run: |
       kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} \
         --type json -p '[{"op":"remove","path":"/data/passive-trial"}]'
   all:
-    note: Make every model active. The controller restarts to read it.
-    run: make deploy-scaling-manager LLMSM_PASSIVE=false
+    note: Make every model active. Live, no restart.
+    run: |
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p '{"data":{"passive":"false"}}'
 
 share:
   products:
@@ -100,31 +90,53 @@ share:
     run: |
       export ACCELERATOR=<gpu product>
       export GPUS=<gpus>
-  install:
-    note: The controller, passive, with a GPU quota for the models to share.
+  quota:
+    note: A GPU quota for the models to share. Live.
     run: |
-      make deploy-scaling-manager LLMSM_PASSIVE=true \
-        LLMSM_LIMITER=quota LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
-  check:
-    note: Read-only. Is there a budget to share, and does the GPU product resolve.
-    run: make utilization-share-check
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p "{\"data\":{\"limiter\":\"quota\",\"quotas\":\"${ACCELERATOR}=${GPUS}\"}}"
   shadow:
-    note: Write the optimizer block, in shadow. Activate refuses a policy without it.
-    run: make utilization-share-shadow
+    note: Utilization share in shadow. Live.
+    run: |
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p '{"data":{"utilizationShare":"shadow"}}'
+  status:
+    note: Prints the limiter and the utilization-share mode in force.
+    run: |
+      kubectl get configmap scaling-manager-controller-status -n ${CONTROLLER_NAMESPACE} \
+        -o jsonpath='{.data.limiter} {.data.utilizationShare}{"\n"}'
   activate:
-    note: Configure the optimizer to act. While a model of a group is passive, the group only reports.
-    run: make utilization-share-activate
+    note: The pod-patch grant sharing needs, then the switch. While a model of a group is passive, the group only reports.
+    run: |
+      sed -e "s/__NAMESPACE__/${CONTROLLER_NAMESPACE}/g" -e "s/__MODEL_NAMESPACE__/${NAMESPACE}/g" \
+        scaling-manager-activate.yaml | kubectl apply -f -
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p '{"data":{"utilizationShare":"active"}}'
   log:
     note: What it would move, from the controller's log.
     run: |
       kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manager --tail=-1 \
         | grep 'Utilization share: would rebalance'
   live:
-    note: Make every model active. The re-install keeps the optimizer block.
+    note: Make every model active. Live, no restart.
     run: |
-      make deploy-scaling-manager LLMSM_PASSIVE=false
-      make utilization-share-status
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p '{"data":{"passive":"false"}}'
+
+checkout:
+  install:
+    note: The same passive install from a checkout of the release tag.
+    run: |
+      make check-prereqs
+      make setup-prereqs           # cluster admin
+      make deploy-scaling-manager LLMSM_PASSIVE=true
 
 cleanup:
-  uninstall:
-    run: make undeploy-scaling-manager
+  share:
+    note: Sharing off first, so no transfer marks are left on pods. Wait until the status no longer says draining.
+    run: |
+      kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+        -p '{"data":{"utilizationShare":"off"}}'
+  policy:
+    note: The scaling-policy ConfigMap step 3 of "Make one model active" created, if you created it. The label-based uninstall does not find it.
+    run: kubectl delete configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --ignore-not-found

@@ -7,69 +7,40 @@ today. It reads the same metrics, decides what it would order, and publishes
 that, but it changes no replica count. You compare its numbers with yours, then
 hand it one model at a time.
 
-This guide installs it passive in one namespace, shows where to read what it
-would have done, and switches one model to active and back. The last part does
-the same for the [utilization-share optimizer](#utilization-share-in-passive-mode).
-Every setting is described in [the scaling policy](../../reference/scaling-policy.md#passive).
+The release files install passive by default, so this guide starts from that
+install. It shows where to read what the controller would have done, switches
+one model to active and back, and does the same for the
+[utilization-share optimizer](#utilization-share-in-passive-mode). Every
+setting is described in [the scaling policy](../../reference/scaling-policy.md#passive).
 
 ## Prerequisites
 
 - [ ] llm-d model servers in the namespace. No model yet? [Install a small
   llm-d model](../install-small-model/).
 - [ ] KEDA and a Prometheus, as for [any install](../install-in-namespace/#prerequisites).
-- [ ] A cluster admin has run step 1, or you are a cluster admin.
-- [ ] `kubectl`, `jq`, `yq` and `make`, in a checkout of this repository.
+- [ ] `kubectl`, and the release files you installed from.
 
 <!-- guide:prerequisites start -->
 ```bash
 # The namespace your model servers run in, and where the controller runs (the same one unless your admin runs it elsewhere).
 export NAMESPACE=<your-namespace>
 export CONTROLLER_NAMESPACE=${NAMESPACE}
-
-# Read-only. Reports the namespace, its model servers and the Prometheus it found.
-make check-prereqs
 ```
 <!-- guide:prerequisites end -->
 
-If `check-prereqs` says the namespace is empty or missing, fix `NAMESPACE`
-before going on.
-
 ## Installation Instructions
 
-### 1. Cluster admin: prepare the namespace
+### 1. Install the controller
 
-<!-- guide:deploy.prereqs start -->
-```bash
-make setup-prereqs
-```
-<!-- guide:deploy.prereqs end -->
+Follow [Install the scaling manager in a namespace](../install-in-namespace/),
+steps 1 to 4. Leave `passive: "true"` in the settings, as shipped. Install it
+before you register any model, so that it never acts on one.
 
-This is the same step as in [Install the scaling manager in a
-namespace](../install-in-namespace/#1-cluster-admin-prepare-the-namespace).
-
-### 2. Install the controller, passive
-
-Install it passive before you register any model, so that it never acts on one.
-
-<!-- guide:deploy.controller start -->
-```bash
-# The controller, passive for every model. It computes and publishes, and changes no replica count.
-make deploy-scaling-manager LLMSM_PASSIVE=true
-```
-<!-- guide:deploy.controller end -->
-
-You should see this warning near the end:
-
-```text
-[WARNING] Passive mode is ON controller-wide (LLMSM_PASSIVE=true): the controller computes and publishes, and changes no replica count. Pass LLMSM_PASSIVE=false to turn it off.
-```
-
-Then check the running controller read it. It reads `LLMSM_PASSIVE` only when
-it starts:
+### 2. Check it is passive
 
 <!-- guide:deploy.passivedefault start -->
 ```bash
-# Prints true when the running controller started passive.
+# Prints true while the controller is passive.
 kubectl get configmap scaling-manager-controller-status -n ${CONTROLLER_NAMESPACE} \
   -o jsonpath='{.data.passiveDefault}{"\n"}'
 ```
@@ -83,25 +54,15 @@ yet; wait a minute and run it again.
 The scaling manager sees a model only through a KEDA ScaledObject with its
 trigger. What you do depends on what scales the model today.
 
-**Scaled by hand, or not at all.** Register it with the plan:
+**Scaled by hand, or not at all.** Create its ScaledObject as in
+[Register the workloads](../install-in-namespace/#register-the-workloads). Set
+`minReplicaCount` and `maxReplicaCount` so the model's current replica count
+lies between them; a count outside them moves to the nearest bound. This is
+the `hold` mode: the count stays where it is, and `kubectl scale` still
+changes it.
 
-<!-- guide:deploy.register start -->
-```bash
-make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
-# edit passive-plan.yaml: apply: yes for a model scaled by hand, no for one KEDA scales
-make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=passive-plan.yaml
-```
-<!-- guide:deploy.register end -->
-
-Set `minReplicas` and `maxReplicas` in the plan so the model's current replica
-count lies between them; a count outside them moves to the nearest bound.
-This is the `hold` mode: the count stays where it is, and `kubectl scale`
-still changes it.
-
-**Scaled by KEDA.** The plan writes `apply: "no"` for it, with a note that
-offers `adopt`. Leave it at `no`: `adopt` replaces the ScaledObject's triggers
-with the scaling manager's. Add the scaling manager's trigger beside yours
-instead:
+**Scaled by KEDA.** Do not replace its triggers. Add the scaling manager's
+beside yours:
 
 <!-- guide:deploy.observevars start -->
 ```bash
@@ -132,9 +93,7 @@ kubectl patch scaledobject ${SCALEDOBJECT} -n ${NAMESPACE} --type json --patch-f
 ```
 <!-- guide:deploy.observe end -->
 
-KEDA keeps scaling on your triggers. This is the `observe` mode. `MODEL_ID`
-is the `modelID` the plan wrote for that workload. Before you run the plan
-again, read [A new plan offers adopt](#a-new-plan-offers-adopt).
+KEDA keeps scaling on your triggers. This is the `observe` mode.
 
 **Scaled by an HPA you wrote.** KEDA cannot share a workload with another
 HPA: two HPAs on one workload fight over its replica count. Move that HPA's
@@ -163,19 +122,18 @@ one from the scaler KEDA calls, with the mode and the setting that decided it:
 2026-11-08T18:20:25Z	INFO	steadystate/passive.go:101	Passive mode entered: the controller computes and publishes for this variant and changes none of its replica counts	{"namespace": "llm-d-sim", "model": "test-model", "variant": "dev-model-decode", "mode": "observe", "source": "LLMSM_PASSIVE", "foreignTriggers": 1}
 ```
 
-`mode` is `hold` for a model registered with the plan and `observe` for one
-whose KEDA triggers you kept. `observe-unsafe` means a `scalingModifiers`
-formula names the scaling manager's trigger; take it out of the formula.
+`mode` is `hold` for a model with the scaling manager's trigger alone and
+`observe` for one whose KEDA triggers you kept. `observe-unsafe` means a
+`scalingModifiers` formula names the scaling manager's trigger; take it out of
+the formula.
 
 ### 2. Compare what it would order with what runs
 
-Open the operational dashboard ([The dashboard](../install-in-namespace/#3-optional-see-it-in-a-dashboard))
-and read the **Replica Overview** panel. For each variant it draws
-`<variant> - current`, the replicas running, and `<variant> - desired`, what
-the scaling manager would run. In passive mode the two lines differ, and the
-gap is what it would have done.
-
-The same in Prometheus. `exported_namespace` is the model's namespace:
+The operational dashboard's **Replica Overview** panel draws, for each
+variant, `<variant> - current`, the replicas running, and `<variant> -
+desired`, what the scaling manager would run. In passive mode the two lines
+differ, and the gap is what it would have done. The same in Prometheus,
+where `exported_namespace` is the model's namespace:
 
 ```promql
 # what it would run, minus what runs, for the passive variants only
@@ -195,12 +153,8 @@ kubectl get events -n ${NAMESPACE} --field-selector reason=PassiveRecommendation
 <!-- guide:verify.events end -->
 
 The message reads `passive: would scale from 3 to 5 replicas`, followed by the
-reason.
-
-Leave it through each model's busy period, typically a day. A positive gap
-during a peak is a scale-up it would have made; a negative gap when load is
-low is capacity it would have released. See [Reading the
-gap](#reading-the-gap) for what the gap cannot tell you.
+reason. Leave it through each model's busy period, typically a day. See
+[Reading the gap](#reading-the-gap) for what the gap cannot tell you.
 
 ## Make one model active
 
@@ -208,26 +162,20 @@ gap](#reading-the-gap) for what the gap cannot tell you.
 
 <!-- guide:active.readiness start -->
 ```bash
-# Report what the model servers still need. Changes nothing.
+# From a checkout of the same release. Report what the model servers still need. Changes nothing.
 make workload-patch NAMESPACE=${NAMESPACE}
 ```
 <!-- guide:active.readiness end -->
 
 Apply what it reports before the model scales. Without a drain hook, every
-scale-down cuts the responses a replica is still writing. See [Make the
-workloads safe to scale](../install-in-namespace/#3-make-the-workloads-safe-to-scale).
+scale-down cuts the responses a replica is still writing.
 
 ### 2. Hand the model over
 
-For a model in `hold`, there is nothing to do here.
-
-For a model in `observe`, remove KEDA's other triggers first. Run the plan
-again: it now offers `apply: adopt` for that workload, because its
-ScaledObject carries the scaling manager's trigger. Keep `adopt` for that
-entry and apply. The ScaledObject keeps its name and bounds, its triggers are
-replaced by the scaling manager's alone, and the model moves to `hold` at its
-current count. Done the other way round, both triggers scale the model for a
-while, and the HPA follows whichever asks for more.
+For a model in `hold`, there is nothing to do here. For a model in `observe`,
+remove KEDA's other triggers from its ScaledObject first, so the scaling
+manager's trigger is the only one. Done the other way round, both triggers
+scale the model for a while, and the HPA follows whichever asks for more.
 
 ### 3. Switch it to active
 
@@ -240,7 +188,7 @@ export MODEL_ID=<the model it serves>
 
 <!-- guide:active.switch start -->
 ```bash
-# Make one model active. The rest stay passive.
+# Make one model active. The rest stay passive. Creates the scaling-policy ConfigMap when there is none.
 cat > passive-trial.yaml <<EOF
 data:
   passive-trial: |
@@ -248,27 +196,21 @@ data:
     namespace: ${NAMESPACE}
     passive: false
 EOF
+kubectl create configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} 2>/dev/null || true
 kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --patch-file passive-trial.yaml
 ```
 <!-- guide:active.switch end -->
 
-The key is read live. Run the [log check](#1-check-each-model-is-passive)
+The entry is read live. Run the [log check](#1-check-each-model-is-passive)
 again. You should see `Passive mode left` for this model, with
-`"source": "perModel"`:
-
-```text
-2026-11-08T18:21:46Z	INFO	scaler/passive.go:60	Passive mode left: the external scaler answers KEDA with the controller's decision again	{"namespace": "llm-d-sim", "scaledObject": "dev-model-decode-keda", "model": "test-model", "mode": "active", "previousMode": "observe", "source": "perModel"}
-2026-11-08T18:21:56Z	INFO	steadystate/passive.go:103	Passive mode left: the controller scales this variant again, under the HPA's own behavior	{"namespace": "llm-d-sim", "model": "test-model", "variant": "dev-model-decode", "mode": "active", "source": "perModel", "foreignTriggers": 1}
-```
-
-From now on a scale-up applies at the next HPA sync,
+`"source": "perModel"`. From now on a scale-up applies at the next HPA sync,
 and a scale-down waits KEDA's 300-second window.
 
 ### 4. Switch it back
 
 <!-- guide:active.back start -->
 ```bash
-# Make it passive again. It inherits LLMSM_PASSIVE=true.
+# Make it passive again. It inherits the passive setting.
 kubectl patch configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} \
   --type json -p '[{"op":"remove","path":"/data/passive-trial"}]'
 ```
@@ -284,16 +226,13 @@ step 2. Then:
 
 <!-- guide:active.all start -->
 ```bash
-# Make every model active. The controller restarts to read it.
-make deploy-scaling-manager LLMSM_PASSIVE=false
+# Make every model active. Live, no restart.
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p '{"data":{"passive":"false"}}'
 ```
 <!-- guide:active.all end -->
 
-You should see `Restarting the controller` in its output, and then `false`
-from the [`passiveDefault` check](#2-install-the-controller-passive).
-
-This re-install keeps the utilization-share optimizer block, if you turned it
-on, in the mode it was in.
+The [`passiveDefault` check](#2-check-it-is-passive) then prints `false`.
 
 ## Utilization share in passive mode
 
@@ -302,12 +241,8 @@ models under one quota. A group of models that holds a passive model never
 moves anything: it computes and publishes the shares, and starts no transfer.
 So a passive install shows you what sharing would do before it does anything.
 
-If your models are already active and you only want sharing to report first,
-you do not need passive mode: use the optimizer's own shadow mode in [Turn on
-the utilization-share optimizer, safely](../utilization-share/).
-
 You need two or more models in the namespace, on one GPU product. Find that
-product:
+product, and say how many of its GPUs the models may hold together:
 
 <!-- guide:share.products start -->
 ```bash
@@ -315,9 +250,6 @@ product:
 kubectl get nodes -L nvidia.com/gpu.product
 ```
 <!-- guide:share.products end -->
-
-The `GPU.PRODUCT` column names it, for example `NVIDIA-A100-PCIE-80GB`. Set
-it, and how many of its GPUs the models may hold together:
 
 <!-- guide:share.vars start -->
 ```bash
@@ -327,55 +259,50 @@ export GPUS=<gpus>
 ```
 <!-- guide:share.vars end -->
 
-Install with a quota for the models to share. Run this in place of step 2, or
-after it: the controller stays passive and gets the quota.
+Each step is a patch of the settings, read live:
 
-<!-- guide:share.install start -->
+<!-- guide:share.quota start -->
 ```bash
-# The controller, passive, with a GPU quota for the models to share.
-make deploy-scaling-manager LLMSM_PASSIVE=true \
-  LLMSM_LIMITER=quota LLMSM_QUOTAS="${ACCELERATOR}=${GPUS}"
+# A GPU quota for the models to share. Live.
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p "{\"data\":{\"limiter\":\"quota\",\"quotas\":\"${ACCELERATOR}=${GPUS}\"}}"
 ```
-<!-- guide:share.install end -->
-
-Register the models as in step 3, then check there is a budget:
-
-<!-- guide:share.check start -->
-```bash
-# Read-only. Is there a budget to share, and does the GPU product resolve.
-make utilization-share-check
-```
-<!-- guide:share.check end -->
-
-The check reads the GPU product the controller resolved from its status
-ConfigMap, so it names the product once the controller has finished a cycle.
-Before that it warns `records no resolvedAccelerators`; rerun it after a
-minute. A warning `resolved no accelerator in its last cycle` means every model
-is at zero replicas or none names its GPU product, and rerunning does not
-clear the second. Go on when `no AcceleratorNotResolved events` reads `[OK]`.
-
-Turn the optimizer on in shadow first, then configure it to act. Activate
-refuses a policy that has no optimizer block yet:
+<!-- guide:share.quota end -->
 
 <!-- guide:share.shadow start -->
 ```bash
-# Write the optimizer block, in shadow. Activate refuses a policy without it.
-make utilization-share-shadow
+# Utilization share in shadow. Live.
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p '{"data":{"utilizationShare":"shadow"}}'
 ```
 <!-- guide:share.shadow end -->
 
+<!-- guide:share.status start -->
+```bash
+# Prints the limiter and the utilization-share mode in force.
+kubectl get configmap scaling-manager-controller-status -n ${CONTROLLER_NAMESPACE} \
+  -o jsonpath='{.data.limiter} {.data.utilizationShare}{"\n"}'
+```
+<!-- guide:share.status end -->
+
+You should see `quota/install-quota shadow`. Then let sharing act. That needs
+the one grant of `patch` on pods, `scaling-manager-activate.yaml`, in the
+namespace the models run in (download it with the other release files):
+
 <!-- guide:share.activate start -->
 ```bash
-# Configure the optimizer to act. While a model of a group is passive, the group only reports.
-make utilization-share-activate
+# The pod-patch grant sharing needs, then the switch. While a model of a group is passive, the group only reports.
+sed -e "s/__NAMESPACE__/${CONTROLLER_NAMESPACE}/g" -e "s/__MODEL_NAMESPACE__/${NAMESPACE}/g" \
+  scaling-manager-activate.yaml | kubectl apply -f -
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p '{"data":{"utilizationShare":"active"}}'
 ```
 <!-- guide:share.activate end -->
 
-`make utilization-share-status` and `llmsm_utilization_share_mode` say
-`active`, because that is how the optimizer is configured. What tells you it
-is held is `llmsm_utilization_share_passive_shadow`: it is `1` for every group
-that holds a passive model. During a busy period the log says what it would
-move:
+The status now says `active`, because that is how the optimizer is configured.
+What tells you it is held is `llmsm_utilization_share_passive_shadow`: it is
+`1` for every group that holds a passive model. During a busy period the log
+says what it would move:
 
 <!-- guide:share.log start -->
 ```bash
@@ -389,10 +316,7 @@ kubectl logs -n ${CONTROLLER_NAMESPACE} deploy/scaling-manager-controller-manage
 ... Utilization share: would rebalance (shadow: the group holds a passive model) {"accelerator": "NVIDIA-A100-PCIE-80GB", "scope": "llm-d-sim", "budget": 4, ..., "replicasToMove": 1, "actionable": ["llm-d-sim/model-a/decode"], ...}
 ```
 
-The line is written only when the roles a move would fix change. If they have
-not changed since the shadow step, the last line is that step's, `would
-rebalance (shadow)`. A quiet log means nothing would move. Read the rest in
-Prometheus:
+A quiet log means nothing would move. Read the rest in Prometheus:
 
 ```promql
 # 1 while the group only reports because it holds a passive model
@@ -404,53 +328,75 @@ llmsm_utilization_share_actionable{exported_namespace="<namespace>"} == 1
 llmsm_utilization_share_replicas_to_move{scope="<namespace>"}
 ```
 
-Two things differ from the per-model comparison above. `llmsm_desired_replicas`
-of a passive model is what the scaling manager would order without sharing,
-not the share's target; the share's answer is in `_target_gpus`, in GPUs. And no
-transfer starts, so `llmsm_utilization_share_transfers_total` does not grow
-and there are no `UtilizationShareGiving` or `UtilizationShareReceiving`
-Events.
+`llmsm_desired_replicas` of a passive model is what the scaling manager would
+order without sharing; the share's answer is in `_target_gpus`, in GPUs. No
+transfer starts, so `llmsm_utilization_share_transfers_total` does not grow.
 
 ### Go live
 
-The group acts only once none of its models is passive. The switch in [Switch
-it to active](#3-switch-it-to-active) writes one entry, `passive-trial`, so it
-makes one model active at a time: run it for a second model and the first is
-passive again. Hand over each model still in `observe`, as in [step
-2](#2-hand-the-model-over). Then make every model active:
+The group acts only once none of its models is passive. Hand over each model
+still in `observe`, as in [step 2](#2-hand-the-model-over). Then make every
+model active:
 
 <!-- guide:share.live start -->
 ```bash
-# Make every model active. The re-install keeps the optimizer block.
-make deploy-scaling-manager LLMSM_PASSIVE=false
-make utilization-share-status
+# Make every model active. Live, no restart.
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p '{"data":{"passive":"false"}}'
 ```
 <!-- guide:share.live end -->
 
-The re-install restarts the controller and keeps the optimizer block, so
-status prints `optimizer block: active`. For two to three minutes nothing in the group
-scales. Then `llmsm_utilization_share_passive_shadow` reads `0`, and a
-transfer shows as `UtilizationShareGiving` and `UtilizationShareReceiving`
-Events, then `UtilizationShareReceived` once the receiver's replica is up.
-`make utilization-share-status` counts them. A model with no load may also
-scale down on its own first; the busy model then takes its GPU with no
-transfer and no event.
+For two to three minutes nothing in the group scales. Then
+`llmsm_utilization_share_passive_shadow` reads `0`, and a transfer shows as
+`UtilizationShareGiving` and `UtilizationShareReceiving` Events, then
+`UtilizationShareReceived` once the receiver's replica is up.
 
 ## Cleanup
 
 Remove any trigger you added in step 3 first (`kubectl edit scaledobject
-${SCALEDOBJECT} -n ${NAMESPACE}`, delete the `llmsm` trigger). The
-uninstall does not touch ScaledObjects it did not create, and a trigger that
-calls a removed scaler fails on every KEDA poll.
+${SCALEDOBJECT} -n ${NAMESPACE}`, delete the `llmsm` trigger): a trigger that
+calls a removed scaler fails on every KEDA poll. If sharing was on, turn it off
+first and wait until the status no longer says `draining`:
 
-<!-- guide:cleanup.uninstall start -->
+<!-- guide:cleanup.share start -->
 ```bash
-make undeploy-scaling-manager
+# Sharing off first, so no transfer marks are left on pods. Wait until the status no longer says draining.
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE} --type merge \
+  -p '{"data":{"utilizationShare":"off"}}'
 ```
-<!-- guide:cleanup.uninstall end -->
+<!-- guide:cleanup.share end -->
 
-It removes the ScaledObjects it created, and KEDA returns each workload to its
-earlier replica count. ScaledObjects you adopted are left and listed by name.
+Then uninstall as in [the install guide](../install-in-namespace/#cleanup),
+and delete `scaling-manager-activate.yaml` from the model namespace with the
+same `sed` and `kubectl delete -f -`. Delete the scaling-policy ConfigMap too:
+it carries no label, so the uninstall leaves it.
+
+<!-- guide:cleanup.policy start -->
+```bash
+# The scaling-policy ConfigMap step 3 of "Make one model active" created, if you created it. The label-based uninstall does not find it.
+kubectl delete configmap scaling-manager-scaling-policy-config -n ${CONTROLLER_NAMESPACE} --ignore-not-found
+```
+<!-- guide:cleanup.policy end -->
+
+## From a checkout instead
+
+`make deploy-scaling-manager` installs passive with `LLMSM_PASSIVE=true`, and
+the `make utilization-share-*` targets wrap the same settings with their own
+checks ([Turn on the utilization-share optimizer,
+safely](../utilization-share/)):
+
+<!-- guide:checkout.install start -->
+```bash
+# The same passive install from a checkout of the release tag.
+make check-prereqs
+make setup-prereqs           # cluster admin
+make deploy-scaling-manager LLMSM_PASSIVE=true
+```
+<!-- guide:checkout.install end -->
+
+`make scaledobjects-plan` registers the models and offers `adopt` for one KEDA
+scales; leave it at `no` while the model is in `observe` ([A new plan offers
+adopt](#a-new-plan-offers-adopt)).
 
 ## Details
 
@@ -459,15 +405,13 @@ earlier replica count. ScaledObjects you adopted are left and listed by name.
 Once the scaling manager's trigger sits on a ScaledObject, `make
 scaledobjects-plan` writes `apply: adopt` for that workload. Adopt replaces
 the ScaledObject's triggers with the scaling manager's alone, so applying it
-drops yours. Set it to `no` until you hand the model over, as in [step
-2](#2-hand-the-model-over).
+drops yours. Set it to `no` until you hand the model over.
 
 ### A scaler without TLS
 
-The trigger in step 3 is the TLS form, the install's default. If
-`kubectl get clustertriggerauthentication scaling-manager-external-scaler-${CONTROLLER_NAMESPACE}`
-answers NotFound, the scaler is plaintext: use
-`scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc.cluster.local:9090`
+The trigger in step 3 is the TLS form. If the controller status's `scalerTLS`
+starts with `plaintext`, step 4 of the install guide is not done yet: until it
+is, use `scaling-manager-external-scaler.${CONTROLLER_NAMESPACE}.svc.cluster.local:9090`
 and leave out `authenticationRef`.
 
 ### A scalingModifiers formula
@@ -498,21 +442,13 @@ model at zero replicas stays at zero until you scale it. The full list is in
 
 The active models are allocated first, as if the passive ones were absent. A
 passive model counts against the budget at what it holds, and its would-be
-count is computed from what is left. Read its `desired` as "what it would get
-after the models that scale".
-
-### Already installed and active
-
-`make deploy-scaling-manager LLMSM_PASSIVE=true` on a running install restarts
-the controller passive. A re-install without `LLMSM_PASSIVE` keeps the value
-the controller has. Editing `LLMSM_PASSIVE` in `scaling-manager-manager-config`
-by hand does nothing until a restart: the controller logs `restart required`.
+count is computed from what is left.
 
 ### Passive for some models only
 
 The `passive` key works at every level of the scaling policy: the `default`
-entry, a tier, or one model, the most specific winning. An active controller
-with one `passive: true` entry observes that model alone. See [the scaling
+entry, a tier, or one model, the most specific winning. The settings key sets
+the `default` entry's; a per-model entry still overrides it. See [the scaling
 policy](../../reference/scaling-policy.md#passive).
 
 ### A count that must not move

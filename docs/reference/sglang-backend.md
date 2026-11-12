@@ -36,7 +36,7 @@ of the scale target's pod template:
 
 Nothing else is engine-specific. Register the workload with a KEDA ScaledObject,
 exactly as for vLLM; the same ScaledObject works for either engine. Register it
-with [step 4 of the namespace install](../guides/install-in-namespace/README.md#4-register-the-workloads).
+with [step 4 of the namespace install](../guides/install-in-namespace/README.md#register-the-workloads).
 Every trigger key is in [ScaledObject trigger metadata](scaledobject-trigger.md),
 and what the pod must carry is in [workload preparation](workload-preparation.md).
 

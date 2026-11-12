@@ -17,8 +17,10 @@ import (
 // namespaceFile is where a Pod reads its own namespace.
 const namespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
-// prometheusCAFile is where the Job mounts PrometheusCASecret (optional), the
-// way the controller does: the preflight reads no Secret through the API.
+// prometheusCAFile is where the Job mounts PrometheusCASecret (optional), so
+// the preflight reads no Secret through the API. The controller mounts the
+// same Secret at /etc/scaling-manager-prometheus-ca and reads it only when
+// the prometheusCACertPath setting points there.
 const prometheusCAFile = "/etc/scaling-manager/prometheus-ca/ca.crt"
 
 // Main runs `manager preflight [check|verify] [flags]` and returns the exit

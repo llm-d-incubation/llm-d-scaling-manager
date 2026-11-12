@@ -18,8 +18,8 @@ replica starts fast ([start-path checklist](../reference/workload-preparation.md
 | [Bound tenants by the quotas Kueue already holds](kueue-bounded-quotas/) | Tenant caps read from Kueue, with no second copy, and cohort borrowing where it is safe | **Experimental** | [Borrow from a Kueue cohort](../guides/kueue-borrowing/) |
 | [Share one GPU quota between models](utilization-share/) | Models that peak at different times share one quota on purpose | **Experimental** | [Utilization share](../guides/utilization-share/) |
 | [Give classes of workloads different scaling behaviour](workload-classes/) | Interactive and batch tiers, without per-model config | Stable | [The path's steps](workload-classes/#start-here) |
-| [Serve one model on two accelerator variants](accelerator-variants/) | The cost-efficient variant grows first | Stable | [Register the workloads](../guides/install-in-namespace/README.md#4-register-the-workloads) |
-| [Scale a P/D-disaggregated model](pd-disaggregation/) | Prefill and decode scaled apart, each on its own evidence | **Experimental** | [Register the workloads](../guides/install-in-namespace/README.md#4-register-the-workloads) |
+| [Serve one model on two accelerator variants](accelerator-variants/) | The cost-efficient variant grows first | Stable | [Register the workloads](../guides/install-in-namespace/README.md#register-the-workloads) |
+| [Scale a P/D-disaggregated model](pd-disaggregation/) | Prefill and decode scaled apart, each on its own evidence | **Experimental** | [Register the workloads](../guides/install-in-namespace/README.md#register-the-workloads) |
 
 **Experimental** means the recipe may still change: the defaults are not
 settled, or a leg of testing is missing. Each page says which. **Stable** does

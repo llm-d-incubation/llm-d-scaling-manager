@@ -720,7 +720,14 @@ main() {
     # controller that never started still ended with "complete!" and exit 0 — the
     # two things a wrapper or a CI job actually reads.
     local verified=true
-    verify_deployment || verified=false
+    # DEPLOY_SCALING_MANAGER=false installs the prerequisites only (the
+    # release-files e2e installs the controller itself afterwards), so there
+    # is no controller to wait for.
+    if [ "$DEPLOY_SCALING_MANAGER" = "true" ]; then
+        verify_deployment || verified=false
+    else
+        log_info "Not verifying the controller: DEPLOY_SCALING_MANAGER=false installed none."
+    fi
 
     print_summary
 

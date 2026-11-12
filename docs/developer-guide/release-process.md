@@ -118,10 +118,8 @@ that one instead. A release that is already **published** is never changed: a
 run whose files differ from the attached ones fails, and one whose files are
 identical uploads nothing. In **Releases**, open the draft, check that the
 files are there (each `.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each),
-paste the release notes, and publish. Keep the draft's first line: until the
-controller reads `scaling-manager-settings`, the files are a **preview** and
-`make deploy-scaling-manager` is the supported install (every file says so in
-its header too).
+paste the release notes, and publish. Keep the draft's first line: it names
+the two supported installs, the attached files and `make deploy-scaling-manager`.
 
 ### 5. Point the docs at the release
 
@@ -363,8 +361,9 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-preflight.yaml` | the preflight Job (`manager preflight check`, image by digest), its ServiceAccount, and its read-only Role and ClusterRole; reads pods and PodMonitors in the controller's namespace only, and no Secret ([preflight.md](../reference/preflight.md)) |
 | `scaling-manager-preflight-cluster.yaml` | the same for the cluster-wide install in `scaling-manager-system` (`--scope=cluster`): lists pods, Deployments and PodMonitors in every namespace. Applies as is |
 
-Every file opens with a `PREVIEW:` line until the controller reads the
-settings ConfigMap (`PREVIEW_NOTE` in `deploy/release-manifests.sh`).
+`make test-e2e-release-manifests` installs the namespaced files on kind with
+`kubectl` only and checks them; run it before a release
+([Testing](testing.md#install-from-the-release-files)).
 
 Every object carries `app.kubernetes.io/part-of`, `instance`, `version` and
 `scaling-manager.llmd.ai/part: admin|controller`; `admin` is exactly what the
