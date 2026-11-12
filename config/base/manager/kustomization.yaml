@@ -13,4 +13,4 @@ resources:
 images:
 - name: controller
   newName: ghcr.io/llm-d-incubation/llm-d-scaling-manager
-  newTag: main
+  newTag: v0.11.0
