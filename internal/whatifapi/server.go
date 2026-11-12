@@ -2,11 +2,15 @@ package whatifapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"runtime"
 	"strings"
 )
 
@@ -22,6 +26,13 @@ const (
 	defaultCurves = 256
 )
 
+// defaultMaxInputs is how many sources are resolved at once by default: each
+// is a replay or a Prometheus capture of seconds to minutes.
+const defaultMaxInputs = 2
+
+// retryAfterSeconds is what a busy server asks a client to wait.
+const retryAfterSeconds = "1"
+
 // Config is the server's configuration.
 type Config struct {
 	// Resolver resolves sources (cmd/whatif's).
@@ -29,6 +40,10 @@ type Config struct {
 	// WhatifSchema names the CLI schema the answer, refusal and flag shapes
 	// follow ("schema-v3").
 	WhatifSchema string
+	// MaxPlans and MaxInputs are how many plans and how many inputs are
+	// priced at once; past them a request is 503 with Retry-After. 0 is the
+	// default: GOMAXPROCS plans, defaultMaxInputs inputs.
+	MaxPlans, MaxInputs int
 }
 
 // Server serves the API. Its state is caches only: an inputs entry per
@@ -41,25 +56,48 @@ type Server struct {
 	plans        *lru[[]byte]
 	curves       *lru[*curveSet]
 	limits       *lru[*limitEntry]
+	// planSlots and inputSlots bound the work in flight: a token per request
+	// priced.
+	planSlots, inputSlots chan struct{}
 }
 
-// inputsEntry is a source resolved: its id, its response body and its
-// Pricer.
+// inputsEntry is a source resolved: its id, the inputs a plan reads its
+// defaults from, and its Pricer.
 type inputsEntry struct {
 	id     string
 	doc    InputsResponse
-	body   []byte
 	pricer Pricer
 }
 
 // New is a server with empty caches.
 func New(c Config) *Server {
+	plans, inputs := c.MaxPlans, c.MaxInputs
+	if plans <= 0 {
+		plans = runtime.GOMAXPROCS(0)
+	}
+	if inputs <= 0 {
+		inputs = defaultMaxInputs
+	}
 	return &Server{resolver: c.Resolver, whatifSchema: c.WhatifSchema, inputs: newLRU[*inputsEntry](defaultInputs),
-		plans: newLRU[[]byte](defaultPlans), curves: newLRU[*curveSet](defaultCurves), limits: newLRU[*limitEntry](defaultCurves)}
+		plans: newLRU[[]byte](defaultPlans), curves: newLRU[*curveSet](defaultCurves), limits: newLRU[*limitEntry](defaultCurves),
+		planSlots: make(chan struct{}, plans), inputSlots: make(chan struct{}, inputs)}
+}
+
+// errBusy is a request past the server's bound on work in flight.
+var errBusy = errors.New("the server is pricing as many requests as it takes at once; retry shortly")
+
+// acquire takes a slot, or reports false at once when none is free.
+func acquire(slots chan struct{}) bool {
+	select {
+	case slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // Handler is the API's routes. The caller wraps it in authentication where
-// the bind needs it (Authenticate).
+// the bind needs it (Authenticator.Wrap), or in LoopbackOnly.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/inputs", s.handleInputs)
@@ -75,6 +113,11 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if !acquire(s.inputSlots) {
+		writeErr(w, errBusy)
+		return
+	}
+	defer func() { <-s.inputSlots }()
 	res, err := s.resolver.Resolve(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
@@ -83,13 +126,16 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 	doc := res.Inputs
 	doc.SchemaVersion, doc.WhatifSchema = SchemaVersion, s.whatifSchema
 	doc.InputsID = contentID("inputs", res.Content)
+	// The entry kept is the first caller's, but each caller is answered with
+	// its own source: two recordings of the same bytes share an id, not a
+	// name.
+	s.inputs.add(doc.InputsID, &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer})
 	body, err := marshal(doc)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	e := s.inputs.add(doc.InputsID, &inputsEntry{id: doc.InputsID, doc: doc, body: body, pricer: res.Pricer})
-	writeBody(w, e.body)
+	writeBody(w, body)
 }
 
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +143,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	body, err := s.Plan(req)
+	body, err := s.Plan(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -109,8 +155,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 var errUnknownInputs = errors.New("unknown inputsId: resolve the source with POST /v1/inputs (ids are kept while in use, the least used dropped first)")
 
 // Plan prices req and returns the response body: from the cache when the same
-// scenario was priced before, so the same scenario has the same bytes.
-func (s *Server) Plan(req PlanRequest) ([]byte, error) {
+// scenario was priced before, so the same scenario has the same bytes. A
+// plan not cached takes one of the server's plan slots, errBusy with none
+// free, and stops between figures once ctx ends.
+func (s *Server) Plan(ctx context.Context, req PlanRequest) ([]byte, error) {
 	e, ok := s.inputs.get(req.InputsID)
 	if !ok {
 		return nil, errUnknownInputs
@@ -123,7 +171,11 @@ func (s *Server) Plan(req PlanRequest) ([]byte, error) {
 	if b, ok := s.plans.get(id); ok {
 		return b, nil
 	}
-	p := &planner{s: s, e: e, sc: sc}
+	if !acquire(s.planSlots) {
+		return nil, errBusy
+	}
+	defer func() { <-s.planSlots }()
+	p := &planner{ctx: ctx, s: s, e: e, sc: sc}
 	out, err := p.plan()
 	if err != nil {
 		return nil, err
@@ -136,11 +188,32 @@ func (s *Server) Plan(req PlanRequest) ([]byte, error) {
 	return s.plans.add(id, body), nil
 }
 
-// readJSON reads the request body into v strictly: an unknown field, a
-// second value, or a body past maxBody is a 400.
+// LoopbackOnly answers only requests addressed to a loopback name (Host
+// localhost, 127.0.0.1 or [::1], with any port): a server with no
+// authentication must not answer a page that rebinds its own name to
+// 127.0.0.1. Others are 403.
+func LoopbackOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		switch strings.ToLower(strings.Trim(host, "[]")) {
+		case "localhost", "127.0.0.1", "::1":
+			next.ServeHTTP(w, r)
+		default:
+			writeError(w, http.StatusForbidden, fmt.Errorf("host %q: this server answers localhost, 127.0.0.1 and [::1] only", r.Host))
+		}
+	})
+}
+
+// readJSON reads the request body into v strictly: a media type other than
+// application/json (none included, so that no form a page posts across sites
+// is read) is 415; an unknown field, a second value, or a body past maxBody
+// is a 400.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
-		writeError(w, http.StatusUnsupportedMediaType, fmt.Errorf("content type %q, want application/json", ct))
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, fmt.Errorf("content type %q, want application/json", r.Header.Get("Content-Type")))
 		return false
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
@@ -176,13 +249,21 @@ func writeBody(w http.ResponseWriter, body []byte) {
 }
 
 // writeErr writes err with its status: 400 for the caller's input, 404 for
-// an unknown inputsId, 500 for anything else.
+// an unknown inputsId, 503 for a busy server (with Retry-After) or a request
+// that ended, 500 for anything else.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case IsInputError(err):
 		writeError(w, http.StatusBadRequest, err)
 	case errors.Is(err, errUnknownInputs):
 		writeError(w, http.StatusNotFound, err)
+	case errors.As(err, new(ErrForbidden)):
+		writeError(w, http.StatusForbidden, err)
+	case errors.Is(err, errBusy):
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		writeError(w, http.StatusServiceUnavailable, err)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("the request ended before it was priced: %w", err))
 	default:
 		writeError(w, http.StatusInternalServerError, err)
 	}

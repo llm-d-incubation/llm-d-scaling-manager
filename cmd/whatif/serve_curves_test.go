@@ -155,6 +155,11 @@ func TestServeFleetLimitIsCapped(t *testing.T) {
 	assert.InDelta(t, *capRate.Value, *fl.Value, 1e-9*(*capRate.Value))
 	require.NotNil(t, fl.WithoutHeadroom.Value)
 	assert.Greater(t, *fl.WithoutHeadroom.Value, *fl.Value)
+	// One more replica of either role leaves the targets loose: the cap binds
+	// the step too.
+	for what, s := range map[string]whatifapi.MarginalStep{"+1 prefill": out.Marginal.PrefillPlusOne, "+1 decode": out.Marginal.DecodePlusOne} {
+		assert.Contains(t, s.Limit.BoundBy, string(whatif.BoundOperatingPoint), "%s", what)
+	}
 }
 
 // A recording is named, never pathed, and an error names no server path.

@@ -3,6 +3,7 @@ package whatifapi
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -119,9 +120,12 @@ func (sc *Scenario) traffic(t *Traffic) error {
 		return nil
 	}
 	if c := t.Classes; c != nil {
-		for name, cr := range map[string]*ClassRate{"regular": c.Regular, "batch": c.Batch} {
-			if cr != nil && cr.Rate != nil && *cr.Rate != 0 {
-				return inputErrorf("traffic.classes.%s.rate %g: v1 prices one class, the total, as critical; regular and batch need traffic split by priority", name, *cr.Rate)
+		for _, cl := range []struct {
+			name string
+			cr   *ClassRate
+		}{{"regular", c.Regular}, {"batch", c.Batch}} {
+			if cr := cl.cr; cr != nil && cr.Rate != nil && *cr.Rate != 0 {
+				return inputErrorf("traffic.classes.%s.rate %g: v1 prices one class, the total, as critical; regular and batch need traffic split by priority", cl.name, *cr.Rate)
 			}
 		}
 		if cr := c.Critical; cr != nil && cr.Rate != nil {
@@ -132,9 +136,12 @@ func (sc *Scenario) traffic(t *Traffic) error {
 		}
 	}
 	if m := t.Mix; m != nil && !m.Observed {
-		for name, x := range map[string]float64{"promptTokens": m.PromptTokens, "outputTokens": m.OutputTokens} {
-			if x != 0 && !usable(x) {
-				return inputErrorf("traffic.mix.%s %g, want a finite length above 0", name, x)
+		for _, l := range []struct {
+			name string
+			x    float64
+		}{{"promptTokens", m.PromptTokens}, {"outputTokens", m.OutputTokens}} {
+			if l.x != 0 && !usable(l.x) {
+				return inputErrorf("traffic.mix.%s %g, want a finite length above 0", l.name, l.x)
 			}
 		}
 		sc.Mix = *m
@@ -209,18 +216,24 @@ func (sc *Scenario) tpot(in *InputsResponse, o *Objective) error {
 	return nil
 }
 
+// namedTerm is an assumed term and its field's name, in the order checked.
+type namedTerm struct {
+	name string
+	x    *float64
+}
+
 // checkAssume refuses an assumed term no CLI flag would take. The CLI's own
 // checks (Pricer.Fleet) refuse the rest.
 func (sc *Scenario) checkAssume() error {
 	a := sc.Assume
-	for name, x := range map[string]*float64{"vp": a.VP, "a": a.A, "tpotRatio": a.TPOTRatio} {
-		if x != nil && !usable(*x) {
-			return inputErrorf("assume.%s %g, want a finite value above 0", name, *x)
+	for _, t := range []namedTerm{{"vp", a.VP}, {"a", a.A}, {"tpotRatio", a.TPOTRatio}} {
+		if t.x != nil && !usable(*t.x) {
+			return inputErrorf("assume.%s %g, want a finite value above 0", t.name, *t.x)
 		}
 	}
-	for name, x := range map[string]*float64{"promptCV": a.PromptCV, "routerHop": a.RouterHop} {
-		if x != nil && (math.IsNaN(*x) || *x < 0 || math.IsInf(*x, 1)) {
-			return inputErrorf("assume.%s %g, want a finite value of 0 or more", name, *x)
+	for _, t := range []namedTerm{{"promptCV", a.PromptCV}, {"routerHop", a.RouterHop}} {
+		if t.x != nil && (math.IsNaN(*t.x) || *t.x < 0 || math.IsInf(*t.x, 1)) {
+			return inputErrorf("assume.%s %g, want a finite value of 0 or more", t.name, *t.x)
 		}
 	}
 	if a.TPOTRatio != nil && (sc.TPOT == nil || sc.TPOT.Statistic == statisticMean) {
@@ -236,7 +249,13 @@ func (sc *Scenario) bucketTargets(o *Objective) error {
 	if o != nil {
 		asked = o.BucketTargets
 	}
-	for name, t := range asked {
+	names := make([]string, 0, len(asked))
+	for name := range asked {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		t := asked[name]
 		if !slices.ContainsFunc(buckets, func(b Bucket) bool { return b.Name == name }) {
 			return inputErrorf("slo.ttft.bucketTargets.%s: no such bucket; the buckets are %s", name, bucketNames())
 		}
@@ -269,14 +288,25 @@ func bucketNames() string {
 	return strings.Join(names, ", ")
 }
 
-// parseStatistic reads "mean" as 0 and "pNN" as q in (0, 1).
+// percentileForm is a percentile as a statistic writes it: "p", one or two
+// digits, and at most one decimal.
+var percentileForm = regexp.MustCompile(`^p[0-9]{1,2}(\.[0-9])?$`)
+
+// parseStatistic reads "mean" as 0 and "pNN" or "pNN.N" as q in (0, 1). Any
+// other spelling (an exponent, a hex float, more decimals) is refused, so that
+// no percentile rounds to p0 or p100 when it is named again
+// (statisticName).
 func parseStatistic(field, s string) (float64, error) {
 	if s == statisticMean {
 		return 0, nil
 	}
-	p, err := strconv.ParseFloat(strings.TrimPrefix(s, "p"), 64)
-	if !strings.HasPrefix(s, "p") || err != nil || !(p > 0 && p < 100) {
-		return 0, inputErrorf("%s %q, want mean or a percentile from p1 to p99.9 (p90)", field, s)
+	bad := inputErrorf("%s %q, want mean or a percentile from p1 to p99.9 (p90)", field, s)
+	if !percentileForm.MatchString(s) {
+		return 0, bad
+	}
+	p, err := strconv.ParseFloat(s[1:], 64)
+	if err != nil || !(p >= 1 && p < 100) {
+		return 0, bad
 	}
 	return p / 100, nil
 }
@@ -289,16 +319,22 @@ func statisticName(q float64) string {
 	return "p" + strconv.FormatFloat(math.Round(1e8*q)/1e6, 'f', -1, 64)
 }
 
-// knobs is the fleet the scenario prices, at the mix's lengths.
-func (sc *Scenario) knobs() Knobs {
+// knobs is the fleet the scenario prices, at the mix's lengths. A statistic
+// that does not read back is an error, never the mean.
+func (sc *Scenario) knobs() (Knobs, error) {
 	k := Knobs{Prefill: sc.Fleet.Prefill, Decode: sc.Fleet.Decode, Assume: sc.Assume, ArrivalCV2: sc.ArrivalCV2,
 		Headroom: sc.Headroom}
-	k.TTFTPercentile, _ = parseStatistic("", sc.TTFT.Statistic)
+	var err error
+	if k.TTFTPercentile, err = parseStatistic("slo.ttft.statistic", sc.TTFT.Statistic); err != nil {
+		return k, err
+	}
 	if sc.TPOT != nil {
-		k.TPOTPercentile, _ = parseStatistic("", sc.TPOT.Statistic)
+		if k.TPOTPercentile, err = parseStatistic("slo.tpot.statistic", sc.TPOT.Statistic); err != nil {
+			return k, err
+		}
 	}
 	if !sc.Mix.Observed {
 		k.PromptTokens, k.OutputTokens = sc.Mix.PromptTokens, sc.Mix.OutputTokens
 	}
-	return k
+	return k, nil
 }

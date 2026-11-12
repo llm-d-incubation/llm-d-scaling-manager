@@ -28,7 +28,9 @@ func post(t *testing.T, h http.Handler, path string, body any) (int, []byte) {
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b)))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.Bytes()
 }
 

@@ -1,6 +1,7 @@
 package whatifapi
 
 import (
+	"context"
 	"slices"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
@@ -50,8 +51,9 @@ type curveSet struct {
 // test counts it.
 var onCurves func()
 
-// priceCurves prices a fleet's curve set.
-func priceCurves(fl Fleet, tpotAsked bool) *curveSet {
+// priceCurves prices a fleet's curve set, stopping with ctx's error once ctx
+// ends: a client gone is no reason to price the rest of a grid.
+func priceCurves(ctx context.Context, fl Fleet, tpotAsked bool) (*curveSet, error) {
 	if onCurves != nil {
 		onCurves()
 	}
@@ -65,9 +67,12 @@ func priceCurves(fl Fleet, tpotAsked bool) *curveSet {
 	if !cs.kneeOK {
 		cs.ttftFloor = noFloor(cs.prefillKnee)
 		cs.tpotFloor = noFloor(cs.decodeKnee)
-		return cs
+		return cs, nil
 	}
 	for _, rate := range grid(cs.lowerKnee) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		t := fl.TTFTAt(rate)
 		cs.ttft = append(cs.ttft, Point{Rate: rate, Figure: figureOf(t, unitSeconds, true)})
 		if v, ok := t.(whatif.TTFT); ok && cs.ttftFloor.Value == nil {
@@ -92,7 +97,7 @@ func priceCurves(fl Fleet, tpotAsked bool) *curveSet {
 	if cs.tpotFloor.Value == nil {
 		cs.tpotFloor = noFloor(firstRefusal(cs.tpot, cs.decodeKnee))
 	}
-	return cs
+	return cs, nil
 }
 
 // noFloor is the floor of a line with no answered point: r's refusal.
@@ -137,6 +142,8 @@ func (cs *curveSet) markers(headroom float64) Markers {
 
 // planner prices one scenario on one inputs entry.
 type planner struct {
+	// ctx is the request's: pricing stops between figures once it ends.
+	ctx   context.Context
 	s     *Server
 	e     *inputsEntry
 	sc    Scenario
@@ -161,11 +168,18 @@ func (p *planner) note(path string, f Figure) Figure {
 	return f
 }
 
-// curves is the fleet's curve set at k, from the cache or priced.
-func (p *planner) curves(k Knobs, fl Fleet) *curveSet {
-	return p.s.curves.getOrAdd(curveKey(p.e.id, k, p.sc.TPOT != nil), func() *curveSet {
-		return priceCurves(fl, p.sc.TPOT != nil)
-	})
+// curves is the fleet's curve set at k, from the cache or priced; a set whose
+// pricing the request's end stopped is not cached.
+func (p *planner) curves(k Knobs, fl Fleet) (*curveSet, error) {
+	key := curveKey(p.e.id, k, p.sc.TPOT != nil)
+	if cs, ok := p.s.curves.get(key); ok {
+		return cs, nil
+	}
+	cs, err := priceCurves(p.ctx, fl, p.sc.TPOT != nil)
+	if err != nil {
+		return nil, err
+	}
+	return p.s.curves.add(key, cs), nil
 }
 
 // limitEntry is what the targets and the headroom set and no rate moves: the
@@ -203,6 +217,9 @@ func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
 	tpot := p.tpotTarget()
 	le := &limitEntry{set: fl.Limits(sc.TTFT.Target, tpot, sc.Headroom)}
 	for i, add := range []func(*Knobs){func(k *Knobs) { k.Prefill++ }, func(k *Knobs) { k.Decode++ }} {
+		if err := p.ctx.Err(); err != nil {
+			return nil, err
+		}
 		kk := k
 		add(&kk)
 		more, err := p.e.pricer.Fleet(kk)
@@ -215,6 +232,9 @@ func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
 	if sc.Views.AllTrafficPerBucket {
 		le.buckets = map[string]whatif.Result{}
 		for _, b := range buckets {
+			if err := p.ctx.Err(); err != nil {
+				return nil, err
+			}
 			bf, err := p.e.pricer.Fleet(bucketKnobs(k, b))
 			if err != nil {
 				return nil, err
@@ -243,12 +263,18 @@ func bucketKnobs(k Knobs, b Bucket) Knobs {
 func (p *planner) plan() (*PlanResponse, error) {
 	p.flags = map[string][]string{}
 	sc := p.sc
-	k := sc.knobs()
+	k, err := sc.knobs()
+	if err != nil {
+		return nil, err
+	}
 	fl, err := p.e.pricer.Fleet(k)
 	if err != nil {
 		return nil, err
 	}
-	cs := p.curves(k, fl)
+	cs, err := p.curves(k, fl)
+	if err != nil {
+		return nil, err
+	}
 	rate, rateSource := 0.0, "request"
 	switch {
 	case sc.Rate != nil:
@@ -434,7 +460,10 @@ func (p *planner) perBucket(k Knobs, le *limitEntry, rate float64) ([]Line, erro
 		if err != nil {
 			return nil, err
 		}
-		cs := p.curves(kb, fl)
+		cs, err := p.curves(kb, fl)
+		if err != nil {
+			return nil, err
+		}
 		path := "ttft.perBucket." + b.Name
 		knees := p.markers(path+".knees", cs.markers(p.sc.Headroom))
 		l := Line{Bucket: b.Name, Semantics: SemanticsAllTraffic, PromptTokens: ptr(kb.PromptTokens),

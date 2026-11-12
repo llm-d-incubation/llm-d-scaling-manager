@@ -58,15 +58,6 @@ func (c *lru[V]) add(key string, value V) V {
 	return value
 }
 
-// getOrAdd is the value at key, or price's, added. price runs outside the
-// lock: two callers may price one key at once, and the first to add wins.
-func (c *lru[V]) getOrAdd(key string, price func() V) V {
-	if v, ok := c.get(key); ok {
-		return v
-	}
-	return c.add(key, price())
-}
-
 // contentID is "sha256:" and the hash of v's JSON, prefixed by kind, so that
 // an inputs id and a scenario id never collide.
 func contentID(kind string, v any) string {

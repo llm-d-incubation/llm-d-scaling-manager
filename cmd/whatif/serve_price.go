@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
@@ -37,6 +39,11 @@ type servedSources struct {
 	warn       io.Writer
 	// now is the clock a default window ends at; time.Now when nil.
 	now func() time.Time
+	// allowed is the namespaces a prometheus source may read, and
+	// namespaceAllowed, with --auth=kubernetes, whether the request's user may
+	// read one (whatifapi.Authenticator.NamespaceAllowed); nil with no auth.
+	allowed          []string
+	namespaceAllowed func(ctx context.Context, namespace string) error
 }
 
 // inputError is err as the API's InputError.
@@ -76,7 +83,7 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 			f.cycle = strconv.Itoa(src.Cycle)
 		}
 	case whatifapi.SourcePrometheus:
-		if err := s.windowOf(&f, src); err != nil {
+		if err := s.windowOf(ctx, &f, src); err != nil {
 			return nil, err
 		}
 	default:
@@ -118,10 +125,27 @@ func (s *servedSources) recordingPath(src whatifapi.SourceRequest) (string, erro
 	return path, nil
 }
 
+// checkNamespace refuses a namespace a request may not read through the
+// server's Prometheus: one that is no DNS-1123 label, one not among the
+// allowed, or, with Kubernetes authentication, one whose Pods the user may
+// not get.
+func (s *servedSources) checkNamespace(ctx context.Context, ns string) error {
+	if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
+		return inputError("source.namespace %q: %s", ns, strings.Join(errs, "; "))
+	}
+	if !slices.Contains(s.allowed, ns) {
+		return whatifapi.ErrForbidden{Err: fmt.Errorf("namespace %s: this server reads %s only (--allowed-namespaces)", ns, strings.Join(s.allowed, ", "))}
+	}
+	if s.namespaceAllowed != nil {
+		return s.namespaceAllowed(ctx, ns)
+	}
+	return nil
+}
+
 // windowOf sets f to read a Prometheus window: the server's Prometheus and
-// role map, the request's namespace (else the server's) and window (else the
-// last hour, ending now).
-func (s *servedSources) windowOf(f *answerFlags, src whatifapi.SourceRequest) error {
+// role map, the request's namespace (else the server's), checked
+// (checkNamespace), and window (else the last hour, ending now).
+func (s *servedSources) windowOf(ctx context.Context, f *answerFlags, src whatifapi.SourceRequest) error {
 	switch {
 	case s.window.prometheus == "":
 		return inputError("source.kind prometheus: the server reads no Prometheus (--prometheus)")
@@ -133,6 +157,9 @@ func (s *servedSources) windowOf(f *answerFlags, src whatifapi.SourceRequest) er
 	f.window = s.window
 	if src.Namespace != "" {
 		f.window.namespace = src.Namespace
+	}
+	if err := s.checkNamespace(ctx, f.window.namespace); err != nil {
+		return err
 	}
 	f.window.from, f.window.to = src.From, src.To
 	if src.From == "" {
