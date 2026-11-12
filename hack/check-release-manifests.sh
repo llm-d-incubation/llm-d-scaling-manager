@@ -145,11 +145,16 @@ check_dir() {
         # (make test-e2e-release-manifests).
         head -3 "$d/$f" | grep -q '^# PREVIEW' && say "$f still opens with the PREVIEW notice"
         # The files no end-to-end test installs say so, and only they.
+        # The tested ones are the Kubernetes namespaced and cluster-wide files
+        # (make test-e2e-release-manifests, both scopes); any wording of the
+        # line on them is wrong.
         untested=no
-        head -3 "$d/$f" | grep -q '^# NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes' && untested=yes
+        head -3 "$d/$f" | grep -q '^# NOT YET TESTED end to end' && untested=yes
         case "$f" in
-            scaling-manager-cluster.yaml|scaling-manager-cluster-openshift.yaml|scaling-manager-namespaced-openshift.yaml|scaling-manager-preflight-cluster.yaml)
-                [ "$untested" = yes ] || say "$f does not open with the NOT YET TESTED line" ;;
+            scaling-manager-cluster-openshift.yaml|scaling-manager-namespaced-openshift.yaml)
+                [ "$untested" = yes ] || say "$f does not open with the NOT YET TESTED line"
+                head -3 "$d/$f" | grep -q '^# NOT YET TESTED end to end; the tested installs are scaling-manager-namespaced.yaml and scaling-manager-cluster.yaml on Kubernetes' \
+                    || say "$f: the NOT YET TESTED line does not name the tested installs" ;;
             *) [ "$untested" = no ] || say "$f is tested end to end but opens with the NOT YET TESTED line" ;;
         esac
         n="$(q "$f" '.[] | select(.metadata.labels["app.kubernetes.io/part-of"] != "scaling-manager"
@@ -569,11 +574,18 @@ d="$WORK/m-preview-back"; rm -rf "$d"; cp -r "$GOOD" "$d"
 sed -i '1a # PREVIEW: not yet installable on its own.' "$d/scaling-manager-activate.yaml"
 caught preview-back "PREVIEW notice" "$d"
 d="$WORK/m-untested-dropped"; rm -rf "$d"; cp -r "$GOOD" "$d"
-sed -i '/^# NOT YET TESTED end to end/d' "$d/scaling-manager-cluster.yaml"
+sed -i '/^# NOT YET TESTED end to end/d' "$d/scaling-manager-cluster-openshift.yaml"
 caught untested-dropped "does not open with the NOT YET TESTED line" "$d"
 d="$WORK/m-untested-on-tested"; rm -rf "$d"; cp -r "$GOOD" "$d"
-sed -i '1a # NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests).' "$d/scaling-manager-namespaced.yaml"
+sed -i '1a # NOT YET TESTED end to end; the tested installs are scaling-manager-namespaced.yaml and scaling-manager-cluster.yaml on Kubernetes (make test-e2e-release-manifests).' "$d/scaling-manager-namespaced.yaml"
 caught untested-on-tested "tested end to end but opens with the NOT YET TESTED line" "$d"
+# The old wording, back on a cluster-wide file the e2e now installs.
+d="$WORK/m-untested-on-cluster"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '1a # NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests).' "$d/scaling-manager-preflight-cluster.yaml"
+caught untested-on-cluster "tested end to end but opens with the NOT YET TESTED line" "$d"
+d="$WORK/m-untested-stale-wording"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i 's/^# NOT YET TESTED end to end; .*/# NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests)./' "$d/scaling-manager-namespaced-openshift.yaml"
+caught untested-stale-wording "does not name the tested installs" "$d"
 
 # --- the release workflow: what renders, signs and uploads these files -------
 WF="$ROOT/.github/workflows/ci-release.yaml"

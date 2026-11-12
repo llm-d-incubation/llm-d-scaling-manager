@@ -63,8 +63,11 @@ RELEASE_FILES=(
 
 # The files no end-to-end test installs yet. Each says so in its header;
 # hack/check-release-manifests.sh asserts the line on exactly these files.
-UNTESTED_FILES="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml scaling-manager-namespaced-openshift.yaml scaling-manager-preflight-cluster.yaml"
-UNTESTED_NOTE="NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests)."
+# The Kubernetes namespaced and cluster-wide files are installed by
+# make test-e2e-release-manifests (RELEASE_E2E_SCOPE=namespace and cluster);
+# no CI runs OpenShift.
+UNTESTED_FILES="scaling-manager-cluster-openshift.yaml scaling-manager-namespaced-openshift.yaml"
+UNTESTED_NOTE="NOT YET TESTED end to end; the tested installs are scaling-manager-namespaced.yaml and scaling-manager-cluster.yaml on Kubernetes (make test-e2e-release-manifests)."
 
 die() { echo "release-manifests: $*" >&2; exit 1; }
 

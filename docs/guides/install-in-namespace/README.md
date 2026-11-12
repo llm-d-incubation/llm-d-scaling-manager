@@ -15,9 +15,9 @@ A cluster admin applies the `part=admin` objects once
 ([step 4](#4-cluster-admin-give-keda-its-client-certificate)). The namespace
 owner does the rest, and upgrades the controller.
 
-Tested: the namespaced files on Kubernetes (kind, `make
-test-e2e-release-manifests`, run before each release). The cluster-wide and
-OpenShift files are not yet tested end to end.
+Tested: the namespaced and the cluster-wide files on Kubernetes (kind, `make
+test-e2e-release-manifests`, in CI and before each release). The OpenShift
+files are not yet tested end to end.
 
 Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-instead).
 
