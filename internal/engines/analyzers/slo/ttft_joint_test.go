@@ -137,7 +137,7 @@ func TestTTFTJoint_TheHop(t *testing.T) {
 func TestTTFTJoint_ANewAcceleratorSweepsTheWindow(t *testing.T) {
 	r := jointRun(t, ttftEstimate(), true)
 	require.Equal(t, constants.SLOTTFTJointReasonPriced, r.cycles(t, 0, 20).Joint.Reason)
-	r.in.VariantStates[len(r.in.VariantStates)-1].AcceleratorName = "H200"
+	r.in.VariantStates[len(r.in.VariantStates)-1].AcceleratorName = "accelerator-b"
 	got := r.cycles(t, 20, 1)
 	assert.Equal(t, string(whatif.JointNoPrefillCapacity), got.Joint.Reason)
 	assert.NotContains(t, got.Joint.Inputs, constants.SLOTTFTJointPrefillWork, "the old engine's readings are gone")
@@ -189,7 +189,7 @@ func TestTTFTJoint_WithInvertedVP(t *testing.T) {
 
 // The joint reasons and flags constants spells are whatif's.
 func TestTTFTJoint_ConstantsAreWhatifs(t *testing.T) {
-	want := []string{constants.SLOTTFTJointReasonPriced}
+	want := append(make([]string, 0, len(constants.SLOTTFTJointReasons)), constants.SLOTTFTJointReasonPriced)
 	for _, r := range []whatif.JointRefusal{whatif.JointNoPrefillCapacity, whatif.JointNoOverhead,
 		whatif.JointNoPull, whatif.JointNoITLLine, whatif.JointNoDecodeOwnLine, whatif.JointNoOutputLength,
 		whatif.JointNoReplicas, whatif.JointSaturated, whatif.JointBatchUnheld, whatif.JointInvalidInput} {
