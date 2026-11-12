@@ -12,6 +12,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
@@ -244,14 +245,19 @@ func StateAt(ctx context.Context, recording []byte, opts Options, q StateQuery) 
 		}
 		noteShapes(shapes, in.ReplicaMetrics, n)
 		ttft.note(in, n, ev.Now)
-		ttft.noteJoint(in, ev.Now)
-		lines.note(in, n, ev.Now)
-		ttft.noteTerm(in, ev.Now, func(variant string) string {
+		args := func(variant string) string {
 			if rec := r.store.Get(in.Namespace, in.ModelID, variant); rec != nil {
 				return rec.EngineParams.ArgsTag()
 			}
 			return ""
-		})
+		}
+		sglang := func(variant string) bool {
+			rec := r.store.Get(in.Namespace, in.ModelID, variant)
+			return rec != nil && rec.EngineParams != nil && rec.EngineParams.Engine == inferenceengine.EngineSGLang
+		}
+		ttft.noteJoint(in, ev.Now, args, sglang)
+		lines.note(in, n, ev.Now)
+		ttft.noteTerm(in, ev.Now, args)
 		if n == cycle {
 			st = r.stateOf(in, n, ev.Now, shapes)
 			r.fillTTFT(st, in, ttft)

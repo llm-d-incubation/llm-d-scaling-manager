@@ -225,3 +225,79 @@ func TestJointWindow_UnderAndRetention(t *testing.T) {
 	assert.Empty(t, w.pull)
 	assert.Empty(t, w.pullPrompt)
 }
+
+// jointReads is readings at x with y.
+func jointReads(xs, ys []float64) []jointRead {
+	out := make([]jointRead, len(xs))
+	for i := range xs {
+		out[i] = jointRead{x: xs[i], y: ys[i]}
+	}
+	return out
+}
+
+// itl.ValidModel's intercept guard is for a line over KV fill: it admits
+// alpha -0.1 ms with beta 0.2 ms. A batch of none takes no negative time, so
+// the ITL line refuses it.
+func TestJointWindow_TheITLLineRefusesANegativeAlpha(t *testing.T) {
+	w := NewJointWindow()
+	w.itl = jointReads([]float64{10, 11, 30, 31}, []float64{0.0019, 0.0021, 0.0059, 0.0061})
+	est := w.Estimate()
+	assert.Equal(t, NoITLLine, est.ITLRefused)
+	assert.Zero(t, est.ITLBeta)
+}
+
+// The own line refuses a fit that reads the decode pod's own part at or
+// below 0 at the least ITL it was read over.
+func TestJointWindow_TheOwnLineRefusesANonPositivePart(t *testing.T) {
+	w := NewJointWindow()
+	w.own = jointReads([]float64{0.002, 0.0021, 0.004, 0.0041}, []float64{0.001, 0.001, 0.2, 0.2})
+	assert.Equal(t, NoDecodeOwnLine, w.Estimate().DecodeRefused)
+	w.own = jointReads([]float64{0.002, 0.0021, 0.004, 0.0041}, []float64{0.02, 0.0205, 0.03, 0.0305})
+	assert.Empty(t, w.Estimate().DecodeRefused, "a line positive over its range stands")
+}
+
+// Flat load gives least squares no slope to read: under MinJointSpread of x
+// neither line is fitted.
+func TestJointWindow_FlatLoadFitsNoLine(t *testing.T) {
+	w := NewJointWindow()
+	w.itl = jointReads([]float64{10, 10.2, 10.4, 10.1}, []float64{0.004, 0.0042, 0.0045, 0.0041})
+	w.own = jointReads([]float64{0.004, 0.0041, 0.0042, 0.00405}, []float64{0.03, 0.031, 0.033, 0.032})
+	est := w.Estimate()
+	assert.Equal(t, NoITLLine, est.ITLRefused)
+	assert.Equal(t, NoDecodeOwnLine, est.DecodeRefused)
+}
+
+// The batch is read from one-minute figures: the generated-token rate times
+// ITL, or else the minute's output length; the five-minute output length
+// only where the minute's is unread. n_out is the minute's too.
+func TestJointWindow_TheBatchIsReadOverOneMinute(t *testing.T) {
+	rm := jointDecodeRow("d0", 10, 0.025, 0.005, 0.08, 1, 20)
+	rm.AvgOutputTokens, rm.AvgOutputTokensRecent = 600, 200 // a shape that just changed
+	k, out, ok := minuteBatch(rm, 10)
+	require.True(t, ok)
+	assert.InDelta(t, 10*200*0.005, k, 1e-12)
+	assert.Equal(t, 200.0, out)
+
+	rm.GenerationTokenRate, rm.GenerationTokenRateKnown = 2100, true
+	k, _, _ = minuteBatch(rm, 10)
+	assert.InDelta(t, 2100*0.005, k, 1e-12, "tokens a second over steps a second")
+
+	rm.AvgOutputTokensRecent, rm.GenerationTokenRateKnown = 0, false
+	k, out, _ = minuteBatch(rm, 10)
+	assert.InDelta(t, 10*600*0.005, k, 1e-12, "the five-minute figure where the minute's is unread")
+	assert.Equal(t, 600.0, out)
+
+	w := NewJointWindow()
+	rm = jointDecodeRow("d0", 10, 0.025, 0.005, 0.08, 1, 20)
+	rm.AvgOutputTokens, rm.AvgOutputTokensRecent = 600, 200
+	w.Observe(JointCycle{Now: time.Unix(1_700_000_000, 0), Decode: []domain.ReplicaMetrics{rm}})
+	require.Len(t, w.output, 1)
+	assert.Equal(t, 200.0, w.output[0].x, "n_out is the minute's")
+}
+
+// A queue time that is not a number is no empty queue.
+func TestJointWindow_ANaNQueueTimeIsNotQueueFree(t *testing.T) {
+	rm := jointPrefillRow("p0", 10, 0.03, math.NaN(), 0.05)
+	_, _, ok := queueFreeWork(rm, nil, time.Unix(1_700_000_000, 0))
+	assert.False(t, ok)
+}

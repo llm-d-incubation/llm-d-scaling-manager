@@ -3,6 +3,7 @@ package learnreplay
 import (
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
@@ -125,19 +126,39 @@ func newTTFTSamples() *ttftSamples {
 }
 
 // noteJoint folds one cycle's prefill and decode rows into the model's joint
-// window, as S1 does (slo.noteJoint) but with no settle tracker.
-func (t *ttftSamples) noteJoint(in domain.AnalyzerInput, now time.Time) {
+// window as S1 does (slo.noteJoint): only for a model with exactly one
+// prefill and one decode variant, keyed to their accelerators and engine
+// arguments (args, "" unknown), with the prompt read SGLang's way where the
+// prefill variant runs SGLang (sglang). One difference stands: no settle
+// tracker. S1 drops a replica's rows until it has been settled for
+// prefill.SteadyFor; here every Ready row reads, so the CLI's inputs can
+// include a replica's first two minutes after a start or an idle spell.
+func (t *ttftSamples) noteJoint(in domain.AnalyzerInput, now time.Time, args func(variant string) string,
+	sglang func(variant string) bool) {
 	roles := rolesOf(in)
-	c := prefill.JointCycle{Now: now}
-	for _, rm := range in.ReplicaMetrics {
-		switch domain.CanonicalRole(roles[rm.VariantName]) {
+	var prefills, decodes []string
+	for _, v := range slices.Sorted(maps.Keys(roles)) {
+		switch domain.CanonicalRole(roles[v]) {
 		case domain.RolePrefill:
-			c.Prefill = append(c.Prefill, rm)
+			prefills = append(prefills, v)
 		case domain.RoleDecode:
-			c.Decode = append(c.Decode, rm)
+			decodes = append(decodes, v)
 		}
 	}
-	t.joint.Observe(c)
+	if len(prefills) != 1 || len(decodes) != 1 {
+		return
+	}
+	var tag strings.Builder
+	for _, v := range []string{prefills[0], decodes[0]} {
+		for _, vs := range in.VariantStates {
+			if vs.VariantName == v {
+				tag.WriteString(vs.AcceleratorName + "|" + args(v) + "|")
+			}
+		}
+	}
+	t.joint.Under(tag.String())
+	t.joint.Observe(prefill.JointCycle{Now: now, Prefill: rowsOfVariant(in.ReplicaMetrics, prefills[0]),
+		Decode: rowsOfVariant(in.ReplicaMetrics, decodes[0]), SGLang: sglang(prefills[0])})
 }
 
 // keepLast is s with v appended, holding the last n.

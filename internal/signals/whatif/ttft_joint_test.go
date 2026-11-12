@@ -128,6 +128,11 @@ func TestJointTTFTMean_Refusals(t *testing.T) {
 		}, JointSaturated},
 		// n_out * lambda_d * beta = 200 * 10 * 0.0005 = 1.
 		{"the batch's knee", func(e *prefill.JointEstimate, _ *JointQuestion) { e.ITLBeta = 0.0005 }, JointBatchUnheld},
+		// Lines the window refuses, given anyway: no step takes no time, and the
+		// decode pod's own part is not negative.
+		{"a negative ITL", func(e *prefill.JointEstimate, _ *JointQuestion) { e.ITLAlpha = -0.01 }, JointNoITLLine},
+		{"a negative own part", func(e *prefill.JointEstimate, _ *JointQuestion) { e.DecodeFixed = -1 },
+			JointNoDecodeOwnLine},
 	} {
 		est, qq := jointEstimate(), q
 		c.edit(&est, &qq)

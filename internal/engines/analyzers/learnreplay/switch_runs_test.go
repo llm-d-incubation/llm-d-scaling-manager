@@ -154,8 +154,9 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// reading gains its Joint field. ols-sweep-slo (83 rows) and
 	// ols-sweep-slo-restart (143) read no-prefill-capacity there: no prefill
 	// pod of theirs reads a queue time. The four staircases price the joint
-	// mean on 115 of 128 (a-off), 276 of 289 (b-off, b-on) and 279 of 292
-	// (c-on) rows; where P1 refused V_P the inverted V_P stands, so S1's
+	// mean on 84 of 128 (a-off: its first step's load is flat, so no decode
+	// line is fitted until the second), 269 and 274 of 289 (b-off, b-on) and
+	// 276 of 292 (c-on) rows; where P1 refused V_P the inverted V_P stands, so S1's
 	// vp_source reads inverted on 116, 247, 276 and 243 rows, and its reason
 	// moves from no-prefill-capacity to no-fixed-latency (116, 247, 34 rows;
 	// no-decode-side stays on 242 and 243). Nothing else of S1 moves: no

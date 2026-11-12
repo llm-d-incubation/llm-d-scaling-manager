@@ -16,8 +16,9 @@ import (
 //
 //   - the prefill pod's unshared work S, by inverting processor sharing,
 //     S = T/(1 + λT), on a pod whose engine queue was empty;
-//   - the prefill pod's overhead around its compute, stretched: a₀, the
-//     highest (AvgTTFT − AvgQueueTime − AvgPrefillTime)·(1 − ρ_p);
+//   - the prefill pod's overhead around its compute, unstretched: a₀, a
+//     high quantile (OverheadQuantile) of
+//     (AvgTTFT − AvgQueueTime − AvgPrefillTime)·(1 − ρ_p);
 //   - the KV pull's unshared work on the decode pods, by the same inversion,
 //     by the prefill pods' utilization in buckets of PullBucketWidth;
 //   - the decode batch's ITL line ITL(k) = α + β·k;
@@ -59,6 +60,11 @@ const (
 	// 0: the staircase's prefill pods read 5 to 10 microseconds below the
 	// knee, and a pod that truly queues reads milliseconds.
 	QueueFreeSeconds = 0.001
+	// MinJointSpread is the least spread of x, (max − min)/mean, a line is
+	// fitted over: flat load gives ordinary least squares no slope to read,
+	// and the fit is noise. The staircase's first step alone spreads the
+	// batch by about 0.5 and ITL by about 0.15 per pod.
+	MinJointSpread = 0.1
 )
 
 // The joint inputs' refusals.
@@ -72,10 +78,13 @@ const (
 	// transfer time, in a cycle whose prefill utilization was read.
 	NoPullReadings Refusal = "NoPullReadings"
 	// NoITLLine is no ITL(k) fit: too few decode readings, too little spread
-	// in the batch, or a fit with no positive slope.
+	// in the batch (MinJointSpread), a fit with no positive slope, or a
+	// negative α.
 	NoITLLine Refusal = "NoITLLine"
 	// NoDecodeOwnLine is no m_d and d: too few decode readings with a TTFT
-	// and a pull, or a fit with no positive slope.
+	// and a pull, too little spread in ITL, a fit with no positive slope, or
+	// one that reads the decode pod's own part at or below 0 anywhere in the
+	// ITL it was read over.
 	NoDecodeOwnLine Refusal = "NoDecodeOwnLine"
 )
 
@@ -175,13 +184,8 @@ func (w *JointWindow) Observe(c JointCycle) {
 		if !rm.AvgITLKnown || !finitePositive(rm.AvgITL) {
 			continue
 		}
-		if out := rm.AvgOutputTokens; finitePositive(out) {
-			// The batch's mean over the minute, by Little's law: requests
-			// in decode are the completion rate times the time each spends
-			// there, n_out steps of ITL. The running gauge is an instant,
-			// and its noise against a minute's ITL flattens the fit (on the
-			// staircase's B, β 0.167 ms from the gauge, 0.218 from this).
-			w.itl = append(w.itl, jointRead{c.Now, lambda * out * rm.AvgITL, rm.AvgITL})
+		if k, out, ok := minuteBatch(rm, lambda); ok {
+			w.itl = append(w.itl, jointRead{c.Now, k, rm.AvgITL})
 			outSum += out
 			outN++
 		}
@@ -196,12 +200,35 @@ func (w *JointWindow) Observe(c JointCycle) {
 	}
 }
 
+// minuteBatch is a decode row's mean batch over the minute its ITL is read
+// over, by Little's law, and its output length then. The running gauge is an
+// instant, and its noise against a minute's ITL flattens the fit (on the
+// staircase's B, β 0.167 ms from the gauge, 0.218 from this). Every figure is
+// a one-minute one: the generated-token rate times ITL, the tokens a step
+// emits over the steps a second, where the rate is read; otherwise the
+// completion rate times the output length over the last minute
+// (AvgOutputTokensRecent) times ITL. The [5m] AvgOutputTokens stands only
+// where the minute's is unread. lambda is the row's completion rate.
+func minuteBatch(rm domain.ReplicaMetrics, lambda float64) (k, out float64, ok bool) {
+	out = rm.AvgOutputTokensRecent
+	if !finitePositive(out) {
+		out = rm.AvgOutputTokens
+	}
+	if !finitePositive(out) {
+		return 0, 0, false
+	}
+	if g := rm.GenerationTokenRate; rm.GenerationTokenRateKnown && finitePositive(g) {
+		return g * rm.AvgITL, out, true
+	}
+	return lambda * out * rm.AvgITL, out, true
+}
+
 // queueFreeWork is a prefill row's unshared work S = T/(1 + λT) and its
 // utilization ρ = λS, read only on a settled serving pod whose engine queue
 // was empty over the minute (QueueFreeSeconds): under processor sharing the
 // pod admits every prompt, and a queue says it stopped.
 func queueFreeWork(rm domain.ReplicaMetrics, s *Settle, now time.Time) (work, rho float64, ok bool) {
-	if !Serving(rm) || !s.Settled(rm, now) || !rm.AvgQueueTimeKnown || rm.AvgQueueTime > QueueFreeSeconds ||
+	if !Serving(rm) || !s.Settled(rm, now) || !rm.AvgQueueTimeKnown || !(rm.AvgQueueTime <= QueueFreeSeconds) ||
 		!rm.AvgPrefillTimeKnown || !finitePositive(rm.AvgPrefillTime) {
 		return 0, 0, false
 	}
@@ -318,8 +345,10 @@ func (w *JointWindow) Estimate() JointEstimate {
 	if est.Pull == nil {
 		est.PullRefused = NoPullReadings
 	}
-	est.ITLAlpha, est.ITLBeta, est.ITLSamples, est.ITLRefused = fitJointLine(w.itl, NoITLLine)
-	est.DecodeFixed, est.DecodeSteps, est.DecodeSamples, est.DecodeRefused = fitJointLine(w.own, NoDecodeOwnLine)
+	est.ITLAlpha, est.ITLBeta, est.ITLSamples, est.ITLRefused = fitJointLine(w.itl, NoITLLine,
+		func(alpha, _, _ float64) bool { return alpha >= 0 })
+	est.DecodeFixed, est.DecodeSteps, est.DecodeSamples, est.DecodeRefused = fitJointLine(w.own, NoDecodeOwnLine,
+		func(d, md, minX float64) bool { return md*minX+d > 0 })
 	if len(w.output) > 0 {
 		est.OutputTokens = medianOf(w.output, func(r jointRead) float64 { return r.x })
 	}
@@ -369,18 +398,27 @@ func (w *JointWindow) pullTable() []PullBucket {
 }
 
 // fitJointLine is y = intercept + slope·x by ordinary least squares
-// (itl.Fit), refused with refusal on fewer than MinJointReadings readings or a
-// fit itl.ValidModel rejects.
-func fitJointLine(reads []jointRead, refusal Refusal) (intercept, slope float64, n int, refused Refusal) {
+// (itl.Fit), refused with refusal on fewer than MinJointReadings readings, on
+// x spread less than MinJointSpread, on a fit itl.Fit rejects (no positive
+// slope), or on one valid rejects. valid is given the intercept, the slope
+// and the least x read. itl.ValidModel's own guard on the intercept is for a
+// line over KV fill, and admits a negative intercept on these.
+func fitJointLine(reads []jointRead, refusal Refusal, valid func(intercept, slope, minX float64) bool) (
+	intercept, slope float64, n int, refused Refusal) {
 	if len(reads) < MinJointReadings {
 		return 0, 0, len(reads), refusal
 	}
 	obs := make([]itl.Observation, len(reads))
+	lo, hi, sum := math.Inf(1), math.Inf(-1), 0.0
 	for i, r := range reads {
 		obs[i] = itl.Observation{K: r.x, ITLSec: r.y}
+		lo, hi, sum = min(lo, r.x), max(hi, r.x), sum+r.x
+	}
+	if mean := sum / float64(len(reads)); !(mean > 0) || !((hi-lo)/mean >= MinJointSpread) {
+		return 0, 0, len(reads), refusal
 	}
 	m, ok := itl.Fit(obs)
-	if !ok {
+	if !ok || !valid(m.B, m.A, lo) {
 		return 0, 0, len(reads), refusal
 	}
 	return m.B, m.A, len(reads), ""

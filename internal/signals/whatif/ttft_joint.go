@@ -143,7 +143,14 @@ func JointTTFTMean(est prefill.JointEstimate, q JointQuestion) (JointTTFT, strin
 	}
 	out.Batch = est.OutputTokens * lambdaD * est.ITLAlpha / (1 - loop)
 	out.ITL = est.ITLAlpha + est.ITLBeta*out.Batch
+	if !(out.ITL > 0) {
+		// A line no fit should have given: no step takes no time.
+		return JointTTFT{}, JointNoITLLine
+	}
 	out.Decode = est.DecodeSteps*out.ITL + est.DecodeFixed
+	if !(out.Decode > 0) {
+		return JointTTFT{}, JointNoDecodeOwnLine
+	}
 
 	out.Hop = q.HopSeconds
 	out.Engine = out.Overhead + out.Prefill + out.Pull + out.Decode

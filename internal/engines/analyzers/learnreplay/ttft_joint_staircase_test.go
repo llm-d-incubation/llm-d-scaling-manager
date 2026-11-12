@@ -62,13 +62,13 @@ const jointBandLow, jointBandHigh = -0.05, 0.10
 // misses, by fixture, with the step (from 1) and its error then. Each must
 // still miss: a change that brings one into the band moves it out of here.
 //
-// b-on's last step, 39.6 r/s, reads 9.1 % under: the decode batch stands at
+// b-on's last step, 39.6 r/s, reads 9.5 % under: the decode batch stands at
 // 0.86 of its own knee there (n_out·λ_d·β), where the closed loop's k is
 // steepest, and the measured ITL rises faster than the line fitted below it.
 // The SLO side: a count priced there would be too small. It is reported, not
 // tuned away (the proposal's "As built (J1)").
 var jointKnownMisses = map[string]map[int]float64{
-	"ttft-staircase-b-on": {7: -0.091},
+	"ttft-staircase-b-on": {7: -0.095},
 }
 
 // jointCycleLine is what one cycle's slo-ttft-joint line says.
@@ -177,7 +177,8 @@ func jointModelRow(t *testing.T, fixture string) []jointStep {
 	next := 0
 	for k, b := range bounds {
 		for ; next < b[1]; next++ {
-			samples.noteJoint(inputs[next].in, inputs[next].at)
+			samples.noteJoint(inputs[next].in, inputs[next].at, func(string) string { return "" },
+				func(string) bool { return false })
 		}
 		if k == 1 {
 			est := samples.joint.Estimate()
@@ -271,7 +272,10 @@ func TestGoldens_TTFTJointModelRow(t *testing.T) {
 			assert.GreaterOrEqual(t, s.bucketErr, jointBandLow, "%s step %d", c.fixture, i+1)
 			assert.LessOrEqual(t, s.bucketErr, jointBandHigh, "%s step %d", c.fixture, i+1)
 		}
-		assert.GreaterOrEqual(t, below, 3, "%s: too few steps below the knee to read the row", c.fixture)
+		// Two at least: a-off ran three steps, and its first is not priced. Its
+		// load held flat there, ITL within prefill.MinJointSpread, so neither
+		// decode line is fitted until the second.
+		assert.GreaterOrEqual(t, below, 2, "%s: too few steps below the knee to read the row", c.fixture)
 	}
 }
 
