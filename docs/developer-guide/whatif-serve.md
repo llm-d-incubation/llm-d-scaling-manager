@@ -78,32 +78,104 @@ point (headroom times the lower knee).
 | `--token-audiences A,...` | The audiences a TokenReview checks a token for. Default: the API server's own. |
 | `--shutdown-timeout` | How long requests in flight may run after Ctrl-C. Default 10s. |
 
-An RBAC rule that grants the API:
-
-```yaml
-rules:
-- nonResourceURLs: ["/whatif/*"]
-  verbs: ["get"]
-```
-
 No request can name a host or a file path: the Prometheus URL is a flag, and a
 recording is a file name inside `--recordings`. An error names no server path.
 
+## Requests
+
+Every request body is one JSON value of at most 1 MiB, sent as
+`Content-Type: application/json`, in every mode: any other media type is 415,
+so no cross-site form reaches the server. Every error, whatever its status, is
+the same shape:
+
+```json
+{"schemaVersion": 1, "error": "slo.ttft.statistic \"p100\", want mean or a percentile from p1 to p99.9 (p90)"}
+```
+
+With `--auth=none` the server answers only requests addressed to a loopback
+name (`localhost`, `127.0.0.0/8`, `[::1]`, by the same rule `--listen` is
+checked by), so a web page that rebinds its own name to 127.0.0.1 cannot read
+it.
+
+## Kubernetes authentication
+
 The server reads Prometheus with its own credentials, so a namespace is the
 server's to allow (`--allowed-namespaces`), and with `--auth=kubernetes` the
-user's too (`get` on `pods` there). An RBAC rule for that:
+user's too: `get` on `pods` there. Access to the API itself is `get` on the
+non-resource URL `/whatif/` plus the path, for every method: a `POST
+/v1/plan` is authorized as `get` on `/whatif/v1/plan`, since the API changes
+nothing.
+
+The RBAC for a group `planners` that reads the namespace `llm`:
 
 ```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: whatif-planner
+rules:
+- nonResourceURLs: ["/whatif/*"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: whatif-planner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: whatif-planner
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: planners
+---
+# One Role and RoleBinding per namespace in --allowed-namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: whatif-planner-reader
+  namespace: llm
 rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: whatif-planner-reader
+  namespace: llm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: whatif-planner-reader
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: planners
 ```
 
-With `--auth=none` the server answers only requests addressed to
-`localhost`, `127.0.0.1` or `[::1]`, so a web page that rebinds its own name to
-127.0.0.1 cannot read it, and every request body must be sent as
-`Content-Type: application/json` (else 415), so no cross-site form reaches it.
+The server's own identity (its kubeconfig) needs `create` on
+`tokenreviews.authentication.k8s.io` and
+`subjectaccessreviews.authorization.k8s.io`, as `system:auth-delegator`
+grants.
+
+A request with a token, from a ServiceAccount `planner` in `llm`:
+
+```
+bin/whatif serve --auth=kubernetes --listen 0.0.0.0:8443 \
+  --tls-cert-file tls.crt --tls-key-file tls.key \
+  --prometheus https://prometheus.example:9090 --kube-state-metrics --namespace llm
+TOKEN=$(kubectl -n llm create token planner)
+curl -s --cacert ca.crt https://planner.example:8443/v1/inputs \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"model": "qwen3-32b", "source": {"kind": "prometheus", "namespace": "llm"}}'
+```
+
+A token minted for another audience (`kubectl create token --audience whatif`)
+is accepted only when the server is started with `--token-audiences whatif`;
+with none, TokenReview checks the token for the API server's own audiences.
 
 ## Endpoints
 
