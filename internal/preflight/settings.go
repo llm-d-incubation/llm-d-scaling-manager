@@ -106,6 +106,8 @@ type settingsState struct {
 	// watchUnchecked: watchNamespaces is set, and whether it only narrows
 	// deployWatch is not known (deployWhy).
 	watchUnchecked bool
+	// watchWidens: watchNamespaces names a namespace deployWatch does not.
+	watchWidens bool
 	// watched are the namespaces the controller manages: watchNamespaces when
 	// it narrows deployWatch, else deployWatch. Nil is every namespace.
 	watched []string
@@ -195,6 +197,7 @@ func (st *settingsState) parseSettings(data map[string]string) string {
 		case err != nil:
 			delete(st.parsed.Restart, "WATCH_NAMESPACE")
 			st.report.Rejected[keyWatchNamespaces] = err.Error()
+			st.watchWidens = true
 		default:
 			effective = ws
 		}
@@ -222,10 +225,12 @@ func quotaKeyFor(watch string) string {
 }
 
 // deploymentWatch reads what the controller's Deployment names to watch, as
-// the loader reads WATCH_NAMESPACE: the --watch-namespace flag, else the
-// container's WATCH_NAMESPACE, else config.yaml (old). Before the install,
-// with no Deployment, it is what the install files name: the controller's
-// namespace for a namespaced install, every namespace for a cluster-wide one.
+// the loader (viper) reads WATCH_NAMESPACE: the --watch-namespace flag when
+// passed, an empty one meaning every namespace; else the container's
+// WATCH_NAMESPACE when not empty, $(VAR) resolved; else config.yaml (old).
+// Before the install, with no Deployment, it is what the install files name:
+// the controller's namespace for a namespaced install, every namespace for a
+// cluster-wide one.
 // why says the Deployment could not be read; the value is then the install
 // files' too.
 func (s *state) deploymentWatch(ctx context.Context, old map[string]any) (watch, why string) {
@@ -254,13 +259,16 @@ func (s *state) deploymentWatch(ctx context.Context, old map[string]any) (watch,
 		}
 		return files, why
 	}
-	if w, scoped := watchedBy(*d); scoped {
-		return strings.Join(w, ","), ""
+	if v, set := watchFlag(*d); set {
+		return config.NormalizeWatchNamespace(v), ""
 	}
 	if cs := d.Spec.Template.Spec.Containers; len(cs) > 0 {
+		expand := containerExpand(*d)
 		for _, e := range cs[0].Env {
 			if e.Name == "WATCH_NAMESPACE" && e.ValueFrom == nil {
-				return config.NormalizeWatchNamespace(e.Value), ""
+				if v := config.NormalizeWatchNamespace(expand(e.Value)); v != "" {
+					return v, ""
+				}
 			}
 		}
 	}
@@ -337,7 +345,7 @@ func (s *state) rejectedEffect(ctx context.Context, st settingsState) string {
 			}
 			switch budget, why := s.settingsBudget(ctx, st); budget {
 			case triYes:
-				start = append(start, "it refuses to start: limiter is declared and no limiter from the settings would apply")
+				start = append(start, "it refuses to start: limiter is set but the settings cannot build it")
 			case triNo:
 				start = append(start, "the limiter keys are not read beside the separate policy namespace ("+why+")")
 			default:
@@ -350,7 +358,7 @@ func (s *state) rejectedEffect(ctx context.Context, st settingsState) string {
 	if len(others) > 0 {
 		start = append(start, strings.Join(others, ", ")+" from the next source down (config.yaml, the environment, the default)")
 	}
-	return "a running controller keeps the last good value of each; on its next start " + strings.Join(start, "; ")
+	return "A running controller keeps the last good value of each; on its next start " + strings.Join(start, "; ")
 }
 
 // checkSettings reports whether the settings exist and the controller accepts
@@ -382,7 +390,13 @@ func checkSettings(ctx context.Context, s *state) ([]Result, string) {
 		if len(st.report.Rejected) > 0 {
 			detail += ". " + s.rejectedEffect(ctx, st)
 		}
-		return []Result{{Status: Fail, Detail: detail, Fix: patch}}, ""
+		fix := patch
+		if st.watchWidens {
+			fix = fmt.Sprintf(`kubectl patch configmap %s -n %s --type json -p '[{"op":"remove","path":"/data/%s"}]'`+
+				"   # or set it to a subset of %s, what the controller's Deployment names\n",
+				SettingsConfigMap, ns, keyWatchNamespaces, st.deployWatch) + patch
+		}
+		return []Result{{Status: Fail, Detail: detail, Fix: fix}}, ""
 	case !st.found && !st.legacy:
 		return []Result{{Status: Fail,
 			Detail: fmt.Sprintf("ConfigMap %s does not exist in %s: the checks below read the shipped defaults, and prometheusURL has none", SettingsConfigMap, ns),
@@ -395,7 +409,9 @@ func checkSettings(ctx context.Context, s *state) ([]Result, string) {
 	case st.watchUnchecked:
 		return []Result{{Status: Unknown,
 			Detail: fmt.Sprintf("%s=%q: whether it only narrows the namespaces the controller's Deployment names, as the controller requires, is not known: %s",
-				keyWatchNamespaces, st.value(keyWatchNamespaces), st.deployWhy) + legacyNote}}, ""
+				keyWatchNamespaces, st.value(keyWatchNamespaces), st.deployWhy) + legacyNote,
+			Fix: fmt.Sprintf("let the preflight ServiceAccount get or list Deployment %s in %s, or run the preflight as a cluster admin",
+				ControllerDeployment, ns)}}, ""
 	case len(st.report.Unknown) > 0 || len(st.report.Warnings) > 0:
 		var notes []string
 		for _, k := range st.report.Unknown {

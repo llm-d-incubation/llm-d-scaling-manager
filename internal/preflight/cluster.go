@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/accelerator"
@@ -94,15 +95,44 @@ func overlapByName(ctx context.Context, s *state, listErr error) ([]Result, stri
 }
 
 // watchedBy reads what a controller Deployment manages from its
-// --watch-namespace argument, as the installer does; false when it has none
-// (cluster-wide). $(VAR) references are resolved from the container's env,
-// $(POD_NAMESPACE) to the Deployment's namespace.
+// --watch-namespace argument, as the installer does; false when it has none,
+// or an empty one (cluster-wide).
 func watchedBy(d appsv1.Deployment) ([]string, bool) {
+	v, set := watchFlag(d)
+	w := splitList(v)
+	return w, set && len(w) > 0
+}
+
+// watchFlag returns the --watch-namespace value the controller container
+// passes, $(VAR) references resolved (containerExpand), and whether it passes
+// one. The last one wins, as pflag reads a repeated flag.
+func watchFlag(d appsv1.Deployment) (value string, set bool) {
 	if len(d.Spec.Template.Spec.Containers) == 0 {
-		return nil, false
+		return "", false
 	}
 	c := d.Spec.Template.Spec.Containers[0]
+	expand := containerExpand(d)
+	args := append(append([]string(nil), c.Command...), c.Args...)
+	for i, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--watch-namespace="):
+			value, set = expand(strings.TrimPrefix(a, "--watch-namespace=")), true
+		case a == "--watch-namespace" && i+1 < len(args):
+			value, set = expand(args[i+1]), true
+		}
+	}
+	return value, set
+}
+
+// containerExpand resolves $(VAR) references in a value of the controller
+// container, as the kubelet does: from the container's env, with
+// $(POD_NAMESPACE) and a metadata.namespace fieldRef the Deployment's namespace.
+func containerExpand(d appsv1.Deployment) func(string) string {
 	env := map[string]string{"POD_NAMESPACE": d.Namespace}
+	var c corev1.Container
+	if cs := d.Spec.Template.Spec.Containers; len(cs) > 0 {
+		c = cs[0]
+	}
 	for _, e := range c.Env {
 		if e.ValueFrom == nil {
 			env[e.Name] = e.Value
@@ -110,7 +140,7 @@ func watchedBy(d appsv1.Deployment) ([]string, bool) {
 			env[e.Name] = d.Namespace
 		}
 	}
-	expand := func(v string) string {
+	return func(v string) string {
 		for range 3 {
 			for k, val := range env {
 				v = strings.ReplaceAll(v, "$("+k+")", val)
@@ -118,22 +148,6 @@ func watchedBy(d appsv1.Deployment) ([]string, bool) {
 		}
 		return v
 	}
-	args := append(append([]string(nil), c.Command...), c.Args...)
-	for i, a := range args {
-		var v string
-		switch {
-		case strings.HasPrefix(a, "--watch-namespace="):
-			v = strings.TrimPrefix(a, "--watch-namespace=")
-		case a == "--watch-namespace" && i+1 < len(args):
-			v = args[i+1]
-		default:
-			continue
-		}
-		if w := splitList(expand(v)); len(w) > 0 {
-			return w, true
-		}
-	}
-	return nil, false
 }
 
 // checkAccelerators: with a quota, each quota key names an accelerator some

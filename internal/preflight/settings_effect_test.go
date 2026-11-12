@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 )
@@ -72,7 +75,7 @@ func TestRejectedSettingsSayWhatTheControllerDoes(t *testing.T) {
 			f.settings[k] = v
 		}
 		r := only(t, f.run(t), "settings")
-		if r.Status != Fail || !strings.Contains(r.Detail, "a running controller keeps the last good value") || !strings.Contains(r.Detail, tc.want) {
+		if r.Status != Fail || !strings.Contains(r.Detail, "A running controller keeps the last good value") || !strings.Contains(r.Detail, tc.want) {
 			t.Errorf("%s: %s %q, want %q", tc.name, r.Status, r.Detail, tc.want)
 		}
 	}
@@ -108,7 +111,7 @@ func TestUnboundedRefusalFollowsTheBudget(t *testing.T) {
 		change func(*fixture)
 		want   string
 	}{
-		{"own namespace, no policy namespace", func(*fixture) {}, "it refuses to start: limiter is declared"},
+		{"own namespace, no policy namespace", func(*fixture) {}, "it refuses to start: limiter is set but the settings cannot build it"},
 		{"well-known policy namespace", func(f *fixture) { f.add(namespace(config.WellKnownPolicyNamespace, nil)) },
 			"not read beside the separate policy namespace (namespace " + config.WellKnownPolicyNamespace + " exists)"},
 		{"labelled policy namespace", func(f *fixture) {
@@ -116,7 +119,7 @@ func TestUnboundedRefusalFollowsTheBudget(t *testing.T) {
 		}, "not read beside the separate policy namespace (" + testNS + " is labelled"},
 		{"admin-owned controller ignores the well-known namespace", func(f *fixture) {
 			f.add(namespace(config.WellKnownPolicyNamespace, nil), controllerDeployment(testNS, "--watch-namespace=team-b"))
-		}, "it refuses to start: limiter is declared"},
+		}, "it refuses to start: limiter is set but the settings cannot build it"},
 		{"namespaces unreadable", func(f *fixture) { f.kubeReact = append(f.kubeReact, forbidden("get", "namespaces")) },
 			"refuses to start unless a separate policy namespace supplies the limiters"},
 	} {
@@ -139,5 +142,97 @@ func TestSettingsWarnKeepsTheLegacyNote(t *testing.T) {
 	r := only(t, f.run(t), "settings")
 	if r.Status != Warn || !strings.Contains(r.Detail, "bogus is no setting") || !strings.Contains(r.Detail, "read scaleToZero from "+LegacyConfigMap) {
 		t.Errorf("got %s %q", r.Status, r.Detail)
+	}
+}
+
+// What the controller's Deployment names, read as the loader reads
+// WATCH_NAMESPACE: the flag when passed (an empty one is every namespace),
+// else the container's WATCH_NAMESPACE with $(VAR) resolved, else config.yaml.
+func TestDeploymentWatchSources(t *testing.T) {
+	withEnv := func(d *appsv1.Deployment, env ...corev1.EnvVar) *appsv1.Deployment {
+		d.Spec.Template.Spec.Containers[0].Env = env
+		return d
+	}
+	watchEnv := func(v string) corev1.EnvVar { return corev1.EnvVar{Name: "WATCH_NAMESPACE", Value: v} }
+	for _, tc := range []struct {
+		name   string
+		deploy *appsv1.Deployment
+		legacy string
+		want   []string
+	}{
+		{"flag", controllerDeployment(testNS, "--watch-namespace="+otherNS), "", []string{otherNS}},
+		{"flag, then env", withEnv(controllerDeployment(testNS, "--watch-namespace="+testNS), watchEnv(otherNS)), "", []string{testNS}},
+		{"flag repeated: the last wins", controllerDeployment(testNS, "--watch-namespace="+otherNS, "--watch-namespace", testNS), "", []string{testNS}},
+		{"empty flag: every namespace, env not read", withEnv(controllerDeployment(testNS, "--watch-namespace="), watchEnv(otherNS)), "", nil},
+		{"env", withEnv(controllerDeployment(testNS), watchEnv(otherNS)), "", []string{otherNS}},
+		{"env with $(VAR)", withEnv(controllerDeployment(testNS),
+			corev1.EnvVar{Name: "LLMSM_WATCH_NAMESPACE", Value: "$(POD_NAMESPACE)"}, watchEnv("$(LLMSM_WATCH_NAMESPACE),"+otherNS)), "", []string{testNS, otherNS}},
+		{"empty env: config.yaml", withEnv(controllerDeployment(testNS), watchEnv("")), otherNS, []string{otherNS}},
+		{"config.yaml", controllerDeployment(testNS), otherNS, []string{otherNS}},
+		{"nothing: every namespace", controllerDeployment(testNS), "", nil},
+	} {
+		f := newFixture(t)
+		f.add(tc.deploy)
+		if tc.legacy != "" {
+			f.add(cm(testNS, LegacyConfigMap, map[string]string{"config.yaml": "WATCH_NAMESPACE: " + tc.legacy + "\n"}))
+		}
+		s := &state{env: f.env(t)}
+		got, named := s.managed()
+		if !slices.Equal(got, tc.want) || named != (tc.want != nil) {
+			t.Errorf("%s: managed = %v %v, want %v", tc.name, got, named, tc.want)
+		}
+	}
+}
+
+// How the controller's Deployment is read: by get, else by list (the
+// cluster-wide preflight may only list); absent, the install files' scope.
+func TestDeploymentWatchReads(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*fixture)
+		want   []string
+		named  bool
+	}{
+		{"get forbidden, list finds none: the namespaced files", func(f *fixture) {
+			f.kubeReact = append(f.kubeReact, forbidden("get", "deployments"))
+		}, []string{testNS}, true},
+		{"get forbidden, list finds none, cluster-wide files: every namespace", func(f *fixture) {
+			f.scope = ScopeCluster
+			f.kubeReact = append(f.kubeReact, forbidden("get", "deployments"))
+		}, nil, false},
+		{"list forbidden, get allowed", func(f *fixture) {
+			f.add(controllerDeployment(testNS, "--watch-namespace="+otherNS))
+			f.kubeReact = append(f.kubeReact, forbidden("list", "deployments"))
+		}, []string{otherNS}, true},
+		{"cluster-wide, before the install: every namespace", func(f *fixture) { f.scope = ScopeCluster }, nil, false},
+	} {
+		f := newFixture(t)
+		tc.change(f)
+		s := &state{env: f.env(t)}
+		got, named := s.managed()
+		if !slices.Equal(got, tc.want) || named != tc.named {
+			t.Errorf("%s: managed = %v %v, want %v %v", tc.name, got, named, tc.want, tc.named)
+		}
+		if r := only(t, f.run(t), "settings"); r.Status == Unknown {
+			t.Errorf("%s: settings %s %q", tc.name, r.Status, r.Detail)
+		}
+	}
+}
+
+// The fixes: a widening watchNamespaces is removed or narrowed; an
+// unreadable Deployment needs a read, or an admin.
+func TestWatchNamespacesFixes(t *testing.T) {
+	f := newFixture(t)
+	f.settings[keyWatchNamespaces] = otherNS
+	r := only(t, f.run(t), "settings")
+	if r.Status != Fail || !strings.Contains(r.Fix, `"op":"remove","path":"/data/watchNamespaces"`) || !strings.Contains(r.Fix, "subset of "+testNS) {
+		t.Errorf("widening: %s fix %q", r.Status, r.Fix)
+	}
+	f = newFixture(t)
+	f.settings[keyWatchNamespaces] = otherNS
+	f.kubeReact = append(f.kubeReact, forbidden("get", "deployments"), forbidden("list", "deployments"))
+	r = only(t, f.run(t), "settings")
+	if r.Status != Unknown || !strings.Contains(r.Fix, "get or list Deployment "+ControllerDeployment) {
+		t.Errorf("unreadable: %s fix %q", r.Status, r.Fix)
 	}
 }

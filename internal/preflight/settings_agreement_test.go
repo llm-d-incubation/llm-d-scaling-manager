@@ -13,7 +13,8 @@ import (
 // (Config.RestrictSettings). Each case is the shipped settings with the keys
 // below changed, fed to both. watch is what the controller's Deployment
 // names; "-" is no Deployment yet, where the namespaced install files name
-// the controller's namespace.
+// the controller's namespace, and "*" no Deployment of a cluster-wide
+// install, which watches every namespace.
 func TestSettingsAgreeWithController(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -51,6 +52,9 @@ func TestSettingsAgreeWithController(t *testing.T) {
 		{"watchNamespaces widens", testNS + ",team-b", map[string]string{keyWatchNamespaces: "team-c"}},
 		{"watchNamespaces narrows every namespace", "", map[string]string{keyWatchNamespaces: "team-c"}},
 		{"watchNamespaces unset, Deployment names two", testNS + ",team-b", nil},
+		{"cluster-wide before the install", "*", nil},
+		{"cluster-wide before the install, watchNamespaces narrows", "*", map[string]string{keyWatchNamespaces: "team-c"}},
+		{"cluster-wide before the install, quota", "*", map[string]string{keyLimiter: "quota", keyQuotas: "H200=8"}},
 		{"logVerbosity 0", "-", map[string]string{keyLogVerbosity: "0"}},
 		{"logVerbosity 10", "-", map[string]string{keyLogVerbosity: "10"}},
 		{"logVerbosity 11", "-", map[string]string{keyLogVerbosity: "11"}},
@@ -71,7 +75,12 @@ func TestSettingsAgreeWithController(t *testing.T) {
 			f := newFixture(t)
 			maps.Copy(f.settings, tc.set)
 			deployment := testNS
-			if tc.watch != "-" {
+			switch tc.watch {
+			case "-":
+			case "*":
+				f.scope = ScopeCluster
+				deployment = ""
+			default:
 				deployment = tc.watch
 				var args []string
 				if tc.watch != "" {
