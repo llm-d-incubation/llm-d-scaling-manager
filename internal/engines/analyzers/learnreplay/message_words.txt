@@ -850,6 +850,7 @@ current-replicas
 currentNeedGPUs
 currentReplicas
 curve
+cutTokens
 cv
 cvSource
 cycle
@@ -1456,6 +1457,7 @@ keep
 keeping
 keeps
 kept
+keptTokens
 key
 keyOutputTokens
 keys
@@ -2093,6 +2095,7 @@ prefillEstimates
 prefillKnown
 prefillObservations
 prefillOnlyRate
+prefillReadySupply
 prefillRefused
 prefillStepsPerToken
 prefix
@@ -2452,6 +2455,7 @@ scalingModifiers
 scheduled
 scheduler
 scheduler-queue-demand
+scheduler-queue-prefill-share-capped
 scheduler-queue-prefill-share-dropped
 scope
 scope/quotas/namespaceQuotas/exclude/kueue

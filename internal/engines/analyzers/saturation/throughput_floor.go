@@ -11,6 +11,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/aggregation"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/floor"
@@ -615,6 +616,10 @@ const SwitchThroughputFloorRaisesVariants = "saturation-throughput-floor-raises-
 // engine queue, so it never opens the gate that would learn prefill's k2 and
 // mu, and with no mu it was never charged. Keeping it errs toward more
 // prefill replicas (the cost side); dropping it under-provisioned prefill.
+// The kept share is priced as KV held at once, which over-states a queue
+// prefill drains at its throughput, so prefill's demand with it is capped at
+// floor.LowerBoundGrowthCap of its READY supply: one doubling of the ready
+// fleet at a time, as the floor caps a prefill lower bound.
 const SwitchPrefillKeepsRouterPrompts = "saturation-prefill-keeps-router-prompts"
 
 // applyThroughputFloor raises roleDemand (in place) and returns the raised
@@ -854,6 +859,32 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 	// exactly the queue's prompt -- 1.2M tokens on the fixture that caught
 	// this -- which is a model-level demand nothing is responsible for
 	// serving.
+	if roleDemand != nil && a.prefillKeepsPrompts {
+		if _, priced := tf.ByRole[domain.RolePrefill]; !priced {
+			// Kept, the share is priced as KV prefill holds at once, where
+			// prefill drains it at a rate nothing here knows. So it is capped
+			// as the floor caps a prefill priced on anything but its own
+			// measurement (floor.LowerBoundGrowthCap): prefill's demand stays
+			// within LowerBoundMaxGrowth times its READY supply, one doubling
+			// of the ready fleet at a time. Only the share is cut: demand
+			// prefill holds of its own is never lowered.
+			if share, ok := eppByRole[domain.RolePrefill]; ok && share > 0 {
+				if before, ok := roleDemand[domain.RolePrefill]; ok {
+					ready := aggregation.AggregateByRole(variants)[domain.RolePrefill].TotalSupply
+					capped := max(before-share, min(before, floor.LowerBoundGrowthCap(scaleUp, ready)))
+					if cut := before - capped; cut > 0 {
+						roleDemand[domain.RolePrefill] = capped
+						totalDemand = max(totalDemand-cut, 0)
+						logger.V(logging.DEFAULT).Info("scheduler-queue-prefill-share-capped",
+							"modelID", input.ModelID, "namespace", input.Namespace,
+							"eppQueueSize", eppQueued, "keptTokens", share-cut, "cutTokens", cut,
+							"prefillReadySupply", ready, "prefillDemandBefore", before,
+							"prefillDemandAfter", capped, "modelTotalAfter", totalDemand)
+					}
+				}
+			}
+		}
+	}
 	if roleDemand != nil && !a.prefillKeepsPrompts {
 		if _, priced := tf.ByRole[domain.RolePrefill]; !priced {
 			if share, ok := eppByRole[domain.RolePrefill]; ok && share > 0 {

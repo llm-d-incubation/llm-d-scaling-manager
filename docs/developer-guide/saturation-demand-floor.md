@@ -169,7 +169,11 @@ so each must keep up with all of it), and on the total otherwise.
   prefill takes first. Prefill learns no `mu` while its own queue reads empty,
   and a backlog that waits in the router keeps it empty, so dropping the share
   left prefill with no charge for that backlog. This errs toward more prefill
-  replicas. With the switch off (a replay), the share is dropped, as before:
+  replicas, so the kept share is capped: prefill's demand stays within
+  `floor.LowerBoundGrowthCap` of its ready supply (`LowerBoundMaxGrowth`, 2,
+  at the scale-up threshold), one doubling of the ready fleet at a time, as
+  the floor caps a prefill lower bound. Demand prefill holds of its own is
+  never cut. With the switch off (a replay), the share is dropped, as before:
   a prefill replica holds a prompt only for its prefill time plus the
   hand-off.
 

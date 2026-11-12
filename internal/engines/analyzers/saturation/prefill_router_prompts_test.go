@@ -2,6 +2,7 @@ package saturation
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/floor"
 )
 
 // Issue llm-d-incubation/llm-d-scaling-manager#51. With no mu, prefill used to
@@ -32,6 +34,17 @@ type prefillRouterFleet struct {
 	lambda   float64
 }
 
+// prefillRouterK1 is each replica's capacity in prefillRouterFleet.
+const prefillRouterK1 = 900_000.0
+
+// growthCap is floor.LowerBoundGrowthCap of f's ready prefill supply, at the
+// scale-up threshold the analyzer sizes with.
+func (f prefillRouterFleet) growthCap() float64 {
+	cfg := makeAnalyzerInput(nil, nil).Config.(*config.ScalingPolicy)
+	scaleUp, _ := cfg.AnalyzerThresholds(domain.SaturationAnalyzerName)
+	return floor.LowerBoundGrowthCap(scaleUp, float64(f.prefillReplicas)*prefillRouterK1)
+}
+
 // price runs the floor over f with stub applied to the analyzer, and returns
 // prefill's demand after it and the model total.
 func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, total float64) {
@@ -41,7 +54,7 @@ func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, tota
 	}
 	clock := propStart
 	a.now = func() time.Time { return clock }
-	const k1 = 900_000.0
+	const k1 = prefillRouterK1
 	vcs := []domain.VariantCapacity{
 		{VariantName: "p", Role: domain.RolePrefill, ReplicaCount: f.prefillReplicas, PerReplicaCapacity: k1,
 			TotalDemand: f.prefillResident},
@@ -75,9 +88,10 @@ func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, tota
 // checkFloorPrefillRouterPrompts: a P/D fleet whose prefill has no mu, 1 to 4
 // replicas of each role, decode with or without a mu, and a router queue of
 // 10 to 500 requests of 1000 to 8000 prompt tokens (less a prefix-cache hit
-// of up to half). Prefill's demand keeps the queue's prompt tokens: they are
-// work prefill takes first. stub, when set, edits the analyzer before it
-// prices (a mutant).
+// of up to half). Prefill's demand keeps the queue's prompt tokens -- work
+// prefill takes first -- up to one doubling of its ready supply
+// (floor.LowerBoundGrowthCap), and never under its own resident KV. stub,
+// when set, edits the analyzer before it prices (a mutant).
 func checkFloorPrefillRouterPrompts(stub func(*SaturationAnalyzer)) func(uint64) error {
 	return func(seed uint64) error {
 		r := propRand(seed)
@@ -95,10 +109,15 @@ func checkFloorPrefillRouterPrompts(stub func(*SaturationAnalyzer)) func(uint64)
 			f.decodeMu = 1 + 9*r.Float64()
 		}
 		prefill, total := f.price(stub)
-		want := f.prefillResident + f.prefillShare
+		growth := f.growthCap()
+		want := max(f.prefillResident, min(f.prefillResident+f.prefillShare, growth))
 		if prefill < want*(1-1e-9) {
-			return violation(kindWrongSide, "prefill with no mu, %d replicas, %.0f queued at the router: priced %.0f, under its resident %.0f plus the queue's prompts %.0f",
-				f.prefillReplicas, queued, prefill, f.prefillResident, f.prefillShare)
+			return violation(kindWrongSide, "prefill with no mu, %d replicas, %.0f queued at the router: priced %.0f, under its resident %.0f plus the queue's prompts %.0f, capped at %.0f",
+				f.prefillReplicas, queued, prefill, f.prefillResident, f.prefillShare, growth)
+		}
+		if prefill > max(f.prefillResident, growth)*(1+1e-9) {
+			return violation(kindOverPriced, "prefill with no mu, %d replicas, %.0f queued at the router: priced %.0f, over one doubling of its ready supply %.0f",
+				f.prefillReplicas, queued, prefill, growth)
 		}
 		return holds(total >= prefill, kindWrongSide, "the model total %.0f is under prefill's own demand %.0f", total, prefill)
 	}
@@ -123,6 +142,39 @@ func TestPrefillWithNoMuKeepsTheRouterPrompts(t *testing.T) {
 	}
 	if onTotal-offTotal != f.prefillShare {
 		t.Errorf("the model total moved %.0f, want the share, %.0f", onTotal-offTotal, f.prefillShare)
+	}
+}
+
+// A router backlog far over what prefill holds is kept only up to one
+// doubling of prefill's ready supply (floor.LowerBoundGrowthCap), as the
+// floor caps a prefill priced on anything but its own measurement; the model
+// total drops what the cap cut. Prefill's own resident KV is never cut.
+func TestPrefillWithNoMuKeepsTheRouterPromptsUpToOneDoubling(t *testing.T) {
+	f := prefillRouterFleet{
+		prefillReplicas: 2, decodeReplicas: 2,
+		prefillResident: 200_000, decodeResident: 400_000,
+		queued: 2000, prefillShare: 2000 * 8000, decodeShare: 2000 * 200,
+		lambda: 30,
+	}
+	growth := f.growthCap()
+	if f.prefillResident+f.prefillShare <= growth {
+		t.Fatalf("precondition: the backlog %.0f is over the cap %.0f", f.prefillResident+f.prefillShare, growth)
+	}
+	prefill, total := f.price(nil)
+	if prefill != growth {
+		t.Errorf("prefill priced %.0f with %.0f queued prompt tokens, want one doubling of its ready supply, %.0f",
+			prefill, f.prefillShare, growth)
+	}
+	want := growth + f.decodeResident + f.decodeShare
+	if math.Abs(total-want) > 1e-6*want {
+		t.Errorf("the model total %.0f, want the capped prefill plus decode, %.0f", total, want)
+	}
+
+	// Resident KV over the cap: none of the share is kept, and nothing of
+	// prefill's own is cut.
+	f.prefillResident = 2 * growth
+	if prefill, _ = f.price(nil); prefill != f.prefillResident {
+		t.Errorf("prefill priced %.0f, want its own resident %.0f, uncut", prefill, f.prefillResident)
 	}
 }
 

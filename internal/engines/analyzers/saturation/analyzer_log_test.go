@@ -70,6 +70,10 @@ var logContract = map[string][]string{
 	// mu (throughput_floor.go); the line is what explains the gap between
 	// scheduler-queue-demand's byRole and RoleDemand.
 	"scheduler-queue-prefill-share-dropped": {"modelID", "namespace", "eppQueueSize", "droppedTokens", "prefillDemandBefore", "prefillDemandAfter"},
+	// With SwitchPrefillKeepsRouterPrompts on, the share is kept, capped at
+	// floor.LowerBoundGrowthCap of prefill's ready supply; the line says how much
+	// of it the cap cut.
+	"scheduler-queue-prefill-share-capped": {"modelID", "namespace", "eppQueueSize", "keptTokens", "cutTokens", "prefillReadySupply", "prefillDemandBefore", "prefillDemandAfter"},
 	// Prefill's demand is held in the no-order/no-release band while decode
 	// is saturated (analyzer.go, holdPrefillDemand); the line is what explains
 	// a prefill RoleDemand that matches neither its rows nor its floor.
