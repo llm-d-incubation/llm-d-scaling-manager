@@ -99,6 +99,7 @@ fail() {
 diagnostics() {
     echo "=== diagnostics ==="
     kubectl get pods -n "$NS" -o wide 2>&1 | head -30
+    [ "$MODEL_NS" = "$NS" ] || kubectl get pods -n "$MODEL_NS" -o wide 2>&1 | head -30
     kubectl get configmap "$STATUS_CM" -n "$NS" -o yaml 2>&1 | grep -v -E '^\s+scalerCACert|BEGIN CERT|END CERT|^\s+[A-Za-z0-9+/=]{40,}$' | head -80
     kubectl logs -n "$NS" "deployment/$DEPLOY" --tail=80 2>&1 | tail -80
 }
@@ -265,6 +266,10 @@ if [ "$SCOPE" = cluster ] && [ "$fails" = keda.networkpolicy ] \
     # The preflight cannot read the edited file: until the NetworkPolicy is
     # applied it judges the file as shipped (keda), so this FAIL stays until
     # the install. The run after the install must PASS it.
+    grep -E '^FAIL +keda.networkpolicy' "$pf" | grep -q "KEDA runs in $KEDA_NS:" \
+        || fail "preflight before the install" "the keda.networkpolicy FAIL does not name $KEDA_NS: $(grep -m1 -E '^FAIL +keda.networkpolicy' "$pf")"
+    [ "$(cat "$LOGS/preflight-before-install.end")" = Failed ] \
+        || fail "preflight before the install" "keda.networkpolicy FAILed, but the Job ended '$(cat "$LOGS/preflight-before-install.end")', not Failed"
     note "scope cluster: keda.networkpolicy FAILs until the cluster file is applied (the preflight reads the shipped file, not the edited one); the run after the install must PASS it"
     fails=""
     before_pass="settings keda.crd keda.version prometheus.reachable"

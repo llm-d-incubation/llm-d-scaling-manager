@@ -2426,8 +2426,9 @@ works there. In order, and a step that fails stops the run:
 - In CI: `e2e-tests-release-manifests` in `ci-pr-checks.yaml`, one leg per
   scope, each on its own runner in parallel with the other e2e jobs. It runs
   on a PR that touches `deploy/`, `config/`, `internal/`, `cmd/`,
-  `test/release-manifests/`, the Go module, the Dockerfile, the Makefile or
-  the workflow, and on a dispatch with `run_full_tests`. On failure it uploads
+  `test/release-manifests/`, the smoke suite and what it imports
+  (`test/e2e/`, `test/utils/`, `test/testconfig/`, `test/alerts/`), the Go
+  module, the Dockerfile, the Makefile or the workflow, and on a dispatch with `run_full_tests`. On failure it uploads
   `dist/release-e2e-logs` (with the cluster's pods, events and the controller
   and KEDA logs) and the rendered files as the artifact
   `release-e2e-logs-<scope>`.
