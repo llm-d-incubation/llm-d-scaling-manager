@@ -377,6 +377,7 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 	if !(arrival > 0) || !whatif.Finite(arrival) {
 		arrival = fleet.requestRate
 	}
+	joint := a.noteJoint(input, fleet, prefills, decodes, prefillRows, decodeRows, arrival, term, now)
 
 	view := &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)}
 	var out []metrics.SLOTTFTReading
@@ -384,6 +385,7 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 		pods := fleet.ready[v]
 		rows := rowsOf(fleet.rows, []string{v})
 		est, fresh := a.prefillEstimate(input.Namespace, input.ModelID, v, now)
+		est = withInvertedVP(est, joint)
 		var estimateAt time.Time
 		if fresh {
 			estimateAt = now
@@ -407,9 +409,10 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 		out = append(out, metrics.SLOTTFTReading{
 			Variant: v, Statistic: statistic, Predicted: p.published(), PerReplica: p.perReplica,
 			Unmet: p.unmet, VPSource: vpSource(est), Reason: p.reason, Refused: p.currentRefusal(),
-			Flags: publishedFlags(p.flags),
+			Flags: publishedFlags(p.flags), Joint: joint.reading(),
 		})
 		logTTFT(logger, input, v, in, p, arrival, target)
+		logJoint(logger, input, v, joint)
 	}
 	return out
 }

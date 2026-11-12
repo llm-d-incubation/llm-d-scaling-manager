@@ -92,6 +92,30 @@ const (
 	// 0 for the others (SLOTTFTFlags).
 	// Labels: namespace, model_name, variant_name, statistic, flag.
 	LLMSMSLOTTFTFlag = "llmsm_slo_ttft_flag"
+	// LLMSMSLOTTFTJointInput is one input of the joint prefill and decode TTFT
+	// model, learned in shadow (SLOTTFTJointInputs): a prefill variant's
+	// unshared work, its overhead a0, the pull at the running prefill
+	// utilization, the decode ITL line and the decode pod's own part. Absent
+	// while the input is not learned; pull-seconds is read at the running
+	// utilization, so it is present only while the mean is priced. Nothing
+	// acts on it. The joint series carry no statistic: they are means, the
+	// same whatever percentile the objective names.
+	// Labels: namespace, model_name, variant_name, input.
+	LLMSMSLOTTFTJointInput = "llmsm_slo_ttft_joint_input"
+	// LLMSMSLOTTFTJointMeanSeconds is the joint model's mean TTFT at the
+	// running fleet and rate, in seconds, the router hop included. Shadow
+	// only; absent when llmsm_slo_ttft_joint_reason is not priced.
+	// Labels: namespace, model_name, variant_name.
+	LLMSMSLOTTFTJointMeanSeconds = "llmsm_slo_ttft_joint_mean_seconds"
+	// LLMSMSLOTTFTJointReason is 1 for why the joint model has no mean, or
+	// priced, and 0 for the others (SLOTTFTJointReasons).
+	// Labels: namespace, model_name, variant_name, reason.
+	LLMSMSLOTTFTJointReason = "llmsm_slo_ttft_joint_reason"
+	// LLMSMSLOTTFTJointFlag is 1 for each flag on the joint mean and 0 for
+	// the others (SLOTTFTJointFlags); all 0 with no mean. Apart from
+	// llmsm_slo_ttft_flag, which is S1's answer's alone.
+	// Labels: namespace, model_name, variant_name, flag.
+	LLMSMSLOTTFTJointFlag = "llmsm_slo_ttft_joint_flag"
 
 	// LabelObjective names an SLO objective: "ttft" or "tpot".
 	LabelObjective = "objective"
@@ -102,6 +126,8 @@ const (
 	LabelVPSource = "vp_source"
 	// LabelFlag names a flag on a TTFT answer.
 	LabelFlag = "flag"
+	// LabelJointInput names an input of the joint TTFT model.
+	LabelJointInput = "input"
 )
 
 // SLO objective label values.
@@ -166,11 +192,68 @@ const (
 	SLOTTFTVPBusyMinutes       = "busy-minutes"
 	SLOTTFTVPPeakUnderQueue    = "peak-under-queue"
 	SLOTTFTVPBackPressureBound = "back-pressure-bound"
-	SLOTTFTVPNone              = "none"
+	// SLOTTFTVPInverted is the queue-free inversion of processor sharing on
+	// the prefill pods, S = T/(1 + lambda*T): it needs no queue, and stands
+	// only where every source above refused.
+	SLOTTFTVPInverted = "inverted"
+	SLOTTFTVPNone     = "none"
 )
 
 // SLOTTFTVPSources is every V_P source value, in the order they are published.
-var SLOTTFTVPSources = []string{SLOTTFTVPBusyMinutes, SLOTTFTVPPeakUnderQueue, SLOTTFTVPBackPressureBound, SLOTTFTVPNone}
+var SLOTTFTVPSources = []string{SLOTTFTVPBusyMinutes, SLOTTFTVPPeakUnderQueue, SLOTTFTVPBackPressureBound,
+	SLOTTFTVPInverted, SLOTTFTVPNone}
+
+// The joint TTFT model's inputs, the input label's values, in the order
+// they are published.
+const (
+	// SLOTTFTJointPrefillWork is S, a prefill pod's unshared work per
+	// request, seconds.
+	SLOTTFTJointPrefillWork = "prefill-work-seconds"
+	// SLOTTFTJointPromptTokens is the prompt S was read at.
+	SLOTTFTJointPromptTokens = "prompt-tokens"
+	// SLOTTFTJointOverhead is a0, the prefill pod's overhead around its
+	// compute, unstretched (its stretch at rho_p is a0/(1 - rho_p)), seconds.
+	SLOTTFTJointOverhead = "overhead-seconds"
+	// SLOTTFTJointPrefillUtilization is the prefill pods' utilization now.
+	SLOTTFTJointPrefillUtilization = "prefill-utilization"
+	// SLOTTFTJointPull is the pull's unshared work at that utilization,
+	// seconds.
+	SLOTTFTJointPull = "pull-seconds"
+	// SLOTTFTJointITLAlpha and SLOTTFTJointITLBeta are ITL(k) = alpha +
+	// beta*k, seconds, k in requests.
+	SLOTTFTJointITLAlpha = "itl-alpha-seconds"
+	SLOTTFTJointITLBeta  = "itl-beta-seconds"
+	// SLOTTFTJointDecodeSteps and SLOTTFTJointDecodeFixed are m_d and d: the
+	// decode pod's TTFT less its pull is m_d*ITL + d.
+	SLOTTFTJointDecodeSteps = "decode-steps"
+	SLOTTFTJointDecodeFixed = "decode-fixed-seconds"
+	// SLOTTFTJointOutputTokens is n_out.
+	SLOTTFTJointOutputTokens = "output-tokens"
+)
+
+// SLOTTFTJointInputs is every joint input, in the order they are published.
+var SLOTTFTJointInputs = []string{
+	SLOTTFTJointPrefillWork, SLOTTFTJointPromptTokens, SLOTTFTJointOverhead, SLOTTFTJointPrefillUtilization,
+	SLOTTFTJointPull, SLOTTFTJointITLAlpha, SLOTTFTJointITLBeta, SLOTTFTJointDecodeSteps,
+	SLOTTFTJointDecodeFixed, SLOTTFTJointOutputTokens,
+}
+
+// SLOTTFTJointReasonPriced is a joint mean published.
+const SLOTTFTJointReasonPriced = "priced"
+
+// SLOTTFTJointReasons is every joint reason, in the order they are
+// published: priced, then the joint model's refusals (whatif.Joint*,
+// spelled here because this package imports nothing; a test in the slo
+// package holds them to whatif's).
+var SLOTTFTJointReasons = []string{
+	SLOTTFTJointReasonPriced, "no-prefill-capacity", "no-overhead", "no-pull", "no-itl-line",
+	"no-decode-own-line", "no-output-length", "no-replicas", "saturated", "batch-unheld", "input-invalid",
+}
+
+// SLOTTFTJointFlags is every flag the joint flag series zero-fills, in the
+// order they are published: whatif.Flag values, held to whatif's by a test in
+// the slo package.
+var SLOTTFTJointFlags = []string{"OverheadMeasured", "PullUnseen", "RouterHopAssumed"}
 
 // The reasons of a prefill variant's TTFT pricing.
 const (
@@ -228,10 +311,11 @@ const SLOTTFTPredictionCaveat = "Not a bound, and which way it errs depends on t
 
 // SLOTTFTFlags is every flag the flag series zero-fills, in the order they are
 // published: the TTFT model's, the decode flags a TTFT answer can carry, and
-// the SLO analyzer's own. The names are whatif.Flag values, spelled here
-// because this package imports nothing; a test in the slo package holds them
-// to whatif's. AssumedVP and DecodeOnsetUnchecked always read 0: the analyzer
-// assumes no V_P and publishes no unchecked answer.
+// the SLO analyzer's own. The joint model's are SLOTTFTJointFlags. The names
+// are whatif.Flag values, spelled here because this package imports nothing;
+// a test in the slo package holds them to whatif's. AssumedVP and
+// DecodeOnsetUnchecked always read 0: the analyzer assumes no V_P and
+// publishes no unchecked answer.
 var SLOTTFTFlags = []string{
 	"UnvalidatedTTFT", "AssumedVP", "VPLowerBound", "VPAboveSlopeBound", "AssumedImbalance",
 	"AssumedPromptSpread", "TransferOmitted", "DecodeSideOmitted", "DecodeTTFTUnmeasured",
