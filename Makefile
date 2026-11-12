@@ -468,7 +468,7 @@ test: manifests generate fmt vet setup-envtest helm check-import-direction check
 	@# The race detector on the packages whose concurrency spec only it can
 	@# check (a few seconds): without -race that spec proves no deadlock and
 	@# nothing more.
-	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/
+	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/ ./internal/whatifapi/...
 
 # The commit a build is made from, recorded in each learner recording's start
 # line (learnrec.BuildCommit), so a golden is added only at the commit that
