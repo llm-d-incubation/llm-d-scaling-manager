@@ -85,21 +85,10 @@ func replicasToSLO(ctx context.Context, args []string, out, warn io.Writer) erro
 	} else {
 		query.Headroom = f.headroomFor(st.Policy)
 	}
-	var ratio whatif.TPOTRatio
-	var ratioFlags []whatif.Flag
-	var ratioRefused *whatif.Unanswerable
+	var r resolvedRatio
 	if *pct != "" {
-		query.PercentileTarget = &whatif.TPOTTarget{Percentile: q}
-		// A percentile outside (0, 1) is the library's to refuse.
-		if q > 0 && q < 1 {
-			ratio, ratioFlags, ratioRefused = f.tpotRatioFor(st, q)
-		} else {
-			ratio = whatif.TPOTRatio{Value: f.tpotRatio, Assumed: true}
-		}
-		query.PercentileTarget.Ratio = ratio
-		if ratioRefused != nil {
-			query.PercentileTarget.Ratio = placeholderRatio
-		}
+		r = f.ratioFor(st, q)
+		query.PercentileTarget = percentileTarget(q, r)
 	}
 
 	answers := make([]replicasAnswer, 0, len(variants))
@@ -110,41 +99,13 @@ func replicasToSLO(ctx context.Context, args []string, out, warn io.Writer) erro
 		given = rate
 	}
 	for i, pv := range variants {
-		query := query
-		var at *operatingTTFT
+		var fleet *pricedFleet
 		if ttft != nil {
-			var o operatingTTFT
-			o, query = fleets[i].atOperatingPoint(*ttft, query, given, h, whatif.KneeRate(pv.decode))
-			at = &o
-			results = append(results, o.results()...)
+			fleet = fleets[i]
 		}
-		slo := whatif.SLOAtReplicas(pv.decode, query)
-		if slo.PercentileTPOT != nil {
-			slo.PercentileTPOT = withRatioRefusal(slo.PercentileTPOT, ratioRefused)
-		}
-		on := func(pick func(whatif.DecodeSLO) whatif.Result) func(whatif.Decode) whatif.Result {
-			return func(d whatif.Decode) whatif.Result { return pick(whatif.SLOAtReplicas(d, query)) }
-		}
-		slo.KneeRate = pv.qualify(pv.band(slo.KneeRate, whatif.KneeRate))
-		// A rate --rate gives is an input, not an estimate: it has no band.
-		// A rate the prefill knee sets has none either: V_P is not resampled.
-		if query.Rate == 0 {
-			slo.Rate = pv.band(slo.Rate, on(func(s whatif.DecodeSLO) whatif.Result { return s.Rate }))
-		}
-		slo.Rate = pv.qualify(slo.Rate)
-		slo.MeanTPOT = pv.qualify(pv.band(slo.MeanTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.MeanTPOT })))
-		if at != nil {
-			slo.Rate, slo.MeanTPOT = at.onRate(at.onDecode(slo.Rate)), at.onDecode(slo.MeanTPOT)
-		}
-		if slo.PercentileTPOT != nil {
-			p := pv.band(slo.PercentileTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.PercentileTPOT }))
-			slo.PercentileTPOT = pv.qualify(onRatio(p, ratio, ratioFlags))
-			if at != nil {
-				slo.PercentileTPOT = at.onDecode(slo.PercentileTPOT)
-			}
-		}
-		answers = append(answers, replicasAnswer{pv: pv, slo: slo, ratio: ratio, query: query, ttft: at, headroom: h})
-		results = append(results, slo.KneeRate, slo.Rate, slo.MeanTPOT, slo.PercentileTPOT)
+		a, priced := replicasAt(pv, fleet, ttft, query, given, h, r)
+		answers = append(answers, a)
+		results = append(results, priced...)
 	}
 	none := noDecode(st, variants)
 	if none != nil {
@@ -202,6 +163,60 @@ func replicasToSLO(ctx context.Context, args []string, out, warn io.Writer) erro
 		return exitStatus(code)
 	}
 	return nil
+}
+
+// percentileTarget is question 2's percentile at q, priced on R_q, or on a
+// placeholder R_q where R_q was refused, so that the library still judges the
+// rest of the question (withRatioRefusal).
+func percentileTarget(q float64, r resolvedRatio) *whatif.TPOTTarget {
+	t := &whatif.TPOTTarget{Percentile: q, Ratio: r.ratio}
+	if r.refused != nil {
+		t.Ratio = placeholderRatio
+	}
+	return t
+}
+
+// replicasAt prices question 2 on one decode variant: with a TTFT asked, the
+// fleet at its operating point first (fleet and ttft nil with none), then
+// decode's knee, rate and TPOTs at the rate that sets, or at query's. priced
+// is every Result the exit code reads, in the order the command reads them.
+func replicasAt(pv pricedVariant, fleet *pricedFleet, ttft *ttftQuestion, query whatif.ReplicasQuery, given *float64, h float64,
+	r resolvedRatio) (replicasAnswer, []whatif.Result) {
+	var priced []whatif.Result
+	var at *operatingTTFT
+	if ttft != nil {
+		var o operatingTTFT
+		o, query = fleet.atOperatingPoint(*ttft, query, given, h, whatif.KneeRate(pv.decode))
+		at = &o
+		priced = append(priced, o.results()...)
+	}
+	slo := whatif.SLOAtReplicas(pv.decode, query)
+	if slo.PercentileTPOT != nil {
+		slo.PercentileTPOT = withRatioRefusal(slo.PercentileTPOT, r.refused)
+	}
+	on := func(pick func(whatif.DecodeSLO) whatif.Result) func(whatif.Decode) whatif.Result {
+		return func(d whatif.Decode) whatif.Result { return pick(whatif.SLOAtReplicas(d, query)) }
+	}
+	slo.KneeRate = pv.qualify(pv.band(slo.KneeRate, whatif.KneeRate))
+	// A rate --rate gives is an input, not an estimate: it has no band.
+	// A rate the prefill knee sets has none either: V_P is not resampled.
+	if query.Rate == 0 {
+		slo.Rate = pv.band(slo.Rate, on(func(s whatif.DecodeSLO) whatif.Result { return s.Rate }))
+	}
+	slo.Rate = pv.qualify(slo.Rate)
+	slo.MeanTPOT = pv.qualify(pv.band(slo.MeanTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.MeanTPOT })))
+	if at != nil {
+		slo.Rate, slo.MeanTPOT = at.onRate(at.onDecode(slo.Rate)), at.onDecode(slo.MeanTPOT)
+	}
+	if slo.PercentileTPOT != nil {
+		p := pv.band(slo.PercentileTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.PercentileTPOT }))
+		slo.PercentileTPOT = pv.qualify(onRatio(p, r.ratio, r.flags))
+		if at != nil {
+			slo.PercentileTPOT = at.onDecode(slo.PercentileTPOT)
+		}
+	}
+	a := replicasAnswer{pv: pv, slo: slo, ratio: r.ratio, query: query, ttft: at, headroom: h}
+	return a, append(priced, slo.KneeRate, slo.Rate, slo.MeanTPOT, slo.PercentileTPOT)
 }
 
 // noDecode is the refusal for a cycle with no decode variant to price,
