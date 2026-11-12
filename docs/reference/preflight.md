@@ -10,9 +10,8 @@ ConfigMap. It reads no Secret.
 | namespaced (one controller per namespace) | `scaling-manager-preflight.yaml` |
 | cluster-wide, in `scaling-manager-system` | `scaling-manager-preflight-cluster.yaml` (applies as is) |
 
-> The release files are a preview until the controller reads the settings
-> ConfigMap. Until then, install with `make deploy-scaling-manager`; the
-> preflight runs against either install.
+The preflight runs against an install from the release files or from
+`make deploy-scaling-manager`.
 
 ## Run it
 

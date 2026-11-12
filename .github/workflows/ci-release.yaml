@@ -381,11 +381,9 @@ jobs:
             pre=""
             [ "$PRERELEASE" = true ] && pre="--prerelease"
             # A draft: publishing, with the release notes, stays a maintainer's step.
-            # Until the controller reads scaling-manager-settings the files are a
-            # preview (deploy/release-manifests.sh, PREVIEW_NOTE); the notes say so.
             gh release create "$VERSION" --draft --verify-tag $pre \
               --title "llm-d-scaling-manager $VERSION" \
-              --notes "The attached manifests are a PREVIEW and not yet installable on their own. Install with make deploy-scaling-manager from a checkout of $VERSION. Release notes to follow."
+              --notes "Install from the attached manifests with kubectl (docs/guides/install-in-namespace), or with make deploy-scaling-manager from a checkout of $VERSION. Release notes to follow."
             draft=true
           fi
           if [ "$draft" != true ]; then

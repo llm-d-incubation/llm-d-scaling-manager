@@ -3,107 +3,176 @@
 ## Overview
 
 This guide installs one scaling manager (llm-d-scaling-manager) that sizes the
-llm-d model servers in **every** namespace. It decides how many replicas each
-variant needs and hands that number to KEDA, which does the scaling.
+llm-d model servers in **every** namespace, from the files attached to a
+release, with `kubectl`. It decides how many replicas each variant needs and
+hands that number to KEDA, which does the scaling. It installs **passive**:
+nothing scales until you switch it on.
 
 Use it when one team runs the cluster. Where namespaces belong to different
 teams, install [one controller per namespace](../install-in-namespace/) instead:
 failure domains, policy and upgrades stay separate.
 
-**This scope is work in progress**, and the install says so. It skips the
-preflight's per-namespace checks, because the namespaces it will manage are
-discovered and may not hold model servers yet.
+**This scope is work in progress.** The steps are the namespaced guide's, with
+the cluster-wide files; read that guide for what each step does.
+
+Tested: the namespaced files on Kubernetes (kind, `make
+test-e2e-release-manifests`, run before each release). The cluster-wide and
+OpenShift files are not yet tested end to end; each says so in its header.
+
+Prefer a checkout and `make`? See [From a checkout instead](#from-a-checkout-instead).
 
 ## Prerequisites
 
 - [ ] Cluster-admin rights.
 - [ ] llm-d model servers somewhere on the cluster.
-- [ ] **KEDA.** On Kubernetes, add `KEDA_HELM_INSTALL=true` to the deploy
-  command to install it. On OpenShift, install the Custom Metrics Autoscaler
-  operator first. KEDA 2.21 is recommended: older KEDA can leave a new
-  ScaledObject [unwired](../../reference/keda.md#unwired-hpa-before-keda-220)
-  after the controller restarts. Supported versions, and what happens with an
-  existing KEDA: [KEDA reference](../../reference/keda.md).
-- [ ] A Prometheus with the Prometheus Operator. Where nothing scrapes the
-  model servers or the EPP yet, `make setup-prereqs` adds the monitors.
+- [ ] **KEDA**, 2.18 or later; 2.21 is recommended ([KEDA reference](../../reference/keda.md)).
+  On OpenShift, the Custom Metrics Autoscaler operator.
+- [ ] A Prometheus with the Prometheus Operator.
 - [ ] **For scale-from-zero only: the `flowControl` feature gate on every
-  EPP.** The check below finds every namespace with llm-d model servers or an
-  InferencePool, and reports each one. Where the gate is off it warns and goes
-  on. To turn it on, add this to the `EndpointPickerConfig` and restart the
-  EPP:
+  EPP** (`featureGates: [flowControl]` in the `EndpointPickerConfig`).
 
-  ```yaml
-  featureGates:
-  - flowControl
-  ```
-
-<!-- guide:prerequisites.check start -->
+<!-- guide:prerequisites.download start -->
 ```bash
-# Read-only. Reports what the install would need.
-make check-prereqs SCOPE=cluster
+# The release files. Pick the release you install.
+V=<release, for example v0.11.0>
+URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+for f in cluster settings preflight-cluster scaler-tls model-namespace keda-auth; do
+  curl -fsSLO $URL/scaling-manager-$f.yaml
+done
 ```
-<!-- guide:prerequisites.check end -->
+<!-- guide:prerequisites.download end -->
 
-No KEDA yet, and you will add `KEDA_HELM_INSTALL=true` to the install? Add it
-to this check too. Without it the check stops at the missing KEDA.
+Each file is pinned to the release's image by digest, and signed. Check them
+now, before the `sed` below changes them: [Verify the release
+files](../../reference/install-methods.md#verify-the-release-files).
+
+<!-- guide:prerequisites.namespace start -->
+```bash
+# The controller runs in scaling-manager-system. The cluster-wide files already name it.
+kubectl create namespace scaling-manager-system
+for f in scaling-manager-settings.yaml scaling-manager-scaler-tls.yaml scaling-manager-keda-auth.yaml; do
+  sed -i "s/__NAMESPACE__/scaling-manager-system/g" "$f"
+done
+```
+<!-- guide:prerequisites.namespace end -->
+
+On OpenShift (not yet tested end to end), use
+`scaling-manager-cluster-openshift.yaml` in place of
+`scaling-manager-cluster.yaml` in every command, set `prometheusURL` to Thanos Querier (the
+settings file names it), and label the namespace
+`openshift.io/user-monitoring=true`.
 
 ## Installation Instructions
 
-### 1. Install the scaling manager
+### 1. KEDA's namespace, settings and the preflight check
 
-<!-- guide:deploy.all start -->
+The scaler NetworkPolicy in `scaling-manager-cluster.yaml` admits KEDA from
+namespace `keda` (`openshift-keda` in the OpenShift file). If KEDA runs
+elsewhere, name its namespace before you apply the file, and keep the edit for
+every upgrade. Without it, the preflight FAILs `keda.networkpolicy`; the `sed`
+it prints names the namespaced files, so run the one below instead:
+
+<!-- guide:deploy.kedans start -->
 ```bash
-make deploy-scaling-manager SCOPE=cluster
+# Before applying, name the namespace KEDA runs in in the scaler NetworkPolicy (the file says keda). Keep this edit for every upgrade.
+export KEDA_NS=<the namespace KEDA runs in>
+sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-cluster.yaml
 ```
-<!-- guide:deploy.all end -->
+<!-- guide:deploy.kedans end -->
 
-At this scope one person is both the cluster admin and the installer, so one
-command runs [`setup-prereqs`](../admin-cluster-setup/) (cluster RBAC, the
-namespace, the ServiceMonitor) and then installs the controller.
+Set `prometheusURL` in `scaling-manager-settings.yaml`, then:
 
-**Check the NetworkPolicy line it prints.** The scaler port `:9090` is limited
-to KEDA's namespace only when the installer can find KEDA. If it warns that
-`:9090` is open to every Pod, run the fix it prints:
-
+<!-- guide:deploy.settings start -->
 ```bash
-# Limit the scaler port to KEDA's namespace
-KEDA_NAMESPACE=<keda namespace> make setup-prereqs SCOPE=cluster LLMSM_NS=<controller namespace>
+# Set prometheusURL in scaling-manager-settings.yaml first. Created once, never applied again.
+kubectl create -f scaling-manager-settings.yaml
 ```
+<!-- guide:deploy.settings end -->
 
-### 2. Register the workloads
-
-Nothing scales until a ScaledObject exists. At this scope the plan covers every
-namespace with model servers, so read it before applying it.
-
-<!-- guide:deploy.register start -->
+<!-- guide:deploy.preflight start -->
 ```bash
-# Plan and apply ScaledObjects in every namespace with model servers. Keep SCOPE=cluster.
-make scaledobjects-plan SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
-# edit scaling-manager-plan.yaml: apply: yes|no|adopt, the modelID, the replica bounds
-make scaledobjects-apply SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+# Read-only. Prints PASS, WARN, FAIL or UNKNOWN per check, and the fix.
+kubectl delete job scaling-manager-preflight -n scaling-manager-system --ignore-not-found
+kubectl apply -f scaling-manager-preflight-cluster.yaml
+until kubectl get job scaling-manager-preflight -n scaling-manager-system \
+    -o jsonpath='{.status.conditions[?(@.status=="True")].type}' | grep -qE 'Complete|Failed'; do sleep 3; done
+kubectl logs -n scaling-manager-system job/scaling-manager-preflight
 ```
-<!-- guide:deploy.register end -->
+<!-- guide:deploy.preflight end -->
 
-The plan has one entry per model server and applies nothing until you say so.
-`apply: adopt` points an existing ScaledObject at the scaling manager instead of
-adding a second. The file's own comments explain every field; there is an
-example in [Install the scaling manager in a
-namespace](../install-in-namespace/README.md#4-register-the-workloads).
+Fix every `FAIL` and run it again. Every check: [Preflight
+check](../../reference/preflight.md). If a private CA signed Prometheus's
+certificate, give the controller that CA:
 
-Check the model servers are safe to scale with `make workload-patch`, again
-with the scope:
-
+<!-- guide:deploy.promca start -->
 ```bash
-# Report what the model servers need (drain hook, model cache, engine caches), across the cluster
-make workload-patch SCOPE=cluster
-# or for one namespace
-make workload-patch NAMESPACE=<ns>
+# Only when a private CA signed Prometheus's certificate.
+kubectl create secret generic scaling-manager-prometheus-ca -n scaling-manager-system --from-file=ca.crt=<ca file>
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge \
+  -p '{"data":{"prometheusCACertPath":"/etc/scaling-manager-prometheus-ca/ca.crt"}}'
 ```
+<!-- guide:deploy.promca end -->
 
-See [Writing the
-patch](../../reference/workload-preparation.md#writing-the-patch-make-workload-patch).
-To shorten each scale-up further, hold the image and the weights on the nodes:
-[The rest of the start path](../../reference/workload-preparation.md#the-rest-of-the-start-path).
+When you are done with the preflight (after step 3), remove its cluster-wide
+reads; applying the preflight file again restores them:
+
+<!-- guide:deploy.preflightdone start -->
+```bash
+# After the last run. The preflight's cluster reads are needed only while it runs.
+kubectl delete clusterrolebinding scaling-manager-preflight --ignore-not-found
+```
+<!-- guide:deploy.preflightdone end -->
+
+### 2. Install the controller
+
+<!-- guide:deploy.controller start -->
+```bash
+kubectl create -f scaling-manager-scaler-tls.yaml
+kubectl apply -f scaling-manager-cluster.yaml
+kubectl rollout status deployment/scaling-manager-controller-manager -n scaling-manager-system
+```
+<!-- guide:deploy.controller end -->
+
+Then, in each namespace with model servers, the model-server monitor:
+
+<!-- guide:deploy.model start -->
+```bash
+# In each namespace with model servers. The model-server PodMonitor (and a Role the cluster-wide controller does not need).
+MODEL_NS=<model namespace>
+sed -e "s/__NAMESPACE__/scaling-manager-system/g" -e "s/__MODEL_NAMESPACE__/$MODEL_NS/g" \
+  scaling-manager-model-namespace.yaml | kubectl apply -f -
+```
+<!-- guide:deploy.model end -->
+
+### 3. Give KEDA its client certificate
+
+<!-- guide:deploy.kedaauth start -->
+```bash
+# In this directory, with KEDA_NS set as above. Prints the steps that give KEDA its client certificate.
+kubectl get configmap scaling-manager-controller-status -n scaling-manager-system \
+  -o jsonpath='{.data.scalerTLSAction}{"\n"}'
+```
+<!-- guide:deploy.kedaauth end -->
+
+<!-- guide:deploy.mtls start -->
+```bash
+# Prints "mutual TLS" once KEDA's side is in place and the controller restarted.
+kubectl get configmap scaling-manager-controller-status -n scaling-manager-system \
+  -o jsonpath='{.data.scalerTLS}{"\n"}'
+```
+<!-- guide:deploy.mtls end -->
+
+In this directory, run the text after `then restart the controller:` in
+step 1 of what it prints; step 2 only on a reinstall. Then check:
+
+### 4. Register the workloads, then let it scale
+
+One ScaledObject per model-server Deployment, as in [the namespaced
+guide](../install-in-namespace/#register-the-workloads), with
+`scalerAddress: scaling-manager-external-scaler.scaling-manager-system.svc:9090`
+and `authenticationRef` naming `scaling-manager-external-scaler-scaling-manager-system`.
+Then [let it scale](../install-in-namespace/#let-it-scale), with `-n
+scaling-manager-system`.
 
 ## Verification
 
@@ -117,44 +186,33 @@ Look for **`READY True`** on the ScaledObject and a number in the HPA's
 `TARGETS`. `1/1 (avg)` means one replica is the right size. Do not use
 `CurrentMetrics` as the check ([why](#why-not-currentmetrics)).
 
-`TARGETS` showing `<unknown>` means KEDA cannot reach the scaler. Usually the
-ScaledObject names another install's namespace, for example after switching
-between a namespace-scoped and a cluster-wide install. Repoint it:
-
-<!-- guide:troubleshoot.repoint start -->
-```bash
-# Point ScaledObjects at the running install's scaler.
-make scaledobjects-repoint
-```
-<!-- guide:troubleshoot.repoint end -->
-
-`READY True` but `TARGETS` showing only `cpu` means KEDA's first call for the
-metric failed and it does not retry. Re-wire it (`DRY_RUN=true` only lists
-them):
-
-```bash
-make scaledobjects-rewire SCOPE=cluster
-```
+`TARGETS` showing `<unknown>` means KEDA cannot reach the scaler: check the
+`scalerAddress`, and that step 3 printed `mutual TLS`. `READY True` but
+`TARGETS` showing only `cpu` means KEDA's first call for the metric failed and
+it does not retry: delete and re-apply the ScaledObject.
 
 ## Cleanup
 
+Delete or repoint the ScaledObjects first: one parked at zero cannot wake once
+the scaler is gone. Then:
+
 <!-- guide:cleanup.uninstall start -->
 ```bash
-make undeploy-scaling-manager SCOPE=cluster
+# ScaledObjects stay; delete or repoint them first. Keeps the scaler CA, for a reinstall.
+kubectl delete -f scaling-manager-cluster.yaml --ignore-not-found
+kubectl delete -f scaling-manager-preflight-cluster.yaml --ignore-not-found
+kubectl delete -f scaling-manager-keda-auth.yaml --ignore-not-found
+kubectl delete secret scaling-manager-external-scaler-scaling-manager-system -n $KEDA_NS --ignore-not-found
+kubectl delete configmap,secret -n scaling-manager-system \
+  -l 'app.kubernetes.io/part-of=scaling-manager,scaling-manager.llmd.ai/scaler-tls!=ca'
 ```
 <!-- guide:cleanup.uninstall end -->
 
-**This touches every namespace:**
-
-- **ScaledObjects the installer created are deleted** everywhere, and KEDA puts
-  each workload back to its earlier replica count: a cluster-wide resize.
-- **ScaledObjects you adopted are kept and listed.** They still call the removed
-  scaler, and one parked at zero cannot wake. Repoint or delete them.
-
-`UNDEPLOY_SCALEDOBJECTS=false` keeps the created ones too. Prometheus, KEDA and
-the namespaces stay; `UNDEPLOY_SHARED=true` removes them as well. Model servers
-keep serving in every namespace. If a namespace's model came from [Install a
-small llm-d model](../install-small-model/), remove it per namespace:
+Delete the model-server monitor in each model namespace with the same `sed`
+and `kubectl delete -f -`. The namespace `scaling-manager-system` and the scaler
+CA in it stay; delete them when you will not reinstall. If a namespace's model
+came from [Install a small llm-d model](../install-small-model/), remove it per
+namespace:
 
 <!-- guide:cleanup.model start -->
 ```bash
@@ -166,35 +224,48 @@ Full detail: [Upgrade and uninstall](../../reference/upgrade-and-uninstall.md).
 
 ## Configuration
 
-| Parameter | Default | Example |
-| --- | --- | --- |
-| `SCOPE` | `namespace`. **Set `cluster` for this guide**, on every command | `cluster` |
-| `LLMSM_NS` | `scaling-manager-system`. Where the controller runs; differs from `NAMESPACE` at this scope | `scaling-manager-system` |
-| `KEDA_NAMESPACE` | detected. Without it, no NetworkPolicy is written | `keda` |
-| `KEDA_HELM_INSTALL` | `false` | `true` |
-| `IMG` | the image built from main, a **floating** tag ([pin the version](../../reference/upgrade-and-uninstall.md#pin-the-version)) | `ghcr.io/you/scaling-manager:dev` |
+The settings ConfigMap in `scaling-manager-system`, as for [a namespaced
+install](../install-in-namespace/#configuration). `watchNamespaces` empty means
+every namespace.
 
 A cluster-scoped install can read every ConfigMap and patch every pod in the
 cluster; every permission is in the [security
-model](../../reference/security-model.md#cluster-scoped-both-platforms). Full
-list of settings: [installer options](../../reference/install-options.md).
+model](../../reference/security-model.md#cluster-scoped-both-platforms).
+
+## From a checkout instead
+
+`make deploy-scaling-manager SCOPE=cluster` installs the same objects. It finds
+Prometheus and KEDA itself, and installs KEDA with `KEDA_HELM_INSTALL=true`:
+
+<!-- guide:checkout.install start -->
+```bash
+# The same install from a checkout of the release tag.
+git checkout <release>
+make check-prereqs SCOPE=cluster
+make deploy-scaling-manager SCOPE=cluster
+```
+<!-- guide:checkout.install end -->
+
+<!-- guide:checkout.register start -->
+```bash
+# From a checkout. Plan and apply ScaledObjects in every namespace with model servers. Keep SCOPE=cluster.
+make scaledobjects-plan SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+# edit scaling-manager-plan.yaml: apply: yes|no|adopt, the modelID, the replica bounds
+make scaledobjects-apply SCOPE=cluster LLMSM_DEFAULT_SO_PLAN=scaling-manager-plan.yaml
+```
+<!-- guide:checkout.register end -->
+
+Keep `SCOPE=cluster` on every command: it defaults to `namespace`, and the plan
+then scans only the controller's own namespace. `make undeploy-scaling-manager
+SCOPE=cluster` removes the install and the ScaledObjects it created. Every
+option: [installer options](../../reference/install-options.md).
 
 ## Details
 
-- **Why `SCOPE=cluster` on every command.** `SCOPE` defaults to `namespace`
-  everywhere in this repo. Without it, `scaledobjects-plan` and
-  `workload-patch` scan only the controller's own namespace, find nothing, and
-  report `No model servers found in scope` or "Deploy them first".
-  With `LLMSM_WORKLOAD_PATCH_APPLY=true`, `SCOPE=cluster` means a rolling restart
-  of every model server on the cluster.
 - **Why `flowControl`.** At zero replicas there are no model-server metrics, so
   the router queue the gate publishes is the only sign anyone wants the model.
-  Without it scale-from-zero never fires. While running, flow control admits only
-  what an engine can absorb, so `vllm:num_requests_waiting` can read 0 while
-  requests wait at the router.
 - **Why the NetworkPolicy matters.** Without it any Pod can call the scaler on
-  `:9090`. How the namespace is found: [the scaler
-  NetworkPolicy](../admin-cluster-setup/README.md#the-scaler-networkpolicy).
+  `:9090`. With mutual TLS, only KEDA can, whatever the policy says.
 
 ### Why not `CurrentMetrics`
 
@@ -204,14 +275,9 @@ reads `<unknown>/1 (avg)` and nothing scales.
 
 ## Next
 
-- `make benchmark-smoke NAMESPACE=<ns>`: drive load at one managed namespace
-  and snapshot the dashboard
 - [Bound every install by real GPUs](../admin-gpu-bounding/)
 - [Share GPUs between models in different
-  namespaces](../utilization-share-cluster-wide/): one budget across
-  namespaces, with the utilization-share optimizer
-- `deploy/warmpool.sh plan -n <ns>`: read-only check of whether a namespace has
-  models that could share a [warm pool](../warm-pool/)
+  namespaces](../utilization-share-cluster-wide/)
 - [After the install](../../reference/operations.md)
 - [Install methods](../../reference/install-methods.md): GitOps, direct
-  Kustomize, and what the script does
+  Kustomize, and verifying the release files

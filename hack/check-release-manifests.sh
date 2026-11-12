@@ -141,8 +141,17 @@ check_dir() {
             *) ins=__NAMESPACE__; safile=scaling-manager-namespaced.yaml ;;
         esac
         [ "$(q "$f" 'length')" -gt 0 ] || say "$f holds no object"
-        # The preview notice, until phase 2 lands (PREVIEW_NOTE in the renderer).
-        head -3 "$d/$f" | grep -q '^# PREVIEW: not yet installable on its own' || say "$f does not open with the PREVIEW notice"
+        # No preview notice: the files install on their own
+        # (make test-e2e-release-manifests).
+        head -3 "$d/$f" | grep -q '^# PREVIEW' && say "$f still opens with the PREVIEW notice"
+        # The files no end-to-end test installs say so, and only they.
+        untested=no
+        head -3 "$d/$f" | grep -q '^# NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes' && untested=yes
+        case "$f" in
+            scaling-manager-cluster.yaml|scaling-manager-cluster-openshift.yaml|scaling-manager-namespaced-openshift.yaml|scaling-manager-preflight-cluster.yaml)
+                [ "$untested" = yes ] || say "$f does not open with the NOT YET TESTED line" ;;
+            *) [ "$untested" = no ] || say "$f is tested end to end but opens with the NOT YET TESTED line" ;;
+        esac
         n="$(q "$f" '.[] | select(.metadata.labels["app.kubernetes.io/part-of"] != "scaling-manager"
                 or (.metadata.labels["app.kubernetes.io/instance"] // "") == ""
                 or .metadata.labels["app.kubernetes.io/version"] != $v
@@ -236,6 +245,13 @@ check_dir() {
         n="$(q "$f" '[.[] | select(.kind == "Deployment") | .spec.template.spec.volumes[]
             | select(.configMap.name == "scaling-manager-manager-config") | .configMap.optional] | tojson')"
         [ "$n" = '[true]' ] || say "$f: the scaling-manager-manager-config volume is not optional: $n"
+        # The Prometheus CA the operator creates is mounted, optional, where
+        # prometheusCACertPath points: without it a private CA cannot be trusted.
+        n="$(q "$f" '[.[] | select(.kind == "Deployment") | . as $d | .spec.template.spec.volumes[]
+            | select(.secret.secretName == "scaling-manager-prometheus-ca" and .secret.optional == true) | .name as $v
+            | $d.spec.template.spec.containers[] | select(.name == "manager") | .volumeMounts[]
+            | select(.name == $v and .mountPath == "/etc/scaling-manager-prometheus-ca")] | length')"
+        [ "$n" = 1 ] || say "$f: Secret scaling-manager-prometheus-ca is not mounted, optional, at /etc/scaling-manager-prometheus-ca ($n)"
         # No installer runs to mint the scaler certificates: the controller
         # provisions them (--external-scaler-tls-bootstrap), never with the
         # make path's certificate files, under the narrow Role, bound to its
@@ -325,7 +341,7 @@ check_dir() {
         || say "scaling-manager-metrics-reader.yaml binds a ClusterRole the namespaced file does not hold"
 
     n="$(q scaling-manager-settings.yaml '.[] | select(.kind == "ConfigMap") | .metadata.name + " " + (.data | tojson)')"
-    [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
+    [ "$n" = 'scaling-manager-settings {"prometheusURL":"","prometheusCACertPath":"","prometheusInsecureSkipVerify":"false","passive":"true","utilizationShare":"off","limiter":"","quotas":"","quotaScope":"namespace","kueue":"false","kueueBorrow":"true","kueueNamespace":"kueue-system","scaleToZero":"false","watchNamespaces":"","logVerbosity":"2"}' ] \
         || say "scaling-manager-settings.yaml: name, keys or defaults differ from the proposal: $n"
 
     # The preflight files: the Job runs `manager preflight check` as its own
@@ -483,6 +499,8 @@ mutate podmonitor-controller "differs from the installer split" scaling-manager-
     '(select(.kind == "PodMonitor") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
 mutate volume-not-optional "is not optional" scaling-manager-namespaced.yaml \
     '(select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "scaling-manager-config") | .configMap.optional) = false'
+mutate prometheus-ca-unmounted "scaling-manager-prometheus-ca is not mounted" scaling-manager-namespaced.yaml \
+    'del(select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "scaling-manager-prometheus-ca"))'
 mutate servername-unfixed "serverName" scaling-manager-namespaced-openshift.yaml \
     '(select(.kind == "ServiceMonitor") | .spec.endpoints[0].tlsConfig.serverName) = "scaling-manager-controller-manager-metrics-service.PLACEHOLDER-NAMESPACE.svc"'
 mutate kueue-unnarrowed "Kueue Namespace read" scaling-manager-kueue.yaml \
@@ -547,9 +565,15 @@ mutate preflight-cluster-scope-lost "preflight Job runs" scaling-manager-preflig
     '(select(.kind == "Job") | .spec.template.spec.containers[0].args) = ["preflight", "check"]'
 mutate preflight-cluster-controller "differs from the installer split" scaling-manager-preflight.yaml \
     '(select(.kind == "ClusterRole") | .metadata.labels["scaling-manager.llmd.ai/part"]) = "controller"'
-d="$WORK/m-preview-missing"; rm -rf "$d"; cp -r "$GOOD" "$d"
-sed -i '/^# PREVIEW: /d' "$d/scaling-manager-activate.yaml"
-caught preview-missing "PREVIEW notice" "$d"
+d="$WORK/m-preview-back"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '1a # PREVIEW: not yet installable on its own.' "$d/scaling-manager-activate.yaml"
+caught preview-back "PREVIEW notice" "$d"
+d="$WORK/m-untested-dropped"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '/^# NOT YET TESTED end to end/d' "$d/scaling-manager-cluster.yaml"
+caught untested-dropped "does not open with the NOT YET TESTED line" "$d"
+d="$WORK/m-untested-on-tested"; rm -rf "$d"; cp -r "$GOOD" "$d"
+sed -i '1a # NOT YET TESTED end to end; the tested install is scaling-manager-namespaced.yaml on Kubernetes (make test-e2e-release-manifests).' "$d/scaling-manager-namespaced.yaml"
+caught untested-on-tested "tested end to end but opens with the NOT YET TESTED line" "$d"
 
 # --- the release workflow: what renders, signs and uploads these files -------
 WF="$ROOT/.github/workflows/ci-release.yaml"
@@ -601,7 +625,7 @@ rm -rf "$WORK/wf/run/dist"/*.yaml "$WORK/wf/run/dist"/*.sigstore.json
 if sign_run; then fail "the sign step passed with no manifest rendered"; else pass; fi
 
 # The attach step, executed with a stub gh: a missing release becomes a draft
-# with the preview note and gets the files; a draft gets them; a published
+# and gets the files; a draft gets them; a published
 # release with the same SHA256SUMS gets nothing; one with different files, or
 # a release that cannot be read, fails the job.
 cat > "$WORK/wf/bin/gh" <<'STUB'
@@ -635,7 +659,7 @@ for c in "absent ok create" "draft ok upload" "published-same ok none" "publishe
     read -r state want acts <<< "$c"
     rc=0; attach "$state" || rc=$?
     uploads="$(grep -c '^release upload' "$WORK/wf/gh.log")"
-    creates="$(grep -c '^release create .*--draft.*PREVIEW' "$WORK/wf/gh.log")"
+    creates="$(grep -c '^release create .*--draft' "$WORK/wf/gh.log")"
     got="ok"; [ "$rc" -eq 0 ] || got="refused"
     case "$acts" in
         create) [ "$creates" = 1 ] && [ "$uploads" = 1 ] || got="$got(create=$creates,upload=$uploads)" ;;

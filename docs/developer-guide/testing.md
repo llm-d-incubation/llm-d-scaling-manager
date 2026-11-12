@@ -2327,6 +2327,96 @@ The specs:
   without it, today's optimizer borrows 8 GPUs for a second G replica. It also
   logs whether Kueue's `waitForPodsReady` is on.
 
+### Install from the release files
+
+`make test-e2e-release-manifests` installs the scaling manager the way the
+[namespace guide](../guides/install-in-namespace/) tells an operator to: from
+the rendered release files, with `kubectl` only, and nothing from `deploy/`.
+The prerequisites (kind with emulated GPUs, Prometheus, KEDA, the llm-d CRDs
+and EPP) come from the existing e2e setup, without the scaling manager:
+
+```bash
+CREATE_CLUSTER=true make test-e2e-release-manifests-with-setup
+# or, step by step on a cluster you keep:
+make test-e2e-release-manifests-setup     # DEPLOY_SCALING_MANAGER=false deploy-e2e-infra, builds and loads the image
+make test-e2e-release-manifests           # renders the files, installs, checks, uninstalls
+```
+
+`test/release-manifests/e2e.sh` copies the files to a scratch directory and
+works there. In order, and a step that fails stops the run:
+
+1. Fills `__NAMESPACE__` with `sed` (the controller runs in `llm-d-sim`, with
+   the model servers), applies what the guide gives the cluster admin (the
+   `part=admin` objects of the main and preflight files, and the
+   model-namespace file), creates the
+   Prometheus CA Secret, and creates the settings with `prometheusURL` and
+   `prometheusCACertPath` set. A second `kubectl create` must fail with
+   `AlreadyExists`.
+2. Runs the preflight Job (the `part=controller` object of its file). The file's NetworkPolicy names `keda`; the e2e KEDA
+   runs in `keda-system`, so the Job must fail on `keda.networkpolicy` and
+   print a fix. It runs that fix as printed, then the preflight again, which
+   must have no FAIL and PASS `settings`, `keda.crd`, `keda.version`,
+   `keda.networkpolicy` and `prometheus.reachable`. The WARN and UNKNOWN lines
+   go into the summary: before the install `keda.mtls`, `metrics.model` and
+   `podmonitor.port` WARN, and `overlap` is UNKNOWN (a namespaced preflight
+   may not list Deployments in other namespaces).
+3. Creates the empty scaler TLS Secrets, applies the `part=controller` objects,
+   and the alerts file, and waits for the rollout and for the status
+   ConfigMap to say `passiveDefault: true`, `utilizationShare: off` and
+   `settingsSource: settings`.
+4. Runs step 1 of `scalerTLSAction` as printed, with `KEDA_NS` set: the client
+   Secret copy, `scaling-manager-keda-auth.yaml` and the restart. Then
+   `scalerTLS` must start with `mutual TLS`, and the preflight must PASS
+   `keda.mtls`, `keda.networkpolicy` and `rbac.controller`. `scaler.tls` must
+   be UNKNOWN naming the NetworkPolicy, or PASS: the shipped policy admits the
+   scaler port from KEDA's namespace only, so the Job's own handshake is
+   dropped. Step 5 shows the mutual TLS end to end instead.
+5. Sets `passive: "false"` and runs the smoke suite against this install
+   (`make test-e2e-smoke`, with `E2E_EXPECT_SCALER_TLS=true` and
+   `DEPLOY_ALERTING_RULES=true`: the install applied the alerts file). It fails
+   on 0 specs. `KEDA Smoke Tests - Basic Autoscaling` is skipped
+   (`RELEASE_E2E_SMOKE_SKIP`): it creates its model in a namespace made at run
+   time, which only a cluster-scoped controller watches. The external-scaler
+   spec still scales a model to two replicas through KEDA over mutual TLS.
+   Afterwards `scalerTLSAction` must be empty: KEDA presented the certificate
+   the controller issued. Then back to passive.
+6. Walks passive, then a quota and `utilizationShare: shadow`, then
+   `passive: "false"`, then the activation file and `utilizationShare:
+   active`, reading the status after each patch. The preflight must PASS
+   `activation`.
+7. Negative control: a wrong `prometheusURL` must fail the preflight Job with
+   `prometheus.reachable` FAIL.
+8. Uninstalls with `kubectl delete -f` and the delete by label from the guide,
+   then lists every object labelled `app.kubernetes.io/part-of=scaling-manager`
+   in every kind and namespace, and every ClusterRole or binding named for the
+   namespace. Only Secret `scaling-manager-external-scaler-ca` may be left, as
+   the guide says.
+
+- **The image is pinned by digest, as a release pins it.** The kind nodes hold
+  the local build under its tag and under an import reference
+  (`docker.io/library/import-<date>@sha256:...`), not under
+  `<repository>@sha256:...`, so a Pod naming the latter would try to pull it.
+  The target tags that reference on each node (`ctr images tag`) and renders
+  with it.
+- `RELEASE_E2E_SMOKE=false` skips step 5. `KEEP_INSTALL=true` (an environment
+  variable of the script) stops before the uninstall.
+- **Re-running on the same cluster.** The script expects no install: a
+  second run fails at `kubectl create` of the settings. After a run that
+  stopped early, run the uninstall block of the script (step 8) by hand,
+  or use a fresh cluster. If the scaler CA changed, restart KEDA's operator
+  too: it keeps the CA of its first connection.
+- The summary, every preflight log and the smoke log are in
+  `dist/release-e2e-logs` (`RELEASE_E2E_LOGS`).
+- Not in CI: the e2e workflow's jobs already use their time budget, and this
+  one adds a full smoke run. Run it before a release and on any change to
+  `deploy/release-manifests.sh`, `config/release/` or the preflight.
+
+Not covered yet: the cluster-wide and OpenShift files, the Kueue and
+metrics-reader files, a model in a namespace other than the controller's, the
+passive non-move of a running model, an upgrade from the previous release's
+files, and the path equivalence with `make deploy-scaling-manager`
+([the proposal's Testing section](../proposals/install-from-release.md#testing)).
+
 ### Controller state between runs
 
 `BeforeSuite` restarts the controller first. This is needed for determinism.

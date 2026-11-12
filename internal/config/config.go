@@ -22,6 +22,7 @@ type Config struct {
 	// epp            eppConfig
 	features   featureFlagsConfig
 	saturation scalingPolicyConfig // namespace-aware
+	settings   settingsState
 }
 
 // LimiterType names one kind of GPU limiter allocation.NewLimiterFromConfig can
@@ -120,8 +121,16 @@ type ScalingPolicySet map[string]ScalingPolicy
 
 // scalingPolicyConfig holds saturation scaling configuration (namespace-aware)
 type scalingPolicyConfig struct {
-	// Global default configuration
+	// Global default configuration: globalPolicy with the live settings
+	// folded into its "default" entry (applySettings). Every reader reads
+	// this one.
 	global ScalingPolicySet
+
+	// globalPolicy is the global set as the scaling-policy ConfigMap wrote
+	// it, before the settings are folded in. Kept so a settings change can be
+	// folded again, and so a rejected entry is replaced by the entry as
+	// written, not by one the settings changed.
+	globalPolicy ScalingPolicySet
 
 	// Namespace-local configuration overrides (keyed by namespace name)
 	namespaceConfigs map[string]ScalingPolicySet
@@ -409,10 +418,23 @@ func (c *Config) StickyScaleDownEnabled() bool {
 	return c.features.stickyScaleDownEnabled
 }
 
-// PassiveDefault reports the controller-wide passive switch (LLMSM_PASSIVE): the
-// value a model's passive mode takes when no scaling-policy entry sets
-// `passive` (ResolvePassive). Read at start. Thread-safe.
+// PassiveDefault reports the controller-wide passive switch: the value a
+// model's passive mode takes when no scaling-policy entry sets `passive`
+// (ResolvePassive). It is the settings ConfigMap's passive key when that is
+// set, which is live, else the LLMSM_PASSIVE read at start. Thread-safe.
 func (c *Config) PassiveDefault() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.settings.live.Passive != nil {
+		return *c.settings.live.Passive
+	}
+	return c.features.passive
+}
+
+// PassiveAtStart reports the LLMSM_PASSIVE read at start from the flags, the
+// environment and config.yaml, whatever the settings ConfigMap says.
+// Thread-safe.
+func (c *Config) PassiveAtStart() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.features.passive
@@ -560,9 +582,10 @@ func (c *Config) UpdateScalingPolicyConfigForNamespace(namespace string, config 
 	var oldCount int
 	if namespace == "" {
 		// Update global
-		oldCount = len(c.saturation.global)
-		c.saturation.global = newConfig
-		newCount := len(c.saturation.global)
+		oldCount = len(c.saturation.globalPolicy)
+		c.saturation.globalPolicy = newConfig
+		c.refoldGlobalLocked()
+		newCount := len(c.saturation.globalPolicy)
 		if oldCount != newCount {
 			ctrl.Log.Info("Updated global saturation config", "oldEntries", oldCount, "newEntries", newCount)
 		}
@@ -651,6 +674,7 @@ func NewTestConfig() *Config {
 		},
 		saturation: scalingPolicyConfig{
 			global:           make(ScalingPolicySet),
+			globalPolicy:     make(ScalingPolicySet),
 			namespaceConfigs: make(map[string]ScalingPolicySet),
 		},
 	}
@@ -1009,6 +1033,8 @@ func (c *Config) SetPolicyNamespace(ns string, source PolicySource) {
 	defer c.mu.Unlock()
 	c.saturation.policyNamespace = ns
 	c.saturation.policySource = source
+	// Whether the budget settings apply depends on it.
+	c.refoldGlobalLocked()
 }
 
 // PolicyNamespace returns the namespace cluster policy is read from. Empty before
@@ -1045,12 +1071,13 @@ func (c *Config) PolicyNamespaceIsSeparate() bool {
 // ScalingPolicyEntry returns the entry stored under key in one namespace's own
 // scaling-policy set, or in the global set when namespace is empty. Unlike
 // ScalingPolicyConfigForNamespace it never falls back from a namespace to the
-// global set: it answers what that ConfigMap last put in force.
+// global set: it answers what that ConfigMap last put in force, as written,
+// before the settings ConfigMap is folded into the "default" entry.
 // Thread-safe.
 func (c *Config) ScalingPolicyEntry(namespace, key string) (ScalingPolicy, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	set := c.saturation.global
+	set := c.saturation.globalPolicy
 	if namespace != "" {
 		set = c.saturation.namespaceConfigs[namespace]
 	}

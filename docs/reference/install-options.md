@@ -828,8 +828,7 @@ The serving certificate must name the host in `scalerAddress`.
 
 </details>
 
-**From the release files** (a preview until the release files install on
-their own): no installer runs, so the controller provisions the three Secrets
+**From the release files**: no installer runs, so the controller provisions the three Secrets
 itself (`--external-scaler-tls-bootstrap`, which the release Deployment sets).
 It may not create Secrets, so create the three, empty, once:
 `kubectl create -f scaling-manager-scaler-tls.yaml`. Never `apply` that file

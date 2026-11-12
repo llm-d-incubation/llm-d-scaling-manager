@@ -132,9 +132,12 @@ spec:
             cpu: 10m
             memory: 64Mi
         volumeMounts:
+        # The whole directory, not a subPath: the ConfigMap is optional now
+        # that scaling-manager-settings carries the same values, and a subPath
+        # into an absent ConfigMap is created as an empty DIRECTORY, which the
+        # loader cannot read as config.yaml.
         - name: scaling-manager-config
-          mountPath: /etc/scaling-manager/config.yaml
-          subPath: config.yaml
+          mountPath: /etc/scaling-manager
           readOnly: true
         - name: epp-metrics-token
           mountPath: /var/run/secrets/epp-metrics
@@ -145,6 +148,9 @@ spec:
       - name: scaling-manager-config
         configMap:
           name: manager-config
+          # Deleting scaling-manager-manager-config once settingsSource says
+          # settings must not leave the pod in ContainerCreating.
+          optional: true
       - name: epp-metrics-token
         secret:
           secretName: epp-metrics-token

@@ -30,6 +30,15 @@ func (r *ConfigMapReconciler) BootstrapInitialConfigMaps(ctx context.Context) er
 	systemNamespace := config.SystemNamespace()
 	watchNamespace := r.Config.WatchNamespace()
 
+	// The settings first, so the first policy fold already carries them. A
+	// settings ConfigMap that exists but cannot be read stops startup: it
+	// may declare the limiter (ReadSettings).
+	if err := r.bootstrapSettings(ctx); err != nil {
+		log.FromContext(ctx).Error(err, "Cannot start: the settings ConfigMap cannot be read")
+		r.Config.MarkConfigMapsBootstrapFailed(err)
+		return err
+	}
+
 	// Always bootstrap global ConfigMaps from system namespace
 	targets := []struct {
 		name      string

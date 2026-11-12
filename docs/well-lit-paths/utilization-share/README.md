@@ -32,26 +32,27 @@ used or not (on-prem, a reservation, a team allotment).
 ## Start here
 
 This is the main path. You need two or more models on one GPU product, model
-servers that drain on termination, and `kubectl`, `jq`, `yq` and `make` in a
-checkout of this repository. Each step links to the guide that has the
-commands.
+servers that drain on termination, `kubectl`, and the release files. Each
+step links to the guide that has the commands; each mode change is a `kubectl
+patch` of the settings ConfigMap, read live.
 
-1. **Install passive, with the quota.** The controller decides for every
-   model and changes no replica count. Prepare the namespace, install with
-   `LLMSM_PASSIVE=true` and a quota, and register the models:
+1. **Install passive, with the quota.** The release files install passive:
+   the controller decides for every model and changes no replica count.
+   Install, set the quota in the settings, and register the models:
    [Try it in passive mode, steps 1 to 3](../../guides/try-in-passive-mode/README.md#installation-instructions),
    with the quota from
    [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
 2. **Watch.** Leave it through each model's busy period. Compare what it would
    order with what runs:
    [Verification](../../guides/try-in-passive-mode/README.md#verification).
-3. **Turn on utilization share in shadow, and keep watching.** Check there is
-   a budget to share and run `make utilization-share-shadow`; leave
-   `make utilization-share-activate` for step 4. It reports what it would move,
-   and moves nothing:
+3. **Turn on utilization share in shadow, and keep watching.** Set
+   `utilizationShare: shadow`; leave `active` for step 4. It reports what it
+   would move, and moves nothing:
    [Utilization share in passive mode](../../guides/try-in-passive-mode/README.md#utilization-share-in-passive-mode).
-4. **Go active.** Make every model active, turn the optimizer on again, and
-   check that transfers end `done`:
+   From a checkout, `make utilization-share-check` and
+   `make utilization-share-shadow` do the same with their own checks.
+4. **Go active.** Apply the activation file, set `utilizationShare: active`
+   and `passive: "false"`, and check that transfers end `done`:
    [Go live](../../guides/try-in-passive-mode/README.md#go-live), then the
    optimizer's [Verification](../../guides/utilization-share/README.md#verification).
    To hand over one model first, see

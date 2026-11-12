@@ -67,7 +67,10 @@ import (
 func ResolvePolicyNamespace(ctx context.Context, c client.Reader, cfg *config.Config) error {
 	logger := log.FromContext(ctx)
 	systemNS := config.SystemNamespace()
-	managedNS := cfg.WatchNamespace()
+	// What the Deployment names, never the watchNamespaces setting: whoever
+	// writes the settings ConfigMap must not be able to change which rule
+	// below decides where their own limits come from.
+	managedNS := cfg.DeploymentWatchNamespace()
 
 	// The tenant-owned shape: this controller manages exactly the namespace it
 	// lives in, so whoever administers that namespace administers this controller.

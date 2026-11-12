@@ -23,7 +23,7 @@ the prerequisites of [the saturation path](../scale-on-saturation/#start-here).
 The namespace owner runs every step.
 
 1. Deploy the P/D model with [llm-d's own P/D guide](https://github.com/llm-d/llm-d/tree/main/guides/pd-disaggregation), adding the EPP's `flowControl` feature gate, which that guide leaves off ([details](#what-it-needs)).
-2. After the cluster admin's `make setup-prereqs`, [install the scaling manager](../../guides/install-in-namespace/) and [register](../../guides/install-in-namespace/README.md#4-register-the-workloads) both roles under one `modelID`.
+2. After the cluster admin's `make setup-prereqs`, [install the scaling manager](../../guides/install-in-namespace/) and [register](../../guides/install-in-namespace/README.md#register-the-workloads) both roles under one `modelID`.
 3. For long generations, set `defaultOutputTokens` on the decode trigger ([how](#tuning-it)).
 4. Check it works: `llmsm_desired_replicas` shows one series per role ([details](#verifying-it)).
 

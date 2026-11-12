@@ -86,6 +86,29 @@ func newLogger(opts *zap.Options, verbosity int, verbositySet bool, logLevel str
 	return logger
 }
 
+// SetVerbosity changes the level of the logger InitLogging built from opts to
+// --v=verbosity. It reports false, and changes nothing, when opts holds no
+// level that can be changed in place.
+func SetVerbosity(opts *zap.Options, verbosity int) bool {
+	lvl, ok := opts.Level.(uberzap.AtomicLevel)
+	if !ok {
+		return false
+	}
+	lvl.SetLevel(zapcore.Level(int8(-1 * verbosity)))
+	return true
+}
+
+// ApplySettingsVerbosity applies the settings ConfigMap's logVerbosity at
+// start: it wins over --v and LOG_LEVEL, as every setting wins over the
+// Deployment, and --zap-log-level (zapLevelGiven), a development flag, wins
+// over it. It reports whether the level was changed.
+func ApplySettingsVerbosity(opts *zap.Options, verbosity int, zapLevelGiven bool) bool {
+	if zapLevelGiven {
+		return false
+	}
+	return SetVerbosity(opts, verbosity)
+}
+
 // Sync flushes any buffered log entries.
 func Sync() error {
 	logger := ctrl.Log.WithName("logger-sync").GetSink()

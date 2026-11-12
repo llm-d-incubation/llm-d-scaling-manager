@@ -79,11 +79,42 @@
 //	                       controller with no quota on its namespace ignores
 //	                       physicalGroups and says so here. The mode is not
 //	                       invalid; absent otherwise.
-//	passiveDefault         "true" or "false": the LLMSM_PASSIVE this process
-//	                       read at start. It is read only then, so a value
-//	                       that differs from scaling-manager-manager-config means the
-//	                       controller needs a restart; the installer compares
-//	                       the two. Absent until set.
+//	passiveDefault         "true" or "false": the controller-wide passive
+//	                       switch in force. It is the settings ConfigMap's
+//	                       passive key when that is set, which is live;
+//	                       otherwise the LLMSM_PASSIVE this process read at
+//	                       start. Absent until set.
+//	passiveAtStart         "true" or "false": the LLMSM_PASSIVE this process
+//	                       read at start, whatever the settings say. It is
+//	                       read only then, so a value that differs from
+//	                       scaling-manager-manager-config means the controller
+//	                       needs a restart, unless settingsSources names
+//	                       passive=settings; the installer compares the two.
+//	settingsSource         where the settings come from as a whole:
+//	                       "settings" (the settings ConfigMap, and the
+//	                       manager ConfigMap contributes nothing that differs
+//	                       from a default, so it can be deleted),
+//	                       "settings+manager-config", "manager-config" (no
+//	                       settings ConfigMap) or "defaults".
+//	settingsSources        for each setting, where its value in force comes
+//	                       from, as key=source pairs sorted by key and joined
+//	                       by ",". Sources: settings, manager-config, policy,
+//	                       policy-namespace, flag, env, default.
+//	settingsFromManagerConfig
+//	                       the config.yaml keys of the manager ConfigMap still
+//	                       in force with a value other than the default,
+//	                       joined by ","; what deleting it would change.
+//	                       Absent when none.
+//	settingsResourceVersion
+//	                       metadata.resourceVersion of the settings ConfigMap
+//	                       last applied; empty when there is none. A reader
+//	                       that patched version V and reads V here knows the
+//	                       live keys of that version are in force.
+//	settingsRejected       the settings whose value cannot be used, as
+//	                       <key>: <reason>, joined by "; ". The value in force
+//	                       before stays. Absent when none.
+//	settingsUnknownKeys    keys of the settings ConfigMap that are no setting,
+//	                       joined by ","; they are ignored. Absent when none.
 //	inFlightLedger         the in-flight node ledger, JSON
 //	                       (allocation.PersistedInFlight): the holes held for
 //	                       replicas whose pods hold no node yet, each with its
@@ -217,7 +248,7 @@ const (
 	// example a physicalGroups a namespace-scoped controller ignores. Absent
 	// when they do not.
 	KeyUtilizationShareNote = "utilizationShareNote"
-	// KeyPassiveDefault is the LLMSM_PASSIVE this process read at start,
+	// KeyPassiveDefault is the controller-wide passive switch in force,
 	// "true" or "false".
 	KeyPassiveDefault = "passiveDefault"
 	// KeyResolvedAccelerators is the accelerator types the steady-state
@@ -228,6 +259,28 @@ const (
 	// scaler: TLS handshakes kept being refused for minutes, no call
 	// served. Absent while one is.
 	KeyScalerUnreachable = "scalerUnreachable"
+	// KeyPassiveAtStart is the LLMSM_PASSIVE this process read at start from
+	// its flags, environment and config.yaml, "true" or "false", whatever the
+	// settings ConfigMap says. The installer compares it with the manager
+	// ConfigMap to tell a restart is due.
+	KeyPassiveAtStart = "passiveAtStart"
+	// KeySettingsSource says where the settings come from as a whole
+	// (config.Config.SettingsSource).
+	KeySettingsSource = "settingsSource"
+	// KeySettingsSources says where each setting's value comes from.
+	KeySettingsSources = "settingsSources"
+	// KeySettingsFromManagerConfig lists the manager ConfigMap's keys still
+	// in force with a value other than the default. Absent when none.
+	KeySettingsFromManagerConfig = "settingsFromManagerConfig"
+	// KeySettingsResourceVersion is the settings ConfigMap's version last
+	// applied.
+	KeySettingsResourceVersion = "settingsResourceVersion"
+	// KeySettingsRejected lists the settings whose value cannot be used.
+	// Absent when none.
+	KeySettingsRejected = "settingsRejected"
+	// KeySettingsUnknownKeys lists the settings ConfigMap's keys that are no
+	// setting. Absent when none.
+	KeySettingsUnknownKeys = "settingsUnknownKeys"
 	// KeyScalerTLS is how the scaler serves when the controller provisions
 	// its certificates (--external-scaler-tls-bootstrap).
 	KeyScalerTLS = "scalerTLS"
@@ -258,6 +311,10 @@ const (
 	labelNameValue = "scaling-manager"
 	labelComponent = "app.kubernetes.io/component"
 	componentValue = "controller-status"
+	// labelPartOf lets an uninstall by label find the ConfigMap, as it finds
+	// every other object the controller writes.
+	labelPartOf      = "app.kubernetes.io/part-of"
+	labelPartOfValue = "scaling-manager"
 )
 
 const (
@@ -626,7 +683,7 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      ConfigMapName,
 				Namespace: p.namespace,
-				Labels:    map[string]string{labelName: labelNameValue, labelComponent: componentValue},
+				Labels:    map[string]string{labelName: labelNameValue, labelComponent: componentValue, labelPartOf: labelPartOfValue},
 			},
 			Data: maps.Clone(want),
 		})
@@ -634,7 +691,8 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 	if err != nil {
 		return err
 	}
-	if maps.Equal(cm.Data, want) && cm.Labels[labelName] == labelNameValue && cm.Labels[labelComponent] == componentValue {
+	if maps.Equal(cm.Data, want) && cm.Labels[labelName] == labelNameValue && cm.Labels[labelComponent] == componentValue &&
+		cm.Labels[labelPartOf] == labelPartOfValue {
 		return nil
 	}
 	if cm.Labels == nil {
@@ -642,6 +700,7 @@ func (p *Publisher) writeOnce(ctx context.Context, want map[string]string) error
 	}
 	cm.Labels[labelName] = labelNameValue
 	cm.Labels[labelComponent] = componentValue
+	cm.Labels[labelPartOf] = labelPartOfValue
 	cm.Data = maps.Clone(want)
 	return p.writer.Update(ctx, &cm)
 }
@@ -694,11 +753,41 @@ func observe(d map[string]string, cfg *config.Config) {
 	d[KeyUtilizationShare] = mode
 	d[KeyUtilizationShareError] = errText(err)
 	setOrDelete(d, KeyUtilizationShareNote, cfg.UtilizationShareNote())
+	observeSettings(d, cfg)
 	if cfg.ClusterQuotaPerController() {
 		d[KeyClusterQuotaPerController] = config.ClusterQuotaPerControllerMessage
 	} else {
 		delete(d, KeyClusterQuotaPerController)
 	}
+}
+
+// observeSettings sets the values that describe the settings in force.
+func observeSettings(d map[string]string, cfg *config.Config) {
+	d[KeyPassiveDefault] = strconv.FormatBool(cfg.PassiveDefault())
+	d[KeyPassiveAtStart] = strconv.FormatBool(cfg.PassiveAtStart())
+	d[KeySettingsSource] = cfg.SettingsSource()
+	d[KeySettingsSources] = config.SettingsSourcesText(cfg.SettingsSources())
+	setOrDelete(d, KeySettingsFromManagerConfig, strings.Join(cfg.SettingsFromManagerConfig(), ","))
+	_, rv := cfg.SettingsPresent()
+	d[KeySettingsResourceVersion] = rv
+	rep := cfg.SettingsReport()
+	rejected := make([]string, 0, len(rep.Rejected))
+	for _, k := range slices.Sorted(maps.Keys(rep.Rejected)) {
+		rejected = append(rejected, k+": "+rep.Rejected[k])
+	}
+	setOrDelete(d, KeySettingsRejected, strings.Join(rejected, "; "))
+	setOrDelete(d, KeySettingsUnknownKeys, strings.Join(rep.Unknown, ","))
+}
+
+// RecordSettings records the settings in force, and refreshes every value
+// derived from cfg in the same update: the limiter and optimizer mode the
+// settings may have changed never lag settingsResourceVersion. Call it only
+// after the settings are applied to cfg.
+func (p *Publisher) RecordSettings(cfg *config.Config) {
+	if p == nil {
+		return
+	}
+	p.update(func(d map[string]string) { observe(d, cfg) })
 }
 
 // SetPodListDenied records whether the GPU usage walk is refused a
@@ -766,7 +855,8 @@ func (p *Publisher) SetUtilizationShareNote(note string) {
 	p.update(func(d map[string]string) { setOrDelete(d, KeyUtilizationShareNote, note) })
 }
 
-// SetPassiveDefault records the LLMSM_PASSIVE this process read at start.
+// SetPassiveDefault records the controller-wide passive switch in force.
+// RecordSettings and every policy record refresh it from the configuration.
 func (p *Publisher) SetPassiveDefault(passive bool) {
 	if p == nil {
 		return
