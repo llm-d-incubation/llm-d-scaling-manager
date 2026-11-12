@@ -104,6 +104,7 @@ var commands = map[string]command{
 	"freeze":          runFreeze,
 	"generate":        runGenerate,
 	"replicas-to-slo": runReplicasToSLO,
+	"serve":           runServe,
 	"slo-to-rate":     runSLOToRate,
 }
 
