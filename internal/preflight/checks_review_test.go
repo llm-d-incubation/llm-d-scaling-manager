@@ -361,6 +361,7 @@ func TestUnnarrowedReaderCoversAll(t *testing.T) {
 		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"namespaces"}, Verbs: []string{"get"}}},
 	})
 	f.settings[keyWatchNamespaces] = testNS + ",team-b"
+	f.add(controllerDeployment(testNS, "--watch-namespace="+testNS+",team-b"))
 	if r := only(t, f.run(t), "rbac.namespaces"); r.Status != Pass {
 		t.Errorf("got %s %q", r.Status, r.Detail)
 	}
@@ -370,6 +371,7 @@ func TestKueueControllerSAUnread(t *testing.T) {
 	f := newFixture(t)
 	f.settings[keyKueue] = valueTrue
 	f.settings[keyLimiter] = limiterQuota
+	f.settings[keyQuotas] = "H200=8"
 	for _, n := range []string{"clusterqueues", "localqueues", "resourceflavors", "workloads"} {
 		f.dyn = append(f.dyn, crd(n+".kueue.x-k8s.io"))
 	}

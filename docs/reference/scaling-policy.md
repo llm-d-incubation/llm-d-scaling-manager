@@ -1293,7 +1293,10 @@ of keeping it as if you had added it:
 
 A key no install rendered is yours, and is kept. A ConfigMap written by a
 release before the annotations has none, so the first re-run from it keeps
-every key, as before, and writes the annotations for the next one.
+every key, as before, and writes the annotations for the next one. Applying
+the release files with `kubectl` in between may leave the annotations as the
+last `make deploy-scaling-manager` wrote them, and the next re-run then drops
+by those keys. The warning names every key it drops, with its value.
 
 When the live entry sets an owned key to another value, the install writes the
 rendered value and names the key:

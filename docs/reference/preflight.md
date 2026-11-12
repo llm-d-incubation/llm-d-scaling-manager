@@ -110,7 +110,7 @@ after it.
 
 | check | FAIL when | WARN when | UNKNOWN when |
 | --- | --- | --- | --- |
-| `settings` | the controller would reject a key (the check uses the controller's own parser: a bad or repeated quota, an unknown mode, a `logVerbosity` outside 0 to 10, `quota` with no budget), `utilizationShare` is on without a limiter, or there are no settings at all | the settings hold a key that is no setting, or a value that has no effect; or the settings are absent and the pre-v0.11.0 `scaling-manager-manager-config` is read instead | the settings cannot be read |
+| `settings` | the controller would reject a key (the check uses the controller's own parser: a bad or repeated quota, an unknown mode, a `logVerbosity` outside 0 to 10, `quota` with no budget, a `watchNamespaces` that names a namespace the controller's Deployment does not), `utilizationShare` is on without a limiter, or there are no settings at all. The detail says what the controller does with each rejected key: a running one keeps the last good value; the next start uses the next source down, turns `passive` on, or refuses to start when `limiter` is declared and cannot be built | the settings hold a key that is no setting, or a value that has no effect; or the settings are absent and the pre-v0.11.0 `scaling-manager-manager-config` is read instead | the settings cannot be read; or `watchNamespaces` is set and the controller's Deployment cannot be read, so whether it only narrows what the Deployment names is not known |
 | `keda.crd` | `scaledobjects.keda.sh` is absent | | the CRD cannot be read |
 | `keda.version` | KEDA is older than 2.18 | an untested minor; before 2.21.0 (CVE-2026-77524); before 2.20.0 (a ScaledObject made just after a controller restart can stay unwired) | KEDA's operator cannot be read, or its image names no version |
 | `keda.networkpolicy` | the scaler NetworkPolicy, applied or in the file (`keda`; `openshift-keda` on OpenShift), does not admit the namespace KEDA runs in. The fix is a `kubectl patch`, or a `sed` on the file before it is applied | the external-metrics APIService is not KEDA's | where KEDA runs cannot be read |
@@ -158,6 +158,11 @@ and not with `prometheusInsecureSkipVerify`.
   grants nothing.
 - A ClusterRole, cluster-wide file: the same, but `list` Deployments, pods and
   PodMonitors in every namespace instead of by name.
+
+Before the install there is no controller Deployment, and the checks read the
+namespaces the install files name: the controller's own for the namespaced
+file, every namespace for the cluster-wide one. After it, they read what the
+Deployment names (`--watch-namespace`), narrowed by `watchNamespaces`.
 
 ## Not yet
 

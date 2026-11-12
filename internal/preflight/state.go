@@ -97,16 +97,15 @@ func (s *state) ctrlUser() string {
 }
 
 // managed returns the namespaces the install manages, and false for a
-// cluster-wide install that names none (it manages every namespace).
+// cluster-wide install that names none (it manages every namespace): the
+// watchNamespaces setting where the controller accepts it, else what its
+// Deployment names (loadSettings).
 func (s *state) managed() ([]string, bool) {
 	st := s.loadSettings(context.Background())
-	if w := splitList(st.value(keyWatchNamespaces)); len(w) > 0 {
-		return w, true
+	if len(st.watched) > 0 {
+		return st.watched, true
 	}
-	if s.env.Scope == ScopeCluster {
-		return nil, false
-	}
-	return []string{s.env.Namespace}, true
+	return nil, false
 }
 
 // isOpenShift reads the API groups: OpenShift serves route.openshift.io.
