@@ -109,18 +109,41 @@ internal one. The inputs, the rows and the JSON are in
 whatif joint-ttft --recording run.jsonl [--cycle N|last] [--model M] [--prefill N] [--decode N] [--rate R] [--prompt I] [--hop D] [-o json]
 ```
 
-Prices the joint prefill and decode model's mean TTFT at a fleet, from the
-inputs the recording's rows support at the cycle: the fleet and rate that ran
-by default, or the ones the flags give. The hop is assumed (20 ms, flagged
-`RouterHopAssumed`) unless `--hop` states it. A refusal (`no-prefill-capacity`
-until a prefill pod has read an empty queue, `saturated`, `batch-unheld`, and
-the rest) is printed and exits `3`. The JSON is `schemaVersion` 1, its keys
-lowerCamel.
+Prices the joint prefill and decode model's mean TTFT at a fleet, from what
+the recording's rows taught it by the cycle asked for. Each of `--prefill`,
+`--decode` and `--rate` defaults to 0, which means the cycle's own: the fleet
+and the rate that ran. `--prompt 0` prices at the prompt the work was read at.
+`--hop 0`, the default, assumes a router hop of 20 ms and flags it
+`RouterHopAssumed`; give `--hop` in seconds to state it.
 
-The inputs are fed as the slo analyzer feeds them (only one prefill and one
-decode variant, swept on a change of accelerator or engine arguments, the
-prompt read SGLang's way on SGLang) with one difference: no settle tracker, so
-a replica's first two minutes after a start or an idle spell are read too. See
+At bucket B of the staircase, its 120th cycle, with a third decode pod:
+
+```console
+$ whatif joint-ttft --recording ttft-staircase-b-off.jsonl.gz --cycle 120 --decode 3
+joint TTFT, ns-01/model-02 at cycle 120: 2 prefill + 3 decode at 29.80 req/s (ran 2 + 2 at 29.80)
+  mean TTFT 145.0 ms (engines 125.0 ms, hop 20.0 ms)
+    overhead a(rho_p) 23.6 ms, prefill T_P 39.5 ms at rho_p 0.371
+    KV pull T_X 33.0 ms, unshared 24.8 ms at 0.247 of the decode pod
+    decode m_d*ITL(k) + d 28.9 ms, batch k 7.2, ITL 3.6 ms
+    flags: [OverheadMeasured RouterHopAssumed]
+  inputs: S 24.9 ms at 8001 tokens (232 readings); a0 14.8 ms (232); pull table 3 buckets
+          ITL(k) 1.944 ms + 0.2322 ms*k (232); decode own 5.03*ITL + 10.7 ms (232); n_out 200
+  note: UNVALIDATED beyond the staircase's 2+2 phases; ...
+```
+
+Exit codes: `0` with a mean; `3` with a refusal, which is printed
+(`no-prefill-capacity` until a prefill pod has read an empty engine queue,
+`saturated` at a prefill or pull knee, `batch-unheld` where the decode batch
+cannot hold the rate, and the rest of `llmsm_slo_ttft_joint_reason`); `2` for a
+usage error; `1` for anything else. With `-o json` the answer is
+`schemaVersion` 1, its keys lowerCamel.
+
+It reads the rows as the slo analyzer does: only for a model with one prefill
+and one decode variant; a new accelerator or new engine arguments start the
+inputs over; on SGLang the prompt is the prompt length. One thing differs. The
+analyzer leaves out a replica's first two minutes after it starts or comes
+back from idle, while it settles; this command reads them, so its inputs can
+lean on a warm-up the analyzer never saw. See
 [As built (J1)](../proposals/slo-capacity-planner-ttft.md#as-built-j1).
 
 ## Reading the line check
