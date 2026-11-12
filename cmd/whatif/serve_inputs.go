@@ -49,7 +49,7 @@ func refused(reason, detail string) whatifapi.Figure {
 
 // refusedBy is the figure u refuses.
 func refusedBy(u whatif.Unanswerable) whatifapi.Figure {
-	return whatifapi.Figure{Refused: &whatifapi.Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: flagStrings(u.Flags),
+	return whatifapi.Figure{Refused: &whatifapi.Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: whatifapi.FlagNames(u.Flags),
 		AssumedTermDecides: u.AssumedTermDecides}}
 }
 
@@ -143,7 +143,7 @@ func termsOf(f *answerFlags, st *learnreplay.State, pv *pricedVariant, pf *price
 		add("tpotRatio", "p90", refusedBy(*r.refused))
 	} else {
 		fig := figure(r.ratio.Value, "")
-		fig.Flags = flagStrings(r.flags)
+		fig.Flags = whatifapi.FlagNames(r.flags)
 		add("tpotRatio", "p90 "+sourceLearned, fig)
 	}
 	return terms

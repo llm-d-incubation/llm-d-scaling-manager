@@ -23,8 +23,39 @@ type lruItem[V any] struct {
 	value V
 }
 
+// newLRU is an empty cache of at most size entries, 1 at least.
 func newLRU[V any](size int) *lru[V] {
 	return &lru[V]{size: max(size, 1), order: list.New(), items: map[string]*list.Element{}}
+}
+
+// put sets key to value, replacing what it held: for an entry that lapses
+// (a review's answer), where add would keep the stale one.
+func (c *lru[V]) put(key string, value V) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.items[key]; ok {
+		e.Value = lruItem[V]{key: key, value: value}
+		c.order.MoveToFront(e)
+		return
+	}
+	c.items[key] = c.order.PushFront(lruItem[V]{key: key, value: value})
+	c.evict()
+}
+
+// evict drops the least used entries past size. The caller holds the lock.
+func (c *lru[V]) evict() {
+	for c.order.Len() > c.size {
+		last := c.order.Back()
+		c.order.Remove(last)
+		delete(c.items, last.Value.(lruItem[V]).key)
+	}
+}
+
+// len is how many entries the cache holds.
+func (c *lru[V]) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.order.Len()
 }
 
 // get is the value at key, marked as used.
@@ -50,11 +81,7 @@ func (c *lru[V]) add(key string, value V) V {
 		return e.Value.(lruItem[V]).value
 	}
 	c.items[key] = c.order.PushFront(lruItem[V]{key: key, value: value})
-	for c.order.Len() > c.size {
-		last := c.order.Back()
-		c.order.Remove(last)
-		delete(c.items, last.Value.(lruItem[V]).key)
-	}
+	c.evict()
 	return value
 }
 

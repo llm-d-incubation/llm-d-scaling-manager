@@ -47,16 +47,9 @@ type curveSet struct {
 	ttftFloor, tpotFloor Figure
 }
 
-// onCurves, when set, is called each time a curve set is priced: the caching
-// test counts it.
-var onCurves func()
-
 // priceCurves prices a fleet's curve set, stopping with ctx's error once ctx
 // ends: a client gone is no reason to price the rest of a grid.
 func priceCurves(ctx context.Context, fl Fleet, tpotAsked bool) (*curveSet, error) {
-	if onCurves != nil {
-		onCurves()
-	}
 	cs := &curveSet{prefillKnee: fl.PrefillKnee(), decodeKnee: fl.DecodeKnee(), onsets: fl.Onsets()}
 	for _, k := range []whatif.Result{cs.prefillKnee, cs.decodeKnee} {
 		if v, ok := valueOf(k); ok && (!cs.kneeOK || v < cs.lowerKnee) {
@@ -76,7 +69,7 @@ func priceCurves(ctx context.Context, fl Fleet, tpotAsked bool) (*curveSet, erro
 		t := fl.TTFTAt(rate)
 		cs.ttft = append(cs.ttft, Point{Rate: rate, Figure: figureOf(t, unitSeconds, true)})
 		if v, ok := t.(whatif.TTFT); ok && cs.ttftFloor.Value == nil {
-			cs.ttftFloor = Figure{Value: ptr(v.Floor), Unit: unitSeconds, Flags: flagNames(v.Flags)}
+			cs.ttftFloor = Figure{Value: ptr(v.Floor), Unit: unitSeconds, Flags: FlagNames(v.Flags)}
 		}
 		if !tpotAsked {
 			continue
@@ -88,7 +81,7 @@ func priceCurves(ctx context.Context, fl Fleet, tpotAsked bool) (*curveSet, erro
 		}
 		cs.tpot = append(cs.tpot, Point{Rate: rate, Figure: figureOf(r, unitSeconds, true)})
 		if a, ok := r.(whatif.Answer); ok && cs.tpotFloor.Value == nil && a.Basis.Floor > 0 {
-			cs.tpotFloor = Figure{Value: ptr(a.Basis.Floor), Unit: unitSeconds, Flags: flagNames(a.Flags)}
+			cs.tpotFloor = Figure{Value: ptr(a.Basis.Floor), Unit: unitSeconds, Flags: FlagNames(a.Flags)}
 		}
 	}
 	if cs.ttftFloor.Value == nil {
@@ -142,8 +135,6 @@ func (cs *curveSet) markers(headroom float64) Markers {
 
 // planner prices one scenario on one inputs entry.
 type planner struct {
-	// ctx is the request's: pricing stops between figures once it ends.
-	ctx   context.Context
 	s     *Server
 	e     *inputsEntry
 	sc    Scenario
@@ -168,18 +159,26 @@ func (p *planner) note(path string, f Figure) Figure {
 	return f
 }
 
-// curves is the fleet's curve set at k, from the cache or priced; a set whose
-// pricing the request's end stopped is not cached.
-func (p *planner) curves(k Knobs, fl Fleet) (*curveSet, error) {
+// curves is the fleet's curve set at k, from the cache or priced, one pricing
+// per key at a time; a set whose pricing ctx stopped is not cached.
+func (p *planner) curves(ctx context.Context, k Knobs, fl Fleet) (*curveSet, error) {
 	key := curveKey(p.e.id, k, p.sc.TPOT != nil)
 	if cs, ok := p.s.curves.get(key); ok {
 		return cs, nil
 	}
-	cs, err := priceCurves(p.ctx, fl, p.sc.TPOT != nil)
-	if err != nil {
-		return nil, err
-	}
-	return p.s.curves.add(key, cs), nil
+	return p.s.curveFlight.doFor(ctx, key, func() (*curveSet, error) {
+		if cs, ok := p.s.curves.get(key); ok {
+			return cs, nil
+		}
+		if p.s.onCurves != nil {
+			p.s.onCurves()
+		}
+		cs, err := priceCurves(ctx, fl, p.sc.TPOT != nil)
+		if err != nil {
+			return nil, err
+		}
+		return p.s.curves.add(key, cs), nil
+	})
 }
 
 // limitEntry is what the targets and the headroom set and no rate moves: the
@@ -194,12 +193,9 @@ type limitEntry struct {
 	buckets map[string]whatif.Result
 }
 
-// onLimits, when set, is called each time a limit entry is priced: the
-// caching test counts it.
-var onLimits func()
-
-// limits is the scenario's limit entry, from the cache or priced.
-func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
+// limits is the scenario's limit entry, from the cache or priced, one pricing
+// per key at a time.
+func (p *planner) limits(ctx context.Context, k Knobs, fl Fleet) (*limitEntry, error) {
 	sc := p.sc
 	key := contentID("limits", struct {
 		Curves   string
@@ -211,13 +207,29 @@ func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
 	if le, ok := p.s.limits.get(key); ok {
 		return le, nil
 	}
-	if onLimits != nil {
-		onLimits()
+	return p.s.limitFlight.doFor(ctx, key, func() (*limitEntry, error) {
+		if le, ok := p.s.limits.get(key); ok {
+			return le, nil
+		}
+		le, err := p.priceLimits(ctx, k, fl)
+		if err != nil {
+			return nil, err
+		}
+		return p.s.limits.add(key, le), nil
+	})
+}
+
+// priceLimits prices the limit entry, stopping with ctx's error once ctx
+// ends.
+func (p *planner) priceLimits(ctx context.Context, k Knobs, fl Fleet) (*limitEntry, error) {
+	sc := p.sc
+	if p.s.onLimits != nil {
+		p.s.onLimits()
 	}
 	tpot := p.tpotTarget()
 	le := &limitEntry{set: fl.Limits(sc.TTFT.Target, tpot, sc.Headroom)}
 	for i, add := range []func(*Knobs){func(k *Knobs) { k.Prefill++ }, func(k *Knobs) { k.Decode++ }} {
-		if err := p.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		kk := k
@@ -232,7 +244,7 @@ func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
 	if sc.Views.AllTrafficPerBucket {
 		le.buckets = map[string]whatif.Result{}
 		for _, b := range buckets {
-			if err := p.ctx.Err(); err != nil {
+			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 			bf, err := p.e.pricer.Fleet(bucketKnobs(k, b))
@@ -242,7 +254,7 @@ func (p *planner) limits(k Knobs, fl Fleet) (*limitEntry, error) {
 			_, le.buckets[b.Name], _ = bf.PlainLimits(sc.TTFT.BucketTargets[b.Name], 0, sc.Headroom)
 		}
 	}
-	return p.s.limits.add(key, le), nil
+	return le, nil
 }
 
 // tpotTarget is the TPOT target, 0 with no TPOT asked.
@@ -259,8 +271,8 @@ func bucketKnobs(k Knobs, b Bucket) Knobs {
 	return k
 }
 
-// plan prices the scenario.
-func (p *planner) plan() (*PlanResponse, error) {
+// plan prices the scenario, stopping with ctx's error once ctx ends.
+func (p *planner) plan(ctx context.Context) (*PlanResponse, error) {
 	p.flags = map[string][]string{}
 	sc := p.sc
 	k, err := sc.knobs()
@@ -271,7 +283,7 @@ func (p *planner) plan() (*PlanResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	cs, err := p.curves(k, fl)
+	cs, err := p.curves(ctx, k, fl)
 	if err != nil {
 		return nil, err
 	}
@@ -282,10 +294,10 @@ func (p *planner) plan() (*PlanResponse, error) {
 	case cs.kneeOK:
 		rate, rateSource = sc.Headroom*cs.lowerKnee, "operating point"
 	default:
-		return nil, inputErrorf("no knee answered to set the operating point (prefill: %s; decode: %s): give traffic.classes.critical.rate",
+		return nil, InputErrorf("no knee answered to set the operating point (prefill: %s; decode: %s): give traffic.classes.critical.rate",
 			reasonOf(cs.prefillKnee), reasonOf(cs.decodeKnee))
 	}
-	le, err := p.limits(k, fl)
+	le, err := p.limits(ctx, k, fl)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +328,7 @@ func (p *planner) plan() (*PlanResponse, error) {
 	out.Limits = p.limitsOf(rate, rateSource, ls)
 	out.Marginal = p.marginal(le, ls.Fleet)
 	if sc.Views.AllTrafficPerBucket {
-		if out.TTFT.PerBucket, err = p.perBucket(k, le, rate); err != nil {
+		if out.TTFT.PerBucket, err = p.perBucket(ctx, k, le, rate); err != nil {
 			return nil, err
 		}
 	}
@@ -452,7 +464,7 @@ func (p *planner) marginal(le *limitEntry, fleet whatif.Result) Marginal {
 // perBucket is the "if all traffic were bucket b" view: each bucket's fleet,
 // every request at the bucket's upper edge, with its own knees, curve, target
 // and points. No limit reads it.
-func (p *planner) perBucket(k Knobs, le *limitEntry, rate float64) ([]Line, error) {
+func (p *planner) perBucket(ctx context.Context, k Knobs, le *limitEntry, rate float64) ([]Line, error) {
 	var lines []Line
 	for _, b := range buckets {
 		kb := bucketKnobs(k, b)
@@ -460,7 +472,7 @@ func (p *planner) perBucket(k Knobs, le *limitEntry, rate float64) ([]Line, erro
 		if err != nil {
 			return nil, err
 		}
-		cs, err := p.curves(kb, fl)
+		cs, err := p.curves(ctx, kb, fl)
 		if err != nil {
 			return nil, err
 		}

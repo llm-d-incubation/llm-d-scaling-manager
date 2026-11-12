@@ -171,7 +171,7 @@ func TestNamespaceAllowed(t *testing.T) {
 	call(h, "/v1/inputs", "Bearer good")
 	require.NotNil(t, got)
 	assert.NoError(t, got["llm"])
-	var forbidden ErrForbidden
+	var forbidden ForbiddenError
 	assert.ErrorAs(t, got["other"], &forbidden)
 	require.NotNil(t, c.lastSAR.ResourceAttributes)
 	assert.Equal(t, authzv1.ResourceAttributes{Namespace: "other", Verb: "get", Resource: "pods"}, *c.lastSAR.ResourceAttributes)

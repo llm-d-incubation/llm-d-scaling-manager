@@ -3,6 +3,7 @@ package whatifapi
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
@@ -96,9 +97,21 @@ type LimitSet struct {
 // with 400 and its message.
 type InputError struct{ Err error }
 
-func (e InputError) Error() string { return e.Err.Error() }
+// Error is what the caller asked wrongly.
+func (e InputError) Error() string {
+	if e.Err == nil {
+		return "invalid request"
+	}
+	return e.Err.Error()
+}
 
+// Unwrap is the error, for errors.Is and errors.As.
 func (e InputError) Unwrap() error { return e.Err }
+
+// InputErrorf is an InputError of a formatted message.
+func InputErrorf(format string, args ...any) error {
+	return InputError{Err: fmt.Errorf(format, args...)}
+}
 
 // IsInputError reports whether err is an InputError.
 func IsInputError(err error) bool {

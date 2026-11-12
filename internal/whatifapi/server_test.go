@@ -184,25 +184,32 @@ func TestCheckFiguresFindsBreaches(t *testing.T) {
 	assert.Empty(t, apitest.CheckFigures([]byte(`{"limits": {"chosen": {"rate": 2, "headroom": {"value": 0}}}}`)))
 }
 
+// counted is a server on the stub with its curve sets and limit entries
+// counted.
+func counted(t *testing.T) (h http.Handler, curves, limits *int) {
+	t.Helper()
+	curves, limits = new(int), new(int)
+	s := New(Config{Resolver: &stubResolver{}, WhatifSchema: "schema-v3"})
+	s.onCurves = func() { *curves++ }
+	s.onLimits = func() { *limits++ }
+	return s.Handler(), curves, limits
+}
+
 // The curves follow the knobs, not the rate or the targets: the same scenario
 // is the same id and the same bytes, priced once; a rate or a target moves the
 // id and prices no curve; a replica count prices a new curve set.
 func TestCaching(t *testing.T) {
-	curves, limits := 0, 0
-	onCurves = func() { curves++ }
-	onLimits = func() { limits++ }
-	t.Cleanup(func() { onCurves, onLimits = nil, nil })
-	h := New(Config{Resolver: &stubResolver{}, WhatifSchema: "schema-v3"}).Handler()
+	h, curves, limits := counted(t)
 	id := inputsOf(t, h)
 	base := PlanRequest{InputsID: id, Traffic: &Traffic{Classes: &Classes{Critical: &ClassRate{Rate: f64(4)}}}}
 	a, aBody := plan(t, h, base)
-	require.Equal(t, 1, curves)
+	require.Equal(t, 1, *curves)
 	b, bBody := plan(t, h, base)
 	assert.Equal(t, a.ScenarioID, b.ScenarioID)
 	assert.Equal(t, aBody, bBody)
-	assert.Equal(t, 1, curves, "the same scenario priced its curves again")
+	assert.Equal(t, 1, *curves, "the same scenario priced its curves again")
 
-	require.Equal(t, 1, limits)
+	require.Equal(t, 1, *limits)
 
 	// A rate move prices the points alone.
 	moved := base
@@ -210,24 +217,84 @@ func TestCaching(t *testing.T) {
 	c, _ := plan(t, h, moved)
 	assert.NotEqual(t, a.ScenarioID, c.ScenarioID)
 	assert.Equal(t, 5.0, c.Limits.Chosen.Rate)
-	assert.Equal(t, 1, curves, "a rate priced the curves again")
-	assert.Equal(t, 1, limits, "a rate priced the limits again")
+	assert.Equal(t, 1, *curves, "a rate priced the curves again")
+	assert.Equal(t, 1, *limits, "a rate priced the limits again")
 	assert.Equal(t, a.Limits.Fleet, c.Limits.Fleet)
 
 	// A target move prices the limits, not the curves.
 	moved.SLO = &SLORequest{TTFT: &Objective{Target: f64(0.5)}}
 	e, _ := plan(t, h, moved)
 	assert.NotEqual(t, c.ScenarioID, e.ScenarioID)
-	assert.Equal(t, 1, curves, "a target priced the curves again")
-	assert.Equal(t, 2, limits, "a target must price its own limits")
+	assert.Equal(t, 1, *curves, "a target priced the curves again")
+	assert.Equal(t, 2, *limits, "a target must price its own limits")
 	assert.Equal(t, []string{"Poisson arrivals", "a stub's note at the target", "a stub's note at the rate"}, e.Assumed)
 
 	more := base
 	more.Fleet = &FleetKnob{Prefill: intp(2)}
 	d, _ := plan(t, h, more)
 	assert.NotEqual(t, a.ScenarioID, d.ScenarioID)
-	assert.Equal(t, 2, curves, "a replica count must price its own curves")
-	assert.Equal(t, 3, limits, "a replica count must price its own limits")
+	assert.Equal(t, 2, *curves, "a replica count must price its own curves")
+	assert.Equal(t, 3, *limits, "a replica count must price its own limits")
+}
+
+// Every knob that reaches a fleet prices a curve set of its own: a cache key
+// that dropped one would serve one fleet's curves for another.
+func TestCachingEveryKnobKeysTheCurves(t *testing.T) {
+	h, curves, _ := counted(t)
+	id := inputsOf(t, h)
+	at := func(r PlanRequest) PlanRequest {
+		r.InputsID = id
+		if r.Traffic == nil {
+			r.Traffic = &Traffic{}
+		}
+		r.Traffic.Classes = &Classes{Critical: &ClassRate{Rate: f64(4)}}
+		return r
+	}
+	base := PlanRequest{SLO: &SLORequest{TPOT: &Objective{Statistic: "none"}}}
+	plan(t, h, at(base))
+	require.Equal(t, 1, *curves)
+	for name, r := range map[string]PlanRequest{
+		"arrivalCV2":            {Traffic: &Traffic{ArrivalCV2: f64(2)}, SLO: base.SLO},
+		"assume.vp":             {Assume: &Assume{VP: f64(1000)}, SLO: base.SLO},
+		"assume.a":              {Assume: &Assume{A: f64(0.01)}, SLO: base.SLO},
+		"assume.promptCV":       {Assume: &Assume{PromptCV: f64(1)}, SLO: base.SLO},
+		"assume.routerHop":      {Assume: &Assume{RouterHop: f64(0.01)}, SLO: base.SLO},
+		"mix.promptTokens":      {Traffic: &Traffic{Mix: &Mix{PromptTokens: 2000}}, SLO: base.SLO},
+		"mix.outputTokens":      {Traffic: &Traffic{Mix: &Mix{OutputTokens: 500}}, SLO: base.SLO},
+		"ttft.statistic":        {SLO: &SLORequest{TTFT: &Objective{Statistic: "p95"}, TPOT: base.SLO.TPOT}},
+		"tpot asked":            {SLO: &SLORequest{TPOT: &Objective{Statistic: "mean", Target: f64(0.012)}}},
+		"tpot.statistic":        {SLO: &SLORequest{TPOT: &Objective{Statistic: "p90", Target: f64(0.012)}}},
+		"assume.tpotRatio":      {SLO: &SLORequest{TPOT: &Objective{Statistic: "p90", Target: f64(0.012)}}, Assume: &Assume{TPOTRatio: f64(1.3)}},
+		"fleet.decode":          {Fleet: &FleetKnob{Decode: intp(3)}, SLO: base.SLO},
+		"fleet.prefill":         {Fleet: &FleetKnob{Prefill: intp(3)}, SLO: base.SLO},
+		"headroom (no new set)": {Headroom: f64(0.5), SLO: base.SLO},
+	} {
+		before := *curves
+		plan(t, h, at(r))
+		want := before + 1
+		if name == "headroom (no new set)" {
+			want = before
+		}
+		assert.Equal(t, want, *curves, "%s", name)
+	}
+}
+
+// The per-bucket view is part of the limits' key: asking it prices a limit
+// entry with every bucket line's point B.
+func TestCachingTheViewKeysTheLimits(t *testing.T) {
+	h, _, limits := counted(t)
+	id := inputsOf(t, h)
+	base := PlanRequest{InputsID: id, Traffic: &Traffic{Classes: &Classes{Critical: &ClassRate{Rate: f64(4)}}}}
+	out, _ := plan(t, h, base)
+	require.Equal(t, 1, *limits)
+	assert.Empty(t, out.TTFT.PerBucket)
+	base.Views = &ViewRequest{AllTrafficPerBucket: true}
+	out, _ = plan(t, h, base)
+	assert.Equal(t, 2, *limits, "the view priced no limits of its own")
+	require.Len(t, out.TTFT.PerBucket, len(buckets))
+	for _, l := range out.TTFT.PerBucket {
+		assert.True(t, l.AtTarget.Rate.Value != nil || l.AtTarget.Rate.Refused != nil, "bucket %s: no point B", l.Bucket)
+	}
 }
 
 // The marginal steps read one more replica of each role, and the binding

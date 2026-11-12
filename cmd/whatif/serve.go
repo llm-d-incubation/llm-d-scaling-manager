@@ -70,19 +70,38 @@ func runServe(ctx context.Context, args []string, out, warn io.Writer) error {
 	// logger says so on stderr, with a stack.
 	ctrllog.SetLogger(logr.Discard())
 	srv := newHTTPServer(f.listen, handler)
-	ln, err := net.Listen("tcp", f.listen)
-	if err != nil {
-		return err
-	}
+	// The key pair is read before the port is taken, so a bad one leaves no
+	// listener behind.
 	if f.auth == whatifapi.AuthKubernetes {
 		cert, err := tls.LoadX509KeyPair(f.tlsCert, f.tlsKey)
 		if err != nil {
 			return usagef("--tls-cert-file, --tls-key-file: %v", err)
 		}
 		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}}
+	}
+	ln, err := net.Listen("tcp", f.listen)
+	if err != nil {
+		return err
+	}
+	if srv.TLSConfig != nil {
 		ln = tls.NewListener(ln, srv.TLSConfig)
 	}
 	fmt.Fprintf(warn, "whatif: serving the capacity planner's API on %s (auth %s)\n", ln.Addr(), f.auth)
+	return serveUntil(ctx, srv, ln, f.shutdownDeadline)
+}
+
+// shutdownGrace is how long requests in flight have to return once their
+// contexts end at the shutdown deadline: a plan stops at its next figure.
+const shutdownGrace = 2 * time.Second
+
+// serveUntil serves srv on ln until ctx ends, then shuts it down: requests in
+// flight may run until deadline, when their contexts end (srv's BaseContext)
+// so that a plan stops between figures; after shutdownGrace what is left is
+// closed.
+func serveUntil(ctx context.Context, srv *http.Server, ln net.Listener, deadline time.Duration) error {
+	base, stop := context.WithCancel(context.Background())
+	defer stop()
+	srv.BaseContext = func(net.Listener) context.Context { return base }
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(ln) }()
 	select {
@@ -90,10 +109,14 @@ func runServe(ctx context.Context, args []string, out, warn io.Writer) error {
 		return err
 	case <-ctx.Done():
 	}
-	sctx, cancel := context.WithTimeout(context.Background(), f.shutdownDeadline)
+	atDeadline := time.AfterFunc(deadline, stop)
+	defer atDeadline.Stop()
+	sctx, cancel := context.WithTimeout(context.Background(), deadline+shutdownGrace)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
-		return err
+		_ = srv.Close()
+		<-done
+		return fmt.Errorf("shutting down after %s: %w", deadline, err)
 	}
 	if err := <-done; !errors.Is(err, http.ErrServerClosed) {
 		return err

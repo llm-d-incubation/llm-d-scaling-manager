@@ -2,6 +2,7 @@ package whatifapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -17,11 +18,19 @@ type stubResolver struct {
 	refusePrefill bool
 	// fleets counts the fleets priced.
 	fleets atomic.Int64
+	// gate, when set, holds every Fleet until it is closed; onPlainLimits,
+	// when set, is called with the count of PlainLimits calls so far.
+	gate          chan struct{}
+	onPlainLimits func(n int64)
+	plainLimits   atomic.Int64
 }
 
 func (r *stubResolver) Resolve(_ context.Context, req InputsRequest) (*Resolved, error) {
-	if req.Model == "bad" {
-		return nil, inputErrorf("no model bad")
+	switch req.Model {
+	case "bad":
+		return nil, InputErrorf("no model bad")
+	case "boom":
+		return nil, errors.New("the source broke")
 	}
 	in := InputsResponse{Model: "model-01", Namespace: "ns-01", Source: SourceInfo{Kind: SourceRecording, Name: "run.jsonl.gz", Cycle: 10, TotalCycles: 10},
 		Fleet: FleetInfo{Prefill: &RoleInfo{Variant: "p", Replicas: 1}, Decode: RoleInfo{Variant: "d", Replicas: 1}},
@@ -30,21 +39,25 @@ func (r *stubResolver) Resolve(_ context.Context, req InputsRequest) (*Resolved,
 		Policy: PolicyInfo{TTFT: &PolicyObjective{Statistic: "p90", Seconds: 0.2}, TPOT: &PolicyObjective{Statistic: "mean", Seconds: 0.012},
 			Headroom: 0.85, FlowControl: "off, inferred"},
 		Terms: []Term{}, Assumed: []string{"Poisson arrivals"}}
-	return &Resolved{Inputs: in, Content: fmt.Sprintf("stub %v", r.refusePrefill), Pricer: r}, nil
+	return &Resolved{Inputs: in, Content: fmt.Sprintf("stub %v %s", r.refusePrefill, req.Model), Pricer: r}, nil
 }
 
 func (r *stubResolver) Fleet(k Knobs) (Fleet, error) {
 	if k.Assume.VP != nil && *k.Assume.VP > 1e9 {
-		return nil, inputErrorf("--assume-vp %g: too large", *k.Assume.VP)
+		return nil, InputErrorf("--assume-vp %g: too large", *k.Assume.VP)
+	}
+	if r.gate != nil {
+		<-r.gate
 	}
 	r.fleets.Add(1)
-	return &stubFleet{k: k, refusePrefill: r.refusePrefill}, nil
+	return &stubFleet{k: k, refusePrefill: r.refusePrefill, r: r}, nil
 }
 
 // stubFleet is one synthetic fleet.
 type stubFleet struct {
 	k             Knobs
 	refusePrefill bool
+	r             *stubResolver
 }
 
 var noVP = whatif.Unanswerable{Reason: whatif.NoPrefillCapacity, Detail: "no P1 estimate"}
@@ -108,6 +121,9 @@ func (f *stubFleet) Limits(ttftSeconds, tpotSeconds, headroom float64) LimitSet 
 }
 
 func (f *stubFleet) PlainLimits(ttftSeconds, tpotSeconds, headroom float64) (decode, prefill, fleet whatif.Result) {
+	if n := f.r.plainLimits.Add(1); f.r.onPlainLimits != nil {
+		f.r.onPlainLimits(n)
+	}
 	knee := min(f.prefillKnee(), f.decodeKnee())
 	if f.refusePrefill {
 		prefill = noVP

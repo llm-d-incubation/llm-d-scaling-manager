@@ -1,7 +1,6 @@
 package whatifapi
 
 import (
-	"fmt"
 	"math"
 	"regexp"
 	"slices"
@@ -41,11 +40,6 @@ func BucketOf(tokens float64) string {
 	return buckets[len(buckets)-1].Name
 }
 
-// inputErrorf is an InputError.
-func inputErrorf(format string, args ...any) error {
-	return InputError{Err: fmt.Errorf(format, args...)}
-}
-
 // usable reports whether x is finite and above 0.
 func usable(x float64) bool { return x > 0 && !math.IsInf(x, 1) }
 
@@ -72,7 +66,7 @@ func scenarioOf(in *InputsResponse, req PlanRequest) (Scenario, error) {
 	sc.Headroom = in.Policy.Headroom
 	if h := req.Headroom; h != nil {
 		if !(*h > 0 && *h <= 1) {
-			return sc, inputErrorf("headroom %g, want a fraction of the knee in (0, 1]", *h)
+			return sc, InputErrorf("headroom %g, want a fraction of the knee in (0, 1]", *h)
 		}
 		sc.Headroom = *h
 	}
@@ -106,7 +100,7 @@ func (sc *Scenario) fleet(in *InputsResponse, k *FleetKnob) error {
 			continue
 		}
 		if *c.n < 1 || *c.n > maxReplicas {
-			return inputErrorf("fleet.%s %d, want 1 to %d replicas", c.role, *c.n, maxReplicas)
+			return InputErrorf("fleet.%s %d, want 1 to %d replicas", c.role, *c.n, maxReplicas)
 		}
 		*c.into = *c.n
 	}
@@ -125,12 +119,12 @@ func (sc *Scenario) traffic(t *Traffic) error {
 			cr   *ClassRate
 		}{{"regular", c.Regular}, {"batch", c.Batch}} {
 			if cr := cl.cr; cr != nil && cr.Rate != nil && *cr.Rate != 0 {
-				return inputErrorf("traffic.classes.%s.rate %g: v1 prices one class, the total, as critical; regular and batch need traffic split by priority", cl.name, *cr.Rate)
+				return InputErrorf("traffic.classes.%s.rate %g: v1 prices one class, the total, as critical; regular and batch need traffic split by priority", cl.name, *cr.Rate)
 			}
 		}
 		if cr := c.Critical; cr != nil && cr.Rate != nil {
 			if !usable(*cr.Rate) {
-				return inputErrorf("traffic.classes.critical.rate %g, want a finite rate above 0", *cr.Rate)
+				return InputErrorf("traffic.classes.critical.rate %g, want a finite rate above 0", *cr.Rate)
 			}
 			sc.Rate = ptr(*cr.Rate)
 		}
@@ -141,7 +135,7 @@ func (sc *Scenario) traffic(t *Traffic) error {
 			x    float64
 		}{{"promptTokens", m.PromptTokens}, {"outputTokens", m.OutputTokens}} {
 			if l.x != 0 && !usable(l.x) {
-				return inputErrorf("traffic.mix.%s %g, want a finite length above 0", l.name, l.x)
+				return InputErrorf("traffic.mix.%s %g, want a finite length above 0", l.name, l.x)
 			}
 		}
 		sc.Mix = *m
@@ -151,7 +145,7 @@ func (sc *Scenario) traffic(t *Traffic) error {
 	}
 	if a := t.ArrivalCV2; a != nil {
 		if !usable(*a) {
-			return inputErrorf("traffic.arrivalCV2 %g, want a finite value above 0: 1 is Poisson", *a)
+			return InputErrorf("traffic.arrivalCV2 %g, want a finite value above 0: 1 is Poisson", *a)
 		}
 		sc.ArrivalCV2 = ptr(*a)
 	}
@@ -176,7 +170,7 @@ func (sc *Scenario) ttft(in *InputsResponse, o *Objective) error {
 		return err
 	}
 	if !usable(target) {
-		return inputErrorf("slo.ttft.target %g: want a target above 0 in seconds (the policy sets none)", target)
+		return InputErrorf("slo.ttft.target %g: want a target above 0 in seconds (the policy sets none)", target)
 	}
 	sc.TTFT = ResolvedObjective{Statistic: statisticName(q), Target: target}
 	return nil
@@ -188,7 +182,7 @@ func (sc *Scenario) ttft(in *InputsResponse, o *Objective) error {
 func (sc *Scenario) tpot(in *InputsResponse, o *Objective) error {
 	if o != nil && o.Statistic == statisticNone {
 		if o.Target != nil {
-			return inputErrorf("slo.tpot: statistic none asks no TPOT, and takes no target")
+			return InputErrorf("slo.tpot: statistic none asks no TPOT, and takes no target")
 		}
 		return nil
 	}
@@ -210,7 +204,7 @@ func (sc *Scenario) tpot(in *InputsResponse, o *Objective) error {
 		return err
 	}
 	if !usable(target) {
-		return inputErrorf("slo.tpot.target %g: want a target above 0 in seconds (the policy sets none)", target)
+		return InputErrorf("slo.tpot.target %g: want a target above 0 in seconds (the policy sets none)", target)
 	}
 	sc.TPOT = &ResolvedObjective{Statistic: statisticName(q), Target: target}
 	return nil
@@ -228,16 +222,16 @@ func (sc *Scenario) checkAssume() error {
 	a := sc.Assume
 	for _, t := range []namedTerm{{"vp", a.VP}, {"a", a.A}, {"tpotRatio", a.TPOTRatio}} {
 		if t.x != nil && !usable(*t.x) {
-			return inputErrorf("assume.%s %g, want a finite value above 0", t.name, *t.x)
+			return InputErrorf("assume.%s %g, want a finite value above 0", t.name, *t.x)
 		}
 	}
 	for _, t := range []namedTerm{{"promptCV", a.PromptCV}, {"routerHop", a.RouterHop}} {
 		if t.x != nil && (math.IsNaN(*t.x) || *t.x < 0 || math.IsInf(*t.x, 1)) {
-			return inputErrorf("assume.%s %g, want a finite value of 0 or more", t.name, *t.x)
+			return InputErrorf("assume.%s %g, want a finite value of 0 or more", t.name, *t.x)
 		}
 	}
 	if a.TPOTRatio != nil && (sc.TPOT == nil || sc.TPOT.Statistic == statisticMean) {
-		return inputErrorf("assume.tpotRatio needs a TPOT percentile (slo.tpot.statistic pNN)")
+		return InputErrorf("assume.tpotRatio needs a TPOT percentile (slo.tpot.statistic pNN)")
 	}
 	return nil
 }
@@ -257,15 +251,15 @@ func (sc *Scenario) bucketTargets(o *Objective) error {
 	for _, name := range names {
 		t := asked[name]
 		if !slices.ContainsFunc(buckets, func(b Bucket) bool { return b.Name == name }) {
-			return inputErrorf("slo.ttft.bucketTargets.%s: no such bucket; the buckets are %s", name, bucketNames())
+			return InputErrorf("slo.ttft.bucketTargets.%s: no such bucket; the buckets are %s", name, bucketNames())
 		}
 		if !usable(t) {
-			return inputErrorf("slo.ttft.bucketTargets.%s %g, want a target above 0 in seconds", name, t)
+			return InputErrorf("slo.ttft.bucketTargets.%s %g, want a target above 0 in seconds", name, t)
 		}
 	}
 	if !sc.Views.AllTrafficPerBucket {
 		if len(asked) > 0 {
-			return inputErrorf("slo.ttft.bucketTargets need views.allTrafficPerBucket: no limit is read per bucket")
+			return InputErrorf("slo.ttft.bucketTargets need views.allTrafficPerBucket: no limit is read per bucket")
 		}
 		return nil
 	}
@@ -300,7 +294,7 @@ func parseStatistic(field, s string) (float64, error) {
 	if s == statisticMean {
 		return 0, nil
 	}
-	bad := inputErrorf("%s %q, want mean or a percentile from p1 to p99.9 (p90)", field, s)
+	bad := InputErrorf("%s %q, want mean or a percentile from p1 to p99.9 (p90)", field, s)
 	if !percentileForm.MatchString(s) {
 		return 0, bad
 	}

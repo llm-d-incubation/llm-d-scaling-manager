@@ -46,11 +46,6 @@ type servedSources struct {
 	namespaceAllowed func(ctx context.Context, namespace string) error
 }
 
-// inputError is err as the API's InputError.
-func inputError(format string, args ...any) error {
-	return whatifapi.InputError{Err: fmt.Errorf(format, args...)}
-}
-
 // apiError is a CLI error as the API's: a usage or input error is the
 // caller's (400), anything else the server's.
 func apiError(err error) error {
@@ -87,7 +82,7 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 			return nil, err
 		}
 	default:
-		return nil, inputError("source.kind %q, want %s or %s", src.Kind, whatifapi.SourcePrometheus, whatifapi.SourceRecording)
+		return nil, whatifapi.InputErrorf("source.kind %q, want %s or %s", src.Kind, whatifapi.SourcePrometheus, whatifapi.SourceRecording)
 	}
 	name, data, err := f.recordingData(ctx)
 	if err != nil {
@@ -110,17 +105,17 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 func (s *servedSources) recordingPath(src whatifapi.SourceRequest) (string, error) {
 	switch {
 	case s.recordings == "":
-		return "", inputError("source.kind recording: the server reads no recordings (--recordings)")
+		return "", whatifapi.InputErrorf("source.kind recording: the server reads no recordings (--recordings)")
 	case src.Namespace != "" || src.From != "" || src.To != "":
-		return "", inputError("source.namespace, from and to are a prometheus source's")
+		return "", whatifapi.InputErrorf("source.namespace, from and to are a prometheus source's")
 	case src.Cycle < 0:
-		return "", inputError("source.cycle %d, want a cycle from 1, or 0 for the last", src.Cycle)
+		return "", whatifapi.InputErrorf("source.cycle %d, want a cycle from 1, or 0 for the last", src.Cycle)
 	case src.Name == "" || src.Name != filepath.Base(src.Name) || strings.ContainsAny(src.Name, `/\:`) || strings.HasPrefix(src.Name, "."):
-		return "", inputError("source.name %q: want a file name in the server's recordings directory, not a path", src.Name)
+		return "", whatifapi.InputErrorf("source.name %q: want a file name in the server's recordings directory, not a path", src.Name)
 	}
 	path := filepath.Join(s.recordings, src.Name)
 	if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() {
-		return "", inputError("source.name %q: no such recording in the server's recordings directory", src.Name)
+		return "", whatifapi.InputErrorf("source.name %q: no such recording in the server's recordings directory", src.Name)
 	}
 	return path, nil
 }
@@ -131,10 +126,10 @@ func (s *servedSources) recordingPath(src whatifapi.SourceRequest) (string, erro
 // not get.
 func (s *servedSources) checkNamespace(ctx context.Context, ns string) error {
 	if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
-		return inputError("source.namespace %q: %s", ns, strings.Join(errs, "; "))
+		return whatifapi.InputErrorf("source.namespace %q: %s", ns, strings.Join(errs, "; "))
 	}
 	if !slices.Contains(s.allowed, ns) {
-		return whatifapi.ErrForbidden{Err: fmt.Errorf("namespace %s: this server reads %s only (--allowed-namespaces)", ns, strings.Join(s.allowed, ", "))}
+		return whatifapi.ForbiddenError{Err: fmt.Errorf("namespace %s: this server reads %s only (--allowed-namespaces)", ns, strings.Join(s.allowed, ", "))}
 	}
 	if s.namespaceAllowed != nil {
 		return s.namespaceAllowed(ctx, ns)
@@ -148,11 +143,11 @@ func (s *servedSources) checkNamespace(ctx context.Context, ns string) error {
 func (s *servedSources) windowOf(ctx context.Context, f *answerFlags, src whatifapi.SourceRequest) error {
 	switch {
 	case s.window.prometheus == "":
-		return inputError("source.kind prometheus: the server reads no Prometheus (--prometheus)")
+		return whatifapi.InputErrorf("source.kind prometheus: the server reads no Prometheus (--prometheus)")
 	case src.Name != "" || src.Cycle != 0:
-		return inputError("source.name and cycle are a recording source's")
+		return whatifapi.InputErrorf("source.name and cycle are a recording source's")
 	case (src.From == "") != (src.To == ""):
-		return inputError("source.from and source.to: give both, or neither for the last hour")
+		return whatifapi.InputErrorf("source.from and source.to: give both, or neither for the last hour")
 	}
 	f.window = s.window
 	if src.Namespace != "" {
@@ -200,7 +195,7 @@ func (s *servedSources) resolved(f *answerFlags, st *learnreplay.State, data []b
 		for i, pv := range variants {
 			names[i] = pv.state.Variant
 		}
-		return nil, inputError("the model has %d decode variants (%s) at cycle %d; a plan prices one P/D fleet: name one with decodeVariant",
+		return nil, whatifapi.InputErrorf("the model has %d decode variants (%s) at cycle %d; a plan prices one P/D fleet: name one with decodeVariant",
 			len(variants), strings.Join(names, ", "), st.Cycle)
 	}
 	ps, err := f.prefillState(st)
@@ -398,10 +393,10 @@ func (sf *servedFleet) TPOTRatio() whatifapi.Ratio {
 		return whatifapi.Ratio{}
 	}
 	if u := sf.ratio.refused; u != nil {
-		return whatifapi.Ratio{Refused: &whatifapi.Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: flagStrings(u.Flags)}}
+		return whatifapi.Ratio{Refused: &whatifapi.Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: whatifapi.FlagNames(u.Flags)}}
 	}
 	r := sf.ratio.ratio.Value
-	out := whatifapi.Ratio{Value: &r, Source: sourceLearned, Flags: flagStrings(sf.ratio.flags)}
+	out := whatifapi.Ratio{Value: &r, Source: sourceLearned, Flags: whatifapi.FlagNames(sf.ratio.flags)}
 	switch {
 	case sf.ratio.ratio.Assumed:
 		out.Source = shapeAssumed
@@ -414,15 +409,3 @@ func (sf *servedFleet) TPOTRatio() whatifapi.Ratio {
 
 // Assumed is the fleet's assumed inputs as read, in the CLI's words.
 func (sf *servedFleet) Assumed() []string { return sf.assumed }
-
-// flagStrings is flags as strings, nil with none.
-func flagStrings(flags []whatif.Flag) []string {
-	if len(flags) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(flags))
-	for _, f := range flags {
-		out = append(out, string(f))
-	}
-	return out
-}

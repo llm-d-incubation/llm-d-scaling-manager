@@ -19,7 +19,7 @@ const (
 func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 	switch v := r.(type) {
 	case whatif.Answer:
-		f := Figure{Value: ptr(v.Value), Unit: unit, Sensitivity: spanOf(v.Sensitivity, worseIsHigh), Flags: flagNames(v.Flags)}
+		f := Figure{Value: ptr(v.Value), Unit: unit, Sensitivity: spanOf(v.Sensitivity, worseIsHigh), Flags: FlagNames(v.Flags)}
 		if v.Band != nil {
 			f.Band = &Band{Lo: v.Band.Lo, Hi: v.Band.Hi}
 		}
@@ -42,7 +42,7 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 		}
 		return f
 	case whatif.TTFT:
-		f := Figure{Value: ptr(v.Seconds), Unit: unitSeconds, Sensitivity: spanOf(v.Sensitivity, true), Flags: flagNames(v.Flags)}
+		f := Figure{Value: ptr(v.Seconds), Unit: unitSeconds, Sensitivity: spanOf(v.Sensitivity, true), Flags: FlagNames(v.Flags)}
 		if v.Floor > 0 {
 			f.Floor = ptr(v.Floor)
 		}
@@ -55,7 +55,7 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 
 // refusalOf is a refusal on the wire.
 func refusalOf(u whatif.Unanswerable) *Refusal {
-	return &Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: flagNames(u.Flags), AssumedTermDecides: u.AssumedTermDecides}
+	return &Refusal{Reason: string(u.Reason), Detail: u.Detail, Flags: FlagNames(u.Flags), AssumedTermDecides: u.AssumedTermDecides}
 }
 
 // spanOf is a span on the wire: a refused corner leaves its worse side with no
@@ -75,8 +75,9 @@ func spanOf(s *whatif.Sensitivity, worseIsHigh bool) *Span {
 	return out
 }
 
-// flagNames is flags as strings, nil with none.
-func flagNames(flags []whatif.Flag) []string {
+// FlagNames is flags as strings, nil with none: how every flag reaches the
+// wire.
+func FlagNames(flags []whatif.Flag) []string {
 	if len(flags) == 0 {
 		return nil
 	}

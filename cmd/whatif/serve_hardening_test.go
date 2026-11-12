@@ -100,7 +100,7 @@ func TestServeNamespaces(t *testing.T) {
 	var asked []string
 	src.namespaceAllowed = func(_ context.Context, ns string) error {
 		asked = append(asked, ns)
-		return whatifapi.ErrForbidden{Err: denied}
+		return whatifapi.ForbiddenError{Err: denied}
 	}
 	code, body = ask("")
 	assert.Equal(t, http.StatusForbidden, code, body)

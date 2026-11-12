@@ -73,16 +73,15 @@ func TestBusyIsServiceUnavailable(t *testing.T) {
 // and frees its slot.
 func TestPlanStopsWhenTheRequestEnds(t *testing.T) {
 	curves := 0
-	onCurves = func() { curves++ }
-	t.Cleanup(func() { onCurves = nil })
 	s := New(Config{Resolver: &stubResolver{}, WhatifSchema: "schema-v3", MaxPlans: 1})
+	s.onCurves = func() { curves++ }
 	id := inputsOf(t, s.Handler())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := s.Plan(ctx, PlanRequest{InputsID: id})
+	_, err := s.plan(ctx, PlanRequest{InputsID: id})
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, curves, "the curves were started")
-	_, err = s.Plan(context.Background(), PlanRequest{InputsID: id})
+	_, err = s.plan(context.Background(), PlanRequest{InputsID: id})
 	require.NoError(t, err)
 	assert.Equal(t, 2, curves, "a stopped curve set was cached")
 	assert.Empty(t, s.planSlots, "a slot was kept")
@@ -95,7 +94,7 @@ func TestLoopbackOnly(t *testing.T) {
 	for host, want := range map[string]int{
 		"localhost": http.StatusTeapot, "localhost:8080": http.StatusTeapot, "127.0.0.1:8080": http.StatusTeapot,
 		"[::1]:8080": http.StatusTeapot, "LOCALHOST:1": http.StatusTeapot,
-		"evil.example:8080": http.StatusForbidden, "127.0.0.1.evil.example": http.StatusForbidden,
+		"evil.example:8080": http.StatusForbidden, "127.0.0.1.evil.example": http.StatusForbidden, "127.0.0.2:8080": http.StatusTeapot,
 		"10.0.0.1:8080": http.StatusForbidden, "": http.StatusForbidden,
 	} {
 		rec := httptest.NewRecorder()
@@ -149,9 +148,9 @@ func TestValidationOrderIsFixed(t *testing.T) {
 	}
 }
 
-// ErrForbidden is a 403.
+// ForbiddenError is a 403.
 func TestForbiddenIs403(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writeErr(rec, ErrForbidden{Err: errors.New("no")})
+	writeErr(rec, ForbiddenError{Err: errors.New("no")})
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 }
