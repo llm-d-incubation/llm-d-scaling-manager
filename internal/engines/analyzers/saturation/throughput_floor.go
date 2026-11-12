@@ -605,6 +605,18 @@ func bucketOf(key string) string {
 // load counted twice.
 const SwitchThroughputFloorRaisesVariants = "saturation-throughput-floor-raises-variants"
 
+// SwitchPrefillKeepsRouterPrompts is the replay switch for prefill's share of
+// the router queue when prefill has no mu (issue
+// llm-d-incubation/llm-d-scaling-manager#51). On, the share stays in
+// prefill's demand: the prompts the router holds are work prefill has to
+// take first, priced as the KV they will hold there. Off, it is dropped, as
+// before: prefill with no mu then saw none of the router's backlog. That is
+// circular. A backlog that waits in the router never shows in prefill's
+// engine queue, so it never opens the gate that would learn prefill's k2 and
+// mu, and with no mu it was never charged. Keeping it errs toward more
+// prefill replicas (the cost side); dropping it under-provisioned prefill.
+const SwitchPrefillKeepsRouterPrompts = "saturation-prefill-keeps-router-prompts"
+
 // applyThroughputFloor raises roleDemand (in place) and returns the raised
 // totalDemand wherever the throughput model exceeds what occupancy measured,
 // after taking the queues' residency charge out of the measurement for every
@@ -637,8 +649,9 @@ const SwitchThroughputFloorRaisesVariants = "saturation-throughput-floor-raises-
 // a mu, both that charge and the engines' own queue charge (LocalQueueDemand)
 // come back out; the engines' own queued requests go into the floor as that
 // role's backlog, and the scheduler's standing queue goes in as prefill's. For
-// prefill without a mu, the scheduler-queue charge is dropped (file header),
-// and that is logged at the per-replica verbosity when it changes the figure:
+// prefill without a mu, the scheduler-queue charge stays in its demand
+// (SwitchPrefillKeepsRouterPrompts). With the switch off it is dropped, and
+// that is logged at the per-replica verbosity when it changes the figure:
 // it is the normal state of a P/D fleet, so an INFO line every cycle would be
 // noise, but a reader comparing scheduler-queue-demand's byRole with
 // RoleDemand needs to find the gap somewhere.
@@ -822,9 +835,14 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 		tf, startSeconds, startSources = pickLargerFloor(tf, estimate(starts.parent), starts)
 	}
 
-	// Prefill with no mu: the scheduler queue's prompts are not resident work
-	// for prefill (file header). Only the disaggregated case has a prefill
-	// entry to correct.
+	// Prefill with no mu, with SwitchPrefillKeepsRouterPrompts off: the
+	// scheduler queue's prompts were taken as not resident work for prefill,
+	// which holds a prompt only for its prefill time and the hand-off. On,
+	// they stay: a backlog in the router is work prefill takes first, and
+	// prefill learns no mu while its own queue reads empty, so dropping it
+	// left prefill with no charge for the router's backlog at all (issue
+	// llm-d-incubation/llm-d-scaling-manager#51). Only the disaggregated case
+	// has a prefill entry to correct.
 	//
 	// THE MODEL TOTAL MOVES WITH IT, and that is a change. While the queue was
 	// charged to both roles the total carried it once as decode's input +
@@ -836,7 +854,7 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 	// exactly the queue's prompt -- 1.2M tokens on the fixture that caught
 	// this -- which is a model-level demand nothing is responsible for
 	// serving.
-	if roleDemand != nil {
+	if roleDemand != nil && !a.prefillKeepsPrompts {
 		if _, priced := tf.ByRole[domain.RolePrefill]; !priced {
 			if share, ok := eppByRole[domain.RolePrefill]; ok && share > 0 {
 				if before, ok := roleDemand[domain.RolePrefill]; ok {

@@ -255,6 +255,9 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// the arrival rate against what the role completes, not against its
 		// resident KV over mu (throughput_floor.go).
 		SwitchFloorTrustReadsCompletions: &a.floorTrustCompleted,
+		// llm-d-incubation/llm-d-scaling-manager#51: prefill with no mu keeps
+		// the router queue's prompts as demand (throughput_floor.go).
+		SwitchPrefillKeepsRouterPrompts: &a.prefillKeepsPrompts,
 	}
 }
 

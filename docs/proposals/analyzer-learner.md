@@ -4230,8 +4230,10 @@ The SLO-side guards, in the order the brief asked for:
 - **Decode** is the role this design is for. Its queue is the engines' own
   (`pd-restart` carries no scheduler queue). Only the capacity part of
   `B` counts. `mu0` reads the decode replicas at their batch cap.
-- **Prefill** is unchanged. With no mu, the scheduler queue's prefill share is
-  already dropped (`scheduler-queue-prefill-share-dropped`), and a prefill
+- **Prefill** is unchanged. With no mu, the scheduler queue's prefill share was
+  dropped (`scheduler-queue-prefill-share-dropped`); since
+  llm-d-incubation/llm-d-scaling-manager#51 it stays in prefill's demand
+  (`SwitchPrefillKeepsRouterPrompts`). A prefill
   bound is held to `LowerBoundMaxGrowth`. Prefill's `RunningRequests /
   AvgServiceTime` is a ratio of a few requests to about 10 ms, too noisy to
   order on. The scheduler's queue stays with prefill, its owner

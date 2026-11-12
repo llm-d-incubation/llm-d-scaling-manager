@@ -162,10 +162,16 @@ so each must keep up with all of it), and on the total otherwise.
   - A lambda that is not a finite positive figure prices nothing.
   - The design and its measurements are in
     [the proposal](../proposals/analyzer-learner.md#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520).
-- A role with no `mu` and no saturated row keeps the residency charge, except
-  prefill's share of the scheduler queue, which is dropped. A prefill replica
-  holds a prompt for its prefill time plus the hand-off. Only a saturated
-  decode makes it hold longer, and more prefill replicas do not fix that.
+- A role with no `mu` and no saturated row keeps the residency charge,
+  prefill's share of the scheduler queue included
+  (`SwitchPrefillKeepsRouterPrompts`, issue
+  llm-d-incubation/llm-d-scaling-manager#51). The queue's prompts are work
+  prefill takes first. Prefill learns no `mu` while its own queue reads empty,
+  and a backlog that waits in the router keeps it empty, so dropping the share
+  left prefill with no charge for that backlog. This errs toward more prefill
+  replicas. With the switch off (a replay), the share is dropped, as before:
+  a prefill replica holds a prompt only for its prefill time plus the
+  hand-off.
 
 The floor writes the role's figure (`RoleDemand`) and the model total. A role
 it raises also lifts that role's variants (`raiseVariantsToRoles`, the same
