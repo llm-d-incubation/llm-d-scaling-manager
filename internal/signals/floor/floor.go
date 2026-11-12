@@ -826,6 +826,15 @@ func priceable(x float64) bool {
 	return x > 0 && !math.IsInf(x, 1)
 }
 
+// LowerBoundGrowthCap is the most demand a role priced without a
+// measurement of its own may carry: LowerBoundMaxGrowth times its READY
+// supply (aggregation.ScopeTotals.TotalSupply), at the scale-up threshold
+// the engine sizes with, so at most one doubling of the ready fleet is
+// ordered at a time. A negative or non-finite supply caps at zero.
+func LowerBoundGrowthCap(scaleUpThreshold, readySupply float64) float64 {
+	return scaleUpThreshold * LowerBoundMaxGrowth * nonNegativeSupply(readySupply)
+}
+
 // nonNegativeSupply floors an anticipated supply at zero for use as a cap,
 // reading a non-finite supply -- NaN or +Inf -- as zero.
 //
@@ -837,15 +846,6 @@ func priceable(x float64) bool {
 // the second line of defence rather than the first. It is kept because the cap
 // it feeds is this package's only guarantee, and because a caller may hand us
 // an anticipated supply we did not aggregate ourselves.
-// LowerBoundGrowthCap is the most demand a role priced without a
-// measurement of its own may carry: LowerBoundMaxGrowth times its READY
-// supply (aggregation.ScopeTotals.TotalSupply), at the scale-up threshold
-// the engine sizes with, so at most one doubling of the ready fleet is
-// ordered at a time. A negative or non-finite supply caps at zero.
-func LowerBoundGrowthCap(scaleUpThreshold, readySupply float64) float64 {
-	return scaleUpThreshold * LowerBoundMaxGrowth * nonNegativeSupply(readySupply)
-}
-
 func nonNegativeSupply(x float64) float64 {
 	if math.IsNaN(x) || math.IsInf(x, 1) || x < 0 {
 		return 0
