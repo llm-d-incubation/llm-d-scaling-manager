@@ -109,6 +109,13 @@ func refusalOf(r, fallback prefill.Refusal) prefill.Refusal {
 	return r
 }
 
+// HopAt is R at a prompt of i tokens, as the decode term prices it: its
+// fixed part and its per-token part at i (PromptLine.split).
+func (t DecodeTerm) HopAt(i float64) float64 {
+	fixed, perToken := t.Hop.split(i)
+	return fixed + perToken*i
+}
+
 // check refuses a term with a figure no reading gives.
 func (t DecodeTerm) check() *Unanswerable {
 	for _, x := range []float64{t.Engine.Base, t.Engine.PerToken, t.Engine.HeldPromptTokens, t.Hop.Base, t.Hop.PerToken,

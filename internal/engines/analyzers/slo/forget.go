@@ -27,7 +27,7 @@ import (
 // lastAccelerator: a variant forgotten after a move to new hardware would
 // otherwise key its next line under the old card for any cycle whose pods do
 // not resolve one; and the TTFT windows (imbalance, decodeTTFT, decodeTerms,
-// prompts).
+// prompts, joint).
 //
 // What it keeps: transients, the model's recent fleet history, which is no
 // learned state of the variant; ownSettled (and ownSettle), when each replica
@@ -87,6 +87,14 @@ func (a *Analyzer) forgetVariant(namespace, modelID, variant string) (int, []lea
 	if _, ok := a.prompts[key]; ok {
 		delete(a.prompts, key)
 		n++
+	}
+	// The joint window is keyed by the prefill variant and holds the decode
+	// variant's readings too: forgetting either forgets it.
+	for k, w := range a.joint {
+		if k == key || w.decodeKey == key {
+			delete(a.joint, k)
+			n++
+		}
 	}
 	return n, forgotten
 }
