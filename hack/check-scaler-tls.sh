@@ -51,6 +51,9 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAIL=0
 PASS=0
+# Every assertion below runs exactly once. A run that stops early, or a case
+# that silently stops running, must fail: change this with the cases.
+EXPECT_ASSERTIONS=352
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -742,6 +745,16 @@ echo "== cert-manager: a webhook that does not answer is a refusal before anythi
 reset_store
 run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' LLMSM_SCALER_TLS=true STUB_CM=present STUB_DRYRUN=fail
 ok '[ "$RC" = 1 ] && grep -q "LLMSM_SCALER_TLS_PROVIDER=openssl" "$WORK/refusal" && [ ! -f "$WORK/cm-applied.yaml" ]' "dry-run failure: exit $RC, $(cat "$WORK/refusal")"
+# Behind a notice on stderr, the refusal quotes the webhook error, not the notice.
+reset_store
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' LLMSM_SCALER_TLS=true STUB_CM=present STUB_DRYRUN=fail STUB_KUBECTL_NOISE=all
+ok '[ "$RC" = 1 ] && grep -q "failed calling webhook" "$WORK/refusal" && ! grep -q "memcache" "$WORK/refusal"' "dry-run failure behind a notice: exit $RC, $(cat "$WORK/refusal")"
+
+echo "== cert-manager API unreachable behind a notice: unknown, naming the connection error"
+# cm_api_said prints what llmsm_cert_manager_api decided, and why.
+cm_api_said() { llmsm_cert_manager_api; echo "$LLMSM_CERT_MANAGER_API: ${LLMSM_CERT_MANAGER_API_ERR:-}"; }
+run cm_api_said STUB_CM=down STUB_KUBECTL_NOISE=all
+ok '[ "$(cat "$WORK/stdout")" = "unknown: Unable to connect to the server: i/o timeout" ]' "cert-manager API behind a notice: said '$(cat "$WORK/stdout")'"
 
 echo "== cert-manager: a Certificate that never becomes Ready is a refusal"
 reset_store
@@ -1930,6 +1943,11 @@ run llmsm_verify_scaler_keda_trust
 ok '[ "$RC" = 1 ] && grep -q "KEDA cannot reach the external scaler" "$WORK/warnings" && grep -q "does not verify the scaler.s serving certificate" "$WORK/warnings" && grep -q "setup-prereqs" "$WORK/warnings" && grep -q "$RESTART" "$WORK/warnings"' "verify, copy on another CA: exit $RC, warnings '$(cat "$WORK/warnings")'"
 # The mismatch names both certificates, so the next one can be told from a bad read.
 ok 'grep -q "KEDA.s ca.crt: subject \"CN *= *another-ca\"" "$WORK/warnings" && grep -q "the serving certificate: subject .*issuer \"CN *= *llmsm-scaler-ca" "$WORK/warnings" && grep -q "sha256 [0-9A-F:]*" "$WORK/warnings" && grep -q "openssl: .*error" "$WORK/warnings"' "verify, copy on another CA: the message does not name the two certificates and openssl.s reason: $(cat "$WORK/warnings")"
+# Under pipefail, as install.sh runs it: a pipeline from the failing openssl
+# verify failed as a whole, and the reason came back empty.
+verify_strict() { set -o pipefail; llmsm_verify_scaler_keda_trust; }
+run verify_strict
+ok '[ "$RC" = 1 ] && grep -q "openssl: .*error" "$WORK/warnings"' "verify under pipefail, copy on another CA: openssl.s reason missing: $(cat "$WORK/warnings")"
 
 echo "== verify: KEDA's copy missing: a failure"
 store_tls_controller
@@ -1972,7 +1990,7 @@ store_tls_controller
 run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=TRUNCATED
 ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match" "$WORK/info" && grep -q "no JSON object: {" "$WORK/info" && ! grep -q "nothing" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, copy truncated: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")'"
 run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=TRUNCATED STUB_KUBECTL_NOISE=all
-ok '[ "$RC" = 0 ] && grep -q "no JSON object: E1113" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, copy truncated behind a notice: the message does not name what kubectl printed on stderr: info '$(cat "$WORK/info")'"
+ok '[ "$RC" = 0 ] && grep -q "no JSON object: {.*on stderr: E1113" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, copy truncated behind a notice: the message does not name what kubectl printed on stderr: info '$(cat "$WORK/info")'"
 
 echo "== verify: KEDA's copy missing behind a notice: still a failure"
 store_tls_controller
@@ -1990,9 +2008,9 @@ ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match.*Th
 echo "== verify: the controller Deployment unreadable, or read as half an object: said, not passed over"
 store_tls_controller
 run llmsm_verify_scaler_keda_trust STUB_DEPLOY=FORBIDDEN
-ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match the scaler: the controller Deployment" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, Deployment Forbidden: exit $RC, info '$(cat "$WORK/info")'"
+ok '[ "$RC" = 0 ] && grep -q "the controller Deployment scaling-manager-controller-manager in $NS cannot be read (Error from server (Forbidden)" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, Deployment Forbidden: exit $RC, info '$(cat "$WORK/info")'"
 run llmsm_verify_scaler_keda_trust STUB_DEPLOY=TRUNCATED
-ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match the scaler: the controller Deployment" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, Deployment truncated: exit $RC, info '$(cat "$WORK/info")'"
+ok '[ "$RC" = 0 ] && grep -q "the controller Deployment scaling-manager-controller-manager in $NS cannot be read (kubectl get deployment.*no JSON object" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, Deployment truncated: exit $RC, info '$(cat "$WORK/info")'"
 run llmsm_check_scaler_keda STUB_DEPLOY=FORBIDDEN
 ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match the scaler: the controller Deployment" "$WORK/info"' "preflight, Deployment Forbidden: exit $RC, info '$(cat "$WORK/info")'"
 
@@ -2051,6 +2069,10 @@ run llmsm_check_scaler_keda STUB_LOGS=FORBIDDEN STUB_KEDA_SECRETS=FORBIDDEN
 ok '[ "$RC" = 0 ] && grep -q "not checked" "$WORK/info" && grep -q "Could not check" "$WORK/info" && ! grep -q "refused no handshake" "$WORK/info"' "preflight, nothing readable: exit $RC (want 0, said as not checked), info '$(cat "$WORK/info")'"
 
 echo ""
+if [ "$((PASS + FAIL))" != "$EXPECT_ASSERTIONS" ]; then
+    echo "FAIL: $((PASS + FAIL)) assertions ran, $EXPECT_ASSERTIONS expected -- the run stopped early, or one was added without updating EXPECT_ASSERTIONS"
+    FAIL=$((FAIL + 1))
+fi
 if [ "$FAIL" -gt 0 ]; then
     echo "external-scaler TLS: $FAIL failed, $PASS passed"
     exit 1

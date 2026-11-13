@@ -89,10 +89,14 @@ llmsm_installations_raw() {
     kc_capture get deployments -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager -o go-template="$LLMSM_INSTALLS_TEMPLATE" || rc=$?
     out="$KC_OUT"
     if [ $rc -ne 0 ]; then
-        if printf '%s' "$KC_ERR" | grep -qi 'forbidden'; then
+        # Unread is not none, whatever the reason: a timeout said nothing and
+        # read as "no other scaling manager installed".
+        if grep -qi 'forbidden' <<< "$(kc_drop_notices "$KC_ERR")"; then
             log_warning "Cannot check whether another scaling manager is already installed (listing Deployments cluster-wide is not permitted for you)."
-            log_warning "  Two controllers managing the same workloads each allocate from the same free GPUs without seeing the other's claims. Confirm with whoever administers the cluster."
+        else
+            log_warning "Cannot check whether another scaling manager is already installed (listing Deployments cluster-wide failed: $(kc_err_line "$KC_ERR"))."
         fi
+        log_warning "  Two controllers managing the same workloads each allocate from the same free GPUs without seeing the other's claims. Confirm with whoever administers the cluster."
         return 0
     fi
     printf '%s

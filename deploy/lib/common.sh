@@ -81,9 +81,10 @@ kc_is_notice() {
 # failed: "Error from server ...", "Unable to connect to the server ...", "The
 # connection to the server ... was refused", or kubectl's own "error: ...",
 # rather than a notice printed before it (kc_is_notice). Else the first line
-# that is no notice, else the first line. A loop, not grep -m1 in a pipe: under
-# pipefail the writer of an early-closed pipe fails, and the fallback then ran
-# too.
+# that is no notice. When stderr held only notices, or nothing, it says so
+# rather than pass a notice off as the error. A loop, not grep -m1 in a pipe:
+# under pipefail the writer of an early-closed pipe fails, and the fallback
+# then ran too.
 kc_err_line() {
     local line first="" plain=""
     while IFS= read -r line; do
@@ -96,7 +97,13 @@ kc_err_line() {
         esac
         [ -n "$plain" ] || kc_is_notice "$line" || plain="$line"
     done <<< "$1"
-    printf '%s\n' "${plain:-$first}"
+    if [ -n "$plain" ]; then
+        printf '%s\n' "$plain"
+    elif [ -n "$first" ]; then
+        printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
+    else
+        printf 'kubectl failed with nothing on stderr\n'
+    fi
 }
 
 # kc_drop_notices echoes kubectl stderr $1 without its notices (kc_is_notice):
@@ -565,7 +572,7 @@ llmsm_scaler_svc_state() {
     kc_capture get svc scaling-manager-external-scaler -n "$1" -o name || rc=$?
     [ "$rc" -eq 0 ] && return 0
     kc_not_found "$KC_ERR" && return 1
-    LLMSM_SCALER_SVC_ERR="$(printf '%s\n' "$KC_ERR" | grep -v '^[[:space:]]*$' | head -1)"
+    LLMSM_SCALER_SVC_ERR="$(kc_err_line "$KC_ERR")"
     return 2
 }
 

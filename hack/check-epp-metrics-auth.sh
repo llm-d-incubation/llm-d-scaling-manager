@@ -44,7 +44,7 @@ PASS=0
 CASES=0
 # EXPECTED_CASES is how many cases this file runs. A case that silently stops
 # running (a renamed function, an early exit) must fail the check.
-EXPECTED_CASES=18
+EXPECTED_CASES=19
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -132,6 +132,12 @@ stub_kubectl() {
             api=v1; case "$a" in "get $VX "*) api=x ;; esac
             if [ "${STUB_POOLS:-}" = FORBIDDEN ]; then forbidden inferencepools; return 1; fi
             if [ "${STUB_POOLS:-}" = GARBAGE ]; then echo 'this is not json'; return 0; fi
+            if [ "${STUB_POOLS:-}" = TIMEOUT ]; then
+                # A discovery notice for another API (a 404), then the error itself.
+                echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for metrics.k8s.io/v1beta1: the server could not find the requested resource"' >&2
+                echo 'Unable to connect to the server: net/http: TLS handshake timeout' >&2
+                return 1
+            fi
             if [ "$api" = v1 ] && [ "${STUB_V1:-}" = NORES ]; then
                 echo "error: the server doesn't have a resource type \"inferencepools\"" >&2; return 1
             fi
@@ -286,6 +292,13 @@ pool v1 apps chat chat-epp
 epp apps chat-epp chat chat-sa
 run llmsm_grant_epp_metrics_auth STUB_POOLS=FORBIDDEN
 ok '[ "$RC" = 2 ] && [ ! -s "$WORK/applied" ] && grep -q "could not list" "$WORK/stdout" && ! grep -q "No InferencePool" "$WORK/info"' "forbidden list: exit $RC (want 2), stdout $(cat "$WORK/stdout"), info $(cat "$WORK/info"), applied $(cat "$WORK/applied")"
+
+begin "a failed list behind a 404 discovery notice is unlistable, not a missing API, and says the error"
+reset
+pool v1 apps chat chat-epp
+epp apps chat-epp chat chat-sa
+run llmsm_grant_epp_metrics_auth STUB_POOLS=TIMEOUT
+ok '[ "$RC" = 2 ] && [ ! -s "$WORK/applied" ] && grep -q "could not list" "$WORK/stdout" && grep -q "Unable to connect to the server" "$WORK/stdout" && ! grep -q "memcache" "$WORK/stdout" && ! grep -q "No InferencePool" "$WORK/info"' "timeout behind a notice: exit $RC (want 2), stdout $(cat "$WORK/stdout"), info $(cat "$WORK/info")"
 
 begin "already allowed: nothing applied; a second run after a grant applies nothing"
 reset

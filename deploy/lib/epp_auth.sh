@@ -69,16 +69,29 @@ llmsm_epp_auth_namespaces() {
 # llmsm_epp_auth_err_kind classifies kubectl stderr in file $1: forbidden,
 # notfound (the object), noresource (the API is not served: no such CRD), or
 # other.
+#
+# Classified on the error alone (kc_drop_notices): kubectl prints notices on
+# stderr too, and a discovery notice for another API ("the server could not
+# find the requested resource") made a failed list noresource, so the EPP
+# grant was skipped without a word.
 llmsm_epp_auth_err_kind() {
-    if grep -qi 'forbidden' "$1"; then
+    local err
+    err="$(kc_drop_notices "$(cat "$1")")"
+    if grep -qi 'forbidden' <<< "$err"; then
         echo forbidden
-    elif grep -qiE "doesn.t have a resource type|could not find the requested resource|no matches for kind" "$1"; then
+    elif grep -qiE "doesn.t have a resource type|could not find the requested resource|no matches for kind" <<< "$err"; then
         echo noresource
-    elif grep -qiE 'NotFound|not found' "$1"; then
+    elif grep -qiE 'NotFound|not found' <<< "$err"; then
         echo notfound
     else
         echo other
     fi
+}
+
+# llmsm_epp_auth_err_line echoes the line of kubectl stderr in file $1 that
+# says why the call failed (kc_err_line), not a notice printed before it.
+llmsm_epp_auth_err_line() {
+    kc_err_line "$(cat "$1")"
 }
 
 # llmsm_epp_auth_plan echoes, tab-separated, one line per finding for the
@@ -113,7 +126,7 @@ llmsm_epp_auth_plan() {
                 case "$(llmsm_epp_auth_err_kind "$errf")" in
                     noresource) continue ;;
                     forbidden) printf 'nolist\t%s\t-\tlisting %s is forbidden\n' "$ns" "$kind" ;;
-                    *) printf 'nolist\t%s\t-\t%s\n' "$ns" "$(head -1 "$errf")" ;;
+                    *) printf 'nolist\t%s\t-\t%s\n' "$ns" "$(llmsm_epp_auth_err_line "$errf")" ;;
                 esac
                 continue
             fi
@@ -156,7 +169,7 @@ llmsm_epp_auth_pool_sas() {
     if [ "$rc" -ne 0 ]; then
         case "$(llmsm_epp_auth_err_kind "$errf")" in
             notfound) printf 'missing\t%s\t%s\tits endpoint picker Service %s does not exist\n' "$ns" "$pool" "$svc" ;;
-            *) printf 'unknown\t%s\t%s\tcould not read Service %s: %s\n' "$ns" "$pool" "$svc" "$(head -1 "$errf")" ;;
+            *) printf 'unknown\t%s\t%s\tcould not read Service %s: %s\n' "$ns" "$pool" "$svc" "$(llmsm_epp_auth_err_line "$errf")" ;;
         esac
         return 0
     fi
@@ -171,7 +184,7 @@ llmsm_epp_auth_pool_sas() {
     rc=0
     json="$(kubectl get deployments -n "$ns" -o json 2>"$errf")" || rc=$?
     if [ "$rc" -ne 0 ]; then
-        printf 'unknown\t%s\t%s\tcould not list Deployments: %s\n' "$ns" "$pool" "$(head -1 "$errf")"
+        printf 'unknown\t%s\t%s\tcould not list Deployments: %s\n' "$ns" "$pool" "$(llmsm_epp_auth_err_line "$errf")"
         return 0
     fi
     if ! sas="$(printf '%s' "$json" | jq -r --argjson sel "$sel" '.items[]
@@ -187,7 +200,7 @@ llmsm_epp_auth_pool_sas() {
         rc=0
         json="$(kubectl get pods -n "$ns" -l "$(printf '%s' "$sel" | jq -r 'to_entries | map(.key + "=" + .value) | join(",")')" -o json 2>"$errf")" || rc=$?
         if [ "$rc" -ne 0 ]; then
-            printf 'unknown\t%s\t%s\tcould not list Pods: %s\n' "$ns" "$pool" "$(head -1 "$errf")"
+            printf 'unknown\t%s\t%s\tcould not list Pods: %s\n' "$ns" "$pool" "$(llmsm_epp_auth_err_line "$errf")"
             return 0
         fi
         if ! sas="$(printf '%s' "$json" | jq -r '.items[] | .spec.serviceAccountName // .spec.serviceAccount // "default"' 2>/dev/null)"; then

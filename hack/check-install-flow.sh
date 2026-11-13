@@ -25,11 +25,12 @@ PASS=0
 # Every case below reports ok or FAIL exactly once. A run that ends early --
 # a sourced lib that exits, a section that stops -- otherwise passes having
 # checked less than it says. Change this deliberately with the cases.
-EXPECT_CASES=108
+EXPECT_CASES=113
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh single_install.sh; do
+for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh single_install.sh \
+    infra_scaling_manager.sh physical_limiter.sh; do
     tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$WORK/$lib"
 done
 
@@ -70,7 +71,16 @@ kubectl() {
     [ -z "${KC_NOISE:-}" ] || kc_noise
     case "$*" in
         "get deployments -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager "*)
+            if [ "${SI_ROWS:-}" = TIMEOUT ]; then
+                echo 'Unable to connect to the server: net/http: TLS handshake timeout' >&2; return 1
+            fi
             printf '%s' "${SI_ROWS:-}"; return 0 ;;
+        "get rolebindings -A -l llm-d.ai/watch-grant-for="*)
+            printf 'team-a\nteam-b\n'; return 0 ;;
+        "create namespace "*" --dry-run=client -o yaml")
+            printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n' "$3"; return 0 ;;
+        "apply -f -")
+            cat > "$WORK/applied-stdin.yaml"; return 0 ;;
         "get crd scaledobjects.keda.sh"*)
             case "${CRD_MODE:-new}" in
                 absent)    echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "scaledobjects.keda.sh" not found' >&2; return 1 ;;
@@ -98,6 +108,7 @@ kubectl() {
             esac ;;
         "get csv -n openshift-keda"*)
             case "${CSV_MODE:-ok}" in
+                error)     echo 'Unable to connect to the server: dial tcp: i/o timeout' >&2; return 1 ;;
                 forbidden) echo 'Error from server (Forbidden): clusterserviceversions.operators.coreos.com is forbidden' >&2; return 1 ;;
                 none)      echo ''; return 0 ;;
                 *)         echo 'custom-metrics-autoscaler.v2.17.2-1 2.17.2-1'; return 0 ;;
@@ -1250,6 +1261,50 @@ else
         fail "ONE CONTROLLER: behind a notice the only install is team-a, namespace-scoped" "$si_out"
     fi
     unset SI_ROWS
+fi
+
+# A list that times out is not "no other controller": it is said.
+SI_ROWS=TIMEOUT
+si_out="$(KC_NOISE=1 llmsm_installations 2>&1 >/dev/null)"
+if printf '%s' "$si_out" | grep -q 'Cannot check whether another scaling manager is already installed (listing Deployments cluster-wide failed: Unable to connect to the server' \
+    && ! printf '%s' "$si_out" | grep -q 'memcache'; then
+    ok "ONE CONTROLLER: a list that fails (not Forbidden) is warned about, naming the error"
+else
+    fail "ONE CONTROLLER: a timed-out list must warn, naming the timeout" "$si_out"
+fi
+unset SI_ROWS
+
+# --- other reads behind a notice ----------------------------------------------
+#
+# Each read below parsed kubectl's stderr with its answer (2>&1). With a
+# notice on stderr, each answer must be what stdout said, and an error what
+# the error said.
+ns_out="$( (. "$WORK/infra_scaling_manager.sh"; KC_NOISE=1 llmsm_granted_namespaces) 2>/dev/null | tr '\n' ' ')"
+if [ "$ns_out" = "team-a team-b " ]; then
+    ok "GRANTS: the namespaces to revoke are read past a notice on stderr"
+else
+    fail "GRANTS: behind a notice the granted namespaces must be team-a team-b" "$ns_out"
+fi
+rm -f "$WORK/applied-stdin.yaml"
+( . "$WORK/physical_limiter.sh"; KC_NOISE=1 pl_ensure_namespace scaling-manager-policy ) >/dev/null 2>&1
+if [ -s "$WORK/applied-stdin.yaml" ] && ! grep -q 'E1113' "$WORK/applied-stdin.yaml" \
+    && grep -qx '  name: scaling-manager-policy' "$WORK/applied-stdin.yaml"; then
+    ok "LIMITER: the Namespace manifest applied carries no notice from stderr"
+else
+    fail "LIMITER: behind a notice the applied Namespace must be the manifest alone" "$(cat "$WORK/applied-stdin.yaml" 2>/dev/null)"
+fi
+cma_out="$( (KC_NOISE=1 CSV_MODE=error llmsm_keda_cma_version_report) 2>&1 )"
+if printf '%s' "$cma_out" | grep -q 'could not check the Custom Metrics Autoscaler version: Unable to connect to the server' \
+    && ! printf '%s' "$cma_out" | grep -q 'memcache'; then
+    ok "KEDA: an unreadable Custom Metrics Autoscaler version names the error, not a notice"
+else
+    fail "KEDA: the CMA version read behind a notice must name the error" "$cma_out"
+fi
+marked_out="$( (kubectl() { pw_kubectl "$@"; }; KC_NOISE=1 PW_MARKED="ns-m" llmsm_pod_writer_marked_namespaces) 2>/dev/null | tr '\n' ' ')"
+if [ "$marked_out" = "ns-m " ]; then
+    ok "POD WRITES: the marked namespaces are read past a notice on stderr"
+else
+    fail "POD WRITES: behind a notice the marked namespaces must be ns-m alone" "$marked_out"
 fi
 
 echo ""

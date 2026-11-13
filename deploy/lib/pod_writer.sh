@@ -192,7 +192,7 @@ llmsm_pod_writer_namespaces() {
     local tmpl='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.triggers}}{{with .metadata}}{{$ns}} {{or .scalerAddress "-"}} {{or .warmPoolName "-"}} {{or .modelID "-"}}{{"\n"}}{{end}}{{end}}{{end}}'
     # Streams apart (kc_capture): a notice on stderr is no row.
     if ! kc_capture get scaledobject -A -o go-template="$tmpl"; then
-        case "$KC_ERR" in
+        case "$(kc_drop_notices "$KC_ERR")" in
             *"doesn't have a resource type"*) return 0 ;;
         esac
         kc_err_line "$KC_ERR" >&2
@@ -276,13 +276,13 @@ llmsm_live_optimizer_mode() {
             return 0
         fi
     else
-        case "$KC_ERR" in
+        case "$(kc_drop_notices "$KC_ERR")" in
             *NotFound*|*"not found"*) ;;
             *) kc_err_line "$KC_ERR" >&2; return 1 ;;
         esac
     fi
     if ! kc_capture get configmap scaling-manager-scaling-policy-config -n "$ns" -o jsonpath='{.data.default}'; then
-        case "$KC_ERR" in
+        case "$(kc_drop_notices "$KC_ERR")" in
             *NotFound*|*"not found"*) echo off; return 0 ;;
         esac
         kc_err_line "$KC_ERR" >&2

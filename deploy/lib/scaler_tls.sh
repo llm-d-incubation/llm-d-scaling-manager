@@ -126,11 +126,11 @@ llmsm_scaler_get_json() {
     [ -z "$KC_ERR" ] || LLMSM_SCALER_NOTICES="${LLMSM_SCALER_NOTICES:+$LLMSM_SCALER_NOTICES
 }$(kc_notices "$KC_ERR")"
     if ! printf '%s' "$KC_OUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
-        # What kubectl said on stderr explains it better than stdout's first
-        # bytes ("{"); stdout's start is the fallback.
-        first="$(kc_err_line "$KC_ERR")"
-        [ -n "$first" ] || first="${KC_OUT:0:80}"
-        LLMSM_GET_ERR="kubectl $* printed no JSON object: ${first:-nothing}"
+        # What stdout started with, and what kubectl said on stderr with it.
+        # One line: the message is read by its first line (kc_err_line).
+        first="$(printf '%s' "${KC_OUT:0:80}" | tr '\n' ' ')"
+        LLMSM_GET_ERR="kubectl $* succeeded but printed no JSON object: ${first:-nothing on stdout}"
+        [ -z "$KC_ERR" ] || LLMSM_GET_ERR="$LLMSM_GET_ERR; on stderr: $(printf '%s\n' "$KC_ERR" | sed -n '/./p' | sed -n '1p')"
         return 2
     fi
     LLMSM_GET_OUT="$KC_OUT"
@@ -1891,7 +1891,10 @@ llmsm_scaler_cert_brief() {
 # a read that went wrong.
 llmsm_scaler_trust_evidence() {
     local why notices
-    why="$(openssl verify -CAfile "$1" "$3" 2>&1 | sed -n '/error/p' | sed -n '1p')" || why=""
+    # Captured first, filtered after: in one pipeline, the failing verify
+    # failed the whole under pipefail (install.sh), and the reason was lost.
+    why="$(openssl verify -CAfile "$1" "$3" 2>&1 || true)"
+    why="$(printf '%s\n' "$why" | sed -n '/error/p' | sed -n '1p')"
     printf '%s: %s; %s: %s' "$2" "$(llmsm_scaler_cert_brief "$1")" "$4" "$(llmsm_scaler_cert_brief "$3")"
     [ -z "$why" ] || printf '; openssl: %s' "$why"
     notices="$(printf '%s\n' "${LLMSM_SCALER_NOTICES:-}" | sed -n '/./p' | sed -n '1,3p' | tr '\n' ' ')"

@@ -585,10 +585,17 @@ llmsm_keda_unreachable_rc() {
 # A controller Deployment that cannot be read is said, not passed over: the
 # check did not run, and silence read as a pass.
 llmsm_verify_scaler_is_tls() {
-    case "$(llmsm_scaler_mode_of "$LLMSM_NS")" in
+    local f mode
+    # In this shell, not $( ): the read's error (LLMSM_GET_ERR) is said below.
+    LLMSM_GET_ERR=""
+    f="$(mktemp)" || return 1
+    llmsm_scaler_mode_of "$LLMSM_NS" > "$f"
+    mode="$(cat "$f")"
+    rm -f "$f"
+    case "$mode" in
         tls) return 0 ;;
         unknown)
-            log_info "  Could not check that KEDA's certificates match the scaler: the controller Deployment scaling-manager-controller-manager in $LLMSM_NS cannot be read, so whether it serves TLS is not known."
+            log_info "  Could not check that KEDA's certificates match the scaler: the controller Deployment scaling-manager-controller-manager in $LLMSM_NS cannot be read ($(kc_err_line "${LLMSM_GET_ERR:-}")), so whether it serves TLS is not known."
             return 1 ;;
     esac
     return 1
