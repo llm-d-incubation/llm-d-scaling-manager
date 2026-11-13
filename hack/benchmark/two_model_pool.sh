@@ -103,6 +103,14 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# The installer's kubectl helpers: kc_capture_with (stdout and stderr apart),
+# kc_err_line, kc_is_notice, kc_drop_notices. kubectl prints notices on stderr
+# on a read that succeeds (the memcache.go "Unhandled Error" discovery line
+# while an aggregated API is down, a throttling notice); read with 2>&1 they
+# were part of the answer. Reads here go through `kc_capture_with kc ...`, so
+# they keep KUBE_CONTEXT.
+# shellcheck source=../../deploy/lib/common.sh
+. "$ROOT/deploy/lib/common.sh"
 
 NS="${BENCHMARK_NAMESPACE:-}"
 # The scenario spec defines both stacks, and its stack NAMES are the path
@@ -390,62 +398,6 @@ die()   { echo "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 k()  { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} -n "$NS" "$@"; }
 kc() { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} "$@"; }
 
-# kcap runs kc and keeps its streams apart: KC_OUT is stdout, KC_ERR stderr,
-# the status kubectl's. kubectl prints notices on stderr on a read that
-# succeeds (the memcache.go "Unhandled Error" discovery line while an
-# aggregated API is down, a throttling notice); read with 2>&1 they were part
-# of the answer. Sets variables: call it as `kcap ... || rc=$?`, never in $( ).
-#
-# A copy of kc_capture (deploy/lib/common.sh) on kc, which carries
-# KUBE_CONTEXT; kerr_line below copies kc_err_line and kc_is_notice from the
-# same file. This script does not source common.sh outside with_scaler_lib.
-# Once the installer change that adds kc_err_line is merged, both copies are
-# to be replaced by the originals.
-kcap() {
-    local errf rc=0
-    KC_OUT="" KC_ERR=""
-    errf="$(mktemp)" || { KC_ERR="mktemp failed"; return 125; }
-    KC_OUT="$(kc "$@" 2>"$errf")" || rc=$?
-    KC_ERR="$(cat "$errf")"
-    rm -f "$errf"
-    return "$rc"
-}
-
-# kerr_line echoes the line of kubectl stderr $1 that says why the call
-# failed ("Error from server", "Unable to connect to the server", "The
-# connection to the server", "error:"), not a notice printed before it. A
-# notice is what kc_is_notice (deploy/lib/common.sh) calls one: a klog line or
-# an API server "Warning:".
-kerr_is_notice() {
-    [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
-    case "$1" in Warning:*) return 0 ;; esac
-    return 1
-}
-# kerr_drop_notices echoes kubectl stderr $1 without its notices
-# (kerr_is_notice), one line each: the error itself. A copy of
-# kc_drop_notices (deploy/lib/common.sh), blank lines dropped.
-kerr_drop_notices() {
-    local line
-    while IFS= read -r line; do
-        if [ -n "$line" ] && ! kerr_is_notice "$line"; then printf '%s\n' "$line"; fi
-    done <<< "$1"
-    return 0
-}
-kerr_line() {
-    local line first="" plain=""
-    while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        [ -n "$first" ] || first="$line"
-        case "$line" in
-            "Error from server"*|error:*|"Unable to connect"*|"The connection to the server"*)
-                printf '%s\n' "$line"; return 0 ;;
-        esac
-        [ -n "$plain" ] || kerr_is_notice "$line" || plain="$line"
-    done <<< "$1"
-    if [ -n "$plain" ]; then printf '%s\n' "$plain"
-    elif [ -n "$first" ]; then printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
-    else printf 'kubectl failed with nothing on stderr\n'; fi
-}
 
 need_ns() { [ -n "$NS" ] || die "BENCHMARK_NAMESPACE is required."; }
 
@@ -568,15 +520,15 @@ with_scaler_lib() {
 # Or one "unreadable<TAB>-<TAB><why>" line when the lists cannot be read.
 wiring_snapshot() {
     local sos hpas rows st so detail
-    # kc_capture, not kcap: inside with_scaler_lib, common.sh is sourced and
-    # kubectl already carries KUBE_CONTEXT (kcap would pass it twice).
+    # kc_capture, not kc_capture_with kc: inside with_scaler_lib, kubectl
+    # already carries KUBE_CONTEXT (kc would pass it twice).
     kc_capture -n "$NS" get scaledobject -o json || {
-        printf 'unreadable\t-\tthe ScaledObjects did not read: %s\n' "$(kerr_line "$KC_ERR")"; return 0; }
+        printf 'unreadable\t-\tthe ScaledObjects did not read: %s\n' "$(kc_err_line "$KC_ERR")"; return 0; }
     sos="$KC_OUT"
     printf '%s' "$sos" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
         printf 'unreadable\t-\tthe ScaledObjects did not read as a list\n'; return 0; }
     kc_capture -n "$NS" get hpa -o json || {
-        printf 'unreadable\t-\tthe HPAs did not read: %s\n' "$(kerr_line "$KC_ERR")"; return 0; }
+        printf 'unreadable\t-\tthe HPAs did not read: %s\n' "$(kc_err_line "$KC_ERR")"; return 0; }
     hpas="$KC_OUT"
     printf '%s' "$hpas" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
         printf 'unreadable\t-\tthe HPAs did not read as a list\n'; return 0; }
@@ -2143,8 +2095,8 @@ sim_monitor() {
 # accelerators on, or nothing. Every node's providerID starts kind:// on kind.
 sim_cluster_problem() {
     local ids
-    kcap get nodes -o jsonpath='{range .items[*]}{.spec.providerID}{"\n"}{end}' || {
-        echo "could not read the nodes to tell whether this is a kind cluster: $(kerr_line "$KC_ERR")"; return; }
+    kc_capture_with kc get nodes -o jsonpath='{range .items[*]}{.spec.providerID}{"\n"}{end}' || {
+        echo "could not read the nodes to tell whether this is a kind cluster: $(kc_err_line "$KC_ERR")"; return; }
     ids="$KC_OUT"
     [ -n "$ids" ] || { echo "no nodes"; return; }
     if printf '%s\n' "$ids" | grep -qv '^kind://'; then
@@ -2551,10 +2503,10 @@ check_policy_namespace() {
     local out label rc=0
     # Forbidden is not absent: a namespace this identity cannot read may still
     # be the one the controller reads.
-    # Streams apart (kcap): with 2>&1 a notice on stderr made the JSON
+    # Streams apart (kc_capture_with): with 2>&1 a notice on stderr made the JSON
     # unparseable, jq gave no label, and the guard passed.
-    kcap get namespace "$NS" -o json || \
-        die "could not read namespace $NS to find which policy the controller reads: $(kerr_line "$KC_ERR")
+    kc_capture_with kc get namespace "$NS" -o json || \
+        die "could not read namespace $NS to find which policy the controller reads: $(kc_err_line "$KC_ERR")
   Set SKIP_POLICY_NAMESPACE_CHECK=1 if you know the policy in $LLMSM_NS is the one in force."
     out="$KC_OUT"
     jq -e 'type == "object"' >/dev/null 2>&1 <<<"$out" || \
@@ -2566,13 +2518,13 @@ check_policy_namespace() {
     fi
     [ -n "$label" ] && return 0
     rc=0
-    kcap get namespace scaling-manager-policy -o name || rc=$?
+    kc_capture_with kc get namespace scaling-manager-policy -o name || rc=$?
     out="$KC_OUT"
     # NotFound is read from the error alone: Forbidden is not absent, and a
     # notice must not decide it either way.
     if [ "$rc" -ne 0 ]; then
-        out="$(kerr_drop_notices "$KC_ERR")"
-        [ -n "$out" ] || out="$(kerr_line "$KC_ERR")"
+        out="$(kc_drop_notices "$KC_ERR")"
+        [ -n "$out" ] || out="$(kc_err_line "$KC_ERR")"
     fi
     case "$out" in
         namespace/scaling-manager-policy)
@@ -2624,10 +2576,10 @@ watch_scope() {
 set_share_policy() {
     local arm="$1" current updated
     check_policy_namespace
-    # Streams apart (kcap): with 2>&1 a notice on stderr was part of the
+    # Streams apart (kc_capture_with): with 2>&1 a notice on stderr was part of the
     # policy, rewritten and patched into the ConfigMap every controller reads.
-    kcap -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || \
-        die "could not read the scaling policy in $LLMSM_NS: $(kerr_line "$KC_ERR")"
+    kc_capture_with kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || \
+        die "could not read the scaling policy in $LLMSM_NS: $(kc_err_line "$KC_ERR")"
     current="$KC_OUT"
     # The comparison is under a quota, and the optimizer has no budget without
     # one -- it would report `invalid` and the arm would measure today's
@@ -2660,7 +2612,7 @@ CONTROLLER_SA="${CONTROLLER_SA:-scaling-manager-controller-manager}"
 # impersonate it -- never folded into no or yes.
 can_i_sa() {
     local out rc=0
-    kcap auth can-i "$@" --as "system:serviceaccount:${LLMSM_NS}:${CONTROLLER_SA}" || rc=$?
+    kc_capture_with kc auth can-i "$@" --as "system:serviceaccount:${LLMSM_NS}:${CONTROLLER_SA}" || rc=$?
     # can-i answers yes or no on stdout; anything else is unknown.
     out="$KC_OUT"
     case "$out" in
@@ -2691,8 +2643,8 @@ EOF
 # Each read that cannot be made is a problem too: not knowing is not passing.
 node_data_problems() {
     local policy nodes pods status ready
-    kcap -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || {
-        echo "could not read the scaling policy in $LLMSM_NS: $(kerr_line "$KC_ERR")"; return; }
+    kc_capture_with kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || {
+        echo "could not read the scaling policy in $LLMSM_NS: $(kc_err_line "$KC_ERR")"; return; }
     policy="$KC_OUT"
     printf '%s\n' "$policy" | grep -Eq '^[[:space:]-]*type:[[:space:]]*(gpu-inventory|inventory)[[:space:]]*$' || \
         echo "the policy in $LLMSM_NS declares no gpu-inventory limiter (stand up with LLMSM_LIMITER=gpu-inventory,quota)"
@@ -3012,9 +2964,9 @@ print('HTTP 200' if done==$count else 'FAILED after %d of $count: %s' % (done, l
         done
         # The probe's own output; kubectl's stderr only when there is none, and
         # without notices: a notice beside empty logs read as the model failing.
-        kcap -n "$NS" logs "$pod" || true
+        kc_capture_with kc -n "$NS" logs "$pod" || true
         out="$KC_OUT"
-        [ -n "$out" ] || out="$(kerr_drop_notices "$KC_ERR")"
+        [ -n "$out" ] || out="$(kc_drop_notices "$KC_ERR" | sed '/^$/d')"
         k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1
         case "$out" in
             *"HTTP 200"*) ok "  $model answered (attempt $attempt)"; return 0 ;;

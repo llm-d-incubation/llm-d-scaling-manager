@@ -2546,16 +2546,18 @@ else
 fi
 
 case_begin
-nk_out="$(kerr_drop_notices "$NOTICE
+# The probe-logs fallback (verify_probe): the error lines, notices and blank
+# lines dropped, through deploy/lib/common.sh kc_drop_notices.
+nk_out="$(kc_drop_notices "$NOTICE
 Warning: v1 ConfigMap is deprecated in v9.99+
 Error from server (Forbidden): configmaps is forbidden
 
-second line of the error")"
+second line of the error" | sed '/^$/d')"
 if [ "$nk_out" != "Error from server (Forbidden): configmaps is forbidden
 second line of the error" ]; then
-    fail "kerr_drop_notices must keep every error line and drop klog and Warning: lines: $nk_out"
+    fail "the probe-logs fallback must keep every error line and drop klog and Warning: lines: $nk_out"
 else
-    ok "kerr_drop_notices keeps the error, all of it, and drops the notices"
+    ok "the probe-logs fallback keeps the error, all of it, and drops the notices"
 fi
 
 # wiring_snapshot runs inside with_scaler_lib, where common.sh is sourced.

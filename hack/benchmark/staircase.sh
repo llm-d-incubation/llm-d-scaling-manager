@@ -374,7 +374,11 @@ flow_control() {
 # kube_is_notice <line> : whether it is a notice kubectl prints on stderr without the
 # call failing -- a klog line (E1113 09:55:01.123456 ... memcache.go "Unhandled
 # Error", printed while an aggregated API is down; I... client-side throttling) or
-# an API server "Warning:". A copy of kc_is_notice (deploy/lib/common.sh).
+# an API server "Warning:". A copy of kc_is_notice (deploy/lib/common.sh), and
+# kube_err_reason below follows kc_err_line: this script runs from a copy of
+# itself in the run directory (STAIRCASE_COPY), with no deploy/lib beside it,
+# and its check points STAIRCASE_ROOT at a stub tree, so it cannot source
+# common.sh from either place.
 kube_is_notice() {
     [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
     case "$1" in Warning:*) return 0 ;; esac
