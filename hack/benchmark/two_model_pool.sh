@@ -103,6 +103,14 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# The installer's kubectl helpers: kc_capture_with (stdout and stderr apart),
+# kc_err_line, kc_is_notice, kc_drop_notices. kubectl prints notices on stderr
+# on a read that succeeds (the memcache.go "Unhandled Error" discovery line
+# while an aggregated API is down, a throttling notice); read with 2>&1 they
+# were part of the answer. Reads here go through `kc_capture_with kc ...`, so
+# they keep KUBE_CONTEXT.
+# shellcheck source=../../deploy/lib/common.sh
+. "$ROOT/deploy/lib/common.sh"
 
 NS="${BENCHMARK_NAMESPACE:-}"
 # The scenario spec defines both stacks, and its stack NAMES are the path
@@ -390,6 +398,7 @@ die()   { echo "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 k()  { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} -n "$NS" "$@"; }
 kc() { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} "$@"; }
 
+
 need_ns() { [ -n "$NS" ] || die "BENCHMARK_NAMESPACE is required."; }
 
 # ---------------------------------------------------------------------------
@@ -511,10 +520,16 @@ with_scaler_lib() {
 # Or one "unreadable<TAB>-<TAB><why>" line when the lists cannot be read.
 wiring_snapshot() {
     local sos hpas rows st so detail
-    sos="$(kubectl -n "$NS" get scaledobject -o json 2>&1)" || {
-        printf 'unreadable\t-\tthe ScaledObjects did not read: %s\n' "$(printf '%s\n' "$sos" | head -1)"; return 0; }
-    hpas="$(kubectl -n "$NS" get hpa -o json 2>&1)" || {
-        printf 'unreadable\t-\tthe HPAs did not read: %s\n' "$(printf '%s\n' "$hpas" | head -1)"; return 0; }
+    # kc_capture, not kc_capture_with kc: inside with_scaler_lib, kubectl
+    # already carries KUBE_CONTEXT (kc would pass it twice).
+    kc_capture -n "$NS" get scaledobject -o json || {
+        printf 'unreadable\t-\tthe ScaledObjects did not read: %s\n' "$(kc_err_line "$KC_ERR")"; return 0; }
+    sos="$KC_OUT"
+    printf '%s' "$sos" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
+        printf 'unreadable\t-\tthe ScaledObjects did not read as a list\n'; return 0; }
+    kc_capture -n "$NS" get hpa -o json || {
+        printf 'unreadable\t-\tthe HPAs did not read: %s\n' "$(kc_err_line "$KC_ERR")"; return 0; }
+    hpas="$KC_OUT"
     printf '%s' "$hpas" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
         printf 'unreadable\t-\tthe HPAs did not read as a list\n'; return 0; }
     rows="$(printf '%s' "$sos" | jq -r --arg ns "$LLMSM_NS" --argjson h "$hpas" "$LLMSM_SCALER_ADDRESS_JQ"'
@@ -2080,8 +2095,9 @@ sim_monitor() {
 # accelerators on, or nothing. Every node's providerID starts kind:// on kind.
 sim_cluster_problem() {
     local ids
-    ids="$(kc get nodes -o jsonpath='{range .items[*]}{.spec.providerID}{"\n"}{end}' 2>&1)" || {
-        echo "could not read the nodes to tell whether this is a kind cluster: $ids"; return; }
+    kc_capture_with kc get nodes -o jsonpath='{range .items[*]}{.spec.providerID}{"\n"}{end}' || {
+        echo "could not read the nodes to tell whether this is a kind cluster: $(kc_err_line "$KC_ERR")"; return; }
+    ids="$KC_OUT"
     [ -n "$ids" ] || { echo "no nodes"; return; }
     if printf '%s\n' "$ids" | grep -qv '^kind://'; then
         echo "BENCH_SIM=1 runs on kind only: the simulators request accelerators, and on this cluster (providerIDs: $(printf '%s' "$ids" | sort -u | tr '\n' ' ')) they would hold real ones doing nothing"
@@ -2484,18 +2500,32 @@ check_policy_namespace() {
         warn "SKIP_POLICY_NAMESPACE_CHECK=1: not checking that the controller reads the policy in $LLMSM_NS"
         return 0
     }
-    local out label
+    local out label rc=0
     # Forbidden is not absent: a namespace this identity cannot read may still
     # be the one the controller reads.
-    out="$(kc get namespace "$NS" -o json 2>&1)" || \
-        die "could not read namespace $NS to find which policy the controller reads: $out
+    # Streams apart (kc_capture_with): with 2>&1 a notice on stderr made the JSON
+    # unparseable, jq gave no label, and the guard passed.
+    kc_capture_with kc get namespace "$NS" -o json || \
+        die "could not read namespace $NS to find which policy the controller reads: $(kc_err_line "$KC_ERR")
+  Set SKIP_POLICY_NAMESPACE_CHECK=1 if you know the policy in $LLMSM_NS is the one in force."
+    out="$KC_OUT"
+    jq -e 'type == "object"' >/dev/null 2>&1 <<<"$out" || \
+        die "namespace $NS did not read as an object, so which policy the controller reads is not known.
   Set SKIP_POLICY_NAMESPACE_CHECK=1 if you know the policy in $LLMSM_NS is the one in force."
     label="$(jq -r '.metadata.labels["scaling-manager.llmd.ai/policy-namespace"] // ""' <<<"$out")"
     if [ -n "$label" ] && [ "$label" != "$LLMSM_NS" ]; then
         die "namespace $NS is labelled to read its policy from $label, not $LLMSM_NS. That policy is shared; the share arms do not rewrite it. Run in a namespace without the label."
     fi
     [ -n "$label" ] && return 0
-    out="$(kc get namespace scaling-manager-policy -o name 2>&1)"
+    rc=0
+    kc_capture_with kc get namespace scaling-manager-policy -o name || rc=$?
+    out="$KC_OUT"
+    # NotFound is read from the error alone: Forbidden is not absent, and a
+    # notice must not decide it either way.
+    if [ "$rc" -ne 0 ]; then
+        out="$(kc_drop_notices "$KC_ERR")"
+        [ -n "$out" ] || out="$(kc_err_line "$KC_ERR")"
+    fi
     case "$out" in
         namespace/scaling-manager-policy)
             [ "$LLMSM_NS" = "scaling-manager-policy" ] || \
@@ -2546,8 +2576,11 @@ watch_scope() {
 set_share_policy() {
     local arm="$1" current updated
     check_policy_namespace
-    current="$(kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' 2>&1)" || \
-        die "could not read the scaling policy in $LLMSM_NS: $current"
+    # Streams apart (kc_capture_with): with 2>&1 a notice on stderr was part of the
+    # policy, rewritten and patched into the ConfigMap every controller reads.
+    kc_capture_with kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || \
+        die "could not read the scaling policy in $LLMSM_NS: $(kc_err_line "$KC_ERR")"
+    current="$KC_OUT"
     # The comparison is under a quota, and the optimizer has no budget without
     # one -- it would report `invalid` and the arm would measure today's
     # optimizer under the wrong name.
@@ -2579,7 +2612,9 @@ CONTROLLER_SA="${CONTROLLER_SA:-scaling-manager-controller-manager}"
 # impersonate it -- never folded into no or yes.
 can_i_sa() {
     local out rc=0
-    out="$(kc auth can-i "$@" --as "system:serviceaccount:${LLMSM_NS}:${CONTROLLER_SA}" 2>&1)" || rc=$?
+    kc_capture_with kc auth can-i "$@" --as "system:serviceaccount:${LLMSM_NS}:${CONTROLLER_SA}" || rc=$?
+    # can-i answers yes or no on stdout; anything else is unknown.
+    out="$KC_OUT"
     case "$out" in
         yes*) echo yes ;;
         no*) if [ "$rc" -ne 0 ]; then echo no; else echo unknown; fi ;;
@@ -2608,8 +2643,9 @@ EOF
 # Each read that cannot be made is a problem too: not knowing is not passing.
 node_data_problems() {
     local policy nodes pods status ready
-    policy="$(kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' 2>&1)" || {
-        echo "could not read the scaling policy in $LLMSM_NS: $policy"; return; }
+    kc_capture_with kc -n "$LLMSM_NS" get configmap scaling-manager-scaling-policy-config -o jsonpath='{.data.default}' || {
+        echo "could not read the scaling policy in $LLMSM_NS: $(kc_err_line "$KC_ERR")"; return; }
+    policy="$KC_OUT"
     printf '%s\n' "$policy" | grep -Eq '^[[:space:]-]*type:[[:space:]]*(gpu-inventory|inventory)[[:space:]]*$' || \
         echo "the policy in $LLMSM_NS declares no gpu-inventory limiter (stand up with LLMSM_LIMITER=gpu-inventory,quota)"
     nodes="$(can_i_sa list nodes)"
@@ -2926,7 +2962,11 @@ print('HTTP 200' if done==$count else 'FAILED after %d of $count: %s' % (done, l
             sleep 5
             waited=$(( waited + 5 ))
         done
-        out="$(k logs "$pod" 2>&1)"
+        # The probe's own output; kubectl's stderr only when there is none, and
+        # without notices: a notice beside empty logs read as the model failing.
+        kc_capture_with kc -n "$NS" logs "$pod" || true
+        out="$KC_OUT"
+        [ -n "$out" ] || out="$(kc_drop_notices "$KC_ERR" | sed '/^$/d')"
         k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1
         case "$out" in
             *"HTTP 200"*) ok "  $model answered (attempt $attempt)"; return 0 ;;

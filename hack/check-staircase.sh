@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=141
+EXPECTED_CHECKS=147
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -244,7 +244,14 @@ case "$args" in
         if [ -e "$STATE/tearing" ] || [ -n "${NO_EPP_POD:-}" ]; then printf '{"items":[]}\n'; exit 0; fi
         printf '{"items":[{"metadata":{"name":"m-epp-1"},"status":{"phase":"Running","podIP":"10.0.0.9"},"spec":{"containers":[{"ports":[{"containerPort":9002}]}]}}]}\n' ;;
     *" get deploy scaling-manager-controller-manager -o json "*)
+        # DEP_NOTICE: kubectl prints a notice on stderr, as it does while an
+        # aggregated API is down, and the read still succeeds (or fails).
+        [ -z "${DEP_NOTICE:-}" ] || echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"' >&2
         [ -n "${CONTROLLER_READ_FAIL:-}" ] && { echo "The connection to the server was refused" >&2; exit 1; }
+        # DEP_NOTICE_ONLY: the read fails having printed nothing but the notice;
+        # DEP_WARNING_ONLY: nothing but an API server warning.
+        [ -n "${DEP_NOTICE_ONLY:-}" ] && exit 1
+        [ -n "${DEP_WARNING_ONLY:-}" ] && { echo "Warning: apps/v1beta1 Deployment is deprecated" >&2; exit 1; }
         [ -n "${NO_EPP_SECRET:-}" ] && { printf '{"spec":{"template":{"spec":{"volumes":[]}}}}\n'; exit 0; }
         printf '{"spec":{"template":{"spec":{"volumes":[{"name":"epp-metrics-token","secret":{"secretName":"scaling-manager-epp-metrics-token"}}]}}}}\n' ;;
     *" exec witness "*" scrape http://10.0.0.9:9090/metrics /t/token "*)
@@ -276,7 +283,18 @@ case "$args" in
     *" delete leaderworkersets "*) [ -n "${HAS_LWS:-}" ]; exit ;;
     *" get pods --no-headers "*) : ;;
     *" get --raw "*) : ;;
-    *" exec ctl "*) printf '{"Kind":"start","Data":{"Commit":"abc"}}\n' ;;
+    *" exec ctl "*)
+        # EXEC_NOTICE: kubectl exec prints a notice on stderr, as it does while an
+        # aggregated API is down, and the command still answers.
+        [ -z "${EXEC_NOTICE:-}" ] || echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"' >&2
+        # EXEC_NO_RECORDING: the recording is not there; head fails, and kubectl
+        # exec says so, then that the command terminated.
+        if [ -n "${EXEC_NO_RECORDING:-}" ]; then
+            echo "head: /recordings/learnrec-*.jsonl: No such file or directory" >&2
+            echo "command terminated with exit code 1" >&2
+            exit 1
+        fi
+        printf '{"Kind":"start","Data":{"Commit":"abc"}}\n' ;;
     *" cp "*) d="${*: -1}"; mkdir -p "$d"; echo recording-bytes > "$d/learnrec-1.jsonl" ;;
     *" exec "*"gzip"*)
         if [ -n "${SNAP_PARTIAL:-}" ]; then head -c 5000 /dev/zero; exit 1; fi
@@ -437,6 +455,40 @@ fresh ctlreadfail
 start CONTROLLER_READ_FAIL=1; wait_run
 expect "a controller Deployment that cannot be read is retried and named an API error, not a missing volume" \
     '[ "$rc" != 0 ] && [ "$(grep -c "get deploy scaling-manager-controller-manager -o json" "$LOG")" = 3 ] && grep -q "could not be read (API error)" "$RUN/timeline.txt" && ! grep -q "mounts no epp-metrics-token" "$RUN/timeline.txt" && ! grep -q "warmup" "$RUN/timeline.txt" && tore_down'
+
+fresh depnotice
+start DEP_NOTICE=1
+wait_for 'EPP metrics readable' "$RUN/timeline.txt"
+expect "a notice on stderr while the controller Deployment reads is not a missing epp-metrics-token volume" \
+    'grep -q "EPP metrics readable at port 9090 of m-epp-1" "$RUN/timeline.txt" && ! grep -q "mounts no epp-metrics-token" "$RUN/timeline.txt"'
+kill -TERM "$pid" 2>/dev/null; wait_run
+
+fresh depnoticefail
+start DEP_NOTICE=1 CONTROLLER_READ_FAIL=1; wait_run
+expect "a controller Deployment read that fails behind a notice names the error, not the notice" \
+    '[ "$rc" != 0 ] && grep -q "controller Deployment read failed (try 1 of 3): The connection to the server was refused" "$RUN/timeline.txt" && ! grep -q "memcache" "$RUN/timeline.txt" && tore_down'
+
+fresh depnoticeonly
+start DEP_NOTICE=1 DEP_NOTICE_ONLY=1; wait_run
+expect "a controller Deployment read that fails having printed only a notice says so, never passing the notice off as the error" \
+    '[ "$rc" != 0 ] && grep -q "controller Deployment read failed (try 1 of 3): kubectl failed, and its stderr held only notices (E1113" "$RUN/timeline.txt" && ! grep -q "read failed (try 1 of 3): E1113" "$RUN/timeline.txt" && tore_down'
+
+fresh depwarningonly
+start DEP_WARNING_ONLY=1; wait_run
+expect "a Warning: line alone is a notice too: the read failed having printed only notices" \
+    '[ "$rc" != 0 ] && grep -q "controller Deployment read failed (try 1 of 3): kubectl failed, and its stderr held only notices (Warning: apps/v1beta1" "$RUN/timeline.txt" && tore_down'
+
+fresh execnorecording
+start EXEC_NO_RECORDING=1; wait_run
+expect "a missing recording names the error head printed, not the exit line after it" \
+    '[ "$rc" != 0 ] && grep -q "no recording start line: .*(kubectl: head: /recordings/learnrec-\*.jsonl: No such file or directory)" "$RUN/timeline.txt" && tore_down'
+
+fresh execnotice
+start EXEC_NOTICE=1
+wait_for 'recorder on, commit abc' "$RUN/timeline.txt"
+expect "a notice kubectl exec prints on stderr is not part of the recording start line" \
+    'grep -q "recorder on, commit abc" "$RUN/timeline.txt" && ! grep -q "no recording start line" "$RUN/timeline.txt"'
+kill -TERM "$pid" 2>/dev/null; wait_run
 
 fresh noepppod
 start NO_EPP_POD=1; wait_run

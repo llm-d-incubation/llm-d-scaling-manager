@@ -2459,8 +2459,144 @@ else
     fail "the schedule/report self-test failed (above)"
 fi
 
+# ---------------------------------------------------------------------------
+# kubectl prints notices on stderr on a read that succeeds: the memcache.go
+# "Unhandled Error" discovery line while an aggregated API is down, or a
+# throttling notice. Read with 2>&1 they were part of the answer. notice_kubectl
+# is a kubectl that prints one before every answer; NK_* say what it answers.
+NOTICE='E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"'
+notice_kubectl() {
+    echo "$NOTICE" >&2
+    case "$*" in
+        *"get namespace scaling-manager-policy -o name"*)
+            # NK_POLICY_NS=exists: the shared policy namespace is there.
+            [ "${NK_POLICY_NS:-}" = exists ] && { echo namespace/scaling-manager-policy; return 0; }
+            echo 'Error from server (NotFound): namespaces "scaling-manager-policy" not found' >&2; return 1 ;;
+        *"get namespace $NS -o json"*)
+            # NK_NS_BODY: the namespace read answers this instead (not an object).
+            [ -n "${NK_NS_BODY:-}" ] && { printf '%s\n' "$NK_NS_BODY"; return 0; }
+            local labels="${NK_LABELS:-}"
+            [ -n "$labels" ] || labels='{}'
+            printf '{"metadata":{"name":"%s","labels":%s}}\n' "$NS" "$labels" ;;
+        *"get configmap scaling-manager-scaling-policy-config -o jsonpath={.data.default}"*)
+            # NK_POLICY_WARNING_FAIL: the read fails having printed only an API
+            # server warning, the other half of what a notice is.
+            [ -n "${NK_POLICY_WARNING_FAIL:-}" ] && { echo 'Warning: v1 ConfigMap is deprecated in v9.99+' >&2; return 1; }
+            printf 'limiters:\n- type: quota\n' ;;
+        *"patch configmap scaling-manager-scaling-policy-config "*)
+            printf '%s\n' "$*" > "$WORK/nk-patched" ;;
+        *"get nodes -o jsonpath="*)
+            printf 'kind://docker/kind/kind-control-plane\nkind://docker/kind/kind-worker\n' ;;
+        *"auth can-i "*)
+            echo yes ;;
+        *"get scaledobject -o json"*)
+            # NK_SOS: the list answers this instead of Forbidden.
+            [ -n "${NK_SOS:-}" ] && { printf '%s\n' "$NK_SOS"; return 0; }
+            echo 'Error from server (Forbidden): scaledobjects.keda.sh is forbidden: User "u" cannot list resource "scaledobjects"' >&2; return 1 ;;
+    esac
+    return 0
+}
+
 case_begin
-CASES_EXPECTED=147
+rm -f "$WORK/nk-patched"
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 set_share_policy shadow) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -ne 0 ] || [ ! -s "$WORK/nk-patched" ]; then
+    fail "set_share_policy behind a notice on stderr did not write the policy (rc=$nk_rc): $nk_out"
+elif grep -q 'E1113' "$WORK/nk-patched" || ! grep -q 'utilizationShare' "$WORK/nk-patched"; then
+    fail "set_share_policy patched a kubectl notice into the shared policy ConfigMap: $(cat "$WORK/nk-patched")"
+else
+    ok "a notice on stderr is not read as part of the policy the share arms rewrite"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_LABELS='{"scaling-manager.llmd.ai/policy-namespace":"other"}' \
+    LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'labelled to read its policy from other'; then
+    fail "the policy-namespace label behind a notice on stderr must still stop the arms (rc=$nk_rc): $nk_out"
+else
+    ok "a namespace labelled to read another policy is caught behind a notice on stderr"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; sim_cluster_problem) 2>/dev/null )"
+if [ -n "$nk_out" ]; then
+    fail "on a kind cluster, a notice on stderr was read as a non-kind node: $nk_out"
+else
+    ok "a notice on stderr is not a node of another provider"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; LLMSM_NS="$NS" can_i_sa list nodes) 2>/dev/null )"
+if [ "$nk_out" != yes ]; then
+    fail "can_i_sa behind a notice on stderr answered '$nk_out', not yes"
+else
+    ok "a yes from can-i is read past a notice on stderr"
+fi
+
+case_begin
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_POLICY_WARNING_FAIL=1 LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 set_share_policy shadow) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'could not read the scaling policy in .*: kubectl failed, and its stderr held only notices (E1113'; then
+    fail "a policy read that failed having printed only notices (a klog line and a Warning:) must say so, not pass a warning off as the error (rc=$nk_rc): $nk_out"
+else
+    ok "a Warning: line is a notice too: a read that printed only notices says so"
+fi
+
+case_begin
+# The probe-logs fallback (verify_probe): the error lines, notices and blank
+# lines dropped, through deploy/lib/common.sh kc_drop_notices.
+nk_out="$(kc_drop_notices "$NOTICE
+Warning: v1 ConfigMap is deprecated in v9.99+
+Error from server (Forbidden): configmaps is forbidden
+
+second line of the error" | sed '/^$/d')"
+if [ "$nk_out" != "Error from server (Forbidden): configmaps is forbidden
+second line of the error" ]; then
+    fail "the probe-logs fallback must keep every error line and drop klog and Warning: lines: $nk_out"
+else
+    ok "the probe-logs fallback keeps the error, all of it, and drops the notices"
+fi
+
+# wiring_snapshot runs inside with_scaler_lib, where common.sh is sourced.
+nk_out="$( (. "$ROOT/deploy/lib/common.sh" >/dev/null 2>&1; kubectl() { notice_kubectl "$@"; }; wiring_snapshot) 2>/dev/null )"
+if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read: Error from server (Forbidden)' || printf '%s' "$nk_out" | grep -q 'memcache'; then
+    fail "an unreadable ScaledObject list behind a notice must name the Forbidden, not the notice: $nk_out"
+else
+    ok "an unreadable ScaledObject list names its error, not a notice before it"
+fi
+
+case_begin
+nk_out="$( (. "$ROOT/deploy/lib/common.sh" >/dev/null 2>&1; kubectl() { notice_kubectl "$@"; }; NK_SOS='{"kind":"Status"}' wiring_snapshot) 2>/dev/null )"
+if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read as a list'; then
+    fail "a ScaledObject answer that is not a list must say so, not read as no ScaledObjects: $nk_out"
+else
+    ok "a ScaledObject answer that is not a list is said, not read as none"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_NS_BODY='[]' LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q "namespace $NS did not read as an object"; then
+    fail "a namespace that does not read as an object must stop the arms, not read as unlabelled (rc=$nk_rc): $nk_out"
+else
+    ok "a namespace that does not read as an object stops the arms"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_POLICY_NS=exists LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'a scaling-manager-policy namespace exists, so a controller' \
+    || printf '%s' "$nk_out" | grep -q 'could not tell'; then
+    fail "the shared policy namespace behind a notice must be recognised, not read as could-not-tell (rc=$nk_rc): $nk_out"
+else
+    ok "the shared policy namespace is recognised behind a notice on stderr"
+fi
+
+case_begin
+CASES_EXPECTED=157
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. Update CASES_EXPECTED deliberately rather than letting coverage drift out."
 else

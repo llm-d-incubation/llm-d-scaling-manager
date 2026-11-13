@@ -371,6 +371,42 @@ flow_control() {
     t "flow control $1"
 }
 
+# kube_is_notice <line> : whether it is a notice kubectl prints on stderr without the
+# call failing -- a klog line (E1113 09:55:01.123456 ... memcache.go "Unhandled
+# Error", printed while an aggregated API is down; I... client-side throttling) or
+# an API server "Warning:". A copy of kc_is_notice (deploy/lib/common.sh), and
+# kube_err_reason below follows kc_err_line: this script runs from a copy of
+# itself in the run directory (STAIRCASE_COPY), with no deploy/lib beside it,
+# and its check points STAIRCASE_ROOT at a stub tree, so it cannot source
+# common.sh from either place.
+kube_is_notice() {
+    [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
+    case "$1" in Warning:*) return 0 ;; esac
+    return 1
+}
+
+# kube_err_reason <file> : the line of kubectl stderr in <file> that says why the call
+# failed, by the rule of kc_err_line (deploy/lib/common.sh): an "Error from
+# server", "Unable to connect", "The connection to the server" or "error:" line,
+# else the FIRST line that is no notice. Not the last: a failed exec ends with
+# "command terminated with exit code 1", after the line that says why. When
+# stderr held only notices, it says so; when nothing, it says that.
+kube_err_reason() {
+    local line first="" plain=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        [ -n "$first" ] || first="$line"
+        case "$line" in
+            "Error from server"*|error:*|"Unable to connect"*|"The connection to the server"*)
+                printf '%s\n' "$line"; return 0 ;;
+        esac
+        [ -n "$plain" ] || kube_is_notice "$line" || plain="$line"
+    done < "$1"
+    if [ -n "$plain" ]; then printf '%s\n' "$plain"
+    elif [ -n "$first" ]; then printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
+    else printf 'kubectl failed with nothing on stderr\n'; fi
+}
+
 # recorder_on : the recorder, as the last change before load.
 recorder_on() {
     kretry patch deployment scaling-manager-controller-manager --type strategic \
@@ -380,8 +416,11 @@ recorder_on() {
     controller_pod || return 1
     echo "$CTL" > "$R/pod1.txt"
     nap "${STAIRCASE_SETTLE:-20}"
-    gstream 120 exec "$(cat "$R/pod1.txt")" -c recordings -- sh -c "head -1 $RECORDINGS/learnrec-*.jsonl" > "$R/start-line.json" 2>&1
-    [ "$(jq -r .Kind "$R/start-line.json" 2>/dev/null)" = start ] || { t "no recording start line: $(head -c 200 "$R/start-line.json")"; return 1; }
+    # stderr apart: a notice kubectl exec printed there made the line fail to
+    # parse, and the run stopped on "no recording start line".
+    gstream 120 exec "$(cat "$R/pod1.txt")" -c recordings -- sh -c "head -1 $RECORDINGS/learnrec-*.jsonl" > "$R/start-line.json" 2> "$R/start-line.err"
+    [ "$(jq -r .Kind "$R/start-line.json" 2>/dev/null)" = start ] || {
+        t "no recording start line: $(head -c 200 "$R/start-line.json")$([ -s "$R/start-line.err" ] && printf ' (kubectl: %s)' "$(kube_err_reason "$R/start-line.err" | cut -c1-200)")"; return 1; }
     t "recorder on, commit $(jq -r .Data.Commit "$R/start-line.json")"
 }
 
@@ -425,9 +464,12 @@ witness() {
     names
     # The Secret the controller mounts at /var/run/secrets/epp-metrics: its token is the
     # one the EPP is known to accept. A read that fails is retried, and is not "no volume".
+    # stderr apart from the JSON: kubectl prints notices there on a read that
+    # succeeds, and with 2>&1 the JSON did not parse, which read as "mounts no
+    # epp-metrics-token Secret".
     for i in $(seq 1 "$WITNESS_TRIES"); do
-        if dep=$(kube get deploy scaling-manager-controller-manager -o json 2>&1); then break; fi
-        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(echo "$dep" | tail -1 | cut -c1-200)"
+        if dep=$(kube get deploy scaling-manager-controller-manager -o json 2>"$R/witness-dep.err"); then break; fi
+        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(kube_err_reason "$R/witness-dep.err" | cut -c1-200)"
         dep=""
         [ "$i" -lt "$WITNESS_TRIES" ] && nap "$WITNESS_RETRY"
     done
