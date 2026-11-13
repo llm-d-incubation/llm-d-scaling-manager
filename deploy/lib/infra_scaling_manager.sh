@@ -61,6 +61,7 @@ llmsm_apply_watch_namespace_rbac() {
     log_info "Granting the controller its permissions in $LLMSM_WATCH_NS (it runs in $LLMSM_NS)"
     printf '%s
 ' "$rendered" | kubectl apply -f - > /dev/null
+    llmsm_apply_watch_namespace_hpa_repair "$tmp_overlay"
     kubectl apply -f - > /dev/null <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -81,6 +82,55 @@ roleRef:
 EOF
     log_success "  Role/$role and RoleBinding/$binding in $LLMSM_WATCH_NS"
     [ -z "${prune_after:-}" ] || llmsm_prune_unlisted_namespaces
+}
+
+# llmsm_watch_hpa_repair_names echoes `role binding` -- the names of the KEDA
+# HPA repair grant this install copies into a namespace it manages from
+# outside. Suffixed like llmsm_watch_rbac_names.
+llmsm_watch_hpa_repair_names() {
+    local suffix
+    suffix="$(llmsm_ns_suffix "$LLMSM_NS")"
+    printf 'scaling-manager-keda-hpa-repair-role-%s scaling-manager-keda-hpa-repair-rolebinding-%s' "$suffix" "$suffix"
+}
+
+# llmsm_apply_watch_namespace_hpa_repair copies the KEDA HPA repair Role from
+# overlay $1 into $LLMSM_WATCH_NS, with a RoleBinding, when KEDA_HPA_REPAIR is
+# true, and removes an earlier copy when it is not. Labelled with the grant key,
+# so llmsm_revoke_namespace and the undeploy take it with the manager Role.
+llmsm_apply_watch_namespace_hpa_repair() {
+    local tmp_overlay="$1" role binding rendered
+    read -r role binding <<< "$(llmsm_watch_hpa_repair_names)"
+    if ! llmsm_keda_hpa_repair_on; then
+        kubectl delete -n "$LLMSM_WATCH_NS" "rolebinding/$binding" "role/$role" --ignore-not-found > /dev/null 2>&1 || true
+        return 0
+    fi
+    rendered=$(kubectl kustomize "$tmp_overlay" 2>/dev/null | LLMSM_TARGET_NS="$LLMSM_WATCH_NS" LLMSM_ROLE_NAME="$role" \
+            LLMSM_GRANT_KEY="$LLMSM_WATCH_GRANT_KEY" LLMSM_GRANT_VAL="$(llmsm_ns_suffix "$LLMSM_NS")" yq '
+            select(.kind == "Role" and .metadata.name == "scaling-manager-keda-hpa-repair-role")
+            | .metadata.name = strenv(LLMSM_ROLE_NAME)
+            | .metadata.namespace = strenv(LLMSM_TARGET_NS)
+            | .metadata.labels[strenv(LLMSM_GRANT_KEY)] = strenv(LLMSM_GRANT_VAL)') || true
+    [ -n "$rendered" ] || log_error "KEDA_HPA_REPAIR=true, but the rendered overlay holds no KEDA HPA repair Role to copy into $LLMSM_WATCH_NS."
+    printf '%s\n' "$rendered" | kubectl apply -f - > /dev/null
+    kubectl apply -f - > /dev/null <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${binding}
+  namespace: ${LLMSM_WATCH_NS}
+  labels:
+    app.kubernetes.io/managed-by: llm-d-scaling-manager
+    ${LLMSM_WATCH_GRANT_KEY}: "$(llmsm_ns_suffix "$LLMSM_NS")"
+subjects:
+- kind: ServiceAccount
+  name: scaling-manager-controller-manager
+  namespace: ${LLMSM_NS}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${role}
+EOF
+    log_success "  Role/$role and RoleBinding/$binding in $LLMSM_WATCH_NS (KEDA_HPA_REPAIR)"
 }
 
 # LLMSM_WATCH_GRANT_KEY labels the manager Role and RoleBinding this install
@@ -1926,6 +1976,18 @@ EOF
         log_info "Including Prometheus alerting rules component..."
         printf 'components:\n' >> "$tmp_overlay/kustomization.yaml"
         printf -- '- ./prometheus-alerts\n' >> "$tmp_overlay/kustomization.yaml"
+    fi
+
+    # The KEDA HPA repair's grant and its switch on the Deployment, only with
+    # KEDA_HPA_REPAIR=true (config/components/keda-hpa-repair*). Without it, a
+    # grant an earlier install made is removed in the phases that own RBAC.
+    if llmsm_keda_hpa_repair_on; then
+        log_info "KEDA_HPA_REPAIR=true: granting get, list and patch on horizontalpodautoscalers ($(llmsm_keda_hpa_repair_component)) and turning the repair on"
+        llmsm_append_keda_hpa_repair_component "$tmp_overlay"
+    else
+        case "${LLMSM_APPLY_SCOPE:-all}" in
+            all|prereqs) llmsm_revoke_keda_hpa_repair ;;
+        esac
     fi
 
     # Give this install its own ClusterRoleBinding names.

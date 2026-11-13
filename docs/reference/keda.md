@@ -65,23 +65,44 @@ cannot upgrade KEDA, the controller can repair these HPAs itself (below).
 For a cluster that cannot upgrade KEDA past 2.19. Off by default; on KEDA 2.20
 and later leave it off, since there is nothing to repair.
 
-Turn it on with `KEDA_HPA_REPAIR=true` on the controller (it restarts):
+Turn it on through the installer, with the variables you installed with:
 
 ```bash
-kubectl set env deployment/scaling-manager-controller-manager -n <controller-namespace> KEDA_HPA_REPAIR=true
+KEDA_HPA_REPAIR=true make deploy-scaling-manager NAMESPACE=<namespace> SCOPE=<namespace|cluster>
 ```
 
-or put `KEDA_HPA_REPAIR: "true"` in the
-[settings ConfigMap](configuration.md#the-settings-configmap) and restart it.
+For a split install, a cluster admin runs `make setup-prereqs` with
+`KEDA_HPA_REPAIR=true` (it grants the HPA access), then the namespace owner runs
+`make deploy-scaling-manager INSTALL_PHASE=scaling-manager` with it too (it turns
+the repair on in the controller's Deployment, which restarts it).
+
+The installer adds the access only when `KEDA_HPA_REPAIR=true`. A cluster-scoped
+install gets the ClusterRole `scaling-manager-keda-hpa-repair-role-<suffix>`
+(`config/components/keda-hpa-repair`); a namespace-scoped one gets the Role
+`scaling-manager-keda-hpa-repair-role` in the controller's namespace
+(`config/components/keda-hpa-repair-namespaced`), copied into each namespace it
+manages from outside. Each grants `get`, `list` and `patch` on
+`horizontalpodautoscalers` and nothing else. A later single-command
+install or `make setup-prereqs` without `KEDA_HPA_REPAIR=true` removes it, and the uninstall
+removes it always.
+
+Setting `KEDA_HPA_REPAIR=true` on the Deployment by hand, or in the
+[settings ConfigMap](configuration.md#the-settings-configmap), turns the repair
+on without the access: it then logs that it may not list or patch HPAs,
+`LLMSMKEDAHPAWiringUnread` fires, and nothing is repaired.
 
 What it does, every 30 seconds, on the leader:
 
 1. Lists the HPAs in the namespaces the controller manages (every namespace
    for a cluster-scoped install).
-2. Keeps only the HPAs whose owner is a ScaledObject with a trigger naming this
+2. Skips, without another read, every HPA no ScaledObject owns, and every HPA
+   that already carries this scaler's External metric
+   (`s<index>-scaling-manager-desired-replicas`). For each other HPA KEDA owns
+   (a `scalingModifiers` one, or one of another scaler) it reads the owning
+   ScaledObject once per pass, and keeps the HPA only when a trigger names this
    install's scaler (`scaling-manager-external-scaler.<controller namespace>`,
    the same rule as `make scaledobjects-rewire`). It skips paused ScaledObjects
-   and HPAs younger than 30 seconds. No other HPA is read twice or changed.
+   and HPAs younger than 30 seconds. It writes to no other HPA.
 3. Calls such an HPA unwired when it has no External metric for the scaler's
    trigger, or the ScaledObject's `status.externalMetricNames` lacks it. With
    `scalingModifiers` the HPA always carries one `composite-metric`, so only the
@@ -99,12 +120,13 @@ once KEDA wired it), and the metrics `llmsm_keda_unwired_hpas` and
 When it stays unwired, see
 [troubleshooting](troubleshooting.md#an-hpa-stays-on-the-cpu-default).
 
-It needs `get`, `list` and `patch` on `horizontalpodautoscalers`. The
-controller's role carries them from this release on, whether or not the repair
-is on ([security model](security-model.md)). An install upgraded from an older
-release gets them when a cluster admin runs `make setup-prereqs` (or a
-single-command install). Until then the repair logs that it may not read or
-patch HPAs, and `LLMSMKEDAHPAWiringUnread` fires.
+The list is not narrowed by KEDA's `app.kubernetes.io/managed-by=keda-operator`
+label: KEDA copies the ScaledObject's own labels over it, so the HPA of a Helm-
+or GitOps-owned ScaledObject reads `managed-by: Helm`.
+
+The release files (`kubectl apply` installs) do not carry the HPA access. Use
+the installer, or apply the component's Role or ClusterRole and binding
+yourself.
 
 ### Upgrading a KEDA the cluster already has
 

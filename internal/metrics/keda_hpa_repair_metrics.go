@@ -60,8 +60,10 @@ func kedaLabels(l prometheus.Labels) prometheus.Labels {
 
 // PublishKEDAUnwiredHPAs sets llmsm_keda_unwired_hpas for each namespace in
 // counts. A namespace published before and absent from counts and from keep
-// loses its series. keep names namespaces whose last read failed: they keep
-// the value they had, because an unread namespace is unknown, not clean.
+// loses its series. keep names namespaces where something could not be read
+// (the HPA list, or a ScaledObject that owns one): they keep the value they
+// had, or stay absent, because a partly read namespace is unknown, not clean,
+// and its partial count would read as one.
 func PublishKEDAUnwiredHPAs(counts map[string]int, keep map[string]bool) {
 	kedaUnwiredMu.Lock()
 	defer kedaUnwiredMu.Unlock()
@@ -70,6 +72,9 @@ func PublishKEDAUnwiredHPAs(counts map[string]int, keep map[string]bool) {
 	}
 	next := make(map[string]bool, len(counts))
 	for ns, n := range counts {
+		if keep[ns] {
+			continue
+		}
 		kedaUnwiredHPAs.With(kedaLabels(prometheus.Labels{constants.LabelNamespace: ns})).Set(float64(n))
 		next[ns] = true
 	}

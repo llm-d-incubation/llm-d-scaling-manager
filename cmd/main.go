@@ -1192,13 +1192,26 @@ func main() {
 	// older a ScaledObject created within about two minutes of a controller
 	// restart keeps an HPA without this scaler's metric. Leader only; reads
 	// uncached, like the Enricher, so no informer on HPAs or ScaledObjects.
-	if cfg.KEDAHPARepairEnabled() {
+	// The readable watched namespaces only: one the controller cannot read is
+	// already reported (llmsm_watch_namespaces_unreadable), and listing its
+	// HPAs would keep LLMSMKEDAHPAWiringUnread firing for the same cause.
+	// Namespace-scoped with none readable lists nothing: an empty list would
+	// mean every namespace.
+	switch {
+	case !cfg.KEDAHPARepairEnabled():
+	case watchNS != "" && len(readableWatched) == 0:
+		setupLog.Info("KEDA_HPA_REPAIR is on, but no watched namespace is readable: the KEDA HPA repair does not run")
+	default:
+		repairNamespaces := readableWatched
+		if watchNS == "" {
+			repairNamespaces = nil // cluster scope: every namespace
+		}
 		if err := mgr.Add(&hparepair.Repairer{
 			Reader:          mgr.GetAPIReader(),
 			Writer:          mgr.GetClient(),
 			Recorder:        mgr.GetEventRecorderFor("scaling-manager-keda-hpa-repair"), //nolint:staticcheck // SA1019: core/v1 events; see the configmap reconciler
 			ScalerNamespace: config.SystemNamespace(),
-			Namespaces:      cfg.WatchNamespaces(),
+			Namespaces:      repairNamespaces,
 		}); err != nil {
 			setupLog.Error(err, "unable to add the KEDA HPA repair to the manager")
 			os.Exit(1)

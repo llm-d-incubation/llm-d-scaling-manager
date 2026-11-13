@@ -1473,10 +1473,13 @@ minutes of a controller restart can get an HPA without the scaler's metric
 ([why](keda.md#unwired-hpa-before-keda-220)). The HPA then scales on CPU, and
 the scaling manager's decisions reach nothing. Upgrading KEDA to 2.21 ends it.
 
-Check one ScaledObject:
+Check one ScaledObject. KEDA records its HPA's name in the ScaledObject's
+status; `keda-hpa-<name>` is only the default, and the HPA's labels can carry
+the ScaledObject's own values instead of KEDA's:
 
 ```bash
-kubectl get hpa -n <namespace> keda-hpa-<scaledobject> -o jsonpath='{.spec.metrics[*].type}{"\n"}'
+HPA=$(kubectl get scaledobject <scaledobject> -n <namespace> -o jsonpath='{.status.hpaName}')
+kubectl get hpa "$HPA" -n <namespace> -o jsonpath='{.spec.metrics[*].type}'
 # External: wired. Resource only: unwired.
 ```
 
@@ -1494,10 +1497,10 @@ kubectl logs -n <controller-namespace> deploy/scaling-manager-controller-manager
 | sign | cause | fix |
 | --- | --- | --- |
 | `LLMSMKEDAHPAUnwired`, and `HPARewireRequested` Events keep coming | KEDA still cannot reach the scaler, so each request fails the same way. KEDA logs `got empty metric spec` | check `LLMSMExternalScalerUnreachable` and that the controller is Ready. Then (cluster admin) `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>` |
-| `HPARewireFailed` Events, `llmsm_keda_hpa_rewires_total{outcome="forbidden"}` rising, log `Not allowed to annotate an unwired HPA` | the controller's role has no `patch` on `horizontalpodautoscalers`: it was installed before this release | (cluster admin) `make setup-prereqs` with the install's variables |
-| `LLMSMKEDAHPAWiringUnread`, log `Could not read every HPA or ScaledObject` | the role has no `get` or `list` on `horizontalpodautoscalers`, or `get` on `scaledobjects` in that namespace. The repair does nothing there, and `llmsm_keda_unwired_hpas` keeps its last value | (cluster admin) `make setup-prereqs` with the install's variables |
+| `HPARewireFailed` Events, `llmsm_keda_hpa_rewires_total{outcome="forbidden"}` rising, log `Not allowed to annotate an unwired HPA` | the controller has no `patch` on `horizontalpodautoscalers`: the repair was turned on by hand or in the settings ConfigMap, not through the installer, or a later `make setup-prereqs` ran without `KEDA_HPA_REPAIR=true` and removed the grant | re-run the install (or, split, `make setup-prereqs` as a cluster admin and then `make deploy-scaling-manager`) with `KEDA_HPA_REPAIR=true` and the install's other variables |
+| `LLMSMKEDAHPAWiringUnread`, log `Could not read every HPA or ScaledObject` | the controller has no `get` or `list` on `horizontalpodautoscalers` (same causes as the row above), or no `get` on `scaledobjects` in that namespace. The repair does nothing there, and `llmsm_keda_unwired_hpas` keeps its last value | re-run the install (or, split, `make setup-prereqs` as a cluster admin and then `make deploy-scaling-manager`) with `KEDA_HPA_REPAIR=true` and the install's other variables |
 | the HPA is unwired and no Event names it | the repair is off, the HPA is younger than 30 seconds, the ScaledObject is paused, or its trigger names another install's scaler | turn on `KEDA_HPA_REPAIR`, or `make scaledobjects-repoint` for a trigger pointing elsewhere |
-| a GitOps tool shows drift on the HPA | the annotation `scaling-manager.llmd.ai/keda-rewire`. KEDA removes it when it next writes the HPA | none. HPAs KEDA owns are rarely in a GitOps source |
+| a GitOps tool shows drift on the HPA, or the HPA keeps a `scaling-manager.llmd.ai/keda-rewire` annotation | the repair's annotation. KEDA removes it only when it rewrites the HPA; while it still cannot reach the scaler, or if the repair is turned off before KEDA rewires, it stays | harmless: KEDA and the controller read nothing from it. `kubectl annotate hpa <hpa> -n <namespace> scaling-manager.llmd.ai/keda-rewire-` removes it. HPAs KEDA owns are rarely in a GitOps source |
 
 ## A model misses, or is never judged against, its SLO
 

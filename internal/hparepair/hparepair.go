@@ -40,6 +40,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/registry"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scalertls"
 )
 
@@ -261,6 +262,12 @@ func (r *Repairer) check(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 	if owner == nil {
 		return
 	}
+	// The common case costs no read: an HPA that already carries this
+	// scaler's metric is wired. Not for one the repair asked about, whose
+	// recovery is reported below.
+	if r.tracked[hpa.UID] == nil && carriesScalerMetric(hpa) {
+		return
+	}
 	var so kedav1alpha1.ScaledObject
 	if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: hpa.Namespace, Name: owner.Name}, &so); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -445,6 +452,33 @@ func Wired(so *kedav1alpha1.ScaledObject, hpa *autoscalingv2.HorizontalPodAutosc
 		}
 	}
 	return true
+}
+
+// carriesScalerMetric reports whether hpa has an External metric
+// s<index>-<scaler.MetricName> and no composite-metric: KEDA wired a trigger
+// of this scaler (of this install or another, which is not ours to repair
+// either). With scalingModifiers the HPA carries composite-metric instead,
+// which says nothing about our trigger, so that needs the ScaledObject.
+//
+// KEDA labels its HPAs app.kubernetes.io/managed-by=keda-operator, but copies
+// the ScaledObject's own labels over it, so a Helm- or GitOps-owned
+// ScaledObject's HPA reads managed-by=Helm: the list is not narrowed by it.
+func carriesScalerMetric(hpa *autoscalingv2.HorizontalPodAutoscaler) bool {
+	found := false
+	for _, m := range hpa.Spec.Metrics {
+		if m.Type != autoscalingv2.ExternalMetricSourceType || m.External == nil {
+			continue
+		}
+		name := m.External.Metric.Name
+		if name == kedav1alpha1.CompositeMetricName {
+			return false
+		}
+		idx, rest, ok := strings.Cut(name, "-")
+		if ok && rest == scaler.MetricName && len(idx) > 1 && idx[0] == 's' && strings.Trim(idx[1:], "0123456789") == "" {
+			found = true
+		}
+	}
+	return found
 }
 
 func hasPrefix(names []string, prefix string) bool {

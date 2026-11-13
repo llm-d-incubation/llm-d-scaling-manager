@@ -115,7 +115,7 @@ in both).
 | get | jobs (batch) | managed namespace | the owner of a Kueue-managed GPU pod, for cohort borrowing |
 | get, list, watch | inferencepools (both InferencePool API groups) | managed namespace | which EPP queue a workload sits behind |
 | get | scaledobjects (keda.sh) | managed namespace | the scale target behind a KEDA call |
-| get, list, **patch** | horizontalpodautoscalers (autoscaling) | managed namespace | the [KEDA HPA repair](keda.md#the-controller-repair-keda_hpa_repair): finding HPAs KEDA left without the scaler's metric, and annotating them. Granted whether or not `KEDA_HPA_REPAIR` is on; off, nothing reads or patches an HPA |
+| get, list, **patch** | horizontalpodautoscalers (autoscaling) | managed namespace (`keda-hpa-repair-role`, **only with `KEDA_HPA_REPAIR=true`**) | the [KEDA HPA repair](keda.md#the-controller-repair-keda_hpa_repair): finding HPAs KEDA left without the scaler's metric, and annotating them. Not in the manager Role; the installer adds this Role and its binding only when asked, and removes them otherwise |
 | get, list | localqueues (kueue.x-k8s.io) | managed namespace | the Kueue quota source |
 | get, list, watch | workloads (kueue.x-k8s.io) | managed namespace | cohort borrowing; granted cluster-wide below only when a policy counts borrowing |
 | get, list, watch | leaderworkersets; get leaderworkersets/scale | managed namespace | LWS scale targets |
@@ -190,7 +190,7 @@ cluster-wide. The differences that matter for review:
 | get, list | **events** | **every namespace** | read for the cluster autoscaler's `TriggeredScaleUp` on a borrowed pod; the grant reaches every Event in the cluster, whose messages can name objects and carry error text |
 | get, list | resourcequotas | **every namespace** | the GPU bound Kueue borrowing checks in each managed namespace |
 | get, list, watch | **deployments**, replicasets, statefulsets | **every namespace** | scale targets, the owners of GPU pods for the Kueue managed check, and the `kueue-controller-manager` Deployment (Kueue's version and whether it runs) |
-| get, list, **patch** | **horizontalpodautoscalers** | **every namespace** | the KEDA HPA repair. `patch` reaches every HPA in the cluster, including its `minReplicas`, `maxReplicas` and metrics, not only the annotation the repair writes: RBAC cannot narrow a patch to one key. The repair writes only to HPAs whose owner is a ScaledObject naming this scaler, and only with `KEDA_HPA_REPAIR` on |
+| get, list, **patch** | **horizontalpodautoscalers** | **every namespace** (ClusterRole `keda-hpa-repair-role-<suffix>`, **only with `KEDA_HPA_REPAIR=true`**) | the KEDA HPA repair. `patch` reaches every HPA in the cluster, including its `minReplicas`, `maxReplicas` and metrics, not only the annotation the repair writes: RBAC cannot narrow a patch to one key. The repair writes only to HPAs whose owner is a ScaledObject naming this scaler. Not part of `manager-role`: the installer adds it only when asked, and removes it otherwise |
 | get | leases, by name: `c1f6bfd2.kueue.x-k8s.io` | **every namespace** | Kueue's leader-election Lease, whether Kueue runs. `resourceNames` narrows the name, not the namespace |
 
 `node-reader` and `kueue-reader` are not rendered at this scope; `manager-role`

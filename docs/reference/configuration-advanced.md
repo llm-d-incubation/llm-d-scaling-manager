@@ -27,7 +27,7 @@ name on the controller Deployment. All of these need a restart.
 | `LLMSM_LIMITED_MODE` | Environment | `false` | the controller may not read Nodes |
 | `SCALE_FROM_ZERO_ENGINE_MAX_CONCURRENCY` | Environment | `10` | many models wake from zero at once |
 | `LEARNED_STATE_EPISODE_GAP`, `LEARNED_STATE_VARIANT_TIMEOUT`, `LEARNED_STATE_BUCKET_RETENTION` | Environment | `24h`, `24h`, `168h` | you test learned-state expiry in a short run ([details](install-options.md#advanced)) |
-| `KEDA_HPA_REPAIR` | Environment or settings | `false` | your KEDA is 2.19 or older and cannot be upgraded: the controller then repairs HPAs KEDA left on the CPU default ([details](keda.md#the-controller-repair-keda_hpa_repair)) |
+| `KEDA_HPA_REPAIR` | Installer variable; also read from the environment or settings | `false` | your KEDA is 2.19 or older and cannot be upgraded: the controller then repairs HPAs KEDA left on the CPU default. Set it through the installer, which also grants the HPA access ([details](keda.md#the-controller-repair-keda_hpa_repair)) |
 | `CONTROLLER_INSTANCE` | Environment | empty | several controllers share a cluster. Each then manages only ScaledObjects labelled `scaling-manager.llmd.ai/controller-instance=<value>`, labels its metrics with it, and cleans up only its own transfer marks |
 | `POOL_GROUP` | Environment | `inference.networking.k8s.io` | your InferencePools use another API group |
 | `--v`; installer `LLMSM_VERBOSITY` | Flag | `2` | debugging: `3` adds per-replica capacity lines, `4` is debug |

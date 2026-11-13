@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -287,6 +288,16 @@ func TestRepairsAnUnwiredHPA(t *testing.T) {
 	if res.Unwired[modelNS] != 1 || res.Requested[modelNS] != 1 || len(res.Unread) != 0 {
 		t.Fatalf("pass 1 = %+v, want one unwired, one request, nothing unread", res)
 	}
+	// The patch writes one annotation and nothing else: not the spec, not the
+	// labels, not another annotation.
+	var after autoscalingv2.HorizontalPodAutoscaler
+	if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(hpa), &after); err != nil {
+		t.Fatal(err)
+	}
+	if !equality.Semantic.DeepEqual(after.Spec, hpa.Spec) || !equality.Semantic.DeepEqual(after.Labels, hpa.Labels) ||
+		len(after.Annotations) != 1 || !equality.Semantic.DeepEqual(after.OwnerReferences, hpa.OwnerReferences) {
+		t.Errorf("the patch changed more than the annotation: spec %+v; labels %v; annotations %v", after.Spec, after.Labels, after.Annotations)
+	}
 	if got := h.annotation(hpa.Name); got != h.now.UTC().Format(time.RFC3339) {
 		t.Errorf("annotation %s = %q, want the request time", Annotation, got)
 	}
@@ -487,6 +498,108 @@ func TestAForbiddenPatchIsReported(t *testing.T) {
 	h.pass()
 	if v := h.gauge(constants.LLMSMKEDAHPARewiresTotal, "namespace", modelNS, "outcome", constants.HPARewireForbidden); v != 1 {
 		t.Errorf("retried inside the backoff: forbidden count %v, want 1", v)
+	}
+}
+
+// A ScaledObject that cannot be read leaves its namespace's unwired count
+// as it was, not lowered to what could be read.
+func TestAnUnreadScaledObjectKeepsTheLastCount(t *testing.T) {
+	a := scaledObject("model-a", "u1", ourAddr)
+	b := scaledObject("model-b", "u2", ourAddr)
+	h := newHarness(t, a, hpaFor(a, t0, cpuMetric()), b, hpaFor(b, t0, cpuMetric()))
+	h.pass()
+	if v := h.gauge(constants.LLMSMKEDAUnwiredHPAs, "namespace", modelNS); v != 2 {
+		t.Fatalf("%s = %v, want 2", constants.LLMSMKEDAUnwiredHPAs, v)
+	}
+	h.getErr = apierrors.NewForbidden(schema.GroupResource{Group: "keda.sh", Resource: "scaledobjects"}, "", nil)
+	h.pass()
+	if v := h.gauge(constants.LLMSMKEDAUnwiredHPAs, "namespace", modelNS); v != 2 {
+		t.Errorf("%s = %v while the ScaledObjects cannot be read, want the last known 2", constants.LLMSMKEDAUnwiredHPAs, v)
+	}
+}
+
+// Cluster scope: a namespace whose HPAs are all wired again loses its series,
+// and an HPA that goes away is forgotten.
+func TestWiredAndGoneAreForgotten(t *testing.T) {
+	so := scaledObject("model-a", "u1", ourAddr)
+	hpa := hpaFor(so, t0, cpuMetric())
+	gone := scaledObject("model-b", "u2", ourAddr)
+	goneHPA := hpaFor(gone, t0, cpuMetric())
+	h := newHarness(t, so, hpa, gone, goneHPA)
+	h.r.Namespaces = nil
+	h.pass()
+	if v := h.gauge(constants.LLMSMKEDAUnwiredHPAs, "namespace", modelNS); v != 2 {
+		t.Fatalf("%s = %v, want 2", constants.LLMSMKEDAUnwiredHPAs, v)
+	}
+	if len(h.r.tracked) != 2 {
+		t.Fatalf("tracked %d, want 2", len(h.r.tracked))
+	}
+
+	if err := h.client.Delete(context.Background(), goneHPA); err != nil {
+		t.Fatal(err)
+	}
+	h.pass()
+	if _, still := h.r.tracked[goneHPA.UID]; still || len(h.r.tracked) != 1 {
+		t.Errorf("tracked %v, want the deleted HPA forgotten and the other kept", h.r.tracked)
+	}
+
+	var cur autoscalingv2.HorizontalPodAutoscaler
+	if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(hpa), &cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.Metrics = []autoscalingv2.MetricSpec{externalMetric("s0-scaling-manager-desired-replicas")}
+	if err := h.client.Update(context.Background(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	var curSO kedav1alpha1.ScaledObject
+	if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(so), &curSO); err != nil {
+		t.Fatal(err)
+	}
+	curSO.Status.ExternalMetricNames = []string{"s0-scaling-manager-desired-replicas"}
+	if err := h.client.Update(context.Background(), &curSO); err != nil {
+		t.Fatal(err)
+	}
+	h.pass()
+	if v := h.gauge(constants.LLMSMKEDAUnwiredHPAs, "namespace", modelNS); v != -1 {
+		t.Errorf("%s = %v once every HPA is wired in cluster scope, want the series gone", constants.LLMSMKEDAUnwiredHPAs, v)
+	}
+	if len(h.r.tracked) != 0 {
+		t.Errorf("tracked %v, want nothing once wired", h.r.tracked)
+	}
+}
+
+// An HPA that already carries this scaler's metric costs no ScaledObject
+// read; one with composite-metric, or one the repair asked about, does.
+func TestAWiredHPAIsNotRead(t *testing.T) {
+	plain := scaledObject("plain", "u1", ourAddr)
+	modifiers := scaledObject("modifiers", "u2", ourAddr)
+	modifiers.Spec.Advanced = &kedav1alpha1.AdvancedConfig{ScalingModifiers: kedav1alpha1.ScalingModifiers{Formula: "s0", Target: "1"}}
+	h := newHarness(t,
+		plain, hpaFor(plain, t0, externalMetric("s0-scaling-manager-desired-replicas")),
+		modifiers, hpaFor(modifiers, t0, externalMetric(kedav1alpha1.CompositeMetricName)))
+	h.getErr = apierrors.NewForbidden(schema.GroupResource{Group: "keda.sh", Resource: "scaledobjects"}, "", nil)
+	res := h.pass()
+	if len(res.Unread) != 1 || res.Unread[0] != modelNS+"/modifiers" {
+		t.Errorf("unread %v, want only %s/modifiers: the wired HPA must not be read", res.Unread, modelNS)
+	}
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"s0-scaling-manager-desired-replicas", true},
+		{"s12-scaling-manager-desired-replicas", true},
+		{"s-scaling-manager-desired-replicas", false},
+		{"sx-scaling-manager-desired-replicas", false},
+		{"s0-other", false},
+		{"scaling-manager-desired-replicas", false},
+	} {
+		got := carriesScalerMetric(hpaFor(plain, t0, externalMetric(tc.name)))
+		if got != tc.want {
+			t.Errorf("carriesScalerMetric(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if carriesScalerMetric(hpaFor(plain, t0, externalMetric("s0-scaling-manager-desired-replicas"), externalMetric(kedav1alpha1.CompositeMetricName))) {
+		t.Error("an HPA with composite-metric was taken as wired without reading the ScaledObject")
 	}
 }
 

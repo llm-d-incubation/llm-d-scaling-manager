@@ -713,6 +713,8 @@ LLMSM_SHARED_CLUSTER_ROLE_BINDINGS=(
     scaling-manager-kueue-reader-rolebinding
     # And for the Namespace get that finds the cluster policy namespace.
     scaling-manager-policy-namespace-reader-rolebinding
+    # The opt-in KEDA HPA repair grant (KEDA_HPA_REPAIR=true, cluster scope).
+    scaling-manager-keda-hpa-repair-rolebinding
 )
 
 # LLMSM_OWNED_CLUSTER_ROLES are the ClusterRoles this project defines, mapped to the
@@ -742,7 +744,72 @@ LLMSM_OWNED_CLUSTER_ROLES=(
     "scaling-manager-node-reader-role:scaling-manager-node-reader-rolebinding"
     "scaling-manager-kueue-reader-role:scaling-manager-kueue-reader-rolebinding"
     "scaling-manager-policy-namespace-reader-role:scaling-manager-policy-namespace-reader-rolebinding"
+    # Rendered only with KEDA_HPA_REPAIR=true (and by the undeploy).
+    "scaling-manager-keda-hpa-repair-role:scaling-manager-keda-hpa-repair-rolebinding"
 )
+
+# llmsm_keda_hpa_repair_on reports whether KEDA_HPA_REPAIR asks for the KEDA
+# HPA repair: true. Unset and false do not; anything else is refused, because
+# a typo must not silently drop the grant or keep it.
+llmsm_keda_hpa_repair_on() {
+    case "${KEDA_HPA_REPAIR:-false}" in
+        true) return 0 ;;
+        false) return 1 ;;
+        *) log_error "KEDA_HPA_REPAIR must be true or false (got '${KEDA_HPA_REPAIR}')" ;;
+    esac
+}
+
+# llmsm_keda_hpa_repair_component echoes the component that carries the KEDA
+# HPA repair's grant for this install's scope: a ClusterRole for cluster scope,
+# a Role in the controller's namespace for namespace scope.
+llmsm_keda_hpa_repair_component() {
+    if [ "$(llmsm_install_scope)" = "namespace" ]; then
+        echo keda-hpa-repair-namespaced
+    else
+        echo keda-hpa-repair
+    fi
+}
+
+# llmsm_append_keda_hpa_repair_component links the KEDA HPA repair component
+# into overlay directory $1 and lists it under `components:` in its
+# kustomization.yaml. Must be called while `components:`, if present, is the
+# last key of that file: it appends a list item.
+#
+# Kustomize cannot make a component conditional, so no overlay lists it; the
+# installer adds it with KEDA_HPA_REPAIR=true, and the undeploy always, so it
+# removes a grant an earlier install made.
+llmsm_append_keda_hpa_repair_component() {
+    local dir="$1" c
+    c="$(llmsm_keda_hpa_repair_component)"
+    ln -sfn "$LLMSM_PROJECT/config/components/$c" "$dir/$c"
+    if grep -q '^components:' "$dir/kustomization.yaml"; then
+        printf -- '- ./%s\n' "$c" >> "$dir/kustomization.yaml"
+    else
+        printf 'components:\n- ./%s\n' "$c" >> "$dir/kustomization.yaml"
+    fi
+}
+
+# llmsm_revoke_keda_hpa_repair deletes the KEDA HPA repair grant an earlier
+# install made in the controller's namespace or cluster-wide, for an install
+# without KEDA_HPA_REPAIR=true. The grant follows the variable on every
+# prereqs run. Forbidden is reported, not taken for "absent".
+llmsm_revoke_keda_hpa_repair() {
+    local out suffix
+    suffix="$(llmsm_ns_suffix "$LLMSM_NS")"
+    if [ "$(llmsm_install_scope)" = "namespace" ]; then
+        out="$(kubectl delete -n "$LLMSM_NS" rolebinding/scaling-manager-keda-hpa-repair-rolebinding \
+            role/scaling-manager-keda-hpa-repair-role --ignore-not-found 2>&1)"
+    else
+        out="$(kubectl delete clusterrolebinding/scaling-manager-keda-hpa-repair-rolebinding-"$suffix" \
+            clusterrole/scaling-manager-keda-hpa-repair-role-"$suffix" --ignore-not-found 2>&1)"
+    fi
+    if printf '%s' "$out" | grep -qi 'forbidden'; then
+        log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install may have made could not be checked or removed (Forbidden). A cluster admin removes it with the same command."
+    elif printf '%s' "$out" | grep -q 'deleted'; then
+        log_info "KEDA_HPA_REPAIR is not true: removed the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made"
+    fi
+    return 0
+}
 
 # llmsm_ns_suffix echoes the per-namespace suffix appended to those names.
 # sha256sum is GNU; macOS ships shasum. The suffix must be IDENTICAL on whatever
@@ -1244,6 +1311,9 @@ llmsm_render_manifests() {
     tmp="$(mktemp -d)" || return 0
     if llmsm_prepare_overlay_base "$tmp" >/dev/null 2>&1; then
         printf 'namespace: %s\nresources:\n- ./base\n' "$ns" > "$tmp/kustomization.yaml"
+        if llmsm_keda_hpa_repair_on 2>/dev/null; then
+            llmsm_append_keda_hpa_repair_component "$tmp"
+        fi
         llmsm_append_crb_name_patches "$tmp/kustomization.yaml" "$ns"
         # The same per-install decisions deploy_scaling_manager_controller applies, so the
         # objects this lists are the objects that install creates. Without the

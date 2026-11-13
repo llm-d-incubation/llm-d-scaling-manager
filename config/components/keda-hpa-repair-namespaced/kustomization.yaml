@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# The KEDA HPA repair, namespace scope (internal/hparepair, KEDA_HPA_REPAIR).
+# The same grant as components/keda-hpa-repair as a Role and RoleBinding in
+# the controller's namespace. When the controller manages other namespaces
+# (LLMSM_WATCH_NS), the installer copies both into each of them, as it does
+# the manager Role (llmsm_apply_watch_namespace_rbac).
+#
+# Opt-in, and NOT listed in any overlay: the installer adds it to the render
+# only with KEDA_HPA_REPAIR=true (llmsm_append_keda_hpa_repair_component).
+# Applied above the overlay's namePrefix, so the names here are final.
+resources:
+- keda-hpa-repair-role.yaml
+- keda-hpa-repair-rolebinding.yaml
+
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: KEDA_HPA_REPAIR
+        value: "true"
+  target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: scaling-manager-controller-manager
