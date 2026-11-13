@@ -129,19 +129,20 @@ func TestTTFT_TheOnsetSwitches(t *testing.T) {
 }
 
 // The charge does not stop the analyzer publishing: on a P/D fleet loaded
-// toward its decode onset (four decode pods), at every percentile target the
-// uncharged rate publishes a per-replica rate at, the charged one publishes
-// one too, priced, never decode-bound, at or under the uncharged rate. Some
-// target must be one the charge lowers, or the test proves nothing.
+// toward its decode onset (four decode pods), at every target, the mean and
+// two percentiles, that the uncharged rate publishes a per-replica rate at,
+// the charged one publishes one too, priced, never decode-bound, at or under
+// the uncharged rate. Some mean and some percentile target must be ones the
+// charge lowers.
 func TestTTFT_TheChargeStillPublishes(t *testing.T) {
 	in := onsetFleetInputs(ttftInputsAt(2, 1.5))
 	d := *testDecode()
 	in.decode = &d
 	off := in
 	in.decodeGateCharge = true
-	lowered := 0
+	lowered := map[bool]int{}
 	for _, secs := range []float64{0.1, 0.15, 0.2, 0.3, 0.5, 1, 2, 5} {
-		for _, q := range []float64{0.9, 0.95} {
+		for _, q := range []float64{0, 0.9, 0.95} {
 			target := whatif.TTFTTarget{Seconds: secs, Percentile: q}
 			pOff := priceTTFT(off, 1, target)
 			if pOff.reason != constants.SLOTTFTReasonPriced {
@@ -153,10 +154,11 @@ func TestTTFT_TheChargeStillPublishes(t *testing.T) {
 			assert.False(t, math.IsNaN(pOn.perReplica), "target %g s q %g: no per-replica rate published", secs, q)
 			assert.LessOrEqual(t, pOn.rate.Value, pOff.rate.Value)
 			if pOn.rate.Value < pOff.rate.Value*(1-1e-6) {
-				lowered++
+				lowered[q > 0]++
 			}
 		}
 	}
-	t.Logf("%d targets lowered by the charge", lowered)
-	assert.Positive(t, lowered, "no target was lowered by the charge")
+	t.Logf("targets lowered by the charge, mean (false) and percentile (true): %v", lowered)
+	assert.Positive(t, lowered[false], "no mean target was lowered by the charge")
+	assert.Positive(t, lowered[true], "no percentile target was lowered by the charge")
 }
