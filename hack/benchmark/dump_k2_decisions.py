@@ -32,6 +32,12 @@ Reads the following log lines:
                                     (saturation_v2) per model, per cycle the
                                     scheduler queue's prompts were not
                                     charged to a prefill that has no mu
+                                    (a replay with the switch off)
+  - scheduler-queue-prefill-share-capped
+                                    (saturation_v2) per model, per cycle the
+                                    scheduler queue's prompts kept on a
+                                    prefill that has no mu were cut to one
+                                    doubling of its ready supply
   - prefill-demand-held            (saturation_v2) per model, per cycle a
                                     decode replica is full and queued: the
                                     prefill demand found and the figure it
@@ -124,6 +130,7 @@ MESSAGES = {
     SQ_MSG,
     TFLOOR_MSG,
     "scheduler-queue-prefill-share-dropped",
+    "scheduler-queue-prefill-share-capped",
     "prefill-demand-held",
     "hot-rank-hold",
     "replica-capacity-skipped",

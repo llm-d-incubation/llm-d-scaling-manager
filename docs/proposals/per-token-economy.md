@@ -307,10 +307,12 @@ isolation would not have caught that; the min does.
 > magic number. Feeding it in as 0 would make a min wrongly veto a scale-down;
 > feeding it in as +Inf would make a max wrongly demand infinite replicas.
 
-That is precisely the defect behind prefill's dropped backlog. Prefill has no
-`mu`, so it gets no `tf.ByRole` entry, so its share of the scheduler queue is
-*subtracted from demand* — an undefined capacity silently became zero demand,
-and 439 queued requests justified nothing. Under this proposal prefill acquires
+That was precisely the defect behind prefill's dropped backlog. Prefill had
+no `mu`, so it got no `tf.ByRole` entry, so its share of the scheduler queue
+was *subtracted from demand* — an undefined capacity silently became zero
+demand, and 439 queued requests justified nothing. (Since
+llm-d-incubation/llm-d-scaling-manager#51 the share is kept, capped at one
+doubling of prefill's ready supply.) Under this proposal prefill acquires
 a defined capacity (`1/A_p`), which removes the immediate cause; the discipline
 still has to be honoured for the case where the TTFT fit is not yet ready, and
 the `(value float64, ok bool)` pair plus `minOfDefined`/`maxOfDefined` are the

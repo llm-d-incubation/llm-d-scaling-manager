@@ -128,6 +128,7 @@ first-sample/start-time/seed-bounds
 known-truth/batch-cap/declared-engine-queue-0
 known-truth/batch-cap/seq-bound-flow-control
 known-truth/borrowed-k2/lower-only
+known-truth/floor/prefill-without-mu-keeps-router-prompts
 known-truth/floor/standing-queue-priced-at-drain
 known-truth/floor/steady-order
 known-truth/itl/line-at-kprice

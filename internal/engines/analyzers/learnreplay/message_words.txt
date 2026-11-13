@@ -860,6 +860,7 @@ current-replicas
 currentNeedGPUs
 currentReplicas
 curve
+cutTokens
 cv
 cvSource
 cycle
@@ -1480,6 +1481,7 @@ keep
 keeping
 keeps
 kept
+keptTokens
 key
 keyOutputTokens
 keys
@@ -2126,6 +2128,7 @@ prefillKnown
 prefillObservations
 prefillOnlyRate
 prefillPods
+prefillReadySupply
 prefillRefused
 prefillStepsPerToken
 prefillWork
@@ -2438,6 +2441,7 @@ saturation-itl-clears-on-a-new-revision
 saturation-itl-one-sided-at-cap
 saturation-itl-tier-hysteresis
 saturation-only
+saturation-prefill-keeps-router-prompts
 saturation-throughput-floor-raises-variants
 saturation-token-based
 saturation.Analyze
@@ -2491,6 +2495,7 @@ scalingModifiers
 scheduled
 scheduler
 scheduler-queue-demand
+scheduler-queue-prefill-share-capped
 scheduler-queue-prefill-share-dropped
 scope
 scope/quotas/namespaceQuotas/exclude/kueue
