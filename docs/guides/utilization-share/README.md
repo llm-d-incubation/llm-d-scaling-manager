@@ -46,8 +46,10 @@ smt utilization-share status -n $NAMESPACE    # as make utilization-share-status
 On an install from the release files, switch the mode with the settings key
 instead of `shadow`, `activate` and `off` below. That file sets
 `utilizationShare` (to `off`), and the key wins over the policy's optimizer
-block these commands write; while it is set they refuse any other mode and
-print this patch:
+block these commands write, unless the policy lives in a separate policy
+namespace (the controller then reads its limiters and optimizer there, and
+ignores the key). While the key wins, these commands refuse any other mode
+and print this patch:
 
 ```bash
 kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE:-$NAMESPACE} --type merge \

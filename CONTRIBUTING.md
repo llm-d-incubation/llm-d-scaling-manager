@@ -15,6 +15,7 @@ Issues and pull requests go to
 - Helm 3.8+
 - Kind, for a local cluster
 - `jq` 1.6+ and `yq` v4 (mikefarah's Go yq; CI pins v4.54.1)
+- GNU tar (on macOS `brew install gnu-tar`; `gtar` is used), for `make release-manifests`
 - `python3` with PyYAML, for the doc and dashboard checks
 
 ### Set up your environment

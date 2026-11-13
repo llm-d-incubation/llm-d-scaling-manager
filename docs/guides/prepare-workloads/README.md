@@ -52,8 +52,9 @@ V=<release, for example v0.11.0>
 export NAMESPACE=<your model namespace>
 TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V
 kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+touch smt.env   # LLMSM_* settings for the tools, one NAME=value per line
 smt() {
-  docker run --rm --user "$(id -u):$(id -g)" \
+  docker run --rm --user "$(id -u):$(id -g)" --env-file "$PWD/smt.env" \
     -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" "$TOOLS" "$@"
 }
 smt version
@@ -213,14 +214,15 @@ or newer (yq must be mikefarah's Go yq, v4). `smt version` prints what it found.
 
 <!-- guide:nocontainer.download start -->
 ```bash
-# The same scripts from the release, for a machine with no container runtime. Needs bash, kubectl, jq and yq (mikefarah's, v4).
+# The same scripts from the release, for a machine with no container runtime. Needs bash, kubectl, jq, yq (mikefarah's, v4) and column (util-linux). On macOS, shasum -a 256 -c in place of sha256sum -c.
 URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
 curl -fsSLO $URL/scaling-manager-tools-$V.tar.gz
 curl -fsSLO $URL/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf scaling-manager-tools-$V.tar.gz
 SMT_DIR=$PWD/scaling-manager-tools
-smt() { "$SMT_DIR/scaling-manager-tools.sh" "$@"; }
+touch smt.env
+smt() { (set -a; . "$PWD/smt.env"; set +a; "$SMT_DIR/scaling-manager-tools.sh" "$@"); }
 smt version
 ```
 <!-- guide:nocontainer.download end -->

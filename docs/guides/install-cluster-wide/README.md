@@ -183,6 +183,16 @@ smt scaledobjects-plan -n <model namespace> --controller-namespace scaling-manag
 smt scaledobjects-apply -n <model namespace> --controller-namespace scaling-manager-system --plan plan.yaml
 ```
 
+The address it writes depends on whether the controller serves TLS, which it
+reads from the controller's Deployment. A namespace owner who may not read
+Deployments in `scaling-manager-system` gets a warning and the plaintext
+address, which a controller from the release files (mutual TLS) does not
+answer on. Say so instead, in the `smt.env` the tools read:
+
+```bash
+echo LLMSM_SCALER_TLS=true >> smt.env
+```
+
 Then [let it scale](../install-in-namespace/#let-it-scale), with `-n
 scaling-manager-system`.
 

@@ -72,10 +72,10 @@ URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/
 for f in namespaced settings scaler-tls model-namespace keda-auth activate; do
   curl -fsSLO $URL/scaling-manager-$f.yaml
 done
-sed -i -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" scaling-manager-*.yaml
+sed -i.bak -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" scaling-manager-*.yaml && rm -f scaling-manager-*.yaml.bak
 export KEDA_NS=<the namespace KEDA runs in>
 # The scaler NetworkPolicy admits KEDA from namespace keda; name yours.
-sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-namespaced.yaml
+sed -i.bak "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-namespaced.yaml && rm -f scaling-manager-namespaced.yaml.bak
 kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin   # admin
 kubectl apply -f scaling-manager-model-namespace.yaml                                   # admin
 # In scaling-manager-settings.yaml set prometheusURL, limiter: "quota" and
@@ -94,8 +94,9 @@ sharing scales a donor down; `workload-patch` writes what each one needs
 
 ```bash
 kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
-smt() { docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/smt.kubeconfig:/kube/config:ro" \
-  -v "$PWD:/work" ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"; }
+touch smt.env   # LLMSM_* settings for the tools, one NAME=value per line
+smt() { docker run --rm --user "$(id -u):$(id -g)" --env-file "$PWD/smt.env" \
+  -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"; }
 smt workload-patch -n $NAMESPACE                         # what each model server still needs
 smt scaledobjects-plan -n $NAMESPACE --out plan.yaml     # lists your model servers; edit it
 smt scaledobjects-apply -n $NAMESPACE --plan plan.yaml   # registers them with KEDA
