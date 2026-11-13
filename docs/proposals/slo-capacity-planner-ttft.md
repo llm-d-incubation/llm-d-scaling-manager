@@ -39,7 +39,7 @@ are the old sum, which stands only as a flagged fall-back.
 
 | Term | What it is | Model |
 | --- | --- | --- |
-| `W_router` | EPP flow-control queue: requests held before dispatch | Almost always 0 below the gate's onset. Above the prefill onset it has no formula of its own: the per-pod wait covers `W_router + W_engine` together. Above the decode onset, not priced ([the router queue](#the-router-queue-flow-control)) |
+| `W_router` | EPP flow-control queue: requests held before dispatch | Almost always 0 below the gate's onset. Above the prefill onset it has no formula of its own: the per-pod wait covers `W_router + W_engine` together, and in the CLI the processor-sharing stage carries it ([the router's wait](#as-built-the-routers-wait-above-the-prefill-onset)). Above the decode onset, not priced ([the router queue](#the-router-queue-flow-control)) |
 | `W_engine` | The prefill pod's own queue | [Per pod, with the imbalance `f`](#the-engine-queue). As built, the pod shares itself between its prompts instead, and `W_engine` is the stretch ([processor sharing](#as-built-processor-sharing)) |
 | `own_prefill` | `a + I/V_P`, this request's own prefill | [Prefill capacity](#prefill-capacity) |
 | `T_xfer` | KV transfer to decode (P/D) | `I·κ/BW` once `nixl_xfer_time_seconds` is collected; omitted and flagged until then. As built, a processor-sharing stage on the decode pod, out of `D` ([processor sharing](#as-built-processor-sharing)) |
@@ -340,7 +340,9 @@ checks it.
    "above flow-control onset". Late binding can only reduce imbalance while the
    gate is closed, but one-per-cycle dispatch and stale scores can add delay,
    so the per-pod model is not proven conservative there; the pooled M/G/c is
-   printed as the optimistic bound.
+   printed as the optimistic bound. On processor sharing the CLI now prices
+   this wait and flags it `FlowControlWaitPriced` instead
+   ([as built](#as-built-the-routers-wait-above-the-prefill-onset)).
 3. **Above the decode onset**: a closed decode gate stops dispatch for every
    request, prefill included, and a released request leaves its decode slot
    idle through prefill and transfer, so the gate is not work conserving. The
@@ -1815,6 +1817,89 @@ at worst in review), but no run has validated it at that spread.
 
 **Goldens.** No replay golden moves: no committed recording's cycle holds an
 `a`, so S1 stops before it prices a fleet. The CLI's TTFT goldens move.
+
+## As built: the router's wait above the prefill onset
+
+With flow control on, the router starts holding requests once the prefill
+pods' mean waiting count reaches its threshold (the prefill onset). Until
+this change the model answered above that rate but flagged the answer
+`AboveFlowControlOnset`: the wait was said not to be priced.
+
+**What changed.** A new fleet switch, `TTFTFleet.PriceRouterWait`, says the
+wait is priced. The CLI turns it on. Above the prefill onset, a TTFT priced on
+processor sharing, at a prompt spread up to `MaxPSPromptCV` (0.25), carries
+`FlowControlWaitPriced` instead of `AboveFlowControlOnset`. No figure moves:
+only the flag changes. The first-come queue, a spread past 0.25, and the SLO
+analyzer's shadow pricing keep the old flag.
+
+**Why no figure moves.** The gate does not add a wait, it moves one:
+
+- It holds requests only while the prefill pods already have work waiting,
+  so the pods never sit idle because of it.
+- The router's queue is one queue for all the pods, and it feeds the pod that
+  frees first. That is no slower than a queue on each pod, which the model
+  prices with the imbalance `f`.
+- A prefill pod runs at most a capped number of prompts at once and queues the
+  rest. At a narrow prompt spread, serving a few prompts at a time finishes
+  them sooner than sharing the pod among all of them, which is what the
+  processor-sharing stage prices.
+
+So the processor-sharing price already covers the router's wait. Adding a
+router queue on top would count the same wait twice.
+
+**Checked against a simulation.** `TestFlowControlWait_GatedPodsAreNoSlower`
+simulates the gated system: two prefill pods with a running cap of 1, 4 or 10,
+the router holding at the upstream threshold of 5, and the KV pull on four
+decode pods. It covers bucket B's fleet at Poisson and at Ca² 4, from 0.85 to
+0.97 of the knee, where the router held 1% to 83% of requests. The price read
+above the simulation everywhere, by 5% (mean, Poisson, cap 10, 0.85 of the knee)
+to 89%.
+
+**Checked against the staircase.** The second staircase sent flow-control-on
+steps just above the frozen prefill onset (B-onset and C-onset, three repeats
+each). `TestStaircaseR2_OnsetStepsReadAboveTheClient` replays them against the
+slowest of the three repeats at each step:
+
+| Bucket | Step, r/s | Over the onset | Model mean / p90 / p95, ms | Client mean / p90 / p95, ms (slowest repeat) | Model over client |
+| --- | --- | --- | --- | --- | --- |
+| B-onset | 41.3 | 0.74x | 171 / 263 / 306 | 165 / 250 / 294 | 1.04-1.05x |
+| B-onset | 50.1 | 0.89x | 245 / 446 / 556 | 205 / 328 / 389 | 1.20-1.43x |
+| B-onset | 54.3 | 0.97x | 357 / 757 / 982 | 238 / 392 / 468 | 1.50-2.10x |
+| B-onset | 56.6 | 1.01x | 578 / 1407 / 1884 | 268 / 446 / 536 | 2.16-3.51x |
+| B-onset | 57.2 | 1.02x | 722 / 1837 / 2482 | 269 / 457 / 542 | 2.68-4.58x |
+| B-onset | 59.0, 61.7 | 1.05x, 1.10x | refused: at or past the prefill knee (59.0) | 277-332 / 471-577 / 553-671 over all repeats, held | |
+| C-onset | 41.3 | 0.84x | 260 / 502 / 638 | 226 / 380 / 472 | 1.15-1.35x |
+| C-onset | 50.1 | 1.02x | 442 / 981 / 1304 | 317 / 580 / 684 | 1.40-1.91x |
+| C-onset | 54.3 | 1.11x | 731 / 1813 / 2459 | 402 / 742 / 893 | 1.82-2.75x |
+| C-onset | 56.6 | 1.15x | 1326 / 3580 / 4920 | did not hold: about 30 s, 9-14% of the step's requests failed | |
+
+As a rate, the targets were set from the model's TTFT at 50.1 r/s. The client
+met them up to 57.2 r/s (B-onset p90), 58.1 r/s (B-onset p95) and 55.4 r/s
+(C-onset), medians of three repeats: the model reads 0.86 to 0.90 of the
+measured rate, on the cautious side.
+
+**What the run says about the onset.** The router held almost nothing above
+the frozen onset: at most 2% of requests waited over 10 ms, with a mean wait
+under 4 ms, until the step where the fleet collapsed (64.5 r/s for B-onset,
+56.6 for C-onset). The prefill pods' waiting count stayed at or near 0. Each
+pod ran 1.2 to 3.4 prompts on average (polls about 35 s apart), which on
+processor sharing means a utilization of about 0.55 to 0.77, while the model
+put the busiest pod at 0.96 at 56.6 r/s. So the onset reads low because the
+model's knee reads low (its `V_P` and its 5% margin), not because of how the
+onset is placed. The gate reads the engine's waiting count, not the number
+running: its saturation averaged 0.05 to 0.11 while each pod ran 1.2 to 3.4
+prompts, which would read 0.24 to 0.68 on the number running. Placing the onset on processor sharing, with the
+prompts past a running cap of 10 (the most a pod was seen to run) counted as
+waiting, would move it from 56.1 to 55.8 r/s for B-onset and from 49.1 to
+52.4 r/s for C-onset. Neither is tested by this run, since the gate never
+closed before the collapse. The placement is left as it was.
+
+**Still open.** The decode onset still caps question 1 at the rate where
+the mean score reaches 1. The gate reads the current score, so it closes for
+part of the time below that rate. Neither staircase reached the decode onset
+(68.9 r/s, above the prefill knee), so no margin is measured yet. The router
+hop's per-token part is already learned (`prefill.HopFit`, `Base + PerToken*I`;
+1.41 µs a token on the second staircase's warm-up, 11.3 ms at 8000 tokens).
 
 ## Measured: where TTFT goes, and why prefill sizing (S2) is not built yet
 

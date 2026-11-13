@@ -1989,8 +1989,11 @@ How a reading becomes a crossing:
   less the client's, which r1 put within 4 ms.
 
 **Above the prefill flow-control onset.** Once the router's prefill gate closes,
-requests wait in its queue. The model flags that wait (`AboveFlowControlOnset`) but
-does not price it yet. A bucket's `measureAboveOnset` in the spec adds steps at those
+requests wait in its queue. The CLI's processor-sharing price carries that wait and
+flags it `FlowControlWaitPriced`; the SLO analyzer still flags it
+`AboveFlowControlOnset` (see the TTFT page, "As built: the router's wait above the
+prefill onset"; `TestStaircaseR2_OnsetStepsReadAboveTheClient` replays the second
+run's onset steps). A bucket's `measureAboveOnset` in the spec adds steps at those
 multiples of its frozen prefill onset, after its scored steps and held the same way.
 They are never scored: no crossing, knee or falsifier reads them. The report's "Above
 the prefill onset" table lists every flow-control-on step past the onset, with the

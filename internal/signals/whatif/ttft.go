@@ -199,6 +199,24 @@ type TTFTFleet struct {
 	// prefill pod and the pull at its unloaded time. On with
 	// slo.SwitchTTFTProcessorSharing, and in the CLI.
 	ProcessorSharing bool
+	// PriceRouterWait prices the router's flow-control wait above the prefill
+	// gate's onset as part of the processor-sharing prefill stage, flagged
+	// FlowControlWaitPriced, in place of AboveFlowControlOnset. It takes
+	// ProcessorSharing at a prompt spread up to MaxPSPromptCV; elsewhere the
+	// wait keeps its flag. False is the flag everywhere: the SLO analyzer's
+	// shadow pricing until a replay switch turns it on. On in the CLI.
+	//
+	// The gate moves the wait, it does not add to it. It holds requests at
+	// the router only while the prefill pods already have work waiting, so
+	// the pods stay busy, and the router's one queue feeds whichever pod
+	// frees first, which is no slower than a queue on each pod. A prefill pod
+	// runs at most its running cap at once and queues the rest; at a prompt
+	// spread this narrow that serves the prompts sooner than sharing the pod
+	// between all of them, which is what the stage prices. Checked against a
+	// simulation of the gated pods (TestFlowControlWait_GatedPodsAreNoSlower)
+	// and against the TTFT staircase's flow-control steps above the onset
+	// (TestStaircaseR2_OnsetStepsReadAboveTheClient).
+	PriceRouterWait bool
 	// DecodeTTFT is the decode engine's measured TTFT, read only when Decode
 	// is nil. On P/D the router's TTFT is the prefill engine's and then the
 	// decode engine's (the KV pull and decode's first step): P2 found the
@@ -542,6 +560,9 @@ type ttftPlan struct {
 	// psCapped is ps at a prompt spread past MaxPSPromptCV: each price is
 	// the larger of processor sharing's and first come's.
 	psCapped bool
+	// routerWait is TTFTFleet.PriceRouterWait where it takes: processor
+	// sharing alone, at a prompt spread up to MaxPSPromptCV.
+	routerWait bool
 }
 
 // plan checks a fleet and places its flow-control onsets.
@@ -557,6 +578,7 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 	}
 	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing,
 		psCapped: fl.ProcessorSharing && pf.cv > MaxPSPromptCV}
+	pl.routerWait = fl.PriceRouterWait && pl.ps && !pl.psCapped
 	if fl.ProcessorSharing && fl.Decode != nil {
 		// The pull is its own stage on the decode pods. With no decode line
 		// there are no pods to share, and it stays in the own time.
@@ -773,7 +795,11 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 			return priced{u: &u}
 		}
 		if rate >= pl.onsets.Prefill {
-			out.Flags = append(out.Flags, AboveFlowControlOnset)
+			f := AboveFlowControlOnset
+			if pl.routerWait {
+				f = FlowControlWaitPriced
+			}
+			out.Flags = append(out.Flags, f)
 		}
 	}
 
@@ -1091,7 +1117,8 @@ func checkPercentile(q float64) *Unanswerable {
 //
 // It refuses (Saturated) at or above the lower knee, and, with flow control
 // on, at or above the decode gate's onset (AboveDecodeOnset); at or above the
-// prefill gate's onset it answers, flagged AboveFlowControlOnset.
+// prefill gate's onset it answers, flagged AboveFlowControlOnset, or with
+// TTFTFleet.PriceRouterWait taking FlowControlWaitPriced.
 func TTFTAt(fl TTFTFleet, rate, q float64) Result {
 	// The question first: a usage error outranks what the fleet's data says,
 	// and placing the onsets is not free.
@@ -1185,7 +1212,7 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 		return *at.u
 	}
 	for _, f := range at.out.Flags {
-		if f == BelowFittedBand || f == KVBoundSlots || f == AboveFlowControlOnset || f == DecodeTermFloored {
+		if f == BelowFittedBand || f == KVBoundSlots || f == AboveFlowControlOnset || f == FlowControlWaitPriced || f == DecodeTermFloored {
 			flags = addFlags(flags, f)
 		}
 	}

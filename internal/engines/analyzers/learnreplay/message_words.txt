@@ -158,6 +158,7 @@ Fix
 FlowControlInferredOff
 FlowControlMismatch
 FlowControlUnknown
+FlowControlWaitPriced
 Found
 GLOBAL_OPT_INTERVAL
 GPS

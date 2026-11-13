@@ -136,8 +136,16 @@ const (
 	// AboveFlowControlOnset is a rate at or above the prefill gate's onset
 	// with flow control on: the router holds the excess and the answer is the
 	// per-pod model, which is not proven conservative there. The pooled
-	// figure is the optimistic bound beside it.
+	// figure is the optimistic bound beside it. With
+	// TTFTFleet.PriceRouterWait taking, FlowControlWaitPriced stands in its
+	// place.
 	AboveFlowControlOnset Flag = "AboveFlowControlOnset"
+	// FlowControlWaitPriced is a rate at or above the prefill gate's onset
+	// with flow control on, priced with TTFTFleet.PriceRouterWait: the router
+	// holds the excess, and its wait is in the processor-sharing prefill
+	// stage's figure. It says the router is holding requests, not that the
+	// answer is weaker.
+	FlowControlWaitPriced Flag = "FlowControlWaitPriced"
 	// HeldByDecodeAdmission is a TTFT rate the prefill side alone would
 	// set higher: decode admission's wait holds it down.
 	HeldByDecodeAdmission Flag = "HeldByDecodeAdmission"
