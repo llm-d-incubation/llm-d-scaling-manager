@@ -1855,6 +1855,25 @@ make benchmark-staircase-redo                               # re-prices bursty b
 make benchmark-staircase-analyze                            # writes $STAIRCASE_RUN/report.md
 ```
 
+**On another model.** `STAIRCASE_MODEL` picks the model and `STAIRCASE_TP` the
+tensor-parallel size of both roles, so a pod holds that many GPUs; the run stops before
+any load if the engines do not ask for them. `STAIRCASE_PREFILL_MEMORY` sets the prefill
+pod's memory, as `STAIRCASE_DECODE_MEMORY` (default 32Gi) does decode's; unset, prefill
+keeps the scenario's. Prefill CPU has no setting: it stays the scenario's. The other
+settings above still apply: `STAIRCASE_ACCELERATOR_KEY`/`_VALUE` to pick a node pool with
+enough GPUs, and `STAIRCASE_MAX_MODEL_LEN` (40960 by default, which fits Qwen3-32B). At
+TP 2 every pod holds 2 GPUs, so the smoke and lapse runs hold twice the GPUs given for
+them above, and the plan's GPU-hours count GPUs, not pods. A model needs its own spec,
+since the warm-up's loads are sized to the engine:
+[`staircase_spec_qwen32b.yaml`](../../hack/benchmark/staircase_spec_qwen32b.yaml) is a
+shortened run on Qwen3-32B at TP 2, buckets A, B and C, one repeat:
+
+```bash
+export STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
+export STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
+export STAIRCASE_PREFILL_MEMORY=64Gi STAIRCASE_DECODE_MEMORY=64Gi
+```
+
 Read what the freeze prints: its last lines are what the prediction assumes. A refused
 freeze aborts the run. After repeat 1 of the gate buckets the run scores them itself,
 and a fail stops it and frees the GPUs.

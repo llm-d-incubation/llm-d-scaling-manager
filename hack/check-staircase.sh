@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=136
+EXPECTED_CHECKS=141
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -94,6 +94,7 @@ case "$*" in
     *benchmark-standup*)
         # A fresh standup: the router's config as the chart writes it, nothing torn down.
         rm -f "$STATE/tearing" "$STATE/fc-off"
+        echo "set ${LLMDBENCH_SET:-}" >> "$LOG"
         if [ -n "${MAKE_SLEEP:-}" ]; then
             sleep "$MAKE_SLEEP" &
             echo $! > "$STATE/standup-sleep"
@@ -217,7 +218,8 @@ case "$args" in
     *" get svc -o json "*) printf '{"items":[{"metadata":{"name":"m-epp"},"spec":{"ports":[{"port":80}]}}]}\n' ;;
     *" get configmap scaling-manager-scaling-policy-config "*) printf '{"data":{"default":"analyzers:\\n  - name: saturation\\n    score: 1\\n"}}\n' ;;
     *" get deploy m-decode -o json "*|*" get deploy m-prefill -o json "*)
-        printf '{"spec":{"template":{"spec":{"containers":[{"name":"vllm","args":["serve","m"],"env":[{"name":"VLLM_MAX_MODEL_LEN","value":"40960"}]}],"nodeSelector":{"gpu":"x"}}}}}\n' ;;
+        # STUB_GPUS: the GPUs the engine container asks for, as the chart rendered them.
+        printf '{"spec":{"template":{"spec":{"containers":[{"name":"vllm","args":["serve","m"],"resources":{"limits":{"nvidia.com/gpu":"%s"}},"env":[{"name":"VLLM_MAX_MODEL_LEN","value":"40960"}]}],"nodeSelector":{"gpu":"x"}}}}}\n' "${STUB_GPUS:-1}" ;;
     *" get scaledobject -o json "*) printf '{"items":[{"metadata":{"name":"so-d"},"spec":{"scaleTargetRef":{"name":"m-decode"}}},{"metadata":{"name":"so-p"},"spec":{"scaleTargetRef":{"name":"m-prefill"}}}]}\n' ;;
     *" get deploy m-"*"jsonpath="*)
         case "$args" in *m-decode*) f="$STATE/so-d" ;; *) f="$STATE/so-p" ;; esac
@@ -356,6 +358,8 @@ expect "nothing ran before the freeze" '[ ! -e "$STATE/steps" ]'
 base_env bash "$B/staircase.sh" freeze > "$WORK/freeze.out" 2>&1
 expect "freeze writes the hashes, spec.json among them" '[ -e "$RUN/ladder.ready" ] && grep -q spec.json "$RUN/frozen.sha256"'
 expect "the plan and its assumptions are printed" 'grep -q "GPU-hours" "$RUN/plan.md" && grep -q "What the prediction assumes" "$RUN/plan.md"'
+gpuh() { STAIRCASE_TP="$1" "$PY" "$B/staircase_freeze.py" plan "$RUN/frozen.json" "$RUN/spec.json" | awk -F'|' '/^\| gate,/ { gsub(/ /, "", $5); print $5 }'; }
+expect "at TP 2 the plan counts twice the GPU-hours" 'awk -v a="$(gpuh 1)" -v b="$(gpuh 2)" "BEGIN { d = b - 2 * a; exit !(a > 0 && d <= 1 && d >= -1) }"'
 wait_run
 expect "the run exits 0" '[ "$rc" = 0 ]'
 expect "all three phases ran" '[ "$(steps)" = 3 ]'
@@ -918,6 +922,19 @@ expect "a Job without its rights fails the smoke" '[ "$rc" != 0 ] && grep -q "^F
 fresh smokepin
 start_smoke NEVER_MOVE=1; wait_run
 expect "a fleet that will not move fails the smoke, and tears down" '[ "$rc" != 0 ] && grep -q "^FAIL the fleet did not move" "$RUN/smoke.txt" && tore_down'
+
+echo "tensor parallelism..."
+expect "unasked, the standup sets no tensor-parallel size or prefill memory" \
+    'grep -q "^set prefill.replicas=1," "$WORK/smoke.log" && ! grep -q "parallelism\|prefill.resources" "$WORK/smoke.log"'
+fresh tp
+start_smoke STAIRCASE_TP=2 STAIRCASE_PREFILL_MEMORY=64Gi STUB_GPUS=2; wait_run
+expect "asked, the standup sets both roles' size and the prefill memory" \
+    'grep -q "^set .*,prefill.parallelism.tensor=2,decode.parallelism.tensor=2,prefill.resources.requests.memory=64Gi,prefill.resources.limits.memory=64Gi$" "$LOG"'
+expect "and a fleet that holds that many GPUs a pod runs" '[ "$rc" = 0 ] && grep -q "smoke: passed" "$RUN.out"'
+fresh tpwrong
+start_smoke STAIRCASE_TP=2 STUB_GPUS=1; wait_run
+expect "a fleet that does not hold them stops before any load, and tears down" \
+    '[ "$rc" != 0 ] && grep -q "asks for .1. GPUs, not the tensor-parallel size 2" "$RUN/timeline.txt" && [ ! -d "$RUN/smoke" ] && tore_down'
 
 echo "the lapse run..."
 start_lapse() {

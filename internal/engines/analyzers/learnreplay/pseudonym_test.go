@@ -133,13 +133,14 @@ func TestExport_EveryRecordedStringIsClassified(t *testing.T) {
 	t.Logf("%d string value sites, %d string-keyed maps", len(values), len(keys))
 	// 137 since learner PR 5d: settle.RestoreEvent's namespace and model, and
 	// each sighting's Pod and variant. 144 with S1: SLOTTFTReading's six, and
-	// SLOPolicy.FlowControl.
-	assert.Len(t, values, 144, "string value sites")
+	// SLOPolicy.FlowControl. 146 with J1: the joint reading's reason and flags.
+	assert.Len(t, values, 146, "string value sites")
 	// 51 since learner PR 5c: LearnedState.StartSamples and StartAdmittedAt,
 	// keyed like StartSeconds, and AnalyzerResult.RoleStartSeeded, by role.
 	// 52 since 5d: LearnedState.StartCounted. 53 since ev-shindin/llm-scaling-manager#495's
-	// LearnedState.ITLBaselineAdmittedAt, keyed like ITLBaseline.
-	assert.Len(t, keys, 53, "string-keyed maps")
+	// LearnedState.ITLBaselineAdmittedAt, keyed like ITLBaseline. 54 with J1's
+	// joint reading's Inputs, keyed by input.
+	assert.Len(t, keys, 54, "string-keyed maps")
 }
 
 // canaryRecording is a small recording with one more event, of an owner the

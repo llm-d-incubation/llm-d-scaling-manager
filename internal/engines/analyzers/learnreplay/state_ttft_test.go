@@ -434,3 +434,40 @@ func TestTTFTSamples_Transfer(t *testing.T) {
 	s.noteTerm(pdInput(prefillRow("p0", 2000, 1), d0, d1), time.Time{}, func(string) string { return "" })
 	assert.InDelta(t, 0.02, s.transfers["dec"].Reading().Figure(), 1e-12)
 }
+
+// The replay feeds the joint window as S1 does: only one prefill and one
+// decode variant, keyed to their engines (a change sweeps it), and the
+// prefill prompt read SGLang's way where the variant runs SGLang.
+func TestTTFTSamples_TheJointFeedIsS1s(t *testing.T) {
+	pre := domain.ReplicaMetrics{VariantName: "pre", PodName: "p0", Ready: true, RequestRate: 10, RequestRateKnown: true,
+		AvgPrefillTime: 0.03, AvgPrefillTimeKnown: true, AvgQueueTimeKnown: true, AvgInputTokensRecent: 8000,
+		PrefillComputedTokenRate: 40000, PrefillComputedTokenRateKnown: true}
+	in := pdInput(pre)
+	now := time.Unix(1_700_000_000, 0)
+	args := func(string) string { return "args-a" }
+	vllm := func(string) bool { return false }
+	s := newTTFTSamples()
+	for range prefill.MinJointReadings {
+		s.noteJoint(in, now, args, vllm)
+	}
+	est := s.joint.Estimate()
+	require.Empty(t, est.PrefillWorkRefused)
+	assert.InDelta(t, 4000, est.PrefillWorkPrompt, 1e-9, "vLLM reads the prompt from the computed-token rate")
+
+	sglang := newTTFTSamples()
+	for range prefill.MinJointReadings {
+		sglang.noteJoint(in, now, args, func(v string) bool { return v == "pre" })
+	}
+	assert.InDelta(t, 8000, sglang.joint.Estimate().PrefillWorkPrompt, 1e-9, "SGLang reads it from the prompt length")
+
+	s.noteJoint(in, now, func(string) string { return "args-b" }, vllm)
+	assert.Equal(t, prefill.NoQueueFreeMinutes, s.joint.Estimate().PrefillWorkRefused, "new arguments sweep the window")
+
+	two := in
+	two.VariantStates = append(slices.Clone(in.VariantStates), domain.VariantReplicaState{VariantName: "dec2", Role: domain.RoleDecode})
+	other := newTTFTSamples()
+	for range prefill.MinJointReadings {
+		other.noteJoint(two, now, args, vllm)
+	}
+	assert.Equal(t, prefill.NoQueueFreeMinutes, other.joint.Estimate().PrefillWorkRefused, "two decode variants: not fed")
+}

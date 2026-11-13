@@ -1932,7 +1932,8 @@ target at a higher rate unless decode grows with it.
 
 ## Proposed: joint prefill and decode TTFT sizing
 
-**Status:** design only. Nothing here is built. It answers
+**Status:** J1 is built, in shadow ([as built](#as-built-j1)); J2 to J4 are
+design only. It answers
 [what S2 needs](#measured-where-ttft-goes-and-why-prefill-sizing-s2-is-not-built-yet):
 size both roles together, against a TTFT percentile, from inputs that exist
 before any pod queues.
@@ -2197,6 +2198,122 @@ A live staircase with the mode on comes after the replays pass.
 - The pull past the prefill utilization seen is not priced: such counts are
   not asked for.
 - The burst rule reads high at light load, as built: the cost side.
+
+## As built (J1)
+
+J1 learns the joint model's inputs and prices its mean, in shadow. Nothing
+acts on either: no ask, nothing in the composite, and the engine still keeps
+`slo` out of the composite and the scale-down grace. It runs for a model with
+one prefill and one decode variant under a TTFT target, behind the replay
+switch `slo.SwitchTTFTJointInputs` (`slo-ttft-joint-inputs`), on by default.
+
+**What it learns** (`prefill.JointWindow`, `internal/signals/prefill/joint.go`),
+from the per-pod histograms the collector already reads, over the last hour:
+
+| Input | How | Notes |
+| --- | --- | --- |
+| `S`, a prefill pod's unshared work | `T/(1 + λT)` on a pod whose engine queue was empty, median | "Empty" is a mean queue time of at most 1 ms: vLLM reads 5 to 10 µs on a pod that does not queue. |
+| `V_P` (`inverted`) | the prompt over `S` | Stands only where P1 refused V_P. A pod that queues gives P1 a source, and P1 wins. |
+| `a₀` | `(AvgTTFT − AvgQueueTime − AvgPrefillTime)·(1 − ρ_p)`, its 0.9 quantile | Not the highest: one scrape read 17.4 ms where its step read 13.6 to 14.6. |
+| The pull table | `T/(1 + λT)` of the KV transfer on the decode pods, median per 0.1 of prefill utilization | Below the lowest bucket the lowest; in a gap the next bucket up; past the highest the highest, flagged `PullUnseen`. |
+| `ITL(k) = α + β·k` | least squares on the decode pods' (k, ITL) | `k` is the minute's mean batch by Little's law: the generated-token rate × ITL, or completions × the last minute's `n_out` × ITL, every figure a one-minute one, not the running gauge. The gauge is an instant, and its noise against a minute's ITL flattens the slope: on B, β 0.167 ms from the gauge, 0.219 ms from the minute (0.218 above). Refused with α below 0. |
+| `m_d`, `d` | least squares of the decode pod's TTFT less its pull against ITL | B reads 4.96 and 11.2 ms, against 5.18 and 11.5 above. Refused where the line reads the decode pod's own part at or below 0 over the ITL it was read at. |
+
+Neither line is fitted over less than 10 % spread of its x ((max − min)/mean):
+flat load gives least squares no slope to read. A-off's first step is that
+flat, so it is not priced.
+
+A decode pod with more waiting requests than 4 × (1 + λ·pull) is behind on
+its batch and reads nothing: B's pods held 1 to 5 below the knee and 61 to 106
+past it.
+
+**How it prices** (`whatif.JointTTFTMean`): the mean of
+`a₀/(1 − ρ_p) + S/(1 − ρ_p) + X/(1 − λ_d·X) + m_d·ITL(k) + d + R`, arrivals
+split evenly over each role's pods, `k` from the closed loop, refused as
+`batch-unheld` when `n_out·λ_d·β ≥ 1`. `R` is the decode term's hop where it is
+fitted, and the assumed 20 ms (`RouterHopAssumed`) otherwise. The mean only:
+the percentile is J2's.
+
+**What you see:** `llmsm_slo_ttft_joint_input`, `llmsm_slo_ttft_joint_mean_seconds`,
+`llmsm_slo_ttft_joint_reason` and `llmsm_slo_ttft_joint_flag` (`OverheadMeasured`,
+`PullUnseen`, `RouterHopAssumed`), with no `statistic` label since they are
+means; `inverted` on `llmsm_slo_ttft_vp_source`; and a `slo-ttft-joint` line in
+the cycle log with the parts and what the engines measured beside them.
+`whatif joint-ttft --recording FILE [--prefill N] [--decode N] [--rate R]`
+prices any fleet from a recording, and exits 3 on a refusal.
+
+### The model row
+
+`TestGoldens_TTFTJointModelRow` replays the four staircase phases committed as
+goldens and compares, per step, after its first 180 s, the joint mean at the
+fleet that ran with what the engines measured. The recordings hold no router
+mean (they predate `TTFTSumRate`), so both sides leave `R` out: the prefill
+pods' mean TTFT plus the decode pods', which on these phases is the router's
+mean less 9 to 11 ms. "Frozen" prices each later step from the inputs as they
+stood after the second step: the extrapolation J2's search will lean on.
+
+| Phase | Step, r/s | Model, ms | Measured, ms | Error | Frozen |
+| --- | --- | --- | --- | --- | --- |
+| A off, 2+2, 1k prompts | 17.0 | not priced | 34.3 | | |
+| | 23.5 | 39.5 | 39.5 | +0.0 % | |
+| | 29.9 | 46.7 | 48.7 | −4.1 % | −9.0 % |
+| B off, 2+2, 8k | 17.7 | 108.7 | 107.8 | +0.8 % | |
+| | 24.1 | 124.6 | 124.6 | +0.1 % | |
+| | 30.5 | 149.0 | 148.4 | +0.4 % | −1.1 % |
+| | 33.1 | 160.7 | 158.6 | +1.3 % | +1.0 % |
+| | 35.7 | 176.3 | 174.7 | +0.9 % | +2.3 % |
+| | 38.6 | 202.0 | 199.0 | +1.5 % | +6.9 % |
+| B on, 2+2, 8k | 18.1 | 110.1 | 111.0 | −0.8 % | |
+| | 24.4 | 125.4 | 123.8 | +1.3 % | |
+| | 30.9 | 149.2 | 147.6 | +1.1 % | −1.3 % |
+| | 34.0 | 163.7 | 158.9 | +3.1 % | +0.9 % |
+| | 36.1 | 175.6 | 172.4 | +1.9 % | +0.1 % |
+| | 38.4 | 196.5 | 195.6 | +0.5 % | −1.9 % |
+| | 39.6 | 235.5 | 260.2 | **−9.5 %** | −13.2 % |
+| C on, 2+2, 8k, `Ca²` 4 | 17.4 | 121.4 | 119.8 | +1.3 % | |
+| | 24.1 | 145.9 | 146.0 | −0.1 % | |
+| | 30.5 | 176.8 | 178.2 | −0.8 % | −0.3 % |
+| | 33.1 | 195.0 | 195.6 | −0.3 % | +2.3 % |
+| | 36.2 | 222.7 | 225.3 | −1.1 % | +6.6 % |
+| | 39.0 | 260.4 | 285.1 | −8.7 % | +19.9 % |
+
+Each phase's last step overloaded (the engines' mean went to seconds) and is
+past the knee; it is left out.
+
+On 2+2 Poisson, 14 of the 15 steps priced below the knee are inside the bar's
+−5 to +10 %, from −4.1 to +3.1 %. The miss is B on's last step, 9.5 % under: the
+decode batch stands at 0.86 of its own knee there (`n_out·λ_d·β`), where the
+closed loop is steepest and the measured ITL rises faster than the line fitted
+below it. That is the SLO side: a count priced there would be too small. It is
+held as a known miss, not tuned away. C reads within 1.3 % to its fifth step,
+better than the bar expects, because `m_d` and `d` are fitted on C's own
+bursty steps; its last step reads 8.7 % under, on the same side.
+
+The in-sample row is the easy one: every input is read from the same pods
+it is compared with. The frozen column is harder. Up to three steps past what
+it saw it reads −9.0 to +6.9 %. Further out C reads 20 % high (the cost side),
+and B on 13 % low at its last step (the SLO side). Most of those cycles are
+past the pull table's highest bucket (`PullUnseen`).
+
+**Not checked here.** B-onset (2+4) has no recording in the repository, so the
+2+4 miss on the pull (above) is not replayed, and nothing here tests whether
+the pull table carries the prefill load's effect there. No recording has the
+router's mean, so `R` and the self-check against the router are not checked
+either.
+
+**Golden changes.** On the replays with S1 on, the six fixtures with one
+prefill and one decode variant under a TTFT target gain the `Joint` field on
+every row of `slo-published.csv`; the staircases price its mean on 84 of 128
+(A off), 269 and 274 of 289 (B off, B on) and 276 of 292 (C on) rows. On the four staircases S1's `vp_source` reads
+`inverted` where it read `none`, and its reason moves from
+`no-prefill-capacity` to `no-fixed-latency`: no cycle holds P1's `a`, so S1
+prices none either way. The open-loop prefill-stress runs, which are not
+`slo` goldens, now have `V_P` too: S1 prices the short one on 63 of 105
+cycles, unchecked against the router (`TestS1_OnThePrefillStressGoldensAsP1LearnsThem`).
+
+**Left for J2 and J3:** the count search, the percentile, the self-check,
+`slo.ttft.sizing`, `maxStep`, `maxCostRatio`, per-role `RoleDemand`, and
+enforce mode.
 
 ## Open questions
 

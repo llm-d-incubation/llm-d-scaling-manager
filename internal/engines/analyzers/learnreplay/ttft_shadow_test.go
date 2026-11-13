@@ -218,15 +218,26 @@ func shadowReplay(t *testing.T, fixture string, target time.Duration, est *prefi
 // As P1 learns them, no run alone gives the model a fleet: each lacks V_P or a
 // (the P2 table). So S1's item 7, run 2 priced from busy minutes, is not met:
 // run 2 reads busy-minutes and refuses for a. That is a reason, never a number.
+//
+// Since J1 (slo.SwitchTTFTJointInputs) the open-loop runs, where no pod
+// queued, have the inverted V_P where P1 had none. The long one still lacks
+// a (no-fixed-latency on 79 of 93 cycles). The short one has a, so S1 prices
+// it, on 63 of 105 cycles: a fleet from one run, in shadow, which no table
+// has checked yet; its last cycle has no traffic. reasons freezes the counts
+// for those two.
 func TestS1_OnThePrefillStressGoldensAsP1LearnsThem(t *testing.T) {
 	t.Parallel() // reads the goldens, writes only to its own copies
 	for _, c := range []struct {
 		fixture, reason, vpSource string
+		reasons                   map[string]int
 	}{
-		{ttftSaturatedFixture, constants.SLOTTFTReasonNoFixedLatency, constants.SLOTTFTVPBusyMinutes},
-		{ttftThreePodsFixture, constants.SLOTTFTReasonNoFixedLatency, constants.SLOTTFTVPPeakUnderQueue},
-		{ttftOpenLongFixture, constants.SLOTTFTReasonNoPrefillCapacity, constants.SLOTTFTVPNone},
-		{ttftOpenShortFixture, constants.SLOTTFTReasonNoPrefillCapacity, constants.SLOTTFTVPNone},
+		{ttftSaturatedFixture, constants.SLOTTFTReasonNoFixedLatency, constants.SLOTTFTVPBusyMinutes, nil},
+		{ttftThreePodsFixture, constants.SLOTTFTReasonNoFixedLatency, constants.SLOTTFTVPPeakUnderQueue, nil},
+		{ttftOpenLongFixture, constants.SLOTTFTReasonNoFixedLatency, constants.SLOTTFTVPInverted,
+			map[string]int{constants.SLOTTFTReasonNoFixedLatency: 79, constants.SLOTTFTReasonNoPrefillCapacity: 14}},
+		{ttftOpenShortFixture, constants.SLOTTFTReasonNoTraffic, constants.SLOTTFTVPInverted,
+			map[string]int{constants.SLOTTFTReasonNoFixedLatency: 25, constants.SLOTTFTReasonNoPrefillCapacity: 14,
+				constants.SLOTTFTReasonNoTraffic: 3, constants.SLOTTFTReasonPriced: 63}},
 	} {
 		got := shadowReplay(t, c.fixture, 3*time.Second, nil)
 		last := got[len(got)-1].reading
@@ -242,6 +253,9 @@ func TestS1_OnThePrefillStressGoldensAsP1LearnsThem(t *testing.T) {
 			}
 		}
 		t.Logf("%s: %d cycles, %v, last vp_source %s", c.fixture, len(got), reasons, last.VPSource)
+		if c.reasons != nil {
+			assert.Equal(t, c.reasons, reasons, c.fixture)
+		}
 	}
 }
 
