@@ -114,6 +114,10 @@ type prefillHeldBound struct {
 	// was taken, or since the figure was first kept: a window is tested only
 	// when all its samples are among them.
 	fresh int
+	// prompt is, for the busy-share bound only (prefill_busy_share.go), the
+	// effective prompt length the held figure was first taken at; zero for
+	// the back-pressure bound, which keeps none.
+	prompt float64
 }
 
 // raiseHeldBoundLocked counts a sample started on key's window, whose

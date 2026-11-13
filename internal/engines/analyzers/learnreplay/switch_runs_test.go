@@ -805,12 +805,59 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	},
 
 	// llm-d-incubation/llm-d-scaling-manager#97
+	// (saturation.SwitchLowerBoundCapsRouterShare, throughput_floor.go): a
+	// prefill the floor prices on a lower bound keeps its router-queue share
+	// only up to floor.LowerBoundGrowthCap, with
+	// SwitchPrefillKeepsRouterPrompts on. Alone, from all off, no prefill is
+	// priced on a lower bound (the busy-share bound is off, and no recording
+	// turns enablePrefillThroughputBound on) and the share is dropped, so it
+	// moves nothing; all on, it cuts the flow-control-on staircase's runaway,
+	// whose outputs SwitchPrefillBusyShareBound's and
+	// SwitchPrefillKeepsRouterPrompts' rows already name. Its unit test
+	// holds it (heldBy).
+	saturation.SwitchLowerBoundCapsRouterShare: nil,
+
+	// llm-d-incubation/llm-d-scaling-manager#97
 	// (saturation.SwitchPrefillBusyShareBound, prefill_busy_share.go): a
 	// prefill with no window of its own is priced on its busy-share bound,
 	// max(RequestRate, ranks / AvgServiceTime) kept as the back-pressure bound
-	// keeps its readings, and a prefill priced on a lower bound keeps its
-	// router-queue share only up to floor.LowerBoundGrowthCap. It moves every
-	// P/D fixture whose prefill rows carry a service time: PLACEHOLDER.
+	// keeps its readings, the held figure dropped when the prompt length moves
+	// past 20 % and kept across a restart, and no reading from a service time
+	// under a quarter of TTFT less queue time. It moves every P/D fixture
+	// whose prefill rows carry a service time, and only prefill's demand (its
+	// role, its variant capacity and the model total); no decode row moves.
+	// Measured all on against the base (main e83f33477), in prefill replicas
+	// the demand implies at the 0.85 target:
+	//
+	//   - Up, with no order moved: ols-sweep (140 cycles, to at most 0.36),
+	//     ols-sweep-slo (60, 0.34), ols-sweep-slo-restart (80, 0.38),
+	//     throughput-sweep (60, 0.35), throughput-sweep-restart (210, 0.37),
+	//     pd-restart (141, 0.11 -> 0.16), ttft-open-loop-long (61, 0.10),
+	//     ttft-open-loop-short (59, 0.09), ttft-staircase-a-off (125, 0.35),
+	//     engine (2, 0.29 -> 0.66) and acceptance (12 rows, +25 000 tokens on
+	//     a prefill variant). acceptance's and engine's learned-state gain the
+	//     prefill-busy window (one sample, 2160 tokens/s).
+	//   - ttft-saturated (52 cycles): to at most 2.0 from 0.42, and one
+	//     replica ordered on 16 cycles where none was. Its prompts grow to
+	//     30,000 tokens; the replicas served 3.1 req/s with their queues near
+	//     empty, and the bound, its held figure dropped at the length change,
+	//     reads 3.9-6 req/s there.
+	//   - ttft-staircase-b-off (224 cycles) and -b-on (268): prefill at most
+	//     1.50 and 1.58 replicas, from 0.19 and 0.29: two from about 28
+	//     req/s, the rate the two-replica fleet first missed 200 ms p90 TTFT
+	//     at. Two were running, so no order moves.
+	//   - ttft-three-pods (157 cycles): to at most 3.03 from 1.60, and one
+	//     replica ordered on 3 cycles (19:05:26, 19:11:26, 19:11:41) where
+	//     none was, at RequiredCapacity under 0.04 of a replica.
+	//   - ttft-staircase-c-on: up on 245 cycles before the runaway (two
+	//     replicas from about 05:00), down on 22 in it (05:51-05:59). There
+	//     the router share is capped (SwitchLowerBoundCapsRouterShare, all
+	//     on) and the floor's drain price replaces prefill's engine-queue
+	//     charge: demand 3.2-3.8M -> the 3 126 824 cap, or 1.5-1.9M on 3
+	//     cycles, and one replica fewer ordered on 21 cycles (at most 2 where
+	//     it was 3).
+	//
+	// Up is the cost side; c-on's runaway cycles are the SLO side.
 	saturation.SwitchPrefillBusyShareBound: {
 		"acceptance/learned-state.csv", "acceptance/results.csv", "acceptance/variant-capacities.csv",
 		"engine/composite-results.csv", "engine/composite-roles.csv", "engine/learned-state.csv",
@@ -1205,6 +1252,11 @@ func withSeams(more, rows map[string][]string) map[string][]string {
 // test that holds the same on either side is a control, not a hold, and is
 // not listed here.
 var heldBy = map[string][]heldTest{
+	// llm-d-incubation/llm-d-scaling-manager#97: runs the switch on and off
+	// and asserts both (the share capped at one doubling on, whole off).
+	saturation.SwitchLowerBoundCapsRouterShare: {
+		{"../saturation", "TestPrefillOnALowerBoundKeepsTheRouterShareCapped"},
+	},
 	// Issue ev-shindin/llm-scaling-manager#397: each runs the switch on and off and asserts both (the
 	// n-dependence cases pass on and fail every seed off; a fleet the bound
 	// grew grows at most once on and stays put off).
@@ -1930,7 +1982,7 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 		sets = append(sets, sw)
 	}
 	for _, in := range switchInteractions {
-		sets = append(sets, set(in.switches[0], in.switches[1]))
+		sets = append(sets, set(in.switches...))
 	}
 	runs := replaySets(t, m, sets)
 	off, alone, on := runs[0], runs[1:1+len(mine)], runs[1+len(mine)]
@@ -1985,12 +2037,21 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 		require.ElementsMatch(t, earlierSeams[name], got, "%s off alone must move exactly the outputs its PR named", name)
 		t.Logf("%s off alone moves %d outputs: %v", name, len(got), got)
 	}
-	// An output two switches move only together is in neither's row, since
-	// neither alone moves it; the pair, on from all off, does.
+	// An output switches move only together is in none of their rows, since
+	// none alone moves it; together, on from all off, they move exactly
+	// their rows and the outputs named for them.
 	for i, in := range switchInteractions {
-		label := in.switches[0] + "+" + in.switches[1]
+		label := strings.Join(in.switches, "+")
 		got := moved(label, off, together[i])
-		require.Subset(t, got, in.outputs, "%s together must move the outputs named for the pair", label)
+		want := slices.Clone(in.outputs)
+		for _, name := range in.switches {
+			for _, o := range replaySwitches[name] {
+				if !slices.Contains(want, o) {
+					want = append(want, o)
+				}
+			}
+		}
+		require.ElementsMatch(t, want, got, "%s together must move exactly their rows and the outputs named for them", label)
 		for _, name := range in.switches {
 			for _, o := range in.outputs {
 				require.NotContains(t, replaySwitches[name], o, "%s is %s's alone: not an interaction", o, name)
@@ -1999,16 +2060,17 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 	}
 }
 
-// switchInteraction is outputs two switches of replaySwitches move only
-// together: neither's row may name them (each alone must move exactly its
-// row), so they are named here, the pair run on from all off.
+// switchInteraction is outputs switches of replaySwitches move only
+// together: none of their rows may name them (each alone must move exactly
+// its row), so they are named here, the switches run on together from all
+// off.
 type switchInteraction struct {
-	switches [2]string
+	switches []string
 	outputs  []string
 }
 
-// switchInteractions is every pair of this PR's switches that moves outputs
-// neither moves alone.
+// switchInteractions is every set of switches in replaySwitches that moves
+// outputs none of them moves alone.
 //
 // llm-d-incubation/llm-d-scaling-manager#97's busy-share bound raises
 // prefill's role demand on fixtures where no other switch gives prefill a
@@ -2017,7 +2079,7 @@ type switchInteraction struct {
 // warm-pool-pressure rows move only with both on. The other fixtures' variant
 // outputs are already in SwitchThroughputFloorRaisesVariants' row.
 var switchInteractions = []switchInteraction{{
-	switches: [2]string{saturation.SwitchPrefillBusyShareBound, saturation.SwitchThroughputFloorRaisesVariants},
+	switches: []string{saturation.SwitchPrefillBusyShareBound, saturation.SwitchThroughputFloorRaisesVariants},
 	outputs: []string{
 		"engine/composite-variants.csv", "engine/warm-pool-pressure.csv",
 		"ttft-open-loop-long/composite-variants.csv", "ttft-open-loop-long/warm-pool-pressure.csv",

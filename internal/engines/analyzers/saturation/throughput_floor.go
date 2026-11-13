@@ -865,14 +865,18 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 	// serving.
 	if roleDemand != nil {
 		_, priced := tf.ByRole[domain.RolePrefill]
-		// A prefill the floor prices on a lower bound has no mu of its own
-		// either, and with SwitchPrefillBusyShareBound on it is the floor's
-		// on most cycles below the knee. Its share is capped as below: the
-		// floor caps its own term at one doubling of the ready fleet, and
+		// A prefill the floor prices on a lower bound, either one, has no mu
+		// of its own either, and with SwitchPrefillBusyShareBound on it is
+		// the floor's on most cycles below the knee. With
+		// SwitchLowerBoundCapsRouterShare on its share is capped as below:
+		// the floor caps its own term at one doubling of the ready fleet, and
 		// the share, kept whole beside it, priced the router's queue as KV
 		// held at once -- up to 20 prefill replicas from 2 in the runaway of
-		// the TTFT staircase recorded with flow control on.
-		if priced && a.prefillBusyShare && tf.Terms[domain.RolePrefill].LowerBound {
+		// the TTFT staircase recorded with flow control on. Only while
+		// SwitchPrefillKeepsRouterPrompts is on: off, the share of a prefill
+		// with no mu is dropped, and one on a lower bound keeps it whole, as
+		// before.
+		if priced && a.lowerBoundCapsShare && a.prefillKeepsPrompts && tf.Terms[domain.RolePrefill].LowerBound {
 			priced = false
 		}
 		share, hasShare := eppByRole[domain.RolePrefill]

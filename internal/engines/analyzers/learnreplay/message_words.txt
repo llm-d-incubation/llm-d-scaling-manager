@@ -2442,6 +2442,7 @@ saturation-holds-role
 saturation-itl-clears-on-a-new-revision
 saturation-itl-one-sided-at-cap
 saturation-itl-tier-hysteresis
+saturation-lower-bound-caps-router-share
 saturation-only
 saturation-prefill-busy-share-bound
 saturation-prefill-keeps-router-prompts

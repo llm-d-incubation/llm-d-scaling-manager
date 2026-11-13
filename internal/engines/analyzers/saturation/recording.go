@@ -129,7 +129,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap,
 // SwitchPrefillBoundHeldConfidence, SwitchThroughputFloorRaisesVariants,
 // SwitchQueuePricedAsDrain, SwitchFloorTrustReadsCompletions,
-// SwitchPrefillKeepsRouterPrompts and SwitchPrefillBusyShareBound; a name
+// SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound and
+// SwitchLowerBoundCapsRouterShare; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -263,6 +264,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// its own is priced at its busy-share bound below the knee
 		// (prefill_busy_share.go).
 		SwitchPrefillBusyShareBound: &a.prefillBusyShare,
+		// llm-d-incubation/llm-d-scaling-manager#97: a prefill priced on a
+		// lower bound keeps its router-queue share only up to one doubling of
+		// its ready supply (throughput_floor.go).
+		SwitchLowerBoundCapsRouterShare: &a.lowerBoundCapsShare,
 	}
 }
 

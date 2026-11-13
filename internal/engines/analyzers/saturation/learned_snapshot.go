@@ -207,6 +207,10 @@ type ThroughputSnapshot struct {
 	// HeldSeconds is, for a window put aside, how long the floor has held a
 	// fleet on it in serving time (stashedThroughput.heldFor).
 	HeldSeconds float64 `json:"heldSeconds,omitempty"`
+	// Held is, for the busy-share bound's window only (prefill_busy_share.go),
+	// its held figure. A document written before the field restores the
+	// window alone, and a build before it ignores the field.
+	Held *HeldBoundSnapshot `json:"held,omitempty" learnrec:"omitzero"`
 }
 
 // SlopeSnapshot is an itl.Slope as exported: the slope, when it was fitted,
@@ -629,6 +633,7 @@ func (a *SaturationAnalyzer) exportLearnedState() LearnedState {
 			RollingAverageSnapshot: ra.Snapshot(),
 			SampledAt:              a.throughputSampledAt[k],
 			LastRead:               a.throughputLastRead[k],
+			Held:                   a.busyHeldSnapshotLocked(k),
 		}
 	}
 	for k, ra := range a.k2Stash {
@@ -1442,6 +1447,7 @@ func (a *SaturationAnalyzer) installPreviousK2Locked(s LearnedState, windowsUnde
 			if finitePositive(w.LastRead) {
 				a.throughputLastRead[k] = w.LastRead
 			}
+			a.restoreBusyHeldLocked(k, w.Held)
 			throughput++
 		}
 	}
@@ -1523,6 +1529,7 @@ func (a *SaturationAnalyzer) installLocked(s LearnedState, windowsUnder string, 
 			if finitePositive(w.LastRead) {
 				a.throughputLastRead[k] = w.LastRead
 			}
+			a.restoreBusyHeldLocked(k, w.Held)
 		}
 	}
 	kept += a.installAcceleratorsLocked(s, now, nil)
