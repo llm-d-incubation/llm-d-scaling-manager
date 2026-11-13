@@ -53,7 +53,7 @@ FAIL=0
 PASS=0
 # Every assertion below runs exactly once. A run that stops early, or a case
 # that silently stops running, must fail: change this with the cases.
-EXPECT_ASSERTIONS=352
+EXPECT_ASSERTIONS=355
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
