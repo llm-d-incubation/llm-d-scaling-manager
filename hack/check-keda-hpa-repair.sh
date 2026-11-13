@@ -35,14 +35,24 @@ fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 begin() { CASES=$((CASES + 1)); echo "== $*"; }
 
 command -v yq >/dev/null 2>&1 || { echo "FAIL: yq is required (not skipping: a skipped check reads as a pass)"; exit 1; }
-if [ -n "${KUSTOMIZE:-}" ]; then
+# Whatever renders: make passes KUSTOMIZE as bin/kustomize whether or not it
+# was downloaded, and CI's deploy-scripts-check has only kubectl. `command`
+# keeps the kubectl stub below from answering its own render.
+if [ -n "${KUSTOMIZE:-}" ] && [ -x "${KUSTOMIZE}" ]; then
     KBUILD=("$KUSTOMIZE" build)
 elif [ -x "$ROOT/bin/kustomize" ]; then
     KBUILD=("$ROOT/bin/kustomize" build)
 elif command -v kustomize >/dev/null 2>&1; then
-    KBUILD=(kustomize build)
+    KBUILD=(command kustomize build)
+elif command -v kubectl >/dev/null 2>&1; then
+    KBUILD=(command kubectl kustomize)
 else
-    echo "FAIL: kustomize is required (make kustomize)"
+    echo "FAIL: neither kustomize nor kubectl is available to render overlays"
+    exit 1
+fi
+# A renderer that renders nothing would fail every case for the wrong reason.
+if ! "${KBUILD[@]}" "$ROOT/config/overlays/cluster-scoped/kubernetes" >/dev/null 2>"$WORK/render.err"; then
+    echo "FAIL: ${KBUILD[*]} cannot render the cluster-scoped overlay: $(head -3 "$WORK/render.err")"
     exit 1
 fi
 
