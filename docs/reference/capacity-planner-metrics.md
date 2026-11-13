@@ -64,6 +64,7 @@ it.
 | `vllm:num_requests_running` | gauge | | running requests: the batch cap, where no flag gives it | optional |
 | `vllm:num_requests_waiting` | gauge | | queue length, and the least queue in a minute: prefill busy minutes (`V_P`) | TTFT |
 | `vllm:num_requests_waiting_by_reason` | gauge | `reason="capacity"` | requests waiting for KV space (vLLM 0.20 and later) | optional |
+| `vllm:num_requests_kv_fetch_by_stage` | gauge | `stage="completed_waiting"` | P/D decode requests whose KV has landed and that wait for a batch slot (vLLM 0.32 and later) | optional |
 | `vllm:request_prompt_tokens_sum` | histogram sum | | mean prompt length: KV per request | TPOT |
 | `vllm:request_prompt_tokens_count` | histogram count | | mean prompt length | TPOT |
 | `vllm:request_prompt_tokens_bucket` | histogram buckets | `le` | prompt lengths, recorded | optional |
@@ -185,10 +186,10 @@ Without the first every variant reads as both roles; without the second, give
 
 | Source | Series | required | TPOT | TTFT | optional |
 | --- | --- | --- | --- | --- | --- |
-| vLLM | 33 | 1 | 8 | 4 | 20 |
+| vLLM | 34 | 1 | 8 | 4 | 21 |
 | SGLang | 23 | 1 | 8 | 0 | 14 |
 | Router (EPP) | 17 | 0 | 1 | 2 | 14 |
 | kube-state-metrics | 13 | 0 | 0 | 0 | 13 |
-| All | 86 | 2 | 17 | 6 | 61 |
+| All | 87 | 2 | 17 | 6 | 62 |
 
 A capture reads one engine's series, vLLM's or SGLang's, never both.
