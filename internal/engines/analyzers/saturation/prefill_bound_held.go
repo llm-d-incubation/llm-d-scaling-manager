@@ -70,13 +70,19 @@ import (
 //
 // The held figure falls only when the window is evicted, put aside by an
 // engine-argument change, forgotten with the variant (or a flush of the
-// learned state), or lost to a restart: where the old max fell too.
+// learned state), or lost to a restart: where the old max fell too. The
+// busy-share bound's (prefill_busy_share.go), which shares this machinery,
+// also falls when the key's prompt length moves past
+// shape.DefaultChangeTolerance of the length it was last raised at.
 //
-// The held figure is working state, not in the snapshot. After a restart, or
-// a window put aside and brought back, the bound is the window's mean until
-// it takes a lower confidence bound again; a restore from a build that
-// raised its samples brings back raised values, whose mean is at most the max
-// that build priced.
+// The back-pressure bound's held figure is working state, not in the
+// snapshot. After a restart, or a window put aside and brought back, the
+// bound is the window's mean until it takes a lower confidence bound again;
+// a restore from a build that raised its samples brings back raised values,
+// whose mean is at most the max that build priced. The busy-share bound's is
+// in the snapshot with its window (ThroughputSnapshot.Held) and is restored
+// with it, unless it carries no prompt length; put aside with its window by
+// an engine-argument change, it is dropped like the other.
 
 // SwitchPrefillBoundHeldConfidence is the replay switch for the prefill
 // bound's estimand under noise (issue ev-shindin/llm-scaling-manager#397). On, the bound's window holds the
@@ -115,7 +121,7 @@ type prefillHeldBound struct {
 	// when all its samples are among them.
 	fresh int
 	// prompt is, for the busy-share bound only (prefill_busy_share.go), the
-	// effective prompt length the held figure was first taken at; zero for
+	// effective prompt length the held figure was last raised at; zero for
 	// the back-pressure bound, which keeps none.
 	prompt float64
 }

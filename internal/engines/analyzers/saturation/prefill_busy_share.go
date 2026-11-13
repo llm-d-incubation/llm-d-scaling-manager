@@ -85,7 +85,7 @@ import (
 // its length (attention), so at longer prompts the same figure over-states
 // the rate, the side that orders too few. The key's input bucket spans a
 // factor of two, and the top one has no upper end. So the held figure keeps
-// the prompt length it was first taken at, and is dropped when the length
+// the prompt length it was last raised at, and is dropped when the length
 // moves past shape.DefaultChangeTolerance of it, the tolerance a fleet-shape
 // change is declared at; the window's mean then prices until the samples
 // taken at the new length raise a new one. It never falls otherwise while the
@@ -216,13 +216,17 @@ func (a *SaturationAnalyzer) notePrefillBusyShare(rm domain.ReplicaMetrics, role
 		math.Abs(ileff-h.prompt) > shape.DefaultChangeTolerance*h.prompt {
 		delete(a.prefillBoundHeld, key)
 	}
+	before := a.prefillBoundHeld[key].tokens
 	a.mu.Unlock()
 	if rate := prefillBusyShareRate(rm, role, adm); rate > 0 {
 		a.notePrefillBoundSample(key, rm.PodName, rate*ileff, args, evidenceOf(rm))
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if h, ok := a.prefillBoundHeld[key]; ok && h.tokens > 0 && h.prompt == 0 {
+	// The figure is the prompt length's it was last raised at: a figure
+	// raised at 0.81 of the length it was first taken at, and kept to 1.19
+	// of that, would be read 47 % past the length it holds for.
+	if h, ok := a.prefillBoundHeld[key]; ok && h.tokens > before {
 		h.prompt = ileff
 		a.prefillBoundHeld[key] = h
 	}
@@ -239,7 +243,7 @@ func (a *SaturationAnalyzer) notePrefillBusyShare(rm domain.ReplicaMetrics, role
 // HeldBoundSnapshot is the busy-share bound's held figure as exported with
 // its window (ThroughputSnapshot.Held): the max of the lower confidence
 // bounds taken, in computed tokens/s, how many were taken, and the prompt
-// length it was first taken at.
+// length it was last raised at.
 type HeldBoundSnapshot struct {
 	Tokens float64 `json:"tokens"`
 	Tests  int     `json:"tests"`
@@ -261,16 +265,18 @@ func (a *SaturationAnalyzer) busyHeldSnapshotLocked(key string) *HeldBoundSnapsh
 }
 
 // restoreBusyHeldLocked installs a restored window's held figure, for the
-// busy-share bound's key only, and only a finite positive one. Its count of
+// busy-share bound's key only, and only a finite positive one with the
+// finite positive prompt length it holds for. Its count of
 // fresh samples starts at zero, so the next full window it tests is of
 // samples taken since the restart. Callers hold a.mu.
 func (a *SaturationAnalyzer) restoreBusyHeldLocked(key string, held *HeldBoundSnapshot) {
 	if held == nil || !isPrefillBusyKey(key) || !finitePositive(held.Tokens) {
 		return
 	}
-	prompt := held.Prompt
-	if !finitePositive(prompt) {
-		prompt = 0
+	// With no prompt length it would hold for any length; it is dropped,
+	// and the window's mean prices until a new figure is taken.
+	if !finitePositive(held.Prompt) {
+		return
 	}
-	a.prefillBoundHeld[key] = prefillHeldBound{tokens: held.Tokens, tests: max(held.Tests, 1), prompt: prompt}
+	a.prefillBoundHeld[key] = prefillHeldBound{tokens: held.Tokens, tests: max(held.Tests, 1), prompt: held.Prompt}
 }

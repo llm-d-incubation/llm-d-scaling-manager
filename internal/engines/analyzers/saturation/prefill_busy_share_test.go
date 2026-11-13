@@ -316,13 +316,22 @@ func checkFloorPrefillSharedSteps(stub func(*SaturationAnalyzer)) func(uint64) e
 // checkFloorPrefillDataParallel: checkFloorPrefillBelowTheKnee on prefill
 // pods of two data-parallel engine ranks, through the whole analyzer: each
 // rank serves one prompt in 1/mu seconds, so a pod serves 2 x mu, and
-// prefill is priced at lambda / (2 x mu x target) within propTruthTol.
-func checkFloorPrefillDataParallel(seed uint64) error {
+// prefill is priced at lambda / (2 x mu x target) within propTruthTol. edit,
+// when set, edits each row first (a rows mutant).
+func checkFloorPrefillDataParallel(edit func(*domain.ReplicaMetrics)) func(uint64) error {
+	return func(seed uint64) error {
+		return prefillDataParallel(seed, edit)
+	}
+}
+
+// prefillDataParallel is checkFloorPrefillDataParallel for one seed.
+func prefillDataParallel(seed uint64, edit func(*domain.ReplicaMetrics)) error {
 	r := propRand(seed)
 	prefill := 2 + r.IntN(3)
 	mu := 5 + 25*r.Float64()
 	lambda := float64(prefill) * 2 * mu * (0.3 + 0.4*r.Float64())
 	rig := newPropRig()
+	rig.wrap = edit
 	var res *domain.AnalyzerResult
 	for range 13 {
 		var err error
@@ -383,6 +392,37 @@ func TestPrefillBusyShareHeldFigureFollowsThePromptLength(t *testing.T) {
 	a.mu.Unlock()
 	if !(h.tokens > 0) || h.prompt != 1500 {
 		t.Errorf("held figure %.0f tokens/s at prompt %.0f, want one kept at 1500 across a move to 1600", h.tokens, h.prompt)
+	}
+}
+
+// The tolerance is measured from the length the held figure was last raised
+// at, not the first. Taken at 1000 tokens, raised at 810 (19 % off, kept),
+// the figure holds for 810: at 1190, 47 % past it, it is dropped, though
+// 1190 is within 20 % of 1000.
+func TestPrefillBusyShareHeldFigureFollowsTheLengthItWasRaisedAt(t *testing.T) {
+	a := NewSaturationAnalyzer(capacity.NewStore())
+	clock := propStart
+	a.now = func() time.Time { return clock }
+	r := propRand(5)
+	for range 10 {
+		busyDirect(a, &clock, r, 5, 0.1, 1000) // 10 req/s, 10,000 tokens/s
+	}
+	for range 15 {
+		busyDirect(a, &clock, r, 5, 1/14.8, 810) // 14.8 req/s, 12,000 tokens/s
+	}
+	a.mu.Lock()
+	h := a.prefillBoundHeld[prefillBusyKey(busyTestKey)]
+	a.mu.Unlock()
+	if h.tokens < 11_500 {
+		t.Fatalf("precondition: held %.0f tokens/s, want about 12,000 raised at 810", h.tokens)
+	}
+	var got prefillBoundReading
+	for range 15 {
+		got = busyDirect(a, &clock, r, 3, 1/5.9, 1190) // 5.9 req/s, 7000 tokens/s
+	}
+	if want := 7000 * 1.01 / 1190; got.rate > want {
+		t.Errorf("at 1190 tokens the bound read %.2f req/s, want at most the new length's %.2f (%.2f is the figure raised at 810)",
+			got.rate, want, h.tokens/1190)
 	}
 }
 

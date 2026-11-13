@@ -1731,7 +1731,7 @@ is read as mu's. The prefill capacity observation (`prefill_observe.go`) reads
 the back-pressure bound only.
 
 - **The prompt length.** The held figure is a bound at the prompt length it
-  was taken at (`prefillHeldBound.prompt`). A prompt's cost per token rises
+  was last raised at (`prefillHeldBound.prompt`). A prompt's cost per token rises
   with its length, and the key's input bucket spans a factor of two (the top
   one has no upper end), so read back at a longer prompt it over-states the
   rate. It is dropped when the key's effective prompt length moves past
@@ -1749,7 +1749,8 @@ the back-pressure bound only.
 - **The restart.** The held figure goes into the snapshot with its window
   (`ThroughputSnapshot.Held`, busy-share keys only, `omitempty` and
   `learnrec:"omitzero"`), and is installed with it
-  (`restoreBusyHeldLocked`) with no fresh samples counted. A document
+  (`restoreBusyHeldLocked`) with no fresh samples counted; one with no prompt
+  length is dropped. A document
   without it restores the window alone. A build before the field ignores it;
   it also reads the `prefill-busy` windows as mu windows in its restore and
   forget counts (its `isPrefillBoundKey` knows only `prefill-bound`),
