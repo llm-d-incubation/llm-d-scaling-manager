@@ -202,6 +202,12 @@ func (f *answerFlags) readState(ctx context.Context) (*learnreplay.State, error)
 	if err != nil {
 		return nil, err
 	}
+	return f.stateOf(ctx, name, data)
+}
+
+// stateOf is readState on a recording already read: data, gunzipped, and the
+// name its errors call it by.
+func (f *answerFlags) stateOf(ctx context.Context, name string, data []byte) (*learnreplay.State, error) {
 	rec, err := learnrec.Read(data)
 	if err != nil {
 		return nil, usagef("%s: not a learner recording: %v", name, err)
@@ -505,6 +511,26 @@ func (f *answerFlags) tpotRatioFor(st *learnreplay.State, q float64) (whatif.TPO
 	}
 	erefused.Detail += "; pass --assume-tpot-ratio for a flagged answer"
 	return whatif.TPOTRatio{}, nil, erefused
+}
+
+// resolvedRatio is R_q as a question resolved it (ratioFor): the ratio, its
+// flags, and its refusal, nil with none.
+type resolvedRatio struct {
+	ratio   whatif.TPOTRatio
+	flags   []whatif.Flag
+	refused *whatif.Unanswerable
+}
+
+// ratioFor is R_q for a percentile question at q: tpotRatioFor inside (0, 1),
+// and outside it the assumed ratio, the percentile being the library's to
+// refuse.
+func (f *answerFlags) ratioFor(st *learnreplay.State, q float64) resolvedRatio {
+	if q > 0 && q < 1 {
+		var r resolvedRatio
+		r.ratio, r.flags, r.refused = f.tpotRatioFor(st, q)
+		return r
+	}
+	return resolvedRatio{ratio: whatif.TPOTRatio{Value: f.tpotRatio, Assumed: true}}
 }
 
 // tpotWindowCount is how many windows R_q was read from.

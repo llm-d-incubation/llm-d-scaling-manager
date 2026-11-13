@@ -162,10 +162,24 @@ so each must keep up with all of it), and on the total otherwise.
   - A lambda that is not a finite positive figure prices nothing.
   - The design and its measurements are in
     [the proposal](../proposals/analyzer-learner.md#queued-work-priced-by-drain-time-as-built-ev-shindinllm-scaling-manager520).
-- A role with no `mu` and no saturated row keeps the residency charge, except
-  prefill's share of the scheduler queue, which is dropped. A prefill replica
-  holds a prompt for its prefill time plus the hand-off. Only a saturated
-  decode makes it hold longer, and more prefill replicas do not fix that.
+- A role with no `mu` and no saturated row keeps the residency charge,
+  prefill's share of the scheduler queue included
+  (`SwitchPrefillKeepsRouterPrompts`, issue
+  llm-d-incubation/llm-d-scaling-manager#51). The queue's prompts are work
+  prefill takes first. Prefill learns no `mu` while its own queue reads empty,
+  and a backlog that waits in the router keeps it empty, so dropping the share
+  left prefill with no charge for that backlog. This errs toward more prefill
+  replicas, so the kept share is capped: prefill's demand stays within
+  `floor.LowerBoundGrowthCap` of its ready supply (`LowerBoundMaxGrowth`, 2,
+  at the scale-up threshold), one doubling of the ready fleet at a time, as
+  the floor caps a prefill lower bound. Demand prefill holds of its own is
+  never cut. The doubling can repeat once per replica start while the queue
+  stands: the engine's `RequiredCapacity` is `2 x ready - anticipated` at
+  the cap, so replicas already ordered and starting are not ordered again,
+  and the share bounds it. A prefill with no Ready replica has a cap of
+  zero and keeps none of the share, as before. With the switch off (a replay), the share is dropped, as before:
+  a prefill replica holds a prompt only for its prefill time plus the
+  hand-off.
 
 The floor writes the role's figure (`RoleDemand`) and the model total. A role
 it raises also lifts that role's variants (`raiseVariantsToRoles`, the same
@@ -182,9 +196,13 @@ The variants then sum to the role (or to their own sum, if that is larger).
 Where no variant is above its share, each reads `1 - role demand / role
 supply` spare, which is what the warm pool's pressure reads
 (`steadystate.variantPressure`, `SpareFraction = 1 - Utilization`). A role the
-floor lowers (the swap above) or leaves alone is not touched. Neither is
-prefill's dropped scheduler-queue share: that share was added to the role
-only, never to a variant.
+floor lowers (the swap above) or leaves alone is not touched. Nor does the
+floor put prefill's scheduler-queue share on a variant: it keeps the share
+(capped) on the role only. A later hold can carry it there. While decode is
+full and queued, `holdPrefillDemand` shares the held prefill figure, which
+keeps the share, over prefill's variants by anticipated supply: in
+`ttft-staircase-c-on` at 05:49:35 the prefill variant's demand moves with
+its role (+21.4 %).
 
 Why a water-fill and not "the larger of own figure and share": with one
 variant above its share, that left the variants summing to more than the
@@ -433,7 +451,9 @@ Properties, each with a spec in `throughput_floor_test.go`:
   ordered costs latency. Newer vLLM splits the waiting count by reason
   (`vllm:num_requests_waiting_by_reason`, `reason="capacity"` for the
   scheduler's own queue). P1 itself reads that split
-  (`decodeCapacityView`); this test keeps the full count. vLLM keeps a
+  (`decodeCapacityView`, which adds back the requests whose KV has landed
+  where vLLM v0.32.0 and later say which those are); this test keeps the
+  full count. vLLM keeps a
   request deferred until it is scheduled, so on a full decode a landed
   pull that cannot get its blocks reads deferred, and the split alone
   would clear a decode that is full and queued.

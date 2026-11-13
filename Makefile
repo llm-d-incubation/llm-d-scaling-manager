@@ -468,7 +468,8 @@ test: manifests generate fmt vet setup-envtest helm check-import-direction check
 	@# The race detector on the packages whose concurrency spec only it can
 	@# check (a few seconds): without -race that spec proves no deadlock and
 	@# nothing more.
-	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/
+	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/ ./internal/whatifapi/...
+	CGO_ENABLED=1 go test -race -count=1 -timeout 20m -run 'TestServeConcurrent' ./cmd/whatif/
 
 # The commit a build is made from, recorded in each learner recording's start
 # line (learnrec.BuildCommit), so a golden is added only at the commit that
@@ -3328,6 +3329,11 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@# and returns a plausible number; only evaluating it on per-rank series
 	@# shows it priced the busiest rank.
 	@PROMTOOL=$(PROMTOOL) bash hack/check-collector-queries.sh
+	@echo "Checking the capacity planner's manual recording converter..."
+	@# Converts fixture query answers and backfills them with promtool. A
+	@# sample written twice at a chunk edge, an unescaped label value, or a
+	@# failed chunk skipped all parse, and the last reads as a window with no load.
+	@PROMTOOL=$(PROMTOOL) bash hack/check-promjson-to-openmetrics.sh
 	@echo "Checking what warmpool.sh actually emits..."
 	@# Renders the pool manifests and asserts their shape. Every bug this covers
 	@# parses fine: one container with the proxy image under the supervisor's

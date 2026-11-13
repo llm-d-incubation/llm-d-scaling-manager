@@ -71,6 +71,10 @@ var agnosticReplicaQueries = []string{
 	// vLLM's waiting count split by reason; SGLang publishes no reason.
 	registration.QueryCapacityQueueLength,
 	registration.QueryMaxRankCapacityQueueLength,
+	// vLLM's KV fetches whose KV has landed (v0.32.0 and later); SGLang
+	// publishes no such stage.
+	registration.QueryLandedQueueLength,
+	registration.QueryMaxRankLandedQueueLength,
 	// vLLM's prefill time, NIXL transfer time, per-request TPOT histogram and
 	// computed-token histogram, for the TTFT model; SGLang publishes none of
 	// them (registration/ttft_inputs.go).
@@ -167,6 +171,8 @@ func replicaQueryLists(recording, ttftRead bool) (engineSpecific, agnostic []str
 var capacityQueueQueries = []string{
 	registration.QueryCapacityQueueLength,
 	registration.QueryMaxRankCapacityQueueLength,
+	registration.QueryLandedQueueLength,
+	registration.QueryMaxRankLandedQueueLength,
 }
 
 // unpartitionedReplicaQueries lists the logical replica queries whose series

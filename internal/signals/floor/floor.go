@@ -563,8 +563,7 @@ func Estimate(
 		// times the role's ready supply: it over-orders by an unknown factor,
 		// and this bounds what one replica start can cost.
 		if lowerBound[role] && mayOrder[role] && scaleUpThreshold > 0 {
-			if growth := scaleUpThreshold * LowerBoundMaxGrowth *
-				nonNegativeSupply(anticipated[role].TotalSupply); floor > growth {
+			if growth := LowerBoundGrowthCap(scaleUpThreshold, anticipated[role].TotalSupply); floor > growth {
 				floor = growth
 				term.GrowthCapped = true
 			}
@@ -825,6 +824,15 @@ func queueJustifiedReplicas(q, mu, drainSeconds float64) float64 {
 // makes cost*mu a NaN (0 x +Inf) in the Term this package publishes.
 func priceable(x float64) bool {
 	return x > 0 && !math.IsInf(x, 1)
+}
+
+// LowerBoundGrowthCap is the most demand a role priced without a
+// measurement of its own may carry: LowerBoundMaxGrowth times its READY
+// supply (aggregation.ScopeTotals.TotalSupply), at the scale-up threshold
+// the engine sizes with, so at most one doubling of the ready fleet is
+// ordered at a time. A negative or non-finite supply caps at zero.
+func LowerBoundGrowthCap(scaleUpThreshold, readySupply float64) float64 {
+	return scaleUpThreshold * LowerBoundMaxGrowth * nonNegativeSupply(readySupply)
 }
 
 // nonNegativeSupply floors an anticipated supply at zero for use as a cap,

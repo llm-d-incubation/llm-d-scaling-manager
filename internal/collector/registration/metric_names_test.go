@@ -36,6 +36,9 @@ var engineGauges = map[string]bool{
 	"sglang:max_total_num_tokens": true,
 	// A gauge with a reason label, since vLLM v0.20.0.
 	"vllm:num_requests_waiting_by_reason": true,
+	// A gauge with a stage label, since vLLM v0.32.0, on a KV consumer only
+	// (a P/D decode).
+	"vllm:num_requests_kv_fetch_by_stage": true,
 }
 
 // exposedAsDeclared reports whether name is one the engine actually exposes:

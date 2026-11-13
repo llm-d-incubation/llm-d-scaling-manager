@@ -313,13 +313,7 @@ func Capture(ctx context.Context, opts Options, w io.Writer) (*Summary, error) {
 	if err := registry.Register("prometheus", src); err != nil {
 		return nil, err
 	}
-	// The queries the engine registers (steadystate.NewEngine) and the one
-	// cmd/main registers whatever the analyzers.
-	registration.RegisterSaturationQueries(registry)
-	registration.RegisterQueueingModelQueries(registry)
-	registration.RegisterSLOQueries(registry)
-	registration.RegisterFlowControlPoolQueries(registry)
-	registration.RegisterAlwaysOnQueries(registry)
+	registerQueries(registry)
 
 	steps := windowSteps(opts.From, opts.To, opts.Step)
 	queries := len(src.QueryList().List())
@@ -400,6 +394,19 @@ func windowSteps(from, to time.Time, step time.Duration) []time.Time {
 		out = append(out, at)
 	}
 	return out
+}
+
+// registerQueries registers every query a capture asks besides
+// kube-state-metrics': the ones the engine registers
+// (steadystate.NewEngine) and the one cmd/main registers whatever the
+// analyzers. The metrics they read are listed for operators in
+// docs/reference/capacity-planner-metrics.md, which a test keeps in step.
+func registerQueries(registry *source.SourceRegistry) {
+	registration.RegisterSaturationQueries(registry)
+	registration.RegisterQueueingModelQueries(registry)
+	registration.RegisterSLOQueries(registry)
+	registration.RegisterFlowControlPoolQueries(registry)
+	registration.RegisterAlwaysOnQueries(registry)
 }
 
 // captureErr is the error a capture fails with: the window's failed query

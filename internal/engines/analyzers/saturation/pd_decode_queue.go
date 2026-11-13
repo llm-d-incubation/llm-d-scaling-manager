@@ -20,6 +20,20 @@ import (
 //     and later), the queue is the part waiting for scheduling capacity
 //     (reason="capacity"). A request that cannot get blocks for its pull
 //     waits there, so a full decode still reads queued.
+//   - Where vLLM also says which deferred requests already have their KV
+//     (LandedQueueKnown, v0.32.0 and later: the "completed_waiting" stage
+//     of num_requests_kv_fetch_by_stage), those are added: their pull is
+//     done and they wait for this replica to schedule them, which the
+//     scheduler does only inside its waiting loop -- a loop that stops at
+//     max_num_seqs, whether or not that cap was stated, and when a block
+//     cannot be allocated. So below a stated cap, at a default one, and on
+//     a full decode alike, a landed pull is a backlog this replica drains.
+//     Capped at the full count, for two reasons. The two are one-minute
+//     peaks, which need not fall in the same instant. And a landed request
+//     the scheduler has promoted but not yet scheduled may be counted in
+//     both the capacity part and completed_waiting; every landed request is
+//     one of the waiting ones, so min(full, ...) bounds that double count.
+//     Without the series the queue is the capacity part alone, as before.
 //   - Except at the sequence cap (maxNumSeqs, the engine's max_num_seqs
 //     when its flag or the llm-d.ai/max-num-seqs annotation states it,
 //     never a default or a learned cap: atCapBatchCap, and
@@ -67,8 +81,13 @@ func decodeCapacityView(rm domain.ReplicaMetrics, role string, maxNumSeqs int64)
 		rm.AtBatchCap(maxNumSeqs) {
 		return rm
 	}
+	full, fullBusiest := rm.QueueLength, rm.BusiestRankQueue()
 	rm.MaxRankQueueLength = rm.BusiestRankCapacityQueue()
 	rm.QueueLength = rm.CapacityQueueLength
+	if rm.LandedQueueKnown {
+		rm.QueueLength = min(full, rm.QueueLength+rm.LandedQueueLength)
+		rm.MaxRankQueueLength = min(fullBusiest, rm.MaxRankQueueLength+rm.BusiestRankLandedQueue())
+	}
 	return rm
 }
 

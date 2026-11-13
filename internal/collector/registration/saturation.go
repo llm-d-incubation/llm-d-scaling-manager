@@ -21,6 +21,13 @@ const (
 	// waits.
 	QueryCapacityQueueLength        = "capacity_queue_length"
 	QueryMaxRankCapacityQueueLength = "max_rank_capacity_queue_length"
+	// QueryLandedQueueLength and QueryMaxRankLandedQueueLength count the
+	// requests whose KV has arrived from prefill and that wait to be
+	// scheduled (vLLM's
+	// num_requests_kv_fetch_by_stage{stage="completed_waiting"}, v0.32.0
+	// and later). vLLM only.
+	QueryLandedQueueLength        = "landed_queue_length"
+	QueryMaxRankLandedQueueLength = "max_rank_landed_queue_length"
 
 	// V2 queries (token-based capacity analysis)
 	QueryCacheConfigInfo = "cache_config_info"
@@ -179,6 +186,28 @@ func RegisterSaturationQueries(sourceRegistry *source.SourceRegistry) {
 		Template:    `max by (model_name, instance, pod) (max_over_time(vllm:num_requests_waiting_by_reason{namespace="{{.namespace}}",reason="capacity"}[1m]))`,
 		Params:      []string{source.ParamNamespace},
 		Description: "Peak queue length of the busiest engine rank per instance over last minute, requests waiting for scheduling capacity only",
+	})
+
+	// The requests a decode counts as deferred although their KV has
+	// already arrived from prefill: they wait for this replica to schedule
+	// them. vLLM (v0.32.0 and later) publishes them as the
+	// "completed_waiting" stage of its KV fetches. The analyzer adds them to
+	// the capacity part on decode of a disaggregated model
+	// (saturation.decodeCapacityView). An older vLLM publishes no such
+	// series and the collector leaves the replica's LandedQueueKnown false.
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryLandedQueueLength,
+		Type:        source.QueryTypePromQL,
+		Template:    `sum by (model_name, instance, pod) (max by (model_name, instance, pod, engine) (max_over_time(vllm:num_requests_kv_fetch_by_stage{namespace="{{.namespace}}",stage="completed_waiting"}[1m])))`,
+		Params:      []string{source.ParamNamespace},
+		Description: "Peak count per instance over last minute of requests whose KV arrived from prefill and that wait to be scheduled",
+	})
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryMaxRankLandedQueueLength,
+		Type:        source.QueryTypePromQL,
+		Template:    `max by (model_name, instance, pod) (max_over_time(vllm:num_requests_kv_fetch_by_stage{namespace="{{.namespace}}",stage="completed_waiting"}[1m]))`,
+		Params:      []string{source.ParamNamespace},
+		Description: "Peak count of the busiest engine rank per instance over last minute of requests whose KV arrived from prefill and that wait to be scheduled",
 	})
 
 	// --- V2 queries for token-based capacity analysis ---

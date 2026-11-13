@@ -37,6 +37,13 @@ type podMetricData struct {
 	capacityQueue        int
 	maxRankCapacityQueue int
 	hasCapacityQueue     bool
+	// landedQueue and maxRankLandedQueue are the requests whose KV has
+	// arrived from prefill and that wait to be scheduled
+	// (domain.ReplicaMetrics.LandedQueueLength); hasLandedQueue is set when
+	// the pod's sum series was read.
+	landedQueue        int
+	maxRankLandedQueue int
+	hasLandedQueue     bool
 	// V2 fields for token-based capacity analysis
 	numGpuBlocks int64
 	blockSize    int64
@@ -250,6 +257,30 @@ func (c *ReplicaMetricsCollector) extractPodMetrics(
 			if data := podData[instanceKey]; instanceKey != "" && data != nil &&
 				value.Value >= 0 && !math.IsInf(value.Value, 0) {
 				data.maxRankCapacityQueue = int(value.Value)
+			}
+		}
+	}
+	// The landed KV fetches, from vLLM v0.32.0 on. Supplementary in the same
+	// way: an instance without the series (an older vLLM, SGLang) keeps
+	// hasLandedQueue false.
+	if result := results[registration.QueryLandedQueueLength]; result != nil && !result.HasError() {
+		for _, value := range result.Values {
+			instanceKey, _, _ := c.buildInstanceKey(ctx, namespace, value.Labels)
+			// A NaN the source turned into 0 passes the range test and keeps
+			// its old value, but is not a reading: the bit needs Finite.
+			if data := podData[instanceKey]; instanceKey != "" && data != nil &&
+				value.Value >= 0 && !math.IsInf(value.Value, 0) {
+				data.landedQueue = int(value.Value)
+				data.hasLandedQueue = value.Finite()
+			}
+		}
+	}
+	if result := results[registration.QueryMaxRankLandedQueueLength]; result != nil && !result.HasError() {
+		for _, value := range result.Values {
+			instanceKey, _, _ := c.buildInstanceKey(ctx, namespace, value.Labels)
+			if data := podData[instanceKey]; instanceKey != "" && data != nil &&
+				value.Value >= 0 && !math.IsInf(value.Value, 0) {
+				data.maxRankLandedQueue = int(value.Value)
 			}
 		}
 	}

@@ -774,6 +774,35 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
 		"ttft-staircase-c-on/results.csv",
 	},
+
+	// llm-d-incubation/llm-d-scaling-manager#51
+	// (saturation.SwitchPrefillKeepsRouterPrompts, throughput_floor.go): a
+	// prefill with no mu keeps the router queue's prompt tokens in its demand
+	// and the model total, where they were dropped, up to one doubling of its
+	// ready supply (floor.LowerBoundGrowthCap). It moves prefill's role
+	// demand, its variant and the model total, only on the two staircase
+	// fixtures run with flow control on, the only ones whose router queues
+	// stood while prefill had no mu. Up every time: the cost side.
+	//
+	//   - ttft-staircase-b-on: 3 cycles (03:24:44, 03:26:14, 03:26:59),
+	//     prefill demand up 12-27 % (178 835 to 226 550 at 03:24:44); its
+	//     RequiredCapacity stays 0, so no order moves.
+	//   - ttft-staircase-c-on: 12 cycles. Before the runaway, 4 cycles
+	//     (05:35:04 to 05:49:35) with prefill demand up (244 124 to 977 854
+	//     at 05:49:05) and RequiredCapacity still 0. In the runaway, 8 cycles
+	//     (05:50:05 to 05:50:50, 05:55:06 to 05:55:51) with prefill demand
+	//     capped at 3 126 824, one doubling of its two ready replicas at the
+	//     scale-up threshold: RequiredCapacity 1 839 308 (2.00 replicas of
+	//     k1) where it was 513 998 to 1 331 590 (0.56-1.45). The runaway's
+	//     other cycles already priced prefill above the cap from what it
+	//     held, and keep no share.
+	saturation.SwitchPrefillKeepsRouterPrompts: {
+		"ttft-staircase-b-on/composite-results.csv", "ttft-staircase-b-on/composite-roles.csv",
+		"ttft-staircase-b-on/results.csv",
+		"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+		"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/results.csv",
+		"ttft-staircase-c-on/variant-capacities.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
+	},
 })
 
 // learner4b2Seams is learner PR 4b-2's switches, earlier seams now (merged

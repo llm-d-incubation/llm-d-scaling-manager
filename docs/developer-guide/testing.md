@@ -380,9 +380,9 @@ the slo analyzer listed, streamed load, router TTFT recorded.
    `kubectl debug -n "$PROM_NS" "$PROM_POD" --target=prometheus --image=IMAGE-WITH-TAR -c snap -- sleep 3600`,
    then `kubectl cp -c snap "$PROM_POD:/proc/1/root/prometheus/snapshots/$NAME" ./ols-sweep-slo-snapshot`.
 
-   Without the admin API, `promtool tsdb dump` writes the series out as text,
-   and `promtool tsdb create-blocks-from openmetrics` makes blocks of them
-   again.
+   Without the admin API, save the raw series through the query API with
+   curl and load them into a local Prometheus:
+   [Record a window for the capacity planner, Path 2](../guides/record-for-capacity-planner/#path-2-record-with-curl-and-jq).
 
 2. Serve the snapshot with a local Prometheus. Give it a retention longer
    than the snapshot's age, or it deletes the old blocks on start:

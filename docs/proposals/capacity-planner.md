@@ -1,7 +1,9 @@
 # Capacity planner: a graphical front end for what-if
 
 **Status:** proposal, 2026-11-09; the open questions are settled under
-[Decisions](#decisions). Nothing on this page is built. It builds on
+[Decisions](#decisions). Phase 0, the API, is built: see
+[As built (phase 0)](#as-built-phase-0). The page and later phases are not. It
+builds on
 `cmd/whatif` and `internal/signals/whatif`, which are
 ([what-if capacity](slo-capacity-planner.md), [end-to-end TTFT](slo-capacity-planner-ttft.md)),
 including the processor-sharing TTFT pricing (PR #16, merged).
@@ -125,6 +127,11 @@ installed.
 | Prometheus window (default) | a past window captured and generated in memory (`whatif ... --prometheus --from --to`) | as of the window's end; seconds to replay | yes, in the CLI | v1 |
 | Recording | a `.jsonl.gz` recording, replayed to a cycle (`whatif ... --recording`) | fixed | yes, in the CLI | v1 |
 | Controller | the controller's in-memory learned state for the model, at its last cycle | one cycle, 15 s | no: the read-only handler in [Data per mode](slo-capacity-planner.md#data-per-mode) | later |
+
+To record a window, with `whatif` or with only curl and jq, see
+[Record a window for the capacity planner](../guides/record-for-capacity-planner/).
+The series both read are listed in
+[Metrics the capacity planner needs](../reference/capacity-planner-metrics.md).
 
 The learned-state ConfigMap ([snapshot](learned-state-snapshot.md)) is not a
 source on its own. It holds k2, throughput windows, ITL baselines and start
@@ -597,10 +604,10 @@ TTFT at that decode count, then rechecks decode once.
   dragging the rate or a target slider recomputes only the points and the
   limits. Results are cached by `scenarioId`.
 - The page debounces slider moves (about 100 ms) and drops stale responses.
-- **Budget:** a slider move answered in under 200 ms on the server. Not yet
-  measured: `RateForTTFT` bisects up to 200 prices, each an optimised union
-  bound, and PS pricing adds work per price. Phase 0 measures it on the
-  goldens and the processor-sharing fleets before the page is built.
+- **Budget:** a slider move answered in under 200 ms on the server.
+  `RateForTTFT` bisects up to 200 prices, each an optimised union bound, and
+  PS pricing adds work per price. Measured in phase 0: a rate move meets it, a
+  cold plan does not ([As built](#as-built-phase-0)).
 
 ### Authentication
 
@@ -714,8 +721,9 @@ v1 is phases 0 and 1; v2 is phase 2.
   separate view, separate label, never used for a limit (C8).
 - **Classes priced as if they did not share the engine.** Mitigation: v1 prices
   the total (C9); classes wait for data.
-- **Latency on slider drag.** Unmeasured; phase 0 measures it before the page.
-  Fallback: price points on release rather than on drag.
+- **Latency on slider drag.** Measured in phase 0 ([As built](#as-built-phase-0)):
+  a rate drag is milliseconds, a target or a new fleet up to seconds.
+  Fallback: price those on release rather than on drag.
 - **A second front end to maintain.** Kept small by having no model in it: all
   arithmetic is in `internal/signals/whatif`, and the API is golden-tested
   against the CLI.
@@ -751,6 +759,66 @@ v1 is phases 0 and 1; v2 is phase 2.
   needs no cluster.
 - **Model accuracy is not tested here.** It is the staircase's job
   ([TTFT ground truth](slo-capacity-planner-ttft.md#ground-truth-and-the-staircase)).
+
+## As built (phase 0)
+
+`whatif serve` runs the API on your machine; how to start it, the flags and
+every key are in [What-if serve](../developer-guide/whatif-serve.md). Built:
+`POST /v1/inputs` (a recording, or a Prometheus window, the last hour by
+default) and `POST /v1/plan` (the mix line, the "if all traffic were bucket b"
+view, TPOT at the mean or a percentile with `AssumedTPOTRatio`, the capped
+and uncapped limits, the +1 steps), with the caching, the authentication and
+the tests this page asks for.
+
+**Where the numbers come from.** `internal/whatifapi` holds the HTTP layer,
+the caches and the shape of a plan, and no model. Each figure comes from the
+CLI's own code (`cmd/whatif/serve_price.go`): the fleet a scenario prices is
+the one `slo-to-rate` reads with the flags its knobs stand for, and the TTFT
+and TPOT at a rate are `replicas-to-slo --rate`'s. A test asks each of the
+CLI's ten JSON goldens' questions of the API and finds the same limits,
+points, bounds, flags and refusals.
+
+**Where it departs from the design above.**
+
+- **No observed rate.** The replayed state carries no request rate per model,
+  so `observed.rate` is refused, and a plan with no rate is priced at the
+  operating point (headroom times the lower knee), as `replicas-to-slo` is.
+- **No shares per bucket.** The recording carries the mean prompt and its
+  spread, not a length per request, so `observed.mix` is refused, and the
+  "if all traffic were bucket b" view shows every bucket, each priced with
+  every request at the bucket's upper edge. Both need a recorder field.
+- **A stated mix is two lengths.** `traffic.mix` is `"observed"` or a mean
+  prompt and output, priced as `--assume-input-tokens` and
+  `--assume-output-tokens`. Per-bucket shares in a stated mix need E1.
+- **No `assume.imbalance`.** The CLI has no `--assume-imbalance` to price it
+  through.
+- **Flags without words.** The top-level flag list names each flag and where
+  it is; the plain-words text and the "clears" action are for the page.
+- **`GET /v1/models`** is not built; name the model in `POST /v1/inputs`.
+- **The +1 steps carry no span** over V_P and f: each would cost five more
+  bisections.
+
+**Latency, measured** on the server, per request
+(`go test ./cmd/whatif -run '^$' -bench Plan -benchtime 3x`, on one 22-core
+laptop, on the goldens' recordings). Cold is a new fleet: a replica
+count, a statistic or an assumption moved.
+
+| Fleet | Cold plan | Rate move | TTFT target move |
+| --- | --- | --- | --- |
+| worked fleet, TTFT p95, prompt cv 2 (PS and first come) | 1.8 s | 4 ms | 0.15 s |
+| the same, with the per-bucket view | 9.9 s | 13 ms | 0.22 s |
+| worked fleet, TTFT p90 | 3.3 s | 3 ms | 1.4 s |
+| KV-pull fleet, TTFT p90, prompt cv 0.06 (PS alone) | 3.9 s | 58 ms | 1.9 s |
+| decode-only goldens (no TTFT priced) | 14 to 23 ms | under 2 ms | under 3 ms |
+
+A rate move meets the 200 ms budget on every fleet: its curves and limits
+are cached, and it prices the two points alone. A cold plan does not, and a
+target move does only on some fleets. Nearly all of the cost is
+`RateForTTFT`'s bisection over the five V_P and f corners, and the 65 curve
+points at five corners each: every price is an optimised union bound, whose
+processor-sharing tail reads incomplete gamma functions. So the page should
+load the curves once per fleet, move the rate on drag, and price a target on
+release (the fallback under [Risks](#risks)). A faster price is engine work.
 
 ## Decisions
 

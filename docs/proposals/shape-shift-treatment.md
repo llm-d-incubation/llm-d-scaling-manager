@@ -232,7 +232,8 @@ what the model predicts and no run has tested.
 
 The queue-at-the-gateway attribution is worth its own line: on a P/D fleet
 the EPP queue is charged to decode (its KV) and dropped from prefill (ev-shindin/llm-scaling-manager#76,
-the right call for a decode-bound queue), but under an `I`-up shift the
+the right call for a decode-bound queue; until llm-d-incubation/llm-d-scaling-manager#51, which keeps
+it on a prefill with no mu, capped), but under an `I`-up shift the
 queue *is* prefill's. The arriving input length above is the discriminator:
 a queue whose prompts are long while decode has free KV is prefill's
 backlog. **Prefill's own cost model is not designed here.** Two facts stand
