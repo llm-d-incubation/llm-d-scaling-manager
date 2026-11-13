@@ -211,6 +211,12 @@ eps_json() {
         else {targetRef: {name: .}, conditions: {ready: true}} end]}]}'
 }
 
+# stub_noise prints the notice kubectl writes to stderr, on a read that still
+# succeeds, while an aggregated API (here KEDA's external metrics) is unavailable.
+stub_noise() {
+    echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"' >&2
+}
+
 # stub_kubectl answers from $STORE and STUB_* variables:
 #   STUB_CM            present | absent | anything else (discovery error)
 #   STUB_DEPLOY        FORBIDDEN makes the controller Deployment unreadable
@@ -235,12 +241,22 @@ eps_json() {
 #   STUB_KEDA_OBJ_NS   KEDA_CLUSTER_OBJECT_NAMESPACE on KEDA's operator (else unset)
 #   STUB_LOGS          FORBIDDEN makes the controller's log unreadable; else $WORK/ctrl.log
 #   STUB_KEDA_SECRETS  FORBIDDEN makes Secrets outside the controller namespace (KEDA's copy)
-#                      unreadable
+#                      unreadable; TRUNCATED makes kubectl succeed on them with half an object
 #   STUB_KEDA_PODS     FORBIDDEN makes the Pods in KEDA's namespace (keda) unreadable; else
 #                      keda-operator-7f9c at 10.128.5.168 and keda-admission-5d at 10.128.5.170
+#   STUB_KUBECTL_NOISE all makes every call first print, on stderr, the discovery
+#                      error kubectl prints while an aggregated API is unavailable,
+#                      and then answer as usual: the read itself succeeds. Any
+#                      other value does that only for calls whose arguments
+#                      contain it (the notice comes and goes on a real cluster)
 # A file $STORE/deployment@<ns>__keda-operator.json is KEDA's operator in <ns>.
 stub_kubectl() {
     printf '%s\n' "$*" >>"$WORK/kubectl.log"
+    case "${STUB_KUBECTL_NOISE:-}" in
+        "") ;;
+        all) stub_noise ;;
+        *) case "$*" in *"$STUB_KUBECTL_NOISE"*) stub_noise ;; esac ;;
+    esac
     local a="$*" tmp name
     case "$a" in
         "get --raw /apis/cert-manager.io")
@@ -274,6 +290,10 @@ stub_kubectl() {
             set -- $a
             if [ "$5" != "$NS" ]; then
                 [ "${STUB_KEDA_SECRETS:-}" != FORBIDDEN ] || { STUB_FORBID_NS="$5" forbidden; return 1; }
+                if [ "${STUB_KEDA_SECRETS:-}" = TRUNCATED ]; then
+                    store_get "secret@$5" "$3" | head -c 40
+                    return 0
+                fi
                 store_get "secret@$5" "$3"
             else
                 [ "${STUB_SECRETS:-}" != FORBIDDEN ] || { forbidden; return 1; }
@@ -1908,6 +1928,42 @@ echo "== verify: KEDA's copy unreadable (a tenant): not checked, never ok"
 store_tls_controller
 run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=FORBIDDEN
 ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match" "$WORK/info" && grep -q "Forbidden" "$WORK/info" && ! grep -q "verifies the serving certificate" "$WORK/info"' "verify, copy Forbidden: exit $RC, info '$(cat "$WORK/info")'"
+
+echo "== verify: kubectl prints a discovery error on stderr while reading KEDA's copy: still a match"
+# kubectl prints this on a read that succeeds, while an aggregated API (KEDA's
+# external metrics) is briefly unavailable. Read together with the object, it
+# made KEDA's copy parse as an empty Secret, and verify failed a fresh install
+# with "the CA KEDA trusts ... does not verify the scaler's serving
+# certificate", of certificates that matched.
+store_tls_controller
+run llmsm_verify_scaler_keda_trust "STUB_KUBECTL_NOISE='-n keda -o json'"
+ok '[ "$RC" = 0 ] && grep -q "KEDA.s certificates match the scaler" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, matching copy, kubectl stderr noise on KEDA's copy: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")'"
+
+echo "== verify: the same notice on every read: still a match, not silently skipped"
+run llmsm_verify_scaler_keda_trust STUB_KUBECTL_NOISE=all
+ok '[ "$RC" = 0 ] && grep -q "KEDA.s certificates match the scaler" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, matching copy, kubectl stderr noise on every read: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")'"
+
+echo "== verify: KEDA's copy on another CA is still a failure with that noise"
+jq --arg ca "$(base64 <"$WORK/other.crt" | tr -d '\n')" '.data["ca.crt"] = $ca' "$STORE/secret@keda__$CTA.json" >"$WORK/copy.json" \
+    && mv "$WORK/copy.json" "$STORE/secret@keda__$CTA.json"
+run llmsm_verify_scaler_keda_trust STUB_KUBECTL_NOISE=all
+ok '[ "$RC" = 1 ] && grep -q "does not verify the scaler.s serving certificate" "$WORK/warnings"' "verify, copy on another CA, kubectl stderr noise: exit $RC, warnings '$(cat "$WORK/warnings")'"
+
+echo "== verify: KEDA's copy Forbidden behind that noise: the Forbidden is what is said"
+store_tls_controller
+run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=FORBIDDEN STUB_KUBECTL_NOISE=all
+ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match" "$WORK/info" && grep -q "Forbidden" "$WORK/info" && ! grep -q "memcache" "$WORK/info"' "verify, copy Forbidden behind noise: exit $RC, info '$(cat "$WORK/info")'"
+
+echo "== verify: a read of KEDA's copy that printed half an object: not checked, never a mismatch"
+store_tls_controller
+run llmsm_verify_scaler_keda_trust STUB_KEDA_SECRETS=TRUNCATED
+ok '[ "$RC" = 0 ] && grep -q "Could not check that KEDA.s certificates match" "$WORK/info" && grep -q "no JSON object" "$WORK/info" && [ ! -s "$WORK/warnings" ]' "verify, copy truncated: exit $RC, info '$(cat "$WORK/info")' warnings '$(cat "$WORK/warnings")'"
+
+echo "== admin install with kubectl stderr noise: TLS on, KEDA's side written, nothing refused"
+reset_store
+fresh_k
+run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' STUB_CM=absent STUB_KUBECTL_NOISE=all
+ok '[ "$RC" = 0 ] && [ "$LLMSM_SCALER_TLS_ON" = true ] && [ "$(sort "$WORK/keda-writes" | tr "\n" " ")" = "configmap/scaling-manager-scaler-keda-auth cta/$CTA secret@keda/$CTA " ]' "install, kubectl stderr noise: exit $RC, on=$LLMSM_SCALER_TLS_ON, KEDA side '$(sort "$WORK/keda-writes" | tr '\n' ' ')': $(cat "$WORK/refusal" "$WORK/warnings")"
 
 echo "== verify: a plaintext controller is not checked"
 reset_store
