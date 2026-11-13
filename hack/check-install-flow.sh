@@ -25,11 +25,11 @@ PASS=0
 # Every case below reports ok or FAIL exactly once. A run that ends early --
 # a sourced lib that exits, a section that stops -- otherwise passes having
 # checked less than it says. Change this deliberately with the cases.
-EXPECT_CASES=101
+EXPECT_CASES=108
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh; do
+for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh single_install.sh; do
     tr -d '\r' < "$ROOT/deploy/lib/$lib" > "$WORK/$lib"
 done
 
@@ -40,7 +40,7 @@ KEDA_CHART_VERSION="2.21.0"
 KEDA_NAMESPACE="keda-system"
 REQUIRED_TOOLS=(kubectl)
 # shellcheck disable=SC1090
-for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh; do
+for lib in common.sh constants.sh prereqs.sh scaler_runtime.sh infra_scaler_backend.sh install_core.sh verify.sh pod_writer.sh single_install.sh; do
     . "$WORK/$lib"
 done
 
@@ -55,10 +55,22 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL $1"; [ -n "${2:-}" ] && printf '%s\n' "$
 #   OP_IMAGE      the operator Deployment's image, or forbidden
 #   CSV_MODE      ok | forbidden | none    (OpenShift Custom Metrics Autoscaler)
 #   KUBECTL_LOG   every call is appended here, for cases that assert on calls
+# kc_noise prints, on stderr, the notice kubectl prints on a read that still
+# succeeds while an aggregated API is unavailable. KC_NOISE=1 makes every stub
+# call print it first: read with 2>&1 it was parsed as part of the answer.
+kc_noise() {
+    echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"' >&2
+}
+
+#   SI_ROWS       the controller Deployments listed cluster-wide, as
+#                 LLMSM_INSTALLS_TEMPLATE renders them
 KUBECTL_LOG="$WORK/kubectl.log"
 kubectl() {
     printf '%s\n' "$*" >> "$KUBECTL_LOG"
+    [ -z "${KC_NOISE:-}" ] || kc_noise
     case "$*" in
+        "get deployments -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager "*)
+            printf '%s' "${SI_ROWS:-}"; return 0 ;;
         "get crd scaledobjects.keda.sh"*)
             case "${CRD_MODE:-new}" in
                 absent)    echo 'Error from server (NotFound): customresourcedefinitions.apiextensions.k8s.io "scaledobjects.keda.sh" not found' >&2; return 1 ;;
@@ -208,6 +220,29 @@ else
     else
         fail "KEDA 2.21.0 Ready must pass as present (rc=$rc state=$state)" "$out"
     fi
+
+    # A notice kubectl prints on stderr while the reads succeed. With 2>&1 it
+    # made the fallback.behavior probe non-empty, so a KEDA without it read
+    # as one with it, and it was taken for the operator image.
+    KC_NOISE=1 CRD_MODE=old OP_READY=True; keda_case
+    if [ "$rc" -eq 0 ] && [ "$state" = present ] && printf '%s' "$out" | grep -q 'NO fallback'; then
+        ok "KEDA CRD without fallback.behavior still warns when kubectl prints a notice on stderr"
+    else
+        fail "a notice on stderr must not read as fallback.behavior (rc=$rc state=$state)" "$out"
+    fi
+    CRD_MODE=new; OP_IMAGE=ghcr.io/kedacore/keda:2.16.1; keda_case
+    if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'operator is 2.16.1.*NO fallback'; then
+        ok "the KEDA operator version is read past a notice on stderr"
+    else
+        fail "a notice on stderr must not be read as the operator image (rc=$rc)" "$out"
+    fi
+    CRD_MODE=error; keda_case
+    if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Unable to connect to the server' && ! printf '%s' "$out" | grep -q 'memcache'; then
+        ok "KEDA probe error behind a notice names the error, not the notice"
+    else
+        fail "a probe error behind a notice must name the error (rc=$rc)" "$out"
+    fi
+    unset KC_NOISE; CRD_MODE=new; OP_IMAGE=ghcr.io/kedacore/keda:2.21.0
 
     # The version of an existing KEDA: reported, never blocking. 2.18, 2.19 and 2.21
     # are supported (CI installs the default chart; 2.18 is what the benchmarks ran
@@ -505,6 +540,7 @@ fi
 #                     delete and the per-namespace RoleBinding list)
 pw_kubectl() {
     printf '%s\n' "$*" >> "$KUBECTL_LOG"
+    [ -z "${KC_NOISE:-}" ] || kc_noise
     local body ns
     case "$*" in
         "get scaledobject -A"*)
@@ -665,6 +701,26 @@ ns-u 10.0.0.9:9090 - llama"
     else
         fail "POD WRITES: a missing ScaledObject kind must read as none, not UNKNOWN" "$out"
     fi
+    # A notice on stderr while every read succeeds: with 2>&1 it was a
+    # ScaledObject row and part of the optimizer mode, so an active optimizer
+    # read as not active and its unmarked namespaces lost the grant.
+    PW_SOS="ns-p $PW_ADDR pool-a
+ns-m $PW_ADDR -
+ns-q $PW_ADDR -
+ns-x $PW_OTHER -"
+    KC_NOISE=1 PW_MARKED="" PW_STATUS=active pw_case llmsm_regrant_pod_writers scaling-manager-system
+    if [ "$(applied)" = "ns-m ns-p ns-q" ] && ! printf '%s' "$out" | grep -q 'does not say which controller'; then
+        ok "POD WRITES: a notice on stderr is neither a ScaledObject row nor part of the optimizer mode"
+    else
+        fail "POD WRITES: behind a notice an active optimizer must still grant in ns-m, ns-p and ns-q, got [$(applied)]" "$out"
+    fi
+    KC_NOISE=1 PW_STATUS=FORBIDDEN pw_case llmsm_regrant_pod_writers scaling-manager-system
+    if printf '%s' "$out" | grep -q 'Could not tell whether the utilization-share optimizer is active: Error from server (Forbidden)' \
+        && ! printf '%s' "$out" | grep -q 'memcache'; then
+        ok "POD WRITES: an unreadable mode behind a notice names the Forbidden, not the notice"
+    else
+        fail "POD WRITES: an unreadable mode behind a notice must name the Forbidden" "$out"
+    fi
     unset PW_SOS PW_MARKED
 
     # Asked without impersonation, the grant counts only when both halves
@@ -809,6 +865,17 @@ ns-c scaling-manager-pod-writer-0000abcd"
     else
         fail "POD WRITES: uninstall deleted the wrong things" "got:  $dels
 want: $want"
+    fi
+    KC_NOISE=1 pw_case llmsm_remove_pod_writers scaling-manager-system
+    dels="$(grep '^delete' "$KUBECTL_LOG" | sort | tr '\n' ';')"
+    KC_NOISE=1 PW_RB_FORBIDDEN=1 pw_case llmsm_remove_pod_writers scaling-manager-system
+    if [ "$dels" = "$want" ] && printf '%s' "$out" | grep -q 'Could not list RoleBindings in: cluster-wide (Error from server (Forbidden)' \
+        && ! printf '%s' "$out" | grep -q 'memcache'; then
+        ok "POD WRITES: behind a notice, uninstall deletes the same, and an unreadable list names the Forbidden"
+    else
+        fail "POD WRITES: behind a notice the deletes must not change, and the refusal must name the Forbidden" "got:  $dels
+want: $want
+$out"
     fi
 
     PW_RB_FORBIDDEN=1 pw_case llmsm_remove_pod_writers scaling-manager-system
@@ -1163,6 +1230,26 @@ if node_note scaling-manager | grep -q '^WARN.*cannot list nodes'; then
     ok "no limiter, INSTALL_PHASE=scaling-manager: a missing node read is still warned about"
 else
     fail "INSTALL_PHASE=scaling-manager must still warn about a missing node read" "$(node_note scaling-manager)"
+fi
+
+# --- one controller per cluster ----------------------------------------------
+#
+# The cluster-wide list of controller Deployments. A notice kubectl printed on
+# stderr while the list succeeded was read, with 2>&1, as a row: "E1113 ..." a
+# namespace, with no --watch-namespace, so a cluster-scoped install that
+# refused this one.
+if ! declare -F llmsm_installations >/dev/null; then
+    fail "ONE CONTROLLER: llmsm_installations is not defined"
+else
+    SI_ROWS="team-a scaling-manager-controller-manager --leader-elect=true~--watch-namespace=team-a~
+"
+    si_out="$(KC_NOISE=1 llmsm_installations 2>/dev/null)"
+    if [ "$si_out" = "team-a scaling-manager-controller-manager namespace" ]; then
+        ok "ONE CONTROLLER: a notice on stderr is not a phantom cluster-scoped install"
+    else
+        fail "ONE CONTROLLER: behind a notice the only install is team-a, namespace-scoped" "$si_out"
+    fi
+    unset SI_ROWS
 fi
 
 echo ""

@@ -81,10 +81,15 @@ llmsm_installations_raw() {
     # a process substitution, so the plain form fails silently: the subshell dies
     # on a Forbidden list, the caller reads no rows, and "no other scaling manager installed"
     # is exactly the answer that lets a second controller be installed.
+    # The streams apart (kc_capture): a notice kubectl prints on stderr while
+    # the list succeeds (a discovery error, a throttling notice) read, with
+    # 2>&1, as a row -- "E1113 ..." a namespace, with no --watch-namespace, so
+    # a cluster-scoped install that refused this one.
     rc=0
-    out=$(kubectl get deployments -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager -o go-template="$LLMSM_INSTALLS_TEMPLATE" 2>&1) || rc=$?
+    kc_capture get deployments -A -l app.kubernetes.io/name=scaling-manager,control-plane=controller-manager -o go-template="$LLMSM_INSTALLS_TEMPLATE" || rc=$?
+    out="$KC_OUT"
     if [ $rc -ne 0 ]; then
-        if printf '%s' "$out" | grep -qi 'forbidden'; then
+        if printf '%s' "$KC_ERR" | grep -qi 'forbidden'; then
             log_warning "Cannot check whether another scaling manager is already installed (listing Deployments cluster-wide is not permitted for you)."
             log_warning "  Two controllers managing the same workloads each allocate from the same free GPUs without seeing the other's claims. Confirm with whoever administers the cluster."
         fi

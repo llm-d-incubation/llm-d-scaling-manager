@@ -551,12 +551,26 @@ so_stub() {
             return 1 ;;
         "get rolebinding")
             printf '%s\n' "${STUB_RB:-$empty}" ;;
-        "get deployment")
-            # No controller Deployment, as kubectl says it: NotFound. A read
-            # that succeeds with nothing on stdout is "unknown" to the scaler
-            # TLS code (llmsm_scaler_get_json), not "no controller".
-            echo "Error from server (NotFound): deployments.apps \"$3\" not found" >&2
-            return 1 ;;
+        "get deployment"|"get deployments"|"get deploy")
+            # No Deployment anywhere, as kubectl says it. A named get is
+            # NotFound; a list is empty. A read that succeeds with nothing on
+            # stdout is "unknown" to the scaler TLS code
+            # (llmsm_scaler_get_json), not "no controller".
+            local dname="" skip=0
+            for a in "${@:3}"; do
+                if [ "$skip" = 1 ]; then skip=0; continue; fi
+                case "$a" in
+                    -n|-o|-l|--namespace|--output|--selector) skip=1 ;;
+                    -*) ;;
+                    *) [ -n "$dname" ] || dname="$a" ;;
+                esac
+            done
+            if [ -n "$dname" ]; then
+                echo "Error from server (NotFound): deployments.apps \"$dname\" not found" >&2
+                return 1
+            fi
+            case " $* " in *" -o json "*|*" -ojson "*) printf '%s\n' "$empty" ;; esac
+            return 0 ;;
         "get scaledobject")
             case "$3" in
                 -A|-n) printf '%s\n' "${STUB_SOS:-$empty}" ;;
