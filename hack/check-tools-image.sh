@@ -324,7 +324,7 @@ fi
 
 # ---------------------------------------------------------------------------
 echo "Warm pools need a checkout"
-printf 'entries: []\nwarmPools:\n  - name: pool-a\n    namespace: models\n    apply: "yes"\n  - name: pool-b\n    namespace: models\n    apply: "no"\n' > "$T/wp-plan.yaml"
+printf 'plan: []\nwarmPools:\n  - name: pool-a\n    namespace: models\n    apply: "yes"\n  - name: pool-b\n    namespace: models\n    apply: "no"\n' > "$T/wp-plan.yaml"
 if [ -n "$IMG" ]; then
     out="$(tools_stubbed scaledobjects-apply -n models --plan wp-plan.yaml 2>&1)" && rc=0 || rc=$?
 else
