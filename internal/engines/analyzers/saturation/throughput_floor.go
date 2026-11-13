@@ -645,9 +645,11 @@ const SwitchPrefillKeepsRouterPrompts = "saturation-prefill-keeps-router-prompts
 // read 99.7 % spare to the warm pool's pressure (1 - Utilization) against the
 // role's 81.5 % (TestFloorRaisesVariants_TheDecodeVariantReadsTheRolesSpare).
 // A role the swap LOWERS is not followed: its variants keep their figures, as
-// no step here lowers a variant. Nor is the prefill share dropped below: it
-// was added to the role's demand only (aggregateRoleDemand), never to a
-// variant's.
+// no step here lowers a variant. Nor is prefill's scheduler-queue share,
+// kept or dropped below: it is on the role's demand only
+// (aggregateRoleDemand), and this function puts it on no variant. A later
+// hold may: holdPrefillDemand, while decode is saturated, shares the held
+// prefill figure, share included, over prefill's variants.
 //
 // eppByRole is the residency charge estimateSchedulerQueueDemand put on the
 // scheduler queue per role, and eppQueued the requests in it. For a role with
@@ -861,45 +863,40 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 	// exactly the queue's prompt -- 1.2M tokens on the fixture that caught
 	// this -- which is a model-level demand nothing is responsible for
 	// serving.
-	if roleDemand != nil && a.prefillKeepsPrompts {
-		if _, priced := tf.ByRole[domain.RolePrefill]; !priced {
+	if roleDemand != nil {
+		_, priced := tf.ByRole[domain.RolePrefill]
+		share, hasShare := eppByRole[domain.RolePrefill]
+		before, hasRole := roleDemand[domain.RolePrefill]
+		switch {
+		case priced || !hasShare || !(share > 0) || !hasRole:
+		case a.prefillKeepsPrompts && scaleUp > 0:
 			// Kept, the share is priced as KV prefill holds at once, where
 			// prefill drains it at a rate nothing here knows. So it is capped
 			// as the floor caps a prefill priced on anything but its own
 			// measurement (floor.LowerBoundGrowthCap): prefill's demand stays
 			// within LowerBoundMaxGrowth times its READY supply, one doubling
 			// of the ready fleet at a time. Only the share is cut: demand
-			// prefill holds of its own is never lowered.
-			if share, ok := eppByRole[domain.RolePrefill]; ok && share > 0 {
-				if before, ok := roleDemand[domain.RolePrefill]; ok {
-					ready := aggregation.AggregateByRole(variants)[domain.RolePrefill].TotalSupply
-					capped := max(before-share, min(before, floor.LowerBoundGrowthCap(scaleUp, ready)))
-					if cut := before - capped; cut > 0 {
-						roleDemand[domain.RolePrefill] = capped
-						totalDemand = max(totalDemand-cut, 0)
-						logger.V(logging.DEFAULT).Info("scheduler-queue-prefill-share-capped",
-							"modelID", input.ModelID, "namespace", input.Namespace,
-							"eppQueueSize", eppQueued, "keptTokens", share-cut, "cutTokens", cut,
-							"prefillReadySupply", ready, "prefillDemandBefore", before,
-							"prefillDemandAfter", capped, "modelTotalAfter", totalDemand)
-					}
-				}
+			// prefill holds of its own is never lowered. With no scale-up
+			// threshold there is no cap, as floor.Estimate applies none.
+			ready := aggregation.AggregateByRole(variants)[domain.RolePrefill].TotalSupply
+			capped := max(before-share, min(before, floor.LowerBoundGrowthCap(scaleUp, ready)))
+			if cut := before - capped; cut > 0 {
+				roleDemand[domain.RolePrefill] = capped
+				totalDemand = max(totalDemand-cut, 0)
+				logger.V(logging.DEFAULT).Info("scheduler-queue-prefill-share-capped",
+					"modelID", input.ModelID, "namespace", input.Namespace,
+					"eppQueueSize", eppQueued, "keptTokens", share-cut, "cutTokens", cut,
+					"prefillReadySupply", ready, "prefillDemandBefore", before,
+					"prefillDemandAfter", capped, "modelTotalAfter", totalDemand)
 			}
-		}
-	}
-	if roleDemand != nil && !a.prefillKeepsPrompts {
-		if _, priced := tf.ByRole[domain.RolePrefill]; !priced {
-			if share, ok := eppByRole[domain.RolePrefill]; ok && share > 0 {
-				if before, ok := roleDemand[domain.RolePrefill]; ok {
-					roleDemand[domain.RolePrefill] = before - share
-					totalDemand = max(totalDemand-share, 0)
-					logger.V(perReplicaLogLevel).Info("scheduler-queue-prefill-share-dropped",
-						"modelID", input.ModelID, "namespace", input.Namespace,
-						"eppQueueSize", eppQueued, "droppedTokens", share,
-						"prefillDemandBefore", before, "prefillDemandAfter", before-share,
-						"modelTotalAfter", totalDemand)
-				}
-			}
+		case !a.prefillKeepsPrompts:
+			roleDemand[domain.RolePrefill] = before - share
+			totalDemand = max(totalDemand-share, 0)
+			logger.V(perReplicaLogLevel).Info("scheduler-queue-prefill-share-dropped",
+				"modelID", input.ModelID, "namespace", input.Namespace,
+				"eppQueueSize", eppQueued, "droppedTokens", share,
+				"prefillDemandBefore", before, "prefillDemandAfter", before-share,
+				"modelTotalAfter", totalDemand)
 		}
 	}
 	// Queued work priced by drain time where the swap below does not run

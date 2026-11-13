@@ -127,8 +127,9 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLAggregatedSizes, SwitchPrefillCapacityObserve,
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
 // SwitchPrefillAQuadratic, SwitchITLOneSidedAtCap,
-// SwitchPrefillBoundHeldConfidence, SwitchQueuePricedAsDrain and
-// SwitchFloorTrustReadsCompletions; a name
+// SwitchPrefillBoundHeldConfidence, SwitchThroughputFloorRaisesVariants,
+// SwitchQueuePricedAsDrain, SwitchFloorTrustReadsCompletions and
+// SwitchPrefillKeepsRouterPrompts; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {

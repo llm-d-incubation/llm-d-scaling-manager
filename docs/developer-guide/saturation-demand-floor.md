@@ -196,9 +196,13 @@ The variants then sum to the role (or to their own sum, if that is larger).
 Where no variant is above its share, each reads `1 - role demand / role
 supply` spare, which is what the warm pool's pressure reads
 (`steadystate.variantPressure`, `SpareFraction = 1 - Utilization`). A role the
-floor lowers (the swap above) or leaves alone is not touched. Neither is
-prefill's dropped scheduler-queue share: that share was added to the role
-only, never to a variant.
+floor lowers (the swap above) or leaves alone is not touched. Nor does the
+floor put prefill's scheduler-queue share on a variant: it keeps the share
+(capped) on the role only. A later hold can carry it there. While decode is
+full and queued, `holdPrefillDemand` shares the held prefill figure, which
+keeps the share, over prefill's variants by anticipated supply: in
+`ttft-staircase-c-on` at 05:49:35 the prefill variant's demand moves with
+its role (+21.4 %).
 
 Why a water-fill and not "the larger of own figure and share": with one
 variant above its share, that left the variants summing to more than the

@@ -7,9 +7,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/floor"
 )
@@ -48,6 +53,11 @@ func (f prefillRouterFleet) growthCap() float64 {
 // price runs the floor over f with stub applied to the analyzer, and returns
 // prefill's demand after it and the model total.
 func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, total float64) {
+	return f.priceLogged(stub, logr.Discard())
+}
+
+// priceLogged is price with the floor's lines written to logger.
+func (f prefillRouterFleet) priceLogged(stub func(*SaturationAnalyzer), logger logr.Logger) (prefill, total float64) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	if stub != nil {
 		stub(a)
@@ -81,7 +91,7 @@ func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, tota
 	input := makeAnalyzerInput(nil, nil)
 	input.ArrivalRate = f.lambda
 	total = a.applyThroughputFloor(input, input.Config.(*config.ScalingPolicy), rcs, vcs, total, roleDemand, eppByRole,
-		f.queued, false, logr.Discard())
+		f.queued, false, logger)
 	return roleDemand[domain.RolePrefill], total
 }
 
@@ -169,7 +179,14 @@ func TestPrefillWithNoMuKeepsTheRouterPromptsUpToOneDoubling(t *testing.T) {
 	if f.prefillResident+f.prefillShare <= growth {
 		t.Fatalf("precondition: the backlog %.0f is over the cap %.0f", f.prefillResident+f.prefillShare, growth)
 	}
-	prefill, total := f.price(nil)
+	// The cut is written at the shipped verbosity (-v=2, logging.DEFAULT),
+	// where an operator reads it without raising -v.
+	core, logs := observer.New(zapcore.Level(-logging.DEFAULT))
+	prefill, total := f.priceLogged(nil, zapr.NewLogger(zap.New(core)))
+	fields := requireLogged(t, logs, "scheduler-queue-prefill-share-capped")
+	if cut, want := fields["cutTokens"], f.prefillResident+f.prefillShare-growth; cut != want {
+		t.Errorf("cutTokens %v, want what the cap took off, %v", cut, want)
+	}
 	if prefill != growth {
 		t.Errorf("prefill priced %.0f with %.0f queued prompt tokens, want one doubling of its ready supply, %.0f",
 			prefill, f.prefillShare, growth)
