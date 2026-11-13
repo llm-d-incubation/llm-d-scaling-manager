@@ -269,6 +269,15 @@ func (s simSample) quantile(q float64) float64 { return s.v[int(q*float64(len(s.
 // the decode pod uniformly, the pull arriving as the prefill ends. Each
 // sample is the prompt's own work and both stages' stretch, as stageMix prices.
 func simulateTandemPS(pf prefillPlan, rate float64, decodePods, n int, seed uint64) simSample {
+	return simulateTandem(pf, rate, decodePods, n, seed, tandemStage)
+}
+
+// stageSim is a simulated stage: each request's sojourn on pods servers of
+// mean work es scaled by its size, the pod picked by pick; arrivals sorted.
+type stageSim func(arr, size []float64, es float64, pods int, pick func() int) []float64
+
+// simulateTandem is simulateTandemPS with the prefill pods simulated by prefill.
+func simulateTandem(pf prefillPlan, rate float64, decodePods, n int, seed uint64, prefill stageSim) simSample {
 	rng := rand.New(rand.NewPCG(seed, 2))
 	np := pf.p.Replicas
 	es1, es2 := pf.work, pf.p.PromptTokens*pf.pull
@@ -295,7 +304,7 @@ func simulateTandemPS(pf prefillPlan, rate float64, decodePods, n int, seed uint
 		}
 		return 1 + rng.IntN(pods-1)
 	}
-	t1 := tandemStage(arr, size, es1, np, func() int { return pod(pf.f/float64(np), np) })
+	t1 := prefill(arr, size, es1, np, func() int { return pod(pf.f/float64(np), np) })
 	dep := make([]float64, n)
 	for i := range dep {
 		dep[i] = arr[i] + t1[i]

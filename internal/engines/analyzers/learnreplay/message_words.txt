@@ -158,6 +158,7 @@ Fix
 FlowControlInferredOff
 FlowControlMismatch
 FlowControlUnknown
+FlowControlWaitPriced
 Found
 GLOBAL_OPT_INTERVAL
 GPS
@@ -2624,6 +2625,7 @@ slo-ttft-measured-transfer
 slo-ttft-price
 slo-ttft-processor-sharing
 slo-ttft-quiet-transfer
+slo-ttft-router-wait
 slo-ttft-variant
 slo-variant
 slo.Analyze

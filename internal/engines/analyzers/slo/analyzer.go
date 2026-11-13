@@ -178,6 +178,9 @@ type Analyzer struct {
 	// ttftProcessorSharing is SwitchTTFTProcessorSharing (ttft.go): on from
 	// the constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftProcessorSharing bool
+	// ttftRouterWait is SwitchTTFTRouterWait (ttft.go): off from the
+	// constructor, at whatif.DefaultPriceRouterWait; a replay turns it on.
+	ttftRouterWait bool
 	// ttftJointInputs is SwitchTTFTJointInputs (ttft_joint.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftJointInputs bool
@@ -268,6 +271,7 @@ func New(router RouterLatencySource, store *capacity.Store) *Analyzer {
 		ttftQuietTransfer:    true,
 		ttftDecodeTerm:       true,
 		ttftProcessorSharing: true,
+		ttftRouterWait:       whatif.DefaultPriceRouterWait,
 		ttftJointInputs:      true,
 		kvOutputDispersion:   true,
 		imbalance:            make(map[string]*imbalanceWindow),

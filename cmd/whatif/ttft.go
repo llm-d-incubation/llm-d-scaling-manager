@@ -375,6 +375,10 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	}
 	pf.fleet.Prefill = p
 	pf.fleet.ProcessorSharing = processorSharing
+	// Experimental and off by default: the wait it prices is argued, not
+	// measured. whatif gates it on processor sharing itself
+	// (whatif.TTFTFleet.PriceRouterWait).
+	pf.fleet.PriceRouterWait = f.priceRouterWait
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop

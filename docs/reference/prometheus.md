@@ -1440,7 +1440,8 @@ model reads all of them `0`, including the two marked "on every answer":
 | `DecodeSideOmitted`, `DecodeTTFTUnmeasured` | No decode line and no measured TTFT: decode's part is left out, so TTFT reads low. They always come together. |
 | `FlowControlInferredOff` | `slo.flowControl` is unset and the flow-control queue series does not exist. A scrape gap looks the same: declare it. |
 | `FlowControlMismatch` | The declared `slo.flowControl` contradicts the series. Priced as declared; the log says so. |
-| `AboveFlowControlOnset` | At the rate answered, the prefill gate is closing: the model is not proven conservative there. |
+| `AboveFlowControlOnset` | Past the prefill gate's onset: the router is holding requests whose wait the model does not price, so a target read at that rate is counted as missed. The published rate is capped under the onset (bound `prefill flow-control onset`), so it never carries this flag: it shows only when the rate is refused and the flags published are the TTFT priced at the current rate's. |
+| `FlowControlWaitPriced` | Always 0 unless the experimental replay switch `slo-ttft-router-wait` is on (it is off by default, as is the CLI's `--price-router-wait`). With it on: past the prefill gate's onset and up to 0.9 of the prefill knee, the router's wait is taken as inside the processor-sharing prefill stage, the target is judged by the figure, and the published rate may stand there. No measured step with a real router wait validates this. |
 | `HeldByDecodeAdmission` | The decode wait lowers the rate a little. Informational below `decode-bound`. |
 | `SpreadBeyondProcessorSharing` | The prompt spread is wider than cv 0.25, where processor sharing has not been checked against a run: TTFT is the higher of processor sharing and the first-come queue. The assumed spread of 2 always raises it. |
 | `PromptSpreadClamped` | The measured spread was above 3 or ran past the histogram: priced at 3. |

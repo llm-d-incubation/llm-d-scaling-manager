@@ -141,7 +141,7 @@ def measure_rates(bucket, spec):
     the frozen prefill flow-control onset. Empty for a bucket that names none.
 
     Above the onset the router's prefill gate closes and requests wait in its queue,
-    a wait the model flags (AboveFlowControlOnset) and does not price. These steps
+    a wait the model flags (AboveFlowControlOnset) and, by default, does not price. These steps
     read that wait; they are never scored.
     """
     sent = next((b for b in spec.get("buckets", []) if b.get("name") == bucket["name"]), {})

@@ -322,7 +322,7 @@ var SLOTTFTFlags = []string{
 	"DecodeEngineMeasured", "DecodeTermOmitted", "DecodeStepSlopeAssumed", "RouterHopAssumed",
 	"DecodeTermFloored", "DecodeTermPrefixHits",
 	"VPScaledToPrompt", "VPShapeMoved", "FlowControlInferredOff",
-	"AboveFlowControlOnset", "HeldByDecodeAdmission", "DecodeOnsetUnchecked",
+	"AboveFlowControlOnset", "FlowControlWaitPriced", "HeldByDecodeAdmission", "DecodeOnsetUnchecked",
 	"SpreadBeyondProcessorSharing", "BelowFittedBand", "KVBoundSlots",
 	"AssumedPoissonArrivals", "PromptSpreadClamped", "FlowControlMismatch",
 	"PromptSpreadAbovePeak", "ImbalanceNotSustained", "OutputSpreadUnread",

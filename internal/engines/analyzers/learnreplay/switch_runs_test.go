@@ -144,6 +144,12 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// priced. Its unit tests hold it (heldBy); the CLI, which has no switch,
 	// moves its own goldens.
 	slo.SwitchTTFTProcessorSharing: nil,
+	// The router's flow-control wait in the processor-sharing prefill stage,
+	// experimental and off in production (whatif.DefaultPriceRouterWait). It
+	// moves no golden: no figure moves with it, only a flag above the prefill
+	// onset, and no committed recording's cycle reaches a priced fleet. Its
+	// unit tests hold it (heldBy).
+	slo.SwitchTTFTRouterWait: nil,
 	// J1 of the joint prefill and decode TTFT sizing: the joint inputs in
 	// shadow, and the inverted V_P where P1 refused V_P. Base: main at
 	// 90d1489. Alone it moves no golden: it runs inside S1's pricing, which
@@ -1229,6 +1235,11 @@ var heldBy = map[string][]heldTest{
 	slo.SwitchTTFTProcessorSharing: {
 		{"../slo", "TestTTFT_TheProcessorSharingSwitch"},
 		{"../slo", "TestTTFT_TheProcessorSharingSwitchOnALine"},
+	},
+	// The router's wait: it prices one fleet above the prefill onset with the
+	// switch on and off through priceTTFT and asserts both flags and verdicts.
+	slo.SwitchTTFTRouterWait: {
+		{"../slo", "TestTTFT_TheRouterWaitSwitch"},
 	},
 	// The first runs the switch on and off through Analyze and asserts both;
 	// the model row replays the staircase goldens with it on.

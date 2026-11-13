@@ -818,7 +818,7 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
 
     print("\n## Above the prefill onset: the router queue's wait\n", file=out)
     print("Every flow-control-on step above the frozen prefill onset. Measure-only steps are scored by nothing: "
-          "the model flags this wait (AboveFlowControlOnset) and does not price it. Waited is the share of "
+          "the model flags this wait (AboveFlowControlOnset) and, by default, does not price it. Waited is the share of "
           "requests the router queue held past the largest bucket edge at or under %g ms, shown with it "
           "(the histogram reads nothing finer); its p90 is read inside wide buckets.\n" % (1000 * QUEUE_WAITED), file=out)
     print("| Bucket | Repeat | Step, r/s | Over the onset | Role | Client TTFT p50 / p90, ms | Waited | Wait mean, ms | Wait p90, ms, coarse | Prefill gate saturation, mean / peak | Queue, peak | Held |", file=out)

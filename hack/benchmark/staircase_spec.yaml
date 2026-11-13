@@ -45,7 +45,7 @@ buckets:
 # Above the prefill onset. Decode binds at N_d 2, so these double it: the ladder is in
 # shares of the prefill knee, which then is the lower knee.
 # measureAboveOnset: steps at these multiples of the frozen prefill flow-control onset,
-# after the scored ones, for the router queue's wait, which the model does not price yet.
+# after the scored ones, for the router queue's wait, which the model does not price by default.
 # Scored by nothing. r1 ran B-onset to 1.05x with the gate open (prefill saturation 0.05)
 # and no queue. They need flow control on and a decode onset above them, which B and A
 # at 2 + 2 do not have (B's prefill onset 53.2 r/s is past its decode knee 33.3).

@@ -136,8 +136,18 @@ const (
 	// AboveFlowControlOnset is a rate at or above the prefill gate's onset
 	// with flow control on: the router holds the excess and the answer is the
 	// per-pod model, which is not proven conservative there. The pooled
-	// figure is the optimistic bound beside it.
+	// figure is the optimistic bound beside it. With
+	// TTFTFleet.PriceRouterWait taking, FlowControlWaitPriced stands in its
+	// place.
 	AboveFlowControlOnset Flag = "AboveFlowControlOnset"
+	// FlowControlWaitPriced is a rate at or above the prefill gate's onset
+	// with flow control on, priced with the experimental
+	// TTFTFleet.PriceRouterWait: the router holds the excess, and its wait is
+	// taken as inside the processor-sharing prefill stage's figure. That is
+	// argued and simulated, not measured: no staircase step with a real
+	// router wait validates it, and at the one step where the router held,
+	// the figure read about 20 times short.
+	FlowControlWaitPriced Flag = "FlowControlWaitPriced"
 	// HeldByDecodeAdmission is a TTFT rate the prefill side alone would
 	// set higher: decode admission's wait holds it down.
 	HeldByDecodeAdmission Flag = "HeldByDecodeAdmission"
@@ -163,6 +173,11 @@ const (
 	// BoundDecodeOnset is the decode gate's onset with flow control on: an
 	// extra knee, above which the model does not price TTFT.
 	BoundDecodeOnset Bound = "decode flow-control onset"
+	// BoundPrefillOnset is the prefill gate's onset with flow control on,
+	// or with TTFTFleet.PriceRouterWait the share of the prefill knee it
+	// takes up to: past it the router holds requests the price does not take
+	// as priced, and the verdict there is a miss.
+	BoundPrefillOnset Bound = "prefill flow-control onset"
 	// BoundPrefillKnee is the prefill knee, N_p * V_P / (f * E[I_eff]).
 	BoundPrefillKnee Bound = "prefill knee"
 )
