@@ -17,7 +17,7 @@ ROOT="${CHECK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 WORKFLOW="$ROOT/.github/workflows/ci-release.yaml"
 # One ok or FAIL per case. A run that stops early otherwise passes having
 # checked less than it says. Change this deliberately with the cases.
-EXPECT_CASES=33
+EXPECT_CASES=40
 PASS=0
 FAIL=0
 
@@ -329,6 +329,69 @@ if [ "$mlogin" = '${{ secrets.GITHUB_TOKEN }}' ]; then
     ok "the main-image login uses the built-in GITHUB_TOKEN alone"
 else
     fail "the main-image login must use secrets.GITHUB_TOKEN only (got '$mlogin')"
+fi
+
+# --- The tools image (release-tools): the same guards as the controller image.
+# The meta step's latest= output is what release-tools reads; it must say what
+# the tags say, or the tools image moves `latest` when the controller did not.
+bad=""
+for spec in "v1.3.0|v1.2.0 v1.3.0|true" "v1.2.1|v1.2.0 v1.3.0 v1.2.1|false" "v1.4.0-rc1|v1.3.0 v1.4.0-rc1|false"; do
+    ref="${spec%%|*}"; rest="${spec#*|}"; want="${rest##*|}"
+    # shellcheck disable=SC2086
+    resolve "$ref" ${rest%|*}
+    got="$(printf '%s\n' "$out" | sed -n 's/^latest=//p')"
+    case "$(tags)" in *:latest*) moved=true ;; *) moved=false ;; esac
+    if [ "$rc" -ne 0 ] || [ "$got" != "$want" ] || [ "$moved" != "$want" ]; then bad="$bad $ref(latest=$got,tags-move=$moved)"; fi
+done
+if [ -z "$bad" ]; then ok "the meta step's latest= output agrees with the tags it resolved"; else fail "latest= disagrees with the tags:$bad"; fi
+
+expect_yq "the tools image is released only after the release job (its tag guard)" \
+    'release' '[.jobs.release-tools.needs] | flatten | join(",")'
+expect_yq "the tools job may sign and push, reads contents, and keeps no credentials" \
+    'contents=read,id-token=write,packages=write|false' \
+    '(.jobs.release-tools.permissions | to_entries | map(.key + "=" + .value) | sort | join(",")) + "|" + (.jobs.release-tools.steps[] | select(.uses == "actions/checkout*") | .with."persist-credentials" | tostring)'
+expect_yq "every tools build (amd64 scan, arm64 scan, push) uses Dockerfile.tools, and the push publishes the tags resolved" \
+    'Dockerfile.tools,Dockerfile.tools,Dockerfile.tools|${{ steps.tools-meta.outputs.tags }}' \
+    '([.jobs.release-tools.steps[] | select(.uses == "docker/build-push-action*") | .with.file] | join(",")) + "|" + (.jobs.release-tools.steps[] | select(.id == "tools-push") | .with.tags)'
+
+# Two blocking scans (amd64 and arm64), both before the login: the last one's
+# index is what must precede it.
+tscan_at="$(yq '[.jobs.release-tools.steps[] | (.with."exit-code" // "")] | to_entries | map(select(.value == "1")) | .[-1].key // -1' "$R")"
+tscan_n="$(yq '[.jobs.release-tools.steps[] | select(.with."exit-code" == "1")] | length' "$R")"
+tlogin_at="$(yq '[.jobs.release-tools.steps[] | (.uses // "")] | to_entries | map(select(.value == "docker/login-action*")) | .[0].key // -1' "$R")"
+tscan_sev="$(yq -r '[.jobs.release-tools.steps[] | select(.with."exit-code" == "1") | .with.severity] | unique | join(",")' "$R")"
+if [ "$tscan_n" = 2 ] && [ "$tscan_at" -ge 0 ] && [ "$tlogin_at" -ge 0 ] && [ "$tscan_at" -lt "$tlogin_at" ] && [ "$tscan_sev" = CRITICAL ]; then
+    ok "the tools image: blocking CRITICAL scans of amd64 and arm64 run before the registry login"
+else
+    fail "the tools image needs two blocking scans, CRITICAL, exit-code 1, both before the login ($tscan_n scans, last at step $tscan_at, login step $tlogin_at, severity '$tscan_sev')"
+fi
+
+# The tools meta step, run: <image>/tools, :latest only when the release moved it.
+yq '.jobs.release-tools.steps[] | select(.id == "tools-meta") | .run' "$R" > "$WORK/tools-meta.sh"
+tools_tags() {
+    : > "$WORK/tools.out"
+    env IMAGE=ghcr.io/owner/repo VERSION="$1" LATEST="$2" GITHUB_OUTPUT="$WORK/tools.out" bash "$WORK/tools-meta.sh" >/dev/null 2>&1 || echo "rc=$?"
+    sed -n 's/^tags=//p' "$WORK/tools.out"
+}
+t1="$(tools_tags v1.3.0 true)"
+t2="$(tools_tags v1.2.1 false)"
+if [ "$t1" = "ghcr.io/owner/repo/tools:v1.3.0,ghcr.io/owner/repo/tools:latest" ] && [ "$t2" = "ghcr.io/owner/repo/tools:v1.2.1" ]; then
+    ok "the tools image takes the version, and latest only when the controller moved it"
+else
+    fail "tools tags: latest=true gave [$t1], latest=false gave [$t2]"
+fi
+
+yq '.jobs.release-tools.steps[] | select(.name == "Sign the tools image") | .run' "$R" > "$WORK/tsign.sh"
+rm -f "$WORK/cosign.args"
+PATH="$WORK/bin:$PATH" IMAGE=ghcr.io/o/r/tools DIGEST=sha256:abc bash "$WORK/tsign.sh" >/dev/null 2>&1
+signed="$(cat "$WORK/cosign.args" 2>/dev/null)"
+rm -f "$WORK/cosign.args"
+if [ "$signed" = "sign --yes ghcr.io/o/r/tools@sha256:abc" ] \
+    && ! PATH="$WORK/bin:$PATH" IMAGE=ghcr.io/o/r/tools DIGEST='' bash "$WORK/tsign.sh" >/dev/null 2>&1 \
+    && [ ! -e "$WORK/cosign.args" ]; then
+    ok "the tools image is signed by digest, and not at all without one"
+else
+    fail "the tools sign step must sign IMAGE@DIGEST and refuse an empty digest (signed '$signed')"
 fi
 
 echo ""

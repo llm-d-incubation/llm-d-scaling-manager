@@ -18,6 +18,10 @@ IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager:$(IMG_TAG)
 # The warm-pool proxy ships as its own image because it runs in the pool's Pod,
 # not the controller's. Pin a digest in the manifest; this tag is for building.
 WARMPOOL_PROXY_IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager/warmpool-proxy:$(IMG_TAG)
+# The operator tools (Dockerfile.tools): prepull, weights, engine-cache,
+# workload-patch, the ScaledObject plan and utilization share without a
+# checkout. The release publishes it.
+TOOLS_IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager/tools:$(IMG_TAG)
 KIND_ARGS ?= -t mix -n 3 -g 2   # Default: 3 nodes, 2 GPUs per node, mixed vendors
 # The kind cluster create-kind-cluster and destroy-kind-cluster act on: the
 # variable deploy/kind-emulator/install.sh already reads. Both targets ignored
@@ -3178,6 +3182,8 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@bash -n deploy/lib/nodedir.sh
 	@bash -n hack/benchmark/model_hostpath.sh
 	@bash -n deploy/enginecache.sh
+	@bash -n deploy/scaling-manager-tools.sh
+	@bash -n hack/check-tools-image.sh
 	@bash -n hack/benchmark/engine_cache_claim.sh
 	@bash -n hack/benchmark/scenario_overrides.sh
 	@bash -n hack/check-harness-teardown.sh
@@ -3348,6 +3354,11 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@bash hack/check-weights-manifests.sh
 	@echo "Checking what enginecache.sh and engine_cache_claim.sh actually emit..."
 	@bash hack/check-enginecache-manifests.sh
+	@echo "Checking the tools entry point (the release's tools image runs it)..."
+	@# Executes deploy/scaling-manager-tools.sh: an argument it drops, an exit
+	@# status it swallows, or a workload-patch that scans past the namespace it
+	@# was given all parse. CI runs it again against the built image.
+	@bash hack/check-tools-image.sh
 	@echo "Checking the harness teardown patches (patch_harness.sh fixes 15-17)..."
 	@bash hack/check-harness-teardown.sh
 	@echo "Checking the harness standup patch (patch_harness.sh fix 18)..."
@@ -3554,6 +3565,20 @@ docker-build-warmpool-proxy: ## Build the warm-pool proxy image. WARMPOOL_PROXY_
 .PHONY: docker-push-warmpool-proxy
 docker-push-warmpool-proxy: ## Push the warm-pool proxy image.
 	$(CONTAINER_TOOL) push ${WARMPOOL_PROXY_IMG}
+
+# BuildKit reads Dockerfile.tools.dockerignore; the default .dockerignore
+# excludes deploy/, which is all this image carries.
+.PHONY: docker-build-tools
+docker-build-tools: ## Build the operator tools image. TOOLS_IMG=<ref>
+	DOCKER_BUILDKIT=1 $(CONTAINER_TOOL) build --build-arg VERSION=$(IMG_TAG) -t ${TOOLS_IMG} -f Dockerfile.tools .
+
+.PHONY: docker-push-tools
+docker-push-tools: ## Push the operator tools image.
+	$(CONTAINER_TOOL) push ${TOOLS_IMG}
+
+.PHONY: tools-image-check
+tools-image-check: docker-build-tools ## Build the tools image and check it renders what this checkout renders (hack/check-tools-image.sh).
+	TOOLS_IMG=${TOOLS_IMG} bash hack/check-tools-image.sh
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

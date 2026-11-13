@@ -3431,7 +3431,12 @@ so_warmpool_block() {
                 --from-workloads < "$rows"; then
             echo ""
             echo "# Warm pools: could not be worked out, so none are suggested here."
-            echo "# Run: deploy/warmpool.sh plan -n <namespace>"
+            # The release's tools image carries neither warmpool.sh nor python3.
+            if [ -f "$(dirname "${BASH_SOURCE[0]}")/../warmpool.sh" ]; then
+                echo "# Run: deploy/warmpool.sh plan -n <namespace>"
+            else
+                echo "# Warm pools need a checkout of this release: run deploy/warmpool.sh plan -n <namespace> there."
+            fi
         fi
     fi
     rm -f "$rows"

@@ -1,0 +1,85 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here — see hack/render-guides.py — so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: prepare-workloads
+
+prerequisites:
+  tools:
+    note: The tools image of the release you installed. It gets a kubeconfig of the current context only, read-only; files land in this directory.
+    run: |
+      V=<release, for example v0.11.0>
+      export NAMESPACE=<your model namespace>
+      TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V
+      kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+      touch smt.env   # LLMSM_* settings for the tools, one NAME=value per line
+      smt() {
+        docker run --rm --user "$(id -u):$(id -g)" --env-file "$PWD/smt.env" \
+          -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" "$TOOLS" "$@"
+      }
+      smt version
+  verify:
+    note: Optional. Check the image was built and signed by this repository's release workflow.
+    run: |
+      cosign verify "$TOOLS" \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
+
+deploy:
+  report:
+    note: What the model servers still need, per workload. Changes nothing in the cluster.
+    run: smt workload-patch -n $NAMESPACE
+  image:
+    note: The engine image, exactly as the model server's pod spec names it, held on every GPU node.
+    run: |
+      export ENGINE_IMAGE=<the image your model server runs>
+      smt prepull apply -n $NAMESPACE --image $ENGINE_IMAGE
+  storage:
+    note: Cluster admin (it creates PersistentVolumes). Weights and engine caches on each GPU node's local disk.
+    run: |
+      export NODE_DIR=/mnt/local/weights/$NAMESPACE   # a directory on the node's local NVMe
+      smt weights apply -n $NAMESPACE --model <hugging face id> --path $NODE_DIR --image $ENGINE_IMAGE
+      smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE
+  status:
+    note: Per GPU node. Wait until every usable node reads present / prepared.
+    run: |
+      smt prepull status -n $NAMESPACE
+      smt weights status -n $NAMESPACE
+      smt engine-cache status -n $NAMESPACE
+  patch:
+    note: Writes scaling-manager-workload-patch.yaml here. Copy it into your model server's chart values.
+    run: smt workload-patch -n $NAMESPACE
+
+verify:
+  clean:
+    note: Again, after the rollout. A model server it no longer names needs nothing more.
+    run: smt workload-patch -n $NAMESPACE
+
+gitops:
+  render:
+    note: The same objects as files, for review or a GitOps repository. Reads no cluster.
+    run: |
+      smt prepull apply -n $NAMESPACE --image $ENGINE_IMAGE --dry-run > prepull.yaml
+      smt weights apply -n $NAMESPACE --model <hugging face id> --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > weights.yaml
+      smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > engine-cache.yaml
+
+nocontainer:
+  download:
+    note: The same scripts from the release, for a machine with no container runtime. Needs bash, kubectl, jq, yq (mikefarah's, v4) and column (util-linux). On macOS, shasum -a 256 -c in place of sha256sum -c.
+    run: |
+      URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+      curl -fsSLO $URL/scaling-manager-tools-$V.tar.gz
+      curl -fsSLO $URL/SHA256SUMS
+      sha256sum -c SHA256SUMS --ignore-missing
+      tar -xzf scaling-manager-tools-$V.tar.gz
+      SMT_DIR=$PWD/scaling-manager-tools
+      touch smt.env
+      smt() { (set -a; . "$PWD/smt.env"; set +a; "$SMT_DIR/scaling-manager-tools.sh" "$@"); }
+      smt version
+
+cleanup:
+  remove:
+    note: Removes the holders, claims, volumes and downloaders. The files on the nodes stay.
+    run: |
+      smt prepull delete -n $NAMESPACE --all
+      smt weights delete -n $NAMESPACE --all
+      smt engine-cache delete -n $NAMESPACE

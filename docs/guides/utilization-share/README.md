@@ -35,6 +35,31 @@ make utilization-share-check
 ```
 <!-- guide:prerequisites end -->
 
+**Without a checkout**, the release's tools image runs the same script
+(`smt` as defined in [Prepare model servers](../prepare-workloads/#prerequisites)):
+
+```bash
+smt utilization-share check -n $NAMESPACE     # as make utilization-share-check
+smt utilization-share status -n $NAMESPACE    # as make utilization-share-status
+```
+
+On an install from the release files, switch the mode with the settings key
+instead of `shadow`, `activate` and `off` below. That file sets
+`utilizationShare` (to `off`), and the key wins over the policy's optimizer
+block these commands write, unless the policy lives in a separate policy
+namespace (the controller then reads its limiters and optimizer there, and
+ignores the key). While the key wins, these commands refuse any other mode
+and print this patch:
+
+```bash
+kubectl patch configmap scaling-manager-settings -n ${CONTROLLER_NAMESPACE:-$NAMESPACE} --type merge \
+  -p '{"data":{"utilizationShare":"shadow"}}'      # then "active", or "off"
+```
+
+Going active also needs the one grant of `patch` on pods,
+`scaling-manager-activate.yaml`, as in
+[Try it in passive mode](../try-in-passive-mode/#utilization-share-in-passive-mode).
+
 ## Installation Instructions
 
 **Step 1: shadow.** Leave it long enough to cover each model's peak, then read

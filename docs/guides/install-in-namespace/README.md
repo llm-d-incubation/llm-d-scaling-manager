@@ -207,18 +207,20 @@ preflight's own handshake is dropped.
 
 A scale-down without a drain hook cuts the responses a replica is still
 writing, and a scale-up without a model cache downloads the weights again.
-From a checkout of the same release:
+The release's tools image reports what each model server still needs:
 
 <!-- guide:deploy.readiness start -->
 ```bash
-# From a checkout of the same release. Reports what the model servers still need. Changes nothing.
-make workload-patch NAMESPACE=${NAMESPACE}
+# With the release's tools image; no checkout. Reports what the model servers still need. Changes nothing in the cluster.
+kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" \
+  ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V workload-patch -n $NAMESPACE
 ```
 <!-- guide:deploy.readiness end -->
 
-It writes a patch rather than changing your workloads. See [Writing the
-patch](../../reference/workload-preparation.md#writing-the-patch-make-workload-patch)
-and [The rest of the start path](../../reference/workload-preparation.md#the-rest-of-the-start-path).
+It writes a patch rather than changing your workloads. To act on it, and to
+make each new replica start faster, follow [Prepare model servers to
+scale](../prepare-workloads/): one recommended configuration, a few commands.
 
 #### Register the workloads
 
@@ -258,8 +260,10 @@ Set `minReplicaCount` and `maxReplicaCount` so the current replica count lies
 between them. A model scaled by KEDA already? Add the trigger beside yours
 instead, as [Try it in passive mode](../try-in-passive-mode/#3-register-the-models)
 shows. Every trigger field: [ScaledObject trigger](../../reference/scaledobject-trigger.md).
-From a checkout, `make scaledobjects-plan` writes these for every model server
-it finds.
+The release's tools image writes these for every model server it finds:
+`scaledobjects-plan -n $NAMESPACE --out plan.yaml`, edit, then
+`scaledobjects-apply -n $NAMESPACE --plan plan.yaml` (how to run it: [Prepare
+model servers](../prepare-workloads/#prerequisites)).
 
 #### Let it scale
 
@@ -484,6 +488,8 @@ model](../../reference/security-model.md).
 
 ## Next
 
+- [Prepare model servers to scale](../prepare-workloads/): the engine image,
+  weights and compile caches on each GPU node, so a new replica starts fast
 - [Try it in passive mode](../try-in-passive-mode/): compare its decisions
   with what runs before it scales anything
 - [After the install](../../reference/operations.md)

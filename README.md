@@ -59,24 +59,50 @@ the scaler answers with the current replica count, so nothing moves.
 
 ## Install
 
-You need llm-d model servers in a namespace, KEDA, a Prometheus, and a checkout
-of this repository with `kubectl`, `jq`, `yq` and `make`. The model servers must
-drain on termination, because sharing scales a donor down: `make workload-patch`
-writes the patch ([preparing a workload](docs/reference/workload-preparation.md)).
-This installs it passive with a GPU quota, so it decides and changes nothing.
-`<gpu product>` is the `GPU.PRODUCT` column of
-`kubectl get nodes -L nvidia.com/gpu.product`:
+From a release, with `kubectl`, `curl` and docker; no checkout. You need llm-d
+model servers in a namespace, KEDA and a Prometheus Operator. A cluster admin
+runs the lines marked `# admin`. This installs it passive with a GPU quota, so
+it decides and changes nothing. `<gpu product>` is the `GPU.PRODUCT` column of
+`kubectl get nodes -L nvidia.com/gpu.product`.
 
 ```bash
+V=<release, for example v0.11.0>
 export NAMESPACE=<the namespace running llm-d>
-make check-prereqs                    # read-only: tools, namespace, Prometheus
-make setup-prereqs                    # once per namespace, by a cluster admin
-make deploy-scaling-manager LLMSM_PASSIVE=true \
-  LLMSM_LIMITER=quota LLMSM_QUOTAS='<gpu product>=<gpus>'
-make scaledobjects-plan LLMSM_DEFAULT_SO_PLAN=plan.yaml   # lists your model servers
-make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=plan.yaml  # registers them with KEDA
-make utilization-share-check          # is there a budget to share?
-make utilization-share-shadow         # report what sharing would move
+URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+for f in namespaced settings scaler-tls model-namespace keda-auth activate; do
+  curl -fsSLO $URL/scaling-manager-$f.yaml
+done
+sed -i.bak -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" scaling-manager-*.yaml && rm -f scaling-manager-*.yaml.bak
+export KEDA_NS=<the namespace KEDA runs in>
+# The scaler NetworkPolicy admits KEDA from namespace keda; name yours.
+sed -i.bak "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-namespaced.yaml && rm -f scaling-manager-namespaced.yaml.bak
+kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin   # admin
+kubectl apply -f scaling-manager-model-namespace.yaml                                   # admin
+# In scaling-manager-settings.yaml set prometheusURL, limiter: "quota" and
+# quotas: "<gpu product>=<gpus>"; passive is already "true".
+kubectl create -f scaling-manager-settings.yaml
+kubectl create -f scaling-manager-scaler-tls.yaml
+kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=controller
+# admin: give KEDA its client certificate. This prints the commands to run.
+kubectl get configmap scaling-manager-controller-status -n $NAMESPACE -o jsonpath='{.data.scalerTLSAction}{"\n"}'
+```
+
+Then register the model servers and turn sharing on in shadow, with the
+release's tools image. The model servers must drain on termination, because
+sharing scales a donor down; `workload-patch` writes what each one needs
+([prepare model servers](docs/guides/prepare-workloads/)):
+
+```bash
+kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+touch smt.env   # LLMSM_* settings for the tools, one NAME=value per line
+smt() { docker run --rm --user "$(id -u):$(id -g)" --env-file "$PWD/smt.env" \
+  -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"; }
+smt workload-patch -n $NAMESPACE                         # what each model server still needs
+smt scaledobjects-plan -n $NAMESPACE --out plan.yaml     # lists your model servers; edit it
+smt scaledobjects-apply -n $NAMESPACE --plan plan.yaml   # registers them with KEDA
+smt utilization-share check -n $NAMESPACE                # is there a budget to share?
+kubectl patch configmap scaling-manager-settings -n $NAMESPACE --type merge \
+  -p '{"data":{"utilizationShare":"shadow"}}'           # report what sharing would move
 ```
 
 Leave it through each model's busy period and read what it would have done
@@ -85,17 +111,24 @@ Leave it through each model's busy period and read what it would have done
 Then go active:
 
 ```bash
-make deploy-scaling-manager LLMSM_PASSIVE=false
-make utilization-share-shadow
-make utilization-share-activate
+kubectl apply -f scaling-manager-activate.yaml           # admin: the one grant of patch on pods
+kubectl patch configmap scaling-manager-settings -n $NAMESPACE --type merge \
+  -p '{"data":{"passive":"false","utilizationShare":"active"}}'
 ```
 
-Models that KEDA already scales, a controller run by a cluster admin, and
-every check along the way are in the guides:
+Sharing is switched by the settings key `utilizationShare`, as here. The
+`utilization-share shadow`/`activate` commands write the scaling policy's
+optimizer block instead; the settings key wins over that block, and the
+release's settings file sets it (to `off`), so on this install switch it with
+`kubectl patch` ([configuration](docs/reference/configuration.md)).
+
+Every step, with its checks: [install in a namespace](docs/guides/install-in-namespace/)
+(or [for the whole cluster](docs/guides/install-cluster-wide/)),
 [try it in passive mode](docs/guides/try-in-passive-mode/) and
 [turn on utilization share](docs/guides/utilization-share/). Without a quota,
-leave out `LLMSM_LIMITER` and the sharing steps: each model is then scaled on
-its own ([install in a namespace](docs/guides/install-in-namespace/)).
+leave out `limiter`, `quotas` and the sharing steps: each model is then scaled
+on its own. From a checkout instead: `make deploy-scaling-manager`
+([installer options](docs/reference/install-options.md)).
 
 ## Contributing
 

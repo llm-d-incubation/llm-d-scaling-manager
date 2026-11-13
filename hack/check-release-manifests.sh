@@ -52,6 +52,21 @@ PART="scaling-manager.llmd.ai/part"
 NSF="scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml"
 CLF="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
 MAIN_FILES="$NSF $CLF"
+TOOLS_TARBALL="scaling-manager-tools-$VERSION.tar.gz"
+TOOLS_SCRIPTS="scaling-manager-tools.sh prepull.sh weights.sh enginecache.sh utilization-share.sh"
+# What the archive's lib/ must hold, read the way the renderer reads it but
+# here, independently: the tracked files in a git checkout, else every file.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    LIB_FILES="$(git -C "$ROOT" ls-files -- deploy/lib)"
+else
+    LIB_FILES="$(cd "$ROOT" && find deploy/lib -type f ! -path '*/__pycache__/*' | sort)"
+fi
+# GNU tar reads the listing format the checks below parse; gtar on macOS.
+TAR=""
+for t in tar gtar; do
+    if command -v "$t" >/dev/null 2>&1 && "$t" --version 2>/dev/null | grep -q 'GNU tar'; then TAR="$t"; break; fi
+done
+[ -n "$TAR" ] || { echo "FAIL: GNU tar is required (tar or gtar; on macOS brew install gnu-tar), not skipping"; exit 1; }
 ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-scaler-tls.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml scaling-manager-preflight.yaml scaling-manager-preflight-cluster.yaml"
 
 render() {
@@ -114,12 +129,28 @@ check_dir() {
     local d="$1" f n bad=0 sub="$WORK/sub" js="$WORK/json" keda want got ins safile split
     say() { echo "  FAIL: $*"; bad=$((bad + 1)); }
 
-    for f in $ALL_FILES SHA256SUMS; do
+    for f in $ALL_FILES SHA256SUMS $TOOLS_TARBALL; do
         [ -s "$d/$f" ] || say "$f was not written"
     done
     [ "$bad" = 0 ] || return "$bad"
     (cd "$d" && sha256sum -c --quiet SHA256SUMS >/dev/null 2>&1) || say "SHA256SUMS does not match the files"
-    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(echo $ALL_FILES | wc -w)" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files"
+    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(( $(echo $ALL_FILES | wc -w) + 1 ))" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files and $TOOLS_TARBALL"
+    grep -q "  $TOOLS_TARBALL\$" "$d/SHA256SUMS" || say "SHA256SUMS does not list $TOOLS_TARBALL"
+    # The tools tarball: the image's files under scaling-manager-tools/, the
+    # scripts executable, lib/ beside them, the version, and nothing else.
+    local listing want_list
+    listing="$("$TAR" -tzvf "$d/$TOOLS_TARBALL" 2>/dev/null)" || { say "$TOOLS_TARBALL is not a gzip tar"; listing=""; }
+    want_list="$( { printf 'scaling-manager-tools/VERSION\n'; for f in $TOOLS_SCRIPTS; do printf 'scaling-manager-tools/%s\n' "$f"; done; printf '%s\n' "$LIB_FILES" | sed 's#^deploy/#scaling-manager-tools/#'; } | sort)"
+    if [ "$(printf '%s\n' "$listing" | awk '$1 !~ /^d/ {print $NF}' | sort)" != "$want_list" ]; then
+        say "$TOOLS_TARBALL does not hold exactly scaling-manager-tools/{VERSION,$(echo $TOOLS_SCRIPTS | tr ' ' ',')} and lib/"
+    fi
+    for f in $TOOLS_SCRIPTS; do
+        printf '%s\n' "$listing" | grep -qE "^-rwxr-xr-x .* scaling-manager-tools/$f\$" || say "$TOOLS_TARBALL: $f is not mode 0755"
+    done
+    printf '%s\n' "$listing" | grep -E ' scaling-manager-tools/(lib/|VERSION$)' | grep -qvE '^(-rw-r--r--|drwxr-xr-x) ' \
+        && say "$TOOLS_TARBALL: a lib/ or VERSION entry is not 0644 (directories 0755)"
+    printf '%s\n' "$listing" | awk '{print $2}' | grep -qv '^0/0$' && say "$TOOLS_TARBALL: an entry not owned by 0/0"
+    [ "$("$TAR" -xzOf "$d/$TOOLS_TARBALL" scaling-manager-tools/VERSION 2>/dev/null)" = "$VERSION" ] || say "$TOOLS_TARBALL: VERSION is not $VERSION"
 
     rm -rf "$js"; mkdir -p "$js"
     for f in $ALL_FILES; do
@@ -440,11 +471,26 @@ else
     pass
 fi
 
+# Reproducible: the same inputs rendered a second time give the same bytes,
+# the tools archive and SHA256SUMS included. A published release's SHA256SUMS
+# is compared with a re-run's (the attach step), so a timestamp or an owner in
+# the archive would make every re-run of a published release fail.
+if render "$REPO@$DIGEST" "$WORK/good-again" > "$WORK/render-again.log" 2>&1; then
+    if cmp -s "$GOOD/$TOOLS_TARBALL" "$WORK/good-again/$TOOLS_TARBALL" && cmp -s "$GOOD/SHA256SUMS" "$WORK/good-again/SHA256SUMS"; then
+        pass
+        echo "  ok: a second render is byte-identical: $TOOLS_TARBALL and SHA256SUMS"
+    else
+        fail "a second render differs: $(cmp "$GOOD/$TOOLS_TARBALL" "$WORK/good-again/$TOOLS_TARBALL" 2>&1 | head -1) $(diff "$GOOD/SHA256SUMS" "$WORK/good-again/SHA256SUMS" | head -2 | tr '\n' ' ')"
+    fi
+else
+    fail "the second render failed: $(tail -2 "$WORK/render-again.log")"
+fi
+
 # Negative controls: one fault per copy. Each must fail with the message of
 # the rule it breaks, not merely fail.
 caught() {
     local name="$1" expect="$2" d="$3"
-    (cd "$d" && sha256sum $ALL_FILES > SHA256SUMS)
+    (cd "$d" && sha256sum $ALL_FILES $TOOLS_TARBALL > SHA256SUMS)
     if check_dir "$d" > "$WORK/m-$name.log" 2>&1; then
         fail "negative control '$name' was not caught"
     elif grep -q -- "$expect" "$WORK/m-$name.log"; then
@@ -594,7 +640,7 @@ expect_wf() {
     got="$(yq -r "$3" "$WF" 2>&1)"
     if [ "$got" = "$2" ]; then pass; else fail "ci-release.yaml: $1: got '$got', want '$2'"; fi
 }
-expect_wf "release-files runs after the image is pushed and signed" 'release' '[.jobs."release-files".needs] | flatten | join(",")'
+expect_wf "release-files runs after both images are pushed and signed" 'release,release-tools' '[.jobs."release-files".needs] | flatten | join(",")'
 expect_wf "release-files may upload (contents) and sign (id-token), nothing more" \
     'contents=write,id-token=write' '.jobs."release-files".permissions | to_entries | map(.key + "=" + .value) | sort | join(",")'
 expect_wf "the image job still cannot write the release" 'read' '.jobs.release.permissions.contents'
@@ -621,12 +667,12 @@ sign_run() {
 }
 rm -rf "$WORK/wf/run"; mkdir -p "$WORK/wf/run"; cp -r "$GOOD" "$WORK/wf/run/dist"; : > "$WORK/wf/cosign.log"
 if sign_run; then
-    want=$(( $(echo $ALL_FILES | wc -w) + 1 ))
+    want=$(( $(echo $ALL_FILES | wc -w) + 2 ))
     got="$(grep -c '^sign-blob --yes --bundle ' "$WORK/wf/cosign.log")"
     bundles="$(find "$WORK/wf/run/dist" -name '*.sigstore.json' | wc -l)"
     if [ "$got" = "$want" ] && [ "$bundles" = "$want" ] && [ -s "$WORK/wf/run/dist/SHA256SUMS.sigstore.json" ]; then
         pass
-        echo "  ok: the sign step signs all $want files, SHA256SUMS included"
+        echo "  ok: the sign step signs all $want files, SHA256SUMS and the tools tarball included"
     else
         fail "the sign step made $got cosign calls and $bundles bundles, want $want each"
     fi

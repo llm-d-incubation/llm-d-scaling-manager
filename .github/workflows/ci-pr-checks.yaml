@@ -238,10 +238,15 @@ jobs:
       # HTTP 5xx, which plain --retry does not; the six attempts span ~2 min.
       - name: Install yq
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       # hack/check-kps-images.sh renders the kube-prometheus-stack release the
@@ -266,6 +271,101 @@ jobs:
       - name: Run make lint-deploy-scripts
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         run: make lint-deploy-scripts
+
+  # The operator tools image the release publishes beside the
+  # controller (Dockerfile.tools; release-tools in ci-release.yaml). Built here
+  # for both release platforms, so a wrong arm64 digest fails the PR rather
+  # than the tag; then the amd64 build is run by hack/check-tools-image.sh,
+  # which requires it to render what this checkout renders, run as non-root
+  # and carry the yq, jq and kubectl it names; then the release's blocking scan.
+  # Skipped step by step on a docs-only PR, like deploy-scripts-check.
+  tools-image:
+    runs-on: ubuntu-latest
+    needs: check-code-changes
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout source
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      # The check renders with the checkout's scripts too, under the yq CI
+      # checks them with, checked against its digest.
+      - name: Install yq
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+          yq --version
+
+      - name: Set up QEMU
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the arm64 tools image
+        id: build-tools-arm64
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.tools
+          platforms: linux/arm64
+          load: true
+          tags: scaling-manager-tools:pr-check-arm64
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            VERSION=pr-check
+
+      - name: Build the amd64 tools image
+        id: build-tools
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.tools
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: scaling-manager-tools:pr-check
+          build-args: |
+            VERSION=pr-check
+
+      - name: Run hack/check-tools-image.sh against the image
+        if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        run: TOOLS_IMG=scaling-manager-tools:pr-check bash hack/check-tools-image.sh
+
+      - name: Scan the tools image for fixable CRITICAL vulnerabilities (blocking)
+        if: ${{ !cancelled() && steps.build-tools.outcome == 'success' }}
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: scaling-manager-tools:pr-check
+          severity: CRITICAL
+          ignore-unfixed: 'true'
+          exit-code: '1'
+
+      - name: Scan the arm64 tools image for fixable CRITICAL vulnerabilities (blocking)
+        if: ${{ !cancelled() && steps.build-tools-arm64.outcome == 'success' }}
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: scaling-manager-tools:pr-check-arm64
+          severity: CRITICAL
+          ignore-unfixed: 'true'
+          exit-code: '1'
 
   docs-check:
     runs-on: ubuntu-latest
@@ -330,10 +430,15 @@ jobs:
       # renders. Same yq pin and retries as deploy-scripts-check.
       - name: Install yq
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       - name: Check the rendered manifests
@@ -782,10 +887,15 @@ jobs:
       # retries as deploy-scripts-check.
       - name: Install yq
         if: steps.decide.outputs.run == 'true'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       - name: Install Kind

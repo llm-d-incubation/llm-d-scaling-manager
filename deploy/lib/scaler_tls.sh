@@ -755,7 +755,9 @@ llmsm_scaler_address() {
 }
 
 # llmsm_scaler_mode_of echoes how the controller in namespace $1 serves the scaler:
-#   tls        mutual TLS this installer provisioned
+#   tls        mutual TLS this installer provisioned, or the controller
+#              provisions itself (--external-scaler-tls-bootstrap, the
+#              release files), whose KEDA side has the same name
 #   manual     TLS flags set by hand (no KEDA side from this installer)
 #   plaintext  no TLS, or no controller there
 #   unknown    its Deployment could not be read
@@ -767,10 +769,11 @@ llmsm_scaler_mode_of() {
         return 0
     fi
     printf '%s' "$LLMSM_GET_OUT" | jq -r --arg a "$LLMSM_SCALER_TLS_ANNOTATION" '
-        ([.spec.template.spec.containers[]? | select(.name == "manager") | (.args // [])[]
-          | select(startswith("--external-scaler-cert-path"))] | length) as $f
+        ([.spec.template.spec.containers[]? | select(.name == "manager") | (.args // [])[]] ) as $args
+        | ([$args[] | select(startswith("--external-scaler-cert-path"))] | length) as $f
+        | ([$args[] | select(. == "--external-scaler-tls-bootstrap" or . == "--external-scaler-tls-bootstrap=true")] | length) as $b
         | (.spec.template.metadata.annotations[$a] // "") as $p
-        | if $f == 0 then "plaintext" elif $p != "" then "tls" else "manual" end' 2>/dev/null || echo unknown
+        | if $b > 0 then "tls" elif $f == 0 then "plaintext" elif $p != "" then "tls" else "manual" end' 2>/dev/null || echo unknown
 }
 
 # llmsm_scaler_address_mode echoes the mode a ScaledObject for the scaler in

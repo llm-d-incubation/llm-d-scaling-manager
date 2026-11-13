@@ -8,9 +8,9 @@ This page is the operational entry point. Longer subjects have their own pages:
 
 - **[Watching what the scaling manager decides](monitoring.md)** -- the dashboard,
   the metrics that answer specific questions, and reading the logs.
-- **[Preparing a workload to be scaled](workload-preparation.md)** -- the model
-  cache, draining before scale-down, `make workload-patch`, and the rest of the
-  start path (`make prepull`, `make weights`).
+- **[Prepare model servers to scale](../guides/prepare-workloads/)** -- the
+  recommended configuration, from the release's tools image; every alternative
+  and its costs are in [Preparing a workload: every option](workload-preparation.md).
 - **[Troubleshooting](troubleshooting.md)** -- from a symptom to its runbook.
 - **[Upgrade and uninstall](upgrade-and-uninstall.md)** -- pinning a version,
   what a restart costs, and what an uninstall leaves behind.

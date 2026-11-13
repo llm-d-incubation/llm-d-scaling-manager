@@ -1,0 +1,9 @@
+# The build context of Dockerfile.tools (BuildKit reads <Dockerfile>.dockerignore
+# in place of .dockerignore, which excludes deploy/). Only the scripts it copies.
+*
+!deploy/scaling-manager-tools.sh
+!deploy/prepull.sh
+!deploy/weights.sh
+!deploy/enginecache.sh
+!deploy/utilization-share.sh
+!deploy/lib/

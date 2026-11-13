@@ -29,9 +29,17 @@ instead.
 3. **Release notes**, in the GitHub Release. They are not kept as a file in
    this repository.
 4. **Release files**, attached to the GitHub Release by the run: the install
-   manifests rendered with the image pinned by digest, `SHA256SUMS`, and a
+   manifests rendered with the image pinned by digest,
+   `scaling-manager-tools-<tag>.tar.gz` (the tools image's scripts, for a
+   machine with no container runtime), `SHA256SUMS`, and a
    `<file>.sigstore.json` signature bundle for each. See
    [The release files](#the-release-files).
+5. **A tools image** at `ghcr.io/<repository owner>/llm-d-scaling-manager/tools:<tag>`:
+   `deploy/prepull.sh`, `deploy/weights.sh`, `deploy/enginecache.sh`,
+   `deploy/utilization-share.sh`, the workload-patch report and the
+   ScaledObject plan, with kubectl, jq and yq, from `Dockerfile.tools`.
+   Operators prepare and register their model servers with it and no checkout
+   ([Prepare model servers](../guides/prepare-workloads/)).
 
 A tag is released only from `main`, or from its own line's
 `release-MAJOR.MINOR` branch (a `v0.10.2` from `release-0.10`) once that line
@@ -117,8 +125,16 @@ draft release for the tag existed before the run, it attached the files to
 that one instead. A release that is already **published** is never changed: a
 run whose files differ from the attached ones fails, and one whose files are
 identical uploads nothing. In **Releases**, open the draft, check that the
-files are there (each `.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each),
-paste the release notes, and publish. Keep the draft's first line: it names
+files are there (each `.yaml`, `scaling-manager-tools-<tag>.tar.gz`,
+`SHA256SUMS`, and a `.sigstore.json` for each), paste the release notes, and
+publish.
+
+Before publishing, check the tools image too: the `release-tools` job
+succeeded (the draft exists only if it did), and the package
+`llm-d-scaling-manager/tools` is **Public**. From a machine not logged in to
+GHCR, `docker pull ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:<tag>`
+must succeed; a `401` or `denied` means the package is still private
+([first release](#the-first-release-to-a-new-package)). Keep the draft's first line: it names
 the two supported installs, the attached files and `make deploy-scaling-manager`.
 
 ### 5. Point the docs at the release
@@ -246,6 +262,12 @@ to **Public**.
 Make the first release after this workflow lands an `-rc1` tag. It tests the
 release run end to end without moving `latest`.
 
+The tools image is a second package, `llm-d-scaling-manager/tools`, which the
+first release that carries the `release-tools` job creates. It starts
+**private**: set it to **Public** after that run, and check that this
+repository has **Write** on it, as above. Until then `docker pull` of the
+tools image fails with `401 Unauthorized` (or `denied`) for every operator.
+
 ---
 
 ## Verifying a release
@@ -312,7 +334,8 @@ re-run from the **Actions** tab.
 
 1. **Gate.** Calls [`ci-pr-checks.yaml`](../../.github/workflows/ci-pr-checks.yaml)
    on the tagged commit: `golangci-lint`, `make build`, `make test`,
-   `make lint-deploy-scripts`, the docs checks and the kustomize builds.
+   `make lint-deploy-scripts`, the tools image build and check, the docs
+   checks and the kustomize builds.
 2. **Validate.** Refuses a tag whose commit is on neither `main` nor the tag's
    `release-MAJOR.MINOR` branch, a tag that is not
    `vMAJOR.MINOR.PATCH[-PRERELEASE]`, and a commit whose `newTag` is not the tag.
@@ -330,8 +353,9 @@ re-run from the **Actions** tab.
 6. **Sign.** Keyless `cosign sign` of the pushed digest, with the workflow's
    OIDC identity as the signer. The run summary prints the digest and the
    verify command.
-7. **Release files** (job `release-files`, after the image job). Runs
-   `make release-manifests` with the pushed digest, signs each file and
+7. **Release files** (job `release-files`, after the image and tools jobs). Runs
+   `make release-manifests` with the pushed digest (it also packages
+   `scaling-manager-tools-<tag>.tar.gz`), signs each file and
    `SHA256SUMS` with keyless `cosign sign-blob --bundle`, and uploads them all
    with `gh release upload --clobber`, creating a draft release when the tag has
    none, and refusing to change a published one. It is the only job with
@@ -339,6 +363,14 @@ re-run from the **Actions** tab.
    its Go (for `make kustomize`) comes from `go.mod`.
    `hack/check-release-manifests.sh` checks the job's shape and runs its sign
    step against a stub cosign.
+8. **Tools image** (job `release-tools`, after the image job). Builds
+   `Dockerfile.tools`, scans it like the controller image, pushes
+   `linux/amd64,linux/arm64` to `<image>/tools:<version>` (and `:latest` only
+   when the controller's `latest` moved), and signs the digest.
+   `hack/check-release-latest.sh` checks the job's shape and runs its tag and
+   sign steps. The PR checks' `tools-image` job builds both platforms on every
+   code change and runs `hack/check-tools-image.sh` against the amd64 image.
+   Verify it as the controller image, with `$IMAGE/tools`.
 
 ### The release files
 

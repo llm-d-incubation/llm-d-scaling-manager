@@ -174,6 +174,25 @@ One ScaledObject per model-server Deployment, as in [the namespaced
 guide](../install-in-namespace/#register-the-workloads), with
 `scalerAddress: scaling-manager-external-scaler.scaling-manager-system.svc:9090`
 and `authenticationRef` naming `scaling-manager-external-scaler-scaling-manager-system`.
+The release's tools image writes them for every model server in a namespace
+([how to run it](../prepare-workloads/#prerequisites)); name the controller's
+namespace, or the plan points at a scaler in the model namespace:
+
+```bash
+smt scaledobjects-plan -n <model namespace> --controller-namespace scaling-manager-system --out plan.yaml
+smt scaledobjects-apply -n <model namespace> --controller-namespace scaling-manager-system --plan plan.yaml
+```
+
+The address it writes depends on whether the controller serves TLS, which it
+reads from the controller's Deployment. A namespace owner who may not read
+Deployments in `scaling-manager-system` gets a warning and the plaintext
+address, which a controller from the release files (mutual TLS) does not
+answer on. Say so instead, in the `smt.env` the tools read:
+
+```bash
+echo LLMSM_SCALER_TLS=true >> smt.env
+```
+
 Then [let it scale](../install-in-namespace/#let-it-scale), with `-n
 scaling-manager-system`.
 
@@ -278,6 +297,8 @@ reads `<unknown>/1 (avg)` and nothing scales.
 
 ## Next
 
+- [Prepare model servers to scale](../prepare-workloads/): the engine image,
+  weights and compile caches on each GPU node, so a new replica starts fast
 - [Bound every install by real GPUs](../admin-gpu-bounding/)
 - [Share GPUs between models in different
   namespaces](../utilization-share-cluster-wide/)

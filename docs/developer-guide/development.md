@@ -11,8 +11,11 @@ How to set up, build, run and change the scaling manager.
 - kubectl 1.24+ (the installer refuses older), or `oc` on OpenShift
 - Helm 3.8+ (the installer uses it for Prometheus and KEDA)
 - Kind, for a local cluster
-- `jq` 1.6+ and `yq` v4 (mikefarah's Go yq). CI pins yq v4.44.3; use it to
-  reproduce a CI failure.
+- `jq` 1.6+ and `yq` v4 (mikefarah's Go yq). CI pins yq v4.54.1, the version
+  the tools image carries; use it to reproduce a CI failure.
+- GNU tar, for `make release-manifests` and the deploy-script checks (it
+  packages the tools archive reproducibly); on macOS `brew install gnu-tar`,
+  which installs `gtar`, which they use
 - `python3` with PyYAML, for the doc and dashboard checks
 
 ### Initial Setup
