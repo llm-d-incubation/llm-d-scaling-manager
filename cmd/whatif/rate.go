@@ -68,30 +68,19 @@ func sloToRate(ctx context.Context, args []string, out, warn io.Writer) error {
 		}
 	}
 
-	var ratioFlags []whatif.Flag
-	var ratioRefused *whatif.Unanswerable
+	var r resolvedRatio
 	if q := target.Percentile; q != 0 {
-		if q > 0 && q < 1 {
-			target.Ratio, ratioFlags, ratioRefused = f.tpotRatioFor(st, q)
-		} else {
-			target.Ratio = whatif.TPOTRatio{Value: f.tpotRatio, Assumed: true}
-		}
+		r = f.ratioFor(st, q)
+		target.Ratio = r.ratio
 	}
-	query := whatif.RateQuery{Target: target, Headroom: f.headroomFor(st.Policy)}
-	if ratioRefused != nil {
-		// Priced with a placeholder R_q, so that the library still judges
-		// the rest of the question; the answer is replaced by the refusal.
-		query.Target.Ratio = placeholderRatio
-	}
+	query := rateQuery(target, f.headroomFor(st.Policy), r)
 
 	answers := make([]rateAnswer, 0, len(variants))
 	results := make([]whatif.Result, 0, len(variants)+1)
 	for i, pv := range variants {
 		a := rateAnswer{pv: pv}
 		if asksTPOT {
-			res := withRatioRefusal(whatif.RateForTPOT(pv.decode, query), ratioRefused)
-			res = pv.band(res, func(d whatif.Decode) whatif.Result { return whatif.RateForTPOT(d, query) })
-			a.result = pv.qualify(onRatio(res, target.Ratio, ratioFlags))
+			a.result = decodeRate(pv, query, r)
 			results = append(results, a.result)
 		}
 		if ttft != nil {
@@ -150,18 +139,51 @@ func sloToRate(ctx context.Context, args []string, out, warn io.Writer) error {
 	return nil
 }
 
+// rateQuery is question 1's decode query: the target at R_q, priced with a
+// placeholder R_q where R_q was refused, so that the library still judges the
+// rest of the question; decodeRate replaces the answer by the refusal.
+func rateQuery(target whatif.TPOTTarget, headroom float64, r resolvedRatio) whatif.RateQuery {
+	query := whatif.RateQuery{Target: target, Headroom: headroom}
+	if r.refused != nil {
+		query.Target.Ratio = placeholderRatio
+	}
+	return query
+}
+
+// decodeRate is question 1's decode rate on one variant: the rate at the
+// target, banded, qualified, and saying where R_q came from.
+func decodeRate(pv pricedVariant, query whatif.RateQuery, r resolvedRatio) whatif.Result {
+	res := withRatioRefusal(whatif.RateForTPOT(pv.decode, query), r.refused)
+	res = pv.band(res, func(d whatif.Decode) whatif.Result { return whatif.RateForTPOT(d, query) })
+	return pv.qualify(onRatio(res, r.ratio, r.flags))
+}
+
 // priceTTFT prices the prefill role's rate at the target, and the fleet's.
 func (a *rateAnswer) priceTTFT(t ttftQuestion, headroom float64) {
+	corners := a.priceTTFTRate(t)
+	a.fleetRate = a.fleetAt(t, headroom, a.result, corners)
+}
+
+// priceTTFTRate prices the prefill role's rate at the target, with its span,
+// and returns the rate at each corner of the span.
+func (a *rateAnswer) priceTTFTRate(t ttftQuestion) []whatif.Result {
 	price := func(fl whatif.TTFTFleet) whatif.Result {
 		return whatif.RateForTTFT(fl, whatif.TTFTTarget{Seconds: t.seconds, Percentile: t.q})
 	}
 	corners := a.fleet.corners(price)
 	a.ttft = withSpan(a.fleet.priced(price), corners)
 	a.fleet.noteAssumedTerm(a.ttft, price)
+	return corners
+}
+
+// fleetAt is the fleet's rate at headroom, from decode's rate (nil with no
+// TPOT asked) and the prefill role's, spanned over the prefill role's corners.
+func (a *rateAnswer) fleetAt(t ttftQuestion, headroom float64, decode whatif.Result, corners []whatif.Result) whatif.Result {
+	spans := make([]whatif.Result, len(corners))
 	for i, c := range corners {
-		corners[i] = fleetRate(t, headroom, a.result, c)
+		spans[i] = fleetRate(t, headroom, decode, c)
 	}
-	a.fleetRate = withSpan(fleetRate(t, headroom, a.result, a.ttft), corners)
+	return withSpan(fleetRate(t, headroom, decode, a.ttft), spans)
 }
 
 // wireTTFT is the answer's prefill and fleet roles, none with no TTFT asked.
