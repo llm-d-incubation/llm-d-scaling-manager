@@ -425,9 +425,12 @@ witness() {
     names
     # The Secret the controller mounts at /var/run/secrets/epp-metrics: its token is the
     # one the EPP is known to accept. A read that fails is retried, and is not "no volume".
+    # stderr apart from the JSON: kubectl prints notices there on a read that
+    # succeeds, and with 2>&1 the JSON did not parse, which read as "mounts no
+    # epp-metrics-token Secret".
     for i in $(seq 1 "$WITNESS_TRIES"); do
-        if dep=$(kube get deploy scaling-manager-controller-manager -o json 2>&1); then break; fi
-        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(echo "$dep" | tail -1 | cut -c1-200)"
+        if dep=$(kube get deploy scaling-manager-controller-manager -o json 2>"$R/witness-dep.err"); then break; fi
+        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(grep -v '^[IWEF][0-9][0-9][0-9][0-9] ' "$R/witness-dep.err" | tail -1 | cut -c1-200)"
         dep=""
         [ "$i" -lt "$WITNESS_TRIES" ] && nap "$WITNESS_RETRY"
     done

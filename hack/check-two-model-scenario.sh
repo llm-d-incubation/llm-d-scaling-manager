@@ -2459,8 +2459,83 @@ else
     fail "the schedule/report self-test failed (above)"
 fi
 
+# ---------------------------------------------------------------------------
+# kubectl prints notices on stderr on a read that succeeds: the memcache.go
+# "Unhandled Error" discovery line while an aggregated API is down, or a
+# throttling notice. Read with 2>&1 they were part of the answer. notice_kubectl
+# is a kubectl that prints one before every answer; NK_* say what it answers.
+NOTICE='E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"'
+notice_kubectl() {
+    echo "$NOTICE" >&2
+    case "$*" in
+        *"get namespace scaling-manager-policy -o name"*)
+            echo 'Error from server (NotFound): namespaces "scaling-manager-policy" not found' >&2; return 1 ;;
+        *"get namespace $NS -o json"*)
+            local labels="${NK_LABELS:-}"
+            [ -n "$labels" ] || labels='{}'
+            printf '{"metadata":{"name":"%s","labels":%s}}\n' "$NS" "$labels" ;;
+        *"get configmap scaling-manager-scaling-policy-config -o jsonpath={.data.default}"*)
+            printf 'limiters:\n- type: quota\n' ;;
+        *"patch configmap scaling-manager-scaling-policy-config "*)
+            printf '%s\n' "$*" > "$WORK/nk-patched" ;;
+        *"get nodes -o jsonpath="*)
+            printf 'kind://docker/kind/kind-control-plane\nkind://docker/kind/kind-worker\n' ;;
+        *"auth can-i "*)
+            echo yes ;;
+        *"get scaledobject -o json"*)
+            echo 'Error from server (Forbidden): scaledobjects.keda.sh is forbidden: User "u" cannot list resource "scaledobjects"' >&2; return 1 ;;
+    esac
+    return 0
+}
+
 case_begin
-CASES_EXPECTED=147
+rm -f "$WORK/nk-patched"
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 set_share_policy shadow) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -ne 0 ] || [ ! -s "$WORK/nk-patched" ]; then
+    fail "set_share_policy behind a notice on stderr did not write the policy (rc=$nk_rc): $nk_out"
+elif grep -q 'E1113' "$WORK/nk-patched" || ! grep -q 'utilizationShare' "$WORK/nk-patched"; then
+    fail "set_share_policy patched a kubectl notice into the shared policy ConfigMap: $(cat "$WORK/nk-patched")"
+else
+    ok "a notice on stderr is not read as part of the policy the share arms rewrite"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_LABELS='{"scaling-manager.llmd.ai/policy-namespace":"other"}' \
+    LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'labelled to read its policy from other'; then
+    fail "the policy-namespace label behind a notice on stderr must still stop the arms (rc=$nk_rc): $nk_out"
+else
+    ok "a namespace labelled to read another policy is caught behind a notice on stderr"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; sim_cluster_problem) 2>/dev/null )"
+if [ -n "$nk_out" ]; then
+    fail "on a kind cluster, a notice on stderr was read as a non-kind node: $nk_out"
+else
+    ok "a notice on stderr is not a node of another provider"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; LLMSM_NS="$NS" can_i_sa list nodes) 2>/dev/null )"
+if [ "$nk_out" != yes ]; then
+    fail "can_i_sa behind a notice on stderr answered '$nk_out', not yes"
+else
+    ok "a yes from can-i is read past a notice on stderr"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; wiring_snapshot) 2>/dev/null )"
+if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read: Error from server (Forbidden)' || printf '%s' "$nk_out" | grep -q 'memcache'; then
+    fail "an unreadable ScaledObject list behind a notice must name the Forbidden, not the notice: $nk_out"
+else
+    ok "an unreadable ScaledObject list names its error, not a notice before it"
+fi
+
+case_begin
+CASES_EXPECTED=152
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. Update CASES_EXPECTED deliberately rather than letting coverage drift out."
 else
