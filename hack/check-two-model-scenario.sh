@@ -2469,8 +2469,12 @@ notice_kubectl() {
     echo "$NOTICE" >&2
     case "$*" in
         *"get namespace scaling-manager-policy -o name"*)
+            # NK_POLICY_NS=exists: the shared policy namespace is there.
+            [ "${NK_POLICY_NS:-}" = exists ] && { echo namespace/scaling-manager-policy; return 0; }
             echo 'Error from server (NotFound): namespaces "scaling-manager-policy" not found' >&2; return 1 ;;
         *"get namespace $NS -o json"*)
+            # NK_NS_BODY: the namespace read answers this instead (not an object).
+            [ -n "${NK_NS_BODY:-}" ] && { printf '%s\n' "$NK_NS_BODY"; return 0; }
             local labels="${NK_LABELS:-}"
             [ -n "$labels" ] || labels='{}'
             printf '{"metadata":{"name":"%s","labels":%s}}\n' "$NS" "$labels" ;;
@@ -2483,6 +2487,8 @@ notice_kubectl() {
         *"auth can-i "*)
             echo yes ;;
         *"get scaledobject -o json"*)
+            # NK_SOS: the list answers this instead of Forbidden.
+            [ -n "${NK_SOS:-}" ] && { printf '%s\n' "$NK_SOS"; return 0; }
             echo 'Error from server (Forbidden): scaledobjects.keda.sh is forbidden: User "u" cannot list resource "scaledobjects"' >&2; return 1 ;;
     esac
     return 0
@@ -2527,7 +2533,8 @@ else
 fi
 
 case_begin
-nk_out="$( (kubectl() { notice_kubectl "$@"; }; wiring_snapshot) 2>/dev/null )"
+# wiring_snapshot runs inside with_scaler_lib, where common.sh is sourced.
+nk_out="$( (. "$ROOT/deploy/lib/common.sh" >/dev/null 2>&1; kubectl() { notice_kubectl "$@"; }; wiring_snapshot) 2>/dev/null )"
 if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read: Error from server (Forbidden)' || printf '%s' "$nk_out" | grep -q 'memcache'; then
     fail "an unreadable ScaledObject list behind a notice must name the Forbidden, not the notice: $nk_out"
 else
@@ -2535,7 +2542,33 @@ else
 fi
 
 case_begin
-CASES_EXPECTED=152
+nk_out="$( (. "$ROOT/deploy/lib/common.sh" >/dev/null 2>&1; kubectl() { notice_kubectl "$@"; }; NK_SOS='{"kind":"Status"}' wiring_snapshot) 2>/dev/null )"
+if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read as a list'; then
+    fail "a ScaledObject answer that is not a list must say so, not read as no ScaledObjects: $nk_out"
+else
+    ok "a ScaledObject answer that is not a list is said, not read as none"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_NS_BODY='[]' LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q "namespace $NS did not read as an object"; then
+    fail "a namespace that does not read as an object must stop the arms, not read as unlabelled (rc=$nk_rc): $nk_out"
+else
+    ok "a namespace that does not read as an object stops the arms"
+fi
+
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_POLICY_NS=exists LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'a scaling-manager-policy namespace exists, so a controller'     || printf '%s' "$nk_out" | grep -q 'could not tell'; then
+    fail "the shared policy namespace behind a notice must be recognised, not read as could-not-tell (rc=$nk_rc): $nk_out"
+else
+    ok "the shared policy namespace is recognised behind a notice on stderr"
+fi
+
+case_begin
+CASES_EXPECTED=155
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. Update CASES_EXPECTED deliberately rather than letting coverage drift out."
 else

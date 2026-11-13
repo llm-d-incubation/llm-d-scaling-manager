@@ -372,6 +372,25 @@ flow_control() {
 }
 
 # recorder_on : the recorder, as the last change before load.
+# kube_err_reason <file> : the last line of kubectl stderr in <file> that is not a
+# notice -- a klog line (E1113 09:55:01.123456 ... memcache.go "Unhandled Error",
+# printed while an aggregated API is down; I... client-side throttling) or an
+# API server "Warning:" -- the same lines deploy/lib/common.sh kc_is_notice
+# drops. When stderr held only notices, it says so; when nothing, it says that.
+kube_err_reason() {
+    local line last="" first=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        [ -n "$first" ] || first="$line"
+        [[ "$line" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && continue
+        case "$line" in Warning:*) continue ;; esac
+        last="$line"
+    done < "$1"
+    if [ -n "$last" ]; then printf '%s\n' "$last"
+    elif [ -n "$first" ]; then printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
+    else printf 'kubectl failed with nothing on stderr\n'; fi
+}
+
 recorder_on() {
     kretry patch deployment scaling-manager-controller-manager --type strategic \
         --patch-file "$ROOT/config/components/learner-recorder/learner-recorder-deployment.yaml" >/dev/null \
@@ -380,8 +399,11 @@ recorder_on() {
     controller_pod || return 1
     echo "$CTL" > "$R/pod1.txt"
     nap "${STAIRCASE_SETTLE:-20}"
-    gstream 120 exec "$(cat "$R/pod1.txt")" -c recordings -- sh -c "head -1 $RECORDINGS/learnrec-*.jsonl" > "$R/start-line.json" 2>&1
-    [ "$(jq -r .Kind "$R/start-line.json" 2>/dev/null)" = start ] || { t "no recording start line: $(head -c 200 "$R/start-line.json")"; return 1; }
+    # stderr apart: a notice kubectl exec printed there made the line fail to
+    # parse, and the run stopped on "no recording start line".
+    gstream 120 exec "$(cat "$R/pod1.txt")" -c recordings -- sh -c "head -1 $RECORDINGS/learnrec-*.jsonl" > "$R/start-line.json" 2> "$R/start-line.err"
+    [ "$(jq -r .Kind "$R/start-line.json" 2>/dev/null)" = start ] || {
+        t "no recording start line: $(head -c 200 "$R/start-line.json")$([ -s "$R/start-line.err" ] && printf ' (kubectl: %s)' "$(kube_err_reason "$R/start-line.err" | cut -c1-200)")"; return 1; }
     t "recorder on, commit $(jq -r .Data.Commit "$R/start-line.json")"
 }
 
@@ -430,7 +452,7 @@ witness() {
     # epp-metrics-token Secret".
     for i in $(seq 1 "$WITNESS_TRIES"); do
         if dep=$(kube get deploy scaling-manager-controller-manager -o json 2>"$R/witness-dep.err"); then break; fi
-        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(grep -v '^[IWEF][0-9][0-9][0-9][0-9] ' "$R/witness-dep.err" | tail -1 | cut -c1-200)"
+        t "controller Deployment read failed (try $i of $WITNESS_TRIES): $(kube_err_reason "$R/witness-dep.err" | cut -c1-200)"
         dep=""
         [ "$i" -lt "$WITNESS_TRIES" ] && nap "$WITNESS_RETRY"
     done

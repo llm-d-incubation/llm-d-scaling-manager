@@ -395,6 +395,12 @@ kc() { kubectl ${KUBE_CONTEXT:+--context "$KUBE_CONTEXT"} "$@"; }
 # succeeds (the memcache.go "Unhandled Error" discovery line while an
 # aggregated API is down, a throttling notice); read with 2>&1 they were part
 # of the answer. Sets variables: call it as `kcap ... || rc=$?`, never in $( ).
+#
+# A copy of kc_capture (deploy/lib/common.sh) on kc, which carries
+# KUBE_CONTEXT; kerr_line below copies kc_err_line and kc_is_notice from the
+# same file. This script does not source common.sh outside with_scaler_lib.
+# Once the installer change that adds kc_err_line is merged, both copies are
+# to be replaced by the originals.
 kcap() {
     local errf rc=0
     KC_OUT="" KC_ERR=""
@@ -407,7 +413,14 @@ kcap() {
 
 # kerr_line echoes the line of kubectl stderr $1 that says why the call
 # failed ("Error from server", "Unable to connect to the server", "The
-# connection to the server", "error:"), not a klog notice printed before it.
+# connection to the server", "error:"), not a notice printed before it. A
+# notice is what kc_is_notice (deploy/lib/common.sh) calls one: a klog line or
+# an API server "Warning:".
+kerr_is_notice() {
+    [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
+    case "$1" in Warning:*) return 0 ;; esac
+    return 1
+}
 kerr_line() {
     local line first="" plain=""
     while IFS= read -r line; do
@@ -417,7 +430,7 @@ kerr_line() {
             "Error from server"*|error:*|"Unable to connect"*|"The connection to the server"*)
                 printf '%s\n' "$line"; return 0 ;;
         esac
-        [ -n "$plain" ] || [[ "$line" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] || plain="$line"
+        [ -n "$plain" ] || kerr_is_notice "$line" || plain="$line"
     done <<< "$1"
     if [ -n "$plain" ]; then printf '%s\n' "$plain"
     elif [ -n "$first" ]; then printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
@@ -545,12 +558,14 @@ with_scaler_lib() {
 # Or one "unreadable<TAB>-<TAB><why>" line when the lists cannot be read.
 wiring_snapshot() {
     local sos hpas rows st so detail
-    kcap -n "$NS" get scaledobject -o json || {
+    # kc_capture, not kcap: inside with_scaler_lib, common.sh is sourced and
+    # kubectl already carries KUBE_CONTEXT (kcap would pass it twice).
+    kc_capture -n "$NS" get scaledobject -o json || {
         printf 'unreadable\t-\tthe ScaledObjects did not read: %s\n' "$(kerr_line "$KC_ERR")"; return 0; }
     sos="$KC_OUT"
     printf '%s' "$sos" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
         printf 'unreadable\t-\tthe ScaledObjects did not read as a list\n'; return 0; }
-    kcap -n "$NS" get hpa -o json || {
+    kc_capture -n "$NS" get hpa -o json || {
         printf 'unreadable\t-\tthe HPAs did not read: %s\n' "$(kerr_line "$KC_ERR")"; return 0; }
     hpas="$KC_OUT"
     printf '%s' "$hpas" | jq -e '.items | type == "array"' >/dev/null 2>&1 || {
@@ -2980,7 +2995,19 @@ print('HTTP 200' if done==$count else 'FAILED after %d of $count: %s' % (done, l
             sleep 5
             waited=$(( waited + 5 ))
         done
-        out="$(k logs "$pod" 2>&1)"
+        # The probe's own output; kubectl's stderr only when there is none, and
+        # without notices: a notice beside empty logs read as the model failing.
+        kcap -n "$NS" logs "$pod" || true
+        out="$KC_OUT"
+        if [ -z "$out" ]; then
+            local eline
+            while IFS= read -r eline; do
+                if [ -n "$eline" ] && ! kerr_is_notice "$eline"; then
+                    out="${out:+$out
+}$eline"
+                fi
+            done <<< "$KC_ERR"
+        fi
         k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1
         case "$out" in
             *"HTTP 200"*) ok "  $model answered (attempt $attempt)"; return 0 ;;
