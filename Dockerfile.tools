@@ -19,9 +19,9 @@ FROM registry.k8s.io/kubectl:v1.36.5@sha256:0667e3f3e6ef435d7cd4c16684244703ebd6
 FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9
 
 ARG TARGETARCH
-# Newer than the v4.44.3 the deploy-script checks pin in CI: v4.44.3 is built
-# with Go 1.22.5, whose fixable CRITICAL (CVE-2025-68121) fails the release's
-# blocking scan. The scripts' fixture checks pass the same under both.
+# The yq the deploy-script checks run under in CI (ci-pr-checks.yaml), so
+# they check what operators run. Not v4.44.3: its Go 1.22.5 build carries a
+# fixable CRITICAL (CVE-2025-68121) that fails the release's blocking scan.
 ARG YQ_VERSION=v4.54.1
 ARG YQ_SHA256_AMD64=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
 ARG YQ_SHA256_ARM64=189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b

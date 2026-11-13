@@ -52,6 +52,8 @@ PART="scaling-manager.llmd.ai/part"
 NSF="scaling-manager-namespaced.yaml scaling-manager-namespaced-openshift.yaml"
 CLF="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
 MAIN_FILES="$NSF $CLF"
+TOOLS_TARBALL="scaling-manager-tools-$VERSION.tar.gz"
+TOOLS_SCRIPTS="scaling-manager-tools.sh prepull.sh weights.sh enginecache.sh utilization-share.sh"
 ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-scaler-tls.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml scaling-manager-preflight.yaml scaling-manager-preflight-cluster.yaml"
 
 render() {
@@ -114,12 +116,26 @@ check_dir() {
     local d="$1" f n bad=0 sub="$WORK/sub" js="$WORK/json" keda want got ins safile split
     say() { echo "  FAIL: $*"; bad=$((bad + 1)); }
 
-    for f in $ALL_FILES SHA256SUMS; do
+    for f in $ALL_FILES SHA256SUMS $TOOLS_TARBALL; do
         [ -s "$d/$f" ] || say "$f was not written"
     done
     [ "$bad" = 0 ] || return "$bad"
     (cd "$d" && sha256sum -c --quiet SHA256SUMS >/dev/null 2>&1) || say "SHA256SUMS does not match the files"
-    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(echo $ALL_FILES | wc -w)" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files"
+    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(( $(echo $ALL_FILES | wc -w) + 1 ))" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files and $TOOLS_TARBALL"
+    grep -q "  $TOOLS_TARBALL\$" "$d/SHA256SUMS" || say "SHA256SUMS does not list $TOOLS_TARBALL"
+    # The tools tarball: the image's files under scaling-manager-tools/, the
+    # scripts executable, lib/ beside them, the version, and nothing else.
+    local listing want_list
+    listing="$(tar -tzvf "$d/$TOOLS_TARBALL" 2>/dev/null)" || { say "$TOOLS_TARBALL is not a gzip tar"; listing=""; }
+    want_list="$(cd "$ROOT/deploy" && { printf 'scaling-manager-tools/VERSION\n'; for f in $TOOLS_SCRIPTS; do printf 'scaling-manager-tools/%s\n' "$f"; done; find lib -type f ! -path '*/__pycache__/*' | sed 's#^#scaling-manager-tools/#'; } | sort)"
+    if [ "$(printf '%s\n' "$listing" | awk '$1 !~ /^d/ {print $NF}' | sort)" != "$want_list" ]; then
+        say "$TOOLS_TARBALL does not hold exactly scaling-manager-tools/{VERSION,$(echo $TOOLS_SCRIPTS | tr ' ' ',')} and lib/"
+    fi
+    for f in $TOOLS_SCRIPTS; do
+        printf '%s\n' "$listing" | grep -qE "^-rwxr-xr-x .* scaling-manager-tools/$f\$" || say "$TOOLS_TARBALL: $f is not mode 0755"
+    done
+    printf '%s\n' "$listing" | awk '{print $2}' | grep -qv '^0/0$' && say "$TOOLS_TARBALL: an entry not owned by 0/0"
+    [ "$(tar -xzOf "$d/$TOOLS_TARBALL" scaling-manager-tools/VERSION 2>/dev/null)" = "$VERSION" ] || say "$TOOLS_TARBALL: VERSION is not $VERSION"
 
     rm -rf "$js"; mkdir -p "$js"
     for f in $ALL_FILES; do
@@ -594,7 +610,7 @@ expect_wf() {
     got="$(yq -r "$3" "$WF" 2>&1)"
     if [ "$got" = "$2" ]; then pass; else fail "ci-release.yaml: $1: got '$got', want '$2'"; fi
 }
-expect_wf "release-files runs after the image is pushed and signed" 'release' '[.jobs."release-files".needs] | flatten | join(",")'
+expect_wf "release-files runs after both images are pushed and signed" 'release,release-tools' '[.jobs."release-files".needs] | flatten | join(",")'
 expect_wf "release-files may upload (contents) and sign (id-token), nothing more" \
     'contents=write,id-token=write' '.jobs."release-files".permissions | to_entries | map(.key + "=" + .value) | sort | join(",")'
 expect_wf "the image job still cannot write the release" 'read' '.jobs.release.permissions.contents'
@@ -621,12 +637,12 @@ sign_run() {
 }
 rm -rf "$WORK/wf/run"; mkdir -p "$WORK/wf/run"; cp -r "$GOOD" "$WORK/wf/run/dist"; : > "$WORK/wf/cosign.log"
 if sign_run; then
-    want=$(( $(echo $ALL_FILES | wc -w) + 1 ))
+    want=$(( $(echo $ALL_FILES | wc -w) + 2 ))
     got="$(grep -c '^sign-blob --yes --bundle ' "$WORK/wf/cosign.log")"
     bundles="$(find "$WORK/wf/run/dist" -name '*.sigstore.json' | wc -l)"
     if [ "$got" = "$want" ] && [ "$bundles" = "$want" ] && [ -s "$WORK/wf/run/dist/SHA256SUMS.sigstore.json" ]; then
         pass
-        echo "  ok: the sign step signs all $want files, SHA256SUMS included"
+        echo "  ok: the sign step signs all $want files, SHA256SUMS and the tools tarball included"
     else
         fail "the sign step made $got cosign calls and $bundles bundles, want $want each"
     fi

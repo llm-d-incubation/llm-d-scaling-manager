@@ -361,6 +361,31 @@ jobs:
         with:
           image: release-tools-scan:${{ needs.release.outputs.version }}
 
+      # The arm64 image carries other binaries (kubectl, jq, yq per arch), so
+      # it is scanned on its own, under QEMU, before anything is pushed.
+      - name: Build the arm64 tools image for scanning (not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.tools
+          platforms: linux/arm64
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: release-tools-scan-arm64:${{ needs.release.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.release.outputs.version }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Scan the arm64 tools image for fixable CRITICAL vulnerabilities (blocking)
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: release-tools-scan-arm64:${{ needs.release.outputs.version }}
+          severity: CRITICAL
+          ignore-unfixed: 'true'
+          exit-code: '1'
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -420,7 +445,9 @@ jobs:
   # pushes the image cannot touch the release. A re-run renders, signs and
   # uploads again, replacing what an earlier attempt attached.
   release-files:
-    needs: release
+    # After release-tools too: a draft release whose notes and guides point at
+    # a tools image that failed to push would install half a release.
+    needs: [release, release-tools]
     runs-on: ubuntu-latest
     permissions:
       # Upload to the GitHub Release, creating a draft when none exists.
@@ -434,12 +461,12 @@ jobs:
           persist-credentials: false
 
 
-      # The yq the rendering check runs under in the PR checks (v4.44.3),
+      # The yq the rendering check runs under in the PR checks (v4.54.1),
       # checked against its digest rather than trusted from the download.
       - name: Install yq
         env:
-          YQ_VERSION: v4.44.3
-          YQ_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
           set -euo pipefail
           curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
@@ -481,7 +508,7 @@ jobs:
         run: |
           set -euo pipefail
           n=0
-          for f in dist/*.yaml dist/SHA256SUMS; do
+          for f in dist/*.yaml dist/scaling-manager-tools-*.tar.gz dist/SHA256SUMS; do
             [ -f "$f" ] || { echo "::error::$f was not rendered"; exit 1; }
             cosign sign-blob --yes --bundle "$f.sigstore.json" "$f" >/dev/null
             n=$((n + 1))
@@ -533,7 +560,7 @@ jobs:
             echo "release $VERSION is published with these exact files; nothing to upload"
             exit 0
           fi
-          gh release upload "$VERSION" --clobber dist/*.yaml dist/SHA256SUMS dist/*.sigstore.json
+          gh release upload "$VERSION" --clobber dist/*.yaml dist/scaling-manager-tools-*.tar.gz dist/SHA256SUMS dist/*.sigstore.json
           gh release view "$VERSION" --json assets --jq '.assets[].name'
 
       - name: Summarise

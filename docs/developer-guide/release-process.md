@@ -29,7 +29,9 @@ instead.
 3. **Release notes**, in the GitHub Release. They are not kept as a file in
    this repository.
 4. **Release files**, attached to the GitHub Release by the run: the install
-   manifests rendered with the image pinned by digest, `SHA256SUMS`, and a
+   manifests rendered with the image pinned by digest,
+   `scaling-manager-tools-<tag>.tar.gz` (the tools image's scripts, for a
+   machine with no container runtime), `SHA256SUMS`, and a
    `<file>.sigstore.json` signature bundle for each. See
    [The release files](#the-release-files).
 5. **A tools image** at `ghcr.io/<repository owner>/llm-d-scaling-manager/tools:<tag>`:
@@ -123,8 +125,16 @@ draft release for the tag existed before the run, it attached the files to
 that one instead. A release that is already **published** is never changed: a
 run whose files differ from the attached ones fails, and one whose files are
 identical uploads nothing. In **Releases**, open the draft, check that the
-files are there (each `.yaml`, `SHA256SUMS`, and a `.sigstore.json` for each),
-paste the release notes, and publish. Keep the draft's first line: it names
+files are there (each `.yaml`, `scaling-manager-tools-<tag>.tar.gz`,
+`SHA256SUMS`, and a `.sigstore.json` for each), paste the release notes, and
+publish.
+
+Before publishing, check the tools image too: the `release-tools` job
+succeeded (the draft exists only if it did), and the package
+`llm-d-scaling-manager/tools` is **Public**. From a machine not logged in to
+GHCR, `docker pull ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:<tag>`
+must succeed; a `401` or `denied` means the package is still private
+([first release](#the-first-release-to-a-new-package)). Keep the draft's first line: it names
 the two supported installs, the attached files and `make deploy-scaling-manager`.
 
 ### 5. Point the docs at the release
@@ -343,8 +353,9 @@ re-run from the **Actions** tab.
 6. **Sign.** Keyless `cosign sign` of the pushed digest, with the workflow's
    OIDC identity as the signer. The run summary prints the digest and the
    verify command.
-7. **Release files** (job `release-files`, after the image job). Runs
-   `make release-manifests` with the pushed digest, signs each file and
+7. **Release files** (job `release-files`, after the image and tools jobs). Runs
+   `make release-manifests` with the pushed digest (it also packages
+   `scaling-manager-tools-<tag>.tar.gz`), signs each file and
    `SHA256SUMS` with keyless `cosign sign-blob --bundle`, and uploads them all
    with `gh release upload --clobber`, creating a draft release when the tag has
    none, and refusing to change a published one. It is the only job with

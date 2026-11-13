@@ -350,8 +350,8 @@ expect_yq "the tools image is released only after the release job (its tag guard
 expect_yq "the tools job may sign and push, reads contents, and keeps no credentials" \
     'contents=read,id-token=write,packages=write|false' \
     '(.jobs.release-tools.permissions | to_entries | map(.key + "=" + .value) | sort | join(",")) + "|" + (.jobs.release-tools.steps[] | select(.uses == "actions/checkout*") | .with."persist-credentials" | tostring)'
-expect_yq "both tools builds use Dockerfile.tools, and the push publishes the tags resolved" \
-    'Dockerfile.tools,Dockerfile.tools|${{ steps.tools-meta.outputs.tags }}' \
+expect_yq "every tools build (amd64 scan, arm64 scan, push) uses Dockerfile.tools, and the push publishes the tags resolved" \
+    'Dockerfile.tools,Dockerfile.tools,Dockerfile.tools|${{ steps.tools-meta.outputs.tags }}' \
     '([.jobs.release-tools.steps[] | select(.uses == "docker/build-push-action*") | .with.file] | join(",")) + "|" + (.jobs.release-tools.steps[] | select(.id == "tools-push") | .with.tags)'
 
 tscan_at="$(yq '[.jobs.release-tools.steps[] | (.with."exit-code" // "")] | to_entries | map(select(.value == "1")) | .[0].key // -1' "$R")"

@@ -240,7 +240,7 @@ jobs:
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         run: |
           sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
@@ -290,8 +290,8 @@ jobs:
       - name: Install yq
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         env:
-          YQ_VERSION: v4.44.3
-          YQ_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
           set -euo pipefail
           curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
@@ -308,13 +308,16 @@ jobs:
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build the arm64 tools image (not loaded)
+      - name: Build the arm64 tools image
+        id: build-tools-arm64
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile.tools
           platforms: linux/arm64
+          load: true
+          tags: scaling-manager-tools:pr-check-arm64
           push: false
           provenance: false
           sbom: false
@@ -346,6 +349,15 @@ jobs:
         uses: ./.github/actions/trivy-scan
         with:
           image: scaling-manager-tools:pr-check
+          severity: CRITICAL
+          ignore-unfixed: 'true'
+          exit-code: '1'
+
+      - name: Scan the arm64 tools image for fixable CRITICAL vulnerabilities (blocking)
+        if: ${{ !cancelled() && steps.build-tools-arm64.outcome == 'success' }}
+        uses: ./.github/actions/trivy-scan
+        with:
+          image: scaling-manager-tools:pr-check-arm64
           severity: CRITICAL
           ignore-unfixed: 'true'
           exit-code: '1'
@@ -415,7 +427,7 @@ jobs:
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         run: |
           sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
@@ -867,7 +879,7 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         run: |
           sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           yq --version
 

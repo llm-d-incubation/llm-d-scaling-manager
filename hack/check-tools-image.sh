@@ -12,7 +12,12 @@
 # dispatcher that drops an argument or the exit status, a workload-patch or
 # ScaledObject plan that walks every namespace from a command that names one,
 # an apply opt-in taken without --apply, a plan apply that rediscovers instead
-# of reading its file, or an image that runs as root.
+# of reading its file, a warm pool applied from an image that cannot create
+# one, a --controller-namespace that never reaches the scaler address, a
+# command whose arguments differ from what its make target passes (each of 21
+# targets, compared through a stub bash), a patch file that does not land in
+# the mounted working directory, or an image that runs as root or cannot read
+# a 0600 kubeconfig as the caller.
 #
 # Offline: workload-patch and scaledobjects-plan run against a stub kubectl that records each call
 # and answers only the namespace-scoped listing, so a scan of anything else
@@ -73,11 +78,13 @@ cat > "$T/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$KUBECTL_LOG"
 d="$(dirname "$KUBECTL_LOG")"
+printf 'LLMSM_NS=%s APPLY=%s WEIGHTS=%s CACHE=%s\n' "${LLMSM_NS:-}" "${LLMSM_WORKLOAD_PATCH_APPLY:-}" "${LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS:-}" "${LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE:-}" >> "$d/env.log"
 case "$*" in
     "get deployments -n demo -o json") echo '{"items":[]}' ;;
     "get deployments -n models -o json") cat "$d/models.json" ;;
     "get deployments qwen-decode -n models -o json") jq '.items[0]' "$d/models.json" ;;
     "get svc scaling-manager-external-scaler -n models -o name") echo service/scaling-manager-external-scaler ;;
+    "get svc scaling-manager-external-scaler -n ctl -o name") echo service/scaling-manager-external-scaler ;;
     "apply -f -") cat > "$d/applied.yaml"; echo "scaledobject.keda.sh/qwen-decode-llmsm created" ;;
     *) echo "stub kubectl: no answer for: $*" >&2; exit 1 ;;
 esac
@@ -272,6 +279,136 @@ wide="$(grep -E -- '(^| )(-A|--all-namespaces)( |$)' "$T/kubectl.log" || true)"
 if [ -z "$wide" ]; then ok "the plan and the apply read no namespace but models"; else fail "plan/apply listed across namespaces: $(printf '%s' "$wide" | tr '\n' ';')"; fi
 
 # ---------------------------------------------------------------------------
+echo "--controller-namespace and the apply opt-ins reach the libraries"
+# A cluster-wide controller: the plan's scaler address names its namespace,
+# not the model namespace.
+: > "$T/kubectl.log"; rm -f "$T/ctl-plan.yaml" "$T/applied.yaml"
+out="$(tools_stubbed scaledobjects-plan -n models --controller-namespace ctl --out ctl-plan.yaml 2>&1)" && rc=0 || rc=$?
+out2="$(tools_stubbed scaledobjects-apply -n models --controller-namespace ctl --plan ctl-plan.yaml 2>&1)" && rc2=0 || rc2=$?
+got="$( [ -f "$T/applied.yaml" ] && yq 'select(.kind == "ScaledObject") | .spec.triggers[0].metadata.scalerAddress' "$T/applied.yaml" 2>/dev/null || true)"
+case "$rc|$rc2|$got" in
+    "0|0|scaling-manager-external-scaler.ctl."*) ok "--controller-namespace ctl: the applied ScaledObject calls the scaler in ctl ($got)" ;;
+    *) fail "--controller-namespace ctl: plan exit $rc, apply exit $rc2, scalerAddress '$got': $(printf '%s' "$out2" | tail -2 | tr '\n' ';')" ;;
+esac
+
+# What workload-patch exports, as the stub kubectl sees it.
+: > "$T/env.log"
+tools_stubbed workload-patch -n demo >/dev/null 2>&1 || true
+plain="$(sort -u "$T/env.log" | head -1)"
+: > "$T/env.log"
+tools_stubbed workload-patch -n demo --controller-namespace ctl --apply --apply-weights --apply-engine-cache >/dev/null 2>&1 || true
+opted="$(sort -u "$T/env.log" | head -1)"
+if [ "$plain" = "LLMSM_NS=demo APPLY= WEIGHTS= CACHE=" ] && [ "$opted" = "LLMSM_NS=ctl APPLY=true WEIGHTS=true CACHE=true" ]; then
+    ok "workload-patch: --controller-namespace sets LLMSM_NS, --apply* the three LLMSM_WORKLOAD_PATCH_APPLY* variables"
+else
+    fail "workload-patch exports: without flags '$plain', with them '$opted'"
+fi
+
+# ---------------------------------------------------------------------------
+echo "The patch file lands in the working directory"
+rm -f "$T/out-patch.yaml"
+if [ -n "$IMG" ]; then
+    out="$(docker run --rm --user "$(id -u):$(id -g)" -v "$T/bin/kubectl:/usr/local/bin/kubectl:ro" \
+        -v "$T:/work" -e KUBECTL_LOG=/work/kubectl.log "$IMG" workload-patch -n models --out out-patch.yaml 2>&1)" && rc=0 || rc=$?
+else
+    out="$(tools_stubbed workload-patch -n models --out out-patch.yaml 2>&1)" && rc=0 || rc=$?
+fi
+if [ -s "$T/out-patch.yaml" ] \
+    && [ "$(yq ea '[select(.kind == "Deployment") | .metadata.name] | join(",")' "$T/out-patch.yaml" 2>/dev/null)" = qwen-decode ] \
+    && yq ea 'select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "vllm") | .lifecycle.preStop' "$T/out-patch.yaml" 2>/dev/null | grep -q . \
+    && grep -q 'VLLM_CACHE_ROOT' "$T/out-patch.yaml"; then
+    ok "workload-patch -n models --out out-patch.yaml writes the drain hook and the cache variables for qwen-decode (exit $rc)"
+else
+    fail "workload-patch --out: exit $rc, file $( [ -s "$T/out-patch.yaml" ] && echo written || echo missing): $(printf '%s' "$out" | tail -2 | tr '\n' ';')"
+fi
+
+# ---------------------------------------------------------------------------
+echo "Warm pools need a checkout"
+printf 'entries: []\nwarmPools:\n  - name: pool-a\n    namespace: models\n    apply: "yes"\n  - name: pool-b\n    namespace: models\n    apply: "no"\n' > "$T/wp-plan.yaml"
+if [ -n "$IMG" ]; then
+    out="$(tools_stubbed scaledobjects-apply -n models --plan wp-plan.yaml 2>&1)" && rc=0 || rc=$?
+else
+    # The image carries no deploy/warmpool.sh; neither does this copy.
+    rm -rf "$T/copy"; mkdir -p "$T/copy"
+    cp "$ROOT/deploy/scaling-manager-tools.sh" "$ROOT/deploy/prepull.sh" "$ROOT/deploy/weights.sh" \
+        "$ROOT/deploy/enginecache.sh" "$ROOT/deploy/utilization-share.sh" "$T/copy/"
+    cp -R "$ROOT/deploy/lib" "$T/copy/lib"
+    out="$(cd "$T" && PATH="$T/bin:$PATH" KUBECTL_LOG="$T/kubectl.log" bash "$T/copy/scaling-manager-tools.sh" scaledobjects-apply -n models --plan wp-plan.yaml 2>&1)" && rc=0 || rc=$?
+fi
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "warm pool(s) pool-a to apply: yes. Warm pools need a checkout"; then
+    ok "scaledobjects-apply refuses a plan that sets a warm pool to apply: yes, naming it"
+else
+    fail "a warm pool set to yes: exit $rc: $(printf '%s' "$out" | tail -1)"
+fi
+
+# ---------------------------------------------------------------------------
+echo "Each command passes what its make target passes"
+# A stub bash records the deploy script each side runs and its arguments; any
+# other call (make's recipe shell) goes to the real bash. Checkout only: the
+# image has no make, and runs this same entry point.
+if [ -z "$IMG" ]; then
+    command -v make >/dev/null 2>&1 || { fail "make is required for the make-target comparison (not skipping)"; }
+    REAL_BASH="$(command -v bash)"
+    mkdir -p "$T/sbin"
+    printf '%s\n' '#!/bin/sh' \
+        'case "$1" in' \
+        '    */prepull.sh|*/weights.sh|*/enginecache.sh|*/utilization-share.sh)' \
+        '        s="${1##*/}"; shift; printf "%s %s\n" "$s" "$*" >> "$ARGV_LOG"; exit 0 ;;' \
+        'esac' \
+        "exec $REAL_BASH \"\$@\"" > "$T/sbin/bash"
+    chmod 0755 "$T/sbin/bash"
+    argv_of() {
+        : > "$T/argv.log"
+        if [ "$1" = make ]; then
+            shift
+            (cd "$ROOT" && env -u NAMESPACE -u CONTROLLER_NAMESPACE -u LLMSM_NS -u LLMSM_NAMESPACE -u LLMSM_WATCH_NS -u IMAGES -u PREPULL_NODE_SELECTOR -u PREPULL_TOLERATIONS -u POLICY_NAMESPACE -u RESTART GOTOOLCHAIN=local PATH="$T/sbin:$PATH" ARGV_LOG="$T/argv.log" make -s --no-print-directory "$@" >/dev/null 2>&1) || true
+        else
+            env -u NAMESPACE -u CONTROLLER_NAMESPACE -u LLMSM_NS -u LLMSM_NAMESPACE -u LLMSM_WATCH_NS -u IMAGES -u PREPULL_NODE_SELECTOR -u PREPULL_TOLERATIONS -u POLICY_NAMESPACE -u RESTART GOTOOLCHAIN=local PATH="$T/sbin:$PATH" ARGV_LOG="$T/argv.log" "$REAL_BASH" "$ROOT/deploy/scaling-manager-tools.sh" "$@" >/dev/null 2>&1 || true
+        fi
+        tr -s ' ' < "$T/argv.log" | sed 's/ $//'
+    }
+    before=$FAILED
+    rows=0
+    while IFS='|' read -r mk tl; do
+        [ -n "$mk" ] || continue
+        rows=$((rows + 1))
+        # shellcheck disable=SC2086
+        want="$(eval "argv_of make $mk")"
+        # shellcheck disable=SC2086
+        got="$(eval "argv_of $tl")"
+        if [ -n "$want" ] && [ "$want" = "$got" ]; then
+            :
+        else
+            fail "make $mk ran [$want]; the tool ($tl) ran [$got]"
+        fi
+    done <<'ROWS'
+prepull IMAGES=q/a:1,q/b:2 NAMESPACE=demo|prepull apply -n demo --image q/a:1 --image q/b:2
+prepull IMAGES=q/a:1 NAMESPACE=demo PREPULL_NODE_SELECTOR=k=v PREPULL_TOLERATIONS=t1,t2|prepull apply -n demo --node-selector k=v --toleration t1 --toleration t2 --image q/a:1
+prepull-status NAMESPACE=demo|prepull status -n demo
+prepull-status NAMESPACE=demo IMAGES=q/a:1 PREPULL_NODE_SELECTOR=k=v|prepull status -n demo --node-selector k=v --image q/a:1
+prepull-delete NAMESPACE=demo|prepull delete -n demo --all
+prepull-delete NAMESPACE=demo IMAGES=q/a:1|prepull delete -n demo --image q/a:1
+weights WEIGHTS_MODEL=Qwen/Q WEIGHTS_PATH=/mnt/local/w WEIGHTS_IMAGE=q/a:1 NAMESPACE=demo WEIGHTS_HF_TOKEN_SECRET=hf/tok WEIGHTS_CAPACITY=100Gi WEIGHTS_MEMORY=8Gi|weights apply -n demo --model Qwen/Q --path /mnt/local/w --image q/a:1 --hf-token-secret hf/tok --capacity 100Gi --memory 8Gi
+weights-status NAMESPACE=demo WEIGHTS_MODEL=Qwen/Q|weights status -n demo --model Qwen/Q
+weights-delete NAMESPACE=demo|weights delete -n demo --all
+weights-delete NAMESPACE=demo WEIGHTS_MODEL=Qwen/Q|weights delete -n demo --model Qwen/Q
+engine-cache ENGINE_CACHE_PATH=/mnt/local/w ENGINE_CACHE_IMAGE=q/a:1 NAMESPACE=demo ENGINE_CACHE_CAPACITY=50Gi ENGINE_CACHE_SEED_CLAIM=seed:sub|engine-cache apply -n demo --path /mnt/local/w --image q/a:1 --capacity 50Gi --seed-claim seed:sub
+engine-cache-status NAMESPACE=demo|engine-cache status -n demo
+engine-cache-delete NAMESPACE=demo|engine-cache delete -n demo
+engine-cache-publish NAMESPACE=demo|engine-cache publish -n demo
+engine-cache-keys NAMESPACE=demo ENGINE_CACHE_PODS='p1 p2'|engine-cache keys -n demo p1 p2
+engine-cache-verify NAMESPACE=demo ENGINE_CACHE_KEYS=k1,k2|engine-cache verify -n demo --keys k1,k2
+utilization-share-check NAMESPACE=demo|utilization-share check -n demo
+utilization-share-shadow NAMESPACE=demo PHYSICAL_GROUPS=true|utilization-share shadow -n demo --physical-groups
+utilization-share-activate NAMESPACE=demo GRANT_SHARED=true RESTART=1|utilization-share activate -n demo --restart --grant-shared
+utilization-share-status NAMESPACE=demo CONTROLLER_NAMESPACE=ctl|utilization-share status -n demo --controller-namespace ctl
+utilization-share-off NAMESPACE=demo POLICY_NAMESPACE=pol|utilization-share off -n demo --policy-namespace pol
+ROWS
+    [ "$rows" -ge 21 ] || fail "only $rows make rows ran"
+    [ "$FAILED" -ne "$before" ] || ok "all $rows make targets and their tool commands run the same script with the same arguments"
+fi
+
+# ---------------------------------------------------------------------------
 if [ -n "$IMG" ]; then
     echo "The image"
     uid="$(docker run --rm --entrypoint /usr/bin/id "$IMG" -u)"
@@ -290,6 +427,12 @@ if [ -n "$IMG" ]; then
     if [ "$rc" = 0 ] && [ -s "$T/probe" ]; then ok "writes to the mounted /work as the caller's --user"; else fail "--user write to /work: exit $rc: $out"; fi
     out="$(docker run --rm --entrypoint /bin/sh "$IMG" -c 'echo written > probe && cat probe' 2>&1)" && rc=0 || rc=$?
     if [ "$rc" = 0 ] && [ "$out" = written ]; then ok "writes to /work with nothing mounted"; else fail "unmounted /work: exit $rc: $out"; fi
+    # A kubeconfig only its owner may read (0600, as kubectl writes it),
+    # mounted as the guide mounts it: the caller's --user reads it.
+    printf 'apiVersion: v1\nkind: Config\nclusters:\n- name: c\n  cluster:\n    server: https://127.0.0.1:1\ncontexts:\n- name: check-context\n  context:\n    cluster: c\n    user: u\ncurrent-context: check-context\nusers:\n- name: u\n  user:\n    token: not-a-token\n' > "$T/smt.kubeconfig"
+    chmod 0600 "$T/smt.kubeconfig"
+    out="$(docker run --rm --user "$(id -u):$(id -g)" -v "$T/smt.kubeconfig:/kube/config:ro" --entrypoint kubectl "$IMG" config current-context 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" = 0 ] && [ "$out" = check-context ]; then ok "reads a 0600 kubeconfig mounted at /kube/config as the caller"; else fail "0600 kubeconfig: exit $rc: $out"; fi
 fi
 
 echo

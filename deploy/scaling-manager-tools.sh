@@ -9,7 +9,7 @@
 #   scaling-manager-tools weights      apply|status|delete ...   keep a model's weights on every GPU node's disk (deploy/weights.sh)
 #   scaling-manager-tools engine-cache apply|status|delete|publish|keys|verify ...
 #                                                                keep the engines' compile caches on every GPU node's disk (deploy/enginecache.sh)
-#   scaling-manager-tools workload-patch -n NS [--apply] [--apply-weights] [--apply-engine-cache] [--out FILE]
+#   scaling-manager-tools workload-patch -n NS [--controller-namespace CNS] [--apply] [--apply-weights] [--apply-engine-cache] [--out FILE]
 #                                                                report and write what the model servers in NS still need (make workload-patch)
 #   scaling-manager-tools scaledobjects-plan -n NS [--controller-namespace CNS] [--out FILE]
 #                                                                write an editable ScaledObject plan for the model servers in NS; applies nothing
@@ -42,7 +42,14 @@
 #   make scaledobjects-apply LLMSM_DEFAULT_SO_PLAN=<f> NAMESPACE=<ns>
 #                                                       scaledobjects-apply -n <ns> --plan <f>
 #   make utilization-share-<verb> NAMESPACE=<ns>        utilization-share <verb> -n <ns>
-#   make <x>-status / <x>-delete NAMESPACE=<ns>         <x> status|delete -n <ns>
+#   make <x>-status NAMESPACE=<ns>                      <x> status -n <ns>
+#   make prepull-delete NAMESPACE=<ns>                  prepull delete -n <ns> --all   (IMAGES=<img>: --image <img>)
+#   make weights-delete NAMESPACE=<ns>                  weights delete -n <ns> --all   (WEIGHTS_MODEL=<id>: --model <id>)
+#   make engine-cache-delete NAMESPACE=<ns>             engine-cache delete -n <ns>
+#
+# Warm pools need a checkout: the plan's warmPools section is created by
+# deploy/warmpool.sh, which this image does not carry, and scaledobjects-apply
+# refuses a plan that sets one to apply: yes.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,9 +68,13 @@ cmd_version() {
     local v="unreleased (a checkout)"
     [ -f "$HERE/VERSION" ] && v="$(cat "$HERE/VERSION")"
     echo "scaling-manager-tools ${v}"
-    printf 'kubectl %s\n' "$(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null || echo 'not found')"
-    printf 'jq      %s\n' "$(jq --version 2>/dev/null || echo 'not found')"
-    printf 'yq      %s\n' "$(yq --version 2>/dev/null | sed 's/.* version //' || echo 'not found')"
+    local k="not found" j="not found" y="not found"
+    command -v kubectl >/dev/null 2>&1 && k="$(kubectl version --client -o json 2>/dev/null | jq -r '.clientVersion.gitVersion' 2>/dev/null)"
+    command -v jq >/dev/null 2>&1 && j="$(jq --version 2>/dev/null)"
+    command -v yq >/dev/null 2>&1 && y="$(yq --version 2>/dev/null | sed 's/.* version //')"
+    printf 'kubectl %s\n' "${k:-unreadable}"
+    printf 'jq      %s\n' "${j:-unreadable}"
+    printf 'yq      %s\n' "${y:-unreadable}"
     printf 'bash    %s\n' "${BASH_VERSION}"
 }
 
@@ -94,14 +105,15 @@ scope_to() {
 # cmd_workload_patch runs what `make workload-patch NAMESPACE=<ns>` runs, scoped
 # to exactly <ns>, with the make variables as flags.
 cmd_workload_patch() {
-    local ns=""
+    local ns="" ctl=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            -n|--namespace|--out)
+            -n|--namespace|--out|--controller-namespace)
                 [ $# -ge 2 ] || die "$1 needs a value" ;;
         esac
         case "$1" in
             -n|--namespace) ns="$2"; shift 2 ;;
+            --controller-namespace) ctl="$2"; shift 2 ;;
             --out) export LLMSM_WORKLOAD_PATCH_FILE="$2"; shift 2 ;;
             --apply) export LLMSM_WORKLOAD_PATCH_APPLY=true; shift ;;
             --apply-weights) export LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS=true; shift ;;
@@ -118,11 +130,12 @@ cmd_workload_patch() {
     done
     [ -n "$ns" ] || die "workload-patch needs -n <namespace>: the namespace whose model servers it reads"
     check_ns workload-patch "$ns"
+    [ -z "$ctl" ] || check_ns "workload-patch --controller-namespace" "$ctl"
     case "${LLMSM_WORKLOAD_PATCH_APPLY_WEIGHTS:-}${LLMSM_WORKLOAD_PATCH_APPLY_ENGINE_CACHE:-}" in
         *true*) [ "${LLMSM_WORKLOAD_PATCH_APPLY:-}" = true ] \
             || die "workload-patch: --apply-weights and --apply-engine-cache take effect only with --apply" ;;
     esac
-    scope_to "$ns"
+    scope_to "$ns" "$ctl"
     # shellcheck source=lib/common.sh
     source "$HERE/lib/common.sh"
     # shellcheck source=lib/scaledobject.sh
@@ -151,6 +164,8 @@ cmd_scaledobjects() {
             -h|--help)
                 sed -n "/^#   scaling-manager-tools scaledobjects-${verb}/,+1p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
                 echo "  the plan's own comments explain every field: set apply: yes, no or adopt, the modelID and the bounds"
+                echo "  --controller-namespace CNS   where the controller runs, when it is not NS (a cluster-wide install: scaling-manager-system)"
+                echo "  warm pools need a checkout: deploy/warmpool.sh creates them, and this image does not carry it"
                 return 0 ;;
             *) die "scaledobjects-${verb}: unknown option $1 (see scaledobjects-${verb} --help)" ;;
         esac
@@ -163,6 +178,12 @@ cmd_scaledobjects() {
     else
         [ -n "$file" ] || die "scaledobjects-apply needs --plan <file>: the plan scaledobjects-plan wrote, edited"
         [ -f "$file" ] || die "scaledobjects-apply: no plan at '$file' (scaledobjects-plan writes one)"
+        if [ ! -f "$HERE/warmpool.sh" ]; then
+            local pools
+            pools="$(yq '[(.warmPools // [])[] | select((.apply // "no" | tostring | downcase) == "yes" or (.apply // "no" | tostring | downcase) == "true") | .name] | join(", ")' "$file" 2>/dev/null)" \
+                || die "scaledobjects-apply: could not read the plan $file as YAML"
+            [ -z "$pools" ] || die "scaledobjects-apply: the plan sets warm pool(s) $pools to apply: yes. Warm pools need a checkout (deploy/warmpool.sh creates them, and this image does not carry it): set them to apply: \"no\" here, and create them from a checkout"
+        fi
     fi
     scope_to "$ns" "$ctl"
     export LLMSM_DEFAULT_SO_PLAN="$file"

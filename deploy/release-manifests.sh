@@ -27,7 +27,11 @@
 #     LLMSM_PREREQ_NAMED in deploy/lib/common.sh), plus any cluster-scoped or
 #     monitoring.coreos.com object of the extra files.
 #
-# Needs yq v4, sha256sum, and kustomize (KUSTOMIZE, else kustomize or
+# Beside the manifests it writes scaling-manager-tools-<version>.tar.gz, the
+# operator tools as scripts (the files of the tools image), and SHA256SUMS
+# lists it too.
+#
+# Needs yq v4, sha256sum, GNU tar, and kustomize (KUSTOMIZE, else kustomize or
 # `kubectl kustomize` on PATH). Reads no cluster.
 
 set -euo pipefail
@@ -389,8 +393,31 @@ for f in "${RELEASE_FILES[@]}"; do
     [ "$n" -gt 0 ] || die "$f holds no object"
 done
 
-(cd "$OUT" && sha256sum "${RELEASE_FILES[@]}" > SHA256SUMS)
+# The operator tools as scripts, for a machine with no container runtime: the
+# same files the tools image carries at /opt/scaling-manager-tools
+# (Dockerfile.tools), under scaling-manager-tools/. Reproducible: sorted,
+# owner 0, mtime 0, gzip without a name or time, so a re-run is byte-identical
+# and a published release's SHA256SUMS still matches.
+TOOLS_TARBALL="scaling-manager-tools-$VERSION.tar.gz"
+TOOLS_SCRIPTS=(scaling-manager-tools.sh prepull.sh weights.sh enginecache.sh utilization-share.sh)
+tar --version 2>/dev/null | grep -q 'GNU tar' || die "GNU tar is required to package $TOOLS_TARBALL reproducibly"
+stage="$WORK/tools/scaling-manager-tools"
+mkdir -p "$stage"
+for f in "${TOOLS_SCRIPTS[@]}"; do
+    install -m 0755 "$ROOT/deploy/$f" "$stage/$f"
+done
+cp -R "$ROOT/deploy/lib" "$stage/lib"
+find "$stage/lib" -name __pycache__ -prune -exec rm -rf {} +
+printf '%s\n' "$VERSION" > "$stage/VERSION"
+rm -f "$OUT"/scaling-manager-tools-*.tar.gz
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 --mode='u+rwX,go+rX,go-w' \
+    -C "$WORK/tools" -cf - scaling-manager-tools | gzip -n -9 > "$OUT/$TOOLS_TARBALL" \
+    || die "could not package $TOOLS_TARBALL"
+[ -s "$OUT/$TOOLS_TARBALL" ] || die "$TOOLS_TARBALL is empty"
+
+(cd "$OUT" && sha256sum "${RELEASE_FILES[@]}" "$TOOLS_TARBALL" > SHA256SUMS)
 for f in "${RELEASE_FILES[@]}"; do
     printf '%-45s %3s objects\n' "$f" "$(yq ea '[.] | map(select(.kind != null)) | length' "$OUT/$f")"
 done
-echo "Wrote ${#RELEASE_FILES[@]} files and SHA256SUMS to $OUT (image $IMAGE_REPO@$IMAGE_DIGEST, version $VERSION)"
+printf '%-45s %3s files\n' "$TOOLS_TARBALL" "$(tar -tzf "$OUT/$TOOLS_TARBALL" | grep -vc '/$')"
+echo "Wrote ${#RELEASE_FILES[@]} manifests, $TOOLS_TARBALL and SHA256SUMS to $OUT (image $IMAGE_REPO@$IMAGE_DIGEST, version $VERSION)"

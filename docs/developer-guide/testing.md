@@ -73,8 +73,11 @@ doc-comment owners) run from their own targets.
 
 - The checks need `jq` and `yq`. They fail, not skip, when either is missing:
   a skip would make a green run meaningless.
-- CI pins yq v4.44.3. Newer yq behaves differently in places, so reproduce a
-  CI failure with that version.
+- CI pins yq v4.54.1, the yq the release's tools image carries, so the
+  checks run what operators run. It was v4.44.3 until that version's Go
+  1.22.5 build carried a fixable CRITICAL (CVE-2025-68121); every
+  `hack/check-*` script passed under both when it moved. yq versions differ in
+  places, so reproduce a CI failure with v4.54.1.
 - `check-install-defaults.sh` covers what a plain install ships: how `IMG` is
   split (registry ports, digests), the pull policy for a reference, the
   floating-tag and unverified-Prometheus-TLS warnings, and which Prometheus
@@ -2565,7 +2568,7 @@ test, lint or e2e, so retarget it to `main` before review.
 | Workflow / job | What it runs | Reproduce locally |
 |----------------|--------------|-------------------|
 | `ci-pr-checks.yaml` / `lint-and-test` | golangci-lint v2.9.0, `make build`, `make test` | `make lint build test` |
-| `ci-pr-checks.yaml` / `deploy-scripts-check` | `make lint-deploy-scripts`, with yq pinned to v4.44.3 | `make lint-deploy-scripts`, with yq v4.44.3 on `PATH` |
+| `ci-pr-checks.yaml` / `deploy-scripts-check` | `make lint-deploy-scripts`, with yq pinned to v4.54.1 | `make lint-deploy-scripts`, with yq v4.54.1 on `PATH` |
 | `ci-pr-checks.yaml` / `tools-image` | builds `Dockerfile.tools` for `linux/arm64` and `linux/amd64`, runs `hack/check-tools-image.sh` against the amd64 image, then the release's blocking Trivy scan; skipped step by step when a PR changes only docs or metadata | `make tools-image-check` (needs docker with BuildKit) |
 | `ci-pr-checks.yaml` / `docs-check` | `make guides-check` (guide blocks vs `guide.yaml`, plus `hack/check-doc-links.py`), `make warmpool-check`, `make dashboards-check` | the same three targets (needs Python with PyYAML) |
 | `ci-pr-checks.yaml` / `kustomize-build` | `kustomize build` of the cluster-scoped kubernetes, namespace-scoped kubernetes and namespace-scoped openshift overlays | `make kustomize`, then `bin/kustomize build config/overlays/<scope>/<env> > /dev/null` |
