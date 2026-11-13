@@ -1264,8 +1264,10 @@ pl_policy_is_live() {
 # command with an error naming it when that fails.
 pl_ensure_namespace() {
     local manifest err
-    manifest="$(kubectl create namespace "$1" --dry-run=client -o yaml 2>&1)" \
-        || log_error "could not render Namespace $1: ${manifest}. Nothing was published."
+    # Streams apart (kc_capture): a notice on stderr is not part of the manifest.
+    kc_capture create namespace "$1" --dry-run=client -o yaml \
+        || log_error "could not render Namespace $1: $(kc_err_line "$KC_ERR"). Nothing was published."
+    manifest="$KC_OUT"
     err="$(printf '%s\n' "$manifest" | kubectl apply -f - 2>&1 >/dev/null)" \
         || log_error "could not create Namespace $1, where the policy is to be published: ${err}. Nothing was published."
 }

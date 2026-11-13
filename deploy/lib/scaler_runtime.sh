@@ -58,13 +58,15 @@ llmsm_keda_operator_version() {
     local out rc=0 image tag
     LLMSM_KEDA_VERSION=""
     LLMSM_KEDA_VERSION_WHY=""
-    out="$(kubectl get deployments -A -l "$KEDA_OPERATOR_LABEL_SELECTOR" \
-        -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>&1)" || rc=$?
+    # Streams apart (kc_capture): a notice on stderr is not the image.
+    kc_capture get deployments -A -l "$KEDA_OPERATOR_LABEL_SELECTOR" \
+        -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' || rc=$?
+    out="$KC_OUT"
     if [ "$rc" -ne 0 ]; then
-        if printf '%s' "$out" | grep -qi 'forbidden'; then
+        if grep -qi 'forbidden' <<< "$(kc_drop_notices "$KC_ERR")"; then
             LLMSM_KEDA_VERSION_WHY="listing Deployments cluster-wide is not permitted for you"
         else
-            LLMSM_KEDA_VERSION_WHY="reading the operator Deployment failed: $(printf '%s\n' "$out" | head -1)"
+            LLMSM_KEDA_VERSION_WHY="reading the operator Deployment failed: $(kc_err_line "$KC_ERR")"
         fi
         return 0
     fi
@@ -125,13 +127,14 @@ llmsm_keda_version_judge() {
 # none, so it is reported and not compared with KEDA's.
 llmsm_keda_cma_version_report() {
     local out rc=0 v
-    out="$(kubectl get csv -n "$KEDA_CMA_NAMESPACE" \
-        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.version}{"\n"}{end}' 2>&1)" || rc=$?
+    kc_capture get csv -n "$KEDA_CMA_NAMESPACE" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.version}{"\n"}{end}' || rc=$?
+    out="$KC_OUT"
     if [ "$rc" -ne 0 ]; then
-        if printf '%s' "$out" | grep -qi 'forbidden'; then
+        if grep -qi 'forbidden' <<< "$(kc_drop_notices "$KC_ERR")"; then
             log_warning "KEDA: could not check the Custom Metrics Autoscaler version (reading ClusterServiceVersions in $KEDA_CMA_NAMESPACE is not permitted for you)."
         else
-            log_warning "KEDA: could not check the Custom Metrics Autoscaler version: $(printf '%s\n' "$out" | head -1)"
+            log_warning "KEDA: could not check the Custom Metrics Autoscaler version: $(kc_err_line "$KC_ERR")"
         fi
         return 0
     fi
@@ -245,15 +248,19 @@ check_keda_prerequisite() {
     local probe rc=0
     # || rc=$?, never ; rc=$? -- under set -e the plain form exits on the very
     # NotFound this exists to explain.
-    probe=$(kubectl get crd scaledobjects.keda.sh -o jsonpath='{.spec.versions[*].schema.openAPIV3Schema.properties.spec.properties.fallback.properties.behavior.type}' 2>&1) || rc=$?
+    # Streams apart (kc_capture): with 2>&1 a notice on stderr made the probe
+    # non-empty, and a KEDA without fallback.behavior read as one with it.
+    kc_capture get crd scaledobjects.keda.sh -o jsonpath='{.spec.versions[*].schema.openAPIV3Schema.properties.spec.properties.fallback.properties.behavior.type}' || rc=$?
+    probe="$KC_OUT"
+    [ "$rc" -eq 0 ] || probe="$(kc_drop_notices "$KC_ERR")"
     if [ $rc -ne 0 ]; then
-        if printf '%s' "$probe" | grep -qi 'forbidden'; then
+        if grep -qi 'forbidden' <<< "$probe"; then
             log_warning "KEDA: cannot verify (reading CustomResourceDefinitions is not permitted for you), so this install assumes KEDA is present."
             log_warning "  If it is not, ScaledObjects stay unready and nothing scales. A cluster admin can confirm: kubectl get crd scaledobjects.keda.sh"
             llmsm_keda_version_report
             return 0
         fi
-        if printf '%s' "$probe" | grep -qiE 'notfound|not found'; then
+        if grep -qiE 'notfound|not found' <<< "$probe"; then
             if llmsm_keda_installs_itself; then
                 LLMSM_KEDA_STATE=absent-installing
                 log_info "KEDA: not on the cluster yet; this run installs it (chart kedacore/keda ${KEDA_CHART_VERSION:-})."
@@ -266,7 +273,7 @@ check_keda_prerequisite() {
 $(llmsm_keda_absent_advice)"
         fi
         log_error "KEDA: could not check for the scaledobjects.keda.sh CRD:
-    ${probe}
+    ${probe:-$(kc_err_line "$KC_ERR")}
 Nothing has been applied. Fix cluster access, or skip the check with SKIP_CHECKS=true."
     fi
 
@@ -349,21 +356,26 @@ $(llmsm_keda_absent_advice)"
         # a bare exit 2 and a half-applied prerequisite set instead of being
         # told to set KEDA_HELM_INSTALL=true.
         local keda_probe keda_rc=0
-        keda_probe=$(kubectl get crd scaledobjects.keda.sh 2>&1) || keda_rc=$?
+        kc_capture get crd scaledobjects.keda.sh || keda_rc=$?
+        keda_probe="$(kc_drop_notices "$KC_ERR")"
         if [ $keda_rc -eq 0 ]; then
             # Measured here, so the summary says so even when SKIP_CHECKS=true
             # skipped the preflight that would otherwise have set it.
             LLMSM_KEDA_STATE=present
             log_success "KEDA ScaledObject CRD is available on the cluster"
             llmsm_keda_version_report
-        elif printf '%s' "$keda_probe" | grep -qi 'forbidden'; then
+        elif grep -qi 'forbidden' <<< "$keda_probe"; then
             log_warning "Cannot check for the KEDA CRD (reading cluster-scoped CRDs is not permitted for you), so this install assumes KEDA is present."
             log_warning "  If it is not, ScaledObjects will stay unready and nothing will scale. Confirm with whoever administers the cluster."
             llmsm_keda_version_report
-        else
+        elif grep -qiE 'notfound|not found' <<< "$keda_probe"; then
             log_error "Kubernetes: scaledobjects.keda.sh CRD not found.
 
 $(llmsm_keda_absent_advice)"
+        else
+            # Not every failure is an absent CRD: a timeout is not.
+            log_error "Kubernetes: could not check for the scaledobjects.keda.sh CRD: $(kc_err_line "$KC_ERR")
+Nothing about KEDA was changed. Fix cluster access and re-run."
         fi
         return
     fi

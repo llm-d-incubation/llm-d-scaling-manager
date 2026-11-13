@@ -38,7 +38,7 @@ FAIL=0
 PASS=0
 # Every case reports ok or FAIL exactly once; a run that stops early must not
 # pass having checked less. Change this deliberately with the cases.
-EXPECT_CASES=25
+EXPECT_CASES=27
 
 for tool in jq yq openssl; do
     command -v "$tool" >/dev/null 2>&1 || { printf 'FATAL: %s is required.\n' "$tool" >&2; exit 1; }
@@ -447,6 +447,32 @@ if printf '%s' "$h" | grep -q 'refusing' && printf '%s' "$h" | grep -q 'rc=1' &&
     ok "child process: a kubectl write from a child process is refused and never reaches the cluster"
 else
     fail "child process: a direct kubectl write must be refused" "$h"
+fi
+
+# The render's reads of the live cluster, behind a notice kubectl prints on
+# stderr while the read itself succeeds (or fails saying nothing else). Read
+# with 2>&1, a notice was an object to delete. NOISY_MODE: empty (the list
+# matched nothing) or fail (exit 1, only the notice on stderr).
+cat > "$WORK/noisy-kubectl" <<'NOISYEOF'
+#!/usr/bin/env bash
+echo 'E1113 09:55:01.123456 4242 memcache.go:265] "Unhandled Error" err="could not get resource list for external.metrics.k8s.io/v1beta1: the server is currently unable to handle the request"' >&2
+case "${NOISY_MODE:-empty}" in
+    fail) exit 1 ;;
+esac
+exit 0
+NOISYEOF
+chmod +x "$WORK/noisy-kubectl"
+h="$(helper 'LLMSM_RENDER_KUBECTL="'"$WORK/noisy-kubectl"'"; export NOISY_MODE=empty; llmsm_render_delete clusterrolebindings -l app.kubernetes.io/name=nothing-here')"
+if printf '%s' "$h" | grep -q 'not found, nothing to delete (rendered)'; then
+    ok "render delete: a selector that matched nothing is nothing to delete, whatever kubectl printed on stderr"
+else
+    fail "render delete: behind a notice, an empty match must record no delete" "$h"
+fi
+h="$(helper 'LLMSM_RENDER_KUBECTL="'"$WORK/noisy-kubectl"'"; export NOISY_MODE=fail; llmsm_render_delete clusterrolebinding some-binding; echo "ns=$(llmsm_render_ns_state team-z)"')"
+if ! printf '%s' "$h" | grep -q 'nothing to delete' && printf '%s' "$h" | grep -q '^ns=unknown$'; then
+    ok "render delete: a read that failed saying only notices is unknown, so the delete is recorded and the namespace unknown"
+else
+    fail "render delete: a failure behind notices alone must record the delete, and leave the namespace unknown" "$h"
 fi
 
 # --- refusals ----------------------------------------------------------------------

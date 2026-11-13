@@ -96,6 +96,46 @@ llmsm_scaler_not_found() {
     printf '%s' "$1" | grep -qF '(NotFound)'
 }
 
+# llmsm_scaler_get_json runs `kubectl "$@"` (a get with -o json) and sets
+# LLMSM_GET_OUT to the object it printed. Returns 0 with it; 1 when kubectl
+# failed, with its stderr in LLMSM_GET_ERR (for llmsm_scaler_not_found); 2 when
+# kubectl succeeded but printed no JSON object, said in LLMSM_GET_ERR.
+#
+# The two streams stay apart (kc_capture). kubectl writes to stderr on a read
+# that succeeds: a discovery error from memcache.go ("Unhandled Error ... get
+# resource list for external.metrics.k8s.io/v1beta1: the server is currently
+# unable to handle the request") while an aggregated API is briefly down, or a
+# client-side throttling notice. Read with 2>&1, that line came first, the
+# parse of the whole failed, and a Secret this installer wrote read as foreign
+# and empty: verify-deployment then said KEDA's CA does not verify the scaler's
+# certificate, of certificates that matched, and the install failed.
+#
+# What a read that succeeded printed besides its answer is kept, not dropped:
+# each notice (kc_notices) is appended to LLMSM_SCALER_NOTICES, which the trust
+# check names when it reports a mismatch, so the next one says what kubectl
+# printed while it read.
+llmsm_scaler_get_json() {
+    local rc=0 first
+    LLMSM_GET_OUT=""
+    LLMSM_GET_ERR=""
+    kc_capture "$@" || rc=$?
+    if [ "$rc" != 0 ]; then
+        LLMSM_GET_ERR="${KC_ERR:-kubectl exited $rc}"
+        return 1
+    fi
+    [ -z "$KC_ERR" ] || LLMSM_SCALER_NOTICES="${LLMSM_SCALER_NOTICES:+$LLMSM_SCALER_NOTICES
+}$(kc_notices "$KC_ERR")"
+    if ! printf '%s' "$KC_OUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        # What stdout started with, and what kubectl said on stderr with it.
+        # One line: the message is read by its first line (kc_err_line).
+        first="$(printf '%s' "${KC_OUT:0:80}" | tr '\n' ' ')"
+        LLMSM_GET_ERR="kubectl $* succeeded but printed no JSON object: ${first:-nothing on stdout}"
+        [ -z "$KC_ERR" ] || LLMSM_GET_ERR="$LLMSM_GET_ERR; on stderr: $(printf '%s\n' "$KC_ERR" | sed -n '/./p' | sed -n '1p')"
+        return 2
+    fi
+    LLMSM_GET_OUT="$KC_OUT"
+}
+
 # llmsm_scaler_tls_read_live sets LLMSM_SCALER_TLS_LIVE from the running controller
 # Deployment:
 #   absent      no Deployment yet (a new install)
@@ -108,15 +148,16 @@ llmsm_scaler_tls_read_live() {
     LLMSM_SCALER_TLS_LIVE=absent
     LLMSM_SCALER_TLS_LIVE_ERR=""
     LLMSM_SCALER_TLS_LIVE_FLAGS=""
-    out="$(kubectl get deployment scaling-manager-controller-manager -n "$LLMSM_NS" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get deployment scaling-manager-controller-manager -n "$LLMSM_NS" -o json || rc=$?
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$out"; then
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then
             return 0
         fi
         LLMSM_SCALER_TLS_LIVE=unreadable
-        LLMSM_SCALER_TLS_LIVE_ERR="$(printf '%s\n' "$out" | head -1)"
+        LLMSM_SCALER_TLS_LIVE_ERR="$(kc_err_line "$LLMSM_GET_ERR")"
         return 0
     fi
+    out="$LLMSM_GET_OUT"
     provider="$(printf '%s' "$out" | jq -r --arg k "$LLMSM_SCALER_TLS_ANNOTATION" \
         '.spec.template.metadata.annotations[$k] // ""' 2>/dev/null)" || provider=""
     has_flag="$(printf '%s' "$out" | jq -r \
@@ -138,35 +179,37 @@ llmsm_scaler_tls_read_live() {
 # The discovery document is readable by every authenticated user, so a tenant
 # gets the same answer an admin does; any error but NotFound is unknown.
 llmsm_cert_manager_api() {
-    local out rc=0
-    out="$(kubectl get --raw /apis/cert-manager.io 2>&1)" || rc=$?
+    local rc=0
+    kc_capture get --raw /apis/cert-manager.io || rc=$?
     if [ "$rc" = 0 ]; then
         LLMSM_CERT_MANAGER_API=present
-    elif llmsm_scaler_not_found "$out"; then
+    elif llmsm_scaler_not_found "$KC_ERR"; then
         LLMSM_CERT_MANAGER_API=absent
     else
         LLMSM_CERT_MANAGER_API=unknown
-        LLMSM_CERT_MANAGER_API_ERR="$(printf '%s\n' "$out" | head -1)"
+        LLMSM_CERT_MANAGER_API_ERR="$(kc_err_line "$KC_ERR")"
     fi
 }
 
 # llmsm_scaler_object_state reads object $1 (a resource, e.g. secret) named $2 in
 # LLMSM_NS and sets LLMSM_OBJ_STATE to absent, ours, foreign or unreadable, with the
-# object in LLMSM_OBJ_JSON. "ours" means it carries LLMSM_SCALER_TLS_LABEL.
+# object in LLMSM_OBJ_JSON. "ours" means it carries LLMSM_SCALER_TLS_LABEL. A read
+# that printed no object is unreadable, never foreign (llmsm_scaler_get_json).
 llmsm_scaler_object_state() {
     local resource="$1" name="$2" out rc=0 owner
     LLMSM_OBJ_JSON=""
     LLMSM_OBJ_STATE=absent
     LLMSM_OBJ_ERR=""
-    out="$(kubectl get "$resource" "$name" -n "$LLMSM_NS" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get "$resource" "$name" -n "$LLMSM_NS" -o json || rc=$?
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$out"; then
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then
             return 0
         fi
         LLMSM_OBJ_STATE=unreadable
-        LLMSM_OBJ_ERR="$(printf '%s\n' "$out" | head -1)"
+        LLMSM_OBJ_ERR="$(kc_err_line "$LLMSM_GET_ERR")"
         return 0
     fi
+    out="$LLMSM_GET_OUT"
     LLMSM_OBJ_JSON="$out"
     owner="$(printf '%s' "$out" | jq -r --arg k "$LLMSM_SCALER_TLS_LABEL" '.metadata.labels[$k] // ""' 2>/dev/null)" || owner=""
     if [ -n "$owner" ]; then
@@ -563,13 +606,14 @@ llmsm_scaler_tls_provision_cert_manager() {
     llmsm_scaler_cert_manager_manifest > "$d/certs.yaml"
     # A dry run on the server goes through cert-manager's webhook: CRDs that are
     # installed with no webhook answering fail here, before anything is written.
-    out="$(kubectl apply --dry-run=server -f "$d/certs.yaml" 2>&1)" || rc=$?
+    kc_capture apply --dry-run=server -f "$d/certs.yaml" || rc=$?
     if [ "$rc" != 0 ]; then
         rm -rf "$d"
+        out="$(kc_drop_notices "$KC_ERR" | sed -n '/./p' | sed -n '1,3p')"
         llmsm_scaler_tls_give_up "cert-manager is installed but would not accept the scaler's Issuers and Certificates in $LLMSM_NS:
-$(printf '%s\n' "$out" | head -3)
+${out:-$(kc_err_line "$KC_ERR")}
 Fix cert-manager (or the permission), or re-run with LLMSM_SCALER_TLS_PROVIDER=openssl." \
-            "cert-manager would not accept the scaler's Issuers and Certificates in $LLMSM_NS ($(printf '%s\n' "$out" | head -1)); fix cert-manager, or re-run with LLMSM_SCALER_TLS_PROVIDER=openssl"
+            "cert-manager would not accept the scaler's Issuers and Certificates in $LLMSM_NS ($(kc_err_line "$KC_ERR")); fix cert-manager, or re-run with LLMSM_SCALER_TLS_PROVIDER=openssl"
         return 0
     fi
     if ! kubectl apply -f "$d/certs.yaml" >/dev/null; then
@@ -716,13 +760,13 @@ llmsm_scaler_address() {
 #   plaintext  no TLS, or no controller there
 #   unknown    its Deployment could not be read
 llmsm_scaler_mode_of() {
-    local out rc=0
-    out="$(kubectl get deployment scaling-manager-controller-manager -n "$1" -o json 2>&1)" || rc=$?
+    local rc=0
+    llmsm_scaler_get_json get deployment scaling-manager-controller-manager -n "$1" -o json || rc=$?
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$out"; then echo plaintext; else echo unknown; fi
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then echo plaintext; else echo unknown; fi
         return 0
     fi
-    printf '%s' "$out" | jq -r --arg a "$LLMSM_SCALER_TLS_ANNOTATION" '
+    printf '%s' "$LLMSM_GET_OUT" | jq -r --arg a "$LLMSM_SCALER_TLS_ANNOTATION" '
         ([.spec.template.spec.containers[]? | select(.name == "manager") | (.args // [])[]
           | select(startswith("--external-scaler-cert-path"))] | length) as $f
         | (.spec.template.metadata.annotations[$a] // "") as $p
@@ -823,13 +867,13 @@ llmsm_scaler_keda_object_ns() {
 # llmsm_scaler_keda_api echoes present when the ClusterTriggerAuthentication kind
 # is served, absent when it is not, unknown when discovery failed.
 llmsm_scaler_keda_api() {
-    local out rc=0
-    out="$(kubectl get --raw /apis/keda.sh/v1alpha1 2>&1)" || rc=$?
+    local rc=0
+    llmsm_scaler_get_json get --raw /apis/keda.sh/v1alpha1 || rc=$?
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$out"; then echo absent; else echo unknown; fi
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then echo absent; else echo unknown; fi
         return 0
     fi
-    if printf '%s' "$out" | jq -e '[.resources[]?.name] | index("clustertriggerauthentications")' >/dev/null 2>&1; then
+    if printf '%s' "$LLMSM_GET_OUT" | jq -e '[.resources[]?.name] | index("clustertriggerauthentications")' >/dev/null 2>&1; then
         echo present
     else
         echo absent
@@ -869,12 +913,12 @@ llmsm_scaler_keda_auth_check() {
         unreadable) log_error "Cannot read Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS ($LLMSM_OBJ_ERR). Grant get on secrets there, or set LLMSM_SCALER_TLS=false." ;;
         *) log_error "Secret $name in $LLMSM_SCALER_KEDA_OBJ_NS was not created by this installer (no $LLMSM_SCALER_TLS_LABEL label); refusing to overwrite it. Remove or rename it, or set LLMSM_SCALER_TLS=false." ;;
     esac
-    out="$(kubectl get clustertriggerauthentications.keda.sh "$name" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get clustertriggerauthentications.keda.sh "$name" -o json || rc=$?
     if [ "$rc" = 0 ]; then
-        printf '%s' "$out" | jq -e --arg k "$LLMSM_SCALER_TLS_LABEL" '.metadata.labels[$k] // empty' >/dev/null 2>&1 \
+        printf '%s' "$LLMSM_GET_OUT" | jq -e --arg k "$LLMSM_SCALER_TLS_LABEL" '.metadata.labels[$k] // empty' >/dev/null 2>&1 \
             || log_error "ClusterTriggerAuthentication $name was not created by this installer (no $LLMSM_SCALER_TLS_LABEL label); refusing to overwrite it. Remove or rename it, or set LLMSM_SCALER_TLS=false."
-    elif ! llmsm_scaler_not_found "$out"; then
-        log_error "Cannot read ClusterTriggerAuthentication $name ($(printf '%s\n' "$out" | head -1)). Grant get on clustertriggerauthentications.keda.sh, or set LLMSM_SCALER_TLS=false."
+    elif [ "$rc" != 1 ] || ! llmsm_scaler_not_found "$LLMSM_GET_ERR"; then
+        log_error "Cannot read ClusterTriggerAuthentication $name ($(kc_err_line "$LLMSM_GET_ERR")). Grant get on clustertriggerauthentications.keda.sh, or set LLMSM_SCALER_TLS=false."
     fi
     # The marker: the controller phase trusts what it says, so a same-named
     # ConfigMap someone else wrote is never taken over.
@@ -1169,15 +1213,16 @@ llmsm_scaler_keda_marker_state() {
     LLMSM_SCALER_KEDA_EXPIRING=false
     LLMSM_SCALER_KEDA_CA_STALE=false
     LLMSM_SCALER_KEDA_MARKER_NS=""
-    out="$(kubectl get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json || rc=$?
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$out"; then
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then
             LLMSM_SCALER_KEDA_WHY="the cluster admin has not written KEDA's side yet"
         else
-            LLMSM_SCALER_KEDA_WHY="ConfigMap $LLMSM_SCALER_KEDA_MARKER in $LLMSM_NS could not be read"
+            LLMSM_SCALER_KEDA_WHY="ConfigMap $LLMSM_SCALER_KEDA_MARKER in $LLMSM_NS could not be read ($(kc_err_line "$LLMSM_GET_ERR"))"
         fi
         return 0
     fi
+    out="$LLMSM_GET_OUT"
     cta="$(printf '%s' "$out" | jq -r '.data.clusterTriggerAuthentication // ""')"
     sha="$(printf '%s' "$out" | jq -r '.data.clientCertSha256 // ""')"
     LLMSM_SCALER_KEDA_MARKER_NS="$(printf '%s' "$out" | jq -r '.data.secretNamespace // ""')"
@@ -1695,11 +1740,12 @@ llmsm_scaler_keda_conn_state() {
         return 0
     fi
     rc=0
-    pods="$(kubectl get pods -n "$kns" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get pods -n "$kns" -o json || rc=$?
     if [ "$rc" != 0 ]; then
-        LLMSM_SCALER_KEDA_CONN_WHY="the controller refused handshakes for an unknown authority, but the Pods in $kns, where KEDA runs, cannot be read ($(printf '%s\n' "$pods" | head -1)), so whether KEDA sent them is not known"
+        LLMSM_SCALER_KEDA_CONN_WHY="the controller refused handshakes for an unknown authority, but the Pods in $kns, where KEDA runs, cannot be read ($(kc_err_line "$LLMSM_GET_ERR")), so whether KEDA sent them is not known"
         return 0
     fi
+    pods="$LLMSM_GET_OUT"
     LLMSM_SCALER_KEDA_CONN_PODS="$(printf '%s' "$pods" | jq -r --arg h "$hosts" '
         ($h | split("\n")) as $hs
         | [.items[]? | select([(.status.podIPs // [])[]?.ip, (.status.podIP // empty)] | any(. as $ip | $hs | any(. == $ip)))
@@ -1711,7 +1757,8 @@ llmsm_scaler_keda_conn_state() {
     # The certificate KEDA was given, against the client CA the controller
     # trusts now.
     rc=0
-    out="$(kubectl get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get configmap "$LLMSM_SCALER_KEDA_MARKER" -n "$LLMSM_NS" -o json || rc=$?
+    out="$LLMSM_GET_OUT"
     d="$(mktemp -d)"
     [ "$rc" = 0 ] && printf '%s' "$out" | jq -r '.data.clientCert // ""' > "$d/keda.crt" 2>/dev/null || : > "$d/keda.crt"
     llmsm_scaler_object_state secret "$LLMSM_SCALER_CLIENT_SECRET"
@@ -1764,6 +1811,8 @@ llmsm_scaler_keda_trust_state() {
     local name copy_ns="" d out rc=0
     LLMSM_SCALER_KEDA_TRUST=unread
     LLMSM_SCALER_KEDA_TRUST_WHY=""
+    # Only what this check's own reads printed (llmsm_scaler_get_json).
+    LLMSM_SCALER_NOTICES=""
     name="$(llmsm_scaler_keda_auth_name)"
     if ! command -v openssl >/dev/null 2>&1; then
         LLMSM_SCALER_KEDA_TRUST_WHY="openssl is not on PATH"
@@ -1813,13 +1862,44 @@ llmsm_scaler_keda_trust_state() {
     fi
     LLMSM_SCALER_KEDA_TRUST=mismatch
     if [ ! -s "$d/keda-ca.crt" ] || ! openssl verify -CAfile "$d/keda-ca.crt" "$d/serving.crt" >/dev/null 2>&1; then
-        LLMSM_SCALER_KEDA_TRUST_WHY="the CA KEDA trusts (ca.crt of Secret $name in $copy_ns) does not verify the scaler's serving certificate (Secret $LLMSM_SCALER_TLS_SECRET in $LLMSM_NS): KEDA rejects the scaler, which logs \"remote error: tls: bad certificate\""
+        LLMSM_SCALER_KEDA_TRUST_WHY="the CA KEDA trusts (ca.crt of Secret $name in $copy_ns) does not verify the scaler's serving certificate (Secret $LLMSM_SCALER_TLS_SECRET in $LLMSM_NS): KEDA rejects the scaler, which logs \"remote error: tls: bad certificate\". $(llmsm_scaler_trust_evidence "$d/keda-ca.crt" "KEDA's ca.crt" "$d/serving.crt" "the serving certificate")"
     elif [ ! -s "$d/keda.crt" ] || ! openssl verify -CAfile "$d/client-ca.crt" "$d/keda.crt" >/dev/null 2>&1; then
-        LLMSM_SCALER_KEDA_TRUST_WHY="the controller's client CA (Secret $LLMSM_SCALER_CLIENT_SECRET in $LLMSM_NS) does not verify KEDA's client certificate (tls.crt of Secret $name in $copy_ns): the scaler refuses KEDA"
+        LLMSM_SCALER_KEDA_TRUST_WHY="the controller's client CA (Secret $LLMSM_SCALER_CLIENT_SECRET in $LLMSM_NS) does not verify KEDA's client certificate (tls.crt of Secret $name in $copy_ns): the scaler refuses KEDA. $(llmsm_scaler_trust_evidence "$d/client-ca.crt" "the client CA" "$d/keda.crt" "KEDA's client certificate")"
     else
         LLMSM_SCALER_KEDA_TRUST=ok
     fi
     rm -rf "$d"
+}
+
+# llmsm_scaler_cert_brief echoes what certificate file $1 is, for a message:
+# its subject, issuer and SHA-256 fingerprint, or that it is empty or no
+# certificate.
+llmsm_scaler_cert_brief() {
+    local subj iss fp
+    [ -s "$1" ] || { echo "empty"; return 0; }
+    subj="$(openssl x509 -in "$1" -noout -subject 2>/dev/null | sed 's/^subject= *//')" || subj=""
+    [ -n "$subj" ] || { echo "not a certificate ($(wc -c < "$1" | tr -d ' ') bytes)"; return 0; }
+    iss="$(openssl x509 -in "$1" -noout -issuer 2>/dev/null | sed 's/^issuer= *//')" || iss=""
+    fp="$(openssl x509 -in "$1" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//')" || fp=""
+    echo "subject \"$subj\", issuer \"$iss\", sha256 $fp"
+}
+
+# llmsm_scaler_trust_evidence echoes, for a trust mismatch, CA file $1 (named
+# $2) and certificate $3 (named $4) as llmsm_scaler_cert_brief describes them,
+# openssl's reason, and what kubectl printed on stderr during reads that
+# succeeded (LLMSM_SCALER_NOTICES): enough to tell certificates that differ from
+# a read that went wrong.
+llmsm_scaler_trust_evidence() {
+    local why notices
+    # Captured first, filtered after: in one pipeline, the failing verify
+    # failed the whole under pipefail (install.sh), and the reason was lost.
+    why="$(openssl verify -CAfile "$1" "$3" 2>&1 || true)"
+    why="$(printf '%s\n' "$why" | sed -n '/error/p' | sed -n '1p')"
+    printf '%s: %s; %s: %s' "$2" "$(llmsm_scaler_cert_brief "$1")" "$4" "$(llmsm_scaler_cert_brief "$3")"
+    [ -z "$why" ] || printf '; openssl: %s' "$why"
+    notices="$(printf '%s\n' "${LLMSM_SCALER_NOTICES:-}" | sed -n '/./p' | sed -n '1,3p' | tr '\n' ' ')"
+    [ -z "$notices" ] || printf '; kubectl also printed, on reads that succeeded: %s' "$notices"
+    printf '\n'
 }
 
 # llmsm_scaler_tls_stay_plaintext names the ScaledObjects a plaintext scaler
@@ -1964,9 +2044,10 @@ llmsm_scaler_so_wiring() {
     if [ "$rc" != 0 ] || [ -z "$so" ]; then echo unknown; return 0; fi
     hname="$(printf '%s' "$so" | jq -r --arg n "$name" '.status.hpaName // ("keda-hpa-" + $n)' 2>/dev/null)" || hname="keda-hpa-$name"
     rc=0
-    hpa="$(kubectl get hpa "$hname" -n "$ns" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get hpa "$hname" -n "$ns" -o json || rc=$?
+    hpa="$LLMSM_GET_OUT"
     if [ "$rc" != 0 ]; then
-        if llmsm_scaler_not_found "$hpa"; then hpa='{}'; else echo unknown; return 0; fi
+        if [ "$rc" = 1 ] && llmsm_scaler_not_found "$LLMSM_GET_ERR"; then hpa='{}'; else echo unknown; return 0; fi
     fi
     printf '%s' "$so" | jq -r --arg ns "$LLMSM_NS" --argjson h "$hpa" "$LLMSM_SCALER_ADDRESS_JQ"'
         if ([.status.conditions[]? | select(.type == "Paused" and .status == "True")] | length) > 0 then "paused"
@@ -2269,7 +2350,9 @@ llmsm_scaler_tls_undeploy() {
         marker_ns="$(printf '%s' "$LLMSM_OBJ_JSON" | jq -r '.data.secretNamespace // ""' 2>/dev/null)" || marker_ns=""
     fi
 
-    out="$(kubectl get clustertriggerauthentications.keda.sh "$name" -o json 2>&1)" || rc=$?
+    llmsm_scaler_get_json get clustertriggerauthentications.keda.sh "$name" -o json || rc=$?
+    out="$LLMSM_GET_OUT"
+    [ "$rc" = 0 ] || out="$LLMSM_GET_ERR"
     if [ "$rc" = 0 ]; then
         if ! printf '%s' "$out" | jq -e --arg k "$LLMSM_SCALER_TLS_LABEL" '.metadata.labels[$k] // empty' >/dev/null 2>&1; then
             log_warning "ClusterTriggerAuthentication $name was not created by this installer (no $LLMSM_SCALER_TLS_LABEL label); left in place."
@@ -2280,10 +2363,10 @@ llmsm_scaler_tls_undeploy() {
         else
             log_warning "Could not remove ClusterTriggerAuthentication $name."
         fi
-    elif llmsm_scaler_not_found "$out"; then
+    elif [ "$rc" = 1 ] && llmsm_scaler_not_found "$out"; then
         cta_gone=true
     else
-        log_warning "Could not read ClusterTriggerAuthentication $name ($(printf '%s\n' "$out" | head -1)); left in place."
+        log_warning "Could not read ClusterTriggerAuthentication $name ($(kc_err_line "$out")); left in place."
     fi
 
     # Where KEDA reads its Secrets, worked out from sources a tenant cannot

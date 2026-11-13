@@ -580,6 +580,27 @@ llmsm_keda_unreachable_rc() {
     return 1
 }
 
+# llmsm_verify_scaler_is_tls succeeds when the controller in LLMSM_NS serves the
+# installer's mutual TLS. Plaintext or hand-set TLS is nothing to check here.
+# A controller Deployment that cannot be read is said, not passed over: the
+# check did not run, and silence read as a pass.
+llmsm_verify_scaler_is_tls() {
+    local f mode
+    # In this shell, not $( ): the read's error (LLMSM_GET_ERR) is said below.
+    LLMSM_GET_ERR=""
+    f="$(mktemp)" || return 1
+    llmsm_scaler_mode_of "$LLMSM_NS" > "$f"
+    mode="$(cat "$f")"
+    rm -f "$f"
+    case "$mode" in
+        tls) return 0 ;;
+        unknown)
+            log_info "  Could not check that KEDA's certificates match the scaler: the controller Deployment scaling-manager-controller-manager in $LLMSM_NS cannot be read ($(kc_err_line "${LLMSM_GET_ERR:-}")), so whether it serves TLS is not known."
+            return 1 ;;
+    esac
+    return 1
+}
+
 # llmsm_verify_scaler_keda_trust checks, when the controller serves the
 # installer's mutual TLS, that what KEDA was given matches the scaler: the CA in
 # the Secret KEDA's ClusterTriggerAuthentication reads verifies the scaler's
@@ -589,7 +610,7 @@ llmsm_keda_unreachable_rc() {
 # said as not checked, and returns 0: never "ok".
 llmsm_verify_scaler_keda_trust() {
     declare -F llmsm_scaler_keda_trust_state >/dev/null || return 0
-    [ "$(llmsm_scaler_mode_of "$LLMSM_NS")" = tls ] || return 0
+    llmsm_verify_scaler_is_tls || return 0
     llmsm_scaler_keda_trust_state
     case "$LLMSM_SCALER_KEDA_TRUST" in
         ok)
@@ -615,7 +636,7 @@ llmsm_verify_scaler_keda_trust() {
 # naming the fix. Nothing installed yet, or plaintext: nothing to check.
 llmsm_check_scaler_keda() {
     declare -F llmsm_scaler_keda_conn_state >/dev/null || return 0
-    [ "$(llmsm_scaler_mode_of "$LLMSM_NS")" = tls ] || return 0
+    llmsm_verify_scaler_is_tls || return 0
     local bad=false
     LLMSM_ALLOW_STALE_KEDA=false llmsm_verify_scaler_keda_trust || bad=true
     llmsm_scaler_keda_conn_state

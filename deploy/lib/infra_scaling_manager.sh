@@ -92,10 +92,11 @@ LLMSM_WATCH_GRANT_KEY="llm-d.ai/watch-grant-for"
 # RoleBinding this install labelled as its own. Fails when RoleBindings cannot
 # be listed cluster-wide: an unreadable list is not an empty one.
 llmsm_granted_namespaces() {
-    local out
-    out="$(kubectl get rolebindings -A -l "${LLMSM_WATCH_GRANT_KEY}=$(llmsm_ns_suffix "$LLMSM_NS")" \
-        -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>&1)" || { printf '%s\n' "$out" >&2; return 1; }
-    printf '%s\n' "$out" | grep -v '^$' | sort -u || true
+    # Streams apart (kc_capture): with 2>&1 a notice on stderr was listed as a
+    # namespace to revoke.
+    kc_capture get rolebindings -A -l "${LLMSM_WATCH_GRANT_KEY}=$(llmsm_ns_suffix "$LLMSM_NS")" \
+        -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' || { kc_err_line "$KC_ERR" >&2; return 1; }
+    printf '%s\n' "$KC_OUT" | grep -v '^$' | sort -u || true
 }
 
 # llmsm_revoke_namespace removes from namespace $1 what this install added there:
