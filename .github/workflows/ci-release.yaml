@@ -285,8 +285,9 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # The workload-preparation tools image (Dockerfile.tools): prepull, weights,
-  # engine-cache and workload-patch for an operator with no checkout
+  # The operator tools image (Dockerfile.tools): prepull, weights,
+  # engine-cache, workload-patch, the ScaledObject plan and utilization share
+  # for an operator with no checkout
   # (docs/guides/prepare-workloads). Pushed to <controller image>/tools under
   # the same version, moving `latest` only when the controller's did, and
   # scanned and signed the same way. After the release job, so the tag passed

@@ -18,8 +18,9 @@ IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager:$(IMG_TAG)
 # The warm-pool proxy ships as its own image because it runs in the pool's Pod,
 # not the controller's. Pin a digest in the manifest; this tag is for building.
 WARMPOOL_PROXY_IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager/warmpool-proxy:$(IMG_TAG)
-# The workload-preparation tools (Dockerfile.tools): prepull, weights,
-# engine-cache and workload-patch without a checkout. The release publishes it.
+# The operator tools (Dockerfile.tools): prepull, weights, engine-cache,
+# workload-patch, the ScaledObject plan and utilization share without a
+# checkout. The release publishes it.
 TOOLS_IMG ?= $(IMAGE_TAG_BASE)/llm-d-scaling-manager/tools:$(IMG_TAG)
 KIND_ARGS ?= -t mix -n 3 -g 2   # Default: 3 nodes, 2 GPUs per node, mixed vendors
 # The kind cluster create-kind-cluster and destroy-kind-cluster act on: the
@@ -3563,11 +3564,11 @@ docker-push-warmpool-proxy: ## Push the warm-pool proxy image.
 # BuildKit reads Dockerfile.tools.dockerignore; the default .dockerignore
 # excludes deploy/, which is all this image carries.
 .PHONY: docker-build-tools
-docker-build-tools: ## Build the workload-preparation tools image. TOOLS_IMG=<ref>
+docker-build-tools: ## Build the operator tools image. TOOLS_IMG=<ref>
 	DOCKER_BUILDKIT=1 $(CONTAINER_TOOL) build --build-arg VERSION=$(IMG_TAG) -t ${TOOLS_IMG} -f Dockerfile.tools .
 
 .PHONY: docker-push-tools
-docker-push-tools: ## Push the workload-preparation tools image.
+docker-push-tools: ## Push the operator tools image.
 	$(CONTAINER_TOOL) push ${TOOLS_IMG}
 
 .PHONY: tools-image-check

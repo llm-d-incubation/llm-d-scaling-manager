@@ -259,8 +259,10 @@ Set `minReplicaCount` and `maxReplicaCount` so the current replica count lies
 between them. A model scaled by KEDA already? Add the trigger beside yours
 instead, as [Try it in passive mode](../try-in-passive-mode/#3-register-the-models)
 shows. Every trigger field: [ScaledObject trigger](../../reference/scaledobject-trigger.md).
-From a checkout, `make scaledobjects-plan` writes these for every model server
-it finds.
+The release's tools image writes these for every model server it finds:
+`scaledobjects-plan -n $NAMESPACE --out plan.yaml`, edit, then
+`scaledobjects-apply -n $NAMESPACE --plan plan.yaml` (how to run it: [Prepare
+model servers](../prepare-workloads/#prerequisites)).
 
 #### Let it scale
 

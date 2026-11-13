@@ -5,4 +5,5 @@
 !deploy/prepull.sh
 !deploy/weights.sh
 !deploy/enginecache.sh
+!deploy/utilization-share.sh
 !deploy/lib/

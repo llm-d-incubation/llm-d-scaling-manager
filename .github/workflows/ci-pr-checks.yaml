@@ -267,7 +267,7 @@ jobs:
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
         run: make lint-deploy-scripts
 
-  # The workload-preparation tools image the release publishes beside the
+  # The operator tools image the release publishes beside the
   # controller (Dockerfile.tools; release-tools in ci-release.yaml). Built here
   # for both release platforms, so a wrong arm64 digest fails the PR rather
   # than the tag; then the amd64 build is run by hack/check-tools-image.sh,

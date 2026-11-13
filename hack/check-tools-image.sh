@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Executes the workload-preparation tools entry point (deploy/scaling-manager-tools.sh)
+# Executes the operator tools entry point (deploy/scaling-manager-tools.sh)
 # and asserts what it does: from the checkout, or, with TOOLS_IMG=<image>, from
 # the tools image the release publishes (Dockerfile.tools).
 #
@@ -8,12 +8,13 @@
 #
 # Every defect this covers builds, starts and prints help: an image whose
 # scripts differ from the checkout's (it renders other manifests than the
-# make targets), a yq or jq other than the one CI checks the scripts under, a
-# dispatcher that drops an argument or the exit status, a workload-patch that
-# walks every namespace from a command that names one, an apply opt-in taken
-# without --apply, or an image that runs as root.
+# make targets), a yq or jq other than the one Dockerfile.tools pins, a
+# dispatcher that drops an argument or the exit status, a workload-patch or
+# ScaledObject plan that walks every namespace from a command that names one,
+# an apply opt-in taken without --apply, a plan apply that rediscovers instead
+# of reading its file, or an image that runs as root.
 #
-# Offline: workload-patch runs against a stub kubectl that records each call
+# Offline: workload-patch and scaledobjects-plan run against a stub kubectl that records each call
 # and answers only the namespace-scoped listing, so a scan of anything else
 # fails the run.
 set -euo pipefail
@@ -66,21 +67,34 @@ tools_stubbed() {
 }
 
 mkdir -p "$T/bin"
+# demo is empty; models holds one llm-d decode Deployment, whose ScaledObject
+# the stub takes on `apply -f -` into applied.yaml beside the log.
 cat > "$T/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$KUBECTL_LOG"
+d="$(dirname "$KUBECTL_LOG")"
 case "$*" in
     "get deployments -n demo -o json") echo '{"items":[]}' ;;
+    "get deployments -n models -o json") cat "$d/models.json" ;;
+    "get deployments qwen-decode -n models -o json") jq '.items[0]' "$d/models.json" ;;
+    "get svc scaling-manager-external-scaler -n models -o name") echo service/scaling-manager-external-scaler ;;
+    "apply -f -") cat > "$d/applied.yaml"; echo "scaledobject.keda.sh/qwen-decode-llmsm created" ;;
     *) echo "stub kubectl: no answer for: $*" >&2; exit 1 ;;
 esac
 EOF
+cat > "$T/models.json" <<'EOF'
+{"items":[{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"qwen-decode","namespace":"models"},
+ "spec":{"replicas":1,"template":{"metadata":{"labels":{"llm-d.ai/inferenceServing":"true","llm-d.ai/role":"decode"}},
+ "spec":{"containers":[{"name":"vllm","image":"quay.io/example/vllm:v1","args":["--model","Qwen/Qwen3-0.6B","--served-model-name","Qwen/Qwen3-0.6B"]}]}}}}]}
+EOF
+chmod 0644 "$T/models.json"
 chmod 0755 "$T/bin/kubectl"
 
 # ---------------------------------------------------------------------------
 echo "The commands"
 out="$(tools help 2>&1)" && rc=0 || rc=$?
 missing=""
-for c in prepull weights engine-cache workload-patch version; do
+for c in prepull weights engine-cache workload-patch scaledobjects-plan scaledobjects-apply utilization-share version; do
     printf '%s' "$out" | grep -q "scaling-manager-tools $c" || missing="$missing $c"
 done
 if [ "$rc" = 0 ] && [ -z "$missing" ]; then ok "help exits 0 and names every command"; else fail "help: exit $rc, missing:${missing}"; fi
@@ -96,6 +110,20 @@ for c in prepull weights engine-cache; do
     out="$(tools "$c" --help 2>&1)" && rc=0 || rc=$?
     if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q -- "--dry-run"; then ok "$c --help reaches the script"; else fail "$c --help: exit $rc"; fi
 done
+# utilization-share.sh prints its usage on stderr and exits 2.
+out="$(tools utilization-share --help 2>&1)" && rc=0 || rc=$?
+if printf '%s' "$out" | grep -q "utilization-share.sh check"; then ok "utilization-share --help reaches the script"; else fail "utilization-share --help: exit $rc"; fi
+out="$(tools utilization-share check 2>&1)" && rc=0 || rc=$?
+if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "models' namespace"; then ok "utilization-share check without -n exits non-zero ($rc)"; else fail "utilization-share check without -n: exit $rc"; fi
+# The verb and -n reach the script: check reads the controller status in demo
+# first, and a read the stub refuses is a failure, not a pass.
+: > "$T/kubectl.log"
+out="$(tools_stubbed utilization-share check -n demo 2>&1)" && rc=0 || rc=$?
+if [ "$rc" != 0 ] && grep -q "get configmap scaling-manager-controller-status -n demo" "$T/kubectl.log"; then
+    ok "utilization-share check -n demo reads the controller status in demo, and fails when it cannot"
+else
+    fail "utilization-share check -n demo: exit $rc, calls: $(tr '\n' ';' < "$T/kubectl.log")"
+fi
 
 # A failing script's status reaches the caller: an apply missing what it needs.
 for c in prepull weights engine-cache; do
@@ -183,6 +211,65 @@ for STUB_SCOPE in "" cluster; do
     if [ "$rc" = 0 ]; then ok "$label on an empty namespace exits 0"; else fail "$label: exit $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ';')"; fi
 done
 unset STUB_SCOPE
+
+# ---------------------------------------------------------------------------
+echo "scaledobjects-plan and scaledobjects-apply"
+refuse() {
+    local label="$1" want="$2"; shift 2
+    out="$(tools "$@" 2>&1)" && rc=0 || rc=$?
+    if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q -- "$want"; then ok "$label"; else fail "$label: exit $rc: $(printf '%s' "$out" | head -1)"; fi
+}
+refuse "scaledobjects-plan without -n is refused" "needs -n" scaledobjects-plan
+refuse "scaledobjects-apply without --plan is refused" "needs --plan" scaledobjects-apply -n demo
+refuse "scaledobjects-apply with no plan file is refused" "no plan at" scaledobjects-apply -n demo --plan /nonexistent/plan.yaml
+refuse "scaledobjects-plan --plan is refused (it writes, with --out)" "takes --out" scaledobjects-plan -n demo --plan x.yaml
+refuse "a controller namespace that is not a name is refused" "not a namespace name" scaledobjects-plan -n demo --controller-namespace 'Bad_NS'
+
+for STUB_SCOPE in "" cluster; do
+    label="scaledobjects-plan -n demo${STUB_SCOPE:+ (LLMSM_SCOPE=$STUB_SCOPE)}"
+    : > "$T/kubectl.log"
+    out="$(tools_stubbed scaledobjects-plan -n demo 2>&1)" && rc=0 || rc=$?
+    calls="$(cat "$T/kubectl.log")"
+    [ -z "${CHECK_TOOLS_VERBOSE:-}" ] || printf '    kubectl: %s\n' "$(printf '%s' "$calls" | tr '\n' ';')"
+    if printf '%s\n' "$calls" | grep -qx "get deployments -n demo -o json"; then
+        ok "$label lists the Deployments in demo"
+    else
+        fail "$label never listed deployments in demo; calls: $(printf '%s' "$calls" | tr '\n' ';')"
+    fi
+    other="$(printf '%s\n' "$calls" | grep -E '^get (deployments|leaderworkersets|pods|statefulsets|namespaces)' | grep -v -- ' -n demo ' || true)"
+    wide="$(printf '%s\n' "$calls" | grep -E -- '(^| )(-A|--all-namespaces)( |$)' || true)"
+    if [ -z "$other" ] && [ -z "$wide" ]; then
+        ok "$label reads no workload outside demo"
+    else
+        fail "$label read outside demo: $(printf '%s %s' "$other" "$wide" | tr '\n' ';')"
+    fi
+    if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q "No llm-d model servers found"; then
+        ok "$label on an empty namespace says so and exits 0"
+    else
+        fail "$label: exit $rc: $(printf '%s' "$out" | tail -2 | tr '\n' ';')"
+    fi
+done
+unset STUB_SCOPE
+
+# A model server is planned, and the edited plan is applied as a ScaledObject:
+# the whole release-only registration, end to end against the stub.
+: > "$T/kubectl.log"; rm -f "$T/so-plan.yaml" "$T/applied.yaml"
+out="$(tools_stubbed scaledobjects-plan -n models --out so-plan.yaml 2>&1)" && rc=0 || rc=$?
+entry="$( [ -f "$T/so-plan.yaml" ] && yq '[.. | select(tag == "!!map" and .name == "qwen-decode")][0] | .apply + "|" + .modelID' "$T/so-plan.yaml" 2>/dev/null || true)"
+if [ "$rc" = 0 ] && [ "$entry" = 'yes|Qwen/Qwen3-0.6B' ]; then
+    ok "scaledobjects-plan -n models writes an entry for the model server: apply yes, its modelID"
+else
+    fail "scaledobjects-plan -n models: exit $rc, entry '$entry': $(printf '%s' "$out" | tail -2 | tr '\n' ';')"
+fi
+out="$(tools_stubbed scaledobjects-apply -n models --plan so-plan.yaml 2>&1)" && rc=0 || rc=$?
+got="$( [ -f "$T/applied.yaml" ] && yq 'select(.kind == "ScaledObject") | .metadata.namespace + "/" + .metadata.name + "|" + .spec.scaleTargetRef.name + "|" + .spec.triggers[0].metadata.scalerAddress' "$T/applied.yaml" 2>/dev/null || true)"
+case "$got" in
+    "models/qwen-decode-llmsm|qwen-decode|scaling-manager-external-scaler.models"*)
+        if [ "$rc" = 0 ]; then ok "scaledobjects-apply applies that plan: ScaledObject $got"; else fail "scaledobjects-apply: applied, then exit $rc"; fi ;;
+    *) fail "scaledobjects-apply --plan so-plan.yaml: exit $rc, applied '$got': $(printf '%s' "$out" | tail -2 | tr '\n' ';')" ;;
+esac
+wide="$(grep -E -- '(^| )(-A|--all-namespaces)( |$)' "$T/kubectl.log" || true)"
+if [ -z "$wide" ]; then ok "the plan and the apply read no namespace but models"; else fail "plan/apply listed across namespaces: $(printf '%s' "$wide" | tr '\n' ';')"; fi
 
 # ---------------------------------------------------------------------------
 if [ -n "$IMG" ]; then

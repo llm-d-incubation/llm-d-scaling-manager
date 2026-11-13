@@ -1,6 +1,7 @@
-# The workload-preparation tools: deploy/prepull.sh, deploy/weights.sh,
-# deploy/enginecache.sh and the workload-patch report, with the kubectl, jq and
-# yq they call, so an operator runs them from a release without a checkout:
+# The operator tools: deploy/prepull.sh, deploy/weights.sh,
+# deploy/enginecache.sh, deploy/utilization-share.sh, the workload-patch report
+# and the ScaledObject plan, with the kubectl, jq and yq they call, so an
+# operator runs them from a release without a checkout:
 #
 #   docker run --rm --user "$(id -u):$(id -g)" \
 #     -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
@@ -18,10 +19,12 @@ FROM registry.k8s.io/kubectl:v1.36.5@sha256:0667e3f3e6ef435d7cd4c16684244703ebd6
 FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9
 
 ARG TARGETARCH
-# The yq the deploy-script checks run under in CI (ci-pr-checks.yaml).
-ARG YQ_VERSION=v4.44.3
-ARG YQ_SHA256_AMD64=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
-ARG YQ_SHA256_ARM64=0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156
+# Newer than the v4.44.3 the deploy-script checks pin in CI: v4.44.3 is built
+# with Go 1.22.5, whose fixable CRITICAL (CVE-2025-68121) fails the release's
+# blocking scan. The scripts' fixture checks pass the same under both.
+ARG YQ_VERSION=v4.54.1
+ARG YQ_SHA256_AMD64=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
+ARG YQ_SHA256_ARM64=189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b
 # The jq of the CI runners (ubuntu-24.04), not the base image's 1.6.
 ARG JQ_VERSION=jq-1.7.1
 ARG JQ_SHA256_AMD64=5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5
@@ -34,7 +37,10 @@ LABEL org.opencontainers.image.source="${IMAGE_SOURCE}"
 LABEL org.opencontainers.image.description="llm-d-scaling-manager tools - prepare model servers for scaling: image pre-pull, node-local weights and engine caches, workload patch"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
+# util-linux for `column`, which the ScaledObject plan's table is printed with.
 RUN set -eu; \
+    microdnf install -y --nodocs util-linux; \
+    microdnf clean all; \
     arch="${TARGETARCH:-amd64}"; \
     case "$arch" in \
         amd64) yqsum="$YQ_SHA256_AMD64"; jqsum="$JQ_SHA256_AMD64" ;; \
@@ -50,7 +56,7 @@ RUN set -eu; \
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 
 # The scripts keep their checkout layout: each sources lib/ beside it.
-COPY deploy/scaling-manager-tools.sh deploy/prepull.sh deploy/weights.sh deploy/enginecache.sh /opt/scaling-manager-tools/
+COPY deploy/scaling-manager-tools.sh deploy/prepull.sh deploy/weights.sh deploy/enginecache.sh deploy/utilization-share.sh /opt/scaling-manager-tools/
 COPY deploy/lib/ /opt/scaling-manager-tools/lib/
 RUN printf '%s\n' "$VERSION" > /opt/scaling-manager-tools/VERSION && \
     chmod 0755 /opt/scaling-manager-tools/*.sh && \

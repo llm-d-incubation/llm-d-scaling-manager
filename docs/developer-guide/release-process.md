@@ -33,9 +33,10 @@ instead.
    `<file>.sigstore.json` signature bundle for each. See
    [The release files](#the-release-files).
 5. **A tools image** at `ghcr.io/<repository owner>/llm-d-scaling-manager/tools:<tag>`:
-   `deploy/prepull.sh`, `deploy/weights.sh`, `deploy/enginecache.sh` and the
-   workload-patch report, with kubectl, jq and yq, from `Dockerfile.tools`.
-   Operators prepare their model servers with it and no checkout
+   `deploy/prepull.sh`, `deploy/weights.sh`, `deploy/enginecache.sh`,
+   `deploy/utilization-share.sh`, the workload-patch report and the
+   ScaledObject plan, with kubectl, jq and yq, from `Dockerfile.tools`.
+   Operators prepare and register their model servers with it and no checkout
    ([Prepare model servers](../guides/prepare-workloads/)).
 
 A tag is released only from `main`, or from its own line's
