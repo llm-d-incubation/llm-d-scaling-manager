@@ -809,6 +809,93 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/results.csv",
 		"ttft-staircase-c-on/variant-capacities.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
 	},
+
+	// llm-d-incubation/llm-d-scaling-manager#97
+	// (saturation.SwitchLowerBoundCapsRouterShare, throughput_floor.go): a
+	// prefill the floor prices on a lower bound keeps its router-queue share
+	// only up to floor.LowerBoundGrowthCap, with
+	// SwitchPrefillKeepsRouterPrompts on. Alone, from all off, no prefill is
+	// priced on a lower bound (the busy-share bound is off, and no recording
+	// turns enablePrefillThroughputBound on) and the share is dropped, so it
+	// moves nothing; all on, it cuts the flow-control-on staircase's runaway,
+	// whose outputs SwitchPrefillBusyShareBound's and
+	// SwitchPrefillKeepsRouterPrompts' rows already name. Its unit test
+	// holds it (heldBy).
+	saturation.SwitchLowerBoundCapsRouterShare: nil,
+
+	// llm-d-incubation/llm-d-scaling-manager#97
+	// (saturation.SwitchPrefillBusyShareBound, prefill_busy_share.go): a
+	// prefill with no window of its own is priced on its busy-share bound,
+	// max(RequestRate, ranks / AvgServiceTime) kept as the back-pressure bound
+	// keeps its readings, the held figure dropped when the prompt length moves
+	// past 20 % and kept across a restart, and no reading from a service time
+	// under a quarter of TTFT less queue time. It moves every P/D fixture
+	// whose prefill rows carry a service time, and only prefill's demand (its
+	// role, its variant capacity and the model total); no decode row moves.
+	// Measured all on against the base (main e83f33477), in prefill replicas
+	// the demand implies at the 0.85 target:
+	//
+	//   - Up, with no order moved: ols-sweep (140 cycles, to at most 0.36),
+	//     ols-sweep-slo (60, 0.34), ols-sweep-slo-restart (80, 0.38),
+	//     throughput-sweep (60, 0.35), throughput-sweep-restart (210, 0.37),
+	//     pd-restart (141, 0.11 -> 0.16), ttft-open-loop-long (61, 0.10),
+	//     ttft-open-loop-short (59, 0.09), ttft-staircase-a-off (125, 0.35),
+	//     engine (2, 0.29 -> 0.66) and acceptance (12 rows, +25 000 tokens on
+	//     a prefill variant). acceptance's and engine's learned-state gain the
+	//     prefill-busy window (one sample, 2160 tokens/s).
+	//   - ttft-saturated (52 cycles): to at most 2.0 from 0.42, and one
+	//     replica ordered on 16 cycles where none was. Its prompts grow to
+	//     30,000 tokens; the replicas served 3.1 req/s with their queues near
+	//     empty, and the bound, its held figure dropped at the length change,
+	//     reads 3.9-6 req/s there.
+	//   - ttft-staircase-b-off (224 cycles) and -b-on (268): prefill at most
+	//     1.50 and 1.58 replicas, from 0.19 and 0.29: two from about 28
+	//     req/s, the rate the two-replica fleet first missed 200 ms p90 TTFT
+	//     at. Two were running, so no order moves.
+	//   - ttft-three-pods (157 cycles): to at most 3.03 from 1.60, and one
+	//     replica ordered on 3 cycles (19:05:26, 19:11:26, 19:11:41) where
+	//     none was, at RequiredCapacity under 0.04 of a replica.
+	//   - ttft-staircase-c-on: up on 245 cycles before the runaway (two
+	//     replicas from about 05:00), down on 22 in it (05:51-05:59). There
+	//     the router share is capped (SwitchLowerBoundCapsRouterShare, all
+	//     on) and the floor's drain price replaces prefill's engine-queue
+	//     charge: demand 3.2-3.8M -> the 3 126 824 cap, or 1.5-1.9M on 3
+	//     cycles, and one replica fewer ordered on 21 cycles (at most 2 where
+	//     it was 3).
+	//
+	// Up is the cost side; c-on's runaway cycles are the SLO side.
+	saturation.SwitchPrefillBusyShareBound: {
+		"acceptance/learned-state.csv", "acceptance/results.csv", "acceptance/variant-capacities.csv",
+		"engine/composite-results.csv", "engine/composite-roles.csv", "engine/learned-state.csv",
+		"engine/results.csv", "engine/variant-capacities.csv", "ols-sweep-slo-restart/composite-results.csv",
+		"ols-sweep-slo-restart/composite-roles.csv", "ols-sweep-slo-restart/results.csv",
+		"ols-sweep-slo-restart/variant-capacities.csv", "ols-sweep-slo/composite-results.csv",
+		"ols-sweep-slo/composite-roles.csv", "ols-sweep-slo/results.csv", "ols-sweep-slo/variant-capacities.csv",
+		"ols-sweep/composite-results.csv", "ols-sweep/composite-roles.csv", "ols-sweep/results.csv",
+		"ols-sweep/variant-capacities.csv", "pd-restart/composite-results.csv", "pd-restart/composite-roles.csv",
+		"pd-restart/results.csv", "pd-restart/variant-capacities.csv",
+		"throughput-sweep-restart/composite-results.csv", "throughput-sweep-restart/composite-roles.csv",
+		"throughput-sweep-restart/results.csv", "throughput-sweep-restart/variant-capacities.csv",
+		"throughput-sweep/composite-results.csv", "throughput-sweep/composite-roles.csv",
+		"throughput-sweep/results.csv", "throughput-sweep/variant-capacities.csv",
+		"ttft-open-loop-long/composite-results.csv", "ttft-open-loop-long/composite-roles.csv",
+		"ttft-open-loop-long/results.csv", "ttft-open-loop-long/variant-capacities.csv",
+		"ttft-open-loop-short/composite-results.csv", "ttft-open-loop-short/composite-roles.csv",
+		"ttft-open-loop-short/results.csv", "ttft-open-loop-short/variant-capacities.csv",
+		"ttft-saturated/composite-results.csv", "ttft-saturated/composite-roles.csv", "ttft-saturated/results.csv",
+		"ttft-saturated/variant-capacities.csv", "ttft-staircase-a-off/composite-results.csv",
+		"ttft-staircase-a-off/composite-roles.csv", "ttft-staircase-a-off/results.csv",
+		"ttft-staircase-a-off/variant-capacities.csv", "ttft-staircase-b-off/composite-results.csv",
+		"ttft-staircase-b-off/composite-roles.csv", "ttft-staircase-b-off/results.csv",
+		"ttft-staircase-b-off/variant-capacities.csv", "ttft-staircase-b-on/composite-results.csv",
+		"ttft-staircase-b-on/composite-roles.csv", "ttft-staircase-b-on/results.csv",
+		"ttft-staircase-b-on/variant-capacities.csv", "ttft-staircase-c-on/composite-results.csv",
+		"ttft-staircase-c-on/composite-roles.csv", "ttft-staircase-c-on/composite-variants.csv",
+		"ttft-staircase-c-on/results.csv", "ttft-staircase-c-on/variant-capacities.csv",
+		"ttft-staircase-c-on/warm-pool-pressure.csv", "ttft-three-pods/composite-results.csv",
+		"ttft-three-pods/composite-roles.csv", "ttft-three-pods/results.csv",
+		"ttft-three-pods/variant-capacities.csv",
+	},
 })
 
 // learner4b2Seams is learner PR 4b-2's switches, earlier seams now (merged
@@ -1171,6 +1258,11 @@ func withSeams(more, rows map[string][]string) map[string][]string {
 // test that holds the same on either side is a control, not a hold, and is
 // not listed here.
 var heldBy = map[string][]heldTest{
+	// llm-d-incubation/llm-d-scaling-manager#97: runs the switch on and off
+	// and asserts both (the share capped at one doubling on, whole off).
+	saturation.SwitchLowerBoundCapsRouterShare: {
+		{"../saturation", "TestPrefillOnALowerBoundKeepsTheRouterShareCapped"},
+	},
 	// Issue ev-shindin/llm-scaling-manager#397: each runs the switch on and off and asserts both (the
 	// n-dependence cases pass on and fail every seed off; a fleet the bound
 	// grew grows at most once on and stays put off).
@@ -1820,6 +1912,31 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"start-restored/variant-capacities.csv":     "60110dafe6b3cfabbfff6e77817d6f20a08a437f55c860cc6995a96f4e3f4571",
 	"start-seed-restart/variant-capacities.csv": "a51d5988cc6f7cd34659fca3d492dc53727bbd73c34916a46b30a0127cb78a09",
 	"start-seed/variant-capacities.csv":         "6a99f3797ea08c447a5eb25933c93607f073b7adf819b9188cced35bde1eb3ce",
+
+	// llm-d-incubation/llm-d-scaling-manager#97's outputs no earlier switch
+	// names, as main holds them at e83f33477.
+	"engine/composite-results.csv":                "f7233378ea38340c09d645e9e092bddf7a1d572b08d49c756af732ad2a2d972b",
+	"engine/composite-roles.csv":                  "b845ffd3ff9c44ad1d49336b9e8beb82f7c1a3d3c14104c9244f7ff083c0cc27",
+	"engine/warm-pool-pressure.csv":               "b21d22185b8cf0edf619b520e4c99492cf290f1d53d9dc33958e2d54ac321db1",
+	"ttft-open-loop-long/composite-results.csv":   "15d527988a105f14abb88b9d85b3015eb56e5202cc266fb68c72a51f1981f361",
+	"ttft-open-loop-long/composite-roles.csv":     "725f74488dc0adbda2dda2df3af0a60fa94639c4c4f76b5c5816362550f77b91",
+	"ttft-open-loop-long/composite-variants.csv":  "19c9a76420fd3622d29833bf9b6a160922b8a9588b44da1d47f30d6d61c0835a",
+	"ttft-open-loop-long/results.csv":             "3fa5e42dcf9f74c6a241337493b602165c5ccdb5af49f044119b424f02a2c98e",
+	"ttft-open-loop-long/variant-capacities.csv":  "bbe3fc9e402b4c12338f843d212bcc5a1669c2cf3f4913e14768b80dc279012c",
+	"ttft-open-loop-long/warm-pool-pressure.csv":  "8ce588002d05ccface7a81db0b9e9ddc739ea972ad3652160ad65a50c23a5de4",
+	"ttft-open-loop-short/composite-results.csv":  "f415a0d5935a6982d933952c4c50e45b9da993f8255f81a831b2e8f67afb06fa",
+	"ttft-open-loop-short/composite-roles.csv":    "229f9d1d6069edf42156a7d46808eb5cefa0e3441b20b940e57934dd3111ce8f",
+	"ttft-open-loop-short/composite-variants.csv": "cc60023170cb5080ed412b4d670da339618fde31706ec8b6fa82d6c6cefd15ec",
+	"ttft-open-loop-short/results.csv":            "c71728bc2433df3ecae11288cd34970ddd1328c7154e2e8e4329fee7b75e5085",
+	"ttft-open-loop-short/variant-capacities.csv": "d3b868a24dc02e5b598b2791562a0f09d160d50df72f54a8a531c636ddc4f992",
+	"ttft-open-loop-short/warm-pool-pressure.csv": "c0c9ef5c5f218c2792574dd4da57ad145c0d3dc4a3fdd937af0dad40ad9eac39",
+	"ttft-staircase-a-off/composite-roles.csv":    "022fa35ed0cfef615a129deb0fa28f994c323ea10a93f984d048e9686572dfc0",
+	"ttft-staircase-a-off/composite-variants.csv": "be84dd0695a07f9b0ce28eda7800972febf9fab772ce0ab318c891f0447f4d4b",
+	"ttft-staircase-a-off/variant-capacities.csv": "4667e45f5071acd7e44e3fef6ed9aa97d889f036d50cf8c5d206ca9b3f972f53",
+	"ttft-staircase-a-off/warm-pool-pressure.csv": "e1e4184614e27d89b98d04cc724fa61d0aa26b34bc5027426a7d7d8565ca4854",
+	"ttft-three-pods/composite-results.csv":       "64bac89a52b8f0e074071f0e0589af0ce2eb90fe695710b799fe3d70aa313d22",
+	"ttft-three-pods/composite-roles.csv":         "2c3a760244cf8716819c5df0cc8ae50a33a5ce0beecede41dd641a17c9c6cb4b",
+	"ttft-three-pods/results.csv":                 "71710411b93d1e1004983761847dc3ebc31589e7cdb4ea68ab6b9bc33259cf87",
 })
 
 // The slow tests of this package run in parallel with each other (each
@@ -1839,6 +1956,12 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 		for _, o := range outs {
 			named[o] = true
 			require.Contains(t, switchBase, o, "an output a switch names needs its base digest")
+		}
+	}
+	for _, in := range switchInteractions {
+		for _, o := range in.outputs {
+			named[o] = true
+			require.Contains(t, switchBase, o, "an output two switches move together needs its base digest")
 		}
 	}
 	set := func(on ...string) map[string]bool {
@@ -1869,8 +1992,13 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 		sw[name] = false
 		sets = append(sets, sw)
 	}
+	for _, in := range switchInteractions {
+		sets = append(sets, set(in.switches...))
+	}
 	runs := replaySets(t, m, sets)
-	off, alone, on, earlierOff := runs[0], runs[1:1+len(mine)], runs[1+len(mine)], runs[2+len(mine):]
+	off, alone, on := runs[0], runs[1:1+len(mine)], runs[1+len(mine)]
+	earlierOff := runs[2+len(mine) : 2+len(mine)+len(earlier)]
+	together := runs[2+len(mine)+len(earlier):]
 
 	// moved is the outputs that differ between two runs, sorted, each
 	// logged with the replay's one-line summary of how.
@@ -1920,7 +2048,56 @@ func TestGoldens_TheSwitchRuns(t *testing.T) {
 		require.ElementsMatch(t, earlierSeams[name], got, "%s off alone must move exactly the outputs its PR named", name)
 		t.Logf("%s off alone moves %d outputs: %v", name, len(got), got)
 	}
+	// An output switches move only together is in none of their rows, since
+	// none alone moves it; together, on from all off, they move exactly
+	// their rows and the outputs named for them.
+	for i, in := range switchInteractions {
+		label := strings.Join(in.switches, "+")
+		got := moved(label, off, together[i])
+		want := slices.Clone(in.outputs)
+		for _, name := range in.switches {
+			for _, o := range replaySwitches[name] {
+				if !slices.Contains(want, o) {
+					want = append(want, o)
+				}
+			}
+		}
+		require.ElementsMatch(t, want, got, "%s together must move exactly their rows and the outputs named for them", label)
+		for _, name := range in.switches {
+			for _, o := range in.outputs {
+				require.NotContains(t, replaySwitches[name], o, "%s is %s's alone: not an interaction", o, name)
+			}
+		}
+	}
 }
+
+// switchInteraction is outputs switches of replaySwitches move only
+// together: none of their rows may name them (each alone must move exactly
+// its row), so they are named here, the switches run on together from all
+// off.
+type switchInteraction struct {
+	switches []string
+	outputs  []string
+}
+
+// switchInteractions is every set of switches in replaySwitches that moves
+// outputs none of them moves alone.
+//
+// llm-d-incubation/llm-d-scaling-manager#97's busy-share bound raises
+// prefill's role demand on fixtures where no other switch gives prefill a
+// floor, and SwitchThroughputFloorRaisesVariants lifts a raised role's
+// variants: on these fixtures the prefill variant's composite-variants and
+// warm-pool-pressure rows move only with both on. The other fixtures' variant
+// outputs are already in SwitchThroughputFloorRaisesVariants' row.
+var switchInteractions = []switchInteraction{{
+	switches: []string{saturation.SwitchPrefillBusyShareBound, saturation.SwitchThroughputFloorRaisesVariants},
+	outputs: []string{
+		"engine/composite-variants.csv", "engine/warm-pool-pressure.csv",
+		"ttft-open-loop-long/composite-variants.csv", "ttft-open-loop-long/warm-pool-pressure.csv",
+		"ttft-open-loop-short/composite-variants.csv", "ttft-open-loop-short/warm-pool-pressure.csv",
+		"ttft-staircase-a-off/composite-variants.csv", "ttft-staircase-a-off/warm-pool-pressure.csv",
+	},
+}}
 
 // replaySets replays every fixture of m once per switch set, and returns,
 // per set, its outputs by fixture/file. Each fixture's recording is read

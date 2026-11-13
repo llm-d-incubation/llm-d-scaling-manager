@@ -1050,6 +1050,13 @@ small even for long prompts. A queue that builds while decode is saturated too
 is not taken as prefill's capacity, because prefill then waits on decode. With
 [`enablePrefillThroughputBound`](#enableprefillthroughputbound) on, it is kept
 as a lower bound instead, which lets the router's arrival rate grow prefill.
+Below the knee, where prefill's queue never builds at all, a second lower bound
+is always on (there is no key for it): what each prefill replica completes per
+second, and one prompt at a time from how long each occupies it. With it the
+router's arrival rate grows prefill too, on vLLM and SGLang alike; it needs the
+engine's service time, and gives nothing from a service time under a quarter of
+the time to first token
+([how it is read](cycle-log.md#throughput-demand-floor)).
 What is learned is kept per band of prompt length, so a shift in prompt length
 puts prefill back on KV-memory pricing until it queues again, and a restart
 keeps it only with `LEARNED_STATE_SNAPSHOT` set. In the one P/D
@@ -1586,9 +1593,18 @@ P/D models on vLLM only. **It is off by default.**
 The bound is the prompt-token rate a prefill replica showed while its queue was
 full and its own rate could not be recorded, usually because decode was full
 too. Prefill can do at least that much. With the bound on, the router's arrival
-rate grows prefill before its queue builds. With it off, prefill has no floor
-until it saturates while decode is fine, and grows only once its queue builds.
-Off, nothing about the bound is recorded or read.
+rate grows prefill before its queue builds. With it off, nothing about this
+bound is recorded or read. Prefill still gets a floor below the knee from a
+second lower bound that is always on, read from what each prefill replica
+completes and how long each request occupies it
+([cycle log](cycle-log.md#throughput-demand-floor)); the floor prices prefill
+on the larger of the two.
+
+A prefill priced on either bound keeps the prompts waiting in the router in its
+demand only up to twice its ready fleet. That cap now applies to a prefill on
+this bound too, where before its router share was kept whole: with long router
+queues, that asks for fewer prefill replicas than before (the SLO side). There
+is no key to turn the cap off.
 
 Turn it on for every model in the `default:` entry, or for one model in its own
 entry:

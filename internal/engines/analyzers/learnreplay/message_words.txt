@@ -705,6 +705,7 @@ busiestPod
 busiestRankKvUsage
 busiestRankQueue
 busy-minutes
+busy-share
 busyMinutes
 busyMinutesOn
 but
@@ -2113,6 +2114,7 @@ prefill
 prefill-a-quadratic
 prefill-bound
 prefill-bound-held-confidence
+prefill-busy
 prefill-busy-minutes
 prefill-capacity-observe
 prefill-capacity-observed
@@ -2441,7 +2443,9 @@ saturation-holds-role
 saturation-itl-clears-on-a-new-revision
 saturation-itl-one-sided-at-cap
 saturation-itl-tier-hysteresis
+saturation-lower-bound-caps-router-share
 saturation-only
+saturation-prefill-busy-share-bound
 saturation-prefill-keeps-router-prompts
 saturation-throughput-floor-raises-variants
 saturation-token-based

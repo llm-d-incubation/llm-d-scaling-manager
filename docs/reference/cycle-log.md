@@ -152,7 +152,7 @@ cycles of a fleet that is coping have none.
 | `heldAtFleet` | `true` when the floor was capped at what the current fleet supplies at the scale-up threshold: it may hold the fleet up, but not order more replicas |
 | `heldWhy` | why it was capped; see below. Empty when `heldAtFleet` is `false` |
 | `mayOrder`, `borrowedOnly` | whether the role's rate is one the floor may order on, and whether every rate it has is borrowed rather than measured by the role's own replicas |
-| `lowerBound`, `growthCapped` | `lowerBound` is `true` when prefill's rate is a lower bound, learned while prefill queued behind a full decode (only with [`enablePrefillThroughputBound`](scaling-policy.md#enableprefillthroughputbound) on). `growthCapped` is `true` when the floor on that bound was cut to twice the ready prefill fleet |
+| `lowerBound`, `growthCapped` | `lowerBound` is `true` when prefill's rate is a lower bound: learned while prefill queued behind a full decode (only with [`enablePrefillThroughputBound`](scaling-policy.md#enableprefillthroughputbound) on), or, below the knee, read from how long each request occupies a prefill replica and how many it completes (always on: there is no policy key for it). `growthCapped` is `true` when the floor on that bound was cut to twice the ready prefill fleet |
 | `orderedBehindQueue`, `queueJustifiedReplicas` | whether a held floor still ordered behind a standing queue, and how many replicas the queue was worth when it did |
 | `muKey`, `muSource` | the learned key the role's `saturatedThroughput` was priced under, and where it came from: `measured`, `derived`, `served-siblings` (a measurement yielded to what its full siblings serve), `neighbour`, `borrowed-line` or `lower-bound`. On a role of several variants, the variant whose figure is nearest the role's. Empty on a cycle with none. The key's output-length bucket is the one the k2 window uses (see `P1-obs` below), so both are read from the same bucket. While the output length is in the middle of a large change (20% past a bucket boundary, for up to 2 minutes) the key keeps its old bucket, that window takes no new readings, and its figure counts as `neighbour`: the derived rate prices where there is one |
 | `startEstimateSeconds`, `startSource` | the replica start time `projectedBacklog` was projected over, and where it came from: `measured`, or `seed` (the ScaledObject's `replicaStartSeconds`, for a role with no start measured); `none` (and 0) when neither is known, and the floor projects nothing |
@@ -180,6 +180,21 @@ prefill fleet in one cycle.
 `prefill-throughput-bound-reading` is logged each time a queued prefill replica
 adds a reading to its lower bound: `computedTokenRate`, `effectiveInputTokens`,
 and `reading`, their ratio in requests per second.
+
+Below the knee a prefill replica's own queue reads empty, so neither its
+measured rate nor the bound above is learned. Each prefill replica then
+reads `max(requests completed per second, 1 / mean service time)` (per engine
+rank) every cycle: at least what it served, and at least one prompt at a time,
+so a lower bound on what it sustains. The floor prices prefill on it with
+`lowerBound=true` and `muSource` `lower-bound`, and `replica-capacity-decision`
+(at `--v=3`) names its bucket `busy-share`. It is always on: there is no
+policy key for it. It keeps the highest figure a quieter period gave,
+because prompts that share a step under load each take longer, and keeps it
+across a restart; it drops that figure when the prompt length moves more than
+20 %. A replica whose mean service time is under a quarter of its time to
+first token (less its queue time, where read) gives no reading. A prefill
+priced on either bound also keeps its share of the router queue only up to
+twice its ready fleet.
 
 ### `replica-start-measured`, `replica-start-outlier-rejected` and `replica-start-change-confirmed`
 

@@ -1705,6 +1705,73 @@ the bound is within 0.5 % of the truth there; the `n-dependence/*/ar-reread`
 property cases read each pod four times a minute
 (`TestRereadFold_TheCasesFailWithTheSwitchOff`).
 
+### The busy-share bound
+
+Below the knee a P/D prefill learns no mu and no back-pressure bound: both
+need its engine queue at the threshold, and prefill admits every prompt it
+holds (issue llm-d-incubation/llm-d-scaling-manager#97). With
+`SwitchPrefillBusyShareBound` on, the constructor's default
+(`prefill_busy_share.go`), each serving prefill row reads
+`max(RequestRate, Ranks() / AvgServiceTime)`: what it served, and one prompt
+at a time per rank. Both are at most what the replica sustains, since a step
+shared by several prompts computes at least as many a second as one prompt
+alone, so the reading is a lower bound. It is written, in computed tokens/s
+at the key's prompt length, to a window under the throughput key with role
+field `prefill-busy`, through the same fold and held figure as the
+back-pressure bound (`notePrefillBoundSample`, `prefillBoundHeld`), and read
+as the larger of the window's mean and the held figure. The held figure
+keeps the quiet readings: under load prompts share steps, `AvgServiceTime`
+grows and one reading falls toward what the replica serves (the three-pod
+recording: 2.6-4.0 req/s served where one 30,000-token prompt takes about
+0.21 s). `computeReplicaCapacity` prices prefill on the larger of the two
+bounds when it has no window of its own; `floor.Estimate` then treats it as
+any lower bound (two samples to order, `LowerBoundMaxGrowth`, no order under a
+shape change). `isPrefillBoundKey` covers both role fields, so neither window
+is read as mu's. The prefill capacity observation (`prefill_observe.go`) reads
+the back-pressure bound only.
+
+- **The prompt length.** The held figure is a bound at the prompt length it
+  was last raised at (`prefillHeldBound.prompt`). A prompt's cost per token rises
+  with its length, and the key's input bucket spans a factor of two (the top
+  one has no upper end), so read back at a longer prompt it over-states the
+  rate. It is dropped when the key's effective prompt length moves past
+  `shape.DefaultChangeTolerance` (20 %) of it. On ttft-saturated, whose
+  prompts grow to 30,000 tokens, the old figure read 8.6-10.4 req/s where
+  the replicas served 3.1; dropped, the bound reads 3.9-6.
+- **The service time.** `serviceTimePlausible`: a service time under
+  `busyShareMinServiceShare` (0.25) of `AvgTTFT` less `AvgQueueTime`
+  (where read) is not the prompt's own, and the row gives no reading, as one
+  with no service time read. RequestRate alone would be a lower bound too,
+  but one the floor ratchets on: priced on what each replica serves it asks
+  for the fleet over the scale-up threshold every cycle. SGLang's
+  `clamp_min(e2e - queue, 0)` service time falls here when it reads zero or
+  near it.
+- **The restart.** The held figure goes into the snapshot with its window
+  (`ThroughputSnapshot.Held`, busy-share keys only, `omitempty` and
+  `learnrec:"omitzero"`), and is installed with it
+  (`restoreBusyHeldLocked`) with no fresh samples counted; one with no prompt
+  length is dropped. A document
+  without it restores the window alone. A build before the field ignores it;
+  it also reads the `prefill-busy` windows as mu windows in its restore and
+  forget counts (its `isPrefillBoundKey` knows only `prefill-bound`),
+  though nothing prices from them, and they age out at `BucketRetention`.
+
+`SwitchLowerBoundCapsRouterShare`, also on from the constructor: with
+`SwitchPrefillKeepsRouterPrompts` on, a prefill the floor prices on a lower
+bound, either one, is treated as having no mu for its share of the router
+queue (`applyThroughputFloor`): the share is capped at
+`floor.LowerBoundGrowthCap`. Kept whole beside the floor's term it priced a
+runaway's queue as KV held at once, up to 20 prefill replicas from 2 on the
+flow-control-on staircase. With `SwitchPrefillKeepsRouterPrompts` off it
+does nothing: the share is kept whole, as for any prefill the floor prices.
+
+Property cases: `liveness/floor/prefill-below-the-knee` (engine and router
+queues empty, priced at `lambda / (mu x target)` within 5 %; off, on its
+resident KV alone, `TestPrefillBelowTheKneeGetsAFloor`),
+`-shared-steps` (the service time grows with load and a batch computes up to
+three times one prompt's rate: never under the truth, never over the growth
+cap) and `-dp2` (two engine ranks a pod, through the whole analyzer).
+
 ## Shape change
 
 `shape_change.go`. One `shapeMemo` per `namespace|modelID`, guarded by

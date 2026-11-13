@@ -25,6 +25,9 @@ func floorCases() []propCase {
 		{class: classMonotonicity, learner: "floor", name: "lower-mu-never-prices-less", family: familyDirect, tuning: tunedDefault, check: checkFloorMuMonotone(nil)},
 		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil, nil)},
 		{class: classKnownTruth, learner: "floor", name: "prefill-without-mu-keeps-router-prompts", family: familyDirect, tuning: tunedDefault, check: checkFloorPrefillRouterPrompts(nil)},
+		{class: classLiveness, learner: "floor", name: "prefill-below-the-knee", family: familyDirect, tuning: tunedDefault, check: checkFloorPrefillBelowTheKnee(nil)},
+		{class: classLiveness, learner: "floor", name: "prefill-below-the-knee-shared-steps", family: familyDirect, tuning: tunedDefault, check: checkFloorPrefillSharedSteps(nil)},
+		{class: classLiveness, learner: "floor", name: "prefill-below-the-knee-dp2", family: familyDirect, tuning: tunedDefault, check: checkFloorPrefillDataParallel(nil)},
 	}
 }
 
