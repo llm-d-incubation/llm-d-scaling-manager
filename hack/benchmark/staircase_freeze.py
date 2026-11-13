@@ -151,10 +151,12 @@ def plan(frozen, spec, out=sys.stdout):
     print("| Bucket | N_p + N_d | Lower knee | Onset | Steps | Measure only | Lengthened | Flagged | Hours a phase, all steps |", file=out)
     print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |", file=out)
     cost = {}
+    # A pod holds STAIRCASE_TP GPUs (1 unset), so GPU-hours are pods times that.
+    gpus_per_pod = int(os.environ.get("STAIRCASE_TP") or 1)
     for b in frozen["buckets"]:
         steps = ladder_steps(b, spec)
         hours = (sum(h for _, h, _ in steps) + spec["phaseOverheadSeconds"]) / 3600
-        cost[b["name"]] = (hours, b["prefill"] + b["decode"])
+        cost[b["name"]] = (hours, (b["prefill"] + b["decode"]) * gpus_per_pod)
         print("| %s | %d + %d | %.1f | %.1f | %d | %d | %d | %d | %.2f |" % (
             b["name"], b["prefill"], b["decode"], b["knee"], b["onsets"]["Prefill"], len(steps),
             len(lib.measure_rates(b, spec)), sum(1 for _, h, _ in steps if h > spec["holdSeconds"]),
@@ -164,10 +166,10 @@ def plan(frozen, spec, out=sys.stdout):
     print("| --- | --- | --- | --- |", file=out)
     rows = {}
     for ph in phases(frozen, spec):
-        hours, pods = cost[ph["bucket"]["name"]]
+        hours, gpus = cost[ph["bucket"]["name"]]
         key = "gate" if ph["gate"] else "held out"
         got = rows.setdefault(key, [0, 0.0, 0.0])
-        got[0], got[1], got[2] = got[0] + 1, got[1] + hours, got[2] + hours * pods
+        got[0], got[1], got[2] = got[0] + 1, got[1] + hours, got[2] + hours * gpus
     for key, (n, hours, gpu) in sorted(rows.items()):
         print("| %s, %d repeats | %d | %.1f | %.0f |" % (key, spec["repeats"], n, hours, gpu), file=out)
     print("\nWhat the prediction assumes. Read this before the first step: `router hop` here means R was not learned.\n", file=out)

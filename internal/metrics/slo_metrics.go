@@ -29,6 +29,11 @@ var (
 	sloTTFTReason      *prometheus.GaugeVec
 	sloTTFTRefused     *prometheus.GaugeVec
 	sloTTFTFlag        *prometheus.GaugeVec
+
+	sloTTFTJointInput  *prometheus.GaugeVec
+	sloTTFTJointMean   *prometheus.GaugeVec
+	sloTTFTJointReason *prometheus.GaugeVec
+	sloTTFTJointFlag   *prometheus.GaugeVec
 )
 
 // registerSLOMetrics creates and registers the SLO analyzer's gauges. Called
@@ -116,9 +121,30 @@ func registerSLOMetrics(registry prometheus.Registerer) error {
 	sloTTFTFlag = gauge(constants.LLMSMSLOTTFTFlag,
 		"SLO analyzer: 1 for each flag on a prefill variant's TTFT answer, 0 for the others.",
 		ttftLabels(constants.LabelFlag))
+	// The joint series are means: no statistic label.
+	jointLabels := func(more ...string) []string {
+		return withInstance(append([]string{constants.LabelNamespace, constants.LabelModelName,
+			constants.LabelVariantName}, more...)...)
+	}
+	sloTTFTJointInput = gauge(constants.LLMSMSLOTTFTJointInput,
+		"SLO analyzer, shadow only: one input of the joint prefill and decode TTFT model, learned from the "+
+			"engines' histograms. Absent while the input is not learned; pull-seconds only while the mean is "+
+			"priced. Nothing acts on it.",
+		jointLabels(constants.LabelJointInput))
+	sloTTFTJointMean = gauge(constants.LLMSMSLOTTFTJointMeanSeconds,
+		"SLO analyzer, shadow only: the joint prefill and decode model's mean TTFT at the running fleet and "+
+			"rate, in seconds. Absent unless llmsm_slo_ttft_joint_reason is priced.",
+		jointLabels())
+	sloTTFTJointReason = gauge(constants.LLMSMSLOTTFTJointReason,
+		"SLO analyzer, shadow only: 1 for why the joint TTFT model has no mean, or priced, 0 for the others.",
+		jointLabels(constants.LabelReason))
+	sloTTFTJointFlag = gauge(constants.LLMSMSLOTTFTJointFlag,
+		"SLO analyzer, shadow only: 1 for each flag on the joint mean, 0 for the others.",
+		jointLabels(constants.LabelFlag))
 	for _, g := range []*prometheus.GaugeVec{sloTarget, sloObserved, sloAttainment, sloObjective, sloFill,
 		sloPredictedITL, sloSource, sloRequests, sloExcluded, sloPredictedTTFT, sloTTFTUnmet, sloTTFTReplicaRate,
-		sloTTFTVPSource, sloTTFTReason, sloTTFTRefused, sloTTFTFlag} {
+		sloTTFTVPSource, sloTTFTReason, sloTTFTRefused, sloTTFTFlag, sloTTFTJointInput, sloTTFTJointMean,
+		sloTTFTJointReason, sloTTFTJointFlag} {
 		if err := registry.Register(g); err != nil {
 			return err
 		}
@@ -177,6 +203,24 @@ type SLOTTFTReading struct {
 	// while Unmet is set.
 	Refused string `learnrec:"omitzero"`
 	// Flags is the flags on the answer, in constants.SLOTTFTFlags order.
+	Flags []string
+	// Joint is the joint prefill and decode model in shadow; nil with the
+	// slo-ttft-joint-inputs replay switch off, or not one variant per role.
+	Joint *SLOTTFTJointReading `learnrec:"omitzero"`
+}
+
+// SLOTTFTJointReading is the joint prefill and decode TTFT model of one
+// prefill variant, in shadow: its inputs, and its mean at the running fleet.
+// A NaN figure is not learned and not published.
+type SLOTTFTJointReading struct {
+	// Inputs is each input by its constants.SLOTTFTJointInputs name.
+	Inputs map[string]float64
+	// MeanSeconds is the mean TTFT at the running fleet and rate, NaN
+	// unless Reason is constants.SLOTTFTJointReasonPriced.
+	MeanSeconds float64
+	// Reason is one of constants.SLOTTFTJointReasons.
+	Reason string
+	// Flags is the flags on the mean, in constants.SLOTTFTJointFlags order.
 	Flags []string
 }
 
@@ -301,6 +345,23 @@ func PublishSLO(snap SLOModelSnapshot, now time.Time) {
 		oneHot(sloTTFTReason, constants.LabelReason, constants.SLOTTFTReasons, func(v string) bool { return v == t.Reason })
 		oneHot(sloTTFTRefused, constants.LabelReason, constants.SLOTTFTRefusedReasons, func(v string) bool { return v == t.Refused })
 		oneHot(sloTTFTFlag, constants.LabelFlag, constants.SLOTTFTFlags, func(v string) bool { return slices.Contains(t.Flags, v) })
+		if j := t.Joint; j != nil {
+			jl := func(pairs ...string) prometheus.Labels {
+				return labels(append([]string{constants.LabelVariantName, t.Variant}, pairs...)...)
+			}
+			for _, name := range constants.SLOTTFTJointInputs {
+				if v, ok := j.Inputs[name]; ok {
+					set(sloTTFTJointInput, jl(constants.LabelJointInput, name), v)
+				}
+			}
+			set(sloTTFTJointMean, jl(), j.MeanSeconds)
+			for _, v := range constants.SLOTTFTJointReasons {
+				set(sloTTFTJointReason, jl(constants.LabelReason, v), boolValue(v == j.Reason))
+			}
+			for _, v := range constants.SLOTTFTJointFlags {
+				set(sloTTFTJointFlag, jl(constants.LabelFlag, v), boolValue(slices.Contains(j.Flags, v)))
+			}
+		}
 	}
 
 	key := snap.Namespace + "/" + snap.ModelName
@@ -354,4 +415,12 @@ func deleteGone(prev, current map[*prometheus.GaugeVec]map[string]prometheus.Lab
 			}
 		}
 	}
+}
+
+// boolValue is a one-hot series' value: 1 for true, 0 for false.
+func boolValue(on bool) float64 {
+	if on {
+		return 1
+	}
+	return 0
 }

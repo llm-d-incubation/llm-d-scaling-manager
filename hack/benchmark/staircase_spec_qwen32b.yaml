@@ -1,0 +1,53 @@
+# A shortened TTFT staircase on Qwen/Qwen3-32B at tensor parallelism 2: the gate buckets
+# A, B and C of staircase_spec.yaml, flow control off and on, one repeat. It asks whether
+# the prediction holds on a model whose engine step is far slower than Qwen3-0.6B's, the
+# "another engine step time" the plan (docs/plans/analyzers/ttft-staircase-repeat.md)
+# lists first to cut. Run it with (an absolute path: the run copies the spec)
+#   STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
+#   STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
+# Every line not named below is staircase_spec.yaml's. Nothing here may change once the
+# warm-up starts: the frozen file carries this file's hash.
+#
+# What differs, and why:
+#   - repeats 1: the gate is scored after it, at the end of the run.
+#   - no B-onset or C-onset: they need a 2 + 4 fleet (12 GPUs at TP 2), and the ladder is
+#     refused whole when a measurement step reaches the decode onset, which on this model
+#     nobody has priced yet. No held-out buckets.
+#   - the warm-up's open-loop and saturating loads are scaled to the model. Sized from an
+#     estimate, not a measurement: about 28k prompt tokens/s of prefill on 2 pods at TP 2
+#     on H200, about 1/17 of what Qwen3-0.6B's r2 warm-up froze (B's prefill knee 59 r/s
+#     at 8000 tokens). The sweep and the rest send about 8% of that, where r2 sent 3 to
+#     5%: fewer requests a level would not fit `a`. If the estimate is off by 2, they are
+#     still under a fifth of the prefill. The closed loops at 8000 tokens sit at about 1,
+#     2 and 3.5 times the concurrency that saturates prefill, as r2's did; the 1000-token
+#     ones keep r2's, which already bracket decode's knee on either model.
+#   - the ladder is laid by the freeze from this warm-up, as on r2: no rate is set here.
+operatingFraction: 0.85
+percentiles: [90, 95]
+targetFloorMargin: 1.2
+promptCV: 0.0577
+steps: [0.40, 0.60, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00]
+holdSeconds: 600
+discardSeconds: 180
+maxHoldSeconds: 1500
+runawayFactor: 2
+maxInflight: 4000
+repeats: 1
+seedBase: 3000
+phaseOverheadSeconds: 240
+warmup:
+  order: [line, sweep, busy, rest]
+  line: {driver: closed, schedule: "420:30:1000:1000,420:100:1000:1000,420:200:1000:1000,420:400:1000:1000,420:24:8000:200,420:48:8000:200,420:80:8000:200"}
+  sweep: {driver: open, schedule: "360:2:1000:32:1,360:1.1:2000:32:1,360:0.55:4000:32:1,360:0.37:6000:32:1,360:0.28:8000:32:1", seed: 11}
+  busy: {driver: closed, schedule: "660:48:8000:8"}
+  # Quiet at the end: the transfer a freeze reads ages out in 5 minutes.
+  rest: {driver: open, schedule: "360:0.28:8000:32:1", seed: 12}
+buckets:
+- {name: A, prompt: 1000, output: 1000, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+- {name: B, prompt: 8000, output: 200, ca2: 1, prefill: 2, decode: 2, fc: ["off", "on"], gate: true}
+- {name: C, prompt: 8000, output: 200, ca2: 4, prefill: 2, decode: 2, fc: ["off", "on"], gate: true, steps: [0.40, 0.60, 0.75, 0.80, 0.825, 0.85, 0.875, 0.90, 0.925, 0.95, 1.00]}
+# staircase_spec.yaml's, unchanged: M2's bands, set before any result on this model.
+falsifiers:
+  itlSlope: [5.5, 9.0]
+  hopPerKiloToken: [0.5, 1.5]
+  burstRatio: [1.0, 1.8]

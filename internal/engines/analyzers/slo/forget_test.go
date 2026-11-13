@@ -201,7 +201,7 @@ func TestForget_ReportsEachForgottenKey(t *testing.T) {
 // struct, interface, func or sync type added later fails here until someone
 // decides. The forgotten ones are held by the tests above.
 func TestForget_EveryFieldIsClassified(t *testing.T) {
-	forgotten := []string{"lines", "seen", "args", "lineLogged", "accelerators", "imbalance", "decodeTTFT", "decodeTerms", "prompts"}
+	forgotten := []string{"lines", "seen", "args", "lineLogged", "accelerators", "imbalance", "decodeTTFT", "decodeTerms", "prompts", "joint"}
 	kept := []string{"transients", "ownSettle", "ownSettled", "paths", "learnerReports", "forgottenReports"}
 	plumbing := []string{"router", "store", "now", "mu", "rec", "settle", "prefillEstimates"}
 	plain := func(k reflect.Kind) bool {
