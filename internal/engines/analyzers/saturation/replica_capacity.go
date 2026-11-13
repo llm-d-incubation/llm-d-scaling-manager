@@ -476,6 +476,19 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		throughputSamples = prefillBound.samples
 		lowerBound = true
 	}
+	// Below the knee, where prefill's queue never reads full and neither
+	// window above is written, the busy-share bound (prefill_busy_share.go),
+	// recorded every cycle. Under the same rule as the back-pressure bound,
+	// and the larger of the two: both are lower bounds on one rate, so the
+	// larger is the tighter.
+	busy := a.notePrefillBusyShare(rm, role, throughputKey, args, keyInput, adm)
+	if reading.rate <= 0 && throughputBucket != derivedBucket && busy.rate > 0 &&
+		(saturatedThroughput <= 0 || (lowerBound && busy.rate > saturatedThroughput)) {
+		saturatedThroughput = busy.rate
+		throughputBucket = busyShareBucket
+		throughputSamples = busy.samples
+		lowerBound = true
+	}
 
 	effectiveCapacity := k1
 	bound := "k1-memory"

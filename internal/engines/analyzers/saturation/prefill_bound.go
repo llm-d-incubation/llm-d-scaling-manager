@@ -90,19 +90,28 @@ const lowerBoundBucket = "lower-bound"
 // |-separated fields (keys.go) and the role is the sixth; no field contains
 // "|". A key of any other shape has no bound.
 func prefillBoundKey(throughputKey string) string {
+	return lowerBoundKeyAs(throughputKey, prefillBoundRole)
+}
+
+// lowerBoundKeyAs is throughputKey, a prefill throughput key, with its role
+// field replaced by role: the window key of one of prefill's lower bounds.
+// Empty for a key of any other shape or role.
+func lowerBoundKeyAs(throughputKey, role string) string {
 	f := strings.Split(throughputKey, "|")
 	if len(f) != 9 || f[5] != domain.RolePrefill {
 		return ""
 	}
-	f[5] = prefillBoundRole
+	f[5] = role
 	return strings.Join(f, "|")
 }
 
-// isPrefillBoundKey reports whether key is a lower bound's window key, one
-// prefillBoundKey made.
+// isPrefillBoundKey reports whether key is a lower bound's window key: the
+// back-pressure bound's (prefillBoundKey) or the busy-share bound's
+// (prefillBusyKey, prefill_busy_share.go). Neither is mu's window, and the
+// code that keeps mu's apart from them reads both the same way.
 func isPrefillBoundKey(key string) bool {
 	f := strings.Split(key, "|")
-	return len(f) == 9 && f[5] == prefillBoundRole
+	return len(f) == 9 && (f[5] == prefillBoundRole || f[5] == prefillBusyRole)
 }
 
 // prefillBoundReading is what the bound offers one replica: a rate, how many

@@ -1705,6 +1705,41 @@ the bound is within 0.5 % of the truth there; the `n-dependence/*/ar-reread`
 property cases read each pod four times a minute
 (`TestRereadFold_TheCasesFailWithTheSwitchOff`).
 
+### The busy-share bound
+
+Below the knee a P/D prefill learns no mu and no back-pressure bound: both
+need its engine queue at the threshold, and prefill admits every prompt it
+holds (issue llm-d-incubation/llm-d-scaling-manager#97). With
+`SwitchPrefillBusyShareBound` on, the constructor's default
+(`prefill_busy_share.go`), each serving prefill row reads
+`max(RequestRate, Ranks() / AvgServiceTime)`: what it served, and one prompt
+at a time per rank. Both are at most what the replica sustains, since a step
+shared by several prompts computes at least as many a second as one prompt
+alone, so the reading is a lower bound. It is written, in computed tokens/s
+at the key's prompt length, to a window under the throughput key with role
+field `prefill-busy`, through the same fold and held figure as the
+back-pressure bound (`notePrefillBoundSample`, `prefillBoundHeld`), and read
+as the larger of the window's mean and the held figure. The held figure
+keeps the quiet readings: under load prompts share steps, `AvgServiceTime`
+grows and one reading falls toward what the replica serves (the three-pod
+recording: 2.6-4.0 req/s served where one 30,000-token prompt takes about
+0.21 s). `computeReplicaCapacity` prices prefill on the larger of the two
+bounds when it has no window of its own; `floor.Estimate` then treats it as
+any lower bound (two samples to order, `LowerBoundMaxGrowth`, no order under a
+shape change). `isPrefillBoundKey` covers both role fields, so neither window
+is read as mu's. The prefill capacity observation (`prefill_observe.go`) reads
+the back-pressure bound only.
+
+With the switch on, a prefill the floor prices on a lower bound is also
+treated as having no mu for its share of the router queue
+(`applyThroughputFloor`): the share is capped at `floor.LowerBoundGrowthCap`.
+Kept whole beside the floor's term it priced a runaway's queue as KV held at
+once, up to 20 prefill replicas from 2 on the flow-control-on staircase.
+
+`liveness/floor/prefill-below-the-knee` holds it: prefill's engine and router
+queues empty, priced at `lambda / (mu x target)` within 5 %; with the switch
+off it is priced on its resident KV alone (`TestPrefillBelowTheKneeGetsAFloor`).
+
 ## Shape change
 
 `shape_change.go`. One `shapeMemo` per `namespace|modelID`, guarded by

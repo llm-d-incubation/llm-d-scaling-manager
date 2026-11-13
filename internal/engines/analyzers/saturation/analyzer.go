@@ -529,6 +529,10 @@ type SaturationAnalyzer struct {
 	// (llm-d-incubation/llm-d-scaling-manager#51, throughput_floor.go): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).
 	prefillKeepsPrompts bool
+	// prefillBusyShare is SwitchPrefillBusyShareBound
+	// (llm-d-incubation/llm-d-scaling-manager#97, prefill_busy_share.go): on
+	// from the constructor; a replay turns it off (SetSwitchesForReplay).
+	prefillBusyShare bool
 	// floorTrustCompleted is SwitchFloorTrustReadsCompletions
 	// (llm-d-incubation/llm-d-scaling-manager#54, throughput_floor.go): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).
@@ -779,6 +783,7 @@ func NewSaturationAnalyzer(store *capacity.Store) *SaturationAnalyzer {
 		queuePricedAsDrain:     true,
 		floorTrustCompleted:    true,
 		prefillKeepsPrompts:    true,
+		prefillBusyShare:       true,
 		drainHaircut:           FirstReadHaircut,
 		itlOneSidedLast:        make(map[string]itlOneSidedRecord),
 		prefillObserver:        prefill.NewObserver(),

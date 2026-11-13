@@ -237,6 +237,20 @@ It is off by default. Turn it on for every model or for one with
 Its extra prefill lasts until the variant's learned state is reset, because a
 prefill held that large rarely queues on its own.
 
+**Prefill below the knee.** Below the knee prefill's own queue reads empty
+even while it is the role that limits time to first token: it admits every
+prompt it holds. Decode's back-pressure is then not there to learn the bound
+from either. So each prefill replica also gives a second lower bound, on by
+default, read every cycle from two figures it already reports: the requests
+it completes per second, and how long each one occupies it. It sustains at
+least what it served, and at least one prompt at a time, so at least the
+larger of the two. The floor prices prefill on the larger of the two bounds,
+under the same limits as above. Prompts that share a step under load each
+take longer, so a reading taken under load is looser; the bound keeps the
+highest figure a quieter period gave. It errs toward more prefill, the cost
+side. A prefill priced on either bound keeps its share of the router queue
+only up to twice its Ready fleet, as a prefill with no rate at all does.
+
 #### Uneven routing
 
 The router can load one replica while another replica of the same role sits
