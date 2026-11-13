@@ -2622,6 +2622,7 @@ slo-itl-waits-after-controller-restart
 slo-kv-per-request-output-dispersion
 slo-model
 slo-transient
+slo-ttft-decode-gate-charge
 slo-ttft-decode-term
 slo-ttft-joint
 slo-ttft-joint-inputs
@@ -2629,6 +2630,7 @@ slo-ttft-measured-spread
 slo-ttft-measured-transfer
 slo-ttft-price
 slo-ttft-processor-sharing
+slo-ttft-ps-onsets
 slo-ttft-quiet-transfer
 slo-ttft-router-wait
 slo-ttft-variant
