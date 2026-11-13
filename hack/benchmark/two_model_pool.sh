@@ -421,6 +421,16 @@ kerr_is_notice() {
     case "$1" in Warning:*) return 0 ;; esac
     return 1
 }
+# kerr_drop_notices echoes kubectl stderr $1 without its notices
+# (kerr_is_notice), one line each: the error itself. A copy of
+# kc_drop_notices (deploy/lib/common.sh), blank lines dropped.
+kerr_drop_notices() {
+    local line
+    while IFS= read -r line; do
+        if [ -n "$line" ] && ! kerr_is_notice "$line"; then printf '%s\n' "$line"; fi
+    done <<< "$1"
+    return 0
+}
 kerr_line() {
     local line first="" plain=""
     while IFS= read -r line; do
@@ -2558,7 +2568,12 @@ check_policy_namespace() {
     rc=0
     kcap get namespace scaling-manager-policy -o name || rc=$?
     out="$KC_OUT"
-    [ "$rc" -eq 0 ] || out="$(kerr_line "$KC_ERR")"
+    # NotFound is read from the error alone: Forbidden is not absent, and a
+    # notice must not decide it either way.
+    if [ "$rc" -ne 0 ]; then
+        out="$(kerr_drop_notices "$KC_ERR")"
+        [ -n "$out" ] || out="$(kerr_line "$KC_ERR")"
+    fi
     case "$out" in
         namespace/scaling-manager-policy)
             [ "$LLMSM_NS" = "scaling-manager-policy" ] || \
@@ -2646,8 +2661,8 @@ CONTROLLER_SA="${CONTROLLER_SA:-scaling-manager-controller-manager}"
 can_i_sa() {
     local out rc=0
     kcap auth can-i "$@" --as "system:serviceaccount:${LLMSM_NS}:${CONTROLLER_SA}" || rc=$?
+    # can-i answers yes or no on stdout; anything else is unknown.
     out="$KC_OUT"
-    [ -n "$out" ] || out="$KC_ERR"
     case "$out" in
         yes*) echo yes ;;
         no*) if [ "$rc" -ne 0 ]; then echo no; else echo unknown; fi ;;
@@ -2999,15 +3014,7 @@ print('HTTP 200' if done==$count else 'FAILED after %d of $count: %s' % (done, l
         # without notices: a notice beside empty logs read as the model failing.
         kcap -n "$NS" logs "$pod" || true
         out="$KC_OUT"
-        if [ -z "$out" ]; then
-            local eline
-            while IFS= read -r eline; do
-                if [ -n "$eline" ] && ! kerr_is_notice "$eline"; then
-                    out="${out:+$out
-}$eline"
-                fi
-            done <<< "$KC_ERR"
-        fi
+        [ -n "$out" ] || out="$(kerr_drop_notices "$KC_ERR")"
         k delete pod "$pod" --ignore-not-found --wait=false >/dev/null 2>&1
         case "$out" in
             *"HTTP 200"*) ok "  $model answered (attempt $attempt)"; return 0 ;;

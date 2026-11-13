@@ -371,26 +371,39 @@ flow_control() {
     t "flow control $1"
 }
 
-# recorder_on : the recorder, as the last change before load.
-# kube_err_reason <file> : the last line of kubectl stderr in <file> that is not a
-# notice -- a klog line (E1113 09:55:01.123456 ... memcache.go "Unhandled Error",
-# printed while an aggregated API is down; I... client-side throttling) or an
-# API server "Warning:" -- the same lines deploy/lib/common.sh kc_is_notice
-# drops. When stderr held only notices, it says so; when nothing, it says that.
+# kube_is_notice <line> : whether it is a notice kubectl prints on stderr without the
+# call failing -- a klog line (E1113 09:55:01.123456 ... memcache.go "Unhandled
+# Error", printed while an aggregated API is down; I... client-side throttling) or
+# an API server "Warning:". A copy of kc_is_notice (deploy/lib/common.sh).
+kube_is_notice() {
+    [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
+    case "$1" in Warning:*) return 0 ;; esac
+    return 1
+}
+
+# kube_err_reason <file> : the line of kubectl stderr in <file> that says why the call
+# failed, by the rule of kc_err_line (deploy/lib/common.sh): an "Error from
+# server", "Unable to connect", "The connection to the server" or "error:" line,
+# else the FIRST line that is no notice. Not the last: a failed exec ends with
+# "command terminated with exit code 1", after the line that says why. When
+# stderr held only notices, it says so; when nothing, it says that.
 kube_err_reason() {
-    local line last="" first=""
+    local line first="" plain=""
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         [ -n "$first" ] || first="$line"
-        [[ "$line" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && continue
-        case "$line" in Warning:*) continue ;; esac
-        last="$line"
+        case "$line" in
+            "Error from server"*|error:*|"Unable to connect"*|"The connection to the server"*)
+                printf '%s\n' "$line"; return 0 ;;
+        esac
+        [ -n "$plain" ] || kube_is_notice "$line" || plain="$line"
     done < "$1"
-    if [ -n "$last" ]; then printf '%s\n' "$last"
+    if [ -n "$plain" ]; then printf '%s\n' "$plain"
     elif [ -n "$first" ]; then printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
     else printf 'kubectl failed with nothing on stderr\n'; fi
 }
 
+# recorder_on : the recorder, as the last change before load.
 recorder_on() {
     kretry patch deployment scaling-manager-controller-manager --type strategic \
         --patch-file "$ROOT/config/components/learner-recorder/learner-recorder-deployment.yaml" >/dev/null \

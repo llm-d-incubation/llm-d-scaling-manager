@@ -2479,6 +2479,9 @@ notice_kubectl() {
             [ -n "$labels" ] || labels='{}'
             printf '{"metadata":{"name":"%s","labels":%s}}\n' "$NS" "$labels" ;;
         *"get configmap scaling-manager-scaling-policy-config -o jsonpath={.data.default}"*)
+            # NK_POLICY_WARNING_FAIL: the read fails having printed only an API
+            # server warning, the other half of what a notice is.
+            [ -n "${NK_POLICY_WARNING_FAIL:-}" ] && { echo 'Warning: v1 ConfigMap is deprecated in v9.99+' >&2; return 1; }
             printf 'limiters:\n- type: quota\n' ;;
         *"patch configmap scaling-manager-scaling-policy-config "*)
             printf '%s\n' "$*" > "$WORK/nk-patched" ;;
@@ -2533,6 +2536,28 @@ else
 fi
 
 case_begin
+case_begin
+nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_POLICY_WARNING_FAIL=1 LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 set_share_policy shadow) 2>&1 )"
+nk_rc=$?
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'could not read the scaling policy in .*: kubectl failed, and its stderr held only notices (E1113'; then
+    fail "a policy read that failed having printed only notices (a klog line and a Warning:) must say so, not pass a warning off as the error (rc=$nk_rc): $nk_out"
+else
+    ok "a Warning: line is a notice too: a read that printed only notices says so"
+fi
+
+case_begin
+nk_out="$(kerr_drop_notices "$NOTICE
+Warning: v1 ConfigMap is deprecated in v9.99+
+Error from server (Forbidden): configmaps is forbidden
+
+second line of the error")"
+if [ "$nk_out" != "Error from server (Forbidden): configmaps is forbidden
+second line of the error" ]; then
+    fail "kerr_drop_notices must keep every error line and drop klog and Warning: lines: $nk_out"
+else
+    ok "kerr_drop_notices keeps the error, all of it, and drops the notices"
+fi
+
 # wiring_snapshot runs inside with_scaler_lib, where common.sh is sourced.
 nk_out="$( (. "$ROOT/deploy/lib/common.sh" >/dev/null 2>&1; kubectl() { notice_kubectl "$@"; }; wiring_snapshot) 2>/dev/null )"
 if ! printf '%s' "$nk_out" | grep -q 'the ScaledObjects did not read: Error from server (Forbidden)' || printf '%s' "$nk_out" | grep -q 'memcache'; then
@@ -2561,14 +2586,15 @@ fi
 case_begin
 nk_out="$( (kubectl() { notice_kubectl "$@"; }; NK_POLICY_NS=exists LLMSM_NS="$NS" SHARE_ALLOW_SHARED_POLICY=1 check_policy_namespace) 2>&1 )"
 nk_rc=$?
-if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'a scaling-manager-policy namespace exists, so a controller'     || printf '%s' "$nk_out" | grep -q 'could not tell'; then
+if [ "$nk_rc" -eq 0 ] || ! printf '%s' "$nk_out" | grep -q 'a scaling-manager-policy namespace exists, so a controller' \
+    || printf '%s' "$nk_out" | grep -q 'could not tell'; then
     fail "the shared policy namespace behind a notice must be recognised, not read as could-not-tell (rc=$nk_rc): $nk_out"
 else
     ok "the shared policy namespace is recognised behind a notice on stderr"
 fi
 
 case_begin
-CASES_EXPECTED=155
+CASES_EXPECTED=157
 if [ "$CASES" -ne "$CASES_EXPECTED" ]; then
     fail "$CASES cases ran, not $CASES_EXPECTED. Update CASES_EXPECTED deliberately rather than letting coverage drift out."
 else
