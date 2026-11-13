@@ -68,6 +68,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/steadystate"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/gpunodes"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/gpuusage"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/hparepair"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/kubecache"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/kueue"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
@@ -1185,6 +1186,36 @@ func main() {
 	if err := mgr.AddReadyzCheck("external-scaler", externalScaler.Ready); err != nil {
 		setupLog.Error(err, "unable to register the KEDA external scaler readiness check")
 		os.Exit(1)
+	}
+
+	// The KEDA HPA repair (KEDA_HPA_REPAIR, off by default): on KEDA 2.19 and
+	// older a ScaledObject created within about two minutes of a controller
+	// restart keeps an HPA without this scaler's metric. Leader only; reads
+	// uncached, like the Enricher, so no informer on HPAs or ScaledObjects.
+	// The readable watched namespaces only: one the controller cannot read is
+	// already reported (llmsm_watch_namespaces_unreadable), and listing its
+	// HPAs would keep LLMSMKEDAHPAWiringUnread firing for the same cause.
+	// Namespace-scoped with none readable lists nothing: an empty list would
+	// mean every namespace.
+	switch {
+	case !cfg.KEDAHPARepairEnabled():
+	case watchNS != "" && len(readableWatched) == 0:
+		setupLog.Info("KEDA_HPA_REPAIR is on, but no watched namespace is readable: the KEDA HPA repair does not run")
+	default:
+		repairNamespaces := readableWatched
+		if watchNS == "" {
+			repairNamespaces = nil // cluster scope: every namespace
+		}
+		if err := mgr.Add(&hparepair.Repairer{
+			Reader:          mgr.GetAPIReader(),
+			Writer:          mgr.GetClient(),
+			Recorder:        mgr.GetEventRecorderFor("scaling-manager-keda-hpa-repair"), //nolint:staticcheck // SA1019: core/v1 events; see the configmap reconciler
+			ScalerNamespace: config.SystemNamespace(),
+			Namespaces:      repairNamespaces,
+		}); err != nil {
+			setupLog.Error(err, "unable to add the KEDA HPA repair to the manager")
+			os.Exit(1)
+		}
 	}
 
 	// The warm pool: GPU-holding Pods that keep models resident but asleep, so a

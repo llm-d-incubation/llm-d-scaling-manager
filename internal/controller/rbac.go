@@ -67,6 +67,14 @@ package controller
 // these objects.
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get
 
+// HorizontalPodAutoscalers: deliberately NO marker. The KEDA HPA repair
+// (internal/hparepair, KEDA_HPA_REPAIR) lists HPAs and patches an annotation
+// on them, and it is off by default, so its get, list and patch come from the
+// opt-in components config/components/keda-hpa-repair (cluster scope) and
+// keda-hpa-repair-namespaced, which the installer adds only with
+// KEDA_HPA_REPAIR=true. A marker here would put patch on every HPA into the
+// role of every install.
+
 // Kueue quotas, read by the quota limiter when a quota entry sets
 // `kueue.enabled` (internal/kueue.Reader): ClusterQueues carry the nominal
 // quotas, ResourceFlavors name the accelerator behind each flavor, LocalQueues

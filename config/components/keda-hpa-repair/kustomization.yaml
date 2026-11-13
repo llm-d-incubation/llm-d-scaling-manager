@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# The KEDA HPA repair, cluster scope (internal/hparepair, KEDA_HPA_REPAIR).
+# For KEDA 2.19 and older only: it annotates an HPA KEDA built for one of this
+# scaler's ScaledObjects without the scaler's External metric, so KEDA derives
+# it again.
+#
+# Opt-in, and NOT listed in any overlay: the installer adds it to the render
+# only with KEDA_HPA_REPAIR=true (llmsm_append_keda_hpa_repair_component). It
+# grants get, list and patch on every HPA in the cluster, which nothing else
+# in the controller needs, and turns the repair on in the Deployment.
+#
+# Applied at the installer's top level, above the overlay's namePrefix, so the
+# names here are the final ones; the installer renames the ClusterRole and its
+# binding per install like the others (LLMSM_OWNED_CLUSTER_ROLES).
+resources:
+- keda-hpa-repair-clusterrole.yaml
+- keda-hpa-repair-clusterrolebinding.yaml
+
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: KEDA_HPA_REPAIR
+        value: "true"
+  target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: scaling-manager-controller-manager

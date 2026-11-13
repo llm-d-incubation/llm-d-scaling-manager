@@ -779,6 +779,8 @@ LLMSM_SHARED_CLUSTER_ROLE_BINDINGS=(
     scaling-manager-kueue-reader-rolebinding
     # And for the Namespace get that finds the cluster policy namespace.
     scaling-manager-policy-namespace-reader-rolebinding
+    # The opt-in KEDA HPA repair grant (KEDA_HPA_REPAIR=true, cluster scope).
+    scaling-manager-keda-hpa-repair-rolebinding
 )
 
 # LLMSM_OWNED_CLUSTER_ROLES are the ClusterRoles this project defines, mapped to the
@@ -808,7 +810,129 @@ LLMSM_OWNED_CLUSTER_ROLES=(
     "scaling-manager-node-reader-role:scaling-manager-node-reader-rolebinding"
     "scaling-manager-kueue-reader-role:scaling-manager-kueue-reader-rolebinding"
     "scaling-manager-policy-namespace-reader-role:scaling-manager-policy-namespace-reader-rolebinding"
+    # Rendered only with KEDA_HPA_REPAIR=true (and by the undeploy).
+    "scaling-manager-keda-hpa-repair-role:scaling-manager-keda-hpa-repair-rolebinding"
 )
+
+# llmsm_keda_hpa_repair_on reports whether KEDA_HPA_REPAIR asks for the KEDA
+# HPA repair: true. Unset and false do not; anything else is refused, because
+# a typo must not silently drop the grant or keep it.
+llmsm_keda_hpa_repair_on() {
+    case "${KEDA_HPA_REPAIR:-false}" in
+        true) return 0 ;;
+        false) return 1 ;;
+        *) log_error "KEDA_HPA_REPAIR must be true or false (got '${KEDA_HPA_REPAIR}')" ;;
+    esac
+}
+
+# llmsm_keda_hpa_repair_component echoes the component that carries the KEDA
+# HPA repair's grant for this install's scope: a ClusterRole for cluster scope,
+# a Role in the controller's namespace for namespace scope.
+llmsm_keda_hpa_repair_component() {
+    if [ "$(llmsm_install_scope)" = "namespace" ]; then
+        echo keda-hpa-repair-namespaced
+    else
+        echo keda-hpa-repair
+    fi
+}
+
+# llmsm_append_keda_hpa_repair_component links the KEDA HPA repair component
+# into overlay directory $1 and lists it under `components:` in its
+# kustomization.yaml. Must be called while `components:`, if present, is the
+# last key of that file: it appends a list item.
+#
+# Kustomize cannot make a component conditional, so no overlay lists it; the
+# installer adds it with KEDA_HPA_REPAIR=true, and the undeploy always, so it
+# removes a grant an earlier install made.
+llmsm_append_keda_hpa_repair_component() {
+    local dir="$1" c
+    c="$(llmsm_keda_hpa_repair_component)"
+    ln -sfn "$LLMSM_PROJECT/config/components/$c" "$dir/$c"
+    if grep -q '^components:' "$dir/kustomization.yaml"; then
+        printf -- '- ./%s\n' "$c" >> "$dir/kustomization.yaml"
+    else
+        printf 'components:\n- ./%s\n' "$c" >> "$dir/kustomization.yaml"
+    fi
+}
+
+# llmsm_delete_hpa_repair_grant deletes the objects its arguments name, one
+# "<kind> <name> [<namespace>]" per argument and one kubectl call each, so
+# render mode records each one. It echoes "<state>|<error line>": forbidden
+# when a delete was denied, failed when one failed otherwise (the line says
+# why, from kc_err_line), deleted when one removed something (render mode:
+# recorded in admin.sh), and none otherwise. The answer is read from stdout
+# and the failure from stderr without its notices (kc_capture,
+# kc_drop_notices), so a warning kubectl prints on success is neither a
+# deletion nor a denial. A denied delete is never "absent".
+llmsm_delete_hpa_repair_grant() {
+    local spec kind name ns rc state=none why=""
+    for spec in "$@"; do
+        read -r kind name ns <<< "$spec"
+        rc=0
+        kc_capture delete "$kind" "$name" ${ns:+-n "$ns"} --ignore-not-found || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            why="$(kc_err_line "$KC_ERR")"
+            if kc_drop_notices "$KC_ERR" | grep -qi 'forbidden'; then
+                state=forbidden
+            elif [ "$state" != forbidden ]; then
+                state=failed
+            fi
+        elif [ "$state" = none ] && printf '%s' "$KC_OUT" | grep -q 'deleted'; then
+            state=deleted
+        fi
+    done
+    printf '%s|%s\n' "$state" "$why"
+}
+
+# llmsm_hpa_repair_delete_cmd echoes the kubectl commands that delete the
+# objects named like llmsm_delete_hpa_repair_grant's arguments, for a message.
+llmsm_hpa_repair_delete_cmd() {
+    local spec kind name ns out=""
+    for spec in "$@"; do
+        read -r kind name ns <<< "$spec"
+        out="${out:+$out; }kubectl delete $kind $name${ns:+ -n $ns} --ignore-not-found"
+    done
+    printf '%s' "$out"
+}
+
+# llmsm_revoke_keda_hpa_repair deletes the KEDA HPA repair grant an earlier
+# install made in the controller's namespace or cluster-wide, for an install
+# without KEDA_HPA_REPAIR=true: the grant follows the variable on every run of
+# the phases that own RBAC. The names are the ones the install renders
+# (components/keda-hpa-repair*, renamed per install by
+# llmsm_append_crb_name_patches). Forbidden is reported with the command an
+# admin runs, not taken for "absent". The controller's own phase is separate:
+# a split install that still runs it with KEDA_HPA_REPAIR=true keeps the
+# repair on without the grant, so the message says to re-run it.
+llmsm_revoke_keda_hpa_repair() {
+    local suffix state specs=()
+    suffix="$(llmsm_ns_suffix "$LLMSM_NS")"
+    if [ "$(llmsm_install_scope)" = "namespace" ]; then
+        specs=("rolebinding scaling-manager-keda-hpa-repair-rolebinding $LLMSM_NS"
+               "role scaling-manager-keda-hpa-repair-role $LLMSM_NS")
+    else
+        specs=("clusterrolebinding scaling-manager-keda-hpa-repair-rolebinding-$suffix"
+               "clusterrole scaling-manager-keda-hpa-repair-role-$suffix")
+    fi
+    state="$(llmsm_delete_hpa_repair_grant "${specs[@]}")"
+    case "${state%%|*}" in
+        forbidden)
+            log_warning "KEDA_HPA_REPAIR is not true, so the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install may have made should go, and you may not delete it (Forbidden). A cluster admin runs:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")"
+            ;;
+        failed)
+            log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install may have made could not be deleted (${state#*|}). Delete it with:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")"
+            ;;
+        deleted)
+            if llmsm_render_active; then
+                log_info "KEDA_HPA_REPAIR is not true: admin.sh deletes the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made."
+            else
+                log_info "KEDA_HPA_REPAIR is not true: removed the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made."
+            fi
+            log_info "  A split install: re-run the controller phase without it too ($(llmsm_make_cmd deploy-scaling-manager INSTALL_PHASE=scaling-manager)), which turns the repair off in the Deployment. Until then the controller keeps trying, and LLMSMKEDAHPAWiringUnread fires."
+            ;;
+    esac
+    return 0
+}
 
 # llmsm_ns_suffix echoes the per-namespace suffix appended to those names.
 # sha256sum is GNU; macOS ships shasum. The suffix must be IDENTICAL on whatever
@@ -1310,6 +1434,9 @@ llmsm_render_manifests() {
     tmp="$(mktemp -d)" || return 0
     if llmsm_prepare_overlay_base "$tmp" >/dev/null 2>&1; then
         printf 'namespace: %s\nresources:\n- ./base\n' "$ns" > "$tmp/kustomization.yaml"
+        if llmsm_keda_hpa_repair_on 2>/dev/null; then
+            llmsm_append_keda_hpa_repair_component "$tmp"
+        fi
         llmsm_append_crb_name_patches "$tmp/kustomization.yaml" "$ns"
         # The same per-install decisions deploy_scaling_manager_controller applies, so the
         # objects this lists are the objects that install creates. Without the

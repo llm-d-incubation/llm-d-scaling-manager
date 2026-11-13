@@ -1,0 +1,59 @@
+# promtool unit tests for the KEDA HPA repair alerts (KEDA_HPA_REPAIR).
+# hack/check-alert-rules.sh copies the shipped PrometheusRule groups,
+# annotations stripped, to rules.yaml beside this file and runs promtool test
+# rules on it.
+#
+# llmsm_keda_unwired_hpas carries the HPA's namespace, renamed to
+# exported_namespace by the scrape; namespace is the controller's.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # 1. An HPA KEDA does not re-derive: two unwired from 5m pages after its
+  #    for: of 10m, once per model namespace, even from two controller pods.
+  #    A namespace whose HPA was wired within the window does not page.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_keda_unwired_hpas{exported_namespace="models",namespace="scaling-manager",pod="a"}'
+        values: '0x4 2x30'
+      - series: 'llmsm_keda_unwired_hpas{exported_namespace="models",namespace="scaling-manager",pod="b"}'
+        values: '0x4 2x30'
+      - series: 'llmsm_keda_unwired_hpas{exported_namespace="team-b",namespace="scaling-manager",pod="a"}'
+        values: '0x4 1x3 0x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LLMSMKEDAHPAUnwired
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LLMSMKEDAHPAUnwired
+        exp_alerts:
+          - exp_labels: {severity: warning, exported_namespace: models}
+
+  # 2. The repair works: KEDA wires the HPA two minutes after the request,
+  #    so the alert never fires.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_keda_unwired_hpas{exported_namespace="models",namespace="scaling-manager",pod="a"}'
+        values: '1x2 0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMSMKEDAHPAUnwired
+        exp_alerts: []
+
+  # 3. The repair cannot read HPAs: pages after 15 minutes, per controller
+  #    namespace, and stops once the reads succeed again.
+  - interval: 1m
+    input_series:
+      - series: 'llmsm_keda_hpa_wiring_unread{namespace="scaling-manager",pod="a"}'
+        values: '1x20 0x20'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LLMSMKEDAHPAWiringUnread
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: LLMSMKEDAHPAWiringUnread
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: scaling-manager}
+      - eval_time: 30m
+        alertname: LLMSMKEDAHPAWiringUnread
+        exp_alerts: []

@@ -89,6 +89,11 @@ type infrastructureConfig struct {
 	// a controller restart, in a ConfigMap (LEARNED_STATE_SNAPSHOT). Off by
 	// default; see docs/proposals/learned-state-snapshot.md.
 	learnedStateSnapshot bool
+	// kedaHPARepair annotates an HPA KEDA built for one of this scaler's
+	// ScaledObjects without the scaler's External metric, so KEDA derives it
+	// again (KEDA_HPA_REPAIR). Off by default: only KEDA 2.19 and older leave
+	// such an HPA behind.
+	kedaHPARepair bool
 }
 
 // tlsConfig holds TLS certificate paths
@@ -392,6 +397,14 @@ func (c *Config) LearnedStateSnapshotEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.infrastructure.learnedStateSnapshot
+}
+
+// KEDAHPARepairEnabled reports whether the controller repairs HPAs KEDA left
+// without this scaler's External metric (KEDA_HPA_REPAIR). Thread-safe.
+func (c *Config) KEDAHPARepairEnabled() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.kedaHPARepair
 }
 
 // ============================================================================

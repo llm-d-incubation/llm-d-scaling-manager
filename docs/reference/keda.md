@@ -57,8 +57,141 @@ Upgrade KEDA to 2.21, which also fixes the CVE above. Until then, run
 `NAMESPACE`, `LLMSM_NS` and `SCOPE` as the install
 ([re-wiring](#the-scalers-tls-in-kedas-namespace)), or restart the KEDA
 operator. On a KEDA below 2.20 the installer says so in its CVE warning, and
-`make verify-deployment` names this cause when it finds an unwired HPA. A
-controller-side repair for older KEDA is planned.
+`make verify-deployment` names this cause when it finds an unwired HPA. If you
+cannot upgrade KEDA, the controller can repair these HPAs itself (below).
+
+### The controller repair (KEDA_HPA_REPAIR)
+
+For a cluster that cannot upgrade KEDA past 2.19. Off by default; on KEDA 2.20
+and later leave it off, since there is nothing to repair.
+
+Turn it on through the installer, with the variables you installed with:
+
+```bash
+KEDA_HPA_REPAIR=true make deploy-scaling-manager NAMESPACE=<namespace> SCOPE=<namespace|cluster>
+```
+
+For a split install, a cluster admin runs `make setup-prereqs` with
+`KEDA_HPA_REPAIR=true` (it grants the HPA access), then the namespace owner runs
+`make deploy-scaling-manager INSTALL_PHASE=scaling-manager` with it too (it turns
+the repair on in the controller's Deployment, which restarts it).
+
+The installer adds the access only when `KEDA_HPA_REPAIR=true`. A cluster-scoped
+install gets the ClusterRole `scaling-manager-keda-hpa-repair-role-<suffix>`
+(`config/components/keda-hpa-repair`); a namespace-scoped one gets the Role
+`scaling-manager-keda-hpa-repair-role` in the controller's namespace
+(`config/components/keda-hpa-repair-namespaced`), copied into each namespace it
+manages from outside. When it manages only other namespaces, the Role in its own
+namespace stays too; it reaches only the HPAs there. Each grants `get`, `list` and `patch` on
+`horizontalpodautoscalers` and nothing else. A later single-command
+install or `make setup-prereqs` without `KEDA_HPA_REPAIR=true` removes it, and the uninstall
+removes it always.
+
+To turn it off, run the same commands without `KEDA_HPA_REPAIR=true`. For a
+split install that is two steps, in this order:
+
+1. The cluster admin runs `make setup-prereqs` without it. That deletes the
+   grant, and the run says so.
+2. The namespace owner runs
+   `make deploy-scaling-manager INSTALL_PHASE=scaling-manager` without it. That
+   turns the repair off in the Deployment. Until this step the controller keeps
+   trying without the grant, and `LLMSMKEDAHPAWiringUnread` fires.
+
+Setting `KEDA_HPA_REPAIR=true` on the Deployment by hand, or in the
+[settings ConfigMap](configuration.md#the-settings-configmap), turns the repair
+on without the access: it then logs that it may not list or patch HPAs,
+`LLMSMKEDAHPAWiringUnread` fires, and nothing is repaired.
+
+What it does, every 30 seconds, on the leader:
+
+1. Lists the HPAs in the namespaces the controller manages (every namespace
+   for a cluster-scoped install).
+2. Skips, without another read, every HPA no ScaledObject owns. For an HPA a
+   ScaledObject owns, it reads the ScaledObject and keeps the HPA only when a
+   trigger names this install's scaler
+   (`scaling-manager-external-scaler.<controller namespace>`, the same rule as
+   `make scaledobjects-rewire`). It skips paused ScaledObjects and HPAs younger
+   than 30 seconds. It writes to no other HPA.
+
+   That read is reused for 10 minutes while the HPA's generation and owner stay
+   the same. So an HPA of another scaler, or one of this scaler's that carries
+   the External metric of each of its triggers
+   (`s<index>-scaling-manager-desired-replicas`), costs one read per 10
+   minutes, not one per pass. A `scalingModifiers` HPA of this scaler is read
+   on every pass, because only the ScaledObject's status shows its wiring.
+3. Calls such an HPA unwired when it has no External metric for the scaler's
+   trigger, or the ScaledObject's `status.externalMetricNames` lacks it. With
+   `scalingModifiers` the HPA always carries one `composite-metric`, so only the
+   status counts.
+4. Adds the annotation `scaling-manager.llmd.ai/keda-rewire: <time>` to the
+   HPA. KEDA reconciles the ScaledObject when an annotation of its HPA changes,
+   asks the scaler for the metric again, and removes the annotation when it
+   rewrites the HPA. The ScaledObject is never written.
+5. Asks again after 30 seconds, doubling up to 10 minutes, until KEDA wires it.
+
+You see each request three ways: a log line (`annotated it so KEDA derives it
+again`), an Event `HPARewireRequested` on the ScaledObject (and `HPARewired`
+once KEDA wired it), and the metrics `llmsm_keda_unwired_hpas` and
+`llmsm_keda_hpa_rewires_total` ([metrics](prometheus.md#keda-hpa-repair-metrics)).
+When it stays unwired, see
+[troubleshooting](troubleshooting.md#an-hpa-stays-on-the-cpu-default).
+
+The list is not narrowed by KEDA's `app.kubernetes.io/managed-by=keda-operator`
+label: KEDA copies the ScaledObject's own labels over it, so the HPA of a Helm-
+or GitOps-owned ScaledObject reads `managed-by: Helm`.
+
+#### Installed from the release files
+
+The release files (`kubectl apply` installs) do not carry the HPA access or the
+switch. Grant both by hand. `<controller-namespace>` is where the controller
+runs.
+
+Cluster-scoped install (`scaling-manager-cluster.yaml`):
+
+```bash
+kubectl create clusterrole scaling-manager-keda-hpa-repair-role \
+  --verb=get,list,patch --resource=horizontalpodautoscalers.autoscaling
+kubectl create clusterrolebinding scaling-manager-keda-hpa-repair-rolebinding \
+  --clusterrole=scaling-manager-keda-hpa-repair-role \
+  --serviceaccount=<controller-namespace>:scaling-manager-controller-manager
+kubectl set env deployment/scaling-manager-controller-manager -n <controller-namespace> KEDA_HPA_REPAIR=true
+```
+
+Namespace-scoped install (`scaling-manager-namespaced.yaml`): for each
+namespace the controller manages, `<namespace>`:
+
+```bash
+kubectl create role scaling-manager-keda-hpa-repair-role -n <namespace> \
+  --verb=get,list,patch --resource=horizontalpodautoscalers.autoscaling
+kubectl create rolebinding scaling-manager-keda-hpa-repair-rolebinding -n <namespace> \
+  --role=scaling-manager-keda-hpa-repair-role \
+  --serviceaccount=<controller-namespace>:scaling-manager-controller-manager
+```
+
+then the same `kubectl set env` as above. The `--serviceaccount` value carries
+the namespace; without it the binding names no account.
+
+To remove it, turn the repair off first, then delete the grant:
+
+```bash
+kubectl set env deployment/scaling-manager-controller-manager -n <controller-namespace> KEDA_HPA_REPAIR-
+# cluster scope
+kubectl delete clusterrolebinding scaling-manager-keda-hpa-repair-rolebinding
+kubectl delete clusterrole scaling-manager-keda-hpa-repair-role
+# namespace scope, for each <namespace>
+kubectl delete rolebinding scaling-manager-keda-hpa-repair-rolebinding -n <namespace>
+kubectl delete role scaling-manager-keda-hpa-repair-role -n <namespace>
+```
+
+A later `make` install from the same cluster does not know these names and
+leaves them alone.
+
+#### Tested
+
+On kind with KEDA 2.18.1, the repair wired an HPA KEDA had built while the
+controller was down. The first request came 3 seconds after the controller came
+back, while KEDA's connection was still failing. The second request, 60 seconds
+later, wired the HPA. KEDA 2.19 was not run.
 
 ### Upgrading a KEDA the cluster already has
 

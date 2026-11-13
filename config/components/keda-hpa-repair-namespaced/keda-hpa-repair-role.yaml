@@ -1,0 +1,18 @@
+---
+# get and list find the HPAs KEDA built for this scaler's ScaledObjects;
+# patch writes the one annotation, scaling-manager.llmd.ai/keda-rewire. RBAC
+# cannot narrow patch to one key: this reaches every field of every HPA in
+# the namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-keda-hpa-repair-role
+rules:
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - get
+  - list
+  - patch

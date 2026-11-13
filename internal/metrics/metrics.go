@@ -1059,6 +1059,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	if err := registerLoadBalanceMetrics(registry); err != nil {
 		return err
 	}
+	if err := registerKEDAHPARepairMetrics(registry); err != nil {
+		return err
+	}
 
 	return nil
 }

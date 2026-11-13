@@ -51,14 +51,14 @@ for fn in llmsm_append_crb_name_patches llmsm_append_metrics_reader_subject_patc
           llmsm_append_kueue_reader_scope_patch llmsm_append_policy_namespace_reader_scope_patch \
           llmsm_append_install_kueue_reader_scope_patch llmsm_kueue_reader_names pl_grant_kueue_read pl_grant_kueue_borrow_read \
           llmsm_rendered_prereq_objects llmsm_prometheus_scraper_sa llmsm_missing_prereqs llmsm_append_replicas_patch \
-          llmsm_append_verbosity_patch llmsm_append_log_level_patch; do
+          llmsm_append_verbosity_patch llmsm_append_log_level_patch llmsm_append_keda_hpa_repair_component; do
     declare -F "$fn" >/dev/null || {
         printf 'FATAL: %s is not defined after sourcing the library.\n' "$fn" >&2
         exit 1
     }
 done
 
-EXPECT_CASES=68
+EXPECT_CASES=89
 RAN=0
 FAILED=0
 
@@ -565,6 +565,86 @@ for overlay in cluster-scoped/openshift namespace-scoped/openshift; do
         "$(printf '%s\n' "$out" | yq -N -r "select(.kind == \"Secret\" and .metadata.name == \"${sm_secret}\") | .metadata.annotations.\"kubernetes.io/service-account.name\"")"
     check "$overlay: metrics-reader names scaling-manager-metrics-scraper alone" 'scaling-manager-system/scaling-manager-metrics-scraper' \
         "$(printf '%s\n' "$out" | reader_subjects)"
+done
+
+# ----------------------------------------------------------------------------
+# The KEDA HPA repair grant exists only with KEDA_HPA_REPAIR=true
+# ----------------------------------------------------------------------------
+# get, list and patch on every HPA is a grant nothing else needs, so no overlay
+# carries it: the installer adds components/keda-hpa-repair (cluster scope) or
+# keda-hpa-repair-namespaced (namespace scope) only when asked, with the
+# switch on the Deployment. Rendered the installer's way, per overlay.
+render_hpa_repair() {
+    local overlay="$1" on="$2" dir scope=namespace
+    case "$overlay" in cluster-scoped/*) scope=cluster ;; esac
+    dir="$(mktemp -d "$WORK/ovl.XXXXXX")"
+    ln -s "$ROOT/config/overlays/$overlay" "$dir/base"
+    printf 'namespace: wns\nresources:\n- ./base\n' > "$dir/kustomization.yaml"
+    if [ "$on" = true ]; then
+        LLMSM_SCOPE="$scope" LLMSM_PROJECT="$ROOT" llmsm_append_keda_hpa_repair_component "$dir"
+    fi
+    llmsm_append_crb_name_patches "$dir/kustomization.yaml" wns
+    "${KBUILD[@]}" "$dir"
+}
+# hpa_grants echoes kind/name:verbs of every Role or ClusterRole with a rule
+# that reaches HPAs: resource horizontalpodautoscalers or a wildcard, in API
+# group autoscaling or a wildcard. A wildcard is a leak, not a pass. The
+# wildcard is matched with test, because == "*" is a glob that matches any
+# string.
+hpa_grants() {
+    yq -N -r '
+        select(.kind == "Role" or .kind == "ClusterRole")
+        | .hpa = [.rules[]? | select(([.resources[]? | select(. == "horizontalpodautoscalers" or test("^[*]$"))] | length > 0)
+            and ([.apiGroups[]? | select(. == "autoscaling" or test("^[*]$"))] | length > 0))]
+        | select(.hpa | length > 0)
+        | .kind + "/" + .metadata.name + ":" + ([.hpa[].verbs[]] | join(","))'
+}
+hpa_switch() {
+    yq -N -r 'select(.kind == "Deployment" and .metadata.name == "scaling-manager-controller-manager") | .spec.template.spec.containers[0].env[] | select(.name == "KEDA_HPA_REPAIR") | .value'
+}
+wns_suffix="$(llmsm_ns_suffix wns)"
+# The helper itself: a wildcard resource or API group is a grant, not a pass.
+wildcards="$WORK/hpa-wildcards.yaml"
+cat > "$wildcards" <<'YAML'
+kind: ClusterRole
+metadata: {name: any}
+rules: [{apiGroups: [autoscaling], resources: ["*"], verbs: [get]}]
+---
+kind: Role
+metadata: {name: group}
+rules: [{apiGroups: ["*"], resources: [horizontalpodautoscalers], verbs: [list]}]
+---
+kind: Role
+metadata: {name: other}
+rules: [{apiGroups: [apps], resources: [deployments], verbs: [get]}]
+YAML
+check 'hpa_grants: a wildcard resource or API group reaches HPAs too' \
+    'ClusterRole/any:get|Role/group:list' "$(hpa_grants < "$wildcards" | paste -sd'|' -)"
+for overlay in cluster-scoped/kubernetes cluster-scoped/openshift namespace-scoped/kubernetes namespace-scoped/openshift; do
+    out="$(render_hpa_repair "$overlay" false)" || out=''
+    [ -n "$out" ] || { printf 'FATAL: %s did not render.\n' "$overlay" >&2; exit 1; }
+    check "$overlay: no role grants horizontalpodautoscalers without KEDA_HPA_REPAIR" '' \
+        "$(printf '%s\n' "$out" | hpa_grants)"
+    check "$overlay: the repair is off without KEDA_HPA_REPAIR" '' "$(printf '%s\n' "$out" | hpa_switch)"
+
+    out="$(render_hpa_repair "$overlay" true)" || out=''
+    [ -n "$out" ] || { printf 'FATAL: %s did not render with the KEDA HPA repair.\n' "$overlay" >&2; exit 1; }
+    case "$overlay" in
+        cluster-scoped/*)
+            want_grant="ClusterRole/scaling-manager-keda-hpa-repair-role-${wns_suffix}:get,list,patch"
+            binding="$(printf '%s\n' "$out" | yq -N -r "select(.kind == \"ClusterRoleBinding\" and .metadata.name == \"scaling-manager-keda-hpa-repair-rolebinding-${wns_suffix}\") | .roleRef.name + \" \" + .subjects[0].namespace + \"/\" + .subjects[0].name")"
+            want_binding="scaling-manager-keda-hpa-repair-role-${wns_suffix} wns/scaling-manager-controller-manager"
+            ;;
+        *)
+            want_grant="Role/scaling-manager-keda-hpa-repair-role:get,list,patch"
+            binding="$(printf '%s\n' "$out" | yq -N -r 'select(.kind == "RoleBinding" and .metadata.name == "scaling-manager-keda-hpa-repair-rolebinding") | .roleRef.name + " " + .subjects[0].namespace + "/" + .subjects[0].name')"
+            want_binding="scaling-manager-keda-hpa-repair-role wns/scaling-manager-controller-manager"
+            ;;
+    esac
+    check "$overlay: KEDA_HPA_REPAIR=true grants get, list, patch on HPAs, in one role of its own" "$want_grant" \
+        "$(printf '%s\n' "$out" | hpa_grants)"
+    check "$overlay: KEDA_HPA_REPAIR=true binds that role to the controller" "$want_binding" "$binding"
+    check "$overlay: KEDA_HPA_REPAIR=true turns the repair on in the Deployment" 'true' "$(printf '%s\n' "$out" | hpa_switch)"
 done
 
 # ----------------------------------------------------------------------------

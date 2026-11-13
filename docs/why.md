@@ -178,8 +178,8 @@ runs per arm on one cluster type (the P/D pair repeated once).
 - On KEDA 2.19 and older, a ScaledObject created or changed within about two
   minutes of a controller restart can stay unwired: its HPA keeps only the
   CPU default and never scales. It is a KEDA bug fixed in 2.20; upgrade KEDA
-  to 2.21, or on older KEDA run `make scaledobjects-rewire`
-  ([KEDA](reference/keda.md#unwired-hpa-before-keda-220)).
+  to 2.21, or on older KEDA run `make scaledobjects-rewire` or turn on
+  `KEDA_HPA_REPAIR` ([KEDA](reference/keda.md#unwired-hpa-before-keda-220)).
 
 Planned work, with its issues, is on the [roadmap](roadmap.md).
 
