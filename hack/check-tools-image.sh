@@ -231,6 +231,7 @@ refuse "scaledobjects-apply without --plan is refused" "needs --plan" scaledobje
 refuse "scaledobjects-apply with no plan file is refused" "no plan at" scaledobjects-apply -n demo --plan /nonexistent/plan.yaml
 refuse "scaledobjects-plan --plan is refused (it writes, with --out)" "takes --out" scaledobjects-plan -n demo --plan x.yaml
 refuse "a controller namespace that is not a name is refused" "not a namespace name" scaledobjects-plan -n demo --controller-namespace 'Bad_NS'
+refuse "weights --memory with no value says so" "--memory needs a value" weights apply -n demo --memory
 
 for STUB_SCOPE in "" cluster; do
     label="scaledobjects-plan -n demo${STUB_SCOPE:+ (LLMSM_SCOPE=$STUB_SCOPE)}"
@@ -339,6 +340,49 @@ if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "warm pool(s) pool-a to apply:
     ok "scaledobjects-apply refuses a plan that sets a warm pool to apply: yes, naming it"
 else
     fail "a warm pool set to yes: exit $rc: $(printf '%s' "$out" | tail -1)"
+fi
+
+# ---------------------------------------------------------------------------
+echo "The apply and delete commands the docs print run as written"
+# The mapping lives in prose as well as in the table below: the entry point's
+# header, the guide, the reference page's make-to-tool table. A delete printed
+# without --all (or --image / --model) is refused by the script, and nothing
+# else would notice the page saying it. Each documented prepull, weights and
+# engine-cache apply or delete is run here, its placeholders filled, with
+# --dry-run, which reads no cluster and must exit 0.
+DOC_FILES="deploy/scaling-manager-tools.sh README.md docs/reference/workload-preparation.md"
+for f in "$ROOT"/docs/guides/*/README.md "$ROOT"/docs/guides/*/guide.yaml; do
+    DOC_FILES="$DOC_FILES ${f#"$ROOT"/}"
+done
+fill() {
+    sed -e 's/<ns>/demo/g' -e 's/\$NAMESPACE/demo/g' -e 's/\${NAMESPACE}/demo/g' \
+        -e 's#<img>#quay.io/example/vllm:v1#g' -e 's#\$ENGINE_IMAGE#quay.io/example/vllm:v1#g' \
+        -e 's#<hugging face id>#Qwen/Qwen3-0.6B#g' -e 's#<id>#Qwen/Qwen3-0.6B#g' \
+        -e 's#<dir>#/mnt/local/weights/demo#g' -e 's#\$NODE_DIR#/mnt/local/weights/demo#g'
+}
+before_docs=$FAILED
+doc_cmds=0
+doc_files_with_delete=""
+for f in $DOC_FILES; do
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        doc_cmds=$((doc_cmds + 1))
+        case "$line" in *" delete "*) case " $doc_files_with_delete " in *" $f "*) ;; *) doc_files_with_delete="$doc_files_with_delete $f" ;; esac ;; esac
+        cmd="$(printf '%s' "$line" | fill)"
+        case "$cmd" in *"<"*|*'$'*) fail "$f: a documented command with a placeholder this check cannot fill: $line"; continue ;; esac
+        case " $cmd " in *" --dry-run "*) ;; *) cmd="$cmd --dry-run" ;; esac
+        # shellcheck disable=SC2086
+        out="$(tools $cmd 2>&1)" && rc=0 || rc=$?
+        [ "$rc" = 0 ] || fail "$f documents \`$line\`, which the script refuses (exit $rc): $(printf '%s' "$out" | grep -m1 -E 'ERROR|needs|unknown' || printf '%s' "$out" | tail -1)"
+    done < <(grep -ohE '(prepull|weights|engine-cache) (apply|delete) -n [^`|#(]*' "$ROOT/$f" | sed -e 's/ > .*$//' -e 's/[[:space:]]*$//' | sort -u)
+done
+# Every page that documents the mapping must have been read: an extraction
+# that finds nothing passes everything.
+for f in deploy/scaling-manager-tools.sh docs/reference/workload-preparation.md docs/guides/prepare-workloads/guide.yaml docs/guides/prepare-workloads/README.md; do
+    case " $doc_files_with_delete " in *" $f "*) ;; *) fail "found no delete command in $f: the extraction read nothing there" ;; esac
+done
+if [ "$doc_cmds" -ge 12 ] && [ "$FAILED" -eq "$before_docs" ]; then
+    ok "every documented apply and delete runs as written ($doc_cmds commands, delete in:$doc_files_with_delete)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,19 @@ CLF="scaling-manager-cluster.yaml scaling-manager-cluster-openshift.yaml"
 MAIN_FILES="$NSF $CLF"
 TOOLS_TARBALL="scaling-manager-tools-$VERSION.tar.gz"
 TOOLS_SCRIPTS="scaling-manager-tools.sh prepull.sh weights.sh enginecache.sh utilization-share.sh"
+# What the archive's lib/ must hold, read the way the renderer reads it but
+# here, independently: the tracked files in a git checkout, else every file.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    LIB_FILES="$(git -C "$ROOT" ls-files -- deploy/lib)"
+else
+    LIB_FILES="$(cd "$ROOT" && find deploy/lib -type f ! -path '*/__pycache__/*' | sort)"
+fi
+# GNU tar reads the listing format the checks below parse; gtar on macOS.
+TAR=""
+for t in tar gtar; do
+    if command -v "$t" >/dev/null 2>&1 && "$t" --version 2>/dev/null | grep -q 'GNU tar'; then TAR="$t"; break; fi
+done
+[ -n "$TAR" ] || { echo "FAIL: GNU tar is required (tar or gtar; on macOS brew install gnu-tar), not skipping"; exit 1; }
 ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-scaler-tls.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml scaling-manager-preflight.yaml scaling-manager-preflight-cluster.yaml"
 
 render() {
@@ -126,16 +139,18 @@ check_dir() {
     # The tools tarball: the image's files under scaling-manager-tools/, the
     # scripts executable, lib/ beside them, the version, and nothing else.
     local listing want_list
-    listing="$(tar -tzvf "$d/$TOOLS_TARBALL" 2>/dev/null)" || { say "$TOOLS_TARBALL is not a gzip tar"; listing=""; }
-    want_list="$(cd "$ROOT/deploy" && { printf 'scaling-manager-tools/VERSION\n'; for f in $TOOLS_SCRIPTS; do printf 'scaling-manager-tools/%s\n' "$f"; done; find lib -type f ! -path '*/__pycache__/*' | sed 's#^#scaling-manager-tools/#'; } | sort)"
+    listing="$("$TAR" -tzvf "$d/$TOOLS_TARBALL" 2>/dev/null)" || { say "$TOOLS_TARBALL is not a gzip tar"; listing=""; }
+    want_list="$( { printf 'scaling-manager-tools/VERSION\n'; for f in $TOOLS_SCRIPTS; do printf 'scaling-manager-tools/%s\n' "$f"; done; printf '%s\n' "$LIB_FILES" | sed 's#^deploy/#scaling-manager-tools/#'; } | sort)"
     if [ "$(printf '%s\n' "$listing" | awk '$1 !~ /^d/ {print $NF}' | sort)" != "$want_list" ]; then
         say "$TOOLS_TARBALL does not hold exactly scaling-manager-tools/{VERSION,$(echo $TOOLS_SCRIPTS | tr ' ' ',')} and lib/"
     fi
     for f in $TOOLS_SCRIPTS; do
         printf '%s\n' "$listing" | grep -qE "^-rwxr-xr-x .* scaling-manager-tools/$f\$" || say "$TOOLS_TARBALL: $f is not mode 0755"
     done
+    printf '%s\n' "$listing" | grep -E ' scaling-manager-tools/(lib/|VERSION$)' | grep -qvE '^(-rw-r--r--|drwxr-xr-x) ' \
+        && say "$TOOLS_TARBALL: a lib/ or VERSION entry is not 0644 (directories 0755)"
     printf '%s\n' "$listing" | awk '{print $2}' | grep -qv '^0/0$' && say "$TOOLS_TARBALL: an entry not owned by 0/0"
-    [ "$(tar -xzOf "$d/$TOOLS_TARBALL" scaling-manager-tools/VERSION 2>/dev/null)" = "$VERSION" ] || say "$TOOLS_TARBALL: VERSION is not $VERSION"
+    [ "$("$TAR" -xzOf "$d/$TOOLS_TARBALL" scaling-manager-tools/VERSION 2>/dev/null)" = "$VERSION" ] || say "$TOOLS_TARBALL: VERSION is not $VERSION"
 
     rm -rf "$js"; mkdir -p "$js"
     for f in $ALL_FILES; do
@@ -454,6 +469,21 @@ if bash "$ROOT/deploy/release-manifests.sh" --image "$REPO@$DIGEST" --version 0.
     fail "deploy/release-manifests.sh accepted --version 0.11"
 else
     pass
+fi
+
+# Reproducible: the same inputs rendered a second time give the same bytes,
+# the tools archive and SHA256SUMS included. A published release's SHA256SUMS
+# is compared with a re-run's (the attach step), so a timestamp or an owner in
+# the archive would make every re-run of a published release fail.
+if render "$REPO@$DIGEST" "$WORK/good-again" > "$WORK/render-again.log" 2>&1; then
+    if cmp -s "$GOOD/$TOOLS_TARBALL" "$WORK/good-again/$TOOLS_TARBALL" && cmp -s "$GOOD/SHA256SUMS" "$WORK/good-again/SHA256SUMS"; then
+        pass
+        echo "  ok: a second render is byte-identical: $TOOLS_TARBALL and SHA256SUMS"
+    else
+        fail "a second render differs: $(cmp "$GOOD/$TOOLS_TARBALL" "$WORK/good-again/$TOOLS_TARBALL" 2>&1 | head -1) $(diff "$GOOD/SHA256SUMS" "$WORK/good-again/SHA256SUMS" | head -2 | tr '\n' ' ')"
+    fi
+else
+    fail "the second render failed: $(tail -2 "$WORK/render-again.log")"
 fi
 
 # Negative controls: one fault per copy. Each must fail with the message of

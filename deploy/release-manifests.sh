@@ -400,17 +400,37 @@ done
 # and a published release's SHA256SUMS still matches.
 TOOLS_TARBALL="scaling-manager-tools-$VERSION.tar.gz"
 TOOLS_SCRIPTS=(scaling-manager-tools.sh prepull.sh weights.sh enginecache.sh utilization-share.sh)
-tar --version 2>/dev/null | grep -q 'GNU tar' || die "GNU tar is required to package $TOOLS_TARBALL reproducibly"
+# GNU tar, as tar or (macOS, brew install gnu-tar) as gtar: --sort, --owner
+# and --mtime are what make the archive reproducible, and bsdtar has none.
+TAR=""
+for t in tar gtar; do
+    if command -v "$t" >/dev/null 2>&1 && "$t" --version 2>/dev/null | grep -q 'GNU tar'; then TAR="$t"; break; fi
+done
+[ -n "$TAR" ] || die "GNU tar is required to package $TOOLS_TARBALL reproducibly (on macOS: brew install gnu-tar, which installs gtar)"
 stage="$WORK/tools/scaling-manager-tools"
-mkdir -p "$stage"
+mkdir -p "$stage/lib"
 for f in "${TOOLS_SCRIPTS[@]}"; do
     install -m 0755 "$ROOT/deploy/$f" "$stage/$f"
 done
-cp -R "$ROOT/deploy/lib" "$stage/lib"
-find "$stage/lib" -name __pycache__ -prune -exec rm -rf {} +
+# deploy/lib as the repository tracks it: in a git checkout, the tracked files
+# only, so nothing generated or left over (a __pycache__, an editor's backup)
+# is shipped; outside one (a source archive), every file but __pycache__.
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    lib_files="$(git -C "$ROOT" ls-files -- deploy/lib)"
+else
+    lib_files="$(cd "$ROOT" && find deploy/lib -type f ! -path '*/__pycache__/*' | sort)"
+fi
+[ -n "$lib_files" ] || die "found no files under deploy/lib to package"
+while IFS= read -r f; do
+    rel="${f#deploy/}"
+    mkdir -p "$stage/$(dirname "$rel")"
+    install -m 0644 "$ROOT/$f" "$stage/$rel"
+done <<< "$lib_files"
 printf '%s\n' "$VERSION" > "$stage/VERSION"
+chmod 0644 "$stage/VERSION"
+find "$stage" -type d -exec chmod 0755 {} +
 rm -f "$OUT"/scaling-manager-tools-*.tar.gz
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 --mode='u+rwX,go+rX,go-w' \
+"$TAR" --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
     -C "$WORK/tools" -cf - scaling-manager-tools | gzip -n -9 > "$OUT/$TOOLS_TARBALL" \
     || die "could not package $TOOLS_TARBALL"
 [ -s "$OUT/$TOOLS_TARBALL" ] || die "$TOOLS_TARBALL is empty"
@@ -419,5 +439,5 @@ tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 --mode='u+rwX,go+
 for f in "${RELEASE_FILES[@]}"; do
     printf '%-45s %3s objects\n' "$f" "$(yq ea '[.] | map(select(.kind != null)) | length' "$OUT/$f")"
 done
-printf '%-45s %3s files\n' "$TOOLS_TARBALL" "$(tar -tzf "$OUT/$TOOLS_TARBALL" | grep -vc '/$')"
+printf '%-45s %3s files\n' "$TOOLS_TARBALL" "$("$TAR" -tzf "$OUT/$TOOLS_TARBALL" | grep -vc '/$')"
 echo "Wrote ${#RELEASE_FILES[@]} manifests, $TOOLS_TARBALL and SHA256SUMS to $OUT (image $IMAGE_REPO@$IMAGE_DIGEST, version $VERSION)"

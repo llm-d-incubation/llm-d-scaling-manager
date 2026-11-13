@@ -647,7 +647,7 @@ esac
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -n|--namespace|--model|--path|--image|--hf-token-secret|--capacity|--node-selector|--toleration)
+        -n|--namespace|--model|--path|--image|--hf-token-secret|--capacity|--memory|--node-selector|--toleration)
             [ $# -ge 2 ] || log_error "$1 needs a value" ;;
     esac
     case "$1" in

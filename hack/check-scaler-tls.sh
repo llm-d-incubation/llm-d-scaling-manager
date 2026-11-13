@@ -535,6 +535,9 @@ put_deploy() {
     case "$1" in
         plaintext) ;;
         manual) args='["--leader-elect=true","--external-scaler-cert-path=/mine"]' ;;
+        bootstrap) args='["--leader-elect=true","--external-scaler-tls-bootstrap=true"]' ;;
+        bootstrap-bare) args='["--leader-elect=true","--external-scaler-tls-bootstrap"]' ;;
+        bootstrap-off) args='["--leader-elect=true","--external-scaler-tls-bootstrap=false"]' ;;
         *) args='["--leader-elect=true","--external-scaler-cert-path=/etc/scaling-manager/scaler-tls"]'
            ann="{\"scaling-manager.llmd.ai/scaler-tls\":\"$1\"}" ;;
     esac
@@ -1324,6 +1327,17 @@ ok 'grep -q "could not be read" "$WORK/stdout"' "Forbidden marker read as '$(cat
 fresh_k
 run 'llmsm_scaler_tls_prepare "$WORK/k/kustomization.yaml"' LLMSM_SCALER_TLS=true STUB_CM=absent STUB_CTA=FORBIDDEN STUB_FORBID_NS=notfound-prod
 ok '[ "$RC" = 1 ] && grep -q "Cannot read ClusterTriggerAuthentication" "$WORK/refusal" && ! grep -q "cta/" "$WORK/keda-writes"' "Forbidden ClusterTriggerAuthentication: exit $RC, wrote '$(tr '\n' ' ' <"$WORK/keda-writes")': $(cat "$WORK/refusal")"
+
+echo "== a controller from the release files provisions its own TLS: its ScaledObjects take the TLS address"
+# --external-scaler-tls-bootstrap and no cert path: read as plaintext, the
+# tools image's scaledobjects-apply wrote the plaintext address and no
+# authenticationRef for every install from the release files.
+for want in "bootstrap tls" "bootstrap-bare tls" "bootstrap-off plaintext"; do
+    reset_store
+    put_deploy "${want% *}"
+    run probe_mode
+    ok 'grep -qx "mode=${want#* }" "$WORK/stdout"' "a Deployment with ${want% *}: mode '$(cat "$WORK/stdout")', want ${want#* }"
+done
 
 # ---------------------------------------------------------------- the client identity
 echo "== LLMSM_SCALER_CLIENT_SAN must be one DNS name"

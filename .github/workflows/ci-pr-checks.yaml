@@ -238,10 +238,15 @@ jobs:
       # HTTP 5xx, which plain --retry does not; the six attempts span ~2 min.
       - name: Install yq
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       # hack/check-kps-images.sh renders the kube-prometheus-stack release the
@@ -425,10 +430,15 @@ jobs:
       # renders. Same yq pin and retries as deploy-scripts-check.
       - name: Install yq
         if: needs.check-code-changes.outputs.has_code_changes != 'false'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       - name: Check the rendered manifests
@@ -877,10 +887,15 @@ jobs:
       # retries as deploy-scripts-check.
       - name: Install yq
         if: steps.decide.outputs.run == 'true'
+        env:
+          YQ_VERSION: v4.54.1
+          YQ_SHA256: 8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
         run: |
-          sudo curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors -o /tmp/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          echo "${YQ_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
           yq --version
 
       - name: Install Kind
