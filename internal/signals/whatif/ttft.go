@@ -291,8 +291,9 @@ type TTFTFleet struct {
 	// percentile target is priced with that share charged to its tail: a
 	// request that meets a closed gate is taken to miss. A mean target is
 	// capped where the share reaches MaxDecodeGateClosedShare. Either way the
-	// bound is BoundDecodeOnset. TTFTAt and TTFTMeets do not move. Off by
-	// default (DefaultChargeDecodeGate).
+	// bound is BoundDecodeGateCharge. TTFTAt and TTFTMeets do not move. With
+	// no decode line it does nothing (DecodeGateChargeFor). Off by default
+	// (DefaultChargeDecodeGate).
 	ChargeDecodeGate bool
 	// DecodeTTFT is the decode engine's measured TTFT, read only when Decode
 	// is nil. On P/D the router's TTFT is the prefill engine's and then the
@@ -482,8 +483,8 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		u = refuse(InvalidInput, fmt.Sprintf("curve b %g, c %g, want finite values of at least 0", p.CurveSlope, p.CurveCurvature))
 	case !(p.VPMargin >= 0 && p.VPMargin <= MaxVPMargin):
 		u = refuse(InvalidInput, fmt.Sprintf("V_P margin %g, want 0 <= margin <= %g", p.VPMargin, MaxVPMargin))
-	case p.RunningCap < 0 || p.RunningCap > maxSlots:
-		u = refuse(InvalidInput, fmt.Sprintf("running cap %d, want 0 <= cap <= %d (0 is not known)", p.RunningCap, maxSlots))
+	case p.RunningCap < 0 || p.RunningCap > MaxRunningCap:
+		u = refuse(InvalidInput, fmt.Sprintf("running cap %d, want 0 <= cap <= %d (0 is not known)", p.RunningCap, MaxRunningCap))
 	default:
 		cv := p.PromptCV
 		if cv < minPromptCV {
@@ -776,31 +777,112 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 	return pl, nil
 }
 
+// OnsetPlacement is how the prefill flow-control onset is placed
+// (TTFTFleet.PSOnsets; PrefillOnsetPlacement).
+type OnsetPlacement string
+
+const (
+	// PlacedFirstCome is a first-come waiting count: PSOnsets off, or the
+	// prefill pod not priced as processor sharing.
+	PlacedFirstCome OnsetPlacement = "first come"
+	// PlacedProcessorSharing is the processor-sharing stage at the stated
+	// running cap.
+	PlacedProcessorSharing OnsetPlacement = "processor sharing at the running cap"
+	// PlacedLowerCapUnknown is the lower of processor sharing at a cap of 1
+	// and first come, the running cap not known. Cap 1 alone can sit above
+	// first come: the stage reads each pod at its own Ca^2 (splitCA2), near 1
+	// on many pods, where first come reads the fleet's.
+	PlacedLowerCapUnknown OnsetPlacement = "the lower of processor sharing at a running cap of 1 and first come (running cap not known)"
+	// PlacedLowerWideSpread is the lower of processor sharing at the running
+	// cap and first come, the prompt cv past MaxPSPromptCV, where the price
+	// is the larger of the two queues'.
+	PlacedLowerWideSpread OnsetPlacement = "the lower of processor sharing at the running cap and first come (prompt cv past MaxPSPromptCV)"
+)
+
+// placement is how the plan places its prefill onset.
+func (pl ttftPlan) placement() OnsetPlacement {
+	switch {
+	case !pl.psOnsets:
+		return PlacedFirstCome
+	case pl.psCapped:
+		return PlacedLowerWideSpread
+	case pl.pf.p.RunningCap == 0:
+		return PlacedLowerCapUnknown
+	}
+	return PlacedProcessorSharing
+}
+
+// PrefillOnsetPlacement is how FlowControlOnsets places fl's prefill onset,
+// and false where it places none: flow control not on, or the fleet refused.
+func PrefillOnsetPlacement(fl TTFTFleet) (OnsetPlacement, bool) {
+	pl, u := fl.plan()
+	if u != nil || pl.fc.State != FlowControlOn {
+		return "", false
+	}
+	return pl.placement(), true
+}
+
+// GateCharge is what TTFTFleet.ChargeDecodeGate does to a rate answer
+// (DecodeGateChargeFor).
+type GateCharge string
+
+const (
+	// GateChargedToTail is the closed share charged to a percentile's tail.
+	GateChargedToTail GateCharge = "the decode gate's closed share charged to the percentile's tail"
+	// GateCappedForMean is a mean target capped where the closed share
+	// reaches MaxDecodeGateClosedShare.
+	GateCappedForMean GateCharge = "the mean capped where the decode gate's closed share reaches MaxDecodeGateClosedShare"
+	// GateNoDecodeLine is the switch on with no decode line: there is no
+	// decode gate to charge.
+	GateNoDecodeLine GateCharge = "not applied: no decode line"
+	// GateFlowControlNotOn is the switch on with flow control not on: there
+	// is no gate.
+	GateFlowControlNotOn GateCharge = "not applied: flow control is not on"
+)
+
+// DecodeGateChargeFor is what ChargeDecodeGate does to RateForTTFT's answer
+// on fl at target t, and false with the switch off or the fleet refused.
+func DecodeGateChargeFor(fl TTFTFleet, t TTFTTarget) (GateCharge, bool) {
+	if !fl.ChargeDecodeGate {
+		return "", false
+	}
+	pl, u := fl.plan()
+	switch {
+	case u != nil:
+		return "", false
+	case pl.fc.State != FlowControlOn:
+		return GateFlowControlNotOn, true
+	case !pl.chargeGate:
+		return GateNoDecodeLine, true
+	case t.Percentile == 0:
+		return GateCappedForMean, true
+	}
+	return GateChargedToTail, true
+}
+
+// MaxRunningCap is the largest Prefill.RunningCap priced: one prompt per
+// slot the admission chain holds.
+const MaxRunningCap = maxSlots
+
 // placeOnsets finds each stage's onset by bisection on the rate: the least
 // rate at which the stage's mean endpoint score reaches 1, below the stage's
 // knee. A stage whose score stays under 1 up to its knee has its knee as the
-// onset. With psOnsets the prefill score is the processor-sharing stage's
-// (psMeanScore), or past MaxPSPromptCV or at an unknown running cap the
-// larger of the two, so the lower onset.
+// onset. The prefill score is the placement's: a larger score is a lower
+// onset.
 func (pl ttftPlan) placeOnsets() (Onsets, *Unanswerable) {
 	qt, kt := pl.fc.QueueThreshold, pl.fc.KVThreshold
-	var on Onsets
-	score := func(r float64) float64 { return pl.pf.meanScore(r, qt) }
-	if pl.psOnsets {
-		k := max(1, pl.pf.p.RunningCap)
-		ps := func(r float64) float64 { return pl.pf.psMeanScore(r, qt, k) }
-		// An unknown cap takes the lower of the two onsets too: cap 1 is the
-		// most waiting on processor sharing, but the stage reads each pod at
-		// its own Ca^2 (splitCA2), near 1 on many pods, where first come
-		// reads the fleet's, so on bursty arrivals over many pods cap 1 can
-		// still sit above the first-come onset.
-		if pl.psCapped || pl.pf.p.RunningCap == 0 {
-			fcfs := score
-			score = func(r float64) float64 { return max(ps(r), fcfs(r)) }
-		} else {
-			score = ps
-		}
+	firstCome := func(r float64) float64 { return pl.pf.meanScore(r, qt) }
+	ps := func(r float64) float64 { return pl.pf.psMeanScore(r, qt, max(1, pl.pf.p.RunningCap)) }
+	var score func(float64) float64
+	switch pl.placement() {
+	case PlacedFirstCome:
+		score = firstCome
+	case PlacedProcessorSharing:
+		score = ps
+	default:
+		score = func(r float64) float64 { return max(ps(r), firstCome(r)) }
 	}
+	var on Onsets
 	on.Prefill = onset(pl.pf.knee(), score)
 	if pl.d == nil {
 		return on, nil
@@ -839,7 +921,7 @@ func decodeScoreTail(d Decode, rate, qt, kt float64) float64 {
 		return 1
 	}
 	c := int(p.slots)
-	w, ok := chainWeights(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, c)
+	w, ok := solveChain(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, c)
 	if !ok {
 		return 1
 	}
@@ -865,9 +947,8 @@ func decodeScoreTail(d Decode, rate, qt, kt float64) float64 {
 // 0.9 of the decode onset one pod is over 1 for 1.2 % of the time, and the
 // bound reads 2.3 % at two pods, 17 % at 16 and 31 % at 32.
 func (pl ttftPlan) gateClosed(rate float64) float64 {
-	d := *pl.d
-	p := decodeScoreTail(d, rate, pl.fc.QueueThreshold, pl.fc.KVThreshold)
-	return -math.Expm1(float64(d.Replicas) * math.Log1p(-p))
+	p := decodeScoreTail(*pl.d, rate, pl.fc.QueueThreshold, pl.fc.KVThreshold)
+	return -math.Expm1(float64(pl.d.Replicas) * math.Log1p(-p))
 }
 
 // onset is the least rate in [0, knee) at which score reaches 1, or knee if
@@ -1361,10 +1442,11 @@ func TTFTAt(fl TTFTFleet, rate, q float64) Result {
 // TTFTFleet.ChargeDecodeGate that share (ttftPlan.gateClosed) is charged: a
 // percentile target is met where the price at q plus the share meets it, a
 // request that meets a closed gate taken as a miss; a mean target is capped
-// where the share reaches MaxDecodeGateClosedShare, bound BoundDecodeOnset.
-// When the charge lowers a percentile's rate, BoundBy is TTFT then
-// BoundDecodeOnset, and BoundDecodeAdmission after it where decode
-// admission holds the rate as well.
+// where the share reaches MaxDecodeGateClosedShare, bound
+// BoundDecodeGateCharge. When the charge lowers a percentile's rate, BoundBy
+// is TTFT then BoundDecodeGateCharge, and BoundDecodeAdmission after it
+// where decode admission holds the rate as well. The charge never names
+// BoundDecodeOnset: the rate is still the prefill side's to raise.
 func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	if !Finite(t.Seconds) || !(t.Seconds > 0) {
 		return refuse(InvalidInput, fmt.Sprintf("TTFT target %g s", t.Seconds))
@@ -1392,25 +1474,25 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 		// The last rate the share is under the constant at, not the first
 		// past it.
 		if lo, hi := bisectRate(limit, func(r float64) bool { return pl.gateClosed(r) < MaxDecodeGateClosedShare }); hi < limit {
-			limit, limitBy = lo, BoundDecodeOnset
+			limit, limitBy = lo, BoundDecodeGateCharge
 		}
 	}
 	if c := pl.prefillCap(); pl.fc.State == FlowControlOn && c < limit {
 		limit, limitBy = c, BoundPrefillOnset
 	}
 	charge := pl.chargeGate && t.Percentile > 0
-	full := pl.bisect(t, limit, true, charge)
+	full := pl.bisect(t, limit, bisectOpts{withDecodeWait: true, chargeGate: charge})
 	if !(full > 0) {
 		// The floor is under the target, but by less than the bisection
 		// resolves: no positive rate is known to meet it.
 		return pl.belowFloor(fl, t, fmt.Sprintf("target %.4g s: no positive rate meets it (TTFT floor %.4g s)", t.Seconds, floor), zero.out.Flags)
 	}
-	alone := pl.bisect(t, limit, false, charge)
+	alone := pl.bisect(t, limit, bisectOpts{chargeGate: charge})
 	// uncharged is the rate with the gate's closed share left out, to tell
 	// whether the charge set the rate.
 	uncharged := full
 	if charge {
-		uncharged = pl.bisect(t, limit, true, false)
+		uncharged = pl.bisect(t, limit, bisectOpts{withDecodeWait: true})
 	}
 
 	var by []Bound
@@ -1423,7 +1505,7 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 		if uncharged > full*(1+1e-6) {
 			// The decode gate's closed share, charged to the tail, holds
 			// the rate below the target's own.
-			by = append(by, BoundDecodeOnset)
+			by = append(by, BoundDecodeGateCharge)
 		}
 		if alone > full*(1+1e-6) {
 			// Decode admission's share of the tail holds it below what the
@@ -1470,22 +1552,28 @@ func (pl ttftPlan) prefillCap() float64 {
 	return pl.onsets.Prefill
 }
 
+// bisectOpts are what bisect prices. withDecodeWait prices the decode
+// admission wait; without it the prefill side alone. chargeGate meets a
+// percentile q at a rate where the TTFT at q plus the decode gate's closed
+// share there (gateClosed) meets it: P(miss) <= P(TTFT > t) + P(gate
+// closed), a request that meets the gate closed taken as a miss.
+type bisectOpts struct {
+	withDecodeWait, chargeGate bool
+}
+
 // bisect is the largest rate below limit whose TTFT meets the target, or
 // limit itself when the TTFT just under it still does (only an onset: at a
-// knee the TTFT is unbounded). With charge, a percentile q is met at a rate
-// where the TTFT at q plus the decode gate's closed share there
-// (gateClosed) meets it: P(miss) <= P(TTFT > t) + P(gate closed), a request
-// that meets the gate closed taken as a miss.
-func (pl ttftPlan) bisect(t TTFTTarget, limit float64, withDecodeWait, charge bool) float64 {
+// knee the TTFT is unbounded).
+func (pl ttftPlan) bisect(t TTFTTarget, limit float64, o bisectOpts) float64 {
 	lo, _ := bisectRate(limit, func(rate float64) bool {
 		q := t.Percentile
-		if charge {
+		if o.chargeGate {
 			q += pl.gateClosed(rate)
 			if !(q < 1) {
 				return false
 			}
 		}
-		p := pl.price(rate, q, withDecodeWait, false)
+		p := pl.price(rate, q, o.withDecodeWait, false)
 		return p.u == nil && p.out.Seconds <= t.Seconds
 	})
 	return lo

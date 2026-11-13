@@ -1986,27 +1986,40 @@ so the default is left as it was; the new one is a switch
 
 ## As built: the onsets on processor sharing, and the decode gate's closed share
 
-Two switches, both off by default. Each is one setting for the CLI and the
-SLO analyzer, so the two answer the same. Neither moves a TTFT figure or a
-committed golden.
+In short: two switches, both off by default. The analyzer can only take the
+lower onset. Nothing here is measured.
+
+Neither switch moves a TTFT figure or a committed golden. In the CLI each is
+a flag, and the output names what it did (in the assumed inputs, text and
+JSON). In the SLO analyzer each is a replay switch only: `SetSwitchesForReplay`
+is the one way on, and no policy key or constructor option sets it, so a
+running controller always prices with both off. Exposing them would take a
+field on the SLO policy (`config.SLOPolicy`) read in `priceTTFTVariants`, and
+a measurement that says to. The planner API has no switch for them either.
 
 **The prefill onset on processor sharing** (`TTFTFleet.PSOnsets`,
 `--ps-onsets`, replay switch `slo-ttft-ps-onsets`). The default onset reads a
 first-come waiting count, which a processor-sharing pod never holds. With the
-switch on, a pod's waiting count is the prompts on it past its running cap
-(`Prefill.RunningCap`, `--prefill-running-cap`; on vLLM about
-`max_num_batched_tokens` over the prompt). The number on the pod takes the
-law the price already uses: busy with probability `ρ`, then geometric with
-the stage's mean `ρ + sρ²/(1 − ρ)`. At Poisson that is the exact M/G/1-PS law.
-Each pod is read at its own share of the arrivals and its own `Ca²`, as the
-price reads it. With the cap unknown, and past a prompt cv of 0.25, the onset
-is the lower of two placements: processor sharing at a cap of 1, and first
-come. Cap 1 alone is not enough. Processor sharing reads each pod at its own
-`Ca²`, which falls toward 1 as pods are added, while first come reads the
-fleet's. So on bursty traffic over many pods, cap 1 can sit above the
-first-come onset: at `Ca²` 9 over 16 prefill pods, 443.1 r/s against 349.8.
-Taking the lower keeps the switch from being more optimistic than the default.
-The SLO analyzer reads no cap, so it always takes the lower.
+switch on:
+
+- A pod's waiting count is the prompts on it past its running cap
+  (`Prefill.RunningCap`, `--prefill-running-cap`; on vLLM about
+  `max_num_batched_tokens` over the prompt).
+- The number on the pod takes the law the price already uses: busy with
+  probability `ρ`, then geometric with the stage's mean `ρ + sρ²/(1 − ρ)`. At
+  Poisson that is the exact M/G/1-PS law.
+- Each pod is read at its own share of the arrivals and its own `Ca²`, as the
+  price reads it.
+- With the cap unknown, and past a prompt cv of 0.25, the onset is the lower
+  of processor sharing at the cap (1 when unknown) and first come. The CLI's
+  assumed cv is 2, so without a measured spread the CLI always takes the
+  lower.
+
+Cap 1 alone is not enough. Processor sharing reads each pod at its own `Ca²`,
+which falls toward 1 as pods are added, while first come reads the fleet's.
+So on bursty traffic over many pods, cap 1 can sit above the first-come
+onset: at `Ca²` 9 over 16 prefill pods, 443.1 r/s against 349.8. Taking the
+lower keeps the switch from being more optimistic than the default.
 
 | Fleet | First come | Cap unknown | Cap 10 |
 | --- | --- | --- | --- |
@@ -2044,7 +2057,10 @@ charges it:
   prefill when it closes. `TestChargeDecodeGate_TheMeanCapIsTheClosedShare`
   tests the boundary.
 
-Either way the bound is `decode flow-control onset`. On the worked example, a
+Either way the bound is `decode gate closed share`, not `decode flow-control
+onset`, so the SLO analyzer does not read the answer as decode-bound and still
+publishes a per-replica rate (`TestTTFT_TheChargeStillPublishes`). With no
+decode line the switch does nothing, and the CLI says so. On the worked example, a
 loose target capped at 12.50 r/s answers 11.20 for the mean, 12.09 at p90 and
 11.80 at p95. `TTFTAt` and `TTFTMeets` do not move, so a rate answer still
 meets its own verdict (`TestOnsetSwitches_TheAnswerMeetsItsOwnVerdict`).

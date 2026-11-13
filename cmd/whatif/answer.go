@@ -111,9 +111,9 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.prefillVariant, "prefill-variant", "", "the prefill variant to price, when the model has several")
 	fs.DurationVar(&f.assumeA, "assume-a", 0, "a, the fixed latency one request pays on a prefill pod (11ms), in place of the learned one (flagged)")
 	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "experimental, unvalidated: take the router's flow-control wait as inside the processor-sharing prefill price (FlowControlWaitPriced)")
-	fs.BoolVar(&f.psOnsets, "ps-onsets", whatif.DefaultPSOnsets, "place the prefill flow-control onset on the processor-sharing model, the prompts past --prefill-running-cap counted as waiting")
-	fs.IntVar(&f.prefillRunningCap, "prefill-running-cap", 0, "the most prompts a prefill pod computes at once (about max_num_batched_tokens over the prompt); needs --ps-onsets; 0 is not known: the lower of the processor-sharing onset at 1 and the first-come one")
-	fs.BoolVar(&f.chargeDecodeGate, "charge-decode-gate", whatif.DefaultChargeDecodeGate, "slo-to-rate only: charge the share of time the decode flow-control gate is closed below its onset to the rate answer, in a percentile's tail or capping a mean; replicas-to-slo prices TTFT at a rate and does not read it, and freeze runs at the default")
+	fs.BoolVar(&f.psOnsets, "ps-onsets", whatif.DefaultPSOnsets, "experimental, unvalidated: place the prefill flow-control onset on the processor-sharing model, the prompts past --prefill-running-cap counted as waiting")
+	fs.IntVar(&f.prefillRunningCap, "prefill-running-cap", 0, "with --ps-onsets, the most prompts a prefill pod computes at once (about max_num_batched_tokens over the prompt); 0 (unknown, the default) takes the lower of processor sharing at 1 and first come")
+	fs.BoolVar(&f.chargeDecodeGate, "charge-decode-gate", whatif.DefaultChargeDecodeGate, "experimental, unvalidated, slo-to-rate only: charge the time the decode flow-control gate is closed below its onset to the rate answer")
 	fs.StringVar(&f.inputBucket, "input-bucket", "", "not supported: per-bucket answers are the planner's M1")
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "answer from a window of this Prometheus (base URL), captured and generated in memory, in place of --recording"

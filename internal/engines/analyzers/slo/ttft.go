@@ -71,24 +71,27 @@ const SwitchTTFTProcessorSharing = "slo-ttft-processor-sharing"
 // router's wait above the prefill onset").
 const SwitchTTFTRouterWait = "slo-ttft-router-wait"
 
-// SwitchTTFTPSOnsets is the switch for whatif.TTFTFleet.PSOnsets: on, the
-// prefill flow-control onset is placed on the processor-sharing stage the
-// price runs on, a pod's prompts past its running cap counted as waiting.
-// The analyzer reads no running cap, so the onset is the lower of
+// SwitchTTFTPSOnsets is the replay switch for whatif.TTFTFleet.PSOnsets: on,
+// the prefill flow-control onset is placed on the processor-sharing stage
+// the price runs on, a pod's prompts past its running cap counted as
+// waiting. The analyzer reads no running cap, so the onset is the lower of
 // processor sharing's at a cap of 1 and the first-come one: never above the
-// onset with the switch off. Off, as before, a first-come waiting count. Off from the
-// constructor, at whatif.DefaultPSOnsets, the CLI's --ps-onsets default.
-// It moves the prefill onset, so the cap on the published rate
-// (BoundPrefillOnset) and the AboveFlowControlOnset verdict.
+// onset with the switch off. Off, as before, a first-come waiting count.
+// Off from the constructor, at whatif.DefaultPSOnsets, the CLI's
+// --ps-onsets default; only SetSwitchesForReplay turns it on. It moves the
+// prefill onset, so the cap on the published rate (BoundPrefillOnset) and
+// the AboveFlowControlOnset verdict.
 const SwitchTTFTPSOnsets = "slo-ttft-ps-onsets"
 
-// SwitchTTFTDecodeGateCharge is the switch for
+// SwitchTTFTDecodeGateCharge is the replay switch for
 // whatif.TTFTFleet.ChargeDecodeGate: on, the published rate is charged the
 // share of time the decode flow-control gate is closed below its onset, in
 // the objective's tail, or for a mean capped where it reaches
-// whatif.MaxDecodeGateClosedShare. Off, as before, the rate stands up to the
-// decode onset. Off from the constructor, at whatif.DefaultChargeDecodeGate,
-// the CLI's --charge-decode-gate default. It moves only the published rate,
+// whatif.MaxDecodeGateClosedShare (whatif.BoundDecodeGateCharge, which
+// decodeBound does not read as decode-bound). Off, as before, the rate
+// stands up to the decode onset. Off from the constructor, at
+// whatif.DefaultChargeDecodeGate, the CLI's --charge-decode-gate default;
+// only SetSwitchesForReplay turns it on. It moves only the published rate,
 // never met/unmet.
 const SwitchTTFTDecodeGateCharge = "slo-ttft-decode-gate-charge"
 
@@ -254,7 +257,9 @@ func answeredReason(fl whatif.TTFTFleet, rate whatif.Answer, in ttftInputs) stri
 // decodeBound reports whether decode sets the rate: the decode onset binds, the
 // prefill side alone allows more than decodeBoundRatio times the rate, or the
 // prefill side alone stands at a decode knee below the prefill knee, where it
-// cannot show more.
+// cannot show more. The decode gate's charge (whatif.BoundDecodeGateCharge)
+// is not decode-bound: it trims the target's margin, and the rate is still
+// published.
 func decodeBound(fl whatif.TTFTFleet, rate whatif.Answer) bool {
 	if slices.Contains(rate.Basis.BoundBy, whatif.BoundDecodeOnset) {
 		return true

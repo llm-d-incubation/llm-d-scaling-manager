@@ -194,7 +194,7 @@ func TestPSOnsets_TheCOnsetTarget(t *testing.T) {
 // Erlang C, and at c it is the admission's wait probability.
 func TestWeights_AtLeastIsTheChainsTail(t *testing.T) {
 	for _, rho := range []float64{0.2, 0.7, 0.95} {
-		w, ok := chainWeights(rho, func(int) float64 { return 1 }, 1)
+		w, ok := solveChain(rho, func(int) float64 { return 1 }, 1)
 		if !ok {
 			t.Fatalf("rho %g: no chain", rho)
 		}
@@ -203,7 +203,7 @@ func TestWeights_AtLeastIsTheChainsTail(t *testing.T) {
 		}
 		for _, c := range []int{2, 5, 32} {
 			lam := rho * float64(c)
-			w, ok := chainWeights(lam, func(m int) float64 { return float64(m) }, c)
+			w, ok := solveChain(lam, func(m int) float64 { return float64(m) }, c)
 			if !ok {
 				t.Fatalf("rho %g c %d: no chain", rho, c)
 			}
@@ -217,9 +217,9 @@ func TestWeights_AtLeastIsTheChainsTail(t *testing.T) {
 	d := *workedFleet().Decode
 	rate := 0.9 * d.kneeRate()
 	adm := mustAdmission(t, DecodeAdmission(d, rate))
-	w, _ := chainWeights(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, adm.Slots)
+	w, _ := solveChain(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, adm.Slots)
 	nearRel(t, "the wait probability", w.atLeast(adm.Slots), adm.WaitProbability, 1e-12)
-	if w, _ := chainWeights(0, func(int) float64 { return 1 }, 3); w.atLeast(0) != 1 || w.atLeast(1) != 0 {
+	if w, _ := solveChain(0, func(int) float64 { return 1 }, 3); w.atLeast(0) != 1 || w.atLeast(1) != 0 {
 		t.Errorf("no arrivals: P(n >= 0) %g, P(n >= 1) %g", w.atLeast(0), w.atLeast(1))
 	}
 }
@@ -261,16 +261,17 @@ func TestChargeDecodeGate_TheGateClosesBelowTheOnset(t *testing.T) {
 // A mean target has no tail to charge: it is capped where the closed share
 // reaches MaxDecodeGateClosedShare. The boundary: at the answer the share is
 // under it, a relative 1e-6 past it the share is over it, and the cap is
-// BoundDecodeOnset. On the worked fleet the cap moves from the onset, 12.50
-// r/s, to 11.20; with the switch off it does not move.
+// BoundDecodeGateCharge, not BoundDecodeOnset. On the worked fleet the cap
+// moves from the onset, 12.50 r/s, to 11.20; with the switch off it does
+// not move.
 func TestChargeDecodeGate_TheMeanCapIsTheClosedShare(t *testing.T) {
 	target := TTFTTarget{Seconds: 30}
 	off := mustAnswer(t, rateForTTFT(t, workedOn(false), target))
 	nearRel(t, "off", off.Value, 12.500975816823301, 1e-9)
 	a := mustAnswer(t, rateForTTFT(t, workedOn(true), target))
 	nearRel(t, "charged", a.Value, 11.19528267724617, 1e-6)
-	if !slices.Equal(a.Basis.BoundBy, []Bound{BoundDecodeOnset}) {
-		t.Errorf("bound %v, want the decode onset", a.Basis.BoundBy)
+	if !slices.Equal(a.Basis.BoundBy, []Bound{BoundDecodeGateCharge}) {
+		t.Errorf("bound %v, want the gate charge", a.Basis.BoundBy)
 	}
 	pl := mustPlan(t, workedOn(true))
 	if under, over := pl.gateClosed(a.Value), pl.gateClosed(a.Value*(1+1e-6)); !(under < MaxDecodeGateClosedShare && over >= MaxDecodeGateClosedShare) {
@@ -282,7 +283,7 @@ func TestChargeDecodeGate_TheMeanCapIsTheClosedShare(t *testing.T) {
 // the largest rate whose TTFT at q plus the share meets the target, so a
 // request meeting a closed gate is counted a miss. At the answer the charged
 // percentile meets the target and a relative 1e-6 past it does not; the
-// bound is the target, then the decode onset; and it is under the uncharged
+// bound is the target, then the gate charge; and it is under the uncharged
 // rate. The worked fleet's loose 30 s target, which the decode onset capped
 // at 12.50 r/s, reads 12.09 at p90 and 11.80 at p95.
 func TestChargeDecodeGate_APercentileIsChargedItsTail(t *testing.T) {
@@ -293,8 +294,8 @@ func TestChargeDecodeGate_APercentileIsChargedItsTail(t *testing.T) {
 		off := mustAnswer(t, rateForTTFT(t, workedOn(false), target))
 		a := mustAnswer(t, rateForTTFT(t, workedOn(true), target))
 		nearRel(t, "charged", a.Value, c.want, 1e-6)
-		if !(a.Value < off.Value) || !slices.Equal(a.Basis.BoundBy, []Bound{BoundTTFT, BoundDecodeOnset}) {
-			t.Errorf("q %g: %g r/s bound %v, off %g; want under it, bound TTFT then the decode onset", c.q, a.Value, a.Basis.BoundBy, off.Value)
+		if !(a.Value < off.Value) || !slices.Equal(a.Basis.BoundBy, []Bound{BoundTTFT, BoundDecodeGateCharge}) {
+			t.Errorf("q %g: %g r/s bound %v, off %g; want under it, bound TTFT then the gate charge", c.q, a.Value, a.Basis.BoundBy, off.Value)
 		}
 		pl := mustPlan(t, workedOn(true))
 		meets := func(r float64) bool {
@@ -331,7 +332,7 @@ func TestChargeDecodeGate_KeepsDecodeAdmissionBesideIt(t *testing.T) {
 	fl := onFleet(psFleet(0.0577, 1), true, true, 0)
 	fl.Decode.Replicas = 1
 	a := mustAnswer(t, rateForTTFT(t, fl, TTFTTarget{Seconds: 1, Percentile: 0.9}))
-	if want := []Bound{BoundTTFT, BoundDecodeOnset, BoundDecodeAdmission}; !slices.Equal(a.Basis.BoundBy, want) || !slices.Contains(a.Flags, HeldByDecodeAdmission) {
+	if want := []Bound{BoundTTFT, BoundDecodeGateCharge, BoundDecodeAdmission}; !slices.Equal(a.Basis.BoundBy, want) || !slices.Contains(a.Flags, HeldByDecodeAdmission) {
 		t.Errorf("%g r/s: bound %v, flags %v; want %v and HeldByDecodeAdmission", a.Value, a.Basis.BoundBy, a.Flags, want)
 	}
 }
@@ -377,7 +378,7 @@ func TestDecodeScoreTail_TheKVLimitBindsFirst(t *testing.T) {
 		t.Fatalf("precondition: %d slots, want 83", c)
 	}
 	rate := 0.9 * d.kneeRate()
-	w, ok := chainWeights(rate, func(m int) float64 { return d.chainMu(float64(m)) }, c)
+	w, ok := solveChain(rate, func(m int) float64 { return d.chainMu(float64(m)) }, c)
 	if !ok {
 		t.Fatal("no chain")
 	}
@@ -422,7 +423,81 @@ func TestOnsetSwitches_TheAnswerMeetsItsOwnVerdict(t *testing.T) {
 		}
 	}
 	t.Logf("bounds: %v", bounds)
-	if bounds[BoundPrefillOnset] == 0 || bounds[BoundDecodeOnset] == 0 || bounds[BoundTTFT] == 0 {
+	if bounds[BoundPrefillOnset] == 0 || bounds[BoundDecodeGateCharge] == 0 || bounds[BoundTTFT] == 0 {
 		t.Errorf("not every bound reached: %v", bounds)
+	}
+}
+
+// With no decode line there is no decode gate: ChargeDecodeGate answers what
+// it answers off, and says it did nothing. The second staircase's B-onset
+// prefill side, decode left out.
+func TestChargeDecodeGate_NoDecodeLineIsUncharged(t *testing.T) {
+	fl := r2Fleet("B-onset")
+	fl.Decode, fl.DecodeTerm = nil, nil
+	for _, q := range []float64{0, 0.9} {
+		target := TTFTTarget{Seconds: 0.4, Percentile: q}
+		off := mustAnswer(t, rateForTTFT(t, onFleet(fl, false, false, 0), target))
+		on := mustAnswer(t, rateForTTFT(t, onFleet(fl, false, true, 0), target))
+		if on.Value != off.Value || !slices.Equal(on.Basis.BoundBy, off.Basis.BoundBy) {
+			t.Errorf("q %g: charged %g r/s %v, off %g %v", q, on.Value, on.Basis.BoundBy, off.Value, off.Basis.BoundBy)
+		}
+		if g, ok := DecodeGateChargeFor(onFleet(fl, false, true, 0), target); !ok || g != GateNoDecodeLine {
+			t.Errorf("q %g: charge %q %v, want %q", q, g, ok, GateNoDecodeLine)
+		}
+	}
+}
+
+// The running cap is priced up to MaxRunningCap and refused past it.
+func TestPSOnsets_TheRunningCapsBound(t *testing.T) {
+	if _, ok := FlowControlOnsets(onFleet(r2Fleet("B-onset"), true, false, MaxRunningCap)).(Onsets); !ok {
+		t.Errorf("cap %d: %#v, want onsets", MaxRunningCap, FlowControlOnsets(onFleet(r2Fleet("B-onset"), true, false, MaxRunningCap)))
+	}
+	if u, ok := FlowControlOnsets(onFleet(r2Fleet("B-onset"), true, false, MaxRunningCap+1)).(Unanswerable); !ok || u.Reason != InvalidInput {
+		t.Errorf("cap %d: %#v, want InvalidInput", MaxRunningCap+1, FlowControlOnsets(onFleet(r2Fleet("B-onset"), true, false, MaxRunningCap+1)))
+	}
+}
+
+// What the output says produced an answer: the placement each fleet takes,
+// and what the charge does on each.
+func TestOnsetSwitches_SayWhatTheyDid(t *testing.T) {
+	wide := r2Fleet("B-onset")
+	wide.Prefill.PromptCV = 0.5
+	fcfs := r2Fleet("B-onset")
+	fcfs.ProcessorSharing = false
+	for _, c := range []struct {
+		name string
+		fl   TTFTFleet
+		want OnsetPlacement
+	}{
+		{"off", onFleet(r2Fleet("B-onset"), false, false, 10), PlacedFirstCome},
+		{"first come", onFleet(fcfs, true, false, 10), PlacedFirstCome},
+		{"cap 10", onFleet(r2Fleet("B-onset"), true, false, 10), PlacedProcessorSharing},
+		{"cap unknown", onFleet(r2Fleet("B-onset"), true, false, 0), PlacedLowerCapUnknown},
+		{"wide spread", onFleet(wide, true, false, 10), PlacedLowerWideSpread},
+	} {
+		if got, ok := PrefillOnsetPlacement(c.fl); !ok || got != c.want {
+			t.Errorf("%s: %q %v, want %q", c.name, got, ok, c.want)
+		}
+	}
+	if _, ok := PrefillOnsetPlacement(r2Fleet("B-onset")); ok {
+		t.Error("flow control off: a placement, want none")
+	}
+	noFC := r2Fleet("B-onset")
+	noFC.ChargeDecodeGate = true
+	for _, c := range []struct {
+		name string
+		fl   TTFTFleet
+		q    float64
+		want GateCharge
+		ok   bool
+	}{
+		{"off", workedOn(false), 0.9, "", false},
+		{"p90", workedOn(true), 0.9, GateChargedToTail, true},
+		{"mean", workedOn(true), 0, GateCappedForMean, true},
+		{"flow control off", noFC, 0.9, GateFlowControlNotOn, true},
+	} {
+		if got, ok := DecodeGateChargeFor(c.fl, TTFTTarget{Seconds: 1, Percentile: c.q}); got != c.want || ok != c.ok {
+			t.Errorf("%s: %q %v, want %q %v", c.name, got, ok, c.want, c.ok)
+		}
 	}
 }
