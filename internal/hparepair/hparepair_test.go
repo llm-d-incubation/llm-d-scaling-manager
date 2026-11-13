@@ -672,7 +672,7 @@ func TestTwoOfOurTriggersOneUnwired(t *testing.T) {
 		{[]string{"s0-other"}, []int{0}, false},
 		{[]string{kedav1alpha1.CompositeMetricName}, []int{0}, false},
 	} {
-		var ms []autoscalingv2.MetricSpec
+		ms := make([]autoscalingv2.MetricSpec, 0, len(tc.names))
 		for _, n := range tc.names {
 			ms = append(ms, externalMetric(n))
 		}
