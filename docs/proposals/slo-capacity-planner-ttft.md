@@ -436,7 +436,7 @@ that is itself wrong (the exponential tail, Poisson arrivals, an omitted
 | `f` from computed-token shares with variable prompts | Under-promises: a pod's token count varies about `√(1+Cs²)` times its request count, and only the request count's excess is subtracted. Four equal pods with `Cs²` = 1 read about 1.03 at 100 requests a pod |
 | Worst-pod percentile | Under-promises |
 | The mean TTFT is the worst pod's mean | Under-promises the fleet's mean, which mixes in the quieter pods |
-| Question 1 capped at the decode onset | Over-promises: the onset is where the mean score reaches 1, and the gate reads the current score; `E[max] ≥ max E`, so the gate already closes for part of the time below it |
+| Question 1 capped at the decode onset | Over-promises by default: the onset is where the mean score reaches 1, and the gate reads the current score; `E[max] ≥ max E`, so the gate already closes for part of the time below it. With `ChargeDecodeGate` on, that time is charged to the answer, on the safe side |
 | The union bound | Under-promises against the true combination of the modelled parts; the independent figure beside it over-promises |
 
 ## Ground truth and the staircase
@@ -586,12 +586,15 @@ roles' rates.
   and the fill taken from the chain. At or above the decode onset TTFT is
   refused (`AboveDecodeOnset`), and question 1 caps at it. At or above the
   prefill onset the answer is flagged `AboveFlowControlOnset`. Below both,
-  flow control changes nothing. The gate's closed fraction `P(score ≥ 1)` is
-  **not built**.
-- **The question-1 cap at the decode onset is not conservative.** The onset
-  is where the mean endpoint score reaches 1, while the gate acts on the
-  current score. Since `E[max] ≥ max E`, the gate already closes for part of
-  the time below the onset.
+  flow control changes nothing. Two switches, both off by default, change
+  this ([as built](#as-built-the-onsets-on-processor-sharing-and-the-decode-gates-closed-share)):
+  one places the prefill onset on processor sharing, the other charges the
+  decode gate's closed fraction to question 1.
+- **The question-1 cap at the decode onset is not conservative** with the
+  default settings. The onset is where the mean endpoint score reaches 1,
+  while the gate acts on the current score. Since `E[max] ≥ max E`, the gate
+  already closes for part of the time below the onset: 24% of the time just
+  under the worked example's onset.
 - **The gate rule** (the mean over endpoints of
   `max(queue/threshold, kv/KVthreshold)`) is the newer llm-d router's
   utilization detector, not GIE v1.2.1's. On a v1.2.1 EPP the onsets are not
@@ -1786,7 +1789,8 @@ it by `ρ` alone, not by a fixed share of `V_P`) before the next staircase.
 queue length on the prefill pods (`meanScore`). Under processor sharing the
 vLLM queue is near empty below saturation (the run's router queue peaked at 0
 at the B-onset step above the predicted onset), so the prefill onset is likely
-placed too low. Not addressed here.
+placed too low. A switch now places it on processor sharing
+([as built](#as-built-the-onsets-on-processor-sharing-and-the-decode-gates-closed-share)).
 
 **P2, re-frozen.** S1 prices with the switch on, so the router comparison of
 [P3 after P2](#as-built-p3-after-p2) (`TestTTFTValidation_AgainstTheRouter`)
@@ -1956,9 +1960,11 @@ because of how the onset is placed. The gate reads the engine's waiting count,
 not the number running: its saturation averaged 0.05 to 0.11 while each pod ran
 1.2 to 3.4 prompts, which would read 0.24 to 0.68 on the number running.
 Placing the onset on processor sharing, with the prompts past a running cap of
-10 (the most a pod was seen to run) counted as waiting, would move it from 56.1
-to 55.8 r/s for B-onset and from 49.1 to 52.4 r/s for C-onset. This run cannot
-tell them apart, so the placement is left as it was.
+10 (the most a pod was seen to run) counted as waiting, moves it from 56.1 to
+55.8 r/s for B-onset and from 49.1 to 51.2 r/s for C-onset (an estimate made
+before it was built read 52.4). This run cannot tell the two placements apart,
+so the default is left as it was; the new one is a switch
+([as built](#as-built-the-onsets-on-processor-sharing-and-the-decode-gates-closed-share)).
 
 **Still open.**
 
@@ -1966,15 +1972,74 @@ tell them apart, so the placement is left as it was.
   held collapsed, and the model reads it 11 to 21 times short. A staircase
   step where the gate closes and the fleet still holds is what would validate
   the switch.
-- The decode onset still caps question 1 at the rate where the mean score
-  reaches 1. The gate reads the current score, so it closes for part of the
-  time below that rate. Neither staircase reached the decode onset (68.9 r/s,
-  above the prefill knee), so no margin is measured yet.
+- By default the decode onset still caps question 1 at the rate where the
+  mean score reaches 1. The gate reads the current score, so it closes for
+  part of the time below that rate. A switch charges that time
+  ([as built](#as-built-the-onsets-on-processor-sharing-and-the-decode-gates-closed-share)),
+  but neither staircase reached the decode onset (68.9 r/s, above the prefill
+  knee), so the charge is not measured yet.
 - The simulation's limits above: renewal arrivals only, two identical pods,
   no router scorer.
 - The router hop's per-token part is already learned (`prefill.HopFit`,
   `Base + PerToken*I`; 1.41 µs a token on the second staircase's warm-up, 11.3
   ms at 8000 tokens).
+
+## As built: the onsets on processor sharing, and the decode gate's closed share
+
+Two switches, both off by default. Each is one setting for the CLI and the
+SLO analyzer, so the two answer the same. Neither moves a TTFT figure or a
+committed golden.
+
+**The prefill onset on processor sharing** (`TTFTFleet.PSOnsets`,
+`--ps-onsets`, replay switch `slo-ttft-ps-onsets`). The default onset reads a
+first-come waiting count, which a processor-sharing pod never holds. With the
+switch on, a pod's waiting count is the prompts on it past its running cap
+(`Prefill.RunningCap`, `--prefill-running-cap`; on vLLM about
+`max_num_batched_tokens` over the prompt). The number on the pod takes the
+law the price already uses: busy with probability `ρ`, then geometric with
+the stage's mean `ρ + sρ²/(1 − ρ)`. At Poisson that is the exact M/G/1-PS law.
+Each pod is read at its own share of the arrivals and its own `Ca²`, as the
+price reads it. An unknown cap is priced as 1, the lowest onset; the SLO
+analyzer reads no cap, so it always uses 1. Past a prompt cv of 0.25 the onset
+is the lower of the two placements.
+
+| Fleet | First come | Cap unknown (1) | Cap 10 |
+| --- | --- | --- | --- |
+| B-onset (second staircase) | 56.08 r/s | 53.46 | 55.76 |
+| C-onset (second staircase) | 49.06 r/s | 46.76 | 51.23 |
+
+So the onset is placed higher only when the cap is known and large enough. The
+C-onset frozen target (the model's own p90 and p95 at 50.12 r/s) answered
+49.06 r/s, capped by the onset; at cap 10 it answers 50.12, set by the target;
+at an unknown cap, 46.76. `TestPSOnsets_ThePrefillOnsetIsTheStagesCrossing`
+and `TestPSOnsets_TheCOnsetTarget` pin these.
+
+**The decode gate's closed share** (`TTFTFleet.ChargeDecodeGate`,
+`--charge-decode-gate`, replay switch `slo-ttft-decode-gate-charge`). The gate
+closes when the decode pods' mean score reaches 1, which takes at least one
+pod's score reaching 1. With the pods independent, each on its admission
+chain's stationary law, the gate is closed at most `1 − (1 − p)^N_d` of the
+time, `p` being one pod's chance of a score of 1 or more. This errs high. On the
+worked example the share is 24% just under the decode onset, 1.2% at 0.9 of
+it and 0.02% at 0.8. With the switch on, question 1 charges it:
+
+- **A percentile target** counts a request that meets a closed gate as a miss:
+  the rate must meet the target at percentile `q` plus the closed share. This
+  is derived, with no constant.
+- **A mean target** has no tail to charge, and the wait behind a closed gate
+  is not priced, so it is capped where the share reaches 1%
+  (`MaxDecodeGateClosedShare`). That is a stated constant: half the 2% of
+  requests that waited over 10 ms at the router at the second staircase's
+  held steps, where the price still read above the client.
+  `TestChargeDecodeGate_TheMeanCapIsTheClosedShare` tests the boundary.
+
+Either way the bound is `decode flow-control onset`. On the worked example, a
+loose target capped at 12.50 r/s answers 11.20 for the mean, 12.09 at p90 and
+11.80 at p95. `TTFTAt` and `TTFTMeets` do not move, so a rate answer still
+meets its own verdict (`TestOnsetSwitches_TheAnswerMeetsItsOwnVerdict`).
+
+**Not measured.** No staircase step reached a decode onset, and none could tell
+the two prefill placements apart. Both switches stay off until one does.
 
 ## Measured: where TTFT goes, and why prefill sizing (S2) is not built yet
 

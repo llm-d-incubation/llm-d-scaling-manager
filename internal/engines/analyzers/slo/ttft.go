@@ -71,6 +71,26 @@ const SwitchTTFTProcessorSharing = "slo-ttft-processor-sharing"
 // router's wait above the prefill onset").
 const SwitchTTFTRouterWait = "slo-ttft-router-wait"
 
+// SwitchTTFTPSOnsets is the switch for whatif.TTFTFleet.PSOnsets: on, the
+// prefill flow-control onset is placed on the processor-sharing stage the
+// price runs on, a pod's prompts past its running cap counted as waiting;
+// the analyzer reads no running cap, so it is priced at 1, the lowest
+// onset. Off, as before, a first-come waiting count. Off from the
+// constructor, at whatif.DefaultPSOnsets, the CLI's --ps-onsets default.
+// It moves the prefill onset, so the cap on the published rate
+// (BoundPrefillOnset) and the AboveFlowControlOnset verdict.
+const SwitchTTFTPSOnsets = "slo-ttft-ps-onsets"
+
+// SwitchTTFTDecodeGateCharge is the switch for
+// whatif.TTFTFleet.ChargeDecodeGate: on, the published rate is charged the
+// share of time the decode flow-control gate is closed below its onset, in
+// the objective's tail, or for a mean capped where it reaches
+// whatif.MaxDecodeGateClosedShare. Off, as before, the rate stands up to the
+// decode onset. Off from the constructor, at whatif.DefaultChargeDecodeGate,
+// the CLI's --charge-decode-gate default. It moves only the published rate,
+// never met/unmet.
+const SwitchTTFTDecodeGateCharge = "slo-ttft-decode-gate-charge"
+
 // SwitchTTFTMeasuredSpread is the replay switch for the measured prompt
 // spread: on, the pricing reads cv from the rows' computed-token histogram
 // where they carry one, over the variant's prompt window
@@ -413,6 +433,7 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 			transferHeld: a.ttftMeasuredTransfer && a.ttftQuietTransfer && transfer.Held,
 			decodeTTFT:   measured, term: term, legacyDecodeSum: !a.ttftDecodeTerm, flow: flow, mismatch: mismatch,
 			processorSharing: a.ttftProcessorSharing, routerWait: a.ttftRouterWait,
+			psOnsets: a.ttftPSOnsets, decodeGateCharge: a.ttftDecodeGateCharge,
 		}
 		in.outputSpreadUnread = a.outputSpreadUnread(fleet)
 		p := gateOrPrice(&in, fresh, arrival, target)

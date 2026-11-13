@@ -85,6 +85,13 @@ type Prefill struct {
 	// (prefillPlan.atRate). PrefillFromEstimate sets DefaultVPMargin; 0 is
 	// none.
 	VPMargin float64
+	// RunningCap is the most prompts one prefill pod computes at once: past
+	// it a prompt waits in the engine's queue, which is what the flow-control
+	// gate reads. On vLLM with chunked prefill it is about
+	// max_num_batched_tokens over the prompt, at most max_num_seqs. Read only
+	// with TTFTFleet.PSOnsets. 0 is not known, priced as 1: the least an
+	// engine runs, so the most waiting and the lowest prefill onset.
+	RunningCap int
 }
 
 // MaxVPShapeRatio is how far, either way, the mean prompt may be from the one
@@ -165,6 +172,29 @@ const DefaultPriceRouterWait = false
 // wait keeps AboveFlowControlOnset (TestFlowControlWait_GatedPodsAreNoSlower).
 const MaxRouterWaitKneeShare = 0.9
 
+// DefaultPSOnsets is TTFTFleet.PSOnsets's default, for the CLI
+// (--ps-onsets) and the SLO analyzer (slo.SwitchTTFTPSOnsets) alike: off.
+// The placement it switches to is derived, not measured: the second
+// staircase could not tell it from the first-come one.
+const DefaultPSOnsets = false
+
+// DefaultChargeDecodeGate is TTFTFleet.ChargeDecodeGate's default, for the
+// CLI (--charge-decode-gate) and the SLO analyzer
+// (slo.SwitchTTFTDecodeGateCharge) alike: off. No staircase has reached a
+// decode onset, so the closed share it charges is not measured.
+const DefaultChargeDecodeGate = false
+
+// MaxDecodeGateClosedShare is the most of the time a mean TTFT target lets
+// the decode gate be closed, with TTFTFleet.ChargeDecodeGate. A request that
+// meets a closed gate waits at the router for a time the model does not
+// price, so a mean has no tail to charge it to, as a percentile does
+// (ttftPlan.gateClosed): it is a stated share, not a derived one. At the
+// second staircase's flow-control steps that held, up to 2 % of requests
+// waited over 10 ms at the router and the processor-sharing price still read
+// at or above the client's mean (TestStaircaseR2_PSPriceReadsAboveTheClientNearTheOnset);
+// this is half that.
+const MaxDecodeGateClosedShare = 0.01
+
 // FlowControlState is what is known of EPP flow control.
 type FlowControlState int
 
@@ -240,6 +270,25 @@ type TTFTFleet struct {
 	// router held (the second staircase's C-onset at 56.6 r/s) the model
 	// reads about 20 times short (TestStaircaseR2_TheStepWithARouterWaitReadsShort).
 	PriceRouterWait bool
+	// PSOnsets places the prefill gate's onset on the processor-sharing
+	// model the price runs on, with ProcessorSharing and flow control on: a
+	// pod's waiting count is the prompts on it past its running cap
+	// (Prefill.RunningCap), on the stage's own law of the number on the pod,
+	// at each pod's share of the arrivals (prefillPlan.psMeanScore). Off, as
+	// before, it is a first-come queue's waiting count, which under processor
+	// sharing the engine never holds. Past MaxPSPromptCV the onset is the
+	// lower of the two. Off by default (DefaultPSOnsets).
+	PSOnsets bool
+	// ChargeDecodeGate makes question 1 conservative at the decode gate, with
+	// flow control on and a decode line. The decode onset is where the mean
+	// score reaches 1; the gate reads the current score, so it closes for a
+	// share of the time below the onset (ttftPlan.gateClosed). On, a
+	// percentile target is priced with that share charged to its tail: a
+	// request that meets a closed gate is taken to miss. A mean target is
+	// capped where the share reaches MaxDecodeGateClosedShare. Either way the
+	// bound is BoundDecodeOnset. TTFTAt and TTFTMeets do not move. Off by
+	// default (DefaultChargeDecodeGate).
+	ChargeDecodeGate bool
 	// DecodeTTFT is the decode engine's measured TTFT, read only when Decode
 	// is nil. On P/D the router's TTFT is the prefill engine's and then the
 	// decode engine's (the KV pull and decode's first step): P2 found the
@@ -428,6 +477,8 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		u = refuse(InvalidInput, fmt.Sprintf("curve b %g, c %g, want finite values of at least 0", p.CurveSlope, p.CurveCurvature))
 	case !(p.VPMargin >= 0 && p.VPMargin <= MaxVPMargin):
 		u = refuse(InvalidInput, fmt.Sprintf("V_P margin %g, want 0 <= margin <= %g", p.VPMargin, MaxVPMargin))
+	case p.RunningCap < 0 || p.RunningCap > maxSlots:
+		u = refuse(InvalidInput, fmt.Sprintf("running cap %d, want 0 <= cap <= %d (0 is not known)", p.RunningCap, maxSlots))
 	default:
 		cv := p.PromptCV
 		if cv < minPromptCV {
@@ -565,6 +616,47 @@ func (pl prefillPlan) meanScore(rate, threshold float64) float64 {
 	return sum / n / threshold
 }
 
+// psMeanScore is meanScore on the processor-sharing stage the price runs on
+// (psStages): each pod at its share of the arrivals (podShares) and its own
+// Ca^2 (splitCA2), scoring the prompts on it past its running cap k
+// (psWaiting) over the threshold.
+func (pl prefillPlan) psMeanScore(rate, threshold float64, k int) float64 {
+	pl = pl.atRate(rate)
+	var sum float64
+	for _, w := range podShares(pl.f, pl.p.Replicas) {
+		rho := rate * w * pl.work
+		if rho >= 1 {
+			return math.Inf(1)
+		}
+		s, _ := psBurst(splitCA2(pl.ca2, w), pl.cs2)
+		sum += psWaiting(rho, s, k)
+	}
+	return sum / float64(pl.p.Replicas) / threshold
+}
+
+// psWaiting is one processor-sharing pod's mean waiting count at utilization
+// rho, with the stage's burst factor s (psBurst) and a running cap of k
+// prompts: E[(N - k)+], N the prompts on the pod. N takes the law the stage
+// prices: P(N >= 1) = rho, as for any work-conserving pod, and past 1
+// geometric at a ratio sigma set so its mean is the stage's. Little's law on
+// the stage's sojourn x(1 + s rho/(1 - rho)) gives E[N] = rho + s rho^2/(1 - rho),
+// so sigma = s rho/(1 - rho + s rho), and
+// E[(N - k)+] = rho sigma^k/(1 - sigma). At Poisson s is 1, sigma is rho, and
+// N is the M/G/1-PS law exactly, whatever the work's spread. The law is the
+// processor-sharing one even past the cap, where the engine serves the
+// waiting prompts closer to first come; at a narrow spread that holds fewer
+// on the pod, so the count errs high, toward a lower onset.
+func psWaiting(rho, s float64, k int) float64 {
+	if !(rho > 0) {
+		return 0
+	}
+	if !(rho < 1) {
+		return math.Inf(1)
+	}
+	sigma := s * rho / (1 - rho + s*rho)
+	return rho * math.Pow(sigma, float64(k)) / (1 - sigma)
+}
+
 // ttftPlan is a checked fleet.
 type ttftPlan struct {
 	pf prefillPlan
@@ -586,6 +678,11 @@ type ttftPlan struct {
 	// routerWait is TTFTFleet.PriceRouterWait where it takes: processor
 	// sharing alone, at a prompt spread up to MaxPSPromptCV.
 	routerWait bool
+	// psOnsets is TTFTFleet.PSOnsets where it takes: processor sharing.
+	psOnsets bool
+	// chargeGate is TTFTFleet.ChargeDecodeGate where it takes: flow control
+	// on and a decode line.
+	chargeGate bool
 }
 
 // plan checks a fleet and places its flow-control onsets.
@@ -602,6 +699,7 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing,
 		psCapped: fl.ProcessorSharing && pf.cv > MaxPSPromptCV}
 	pl.routerWait = fl.PriceRouterWait && pl.ps && !pl.psCapped
+	pl.psOnsets = fl.PSOnsets && pl.ps
 	if fl.ProcessorSharing && fl.Decode != nil {
 		// The pull is its own stage on the decode pods. With no decode line
 		// there are no pods to share, and it stays in the own time.
@@ -660,6 +758,7 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 		if fl.Decode == nil {
 			pl.flags = append(pl.flags, DecodeOnsetUnchecked)
 		}
+		pl.chargeGate = fl.ChargeDecodeGate && fl.Decode != nil
 		on, u := pl.placeOnsets()
 		if u != nil {
 			return ttftPlan{}, u
@@ -675,11 +774,24 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 // placeOnsets finds each stage's onset by bisection on the rate: the least
 // rate at which the stage's mean endpoint score reaches 1, below the stage's
 // knee. A stage whose score stays under 1 up to its knee has its knee as the
+// onset. With psOnsets the prefill score is the processor-sharing stage's
+// (psMeanScore), or past MaxPSPromptCV the larger of the two, so the lower
 // onset.
 func (pl ttftPlan) placeOnsets() (Onsets, *Unanswerable) {
 	qt, kt := pl.fc.QueueThreshold, pl.fc.KVThreshold
 	var on Onsets
-	on.Prefill = onset(pl.pf.knee(), func(r float64) float64 { return pl.pf.meanScore(r, qt) })
+	score := func(r float64) float64 { return pl.pf.meanScore(r, qt) }
+	if pl.psOnsets {
+		k := max(1, pl.pf.p.RunningCap)
+		ps := func(r float64) float64 { return pl.pf.psMeanScore(r, qt, k) }
+		if pl.psCapped {
+			fcfs := score
+			score = func(r float64) float64 { return max(ps(r), fcfs(r)) }
+		} else {
+			score = ps
+		}
+	}
+	on.Prefill = onset(pl.pf.knee(), score)
 	if pl.d == nil {
 		return on, nil
 	}
@@ -704,6 +816,46 @@ func decodeScore(d Decode, rate, qt, kt float64) float64 {
 	}
 	lq := rate / float64(d.Replicas) * adm.MeanWait()
 	return max(lq/qt, adm.Basis.Fill/kt)
+}
+
+// decodeScoreTail is the share of the time a decode pod's score at rate is
+// at least 1, the decode pods balanced, on the admission chain decodeScore
+// reads the means of: P(n >= n*), n* the least state whose score,
+// max((n - c)+/QueueThreshold, min(n, c) KVPerRequest/(CapacityTokens KVThreshold)),
+// reaches 1. 1 where the chain has no stationary state.
+func decodeScoreTail(d Decode, rate, qt, kt float64) float64 {
+	p := d.full()
+	if p.slots > maxSlots || !(rate < d.kneeRate()) {
+		return 1
+	}
+	c := int(p.slots)
+	w, ok := chainWeights(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, c)
+	if !ok {
+		return 1
+	}
+	// The waiting count n - c reaches qt at c + ceil(qt); the fill reaches
+	// kt at ceil(kt C/KVreq) requests, where the slots hold that many.
+	n := float64(c) + math.Ceil(qt)
+	if m := math.Ceil(kt * d.CapacityTokens / d.KVPerRequest); m <= float64(c) {
+		n = min(n, m)
+	}
+	if !(n < math.MaxInt32) {
+		return 0
+	}
+	return w.atLeast(int(n))
+}
+
+// gateClosed is the most of the time the decode gate is closed at rate, and
+// with Poisson arrivals the most of the requests that meet it closed. The
+// gate closes when the decode pods' mean score reaches 1, which takes at
+// least one pod's reaching 1: with the pods independent, each on its chain's
+// law, that is 1 - (1 - p)^N_d, p one pod's decodeScoreTail. It errs high,
+// toward a lower rate: one pod over 1 closes the gate only if the others'
+// scores bring the mean there.
+func (pl ttftPlan) gateClosed(rate float64) float64 {
+	d := *pl.d
+	p := decodeScoreTail(d, rate, pl.fc.QueueThreshold, pl.fc.KVThreshold)
+	return -math.Expm1(float64(d.Replicas) * math.Log1p(-p))
 }
 
 // onset is the least rate in [0, knee) at which score reaches 1, or knee if
@@ -1191,9 +1343,15 @@ func TTFTAt(fl TTFTFleet, rate, q float64) Result {
 // AboveFlowControlOnset, which TTFTMeets reads as a miss, so a rate answer
 // never stands there: the answer is always a rate whose own verdict is met.
 //
-// The cap at the decode onset is not conservative: the onset is where the
-// MEAN endpoint score reaches 1, while the gate reads the current score, and
-// E[max] >= max E, so the gate closes for part of the time below it.
+// The cap at the decode onset alone is not conservative: the onset is where
+// the MEAN endpoint score reaches 1, while the gate reads the current score,
+// and E[max] >= max E, so the gate closes for part of the time below it. With
+// TTFTFleet.ChargeDecodeGate that share (ttftPlan.gateClosed) is charged: a
+// percentile target is met where the price at q plus the share meets it, a
+// request that meets a closed gate taken as a miss; a mean target is capped
+// where the share reaches MaxDecodeGateClosedShare, bound BoundDecodeOnset.
+// When the charge lowers a percentile's rate, BoundBy is TTFT then
+// BoundDecodeOnset.
 func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	if !Finite(t.Seconds) || !(t.Seconds > 0) {
 		return refuse(InvalidInput, fmt.Sprintf("TTFT target %g s", t.Seconds))
@@ -1217,22 +1375,38 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	if pl.fc.State == FlowControlOn && pl.d != nil && pl.onsets.Decode < limit {
 		limit, limitBy = pl.onsets.Decode, BoundDecodeOnset
 	}
+	if pl.chargeGate && t.Percentile == 0 {
+		if _, c := bisectRate(limit, func(r float64) bool { return pl.gateClosed(r) < MaxDecodeGateClosedShare }); c < limit {
+			limit, limitBy = c, BoundDecodeOnset
+		}
+	}
 	if c := pl.prefillCap(); pl.fc.State == FlowControlOn && c < limit {
 		limit, limitBy = c, BoundPrefillOnset
 	}
-	full := pl.bisect(t, limit, true)
+	charge := pl.chargeGate && t.Percentile > 0
+	full := pl.bisect(t, limit, true, charge)
 	if !(full > 0) {
 		// The floor is under the target, but by less than the bisection
 		// resolves: no positive rate is known to meet it.
 		return pl.belowFloor(fl, t, fmt.Sprintf("target %.4g s: no positive rate meets it (TTFT floor %.4g s)", t.Seconds, floor), zero.out.Flags)
 	}
-	alone := pl.bisect(t, limit, false)
+	alone := pl.bisect(t, limit, false, charge)
+	// uncharged is the rate with the gate's closed share left out, to tell
+	// whether the charge set the rate.
+	uncharged := full
+	if charge {
+		uncharged = pl.bisect(t, limit, true, false)
+	}
 
 	var by []Bound
 	flags := append([]Flag(nil), pl.flags...)
 	switch {
 	case limitBy != "" && full >= limit:
 		by = []Bound{limitBy}
+	case uncharged > full*(1+1e-6):
+		// The decode gate's closed share, charged to the tail, holds the
+		// rate below the target's own.
+		by = []Bound{BoundTTFT, BoundDecodeOnset}
 	case alone > full*(1+1e-6):
 		// The target sets the rate; decode admission's share of the tail
 		// holds it below what the prefill side alone allows.
@@ -1281,10 +1455,20 @@ func (pl ttftPlan) prefillCap() float64 {
 
 // bisect is the largest rate below limit whose TTFT meets the target, or
 // limit itself when the TTFT just under it still does (only an onset: at a
-// knee the TTFT is unbounded).
-func (pl ttftPlan) bisect(t TTFTTarget, limit float64, withDecodeWait bool) float64 {
+// knee the TTFT is unbounded). With charge, a percentile q is met at a rate
+// where the TTFT at q plus the decode gate's closed share there
+// (gateClosed) meets it: P(miss) <= P(TTFT > t) + P(gate closed), a request
+// that meets the gate closed taken as a miss.
+func (pl ttftPlan) bisect(t TTFTTarget, limit float64, withDecodeWait, charge bool) float64 {
 	lo, _ := bisectRate(limit, func(rate float64) bool {
-		p := pl.price(rate, t.Percentile, withDecodeWait, false)
+		q := t.Percentile
+		if charge {
+			q += pl.gateClosed(rate)
+			if !(q < 1) {
+				return false
+			}
+		}
+		p := pl.price(rate, q, withDecodeWait, false)
 		return p.u == nil && p.out.Seconds <= t.Seconds
 	})
 	return lo

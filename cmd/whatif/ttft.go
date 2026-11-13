@@ -379,6 +379,10 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	// measured. whatif gates it on processor sharing itself
 	// (whatif.TTFTFleet.PriceRouterWait).
 	pf.fleet.PriceRouterWait = f.priceRouterWait
+	// Off by default, as in the SLO analyzer (whatif.DefaultPSOnsets,
+	// whatif.DefaultChargeDecodeGate).
+	pf.fleet.PSOnsets, pf.fleet.ChargeDecodeGate = f.psOnsets, f.chargeDecodeGate
+	pf.fleet.Prefill.RunningCap = f.prefillRunningCap
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop
