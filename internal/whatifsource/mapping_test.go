@@ -72,6 +72,10 @@ func mappingCases() []mappingCase {
 			field: f(func(r domain.ReplicaMetrics) float64 { return float64(r.CapacityQueueLength) }, func(r domain.ReplicaMetrics) bool { return r.CapacityQueueKnown })},
 		{query: registration.QueryMaxRankCapacityQueueLength, value: 2, want: 2.0, also: map[string]float64{registration.QueryCapacityQueueLength: 3},
 			field: f(func(r domain.ReplicaMetrics) float64 { return float64(r.MaxRankCapacityQueueLength) }, nil)},
+		{query: registration.QueryLandedQueueLength, value: 3, want: 3.0,
+			field: f(func(r domain.ReplicaMetrics) float64 { return float64(r.LandedQueueLength) }, func(r domain.ReplicaMetrics) bool { return r.LandedQueueKnown })},
+		{query: registration.QueryMaxRankLandedQueueLength, value: 2, want: 2.0, also: map[string]float64{registration.QueryLandedQueueLength: 3},
+			field: f(func(r domain.ReplicaMetrics) float64 { return float64(r.MaxRankLandedQueueLength) }, nil)},
 		{query: registration.QueryCacheConfigInfo, extra: []string{"num_gpu_blocks", "1000", "block_size", "16"}, value: 2, want: 16000.0, noNaN: true,
 			field: f(func(r domain.ReplicaMetrics) float64 { return float64(r.TotalKvCapacityTokens) }, func(r domain.ReplicaMetrics) bool {
 				return r.NumGpuBlocks == 1000 && r.BlockSize == 16 && r.EngineRanks == 2 && r.TokensInUse == 8000
@@ -205,6 +209,7 @@ func collectorReplicaQueries() []string {
 		registration.QueryAvgQueueTime, registration.QueryQueueTimeBuckets, registration.QueryQueueMin,
 		registration.QueryPrefillComputedTokenRate, registration.QueryPreemptionRate, registration.QuerySpecAcceptedPerStep,
 		registration.QueryCapacityQueueLength, registration.QueryMaxRankCapacityQueueLength,
+		registration.QueryLandedQueueLength, registration.QueryMaxRankLandedQueueLength,
 		registration.QueryAvgPrefillTime, registration.QueryAvgKVTransferTime, registration.QueryTPOTBuckets,
 	}
 }

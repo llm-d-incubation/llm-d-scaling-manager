@@ -190,8 +190,16 @@ are in [analyzer evidence](../developer-guide/analyzer-evidence.md):
   before the replicas arrived. This can lower the demand, so it is done only
   when the floor may order on its mu and the arrival rate accounts for what the
   replicas already hold; in the first minute of a load step the arrival rate
-  still reads the minute before, and the queue keeps its full charge. Prefill's share of the scheduler queue is dropped:
-  more prefill replicas do not fix a full decode.
+  still reads the minute before, and the queue keeps its full charge.
+- **A prefill with no measured throughput keeps the router's prompts, capped.**
+  The prompts waiting in the router are work prefill takes first, so they stay
+  in prefill's demand while prefill has no `mu` of its own. They are capped so
+  that prefill's demand is at most twice what its Ready replicas hold, one
+  doubling at a time: the cap can order again after each round of replicas
+  becomes Ready while the queue stands, never past what the queue itself
+  asks for. A prefill with no Ready replica keeps none of the share. While
+  decode is full and queued, prefill's own demand is held (neither ordered nor
+  released), and the router's share is exempt from that hold.
 
 **Prefill's mu without a prefill saturation.** On a P/D model prefill rarely
 saturates on its own. Its queue usually builds because decode is full, and a
@@ -388,6 +396,7 @@ model; check the health metrics below.
 | `vllm:kv_cache_usage_perc` | gauge | live tokens-in-use → **demand** |
 | `vllm:num_requests_waiting` | gauge | local queue → **compute-ceiling** trigger + demand |
 | `vllm:num_requests_waiting_by_reason` (`reason="capacity"`) | gauge | on decode of a P/D model, the local queue without requests waiting for their KV from prefill (vLLM v0.20.0 and later) — *optional*: without it the whole queue counts |
+| `vllm:num_requests_kv_fetch_by_stage` (`stage="completed_waiting"`) | gauge | on decode of a P/D model, the requests whose KV has arrived from prefill and that wait for this pod, added back to the queue above (vLLM v0.32.0 and later) — *optional*: without it only the capacity part counts |
 | `vllm:request_prompt_tokens_sum` / `_count` | histogram | average **input** tokens per request |
 | `vllm:request_generation_tokens_sum` / `_count` | histogram | average **output** tokens per request |
 | `vllm:request_generation_tokens_bucket` | histogram | the spread of output lengths: a long request stays resident longer, so it holds more KV per request than the mean says (SGLang: `sglang:generation_tokens_histogram_bucket`) — *optional*: without it every request is priced at the mean length, as before |

@@ -499,6 +499,12 @@ func (c *ReplicaMetricsCollector) attributeInstance(
 		metric.CapacityQueueLength = data.capacityQueue
 		metric.MaxRankCapacityQueueLength = data.maxRankCapacityQueue
 	}
+	// The landed KV fetches, which wait in the same queue.
+	if data.hasLandedQueue && data.hasQueue {
+		metric.LandedQueueKnown = true
+		metric.LandedQueueLength = data.landedQueue
+		metric.MaxRankLandedQueueLength = data.maxRankLandedQueue
+	}
 
 	return metric, pairedAs, true
 }

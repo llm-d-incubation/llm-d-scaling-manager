@@ -2516,6 +2516,14 @@ the decode pod drains, so the queue there is read differently:
   A cap the engine picks by default is not known.
   `--max-num-active-seqs` (vLLM v0.31+) also sets the cap, alone or with
   `--max-num-seqs`; with both, the lower one counts.
+- vLLM v0.32.0 and later also count the requests whose KV has already
+  arrived and that wait for this pod to schedule them
+  (`vllm:num_requests_kv_fetch_by_stage{stage="completed_waiting"}`). vLLM
+  reports these as deferred too, but they wait on this pod, not on prefill.
+  So the queue is the capacity part plus them. This also covers a pod capped
+  by vLLM's default `max_num_seqs`, and a full pod whose landed requests
+  cannot get their next block. Without the series, only the capacity part
+  counts, as above.
 - Older vLLM: the whole queue counts, as before. The requests waiting for
   prefill's KV cannot be told apart, and dropping a real queue would
   under-provision. A P/D decode on older vLLM can therefore read busier than

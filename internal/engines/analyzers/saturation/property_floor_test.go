@@ -24,6 +24,7 @@ func floorCases() []propCase {
 		{class: classEdges, learner: "floor", name: "backlog-grew", family: familyDirect, tuning: tunedDefault, seeds: cheapSeeds, check: checkBacklogEdge(tuningDefault)},
 		{class: classMonotonicity, learner: "floor", name: "lower-mu-never-prices-less", family: familyDirect, tuning: tunedDefault, check: checkFloorMuMonotone(nil)},
 		{class: classKnownTruth, learner: "floor", name: "standing-queue-priced-at-drain", family: familyDirect, tuning: tunedDefault, check: checkFloorStandingQueue(nil, nil)},
+		{class: classKnownTruth, learner: "floor", name: "prefill-without-mu-keeps-router-prompts", family: familyDirect, tuning: tunedDefault, check: checkFloorPrefillRouterPrompts(nil)},
 	}
 }
 

@@ -1,0 +1,3 @@
+{"status":"success","data":{"resultType":"matrix","result":[
+{"metric":{"__name__":"vllm:time_to_first_token_seconds","namespace":"demo","pod":"p-1"},"histograms":[[1700000000,{"count":"3","sum":"0.5","buckets":[[0,"0.1","0.2","3"]]}]]}
+]}}
