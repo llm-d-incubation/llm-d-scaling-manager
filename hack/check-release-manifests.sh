@@ -460,7 +460,7 @@ fi
 # the rule it breaks, not merely fail.
 caught() {
     local name="$1" expect="$2" d="$3"
-    (cd "$d" && sha256sum $ALL_FILES > SHA256SUMS)
+    (cd "$d" && sha256sum $ALL_FILES $TOOLS_TARBALL > SHA256SUMS)
     if check_dir "$d" > "$WORK/m-$name.log" 2>&1; then
         fail "negative control '$name' was not caught"
     elif grep -q -- "$expect" "$WORK/m-$name.log"; then

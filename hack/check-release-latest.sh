@@ -354,13 +354,16 @@ expect_yq "every tools build (amd64 scan, arm64 scan, push) uses Dockerfile.tool
     'Dockerfile.tools,Dockerfile.tools,Dockerfile.tools|${{ steps.tools-meta.outputs.tags }}' \
     '([.jobs.release-tools.steps[] | select(.uses == "docker/build-push-action*") | .with.file] | join(",")) + "|" + (.jobs.release-tools.steps[] | select(.id == "tools-push") | .with.tags)'
 
-tscan_at="$(yq '[.jobs.release-tools.steps[] | (.with."exit-code" // "")] | to_entries | map(select(.value == "1")) | .[0].key // -1' "$R")"
+# Two blocking scans (amd64 and arm64), both before the login: the last one's
+# index is what must precede it.
+tscan_at="$(yq '[.jobs.release-tools.steps[] | (.with."exit-code" // "")] | to_entries | map(select(.value == "1")) | .[-1].key // -1' "$R")"
+tscan_n="$(yq '[.jobs.release-tools.steps[] | select(.with."exit-code" == "1")] | length' "$R")"
 tlogin_at="$(yq '[.jobs.release-tools.steps[] | (.uses // "")] | to_entries | map(select(.value == "docker/login-action*")) | .[0].key // -1' "$R")"
-tscan_sev="$(yq -r '.jobs.release-tools.steps[] | select(.with."exit-code" == "1") | .with.severity' "$R")"
-if [ "$tscan_at" -ge 0 ] && [ "$tlogin_at" -ge 0 ] && [ "$tscan_at" -lt "$tlogin_at" ] && [ "$tscan_sev" = CRITICAL ]; then
-    ok "the tools image: a blocking CRITICAL scan runs before the registry login"
+tscan_sev="$(yq -r '[.jobs.release-tools.steps[] | select(.with."exit-code" == "1") | .with.severity] | unique | join(",")' "$R")"
+if [ "$tscan_n" = 2 ] && [ "$tscan_at" -ge 0 ] && [ "$tlogin_at" -ge 0 ] && [ "$tscan_at" -lt "$tlogin_at" ] && [ "$tscan_sev" = CRITICAL ]; then
+    ok "the tools image: blocking CRITICAL scans of amd64 and arm64 run before the registry login"
 else
-    fail "the tools image's blocking scan must be CRITICAL, exit-code 1, before the login (scan step $tscan_at, login step $tlogin_at, severity '$tscan_sev')"
+    fail "the tools image needs two blocking scans, CRITICAL, exit-code 1, both before the login ($tscan_n scans, last at step $tscan_at, login step $tlogin_at, severity '$tscan_sev')"
 fi
 
 # The tools meta step, run: <image>/tools, :latest only when the release moved it.
