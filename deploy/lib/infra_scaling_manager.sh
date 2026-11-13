@@ -98,17 +98,23 @@ llmsm_watch_hpa_repair_names() {
 # true, and removes an earlier copy when it is not. Labelled with the grant key,
 # so llmsm_revoke_namespace and the undeploy take it with the manager Role.
 llmsm_apply_watch_namespace_hpa_repair() {
-    local tmp_overlay="$1" role binding rendered
+    local tmp_overlay="$1" role binding rendered state
     read -r role binding <<< "$(llmsm_watch_hpa_repair_names)"
     if ! llmsm_keda_hpa_repair_on; then
         local specs=("rolebinding $binding $LLMSM_WATCH_NS" "role $role $LLMSM_WATCH_NS")
-        case "$(llmsm_delete_hpa_repair_grant "${specs[@]}")" in
+        state="$(llmsm_delete_hpa_repair_grant "${specs[@]}")"
+        case "${state%%|*}" in
             forbidden) log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install made in $LLMSM_WATCH_NS could not be deleted (Forbidden). A cluster admin runs:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")" ;;
+            failed) log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install made in $LLMSM_WATCH_NS could not be deleted (${state#*|}). Delete it with:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")" ;;
             deleted) log_info "KEDA_HPA_REPAIR is not true: the HPA grant an earlier install made in $LLMSM_WATCH_NS is deleted$(llmsm_render_active && printf ' by admin.sh')" ;;
         esac
         return 0
     fi
-    rendered=$(kubectl kustomize "$tmp_overlay" 2>/dev/null | LLMSM_TARGET_NS="$LLMSM_WATCH_NS" LLMSM_ROLE_NAME="$role" \
+    # The render from stdout alone: a notice kubectl prints on stderr is not
+    # YAML, and a render that fails says why (kc_err_line).
+    kc_capture kustomize "$tmp_overlay" \
+        || log_error "KEDA_HPA_REPAIR=true, but the overlay could not be rendered to copy its HPA Role into $LLMSM_WATCH_NS: $(kc_err_line "$KC_ERR")"
+    rendered=$(printf '%s\n' "$KC_OUT" | LLMSM_TARGET_NS="$LLMSM_WATCH_NS" LLMSM_ROLE_NAME="$role" \
             LLMSM_GRANT_KEY="$LLMSM_WATCH_GRANT_KEY" LLMSM_GRANT_VAL="$(llmsm_ns_suffix "$LLMSM_NS")" yq '
             select(.kind == "Role" and .metadata.name == "scaling-manager-keda-hpa-repair-role")
             | .metadata.name = strenv(LLMSM_ROLE_NAME)

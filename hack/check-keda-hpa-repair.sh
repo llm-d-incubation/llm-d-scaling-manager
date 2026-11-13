@@ -8,7 +8,9 @@
 #                 grant by the names the install RENDERS (the per-install
 #                 suffix in cluster scope), one object per kubectl call; a
 #                 Forbidden delete is reported with the admin's command, never
-#                 as removed; nothing there says nothing
+#                 as removed; nothing there says nothing; a notice on stderr
+#                 is neither a denial nor the answer, and another failure is
+#                 reported by its error line (kc_capture, kc_err_line)
 #   watched copy  with it, the Role copied into a namespace managed from
 #                 outside is the rendered HPA Role (selected by name), renamed,
 #                 labelled and bound to the controller's ServiceAccount;
@@ -27,7 +29,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB_DIR="${LIB_DIR:-$ROOT/deploy/lib}"
 FAIL=0
 CASES=0
-EXPECTED_CASES=10
+EXPECTED_CASES=12
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -67,7 +69,7 @@ WATCHED=team-a
 #   kustomize DIR      the real render
 #   apply -f -         stdin appended to $WORK/applied.yaml
 #   delete -f -        stdin appended to $WORK/deleted.yaml
-#   delete KIND NAME   $DELETE_MODE: deleted | forbidden | absent
+#   delete KIND NAME   $DELETE_MODE: deleted | forbidden | notice | error | absent
 #   get ...            NotFound
 # anything else succeeds silently.
 stub_kubectl() {
@@ -80,6 +82,12 @@ stub_kubectl() {
             case "${DELETE_MODE:-absent}" in
                 deleted) echo "$2.rbac.authorization.k8s.io \"$3\" deleted" ;;
                 forbidden) echo "Error from server (Forbidden): $2.rbac.authorization.k8s.io \"$3\" is forbidden: User \"tenant\" cannot delete resource" >&2; return 1 ;;
+                # A success with a notice that names a forbidden thing on stderr.
+                notice) echo "Warning: policy notice: a forbidden-words list is deprecated" >&2
+                        echo "$2.rbac.authorization.k8s.io \"$3\" deleted" ;;
+                # A failure that is not a denial, after a notice.
+                error) echo "I1113 09:55:01.123456   1 request.go:700] Waited for 1s due to client-side throttling" >&2
+                       echo "Error from server (InternalError): an error on the server has prevented the request" >&2; return 1 ;;
             esac ;;
         get) echo 'Error from server (NotFound): not found' >&2; return 1 ;;
     esac
@@ -146,6 +154,16 @@ LLMSM_SCOPE=cluster DELETE_MODE=forbidden in_lib llmsm_revoke_keda_hpa_repair
 grep -q 'Forbidden' "$WORK/out" || fail "a Forbidden delete was not reported: $(cat "$WORK/out")"
 grep -q 'kubectl delete clusterrole scaling-manager-keda-hpa-repair-role-' "$WORK/out" || fail "the admin's command is missing: $(cat "$WORK/out")"
 ! grep -q 'removed the HPA grant' "$WORK/out" || fail "a Forbidden delete was reported as removed"
+
+begin "revoke: a notice on stderr beside a delete is neither a denial nor the answer"
+LLMSM_SCOPE=cluster DELETE_MODE=notice in_lib llmsm_revoke_keda_hpa_repair
+grep -q 'removed the HPA grant' "$WORK/out" || fail "a delete with a notice was not reported as removed: $(cat "$WORK/out")"
+! grep -q 'Forbidden' "$WORK/out" || fail "a notice naming forbidden was taken for a denial: $(cat "$WORK/out")"
+
+begin "revoke: another failure is reported with its error line, not the notice before it"
+LLMSM_SCOPE=cluster DELETE_MODE=error in_lib llmsm_revoke_keda_hpa_repair
+grep -q 'could not be deleted (Error from server (InternalError)' "$WORK/out" || fail "the failure was not reported with its error line: $(cat "$WORK/out")"
+! grep -q 'removed the HPA grant\|Forbidden' "$WORK/out" || fail "a failed delete was reported as removed or denied"
 
 begin "revoke: nothing to delete says nothing"
 LLMSM_SCOPE=cluster DELETE_MODE=absent in_lib llmsm_revoke_keda_hpa_repair

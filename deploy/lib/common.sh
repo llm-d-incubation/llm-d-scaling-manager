@@ -857,21 +857,31 @@ llmsm_append_keda_hpa_repair_component() {
 
 # llmsm_delete_hpa_repair_grant deletes the objects its arguments name, one
 # "<kind> <name> [<namespace>]" per argument and one kubectl call each, so
-# render mode records each one. It echoes forbidden when any delete was
-# denied, deleted when one removed something (render mode: recorded in
-# admin.sh), and none otherwise. A denied delete is never "absent".
+# render mode records each one. It echoes "<state>|<error line>": forbidden
+# when a delete was denied, failed when one failed otherwise (the line says
+# why, from kc_err_line), deleted when one removed something (render mode:
+# recorded in admin.sh), and none otherwise. The answer is read from stdout
+# and the failure from stderr without its notices (kc_capture,
+# kc_drop_notices), so a warning kubectl prints on success is neither a
+# deletion nor a denial. A denied delete is never "absent".
 llmsm_delete_hpa_repair_grant() {
-    local spec kind name ns out state=none
+    local spec kind name ns rc state=none why=""
     for spec in "$@"; do
         read -r kind name ns <<< "$spec"
-        out="$(kubectl delete "$kind" "$name" ${ns:+-n "$ns"} --ignore-not-found 2>&1)" || true
-        if printf '%s' "$out" | grep -qi 'forbidden'; then
-            state=forbidden
-        elif [ "$state" = none ] && printf '%s' "$out" | grep -q 'deleted'; then
+        rc=0
+        kc_capture delete "$kind" "$name" ${ns:+-n "$ns"} --ignore-not-found || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            why="$(kc_err_line "$KC_ERR")"
+            if kc_drop_notices "$KC_ERR" | grep -qi 'forbidden'; then
+                state=forbidden
+            elif [ "$state" != forbidden ]; then
+                state=failed
+            fi
+        elif [ "$state" = none ] && printf '%s' "$KC_OUT" | grep -q 'deleted'; then
             state=deleted
         fi
     done
-    echo "$state"
+    printf '%s|%s\n' "$state" "$why"
 }
 
 # llmsm_hpa_repair_delete_cmd echoes the kubectl commands that delete the
@@ -905,9 +915,12 @@ llmsm_revoke_keda_hpa_repair() {
                "clusterrole scaling-manager-keda-hpa-repair-role-$suffix")
     fi
     state="$(llmsm_delete_hpa_repair_grant "${specs[@]}")"
-    case "$state" in
+    case "${state%%|*}" in
         forbidden)
             log_warning "KEDA_HPA_REPAIR is not true, so the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install may have made should go, and you may not delete it (Forbidden). A cluster admin runs:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")"
+            ;;
+        failed)
+            log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install may have made could not be deleted (${state#*|}). Delete it with:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")"
             ;;
         deleted)
             if llmsm_render_active; then
