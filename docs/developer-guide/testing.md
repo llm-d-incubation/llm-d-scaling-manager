@@ -2571,7 +2571,7 @@ test, lint or e2e, so retarget it to `main` before review.
 | `ci-pr-checks.yaml` / `e2e-tests-smoke` | `make test-e2e-smoke-with-setup` on a fresh Kind cluster, then the release's blocking Trivy scan (fixable CRITICAL) of the image it built; skipped when a PR changes only docs or metadata | `CREATE_CLUSTER=true make test-e2e-smoke-with-setup` |
 | `ci-pr-checks.yaml` / `e2e-tests-full` | `make test-e2e-full-with-setup` with `SCALE_TO_ZERO_ENABLED=true`; returns early when no compiled file (Go, Makefile, `config/`, `test/`, workflows) changed | `CREATE_CLUSTER=true SCALE_TO_ZERO_ENABLED=true make test-e2e-full-with-setup` |
 | `ci-pr-checks.yaml` / `e2e-tests-passive` | `make test-e2e-passive-with-setup` with `SCALE_TO_ZERO_ENABLED=true`, in parallel with `e2e-tests-full`; same triggers, and returns early on the same rule | `CREATE_CLUSTER=true USE_SIMULATOR=true SCALE_TO_ZERO_ENABLED=true make test-e2e-passive-with-setup` |
-| `ci-signed-commits.yaml` / `signed-commits` | fails if any commit in the PR lacks a verified signature | `git log --show-signature origin/main..HEAD` |
+| `ci-signed-commits.yaml` / `signed-commits` | fails if any commit in the PR lacks a verified signature; in the merge queue a job of the same name reports, since the PR's commits were checked already | `git log --show-signature origin/main..HEAD` |
 
 On a push to `main`, only `lint-and-test`, `deploy-scripts-check`, `docs-check`
 and `kustomize-build` run; the e2e jobs are PR-only.
