@@ -169,8 +169,12 @@ make workload-patch NAMESPACE=${NAMESPACE}
 
 Apply what it reports before the model scales. Without a drain hook, every
 scale-down cuts the responses a replica is still writing. Without a checkout,
-the release's tools image runs the same report:
-[Prepare model servers to scale](../prepare-workloads/).
+the release's tools image runs the same report (`smt` as defined in
+[Prepare model servers to scale](../prepare-workloads/#prerequisites)):
+
+```bash
+smt workload-patch -n ${NAMESPACE}
+```
 
 ### 2. Hand the model over
 

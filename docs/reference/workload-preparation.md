@@ -14,7 +14,12 @@
 > | `make prepull IMAGES=<img> NAMESPACE=<ns>` | `prepull apply -n <ns> --image <img>` |
 > | `make weights WEIGHTS_MODEL=<id> WEIGHTS_PATH=<dir> WEIGHTS_IMAGE=<img> NAMESPACE=<ns>` | `weights apply -n <ns> --model <id> --path <dir> --image <img>` |
 > | `make engine-cache ENGINE_CACHE_PATH=<dir> ENGINE_CACHE_IMAGE=<img> NAMESPACE=<ns>` | `engine-cache apply -n <ns> --path <dir> --image <img>` |
-> | `make <prepull, weights or engine-cache>-status` / `-delete NAMESPACE=<ns>` | `<prepull, weights or engine-cache> status` / `delete -n <ns>` |
+> | `make <prepull, weights or engine-cache>-status NAMESPACE=<ns>` | `<prepull, weights or engine-cache> status -n <ns>` |
+> | `make prepull-delete NAMESPACE=<ns>` (`IMAGES=<img>` for one) | `prepull delete -n <ns> --all` (`--image <img>` for one) |
+> | `make weights-delete NAMESPACE=<ns>` (`WEIGHTS_MODEL=<id>` for one) | `weights delete -n <ns> --all` (`--model <id>` for one) |
+> | `make engine-cache-delete NAMESPACE=<ns>` | `engine-cache delete -n <ns>` |
+> | `make scaledobjects-plan` / `-apply LLMSM_DEFAULT_SO_PLAN=<f> NAMESPACE=<ns>` | `scaledobjects-plan -n <ns> --out <f>` / `scaledobjects-apply -n <ns> --plan <f>` |
+> | `make utilization-share-<verb> NAMESPACE=<ns>` | `utilization-share <verb> -n <ns>` |
 > | `make engine-cache-publish`, `-keys`, `-verify` | `engine-cache publish`, `keys`, `verify` |
 > | `make workload-patch NAMESPACE=<ns>` | `workload-patch -n <ns>`; the `LLMSM_*` variables as `docker run -e` |
 > | `make model-cache` | none: create the ReadWriteMany claim with `kubectl`; the emitted patch carries it as a commented manifest |

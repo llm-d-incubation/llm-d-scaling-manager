@@ -73,6 +73,9 @@ for f in namespaced settings scaler-tls model-namespace keda-auth activate; do
   curl -fsSLO $URL/scaling-manager-$f.yaml
 done
 sed -i -e "s/__NAMESPACE__/$NAMESPACE/g" -e "s/__MODEL_NAMESPACE__/$NAMESPACE/g" scaling-manager-*.yaml
+export KEDA_NS=<the namespace KEDA runs in>
+# The scaler NetworkPolicy admits KEDA from namespace keda; name yours.
+sed -i "s#kubernetes.io/metadata.name: keda\$#kubernetes.io/metadata.name: $KEDA_NS#" scaling-manager-namespaced.yaml
 kubectl apply -f scaling-manager-namespaced.yaml -l scaling-manager.llmd.ai/part=admin   # admin
 kubectl apply -f scaling-manager-model-namespace.yaml                                   # admin
 # In scaling-manager-settings.yaml set prometheusURL, limiter: "quota" and
@@ -90,7 +93,8 @@ sharing scales a donor down; `workload-patch` writes what each one needs
 ([prepare model servers](docs/guides/prepare-workloads/)):
 
 ```bash
-smt() { docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/.kube/config:/kube/config:ro" \
+kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+smt() { docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/smt.kubeconfig:/kube/config:ro" \
   -v "$PWD:/work" ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"; }
 smt workload-patch -n $NAMESPACE                         # what each model server still needs
 smt scaledobjects-plan -n $NAMESPACE --out plan.yaml     # lists your model servers; edit it
@@ -110,6 +114,12 @@ kubectl apply -f scaling-manager-activate.yaml           # admin: the one grant 
 kubectl patch configmap scaling-manager-settings -n $NAMESPACE --type merge \
   -p '{"data":{"passive":"false","utilizationShare":"active"}}'
 ```
+
+Sharing is switched by the settings key `utilizationShare`, as here. The
+`utilization-share shadow`/`activate` commands write the scaling policy's
+optimizer block instead; the settings key wins over that block, and the
+release's settings file sets it (to `off`), so on this install switch it with
+`kubectl patch` ([configuration](docs/reference/configuration.md)).
 
 Every step, with its checks: [install in a namespace](docs/guides/install-in-namespace/)
 (or [for the whole cluster](docs/guides/install-cluster-wide/)),

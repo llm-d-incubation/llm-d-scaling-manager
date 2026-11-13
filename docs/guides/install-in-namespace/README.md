@@ -211,8 +211,9 @@ The release's tools image reports what each model server still needs:
 
 <!-- guide:deploy.readiness start -->
 ```bash
-# With the release's tools image; no checkout. Reports what the model servers still need. Changes nothing.
-docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
+# With the release's tools image; no checkout. Reports what the model servers still need. Changes nothing in the cluster.
+kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" \
   ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V workload-patch -n $NAMESPACE
 ```
 <!-- guide:deploy.readiness end -->

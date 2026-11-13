@@ -5,20 +5,27 @@ name: prepare-workloads
 
 prerequisites:
   tools:
-    note: The tools image of the release you installed. Your kubeconfig is mounted read-only; files land in this directory.
+    note: The tools image of the release you installed. It gets a kubeconfig of the current context only, read-only; files land in this directory.
     run: |
       V=<release, for example v0.11.0>
       export NAMESPACE=<your model namespace>
+      TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V
+      kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
       smt() {
         docker run --rm --user "$(id -u):$(id -g)" \
-          -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
-          ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"
+          -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" "$TOOLS" "$@"
       }
       smt version
+  verify:
+    note: Optional. Check the image was built and signed by this repository's release workflow.
+    run: |
+      cosign verify "$TOOLS" \
+        --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+        --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
 
 deploy:
   report:
-    note: What the model servers still need, per workload. Changes nothing.
+    note: What the model servers still need, per workload. Changes nothing in the cluster.
     run: smt workload-patch -n $NAMESPACE
   image:
     note: The engine image, exactly as the model server's pod spec names it, held on every GPU node.
@@ -53,6 +60,19 @@ gitops:
       smt prepull apply -n $NAMESPACE --image $ENGINE_IMAGE --dry-run > prepull.yaml
       smt weights apply -n $NAMESPACE --model <hugging face id> --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > weights.yaml
       smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > engine-cache.yaml
+
+nocontainer:
+  download:
+    note: The same scripts from the release, for a machine with no container runtime. Needs bash, kubectl, jq and yq (mikefarah's, v4).
+    run: |
+      URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+      curl -fsSLO $URL/scaling-manager-tools-$V.tar.gz
+      curl -fsSLO $URL/SHA256SUMS
+      sha256sum -c SHA256SUMS --ignore-missing
+      tar -xzf scaling-manager-tools-$V.tar.gz
+      SMT_DIR=$PWD/scaling-manager-tools
+      smt() { "$SMT_DIR/scaling-manager-tools.sh" "$@"; }
+      smt version
 
 cleanup:
   remove:

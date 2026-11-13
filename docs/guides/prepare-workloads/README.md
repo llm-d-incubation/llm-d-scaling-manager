@@ -12,7 +12,7 @@ The recommended configuration puts three things on each GPU node's own disk:
 | --- | --- | --- |
 | **The engine image**, held by a small pod | a node without it pulls 10-20 GB before the container starts | at least 67-80 s of pull, Qwen3-32B on vLLM v0.26.0 |
 | **The weights**, on the node's local NVMe | a shared volume removes the download, not the read, and replicas that start together share its bandwidth | a 700 GB model: 1403 s from the shared volume on two nodes, about 104 s from local NVMe |
-| **The engine's compile caches** (`VLLM_CACHE_ROOT`, `FLASHINFER_WORKSPACE_DIR`, `TRITON_CACHE_DIR`) and Python bytecode (`PYTHONPYCACHEPREFIX`) | otherwise every replica compiles from nothing | about 11 s of compile (14 s cold, 3 s cached) and about 11 s of bytecode per start |
+| **The engine's compile caches** (`VLLM_CACHE_ROOT`, `FLASHINFER_WORKSPACE_DIR`, `TRITON_CACHE_DIR`) and Python bytecode (`PYTHONPYCACHEPREFIX`) | otherwise every replica compiles from nothing | about 11 s of compile (14 s cold, 3 s cached), and on vLLM 0.26 about 11 s of bytecode per start (0.32 ships its own bytecode) |
 
 Together, on Qwen3-32B and one H200: 102.6 s to Ready unprepared, 48.3 s
 prepared, plus the pull a new node would have paid. Every number and how it was
@@ -32,28 +32,63 @@ directory at all? See [Choosing differently](#choosing-differently).
   node, for example `/mnt/local/weights/<namespace>`. Not the node's root disk,
   not a network mount. On OpenShift it must be under `/var` and prepared first;
   see [Weights on the node's disk](../../reference/workload-preparation.md#weights-on-the-nodes-disk).
-- [ ] **docker** and a kubeconfig with its credentials in the file (a token or a
-  certificate). A kubeconfig that runs a login plugin (`exec:`) does not work
-  inside the container; see [Without docker](#without-docker).
+- [ ] **docker** (or podman), on Linux or macOS; on Windows, from WSL or Git
+  Bash. The kubeconfig's credentials must be in the file (a token or a
+  certificate): a login plugin (`exec:`) does not run inside the container; see
+  [Without the container](#without-the-container). No container runtime at all?
+  The same section.
 - [ ] **A cluster admin** for step 3, and to read nodes for the `status`
   commands.
 
-The tools image carries the release's scripts, with kubectl, jq and yq. Define
-a short function for it:
+The tools image carries the release's scripts, with kubectl, jq and yq. Give
+it a kubeconfig of the current context only (`--minify`), with its
+certificates inlined (`--flatten`), rather than your whole `~/.kube/config`,
+and define a short function for it:
 
 <!-- guide:prerequisites.tools start -->
 ```bash
-# The tools image of the release you installed. Your kubeconfig is mounted read-only; files land in this directory.
+# The tools image of the release you installed. It gets a kubeconfig of the current context only, read-only; files land in this directory.
 V=<release, for example v0.11.0>
 export NAMESPACE=<your model namespace>
+TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V
+kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig
 smt() {
   docker run --rm --user "$(id -u):$(id -g)" \
-    -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
-    ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"
+    -v "$PWD/smt.kubeconfig:/kube/config:ro" -v "$PWD:/work" "$TOOLS" "$@"
 }
 smt version
 ```
 <!-- guide:prerequisites.tools end -->
+
+Optionally, check the image was built by this repository's release workflow
+(cosign v3). `cosign verify` prints the digest it checked; to run exactly that
+image, set `TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools@sha256:<digest>`.
+
+<!-- guide:prerequisites.verify start -->
+```bash
+# Optional. Check the image was built and signed by this repository's release workflow.
+cosign verify "$TOOLS" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
+```
+<!-- guide:prerequisites.verify end -->
+
+### If it fails
+
+- **`permission denied` on `/kube/config` or `/work`**: rootless podman needs
+  `--userns=keep-id` in place of `--user ...`; rootless docker needs no
+  `--user` at all. On an SELinux host (Fedora, RHEL), add `,z` to each volume:
+  `-v "$PWD/smt.kubeconfig:/kube/config:ro,z" -v "$PWD:/work:z"`.
+- **`connection refused` to `127.0.0.1` or `localhost`** (kind, a port-forward,
+  a tunnel): inside the container that is the container itself. On Linux, add
+  `--network host` to the `docker run`.
+- **A login plugin** (`exec:` in the kubeconfig, for example on EKS or GKE), or
+  a credential the flattened file cannot carry: run the scripts outside the
+  container, [below](#without-the-container).
+- **Mounting `~/.kube/config` itself** fails when it names certificate files
+  by path (they are not in the container), or when `KUBECONFIG` lists several
+  files: the flattened `smt.kubeconfig` avoids both. Make it again after
+  `kubectl config use-context`, or after the credentials change.
 
 ## Steps
 
@@ -61,14 +96,16 @@ smt version
 
 <!-- guide:deploy.report start -->
 ```bash
-# What the model servers still need, per workload. Changes nothing.
+# What the model servers still need, per workload. Changes nothing in the cluster.
 smt workload-patch -n $NAMESPACE
 ```
 <!-- guide:deploy.report end -->
 
 It names each model server that re-downloads its weights, compiles from
 nothing, or drops requests on scale-down. Nothing is written yet if nothing is
-missing.
+missing. A controller in another namespace (a cluster-wide install runs in
+`scaling-manager-system`)? Add `--controller-namespace <that namespace>` to
+`workload-patch` and to `scaledobjects-plan`/`scaledobjects-apply`.
 
 ### 2. Hold the engine image on the GPU nodes
 
@@ -166,20 +203,42 @@ smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE --dr
 `kubectl apply -f` each file. The `status` commands work on them as on the
 objects `apply` made.
 
-## Without docker
+## Without the container
 
-The scripts are in the image. Copy them out, and run them with your own
-`bash`, `kubectl`, `jq` and `yq`:
+Each release attaches the same scripts as `scaling-manager-tools-<release>.tar.gz`,
+signed like the install files. They run with your own `bash`, `kubectl`, `jq`
+and `yq`, and your own kubeconfig, login plugins included. The release checks
+them with yq v4.54.1 and jq 1.7.1, the versions the image carries; use those
+or newer (yq must be mikefarah's Go yq, v4). `smt version` prints what it found.
 
+<!-- guide:nocontainer.download start -->
 ```bash
-id=$(docker create ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V)
-docker cp "$id:/opt/scaling-manager-tools" ./scaling-manager-tools
-docker rm "$id"
-./scaling-manager-tools/scaling-manager-tools.sh prepull status -n $NAMESPACE
+# The same scripts from the release, for a machine with no container runtime. Needs bash, kubectl, jq and yq (mikefarah's, v4).
+URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
+curl -fsSLO $URL/scaling-manager-tools-$V.tar.gz
+curl -fsSLO $URL/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf scaling-manager-tools-$V.tar.gz
+SMT_DIR=$PWD/scaling-manager-tools
+smt() { "$SMT_DIR/scaling-manager-tools.sh" "$@"; }
+smt version
 ```
+<!-- guide:nocontainer.download end -->
+
+Every command on this page then works as written. To check the signature as
+well as the checksum, verify `SHA256SUMS` with its `.sigstore.json` bundle:
+[Verify the release files](../../reference/install-methods.md#verify-the-release-files).
 
 From a checkout, the same commands are `make` targets (`make prepull`,
 `make weights`, `make engine-cache`, `make workload-patch`).
+
+## Warm pools need a checkout
+
+`scaledobjects-plan` may suggest warm pools; neither the image nor the archive
+can create them (that is `deploy/warmpool.sh`, with python3).
+`scaledobjects-apply` refuses a plan that sets a warm pool to `apply: yes`.
+Create pools from a checkout of the same release:
+[Bridge a scale-up with a warm pool](../warm-pool/).
 
 ## Cleanup
 
@@ -191,6 +250,8 @@ smt weights delete -n $NAMESPACE --all
 smt engine-cache delete -n $NAMESPACE
 ```
 <!-- guide:cleanup.remove end -->
+
+`smt.kubeconfig` holds your credentials: delete it when you are done.
 
 Scale the model servers that mount a claim to zero first: a mounted claim
 stays `Terminating`. The files on the nodes stay; delete the directory on each
