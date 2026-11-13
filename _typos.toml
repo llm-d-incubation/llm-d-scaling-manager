@@ -20,6 +20,7 @@ extend-ignore-re = [
   "tema-[ab]",
   "payroll-ded",
   "\"rror\"",
+  "\"activ\"",
 ]
 
 [default.extend-words]
