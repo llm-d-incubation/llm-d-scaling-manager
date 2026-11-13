@@ -6,7 +6,11 @@ analyzers as a controller's cycles would have. The output is an ordinary
 learner recording. The design is R2 in
 [the learner proposal, 2.9](../proposals/analyzer-learner.md#29-recorder-fields-for-ttft-and-capture).
 How to run it on a real window is in
-[Testing: Capture a past window](testing.md#capture-a-past-window).
+[Testing: Capture a past window](testing.md#capture-a-past-window). For
+operators, [Record a window for the capacity planner](../guides/record-for-capacity-planner/)
+covers recording, with `whatif` or with only curl and jq, and
+[Metrics the capacity planner needs](../reference/capacity-planner-metrics.md)
+lists every raw series the queries below read.
 
 ```
 whatif capture  --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...)

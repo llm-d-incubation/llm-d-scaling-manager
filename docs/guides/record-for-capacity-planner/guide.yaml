@@ -1,0 +1,245 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here -- see hack/render-guides.py -- so the commands a reader copies and the
+# commands a tool would run are the same strings.
+#
+# manual.fetch lists every series a capture reads, and nothing else:
+# internal/whatifsource/metrics_doc_test.go fails when the list and the queries
+# disagree.
+name: record-for-capacity-planner
+
+prerequisites:
+  prometheus:
+    note: |
+      Reach Prometheus from your machine. Use the Service your Prometheus has; plain http here.
+      For a Prometheus behind a token, see "Prometheus with a token" below.
+    run: |
+      export PROM_NS=<prometheus namespace>
+      export PROM_SVC=<prometheus service>
+      kubectl -n ${PROM_NS} port-forward svc/${PROM_SVC} 9090:9090 &
+      export PROM_URL=http://localhost:9090
+      curl -s ${PROM_URL}/api/v1/status/buildinfo | jq -r .data.version
+
+record:
+  build:
+    note: From a checkout of the release you run. Needs Go. There is no released whatif binary or image.
+    run: |
+      make whatif
+      bin/whatif capture -h 2>&1 | head -3
+  window:
+    note: The namespace your model servers run in, and the window to answer from (UTC).
+    run: |
+      export NAMESPACE=<model namespace>
+      export FROM=2026-11-01T12:00:00Z
+      export TO=2026-11-01T13:00:00Z
+  engineargs:
+    note: The engine arguments the Deployment ran with. kube-state-metrics does not export them.
+    run: |
+      kubectl -n ${NAMESPACE} get deploy <decode deployment> \
+        -o jsonpath='{.spec.template.spec.containers[0].args}{"\n"}'
+      export ENGINE_ARGS="<those arguments, space-separated>"
+  capture:
+    note: Replays the window through the controller's own queries. Exit 0 done, 2 your input (a flag, nothing found), 1 a failed query.
+    run: |
+      bin/whatif capture --prometheus ${PROM_URL} --namespace ${NAMESPACE} --kube-state-metrics \
+        --from ${FROM} --to ${TO} --engine vllm --engine-args "${ENGINE_ARGS}" \
+        -o run.capture.jsonl.gz
+  generate:
+    note: Plays the capture through the analyzers. The result is an ordinary learner recording.
+    run: |
+      bin/whatif generate -in run.capture.jsonl.gz -o run.jsonl.gz
+  ask:
+    note: Ask the planner's two questions. Exit 0 answered, 3 a role refused (the output says why).
+    run: |
+      bin/whatif replicas-to-slo --recording run.jsonl.gz --cycle last
+      bin/whatif slo-to-rate --recording run.jsonl.gz --cycle last --tpot 20ms@p90
+
+manual:
+  window:
+    note: |
+      The namespace, and the window in Unix seconds. Start 5 minutes before the window you want answered.
+      GNU date shown; on macOS use date -j -u -f %Y-%m-%dT%H:%M:%SZ <time> +%s.
+    run: |
+      export PROM_URL=http://localhost:9090
+      export NAMESPACE=<model namespace>
+      export FROM=$(date -u -d 2026-11-01T11:55:00Z +%s)
+      export TO=$(date -u -d 2026-11-01T13:00:00Z +%s)
+      export CHUNK=3600
+      export CURL_OPTS=""
+  fetch:
+    note: |
+      Saves the raw samples of every series the planner reads, one file per series and CHUNK seconds.
+      Each is one instant query for a range, metric{namespace=...}[1h]: it returns stored samples, not a resampled grid.
+      A failed query saves its error, so the check below and the converter refuse it. Needs bash, jq and curl 7.76 or later.
+      Lower CHUNK if a query fails with "too many samples".
+    run: |
+      export METRICS="
+      vllm:kv_cache_usage_perc vllm:cache_config_info vllm:inter_token_latency_seconds_sum
+      vllm:inter_token_latency_seconds_count vllm:generation_tokens_total vllm:num_requests_running
+      vllm:num_requests_waiting vllm:num_requests_waiting_by_reason vllm:request_prompt_tokens_sum
+      vllm:request_prompt_tokens_count vllm:request_prompt_tokens_bucket vllm:request_generation_tokens_sum
+      vllm:request_generation_tokens_count vllm:request_generation_tokens_bucket vllm:prefix_cache_hits_total
+      vllm:prefix_cache_queries_total vllm:request_prefill_kv_computed_tokens_sum
+      vllm:request_prefill_kv_computed_tokens_bucket vllm:request_inference_time_seconds_sum
+      vllm:request_inference_time_seconds_count vllm:time_to_first_token_seconds_sum
+      vllm:time_to_first_token_seconds_count vllm:time_to_first_token_seconds_bucket
+      vllm:request_queue_time_seconds_sum vllm:request_queue_time_seconds_count
+      vllm:request_queue_time_seconds_bucket vllm:request_prefill_time_seconds_sum
+      vllm:request_prefill_time_seconds_count vllm:request_time_per_output_token_seconds_bucket
+      vllm:nixl_xfer_time_seconds_sum vllm:nixl_xfer_time_seconds_count vllm:num_preemptions_total
+      vllm:spec_decode_num_accepted_tokens_total
+      sglang:token_usage sglang:max_total_num_tokens sglang:inter_token_latency_seconds_sum
+      sglang:inter_token_latency_seconds_count sglang:generation_tokens_total sglang:num_running_reqs
+      sglang:num_queue_reqs sglang:prompt_tokens_histogram_sum sglang:prompt_tokens_histogram_count
+      sglang:prompt_tokens_histogram_bucket sglang:generation_tokens_histogram_sum
+      sglang:generation_tokens_histogram_count sglang:generation_tokens_histogram_bucket
+      sglang:cached_tokens_total sglang:prompt_tokens_total sglang:e2e_request_latency_seconds_sum
+      sglang:e2e_request_latency_seconds_count sglang:queue_time_seconds_sum sglang:queue_time_seconds_count
+      sglang:queue_time_seconds_bucket sglang:time_to_first_token_seconds_sum
+      sglang:time_to_first_token_seconds_count sglang:time_to_first_token_seconds_bucket
+      llm_d_epp_request_streaming_tpot_seconds_bucket llm_d_epp_request_streaming_tpot_seconds_sum
+      llm_d_epp_request_streaming_tpot_seconds_count llm_d_epp_request_ttft_seconds_bucket
+      llm_d_epp_request_ttft_seconds_sum llm_d_epp_request_ttft_seconds_count
+      llm_d_epp_flow_control_queue_size inference_extension_flow_control_queue_size
+      llm_d_epp_flow_control_queue_bytes inference_extension_flow_control_queue_bytes
+      llm_d_epp_flow_control_request_enqueue_duration_seconds_count
+      inference_extension_flow_control_request_enqueue_duration_seconds_count
+      llm_d_epp_scheduler_attempts_total inference_extension_scheduler_attempts_total
+      llm_d_epp_flow_control_request_queue_duration_seconds_bucket llm_d_epp_flow_control_pool_saturation
+      llm_d_epp_flow_control_requests_total
+      kube_pod_info kube_pod_owner kube_replicaset_owner kube_pod_labels kube_pod_status_phase
+      kube_pod_status_ready kube_pod_status_ready_time kube_pod_created kube_pod_start_time
+      kube_pod_deletion_timestamp kube_pod_container_resource_requests kube_node_labels
+      kube_deployment_spec_replicas
+      "
+      rm -rf planner-export
+      mkdir -p planner-export
+      failed=0
+      for m in ${METRICS}; do
+        sel="${m}{namespace='${NAMESPACE}'}"
+        [ "${m}" = kube_node_labels ] && sel="${m}"
+        t=${FROM}
+        while [ "${t}" -lt "${TO}" ]; do
+          end=$(( t + CHUNK )); [ "${end}" -gt "${TO}" ] && end=${TO}
+          out="planner-export/${m//:/_}.${t}.json"
+          curl -sS --fail-with-body ${CURL_OPTS} -G "${PROM_URL}/api/v1/query" -o "${out}" \
+            --data-urlencode "query=${sel}[$(( end - t ))s]" --data-urlencode "time=${end}" \
+            || { echo "FAILED: ${m} at ${t}"; failed=1; }
+          t=${end}
+        done
+      done
+      echo "failed=${failed}"
+  describe:
+    note: |
+      What loading the export needs and Prometheus does not hold: the window, the engine, and the engine
+      arguments of the decode and prefill Deployments (leave PREFILL_DEPLOYMENT empty without one).
+      ENGINE is vllm or sglang; ENGINE_CONTAINER is the engine's container name.
+      It stops, and writes no window.txt, when a Deployment or its container is not found.
+    run: |
+      export ENGINE=vllm
+      export ENGINE_CONTAINER=vllm
+      export DECODE_DEPLOYMENT=<decode deployment>
+      export PREFILL_DEPLOYMENT=
+      engine_args() {
+        out=$(kubectl -n "${NAMESPACE}" get deploy "$1" -o json | jq -r --arg c "${ENGINE_CONTAINER}" '
+          [.spec.template.spec.containers[] | select(.name == $c) | (.command // []) + (.args // []) | .[]
+           | gsub("\n"; " ")
+           | if test("^[[{]") then (try (fromjson | tojson) catch .) else . end]
+          | join(" ")')
+        [ -n "${out}" ] || { echo "no container ${ENGINE_CONTAINER} with a command or args in Deployment $1" >&2; return 1; }
+        echo "${out}"
+      }
+      rm -f planner-export/window.txt
+      (
+        [ -n "${DECODE_DEPLOYMENT}" ] || { echo "set DECODE_DEPLOYMENT" >&2; exit 1; }
+        decode_args=$(engine_args "${DECODE_DEPLOYMENT}") || exit 1
+        prefill_args=
+        if [ -n "${PREFILL_DEPLOYMENT}" ]; then prefill_args=$(engine_args "${PREFILL_DEPLOYMENT}") || exit 1; fi
+        {
+          echo "NAMESPACE=${NAMESPACE}"
+          echo "FROM=${FROM}"
+          echo "TO=${TO}"
+          echo "FROM_ISO=$(jq -rn --argjson t "${FROM}" '$t | todate')"
+          echo "TO_ISO=$(jq -rn --argjson t "${TO}" '$t | todate')"
+          echo "CAPTURE_FROM=$(( FROM + 300 ))"
+          echo "ENGINE=${ENGINE}"
+          echo "DECODE_ARGS=${decode_args}"
+          echo "PREFILL_ARGS=${prefill_args}"
+        } > planner-export/window.txt
+      ) && cat planner-export/window.txt || echo "window.txt NOT written: fix the above, then run this step again"
+      if grep -E '^[A-Z]+_ARGS=.*([$]|sh -c)' planner-export/window.txt 2>/dev/null; then
+        echo "EDIT planner-export/window.txt: the line above is not expanded (see the guide)"
+      fi
+  check:
+    note: |
+      Every chunk saved and a success, then how many series each metric had. It prints bad=0 when nothing is missing.
+      Zero series is fine for a metric your fleet does not export.
+    run: |
+      want=$(( (TO - FROM + CHUNK - 1) / CHUNK ))
+      bad=0
+      for m in ${METRICS}; do
+        have=$(ls planner-export/"${m//:/_}".*.json 2>/dev/null | wc -l)
+        [ "${have}" -eq "${want}" ] || { echo "MISSING: ${m} has ${have} of ${want} chunks"; bad=1; }
+      done
+      for f in planner-export/*.json; do
+        jq -e '.status == "success"' "${f}" >/dev/null 2>&1 || { echo "FAILED: ${f}"; bad=1; }
+      done
+      echo "bad=${bad}"
+      for f in planner-export/*.json; do
+        echo "$(jq '.data.result | length' "${f}" 2>/dev/null || echo 0) $(basename "${f}" | cut -d. -f1)"
+      done | awk '{n[$2] += $1} END {for (m in n) print n[m], m}' | sort -n
+  pack:
+    note: One file to send. It holds your metric labels (Pod, node, model names) and engine arguments, no request content.
+    run: |
+      tar czf planner-export.tgz planner-export
+
+load:
+  tools:
+    note: |
+      In a checkout of this repository, with Python 3 and a prometheus binary on PATH (the Prometheus release,
+      or the quay.io/prometheus/prometheus image). Builds whatif and installs promtool.
+    run: |
+      make whatif promtool
+      export PROMTOOL=$(ls bin/promtool-* | sort -V | tail -1)
+      ${PROMTOOL} --version | head -1
+  inspect:
+    note: |
+      The export came from someone else: look before you extract. This lists any entry that is not a plain
+      file name under planner-export/ (a path that climbs out, a link); it should print nothing.
+    run: |
+      tar tzvf planner-export.tgz | awk '$1 !~ /^[-d]/ || $NF !~ /^planner-export\/[A-Za-z0-9_.:-]*$/'
+  convert:
+    note: |
+      Merges the answers into one OpenMetrics file, and prints the lookback to serve them with.
+      It reads only the *.json answers. window.txt is read as data, never sourced, and checked.
+    run: |
+      tar xzf planner-export.tgz --no-same-owner
+      python3 hack/promjson-to-openmetrics.py -o planner-export.om planner-export/*.json
+      while IFS='=' read -r k v; do
+        case "${k}" in NAMESPACE|FROM|TO|FROM_ISO|TO_ISO|CAPTURE_FROM|ENGINE|DECODE_ARGS|PREFILL_ARGS) export "${k}=${v}" ;; esac
+      done < planner-export/window.txt
+      case "${FROM}:${TO}:${CAPTURE_FROM}" in *[!0-9:]*|:*|*::*|*:) echo "STOP: FROM, TO and CAPTURE_FROM in window.txt must be Unix seconds" ;; esac
+      case "${ENGINE}" in vllm|sglang) ;; *) echo "STOP: ENGINE in window.txt must be vllm or sglang" ;; esac
+      echo "namespace ${NAMESPACE}, engine ${ENGINE}, decode arguments: ${DECODE_ARGS}"
+  backfill:
+    note: Writes TSDB blocks.
+    run: |
+      ${PROMTOOL} tsdb create-blocks-from openmetrics planner-export.om planner-tsdb
+  serve:
+    note: |
+      Serve the blocks. A retention longer than their age, or Prometheus deletes them on start.
+      LOOKBACK is the one the converter printed, four scrape intervals: it ends a series about when the original did (see Limits).
+    run: |
+      export LOOKBACK=<the lookback the converter printed, e.g. 60s>
+      touch empty.yml
+      prometheus --config.file=empty.yml --storage.tsdb.path=planner-tsdb \
+        --storage.tsdb.retention.time=10y --query.lookback-delta="${LOOKBACK}" \
+        --web.listen-address=127.0.0.1:9091 &
+      until curl -sf http://127.0.0.1:9091/-/ready >/dev/null; do sleep 1; done
+  capture:
+    note: |
+      Then capture as in the first path, against the local copy, from 5 minutes into the export.
+      whatif takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
+    run: |
+      bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
+        --from "${CAPTURE_FROM}" --to "${TO}" --engine "${ENGINE}" --engine-args "${DECODE_ARGS}" \
+        -o run.capture.jsonl.gz

@@ -1,0 +1,10 @@
+kube_pod_labels{label_note="a\"b\\c\nd",namespace="demo",pod="p-1"} 1 1700000000
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-1"} 0.25 1700000000
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-1"} 0.5 1700000015
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-1"} NaN 1700000030.5
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-1"} +Inf 1700000045
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-1"} 1e-3 1700000060
+vllm:kv_cache_usage_perc{model_name="m",namespace="demo",pod="p-2"} 0.75 1700000045
+vllm:request_prompt_tokens_bucket{le="+Inf",model_name="m",namespace="demo",pod="p-1"} 10 1700000000
+vllm:request_prompt_tokens_bucket{le="+Inf",model_name="m",namespace="demo",pod="p-1"} 12 1700000015
+# EOF

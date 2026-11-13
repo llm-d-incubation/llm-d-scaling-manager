@@ -128,6 +128,11 @@ installed.
 | Recording | a `.jsonl.gz` recording, replayed to a cycle (`whatif ... --recording`) | fixed | yes, in the CLI | v1 |
 | Controller | the controller's in-memory learned state for the model, at its last cycle | one cycle, 15 s | no: the read-only handler in [Data per mode](slo-capacity-planner.md#data-per-mode) | later |
 
+To record a window, with `whatif` or with only curl and jq, see
+[Record a window for the capacity planner](../guides/record-for-capacity-planner/).
+The series both read are listed in
+[Metrics the capacity planner needs](../reference/capacity-planner-metrics.md).
+
 The learned-state ConfigMap ([snapshot](learned-state-snapshot.md)) is not a
 source on its own. It holds k2, throughput windows, ITL baselines and start
 estimates, but not `V_P`, `a`, `f` or the prompt spread, so it cannot price
