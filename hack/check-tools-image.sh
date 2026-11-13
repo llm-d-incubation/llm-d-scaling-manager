@@ -458,9 +458,11 @@ if [ -n "$IMG" ]; then
     uid="$(docker run --rm --entrypoint /usr/bin/id "$IMG" -u)"
     if [ "$uid" != 0 ]; then ok "runs as a non-root user by default (uid $uid)"; else fail "the image runs as root"; fi
     v="$(tools version 2>&1)" || true
-    want_yq="$(sed -n 's/^ARG YQ_VERSION=//p' "$ROOT/Dockerfile.tools")"
-    want_jq="$(sed -n 's/^ARG JQ_VERSION=//p' "$ROOT/Dockerfile.tools")"
-    want_kubectl="$(sed -n 's#^FROM registry.k8s.io/kubectl:\(v[0-9.]*\)@.*#\1#p' "$ROOT/Dockerfile.tools")"
+    # A Windows checkout (core.autocrlf) gives Dockerfile.tools CRLF endings.
+    dockerfile="$(tr -d '\r' < "$ROOT/Dockerfile.tools")"
+    want_yq="$(printf '%s\n' "$dockerfile" | sed -n 's/^ARG YQ_VERSION=//p')"
+    want_jq="$(printf '%s\n' "$dockerfile" | sed -n 's/^ARG JQ_VERSION=//p')"
+    want_kubectl="$(printf '%s\n' "$dockerfile" | sed -n 's#^FROM registry.k8s.io/kubectl:\(v[0-9.]*\)@.*#\1#p')"
     for want in "yq      $want_yq" "jq      $want_jq" "kubectl $want_kubectl"; do
         if [ -n "${want##* }" ] && printf '%s\n' "$v" | grep -qxF "$want"; then ok "version: $want"; else fail "version does not print '$want': $(printf '%s' "$v" | tr '\n' ';')"; fi
     done
