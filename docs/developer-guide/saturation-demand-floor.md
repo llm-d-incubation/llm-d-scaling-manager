@@ -173,7 +173,11 @@ so each must keep up with all of it), and on the total otherwise.
   `floor.LowerBoundGrowthCap` of its ready supply (`LowerBoundMaxGrowth`, 2,
   at the scale-up threshold), one doubling of the ready fleet at a time, as
   the floor caps a prefill lower bound. Demand prefill holds of its own is
-  never cut. With the switch off (a replay), the share is dropped, as before:
+  never cut. The doubling can repeat once per replica start while the queue
+  stands: the engine's `RequiredCapacity` is `2 x ready - anticipated` at
+  the cap, so replicas already ordered and starting are not ordered again,
+  and the share bounds it. A prefill with no Ready replica has a cap of
+  zero and keeps none of the share, as before. With the switch off (a replay), the share is dropped, as before:
   a prefill replica holds a prompt only for its prefill time plus the
   hand-off.
 

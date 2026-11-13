@@ -190,8 +190,16 @@ are in [analyzer evidence](../developer-guide/analyzer-evidence.md):
   before the replicas arrived. This can lower the demand, so it is done only
   when the floor may order on its mu and the arrival rate accounts for what the
   replicas already hold; in the first minute of a load step the arrival rate
-  still reads the minute before, and the queue keeps its full charge. Prefill's share of the scheduler queue is dropped:
-  more prefill replicas do not fix a full decode.
+  still reads the minute before, and the queue keeps its full charge.
+- **A prefill with no measured throughput keeps the router's prompts, capped.**
+  The prompts waiting in the router are work prefill takes first, so they stay
+  in prefill's demand while prefill has no `mu` of its own. They are capped so
+  that prefill's demand is at most twice what its Ready replicas hold, one
+  doubling at a time: the cap can order again after each round of replicas
+  becomes Ready while the queue stands, never past what the queue itself
+  asks for. A prefill with no Ready replica keeps none of the share. While
+  decode is full and queued, prefill's own demand is held (neither ordered nor
+  released), and the router's share is exempt from that hold.
 
 **Prefill's mu without a prefill saturation.** On a P/D model prefill rarely
 saturates on its own. Its queue usually builds because decode is full, and a

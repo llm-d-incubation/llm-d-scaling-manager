@@ -86,9 +86,12 @@ func (f prefillRouterFleet) price(stub func(*SaturationAnalyzer)) (prefill, tota
 }
 
 // checkFloorPrefillRouterPrompts: a P/D fleet whose prefill has no mu, 1 to 4
-// replicas of each role, decode with or without a mu, and a router queue of
-// 10 to 500 requests of 1000 to 8000 prompt tokens (less a prefix-cache hit
-// of up to half). Prefill's demand keeps the queue's prompt tokens -- work
+// replicas of each role, decode with or without a mu, and a router queue. On
+// even seeds the queue is 10 to 500 requests of 1000 to 8000 prompt tokens
+// (less a prefix-cache hit of up to half), mostly under the cap. On odd seeds
+// it is 2000 to 4000 requests of 6000 to 8000 prompt tokens (less a hit of up
+// to a quarter), at least 9M tokens: over the cap of the largest fleet drawn
+// (4 replicas), so the cap binds. Prefill's demand keeps the queue's prompt tokens -- work
 // prefill takes first -- up to one doubling of its ready supply
 // (floor.LowerBoundGrowthCap), and never under its own resident KV. stub,
 // when set, edits the analyzer before it prices (a mutant).
@@ -97,11 +100,17 @@ func checkFloorPrefillRouterPrompts(stub func(*SaturationAnalyzer)) func(uint64)
 		r := propRand(seed)
 		queued := float64(10 + r.IntN(491))
 		in, out := 1000+7000*r.Float64(), 100+1900*r.Float64()
+		hit := 0.5 * r.Float64()
+		if seed%2 == 1 {
+			queued = float64(2000 + r.IntN(2001))
+			in = 6000 + 2000*r.Float64()
+			hit = 0.25 * r.Float64()
+		}
 		f := prefillRouterFleet{
 			prefillReplicas: 1 + r.IntN(4), decodeReplicas: 1 + r.IntN(4),
 			prefillResident: 20_000 + 200_000*r.Float64(), decodeResident: 100_000 + 600_000*r.Float64(),
 			queued:       queued,
-			prefillShare: queued * in * (1 - 0.5*r.Float64()),
+			prefillShare: queued * in * (1 - hit),
 			decodeShare:  queued * out,
 			lambda:       1 + 30*r.Float64(),
 		}

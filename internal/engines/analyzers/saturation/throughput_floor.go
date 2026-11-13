@@ -655,11 +655,13 @@ const SwitchPrefillKeepsRouterPrompts = "saturation-prefill-keeps-router-prompts
 // come back out; the engines' own queued requests go into the floor as that
 // role's backlog, and the scheduler's standing queue goes in as prefill's. For
 // prefill without a mu, the scheduler-queue charge stays in its demand
-// (SwitchPrefillKeepsRouterPrompts). With the switch off it is dropped, and
-// that is logged at the per-replica verbosity when it changes the figure:
-// it is the normal state of a P/D fleet, so an INFO line every cycle would be
-// noise, but a reader comparing scheduler-queue-demand's byRole with
-// RoleDemand needs to find the gap somewhere.
+// (SwitchPrefillKeepsRouterPrompts), capped at floor.LowerBoundGrowthCap of
+// its ready supply; a cap that cuts it logs scheduler-queue-prefill-share-
+// capped at INFO, since it changes the figure an operator sees. With the
+// switch off (a replay) the charge is dropped, and that is logged at
+// perReplicaLogLevel: it was the normal state of a P/D fleet, so an INFO line
+// every cycle would be noise, but a reader comparing scheduler-queue-demand's
+// byRole with RoleDemand needs to find the gap somewhere.
 //
 // Logged at INFO when it binds, with the terms: a floor that changes a
 // decision is worth a line, and which of lambda, mu, P and the backlog moved
@@ -891,7 +893,7 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 				if before, ok := roleDemand[domain.RolePrefill]; ok {
 					roleDemand[domain.RolePrefill] = before - share
 					totalDemand = max(totalDemand-share, 0)
-					logger.V(logging.DEFAULT).Info("scheduler-queue-prefill-share-dropped",
+					logger.V(perReplicaLogLevel).Info("scheduler-queue-prefill-share-dropped",
 						"modelID", input.ModelID, "namespace", input.Namespace,
 						"eppQueueSize", eppQueued, "droppedTokens", share,
 						"prefillDemandBefore", before, "prefillDemandAfter", before-share,

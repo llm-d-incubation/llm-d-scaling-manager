@@ -28,6 +28,9 @@
 //   - A backlog is priced as work to drain -- B requests within
 //     BacklogDrainSeconds on top of lambda arriving -- not as simultaneous
 //     residency, which sized fleets to hold queues that were gone before the
-//     replicas arrived. Prefill's share of the scheduler queue is dropped
-//     entirely: more prefill replicas do not fix a decode that is full.
+//     replicas arrived. A prefill with no mu of its own keeps its share of
+//     the scheduler queue (the saturation analyzer's
+//     SwitchPrefillKeepsRouterPrompts), capped at LowerBoundGrowthCap of
+//     its ready supply; it was dropped before, which left a backlog waiting
+//     in the router uncharged.
 package floor

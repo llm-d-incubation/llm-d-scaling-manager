@@ -77,13 +77,24 @@ replica.
 start orders capacity that drains nothing, and a replica on these stands takes
 60-100 s to become Ready.
 
-### Prefill's share of the scheduler queue is dropped
+### Prefill's share of the scheduler queue: dropped, then kept and capped
 
 *Same stand.* A prefill replica holds a prompt's KV for its prefill time plus
 the hand-off to decode; the only thing that makes it hold more is decode being
 saturated, which more prefill replicas do not fix. Every prefill replica
 beyond the first at the first ramp was ordered by that term, and none of them
-prefilled anything a single one could not.
+prefilled anything a single one could not. So the share was dropped while
+prefill had no mu.
+
+That is history. Dropped, a backlog that waits in the router was never charged
+to prefill, and it never opens the gate that would learn prefill's mu
+(llm-d-incubation/llm-d-scaling-manager#51). Since then a prefill with no mu
+keeps the share (`SwitchPrefillKeepsRouterPrompts`), capped at
+`floor.LowerBoundGrowthCap` of its ready supply: one doubling of the ready
+prefill fleet at a time. The stand's case is still covered: while decode is
+full and queued, `holdPrefillDemand` (`analyze.go`, after the floor) holds
+prefill's demand, neither ordering nor releasing it, so a full decode orders
+no prefill. That case's fixture does not move.
 
 ## The hold rules
 
