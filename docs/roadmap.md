@@ -60,9 +60,11 @@ state. The gaps themselves are summarized in [known gaps](why.md#known-gaps).
   `make scaledobjects-rewire` fixes it
   ([KEDA](reference/keda.md#unwired-hpa-before-keda-220)), and so does the
   opt-in controller repair, `KEDA_HPA_REPAIR`
-  ([KEDA](reference/keda.md#the-controller-repair-keda_hpa_repair)). Left:
-  measure it on a real KEDA 2.18 or 2.19 install, then consider turning it on
-  by default when the installer finds a KEDA below 2.20.
+  ([KEDA](reference/keda.md#the-controller-repair-keda_hpa_repair)). On kind
+  with KEDA 2.18.1 it wired an HPA about 60 seconds after the controller came
+  back. Left: run it on KEDA 2.19 and on a cluster with real traffic, then
+  consider turning it on by default when the installer finds a KEDA below
+  2.20.
   [#45](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues/45)
 - **Make surviving a restart the default.** By default what the controller
   learns about a model's capacity lives in memory, so a restart or a leader

@@ -3298,6 +3298,11 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@# patches a paused ScaledObject, another scaler's trigger, or reads an
 	@# unreadable HPA as wired all parse, and all exit 0.
 	@bash hack/check-scaledobject-rewire.sh
+	@echo "Checking the KEDA HPA repair grant..."
+	@# Runs the installer's KEDA_HPA_REPAIR handling against a stubbed kubectl:
+	@# a revoke under the wrong names, a Forbidden delete read as removed, or
+	@# an uninstall that leaves the grant all parse, and all exit 0.
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-keda-hpa-repair.sh
 	@echo "Checking the EPP /metrics authentication grant..."
 	@# Runs epp-metrics-auth against a stubbed kubectl. A grant that binds the
 	@# wrong ServiceAccount, reads a Forbidden list as no pools, or binds twice

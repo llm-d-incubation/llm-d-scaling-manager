@@ -58,7 +58,7 @@ for fn in llmsm_append_crb_name_patches llmsm_append_metrics_reader_subject_patc
     }
 done
 
-EXPECT_CASES=88
+EXPECT_CASES=89
 RAN=0
 FAILED=0
 
@@ -586,13 +586,40 @@ render_hpa_repair() {
     llmsm_append_crb_name_patches "$dir/kustomization.yaml" wns
     "${KBUILD[@]}" "$dir"
 }
+# hpa_grants echoes kind/name:verbs of every Role or ClusterRole with a rule
+# that reaches HPAs: resource horizontalpodautoscalers or a wildcard, in API
+# group autoscaling or a wildcard. A wildcard is a leak, not a pass. The
+# wildcard is matched with test, because == "*" is a glob that matches any
+# string.
 hpa_grants() {
-    yq -N -r 'select((.kind == "Role" or .kind == "ClusterRole") and ([.rules[]?.resources[]?] | any_c(. == "horizontalpodautoscalers"))) | .kind + "/" + .metadata.name + ":" + ([.rules[] | select(.resources[]? == "horizontalpodautoscalers") | .verbs[]] | join(","))'
+    yq -N -r '
+        select(.kind == "Role" or .kind == "ClusterRole")
+        | .hpa = [.rules[]? | select(([.resources[]? | select(. == "horizontalpodautoscalers" or test("^[*]$"))] | length > 0)
+            and ([.apiGroups[]? | select(. == "autoscaling" or test("^[*]$"))] | length > 0))]
+        | select(.hpa | length > 0)
+        | .kind + "/" + .metadata.name + ":" + ([.hpa[].verbs[]] | join(","))'
 }
 hpa_switch() {
     yq -N -r 'select(.kind == "Deployment" and .metadata.name == "scaling-manager-controller-manager") | .spec.template.spec.containers[0].env[] | select(.name == "KEDA_HPA_REPAIR") | .value'
 }
 wns_suffix="$(llmsm_ns_suffix wns)"
+# The helper itself: a wildcard resource or API group is a grant, not a pass.
+wildcards="$WORK/hpa-wildcards.yaml"
+cat > "$wildcards" <<'YAML'
+kind: ClusterRole
+metadata: {name: any}
+rules: [{apiGroups: [autoscaling], resources: ["*"], verbs: [get]}]
+---
+kind: Role
+metadata: {name: group}
+rules: [{apiGroups: ["*"], resources: [horizontalpodautoscalers], verbs: [list]}]
+---
+kind: Role
+metadata: {name: other}
+rules: [{apiGroups: [apps], resources: [deployments], verbs: [get]}]
+YAML
+check 'hpa_grants: a wildcard resource or API group reaches HPAs too' \
+    'ClusterRole/any:get|Role/group:list' "$(hpa_grants < "$wildcards" | paste -sd'|' -)"
 for overlay in cluster-scoped/kubernetes cluster-scoped/openshift namespace-scoped/kubernetes namespace-scoped/openshift; do
     out="$(render_hpa_repair "$overlay" false)" || out=''
     [ -n "$out" ] || { printf 'FATAL: %s did not render.\n' "$overlay" >&2; exit 1; }

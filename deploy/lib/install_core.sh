@@ -379,6 +379,11 @@ $(pl_kueue_borrowers_besides "$LLMSM_NS")"
 main() {
     parse_args "$@"
 
+    # KEDA_HPA_REPAIR decides a grant, so a value that is neither true nor
+    # false stops every path here, the check included, naming the variable.
+    # The undeploy ignores it: it always removes the grant.
+    [ "$UNDEPLOY" = "true" ] || llmsm_keda_hpa_repair_on || true
+
     # RENDER=<dir>: the cluster-admin phase, written to <dir> for an admin to
     # run instead of applied (deploy/lib/common.sh, "Render mode"). First, so
     # every kubectl and helm call below goes through it.

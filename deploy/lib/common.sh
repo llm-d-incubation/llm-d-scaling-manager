@@ -789,25 +789,69 @@ llmsm_append_keda_hpa_repair_component() {
     fi
 }
 
+# llmsm_delete_hpa_repair_grant deletes the objects its arguments name, one
+# "<kind> <name> [<namespace>]" per argument and one kubectl call each, so
+# render mode records each one. It echoes forbidden when any delete was
+# denied, deleted when one removed something (render mode: recorded in
+# admin.sh), and none otherwise. A denied delete is never "absent".
+llmsm_delete_hpa_repair_grant() {
+    local spec kind name ns out state=none
+    for spec in "$@"; do
+        read -r kind name ns <<< "$spec"
+        out="$(kubectl delete "$kind" "$name" ${ns:+-n "$ns"} --ignore-not-found 2>&1)" || true
+        if printf '%s' "$out" | grep -qi 'forbidden'; then
+            state=forbidden
+        elif [ "$state" = none ] && printf '%s' "$out" | grep -q 'deleted'; then
+            state=deleted
+        fi
+    done
+    echo "$state"
+}
+
+# llmsm_hpa_repair_delete_cmd echoes the kubectl commands that delete the
+# objects named like llmsm_delete_hpa_repair_grant's arguments, for a message.
+llmsm_hpa_repair_delete_cmd() {
+    local spec kind name ns out=""
+    for spec in "$@"; do
+        read -r kind name ns <<< "$spec"
+        out="${out:+$out; }kubectl delete $kind $name${ns:+ -n $ns} --ignore-not-found"
+    done
+    printf '%s' "$out"
+}
+
 # llmsm_revoke_keda_hpa_repair deletes the KEDA HPA repair grant an earlier
 # install made in the controller's namespace or cluster-wide, for an install
-# without KEDA_HPA_REPAIR=true. The grant follows the variable on every
-# prereqs run. Forbidden is reported, not taken for "absent".
+# without KEDA_HPA_REPAIR=true: the grant follows the variable on every run of
+# the phases that own RBAC. The names are the ones the install renders
+# (components/keda-hpa-repair*, renamed per install by
+# llmsm_append_crb_name_patches). Forbidden is reported with the command an
+# admin runs, not taken for "absent". The controller's own phase is separate:
+# a split install that still runs it with KEDA_HPA_REPAIR=true keeps the
+# repair on without the grant, so the message says to re-run it.
 llmsm_revoke_keda_hpa_repair() {
-    local out suffix
+    local suffix state specs=()
     suffix="$(llmsm_ns_suffix "$LLMSM_NS")"
     if [ "$(llmsm_install_scope)" = "namespace" ]; then
-        out="$(kubectl delete -n "$LLMSM_NS" rolebinding/scaling-manager-keda-hpa-repair-rolebinding \
-            role/scaling-manager-keda-hpa-repair-role --ignore-not-found 2>&1)"
+        specs=("rolebinding scaling-manager-keda-hpa-repair-rolebinding $LLMSM_NS"
+               "role scaling-manager-keda-hpa-repair-role $LLMSM_NS")
     else
-        out="$(kubectl delete clusterrolebinding/scaling-manager-keda-hpa-repair-rolebinding-"$suffix" \
-            clusterrole/scaling-manager-keda-hpa-repair-role-"$suffix" --ignore-not-found 2>&1)"
+        specs=("clusterrolebinding scaling-manager-keda-hpa-repair-rolebinding-$suffix"
+               "clusterrole scaling-manager-keda-hpa-repair-role-$suffix")
     fi
-    if printf '%s' "$out" | grep -qi 'forbidden'; then
-        log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install may have made could not be checked or removed (Forbidden). A cluster admin removes it with the same command."
-    elif printf '%s' "$out" | grep -q 'deleted'; then
-        log_info "KEDA_HPA_REPAIR is not true: removed the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made"
-    fi
+    state="$(llmsm_delete_hpa_repair_grant "${specs[@]}")"
+    case "$state" in
+        forbidden)
+            log_warning "KEDA_HPA_REPAIR is not true, so the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install may have made should go, and you may not delete it (Forbidden). A cluster admin runs:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")"
+            ;;
+        deleted)
+            if llmsm_render_active; then
+                log_info "KEDA_HPA_REPAIR is not true: admin.sh deletes the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made."
+            else
+                log_info "KEDA_HPA_REPAIR is not true: removed the HPA grant (get, list, patch on horizontalpodautoscalers) an earlier install made."
+            fi
+            log_info "  A split install: re-run the controller phase without it too ($(llmsm_make_cmd deploy-scaling-manager INSTALL_PHASE=scaling-manager)), which turns the repair off in the Deployment. Until then the controller keeps trying, and LLMSMKEDAHPAWiringUnread fires."
+            ;;
+    esac
     return 0
 }
 

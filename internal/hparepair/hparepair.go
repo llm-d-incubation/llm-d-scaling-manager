@@ -18,6 +18,11 @@
 // ScaledObject does not make KEDA ask again.
 //
 // It is off unless KEDA_HPA_REPAIR is true, and runs on the leader only.
+//
+// Run on kind with KEDA 2.18.1: an HPA KEDA built while the controller was
+// down was wired about 60 seconds after the controller came back, on the
+// second request (the first met KEDA's still-failing connection). KEDA 2.19
+// was not run.
 package hparepair
 
 import (
@@ -50,11 +55,14 @@ const Annotation = "scaling-manager.llmd.ai/keda-rewire"
 
 // Event reasons on the ScaledObject.
 const (
-	// EventRewireRequested: the HPA was annotated so KEDA derives it again.
+	// EventRewireRequested is the reason of the Normal event that says the
+	// HPA was annotated so KEDA derives it again.
 	EventRewireRequested = "HPARewireRequested"
-	// EventRewireFailed: the annotation could not be written.
+	// EventRewireFailed is the reason of the Warning event that says the
+	// annotation could not be written.
 	EventRewireFailed = "HPARewireFailed"
-	// EventRewired: KEDA put the scaler's metric on the HPA after a request.
+	// EventRewired is the reason of the Normal event that says KEDA put the
+	// scaler's metric on the HPA after one or more requests.
 	EventRewired = "HPARewired"
 )
 
@@ -72,6 +80,9 @@ const (
 	DefaultMinBackoff = 30 * time.Second
 	// DefaultMaxBackoff caps the doubling wait between requests.
 	DefaultMaxBackoff = 10 * time.Minute
+	// DefaultVerdictTTL is how long what one ScaledObject read said about an
+	// HPA is kept while the HPA's generation and owner do not change.
+	DefaultVerdictTTL = 10 * time.Minute
 )
 
 // Repairer finds and annotates unwired HPAs. Build it with its exported
@@ -91,12 +102,26 @@ type Repairer struct {
 	// Namespaces are the namespaces to read. Empty reads every namespace.
 	Namespaces []string
 
-	Interval   time.Duration
-	Grace      time.Duration
+	// Interval is how often a pass runs. Zero takes DefaultInterval.
+	Interval time.Duration
+	// Grace is how old an HPA must be before it counts as unwired. Zero
+	// takes DefaultGrace.
+	Grace time.Duration
+	// MinBackoff is the wait after the first request on an HPA. Zero takes
+	// DefaultMinBackoff.
 	MinBackoff time.Duration
+	// MaxBackoff caps the doubling wait between requests. Zero takes
+	// DefaultMaxBackoff.
 	MaxBackoff time.Duration
+	// VerdictTTL is how long a ScaledObject read is reused for an HPA whose
+	// generation and owner have not changed. Zero takes DefaultVerdictTTL.
+	VerdictTTL time.Duration
 
 	now func() time.Time
+	// verdicts is what the last ScaledObject read said about each HPA, by
+	// UID, so an HPA that is not this scaler's, or is wired, costs one read
+	// per VerdictTTL rather than one per pass. Only touched from Pass.
+	verdicts map[types.UID]*verdict
 	// tracked is the state per HPA, by UID, of every HPA the repair has asked
 	// about at least once. Only touched from Pass.
 	tracked map[types.UID]*attempt
@@ -106,6 +131,20 @@ type Repairer struct {
 	// unread remembers whether the last pass was unread, so the change is
 	// logged once.
 	unread bool
+}
+
+// verdict is what one ScaledObject read said about an HPA. It holds while
+// the HPA keeps generation and owner, until until.
+type verdict struct {
+	generation int64
+	owner      types.UID
+	until      time.Time
+	// ours are this scaler's trigger indices; empty when the ScaledObject
+	// is not this scaler's, is paused, or is not the HPA's owner any more.
+	// A scalingModifiers HPA carries composite-metric, never the triggers'
+	// own metrics, so hpaCarries is false for it and it is read every pass:
+	// only the ScaledObject's status shows its wiring.
+	ours []int
 }
 
 // attempt is the repair's state for one HPA.
@@ -181,6 +220,14 @@ func (r *Repairer) Pass(ctx context.Context) Result {
 	logger := ctrl.LoggerFrom(ctx)
 	if r.tracked == nil {
 		r.tracked = map[types.UID]*attempt{}
+	}
+	if r.verdicts == nil {
+		r.verdicts = map[types.UID]*verdict{}
+	}
+	for uid, v := range r.verdicts {
+		if !r.clock().Before(v.until) {
+			delete(r.verdicts, uid)
+		}
 	}
 	for _, a := range r.tracked {
 		a.seen = false
@@ -262,15 +309,19 @@ func (r *Repairer) check(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 	if owner == nil {
 		return
 	}
-	// The common case costs no read: an HPA that already carries this
-	// scaler's metric is wired. Not for one the repair asked about, whose
-	// recovery is reported below.
-	if r.tracked[hpa.UID] == nil && carriesScalerMetric(hpa) {
-		return
+	// Reuse the last read while the HPA keeps its generation and owner: an
+	// HPA that is not this scaler's (or is paused) needs nothing, and one of
+	// ours whose metrics are all on it is wired. Not for an HPA the repair
+	// asked about, whose recovery is reported below with the ScaledObject.
+	if v := r.verdicts[hpa.UID]; v != nil && v.generation == hpa.Generation && v.owner == owner.UID && r.tracked[hpa.UID] == nil {
+		if len(v.ours) == 0 || hpaCarries(hpa, v.ours) {
+			return
+		}
 	}
 	var so kedav1alpha1.ScaledObject
 	if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: hpa.Namespace, Name: owner.Name}, &so); err != nil {
 		if apierrors.IsNotFound(err) {
+			delete(r.verdicts, hpa.UID)
 			return // being deleted: KEDA's garbage, not ours to wire
 		}
 		// Unknown, not "not ours": keep what was known about it.
@@ -283,6 +334,9 @@ func (r *Repairer) check(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 			"namespace", hpa.Namespace, "scaledObject", owner.Name, "hpa", hpa.Name, "forbidden", apierrors.IsForbidden(err), "error", err.Error())
 		return
 	}
+	v := &verdict{generation: hpa.Generation, owner: owner.UID,
+		until: r.clock().Add(orDefault(r.VerdictTTL, DefaultVerdictTTL))}
+	r.verdicts[hpa.UID] = v
 	if so.UID != owner.UID {
 		return // the HPA belongs to an earlier ScaledObject of that name
 	}
@@ -290,6 +344,7 @@ func (r *Repairer) check(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 	if len(idx) == 0 || paused(&so) {
 		return
 	}
+	v.ours = idx
 	a := r.tracked[hpa.UID]
 	if Wired(&so, hpa, idx) {
 		if a != nil && a.requests > 0 {
@@ -454,31 +509,29 @@ func Wired(so *kedav1alpha1.ScaledObject, hpa *autoscalingv2.HorizontalPodAutosc
 	return true
 }
 
-// carriesScalerMetric reports whether hpa has an External metric
-// s<index>-<scaler.MetricName> and no composite-metric: KEDA wired a trigger
-// of this scaler (of this install or another, which is not ours to repair
-// either). With scalingModifiers the HPA carries composite-metric instead,
-// which says nothing about our trigger, so that needs the ScaledObject.
+// hpaCarries reports whether hpa has the External metric
+// s<index>-<scaler.MetricName> of every trigger index in idx. Which indices
+// are this scaler's only the ScaledObject says, so idx comes from a read: an
+// HPA with s0 wired cannot tell on its own whether an s1 of ours failed.
 //
 // KEDA labels its HPAs app.kubernetes.io/managed-by=keda-operator, but copies
 // the ScaledObject's own labels over it, so a Helm- or GitOps-owned
 // ScaledObject's HPA reads managed-by=Helm: the list is not narrowed by it.
-func carriesScalerMetric(hpa *autoscalingv2.HorizontalPodAutoscaler) bool {
-	found := false
-	for _, m := range hpa.Spec.Metrics {
-		if m.Type != autoscalingv2.ExternalMetricSourceType || m.External == nil {
-			continue
+func hpaCarries(hpa *autoscalingv2.HorizontalPodAutoscaler, idx []int) bool {
+	for _, i := range idx {
+		want := fmt.Sprintf("s%d-%s", i, scaler.MetricName)
+		found := false
+		for _, m := range hpa.Spec.Metrics {
+			if m.Type == autoscalingv2.ExternalMetricSourceType && m.External != nil && m.External.Metric.Name == want {
+				found = true
+				break
+			}
 		}
-		name := m.External.Metric.Name
-		if name == kedav1alpha1.CompositeMetricName {
+		if !found {
 			return false
 		}
-		idx, rest, ok := strings.Cut(name, "-")
-		if ok && rest == scaler.MetricName && len(idx) > 1 && idx[0] == 's' && strings.Trim(idx[1:], "0123456789") == "" {
-			found = true
-		}
 	}
-	return found
+	return true
 }
 
 func hasPrefix(names []string, prefix string) bool {

@@ -106,6 +106,7 @@ type harness struct {
 	r        *Repairer
 	now      time.Time
 	patches  int
+	gets     map[string]int
 	reg      *prometheus.Registry
 	listErr  error
 	getErr   error
@@ -114,7 +115,7 @@ type harness struct {
 
 func newHarness(t *testing.T, objs ...client.Object) *harness {
 	t.Helper()
-	h := &harness{t: t, now: t0.Add(10 * time.Minute)}
+	h := &harness{t: t, now: t0.Add(10 * time.Minute), gets: map[string]int{}}
 	h.reg = prometheus.NewRegistry()
 	if err := metrics.InitMetrics(h.reg); err != nil {
 		t.Fatal(err)
@@ -128,6 +129,9 @@ func newHarness(t *testing.T, objs ...client.Object) *harness {
 				return c.List(ctx, list, opts...)
 			},
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*kedav1alpha1.ScaledObject); ok {
+					h.gets[key.Name]++
+				}
 				if _, ok := obj.(*kedav1alpha1.ScaledObject); ok && h.getErr != nil {
 					return h.getErr
 				}
@@ -568,38 +572,132 @@ func TestWiredAndGoneAreForgotten(t *testing.T) {
 	}
 }
 
-// An HPA that already carries this scaler's metric costs no ScaledObject
-// read; one with composite-metric, or one the repair asked about, does.
-func TestAWiredHPAIsNotRead(t *testing.T) {
-	plain := scaledObject("plain", "u1", ourAddr)
-	modifiers := scaledObject("modifiers", "u2", ourAddr)
+// The ScaledObject behind an HPA is read once and reused while the HPA keeps
+// its generation and owner, for VerdictTTL: an HPA of another scaler, or one
+// of ours that is wired, costs one read per TTL, not one per pass. A
+// scalingModifiers HPA of ours is read every pass: only the status shows
+// its wiring.
+func TestAScaledObjectIsReadOncePerVerdict(t *testing.T) {
+	foreign := scaledObject("foreign", "u1", "scaling-manager-external-scaler.someone-else:9090")
+	foreignHPA := hpaFor(foreign, t0, externalMetric("s0-other"))
+	wired := scaledObject("wired", "u2", ourAddr)
+	wired.Status.ExternalMetricNames = []string{"s0-scaling-manager-desired-replicas"}
+	modifiers := scaledObject("modifiers", "u3", ourAddr)
 	modifiers.Spec.Advanced = &kedav1alpha1.AdvancedConfig{ScalingModifiers: kedav1alpha1.ScalingModifiers{Formula: "s0", Target: "1"}}
-	h := newHarness(t,
-		plain, hpaFor(plain, t0, externalMetric("s0-scaling-manager-desired-replicas")),
+	modifiers.Status.ExternalMetricNames = []string{"s0-scaling-manager-desired-replicas"}
+	h := newHarness(t, foreign, foreignHPA,
+		wired, hpaFor(wired, t0, externalMetric("s0-scaling-manager-desired-replicas")),
 		modifiers, hpaFor(modifiers, t0, externalMetric(kedav1alpha1.CompositeMetricName)))
-	h.getErr = apierrors.NewForbidden(schema.GroupResource{Group: "keda.sh", Resource: "scaledobjects"}, "", nil)
-	res := h.pass()
-	if len(res.Unread) != 1 || res.Unread[0] != modelNS+"/modifiers" {
-		t.Errorf("unread %v, want only %s/modifiers: the wired HPA must not be read", res.Unread, modelNS)
+
+	h.pass()
+	if h.gets["foreign"] != 1 || h.gets["wired"] != 1 || h.gets["modifiers"] != 1 {
+		t.Fatalf("first pass read %v, want each ScaledObject once", h.gets)
 	}
+	h.now = h.now.Add(DefaultInterval)
+	h.pass()
+	if h.gets["foreign"] != 1 || h.gets["wired"] != 1 {
+		t.Errorf("second pass read %v, want foreign and wired from the verdict", h.gets)
+	}
+	if h.gets["modifiers"] != 2 {
+		t.Errorf("modifiers read %d times, want every pass", h.gets["modifiers"])
+	}
+
+	// A new generation is a new read.
+	var cur autoscalingv2.HorizontalPodAutoscaler
+	if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(foreignHPA), &cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Generation = 7
+	if err := h.client.Update(context.Background(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	h.pass()
+	if h.gets["foreign"] != 2 {
+		t.Errorf("foreign read %d times after a new generation, want 2", h.gets["foreign"])
+	}
+
+	// So is an expired verdict.
+	h.now = h.now.Add(DefaultVerdictTTL)
+	h.pass()
+	if h.gets["foreign"] != 3 || h.gets["wired"] != 2 {
+		t.Errorf("after the TTL read %v, want foreign 3 and wired 2", h.gets)
+	}
+}
+
+// Two triggers of ours: s0 wired, s1 failed. The HPA alone looks wired (it
+// carries s0), so this needs the ScaledObject; the verdict that says s0 and
+// s1 are ours keeps it unwired on later passes too.
+func TestTwoOfOurTriggersOneUnwired(t *testing.T) {
+	so := scaledObject("two", "u1", ourAddr, ourAddr)
+	so.Status.ExternalMetricNames = []string{"s0-scaling-manager-desired-replicas"}
+	hpa := hpaFor(so, t0, externalMetric("s0-scaling-manager-desired-replicas"))
+	h := newHarness(t, so, hpa)
+	if res := h.pass(); res.Unwired[modelNS] != 1 || res.Requested[modelNS] != 1 {
+		t.Fatalf("pass 1 = %+v, want the HPA unwired and asked about", res)
+	}
+	h.now = h.now.Add(time.Hour)
+	if res := h.pass(); res.Unwired[modelNS] != 1 || res.Requested[modelNS] != 1 {
+		t.Errorf("pass 2 = %+v, want it still unwired and asked about again", res)
+	}
+
+	// Wired, then KEDA drops s1 again: the verdict does not hide it.
+	both := scaledObject("both", "u2", ourAddr, ourAddr)
+	both.Status.ExternalMetricNames = []string{"s0-scaling-manager-desired-replicas", "s1-scaling-manager-desired-replicas"}
+	bothHPA := hpaFor(both, t0, externalMetric("s0-scaling-manager-desired-replicas"), externalMetric("s1-scaling-manager-desired-replicas"))
+	h2 := newHarness(t, both, bothHPA)
+	if res := h2.pass(); res.Unwired[modelNS] != 0 {
+		t.Fatalf("both wired: %+v", res)
+	}
+	var cur autoscalingv2.HorizontalPodAutoscaler
+	if err := h2.client.Get(context.Background(), client.ObjectKeyFromObject(bothHPA), &cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Spec.Metrics = cur.Spec.Metrics[:1]
+	if err := h2.client.Update(context.Background(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	h2.now = h2.now.Add(DefaultInterval)
+	if res := h2.pass(); res.Unwired[modelNS] != 1 {
+		t.Errorf("s1 dropped: %+v, want unwired though the verdict was fresh", res)
+	}
+
 	for _, tc := range []struct {
-		name string
-		want bool
+		names []string
+		idx   []int
+		want  bool
 	}{
-		{"s0-scaling-manager-desired-replicas", true},
-		{"s12-scaling-manager-desired-replicas", true},
-		{"s-scaling-manager-desired-replicas", false},
-		{"sx-scaling-manager-desired-replicas", false},
-		{"s0-other", false},
-		{"scaling-manager-desired-replicas", false},
+		{[]string{"s0-scaling-manager-desired-replicas"}, []int{0}, true},
+		{[]string{"s0-scaling-manager-desired-replicas"}, []int{0, 1}, false},
+		{[]string{"s1-scaling-manager-desired-replicas"}, []int{0}, false},
+		{[]string{"s0-other"}, []int{0}, false},
+		{[]string{kedav1alpha1.CompositeMetricName}, []int{0}, false},
 	} {
-		got := carriesScalerMetric(hpaFor(plain, t0, externalMetric(tc.name)))
-		if got != tc.want {
-			t.Errorf("carriesScalerMetric(%q) = %v, want %v", tc.name, got, tc.want)
+		var ms []autoscalingv2.MetricSpec
+		for _, n := range tc.names {
+			ms = append(ms, externalMetric(n))
+		}
+		if got := hpaCarries(hpaFor(so, t0, ms...), tc.idx); got != tc.want {
+			t.Errorf("hpaCarries(%v, %v) = %v, want %v", tc.names, tc.idx, got, tc.want)
 		}
 	}
-	if carriesScalerMetric(hpaFor(plain, t0, externalMetric("s0-scaling-manager-desired-replicas"), externalMetric(kedav1alpha1.CompositeMetricName))) {
-		t.Error("an HPA with composite-metric was taken as wired without reading the ScaledObject")
+}
+
+// Start runs passes until its context is cancelled, then returns.
+func TestStartReturnsOnCancel(t *testing.T) {
+	h := newHarness(t)
+	h.r.Interval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.r.Start(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Start returned %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after its context was cancelled")
 	}
 }
 

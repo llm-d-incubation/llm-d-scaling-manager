@@ -101,7 +101,11 @@ llmsm_apply_watch_namespace_hpa_repair() {
     local tmp_overlay="$1" role binding rendered
     read -r role binding <<< "$(llmsm_watch_hpa_repair_names)"
     if ! llmsm_keda_hpa_repair_on; then
-        kubectl delete -n "$LLMSM_WATCH_NS" "rolebinding/$binding" "role/$role" --ignore-not-found > /dev/null 2>&1 || true
+        local specs=("rolebinding $binding $LLMSM_WATCH_NS" "role $role $LLMSM_WATCH_NS")
+        case "$(llmsm_delete_hpa_repair_grant "${specs[@]}")" in
+            forbidden) log_warning "KEDA_HPA_REPAIR is not true, and the HPA grant an earlier install made in $LLMSM_WATCH_NS could not be deleted (Forbidden). A cluster admin runs:  $(llmsm_hpa_repair_delete_cmd "${specs[@]}")" ;;
+            deleted) log_info "KEDA_HPA_REPAIR is not true: the HPA grant an earlier install made in $LLMSM_WATCH_NS is deleted$(llmsm_render_active && printf ' by admin.sh')" ;;
+        esac
         return 0
     fi
     rendered=$(kubectl kustomize "$tmp_overlay" 2>/dev/null | LLMSM_TARGET_NS="$LLMSM_WATCH_NS" LLMSM_ROLE_NAME="$role" \
