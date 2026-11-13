@@ -1,0 +1,63 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here — see hack/render-guides.py — so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: prepare-workloads
+
+prerequisites:
+  tools:
+    note: The tools image of the release you installed. Your kubeconfig is mounted read-only; files land in this directory.
+    run: |
+      V=<release, for example v0.11.0>
+      export NAMESPACE=<your model namespace>
+      smt() {
+        docker run --rm --user "$(id -u):$(id -g)" \
+          -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
+          ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V "$@"
+      }
+      smt version
+
+deploy:
+  report:
+    note: What the model servers still need, per workload. Changes nothing.
+    run: smt workload-patch -n $NAMESPACE
+  image:
+    note: The engine image, exactly as the model server's pod spec names it, held on every GPU node.
+    run: |
+      export ENGINE_IMAGE=<the image your model server runs>
+      smt prepull apply -n $NAMESPACE --image $ENGINE_IMAGE
+  storage:
+    note: Cluster admin (it creates PersistentVolumes). Weights and engine caches on each GPU node's local disk.
+    run: |
+      export NODE_DIR=/mnt/local/weights/$NAMESPACE   # a directory on the node's local NVMe
+      smt weights apply -n $NAMESPACE --model <hugging face id> --path $NODE_DIR --image $ENGINE_IMAGE
+      smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE
+  status:
+    note: Per GPU node. Wait until every usable node reads present / prepared.
+    run: |
+      smt prepull status -n $NAMESPACE
+      smt weights status -n $NAMESPACE
+      smt engine-cache status -n $NAMESPACE
+  patch:
+    note: Writes scaling-manager-workload-patch.yaml here. Copy it into your model server's chart values.
+    run: smt workload-patch -n $NAMESPACE
+
+verify:
+  clean:
+    note: Again, after the rollout. A model server it no longer names needs nothing more.
+    run: smt workload-patch -n $NAMESPACE
+
+gitops:
+  render:
+    note: The same objects as files, for review or a GitOps repository. Reads no cluster.
+    run: |
+      smt prepull apply -n $NAMESPACE --image $ENGINE_IMAGE --dry-run > prepull.yaml
+      smt weights apply -n $NAMESPACE --model <hugging face id> --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > weights.yaml
+      smt engine-cache apply -n $NAMESPACE --path $NODE_DIR --image $ENGINE_IMAGE --dry-run > engine-cache.yaml
+
+cleanup:
+  remove:
+    note: Removes the holders, claims, volumes and downloaders. The files on the nodes stay.
+    run: |
+      smt prepull delete -n $NAMESPACE --all
+      smt weights delete -n $NAMESPACE --all
+      smt engine-cache delete -n $NAMESPACE

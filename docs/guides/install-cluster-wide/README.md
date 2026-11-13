@@ -278,6 +278,8 @@ reads `<unknown>/1 (avg)` and nothing scales.
 
 ## Next
 
+- [Prepare model servers to scale](../prepare-workloads/): the engine image,
+  weights and compile caches on each GPU node, so a new replica starts fast
 - [Bound every install by real GPUs](../admin-gpu-bounding/)
 - [Share GPUs between models in different
   namespaces](../utilization-share-cluster-wide/)

@@ -1,4 +1,23 @@
-# Preparing a workload to be scaled
+# Preparing a workload: every option
+
+> **Start with [Prepare model servers to scale](../guides/prepare-workloads/).**
+> It is the recommended configuration in a few commands, from the release's
+> tools image. This page is the long form: every alternative, what each costs,
+> the measurements behind the choice, and the caveats.
+>
+> The commands here are `make` targets, for a checkout. Each has the same
+> command in the tools image, with the same options as flags
+> (`docker run ... tools:<release> --help` lists them):
+>
+> | from a checkout | from the release's tools image |
+> | --- | --- |
+> | `make prepull IMAGES=<img> NAMESPACE=<ns>` | `prepull apply -n <ns> --image <img>` |
+> | `make weights WEIGHTS_MODEL=<id> WEIGHTS_PATH=<dir> WEIGHTS_IMAGE=<img> NAMESPACE=<ns>` | `weights apply -n <ns> --model <id> --path <dir> --image <img>` |
+> | `make engine-cache ENGINE_CACHE_PATH=<dir> ENGINE_CACHE_IMAGE=<img> NAMESPACE=<ns>` | `engine-cache apply -n <ns> --path <dir> --image <img>` |
+> | `make <prepull, weights or engine-cache>-status` / `-delete NAMESPACE=<ns>` | `<prepull, weights or engine-cache> status` / `delete -n <ns>` |
+> | `make engine-cache-publish`, `-keys`, `-verify` | `engine-cache publish`, `keys`, `verify` |
+> | `make workload-patch NAMESPACE=<ns>` | `workload-patch -n <ns>`; the `LLMSM_*` variables as `docker run -e` |
+> | `make model-cache` | none: create the ReadWriteMany claim with `kubectl`; the emitted patch carries it as a commented manifest |
 
 Three things decide whether a scale-up helps:
 

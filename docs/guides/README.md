@@ -18,6 +18,7 @@ source docs/guides/env.sh
 | [Install the scaling manager in a namespace](install-in-namespace/) | **start here** when llm-d already serves. One team, one namespace |
 | [Install the scaling manager for the whole cluster](install-cluster-wide/) | one controller for every namespace |
 | [Try the scaling manager in passive mode](try-in-passive-mode/) | next to what scales your models today: it reports what it would order and changes nothing, then takes over one model at a time |
+| [Prepare model servers to scale](prepare-workloads/) | **after the install.** The engine image, weights and compile caches on each GPU node, so a new replica starts fast. One recommended configuration, from the release's tools image |
 
 ## Cluster administration
 
@@ -48,7 +49,7 @@ source docs/guides/env.sh
 | [Configuration](../reference/configuration.md) | every setting the controller reads, by what you set and what you tune |
 | [After the install](../reference/operations.md) | verifying the install, first-line troubleshooting |
 | [Watching what the scaling manager decides](../reference/monitoring.md) | the dashboard, the metrics, the logs |
-| [Preparing a workload](../reference/workload-preparation.md) | the model cache, draining, `make workload-patch`, the start path (`make prepull`, `make weights`) |
+| [Preparing a workload: every option](../reference/workload-preparation.md) | every alternative to the [recommended configuration](prepare-workloads/), with its costs and measurements: the model cache, draining, the workload patch, the start path |
 | [Install methods](../reference/install-methods.md) | GitOps, direct Kustomize, what the script does |
 | [The GPU limiter](../reference/gpu-limiter.md) | where policy lives, and the accelerator precondition |
 

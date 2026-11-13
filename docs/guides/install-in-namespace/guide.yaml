@@ -65,8 +65,10 @@ deploy:
       kubectl get configmap scaling-manager-controller-status -n $NAMESPACE \
         -o jsonpath='{.data.scalerTLS}{"\n"}'
   readiness:
-    note: From a checkout of the same release. Reports what the model servers still need. Changes nothing.
-    run: make workload-patch NAMESPACE=${NAMESPACE}
+    note: With the release's tools image; no checkout. Reports what the model servers still need. Changes nothing.
+    run: |
+      docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
+        ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V workload-patch -n $NAMESPACE
   register:
     note: One ScaledObject per model-server Deployment. Edit the names, the modelID and the bounds.
     run: |
