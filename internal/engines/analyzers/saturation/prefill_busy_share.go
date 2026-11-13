@@ -139,6 +139,14 @@ const SwitchLowerBoundCapsRouterShare = "saturation-lower-bound-caps-router-shar
 // (prefill_observe.go) and enablePrefillThroughputBound governs.
 const prefillBusyRole = "prefill-busy"
 
+// LowerBoundRoles is the role fields of prefill's lower-bound window keys,
+// the back-pressure bound's and the busy-share bound's: code words a
+// learned-state key holds in place of a variant's role, which the learner
+// export keeps as they are.
+func LowerBoundRoles() []string {
+	return []string{prefillBoundRole, prefillBusyRole}
+}
+
 // busyShareBucket is the bucket label a replica's throughput carries in the
 // replica-capacity-decision line when the busy-share bound priced it.
 const busyShareBucket = "busy-share"

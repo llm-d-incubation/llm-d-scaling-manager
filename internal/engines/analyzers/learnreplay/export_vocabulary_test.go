@@ -9,6 +9,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
 )
 
 // Every rate source the code defines is a word the export keeps. Before
@@ -27,6 +28,20 @@ func TestVocabulary_HoldsEveryServiceRateSource(t *testing.T) {
 		domain.ServiceRateSourceDerivedAggregated,
 	} {
 		assert.True(t, vocabulary[source], "%q is not in the export's vocabulary", source)
+	}
+}
+
+// The role fields of prefill's lower-bound window keys are code words the
+// export keeps (issue llm-d-incubation/llm-d-scaling-manager#97). Before
+// they were in the vocabulary, every recording of a P/D model whose prefill
+// held a busy-share window was refused ("a key of Throughput in
+// saturation.ExportLearnedState is not allowed after the export").
+func TestVocabulary_HoldsThePrefillLowerBoundRoles(t *testing.T) {
+	roles := saturation.LowerBoundRoles()
+	require.NotEmpty(t, roles, "precondition: the saturation analyzer names its lower-bound roles")
+	for _, role := range roles {
+		assert.True(t, vocabulary[role], "%q is not in the export's vocabulary", role)
+		assert.True(t, shapePart(role), "%q is not read as a window key's shape part", role)
 	}
 }
 

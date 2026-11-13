@@ -274,7 +274,7 @@ var keyRules = map[string]rule{
 // may hold. A value not here stops the export, naming the field: add the
 // word here when it is the code's own, or classify the field as a rename
 // when it is a name someone chose.
-var vocabulary = withWords(ttftWords(), withWords(enginerec.Words(), setOf(
+var vocabulary = withWords(saturation.LowerBoundRoles(), withWords(ttftWords(), withWords(enginerec.Words(), setOf(
 	// Roles and analyzers.
 	"both", "decode", "prefill", "saturation", "slo", "throughput", "saturation-token-based",
 	"queueing-model", "default",
@@ -302,7 +302,7 @@ var vocabulary = withWords(ttftWords(), withWords(enginerec.Words(), setOf(
 	string(config.SLOFlowControlEnabled), string(config.SLOFlowControlDisabled),
 	// The redaction marker.
 	"redacted",
-)))
+))))
 
 // withWords adds words to a set and returns it: the composite's own words
 // (enginerec.Words), read from the code that writes them.
