@@ -112,7 +112,7 @@ func (f *answerFlags) checkTTFT() error {
 		return usagef("--assume-a %s, want a duration above 0", f.assumeA)
 	case f.prefill < 0:
 		return usagef("--prefill %d, want 0 (the recorded count) or more", f.prefill)
-	case f.set["prefill-running-cap"] && !(f.prefillRunningCap >= 0 && f.prefillRunningCap <= whatif.MaxRunningCap):
+	case f.set["prefill-running-cap"] && (f.prefillRunningCap < 0 || f.prefillRunningCap > whatif.MaxRunningCap):
 		return usagef("--prefill-running-cap %d, want 0 (unknown) to %d", f.prefillRunningCap, whatif.MaxRunningCap)
 	case f.set["prefill-running-cap"] && !f.psOnsets:
 		return usagef("--prefill-running-cap is read only with --ps-onsets")
@@ -421,7 +421,7 @@ func (f *answerFlags) onsetNotes(pf *pricedFleet) {
 		case p == whatif.PlacedProcessorSharing:
 			pf.assume("prefill onset on processor sharing at a running cap of %d (--ps-onsets)", f.prefillRunningCap)
 		case p == whatif.PlacedLowerWideSpread:
-			capText := fmt.Sprint(f.prefillRunningCap)
+			capText := strconv.Itoa(f.prefillRunningCap)
 			if f.prefillRunningCap == 0 {
 				capText = "1 (not known)"
 			}
