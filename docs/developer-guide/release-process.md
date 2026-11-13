@@ -32,6 +32,11 @@ instead.
    manifests rendered with the image pinned by digest, `SHA256SUMS`, and a
    `<file>.sigstore.json` signature bundle for each. See
    [The release files](#the-release-files).
+5. **A tools image** at `ghcr.io/<repository owner>/llm-d-scaling-manager/tools:<tag>`:
+   `deploy/prepull.sh`, `deploy/weights.sh`, `deploy/enginecache.sh` and the
+   workload-patch report, with kubectl, jq and yq, from `Dockerfile.tools`.
+   Operators prepare their model servers with it and no checkout
+   ([Prepare model servers](../guides/prepare-workloads/)).
 
 A tag is released only from `main`, or from its own line's
 `release-MAJOR.MINOR` branch (a `v0.10.2` from `release-0.10`) once that line
@@ -246,6 +251,12 @@ to **Public**.
 Make the first release after this workflow lands an `-rc1` tag. It tests the
 release run end to end without moving `latest`.
 
+The tools image is a second package, `llm-d-scaling-manager/tools`, which the
+first release that carries the `release-tools` job creates. It starts
+**private**: set it to **Public** after that run, and check that this
+repository has **Write** on it, as above. Until then `docker pull` of the
+tools image fails with `401 Unauthorized` (or `denied`) for every operator.
+
 ---
 
 ## Verifying a release
@@ -312,7 +323,8 @@ re-run from the **Actions** tab.
 
 1. **Gate.** Calls [`ci-pr-checks.yaml`](../../.github/workflows/ci-pr-checks.yaml)
    on the tagged commit: `golangci-lint`, `make build`, `make test`,
-   `make lint-deploy-scripts`, the docs checks and the kustomize builds.
+   `make lint-deploy-scripts`, the tools image build and check, the docs
+   checks and the kustomize builds.
 2. **Validate.** Refuses a tag whose commit is on neither `main` nor the tag's
    `release-MAJOR.MINOR` branch, a tag that is not
    `vMAJOR.MINOR.PATCH[-PRERELEASE]`, and a commit whose `newTag` is not the tag.
@@ -339,6 +351,14 @@ re-run from the **Actions** tab.
    its Go (for `make kustomize`) comes from `go.mod`.
    `hack/check-release-manifests.sh` checks the job's shape and runs its sign
    step against a stub cosign.
+8. **Tools image** (job `release-tools`, after the image job). Builds
+   `Dockerfile.tools`, scans it like the controller image, pushes
+   `linux/amd64,linux/arm64` to `<image>/tools:<version>` (and `:latest` only
+   when the controller's `latest` moved), and signs the digest.
+   `hack/check-release-latest.sh` checks the job's shape and runs its tag and
+   sign steps. The PR checks' `tools-image` job builds both platforms on every
+   code change and runs `hack/check-tools-image.sh` against the amd64 image.
+   Verify it as the controller image, with `$IMAGE/tools`.
 
 ### The release files
 

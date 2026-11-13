@@ -2566,6 +2566,7 @@ test, lint or e2e, so retarget it to `main` before review.
 |----------------|--------------|-------------------|
 | `ci-pr-checks.yaml` / `lint-and-test` | golangci-lint v2.9.0, `make build`, `make test` | `make lint build test` |
 | `ci-pr-checks.yaml` / `deploy-scripts-check` | `make lint-deploy-scripts`, with yq pinned to v4.44.3 | `make lint-deploy-scripts`, with yq v4.44.3 on `PATH` |
+| `ci-pr-checks.yaml` / `tools-image` | builds `Dockerfile.tools` for `linux/arm64` and `linux/amd64`, runs `hack/check-tools-image.sh` against the amd64 image, then the release's blocking Trivy scan; skipped step by step when a PR changes only docs or metadata | `make tools-image-check` (needs docker with BuildKit) |
 | `ci-pr-checks.yaml` / `docs-check` | `make guides-check` (guide blocks vs `guide.yaml`, plus `hack/check-doc-links.py`), `make warmpool-check`, `make dashboards-check` | the same three targets (needs Python with PyYAML) |
 | `ci-pr-checks.yaml` / `kustomize-build` | `kustomize build` of the cluster-scoped kubernetes, namespace-scoped kubernetes and namespace-scoped openshift overlays | `make kustomize`, then `bin/kustomize build config/overlays/<scope>/<env> > /dev/null` |
 | `ci-pr-checks.yaml` / `e2e-tests-smoke` | `make test-e2e-smoke-with-setup` on a fresh Kind cluster, then the release's blocking Trivy scan (fixable CRITICAL) of the image it built; skipped when a PR changes only docs or metadata | `CREATE_CLUSTER=true make test-e2e-smoke-with-setup` |
@@ -2573,8 +2574,8 @@ test, lint or e2e, so retarget it to `main` before review.
 | `ci-pr-checks.yaml` / `e2e-tests-passive` | `make test-e2e-passive-with-setup` with `SCALE_TO_ZERO_ENABLED=true`, in parallel with `e2e-tests-full`; same triggers, and returns early on the same rule | `CREATE_CLUSTER=true USE_SIMULATOR=true SCALE_TO_ZERO_ENABLED=true make test-e2e-passive-with-setup` |
 | `ci-signed-commits.yaml` / `signed-commits` | fails if any commit in the PR lacks a verified signature; in the merge queue a job of the same name reports, since the PR's commits were checked already | `git log --show-signature origin/main..HEAD` |
 
-On a push to `main`, only `lint-and-test`, `deploy-scripts-check`, `docs-check`
-and `kustomize-build` run; the e2e jobs are PR-only.
+On a push to `main`, only `lint-and-test`, `deploy-scripts-check`,
+`tools-image`, `docs-check` and `kustomize-build` run; the e2e jobs are PR-only.
 
 `ci-e2e-openshift.yaml` (the GPU OpenShift run) is manual
 (`workflow_dispatch` only); its PR and `/ok-to-test` triggers are disabled.

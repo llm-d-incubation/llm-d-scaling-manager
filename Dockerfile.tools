@@ -1,0 +1,70 @@
+# The workload-preparation tools: deploy/prepull.sh, deploy/weights.sh,
+# deploy/enginecache.sh and the workload-patch report, with the kubectl, jq and
+# yq they call, so an operator runs them from a release without a checkout:
+#
+#   docker run --rm --user "$(id -u):$(id -g)" \
+#     -v "$HOME/.kube/config:/kube/config:ro" -v "$PWD:/work" \
+#     ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:<release> prepull status -n <ns>
+#
+# The entry point is deploy/scaling-manager-tools.sh. Built and pushed by
+# .github/workflows/ci-release.yaml beside the controller image, and checked by
+# hack/check-tools-image.sh. No docker.io image anywhere: kubectl comes from
+# registry.k8s.io, the base from registry.access.redhat.com, yq and jq from
+# their GitHub releases, each checked against its digest.
+
+# kubectl, the version of the controller's client-go (go.mod).
+FROM registry.k8s.io/kubectl:v1.36.5@sha256:0667e3f3e6ef435d7cd4c16684244703ebd67314c17511c2a9f87ea44f6cdf6b AS kubectl
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9
+
+ARG TARGETARCH
+# The yq the deploy-script checks run under in CI (ci-pr-checks.yaml).
+ARG YQ_VERSION=v4.44.3
+ARG YQ_SHA256_AMD64=a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
+ARG YQ_SHA256_ARM64=0e7e1524f68d91b3ff9b089872d185940ab0fa020a5a9052046ef10547023156
+# The jq of the CI runners (ubuntu-24.04), not the base image's 1.6.
+ARG JQ_VERSION=jq-1.7.1
+ARG JQ_SHA256_AMD64=5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5
+ARG JQ_SHA256_ARM64=4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5
+# The release this image is, printed by `scaling-manager-tools version`.
+ARG VERSION="unreleased"
+ARG IMAGE_SOURCE=https://github.com/llm-d-incubation/llm-d-scaling-manager
+
+LABEL org.opencontainers.image.source="${IMAGE_SOURCE}"
+LABEL org.opencontainers.image.description="llm-d-scaling-manager tools - prepare model servers for scaling: image pre-pull, node-local weights and engine caches, workload patch"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+RUN set -eu; \
+    arch="${TARGETARCH:-amd64}"; \
+    case "$arch" in \
+        amd64) yqsum="$YQ_SHA256_AMD64"; jqsum="$JQ_SHA256_AMD64" ;; \
+        arm64) yqsum="$YQ_SHA256_ARM64"; jqsum="$JQ_SHA256_ARM64" ;; \
+        *) echo "no yq or jq digest for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}"; \
+    echo "${yqsum}  /usr/local/bin/yq" | sha256sum -c -; \
+    curl -fsSL --retry 5 -o /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/${JQ_VERSION}/jq-linux-${arch}"; \
+    echo "${jqsum}  /usr/local/bin/jq" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/yq /usr/local/bin/jq
+
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+
+# The scripts keep their checkout layout: each sources lib/ beside it.
+COPY deploy/scaling-manager-tools.sh deploy/prepull.sh deploy/weights.sh deploy/enginecache.sh /opt/scaling-manager-tools/
+COPY deploy/lib/ /opt/scaling-manager-tools/lib/
+RUN printf '%s\n' "$VERSION" > /opt/scaling-manager-tools/VERSION && \
+    chmod 0755 /opt/scaling-manager-tools/*.sh && \
+    mkdir -p /work && chmod 1777 /work && \
+    ln -s /opt/scaling-manager-tools/scaling-manager-tools.sh /usr/local/bin/scaling-manager-tools
+
+# A kubeconfig mounted at /kube/config. Any --user may run it: HOME and
+# kubectl's cache are under /tmp, and the patch is written to the working
+# directory, /work (mount one there to keep it).
+ENV KUBECONFIG=/kube/config \
+    KUBECACHEDIR=/tmp/kube-cache \
+    HOME=/tmp
+WORKDIR /work
+USER 65532:65532
+
+ENTRYPOINT ["/opt/scaling-manager-tools/scaling-manager-tools.sh"]
+CMD ["help"]
