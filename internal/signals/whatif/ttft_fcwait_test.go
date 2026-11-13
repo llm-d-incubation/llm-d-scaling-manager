@@ -22,38 +22,45 @@ func fcFleet(fl TTFTFleet, priced bool) TTFTFleet {
 
 // Above the prefill onset the switch trades AboveFlowControlOnset for
 // FlowControlWaitPriced and moves no figure. It takes only processor sharing
-// at a prompt spread up to MaxPSPromptCV: past it, and on the first-come
-// queue, the wait keeps its flag.
+// at a prompt spread up to MaxPSPromptCV and a rate up to
+// MaxRouterWaitKneeShare of the knee: past either, and on the first-come
+// queue, the wait keeps its flag. Bucket C's fleet (Ca^2 4) on four decode
+// pods, whose prefill onset sits under the share.
 func TestFlowControlWait_FlagFollowsTheSwitch(t *testing.T) {
-	base := psFleet(0.0577, 1)
+	if DefaultPriceRouterWait {
+		t.Fatal("PriceRouterWait is experimental: off by default")
+	}
+	base := psFleet(0.0577, 4)
 	base.Decode.Replicas = 4
 	on := mustOnsets(t, fcFleet(base, false))
 	knee := mustTTFT(t, ttftAt(t, fcFleet(base, false), 1, 0.9)).PrefillKnee
-	if !(on.Prefill < knee && knee < on.Decode) {
-		t.Fatalf("precondition: prefill onset %g under the knee %g under the decode onset %g", on.Prefill, knee, on.Decode)
+	within, past, below := on.Prefill*1.01, (MaxRouterWaitKneeShare+1)/2*knee, 0.9*on.Prefill
+	if !(within < MaxRouterWaitKneeShare*knee && knee < on.Decode) {
+		t.Fatalf("precondition: prefill onset %g under %g of the knee %g, under the decode onset %g", on.Prefill, MaxRouterWaitKneeShare, knee, on.Decode)
 	}
-	above, below := (on.Prefill+knee)/2, 0.9*on.Prefill
 	for _, c := range []struct {
 		name     string
 		cv       float64
 		ps       bool
 		priced   bool
+		rate     float64
 		wantFlag Flag
 	}{
-		{"switch off", 0.0577, true, false, AboveFlowControlOnset},
-		{"switch on", 0.0577, true, true, FlowControlWaitPriced},
-		{"past MaxPSPromptCV", 0.5, true, true, AboveFlowControlOnset},
-		{"first come", 0.0577, false, true, AboveFlowControlOnset},
+		{"switch off", 0.0577, true, false, within, AboveFlowControlOnset},
+		{"switch on", 0.0577, true, true, within, FlowControlWaitPriced},
+		{"switch on, past the share", 0.0577, true, true, past, AboveFlowControlOnset},
+		{"past MaxPSPromptCV", 0.5, true, true, within, AboveFlowControlOnset},
+		{"first come", 0.0577, false, true, within, AboveFlowControlOnset},
 	} {
 		fl := base
 		fl.Prefill.PromptCV, fl.ProcessorSharing = c.cv, c.ps
 		other := map[Flag]Flag{AboveFlowControlOnset: FlowControlWaitPriced, FlowControlWaitPriced: AboveFlowControlOnset}[c.wantFlag]
 		for _, q := range []float64{0, 0.9} {
-			got := mustTTFT(t, ttftAt(t, fcFleet(fl, c.priced), above, q))
+			got := mustTTFT(t, ttftAt(t, fcFleet(fl, c.priced), c.rate, q))
 			if !got.HasFlag(c.wantFlag) || got.HasFlag(other) {
 				t.Errorf("%s, q %g, above the onset: flags %v, want %s and not %s", c.name, q, got.Flags, c.wantFlag, other)
 			}
-			if flip := mustTTFT(t, ttftAt(t, fcFleet(fl, !c.priced), above, q)); flip.Seconds != got.Seconds {
+			if flip := mustTTFT(t, ttftAt(t, fcFleet(fl, !c.priced), c.rate, q)); flip.Seconds != got.Seconds {
 				t.Errorf("%s, q %g: the switch moved the figure, %g to %g", c.name, q, got.Seconds, flip.Seconds)
 			}
 			if b := mustTTFT(t, ttftAt(t, fcFleet(fl, c.priced), below, q)); b.HasFlag(AboveFlowControlOnset) || b.HasFlag(FlowControlWaitPriced) {
@@ -62,12 +69,39 @@ func TestFlowControlWait_FlagFollowsTheSwitch(t *testing.T) {
 		}
 	}
 	// Question 1 carries it from the answer's price: a target met only above
-	// the onset.
+	// the onset, inside the share.
 	fl := fcFleet(base, true)
-	target := TTFTTarget{Seconds: mustTTFT(t, ttftAt(t, fl, above, 0.9)).Seconds, Percentile: 0.9}
+	target := TTFTTarget{Seconds: mustTTFT(t, ttftAt(t, fl, within, 0.9)).Seconds, Percentile: 0.9}
 	a := mustAnswer(t, rateForTTFT(t, fl, target))
 	if !(a.Value >= on.Prefill) || !slices.Contains(a.Flags, FlowControlWaitPriced) || slices.Contains(a.Flags, AboveFlowControlOnset) {
 		t.Errorf("rate %g r/s (onset %g), flags %v: want FlowControlWaitPriced alone", a.Value, on.Prefill, a.Flags)
+	}
+}
+
+// The verdict: a TTFT above the onset flagged AboveFlowControlOnset misses
+// however low its figure; FlowControlWaitPriced is read by its figure; a
+// refusal past the knee or the decode onset misses, any other says nothing.
+func TestTTFTMeets(t *testing.T) {
+	target := TTFTTarget{Seconds: 1, Percentile: 0.9}
+	for _, c := range []struct {
+		name       string
+		r          Result
+		met, known bool
+	}{
+		{"under", TTFT{Seconds: 0.5}, true, true},
+		{"at", TTFT{Seconds: 1}, true, true},
+		{"over", TTFT{Seconds: 1.5}, false, true},
+		{"held, unpriced", TTFT{Seconds: 0.5, Flags: []Flag{AboveFlowControlOnset}}, false, true},
+		{"held, priced", TTFT{Seconds: 0.5, Flags: []Flag{FlowControlWaitPriced}}, true, true},
+		{"held, priced, over", TTFT{Seconds: 1.5, Flags: []Flag{FlowControlWaitPriced}}, false, true},
+		{"saturated", Unanswerable{Reason: Saturated}, false, true},
+		{"decode onset", Unanswerable{Reason: AboveDecodeOnset}, false, true},
+		{"no capacity", Unanswerable{Reason: NoPrefillCapacity}, false, false},
+	} {
+		met, known := TTFTMeets(c.r, target)
+		if met != c.met || known != c.known {
+			t.Errorf("%s: met %v known %v, want %v %v", c.name, met, known, c.met, c.known)
+		}
 	}
 }
 
@@ -86,9 +120,13 @@ func mustOnsets(t *testing.T, fl TTFTFleet) Onsets {
 // between them, and queues the rest first come (vLLM's waiting count); the
 // router holds arrivals in one first-come queue while the pods' mean waiting
 // count is at or above qt, and dispatches the head to the pod pick names
-// while it is below. One dispatch cycle per event, no stale score: the gate
-// reads the current count. held counts the requests the router held.
-func gatedStage(capL int, qt float64, held *int) stageSim {
+// while it is below. pick is a random draw weighted by the pods' shares (the
+// busiest at f/N_p), not the first pod to free: the router's own scorer is
+// not modelled. With poll 0 the gate reads the current count at every event;
+// with poll > 0 it reads the count as of the last poll, every poll seconds,
+// and dispatches against that stale count until the next one. held counts
+// the requests the router held.
+func gatedStage(capL int, qt, poll float64, held *int) stageSim {
 	return func(arr, size []float64, es float64, pods int, pick func() int) []float64 {
 		type job struct {
 			i   int
@@ -98,10 +136,17 @@ func gatedStage(capL int, qt float64, held *int) stageSim {
 		active := make([][]job, pods)
 		waiting := make([][]int, pods)
 		var router []int
-		waitingAll, next, done := 0, 0, 0
-		now := 0.0
+		waitingAll, next, done, seen := 0, 0, 0, 0
+		now, tick := 0.0, poll
+		open := func() bool {
+			w := waitingAll
+			if poll > 0 {
+				w = seen
+			}
+			return float64(w) < qt*float64(pods)
+		}
 		dispatch := func() {
-			for len(router) > 0 && float64(waitingAll) < qt*float64(pods) {
+			for len(router) > 0 && open() {
 				i := router[0]
 				router = router[1:]
 				p := pick()
@@ -131,13 +176,17 @@ func gatedStage(capL int, qt float64, held *int) stageSim {
 					tf, fp, least = at, p, m
 				}
 			}
-			at := min(na, tf)
+			tt := math.Inf(1)
+			if poll > 0 {
+				tt = tick
+			}
+			at := min(na, tf, tt)
 			for p, a := range active {
 				if len(a) == 0 {
 					continue
 				}
 				d := (at - now) / float64(len(a))
-				if p == fp && tf <= na {
+				if p == fp && tf <= na && tf <= tt {
 					d = least
 				}
 				for j := range a {
@@ -145,9 +194,15 @@ func gatedStage(capL int, qt float64, held *int) stageSim {
 				}
 			}
 			now = at
+			if tt < na && tt < tf {
+				seen = waitingAll
+				tick += poll
+				dispatch()
+				continue
+			}
 			if na <= tf {
 				router = append(router, next)
-				if len(router) > 1 || float64(waitingAll) >= qt*float64(pods) {
+				if len(router) > 1 || !open() {
 					*held++
 				}
 				next++
@@ -176,52 +231,74 @@ func gatedStage(capL int, qt float64, held *int) stageSim {
 	}
 }
 
-// The gate moves the wait, it does not add to it. Bucket B's fleet on four
-// decode pods, prompts at the staircase's cv: with the prefill pods gated
-// (running cap 1, 4 and 10, the router holding at the upstream threshold of
-// 5), every request's prefill and pull, router wait included, is no slower
-// than the processor-sharing stage prices, at the mean, p90 and p95, from
-// below the onset to 0.97 of the knee, Poisson and at Ca^2 4. The price may
-// read high (it prices no cap: at this spread a cap serves sooner); it may
-// read at most 5 % short, TestPS_AgainstATandemSimulation's band below.
+// The gate moves the wait, it does not add to it, up to
+// MaxRouterWaitKneeShare of the knee. Bucket B's fleet on four decode pods:
+// with the prefill pods gated (running cap 1, 10, 64 and 256, the router
+// holding at the upstream threshold of 5, its gate read live or every 50 ms
+// and 200 ms), at prompt cv 0.058 and 0.25, Poisson and Ca^2 4, three seeds,
+// every request's prefill and pull, router wait included, reads no more than
+// 5 % under the processor-sharing price, at the mean, p90 and p95, at 0.85
+// and 0.90 of the knee: the band the stage reads its own simulation in
+// (TestPS_AgainstATandemSimulation). The worst was -4.8 %, at cap 64 and 256,
+// where the router held nothing: the stage's own error. Above the share the
+// margin is gone, and one point pins it: at 0.97 of the knee, Ca^2 4, cap
+// 256, seed 2, the price reads p95 over 20 % short.
 func TestFlowControlWait_GatedPodsAreNoSlower(t *testing.T) {
 	if testing.Short() {
 		t.Skip("simulation")
 	}
-	for _, ca2 := range []float64{1, 4} {
-		fl := psFleet(0.0577, ca2)
+	const n = 200000
+	gated := func(cv, ca2, share float64, capL int, poll float64, seed uint64) (stageMix, simSample, float64) {
+		fl := psFleet(cv, ca2)
 		fl.Decode.Replicas = 4
 		pl, u := fl.plan()
 		if u != nil {
 			t.Fatal(u)
 		}
-		knee := pl.pf.knee()
-		for _, share := range []float64{0.85, 0.95, 0.97} {
-			rate := share * knee
-			mix, _, bad := pl.pf.psStages(rate, 4, false)
-			if bad != nil {
-				t.Fatal(bad)
-			}
-			for _, capL := range []int{1, 4, 10} {
-				var held int
-				sim := simulateTandem(pl.pf, rate, 4, 200000, 1, gatedStage(capL, FlowControlQueueThreshold, &held))
-				for _, k := range []struct {
-					what       string
-					model, sim float64
-				}{
-					{"mean", mix.mean(), sim.mean},
-					{"p90", mix.quantile(0.1), sim.quantile(0.9)},
-					{"p95", mix.quantile(0.05), sim.quantile(0.95)},
-				} {
-					e := k.model/k.sim - 1
-					t.Logf("Ca^2 %g, %.2f of the knee, cap %d (router held %.2f %%) %s: model %.1f ms, gated simulation %.1f ms, %+.1f %%",
-						ca2, share, capL, 100*float64(held)/200000, k.what, 1e3*k.model, 1e3*k.sim, 100*e)
-					if e < -0.05 {
-						t.Errorf("Ca^2 %g, %.2f of the knee, cap %d, %s: the price reads %+.1f %% under the gated pods", ca2, share, capL, k.what, 100*e)
+		rate := share * pl.pf.knee()
+		mix, _, bad := pl.pf.psStages(rate, 4, false)
+		if bad != nil {
+			t.Fatal(bad)
+		}
+		var held int
+		sim := simulateTandem(pl.pf, rate, 4, n, seed, gatedStage(capL, FlowControlQueueThreshold, poll, &held))
+		return mix, sim, float64(held) / n
+	}
+	worst := 0.0
+	for _, cv := range []float64{0.0577, 0.25} {
+		for _, ca2 := range []float64{1, 4} {
+			for _, share := range []float64{0.85, MaxRouterWaitKneeShare} {
+				for _, capL := range []int{1, 10, 64, 256} {
+					for _, poll := range []float64{0, 0.05, 0.2} {
+						for seed := uint64(1); seed <= 3; seed++ {
+							mix, sim, held := gated(cv, ca2, share, capL, poll, seed)
+							for _, k := range []struct {
+								what       string
+								model, sim float64
+							}{
+								{"mean", mix.mean(), sim.mean},
+								{"p90", mix.quantile(0.1), sim.quantile(0.9)},
+								{"p95", mix.quantile(0.05), sim.quantile(0.95)},
+							} {
+								e := k.model/k.sim - 1
+								worst = min(worst, e)
+								if e < -0.05 {
+									t.Errorf("cv %g, Ca^2 %g, %.2f of the knee, cap %d, poll %g s, seed %d (router held %.1f %%), %s: the price reads %+.1f %% under the gated pods",
+										cv, ca2, share, capL, poll, seed, 100*held, k.what, 100*e)
+								}
+							}
+						}
 					}
 				}
 			}
 		}
+	}
+	t.Logf("worst, the price over the gated pods: %+.1f %%", 100*worst)
+	mix, sim, held := gated(0.0577, 4, 0.97, 256, 0, 2)
+	e := mix.quantile(0.05)/sim.quantile(0.95) - 1
+	t.Logf("past the share: 0.97 of the knee, Ca^2 4, cap 256, seed 2 (router held %.1f %%): p95 %+.1f %%", 100*held, 100*e)
+	if !(e < -0.2) {
+		t.Errorf("past the share the price read p95 %+.1f %% of the gated pods: the pinned shortfall is gone, revisit MaxRouterWaitKneeShare", 100*e)
 	}
 }
 
@@ -298,17 +375,19 @@ func TestStaircaseR2_TheFixtureIsTheFrozenCurve(t *testing.T) {
 }
 
 // The second staircase sent steps just above the prefill onset with flow
-// control on. With the router's wait priced, every step that held reads at
-// or above the slowest of the three repeats' client TTFT, at the mean, p90
-// and p95, and the steps at or past the onset carry FlowControlWaitPriced.
-// The router held almost nothing there (at most 2 % of requests past 10 ms,
-// a mean wait under 4 ms): the onset sits under where the gate closed, since
-// the pods served faster than the frozen V_P, and the price reads 1.0x to
-// 3.7x the client.
-func TestStaircaseR2_OnsetStepsReadAboveTheClient(t *testing.T) {
+// control on. This checks the processor-sharing price near the onset, not
+// the priced router wait: the router held almost nothing at these steps (at
+// most 2 % of requests past 10 ms, a mean wait under 4 ms), so none of them
+// validates FlowControlWaitPriced. Every step that held reads at or above
+// the slowest of the three repeats' client TTFT, at the mean, p90 and p95,
+// 1.04x to 4.58x, and the steps at or past the onset carry the flag the
+// switch asks for: FlowControlWaitPriced inside MaxRouterWaitKneeShare of
+// the knee, AboveFlowControlOnset past it and with the switch off.
+func TestStaircaseR2_PSPriceReadsAboveTheClientNearTheOnset(t *testing.T) {
 	for _, bucket := range []string{"B-onset", "C-onset"} {
 		fl := fcFleet(r2Fleet(bucket), true)
 		on := mustOnsets(t, fl)
+		knee := mustTTFT(t, ttftAt(t, fl, 1, 0.9)).PrefillKnee
 		for _, s := range r2Phases[bucket] {
 			if !s.held {
 				continue
@@ -320,10 +399,36 @@ func TestStaircaseR2_OnsetStepsReadAboveTheClient(t *testing.T) {
 				if 1e3*got.Seconds < s.client[i] {
 					t.Errorf("%s %.2f r/s q %g: model %.1f ms under the client's %.1f ms", bucket, s.rate, q, 1e3*got.Seconds, s.client[i])
 				}
-				if above := s.rate >= on.Prefill; got.HasFlag(FlowControlWaitPriced) != above || got.HasFlag(AboveFlowControlOnset) {
-					t.Errorf("%s %.2f r/s (onset %.2f): flags %v", bucket, s.rate, on.Prefill, got.Flags)
+				above, inside := s.rate >= on.Prefill, s.rate <= MaxRouterWaitKneeShare*knee
+				if got.HasFlag(FlowControlWaitPriced) != (above && inside) || got.HasFlag(AboveFlowControlOnset) != (above && !inside) {
+					t.Errorf("%s %.2f r/s (onset %.2f, knee %.2f): flags %v", bucket, s.rate, on.Prefill, knee, got.Flags)
 				}
 			}
 		}
+	}
+}
+
+// A known failure, asserted so that a fix shows: C-onset's step at 56.6 r/s,
+// 0.96 of the frozen prefill knee, is the one step of the run where the
+// router really held. Over its three repeats the router queue peaked at 1839
+// to 1892, its wait averaged 18.8 to 20.9 s, the client's p50 read 28.4 to
+// 29.8 s and its p90 41.5 to 43.9 s (one repeat past the histogram), and 9 to
+// 14 % of the step's requests failed: the fleet did not hold the rate at
+// Ca^2 4. The model answers a mean of 1.33 s and a p90 of 3.58 s, over ten
+// times short. The step is past MaxRouterWaitKneeShare, so the answer keeps
+// AboveFlowControlOnset with the switch on: it is not priced as a wait.
+func TestStaircaseR2_TheStepWithARouterWaitReadsShort(t *testing.T) {
+	const rate = 56.60893235175076
+	// The least of the three repeats, seconds.
+	const routerWait, clientP50, clientP90 = 18.8406, 28.3652, 41.4814
+	fl := fcFleet(r2Fleet("C-onset"), true)
+	mean := mustTTFT(t, ttftAt(t, fl, rate, 0))
+	p90 := mustTTFT(t, ttftAt(t, fl, rate, 0.9))
+	t.Logf("model mean %.2f s, p90 %.2f s; the router's wait alone %.1f s, client p50 %.1f s, p90 %.1f s", mean.Seconds, p90.Seconds, routerWait, clientP50, clientP90)
+	if !(10*mean.Seconds < routerWait && 10*p90.Seconds < clientP90) {
+		t.Errorf("the known failure is gone: model mean %.2f s, p90 %.2f s against a router wait of %.1f s and a client p90 of %.1f s; update the TTFT page", mean.Seconds, p90.Seconds, routerWait, clientP90)
+	}
+	if !mean.HasFlag(AboveFlowControlOnset) || mean.HasFlag(FlowControlWaitPriced) {
+		t.Errorf("flags %v: past the share the wait keeps AboveFlowControlOnset", mean.Flags)
 	}
 }

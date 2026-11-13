@@ -56,6 +56,9 @@ type answerFlags struct {
 	set                                               map[string]bool
 	// assumeA is --assume-a, a TTFT flag (ttft.go).
 	assumeA time.Duration
+	// priceRouterWait is --price-router-wait, a TTFT flag (ttft.go):
+	// experimental, off by default.
+	priceRouterWait bool
 	// engineTPOT says R_q was read from the engine's TPOT histogram
 	// (tpotRatioFor).
 	engineTPOT bool
@@ -102,6 +105,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&f.prefill, "prefill", 0, "prefill replicas to price; 0 takes the recorded count")
 	fs.StringVar(&f.prefillVariant, "prefill-variant", "", "the prefill variant to price, when the model has several")
 	fs.DurationVar(&f.assumeA, "assume-a", 0, "a, the fixed latency one request pays on a prefill pod (11ms), in place of the learned one (flagged)")
+	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "experimental: above the prefill flow-control onset, take the router's wait as priced by the processor-sharing prefill stage (flag FlowControlWaitPriced, not AboveFlowControlOnset); no measured step with a real router wait validates it")
 	fs.StringVar(&f.inputBucket, "input-bucket", "", "not supported: per-bucket answers are the planner's M1")
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "answer from a window of this Prometheus (base URL), captured and generated in memory, in place of --recording"

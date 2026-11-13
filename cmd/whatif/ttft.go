@@ -348,8 +348,7 @@ func (f *answerFlags) nameStatedInputs(pf *pricedFleet) {
 }
 
 // processorSharing is how the CLI prices the prefill side: as
-// slo.SwitchTTFTProcessorSharing on, with the router's flow-control wait in
-// the prefill stage (whatif.TTFTFleet.PriceRouterWait). The CLI has no switch; a test that holds
+// slo.SwitchTTFTProcessorSharing on. The CLI has no switch; a test that holds
 // the first-come arithmetic turns it off (firstCome).
 var processorSharing = true
 
@@ -376,7 +375,9 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	}
 	pf.fleet.Prefill = p
 	pf.fleet.ProcessorSharing = processorSharing
-	pf.fleet.PriceRouterWait = processorSharing
+	// Experimental and off by default: the wait it prices is argued, not
+	// measured (whatif.TTFTFleet.PriceRouterWait).
+	pf.fleet.PriceRouterWait = processorSharing && f.priceRouterWait
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop

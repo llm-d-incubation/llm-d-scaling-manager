@@ -141,10 +141,12 @@ const (
 	// place.
 	AboveFlowControlOnset Flag = "AboveFlowControlOnset"
 	// FlowControlWaitPriced is a rate at or above the prefill gate's onset
-	// with flow control on, priced with TTFTFleet.PriceRouterWait: the router
-	// holds the excess, and its wait is in the processor-sharing prefill
-	// stage's figure. It says the router is holding requests, not that the
-	// answer is weaker.
+	// with flow control on, priced with the experimental
+	// TTFTFleet.PriceRouterWait: the router holds the excess, and its wait is
+	// taken as inside the processor-sharing prefill stage's figure. That is
+	// argued and simulated, not measured: no staircase step with a real
+	// router wait validates it, and at the one step where the router held,
+	// the figure read about 20 times short.
 	FlowControlWaitPriced Flag = "FlowControlWaitPriced"
 	// HeldByDecodeAdmission is a TTFT rate the prefill side alone would
 	// set higher: decode admission's wait holds it down.

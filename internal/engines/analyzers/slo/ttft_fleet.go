@@ -90,10 +90,11 @@ type ttftInputs struct {
 	// legacyDecodeSum is SwitchTTFTDecodeTerm off.
 	term            *whatif.DecodeTerm
 	legacyDecodeSum bool
-	// processorSharing is SwitchTTFTProcessorSharing.
-	processorSharing bool
-	flow             whatif.FlowControl
-	mismatch         bool
+	// processorSharing is SwitchTTFTProcessorSharing, routerWait
+	// SwitchTTFTRouterWait.
+	processorSharing, routerWait bool
+	flow                         whatif.FlowControl
+	mismatch                     bool
 }
 
 // imbalance is f at pods, whether it is assumed, and where it came from.
@@ -156,7 +157,8 @@ func ttftFleet(in ttftInputs, pods int) (whatif.TTFTFleet, []whatif.Flag) {
 	p.PromptTokens = in.prompt
 	p.PromptCV, p.PromptCVAssumed = in.spread.CV, in.spread.Assumed
 	p.TransferSecondsPerToken = in.transfer
-	fl := whatif.TTFTFleet{Prefill: p, Decode: in.decode, FlowControl: in.flow, ProcessorSharing: in.processorSharing}
+	fl := whatif.TTFTFleet{Prefill: p, Decode: in.decode, FlowControl: in.flow, ProcessorSharing: in.processorSharing,
+		PriceRouterWait: in.routerWait}
 	if in.decode == nil {
 		fl.DecodeTTFT = in.decodeTTFT
 	} else {

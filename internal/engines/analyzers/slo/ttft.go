@@ -59,6 +59,18 @@ const SwitchTTFTDecodeTerm = "slo-ttft-decode-term"
 // built: processor sharing").
 const SwitchTTFTProcessorSharing = "slo-ttft-processor-sharing"
 
+// SwitchTTFTRouterWait is the switch for the experimental
+// whatif.TTFTFleet.PriceRouterWait: on, a TTFT above the prefill flow-control
+// onset takes the router's wait as inside the processor-sharing prefill
+// stage, flagged FlowControlWaitPriced and read by its figure
+// (whatif.TTFTMeets); off, as before, it is flagged AboveFlowControlOnset and
+// is a miss however low the figure. Off from the constructor, at
+// whatif.DefaultPriceRouterWait, the CLI's --price-router-wait default, so
+// the analyzer and the CLI answer the same; a replay turns it on. No figure
+// moves (docs/proposals/slo-capacity-planner-ttft.md, "As built: the
+// router's wait above the prefill onset").
+const SwitchTTFTRouterWait = "slo-ttft-router-wait"
+
 // SwitchTTFTMeasuredSpread is the replay switch for the measured prompt
 // spread: on, the pricing reads cv from the rows' computed-token histogram
 // where they carry one, over the variant's prompt window
@@ -162,14 +174,15 @@ func priceTTFT(in ttftInputs, rate float64, target whatif.TTFTTarget) ttftPricin
 	case whatif.Unanswerable:
 		out.rateRefused = &r
 	}
-	switch r := whatif.TTFTAt(fl, rate, target.Percentile).(type) {
+	at := whatif.TTFTAt(fl, rate, target.Percentile)
+	switch r := at.(type) {
 	case whatif.TTFT:
 		out.at = &r
-		out.unmet = r.Seconds > target.Seconds || r.HasFlag(whatif.AboveFlowControlOnset)
 	case whatif.Unanswerable:
 		out.atRefused = &r
-		out.unmet = r.Reason == whatif.Saturated || r.Reason == whatif.AboveDecodeOnset
 	}
+	met, known := whatif.TTFTMeets(at, target)
+	out.unmet = known && !met
 
 	var flags []whatif.Flag
 	switch {
@@ -399,7 +412,7 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 			transfer: a.transferPerToken(transfer, decodeRows, prompt), decode: decode, decodeVariant: decodeVariant,
 			transferHeld: a.ttftMeasuredTransfer && a.ttftQuietTransfer && transfer.Held,
 			decodeTTFT:   measured, term: term, legacyDecodeSum: !a.ttftDecodeTerm, flow: flow, mismatch: mismatch,
-			processorSharing: a.ttftProcessorSharing,
+			processorSharing: a.ttftProcessorSharing, routerWait: a.ttftRouterWait,
 		}
 		in.outputSpreadUnread = a.outputSpreadUnread(fleet)
 		p := gateOrPrice(&in, fresh, arrival, target)

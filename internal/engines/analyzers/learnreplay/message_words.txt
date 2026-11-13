@@ -2625,6 +2625,7 @@ slo-ttft-measured-transfer
 slo-ttft-price
 slo-ttft-processor-sharing
 slo-ttft-quiet-transfer
+slo-ttft-router-wait
 slo-ttft-variant
 slo-variant
 slo.Analyze

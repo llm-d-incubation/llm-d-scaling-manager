@@ -1393,8 +1393,8 @@ func TestTTFT_TheFlagListIsTheModels(t *testing.T) {
 		whatif.DecodeTTFTUnmeasured, whatif.DecodeEngineMeasured, whatif.DecodeTermOmitted,
 		whatif.DecodeStepSlopeAssumed, whatif.RouterHopAssumed, whatif.DecodeTermFloored, whatif.DecodeTermPrefixHits,
 		whatif.VPScaledToPrompt, whatif.VPShapeMoved,
-		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.HeldByDecodeAdmission,
-		whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
+		whatif.FlowControlInferredOff, whatif.AboveFlowControlOnset, whatif.FlowControlWaitPriced,
+		whatif.HeldByDecodeAdmission, whatif.DecodeOnsetUnchecked, whatif.SpreadBeyondProcessorSharing, whatif.BelowFittedBand, whatif.KVBoundSlots,
 		AssumedPoissonArrivals, PromptSpreadClamped, FlowControlMismatch, PromptSpreadAbovePeak, ImbalanceNotSustained,
 		whatif.OutputSpreadUnread}
 	want := make([]string, len(flags))
