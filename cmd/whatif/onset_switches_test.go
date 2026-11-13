@@ -34,6 +34,26 @@ func TestTTFT_OnsetFlags(t *testing.T) {
 		assert.Equal(t, c.runningCapped, f.prefillRunningCap, "%v", c.args)
 	}
 
+	// --prefill-running-cap is read only with --ps-onsets, and not below 0.
+	for _, c := range []struct {
+		args []string
+		ok   bool
+	}{
+		{[]string{"--prefill-running-cap", "10"}, false},
+		{[]string{"--ps-onsets", "--prefill-running-cap", "-1"}, false},
+		{[]string{"--ps-onsets", "--prefill-running-cap", "10"}, true},
+		{[]string{"--ps-onsets"}, true},
+	} {
+		f := answerFlags{set: map[string]bool{}}
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		f.register(fs)
+		require.NoError(t, fs.Parse(c.args))
+		fs.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
+		err := f.checkTTFT()
+		assert.Equal(t, c.ok, err == nil, "%v: %v", c.args, err)
+	}
+
 	pf := fleetOf(t, learnedState(), answerFlags{})
 	require.Nil(t, pf.refused)
 	assert.False(t, pf.fleet.PSOnsets || pf.fleet.ChargeDecodeGate, "the defaults")

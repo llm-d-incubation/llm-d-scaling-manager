@@ -436,7 +436,7 @@ that is itself wrong (the exponential tail, Poisson arrivals, an omitted
 | `f` from computed-token shares with variable prompts | Under-promises: a pod's token count varies about `√(1+Cs²)` times its request count, and only the request count's excess is subtracted. Four equal pods with `Cs²` = 1 read about 1.03 at 100 requests a pod |
 | Worst-pod percentile | Under-promises |
 | The mean TTFT is the worst pod's mean | Under-promises the fleet's mean, which mixes in the quieter pods |
-| Question 1 capped at the decode onset | Over-promises by default: the onset is where the mean score reaches 1, and the gate reads the current score; `E[max] ≥ max E`, so the gate already closes for part of the time below it. With `ChargeDecodeGate` on, that time is charged to the answer, on the safe side |
+| Question 1 capped at the decode onset | Over-promises by default: the onset is where the mean score reaches 1, and the gate reads the current score; `E[max] ≥ max E`, so the gate already closes for part of the time below it. With `ChargeDecodeGate` on, a percentile target is charged that time as misses, on the safe side; a mean target is only capped where it reaches 1%, and up to 1% of requests still wait unpriced |
 | The union bound | Under-promises against the true combination of the modelled parts; the independent figure beside it over-promises |
 
 ## Ground truth and the staircase
@@ -1999,11 +1999,16 @@ switch on, a pod's waiting count is the prompts on it past its running cap
 law the price already uses: busy with probability `ρ`, then geometric with
 the stage's mean `ρ + sρ²/(1 − ρ)`. At Poisson that is the exact M/G/1-PS law.
 Each pod is read at its own share of the arrivals and its own `Ca²`, as the
-price reads it. An unknown cap is priced as 1, the lowest onset; the SLO
-analyzer reads no cap, so it always uses 1. Past a prompt cv of 0.25 the onset
-is the lower of the two placements.
+price reads it. With the cap unknown, and past a prompt cv of 0.25, the onset
+is the lower of two placements: processor sharing at a cap of 1, and first
+come. Cap 1 alone is not enough. Processor sharing reads each pod at its own
+`Ca²`, which falls toward 1 as pods are added, while first come reads the
+fleet's. So on bursty traffic over many pods, cap 1 can sit above the
+first-come onset: at `Ca²` 9 over 16 prefill pods, 443.1 r/s against 349.8.
+Taking the lower keeps the switch from being more optimistic than the default.
+The SLO analyzer reads no cap, so it always takes the lower.
 
-| Fleet | First come | Cap unknown (1) | Cap 10 |
+| Fleet | First come | Cap unknown | Cap 10 |
 | --- | --- | --- | --- |
 | B-onset (second staircase) | 56.08 r/s | 53.46 | 55.76 |
 | C-onset (second staircase) | 49.06 r/s | 46.76 | 51.23 |
@@ -2019,19 +2024,25 @@ and `TestPSOnsets_TheCOnsetTarget` pin these.
 closes when the decode pods' mean score reaches 1, which takes at least one
 pod's score reaching 1. With the pods independent, each on its admission
 chain's stationary law, the gate is closed at most `1 − (1 − p)^N_d` of the
-time, `p` being one pod's chance of a score of 1 or more. This errs high. On the
-worked example the share is 24% just under the decode onset, 1.2% at 0.9 of
-it and 0.02% at 0.8. With the switch on, question 1 charges it:
+time, `p` being one pod's chance of a score of 1 or more. This errs high, and
+more so with more pods: at 0.9 of the onset one pod is over 1 for 1.2% of
+the time, and the bound reads 2.3% at two pods, 17% at 16 and 31% at 32. On
+the worked example (one decode pod) the share is 24% just under the decode
+onset, 1.2% at 0.9 of it and 0.02% at 0.8. With the switch on, question 1
+charges it:
 
 - **A percentile target** counts a request that meets a closed gate as a miss:
   the rate must meet the target at percentile `q` plus the closed share. This
   is derived, with no constant.
 - **A mean target** has no tail to charge, and the wait behind a closed gate
-  is not priced, so it is capped where the share reaches 1%
-  (`MaxDecodeGateClosedShare`). That is a stated constant: half the 2% of
-  requests that waited over 10 ms at the router at the second staircase's
-  held steps, where the price still read above the client.
-  `TestChargeDecodeGate_TheMeanCapIsTheClosedShare` tests the boundary.
+  is not priced, so it is only capped where the share reaches 1%
+  (`MaxDecodeGateClosedShare`). Up to 1% of requests still wait unpriced, so
+  a mean answer is not proven safe. The 1% is a stated constant: half the 2%
+  of requests that waited over 10 ms at the router at the second staircase's
+  held steps, where the price still read above the client. Those holds were
+  at the prefill gate. No run has reached the decode gate, which also stops
+  prefill when it closes. `TestChargeDecodeGate_TheMeanCapIsTheClosedShare`
+  tests the boundary.
 
 Either way the bound is `decode flow-control onset`. On the worked example, a
 loose target capped at 12.50 r/s answers 11.20 for the mean, 12.09 at p90 and

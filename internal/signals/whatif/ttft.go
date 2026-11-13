@@ -89,8 +89,9 @@ type Prefill struct {
 	// it a prompt waits in the engine's queue, which is what the flow-control
 	// gate reads. On vLLM with chunked prefill it is about
 	// max_num_batched_tokens over the prompt, at most max_num_seqs. Read only
-	// with TTFTFleet.PSOnsets. 0 is not known, priced as 1: the least an
-	// engine runs, so the most waiting and the lowest prefill onset.
+	// with TTFTFleet.PSOnsets. 0 is not known: the onset is then the lower of
+	// processor sharing's at a cap of 1, the least an engine runs, and the
+	// first-come one, so never above the onset with PSOnsets off.
 	RunningCap int
 }
 
@@ -188,11 +189,14 @@ const DefaultChargeDecodeGate = false
 // the decode gate be closed, with TTFTFleet.ChargeDecodeGate. A request that
 // meets a closed gate waits at the router for a time the model does not
 // price, so a mean has no tail to charge it to, as a percentile does
-// (ttftPlan.gateClosed): it is a stated share, not a derived one. At the
-// second staircase's flow-control steps that held, up to 2 % of requests
-// waited over 10 ms at the router and the processor-sharing price still read
-// at or above the client's mean (TestStaircaseR2_PSPriceReadsAboveTheClientNearTheOnset);
-// this is half that.
+// (ttftPlan.gateClosed): it is a stated share, not a derived one, and up to
+// that share of requests still wait unpriced. At the second staircase's
+// flow-control steps that held, up to 2 % of requests waited over 10 ms at
+// the router and the processor-sharing price still read at or above the
+// client's mean (TestStaircaseR2_PSPriceReadsAboveTheClientNearTheOnset);
+// this is half that. Those were the prefill gate's holds: no run has reached
+// the decode gate, whose closed gate stops prefill too, so the share is not
+// measured there.
 const MaxDecodeGateClosedShare = 0.01
 
 // FlowControlState is what is known of EPP flow control.
@@ -276,8 +280,9 @@ type TTFTFleet struct {
 	// (Prefill.RunningCap), on the stage's own law of the number on the pod,
 	// at each pod's share of the arrivals (prefillPlan.psMeanScore). Off, as
 	// before, it is a first-come queue's waiting count, which under processor
-	// sharing the engine never holds. Past MaxPSPromptCV the onset is the
-	// lower of the two. Off by default (DefaultPSOnsets).
+	// sharing the engine never holds. Past MaxPSPromptCV, and with the
+	// running cap not known, the onset is the lower of the two. Off by
+	// default (DefaultPSOnsets).
 	PSOnsets bool
 	// ChargeDecodeGate makes question 1 conservative at the decode gate, with
 	// flow control on and a decode line. The decode onset is where the mean
@@ -775,8 +780,8 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 // rate at which the stage's mean endpoint score reaches 1, below the stage's
 // knee. A stage whose score stays under 1 up to its knee has its knee as the
 // onset. With psOnsets the prefill score is the processor-sharing stage's
-// (psMeanScore), or past MaxPSPromptCV the larger of the two, so the lower
-// onset.
+// (psMeanScore), or past MaxPSPromptCV or at an unknown running cap the
+// larger of the two, so the lower onset.
 func (pl ttftPlan) placeOnsets() (Onsets, *Unanswerable) {
 	qt, kt := pl.fc.QueueThreshold, pl.fc.KVThreshold
 	var on Onsets
@@ -784,7 +789,12 @@ func (pl ttftPlan) placeOnsets() (Onsets, *Unanswerable) {
 	if pl.psOnsets {
 		k := max(1, pl.pf.p.RunningCap)
 		ps := func(r float64) float64 { return pl.pf.psMeanScore(r, qt, k) }
-		if pl.psCapped {
+		// An unknown cap takes the lower of the two onsets too: cap 1 is the
+		// most waiting on processor sharing, but the stage reads each pod at
+		// its own Ca^2 (splitCA2), near 1 on many pods, where first come
+		// reads the fleet's, so on bursty arrivals over many pods cap 1 can
+		// still sit above the first-come onset.
+		if pl.psCapped || pl.pf.p.RunningCap == 0 {
 			fcfs := score
 			score = func(r float64) float64 { return max(ps(r), fcfs(r)) }
 		} else {
@@ -851,7 +861,9 @@ func decodeScoreTail(d Decode, rate, qt, kt float64) float64 {
 // least one pod's reaching 1: with the pods independent, each on its chain's
 // law, that is 1 - (1 - p)^N_d, p one pod's decodeScoreTail. It errs high,
 // toward a lower rate: one pod over 1 closes the gate only if the others'
-// scores bring the mean there.
+// scores bring the mean there, so the bound loosens as the pods grow: at
+// 0.9 of the decode onset one pod is over 1 for 1.2 % of the time, and the
+// bound reads 2.3 % at two pods, 17 % at 16 and 31 % at 32.
 func (pl ttftPlan) gateClosed(rate float64) float64 {
 	d := *pl.d
 	p := decodeScoreTail(d, rate, pl.fc.QueueThreshold, pl.fc.KVThreshold)
@@ -1351,7 +1363,8 @@ func TTFTAt(fl TTFTFleet, rate, q float64) Result {
 // request that meets a closed gate taken as a miss; a mean target is capped
 // where the share reaches MaxDecodeGateClosedShare, bound BoundDecodeOnset.
 // When the charge lowers a percentile's rate, BoundBy is TTFT then
-// BoundDecodeOnset.
+// BoundDecodeOnset, and BoundDecodeAdmission after it where decode
+// admission holds the rate as well.
 func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	if !Finite(t.Seconds) || !(t.Seconds > 0) {
 		return refuse(InvalidInput, fmt.Sprintf("TTFT target %g s", t.Seconds))
@@ -1376,8 +1389,10 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 		limit, limitBy = pl.onsets.Decode, BoundDecodeOnset
 	}
 	if pl.chargeGate && t.Percentile == 0 {
-		if _, c := bisectRate(limit, func(r float64) bool { return pl.gateClosed(r) < MaxDecodeGateClosedShare }); c < limit {
-			limit, limitBy = c, BoundDecodeOnset
+		// The last rate the share is under the constant at, not the first
+		// past it.
+		if lo, hi := bisectRate(limit, func(r float64) bool { return pl.gateClosed(r) < MaxDecodeGateClosedShare }); hi < limit {
+			limit, limitBy = lo, BoundDecodeOnset
 		}
 	}
 	if c := pl.prefillCap(); pl.fc.State == FlowControlOn && c < limit {
@@ -1403,17 +1418,19 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	switch {
 	case limitBy != "" && full >= limit:
 		by = []Bound{limitBy}
-	case uncharged > full*(1+1e-6):
-		// The decode gate's closed share, charged to the tail, holds the
-		// rate below the target's own.
-		by = []Bound{BoundTTFT, BoundDecodeOnset}
-	case alone > full*(1+1e-6):
-		// The target sets the rate; decode admission's share of the tail
-		// holds it below what the prefill side alone allows.
-		by = []Bound{BoundTTFT, BoundDecodeAdmission}
-		flags = append(flags, HeldByDecodeAdmission)
 	default:
 		by = []Bound{BoundTTFT}
+		if uncharged > full*(1+1e-6) {
+			// The decode gate's closed share, charged to the tail, holds
+			// the rate below the target's own.
+			by = append(by, BoundDecodeOnset)
+		}
+		if alone > full*(1+1e-6) {
+			// Decode admission's share of the tail holds it below what the
+			// prefill side alone allows.
+			by = append(by, BoundDecodeAdmission)
+			flags = append(flags, HeldByDecodeAdmission)
+		}
 	}
 	// The answer is the rate priced, under the cap: at an onset itself the
 	// verdict there (TTFTMeets) is a miss, which a rate answer never is.

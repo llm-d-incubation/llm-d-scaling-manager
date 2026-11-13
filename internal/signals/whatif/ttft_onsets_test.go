@@ -68,8 +68,8 @@ func TestPSWaiting_IsTheStagesLaw(t *testing.T) {
 }
 
 // Placed on processor sharing, the prefill onset is where the stage's score
-// crosses 1, it rises with the running cap, and an unknown cap is cap 1, the
-// lowest. Pinned on the second staircase's frozen fleets, so a move shows:
+// crosses 1, it rises with the running cap, and an unknown cap is the lower
+// of cap 1 and first come, here cap 1. Pinned on the second staircase's frozen fleets, so a move shows:
 // first come put them at 56.08 (B-onset) and 49.06 r/s (C-onset), unchanged
 // with the switch off. Cap 10, the most a pod was seen to run, puts B-onset
 // at 55.76 and C-onset at 51.23: C-onset's Ca^2 4 reaches each pod at 2.5
@@ -105,6 +105,33 @@ func TestPSOnsets_ThePrefillOnsetIsTheStagesCrossing(t *testing.T) {
 				t.Errorf("%s cap %d: onset %g, want above %g (the lower cap's) and under the knee %g", c.bucket, k, got, prev, pl.pf.knee())
 			}
 			prev = got
+		}
+	}
+}
+
+// An unknown running cap is never placed above the first-come onset, so the
+// switch is never more optimistic than with it off. Cap 1 alone can be:
+// processor sharing reads each pod at its own Ca^2 (splitCA2), which falls
+// toward 1 as pods are added, where first come reads the fleet's. The
+// C-onset fleet balanced (f 1) on 64 decode pods: at Ca^2 4 over 4 prefill
+// pods first come is 105.26 r/s and cap 1 107.92; over 16, 421.05 and
+// 459.11; at Ca^2 9 over 16, 349.80 and 443.11.
+func TestPSOnsets_AnUnknownCapIsNeverAboveFirstCome(t *testing.T) {
+	for _, c := range []struct {
+		ca2          float64
+		pods         int
+		fcfs, capOne float64
+	}{{4, 4, 105.2624, 107.9188}, {4, 16, 421.0497, 459.1122}, {9, 16, 349.7999, 443.1082}} {
+		fl := r2Fleet("C-onset")
+		fl.Prefill.Imbalance, fl.Prefill.Replicas, fl.Prefill.ArrivalCV2 = 1, c.pods, c.ca2
+		fl.Decode.Replicas = 64
+		fcfs := mustOnsets(t, onFleet(fl, false, false, 0)).Prefill
+		capOne := mustOnsets(t, onFleet(fl, true, false, 1)).Prefill
+		unknown := mustOnsets(t, onFleet(fl, true, false, 0)).Prefill
+		nearRel(t, "first come", fcfs, c.fcfs, 1e-5)
+		nearRel(t, "cap 1", capOne, c.capOne, 1e-5)
+		if unknown != fcfs {
+			t.Errorf("Ca^2 %g, %d pods: unknown cap %g, want the first-come %g (cap 1 reads %g)", c.ca2, c.pods, unknown, fcfs, capOne)
 		}
 	}
 }
@@ -282,13 +309,84 @@ func TestChargeDecodeGate_APercentileIsChargedItsTail(t *testing.T) {
 			t.Errorf("q %g: the charged target holds at %g r/s %v, just past it %v", c.q, a.Value, meets(a.Value), meets(a.Value*(1+1e-6)))
 		}
 	}
-	// A target the decode gate does not reach is not charged: a tight one
-	// whose rate sits where the gate is almost never closed.
-	target := TTFTTarget{Seconds: 0.2, Percentile: 0.9}
+	// A target the decode gate does not reach is not charged: one met at
+	// half the decode onset, where the gate is almost never closed, answers
+	// the same rate within the bisection's resolution and the same bound.
+	pl := mustPlan(t, workedOn(true))
+	target := TTFTTarget{Seconds: mustTTFT(t, ttftAt(t, workedOn(false), 0.5*pl.onsets.Decode, 0.9)).Seconds, Percentile: 0.9}
 	off, on := mustAnswer(t, rateForTTFT(t, workedOn(false), target)), mustAnswer(t, rateForTTFT(t, workedOn(true), target))
-	if pl := mustPlan(t, workedOn(true)); pl.gateClosed(off.Value) < 1e-9 && (on.Value != off.Value || !slices.Equal(on.Basis.BoundBy, off.Basis.BoundBy)) {
-		t.Errorf("tight target: %g r/s %v charged, %g %v off", on.Value, on.Basis.BoundBy, off.Value, off.Basis.BoundBy)
+	if share := pl.gateClosed(off.Value); !(share < 1e-6) {
+		t.Fatalf("precondition: the gate closed %g of the time at the uncharged %g r/s, want under 1e-6", share, off.Value)
 	}
+	nearRel(t, "tight target", on.Value, off.Value, 1e-6)
+	if !slices.Equal(on.Basis.BoundBy, off.Basis.BoundBy) {
+		t.Errorf("tight target: bound %v charged, %v off", on.Basis.BoundBy, off.Basis.BoundBy)
+	}
+}
+
+// Where the charge and decode admission both hold the rate, both bounds
+// stand and HeldByDecodeAdmission with them: bucket B's fleet on one decode
+// pod, a 1 s p90 target.
+func TestChargeDecodeGate_KeepsDecodeAdmissionBesideIt(t *testing.T) {
+	fl := onFleet(psFleet(0.0577, 1), true, true, 0)
+	fl.Decode.Replicas = 1
+	a := mustAnswer(t, rateForTTFT(t, fl, TTFTTarget{Seconds: 1, Percentile: 0.9}))
+	if want := []Bound{BoundTTFT, BoundDecodeOnset, BoundDecodeAdmission}; !slices.Equal(a.Basis.BoundBy, want) || !slices.Contains(a.Flags, HeldByDecodeAdmission) {
+		t.Errorf("%g r/s: bound %v, flags %v; want %v and HeldByDecodeAdmission", a.Value, a.Basis.BoundBy, a.Flags, want)
+	}
+}
+
+// The gate closes only with some pod over 1, so over N_d independent pods it
+// is closed at most 1 - (1 - p)^N_d of the time, p one pod's share: at 0.9 of
+// the decode onset, the worked fleet's decode line on 1, 2, 16 and 32 pods,
+// each pod at the same load, p is 1.17 % and the share 1.17 %, 2.33 %, 17.2 %
+// and 31.5 %. The bound loosens as the pods grow.
+func TestChargeDecodeGate_TheShareCompoundsOverThePods(t *testing.T) {
+	for _, c := range []struct {
+		pods int
+		want float64
+	}{{1, 0.01174}, {2, 0.02333}, {16, 0.17211}, {32, 0.31460}} {
+		fl := workedOn(true)
+		d := *fl.Decode
+		d.Replicas = c.pods
+		fl.Decode = &d
+		pl := mustPlan(t, fl)
+		rate := 0.9 * pl.onsets.Decode
+		p := decodeScoreTail(d, rate, pl.fc.QueueThreshold, pl.fc.KVThreshold)
+		got := pl.gateClosed(rate)
+		nearRel(t, "one pod's share", p, 0.01174, 1e-3)
+		nearRel(t, "1 - (1 - p)^N", got, 1-math.Pow(1-p, float64(c.pods)), 1e-12)
+		nearRel(t, "the share", got, c.want, 1e-3)
+		if c.pods > 1 && !(got > p) {
+			t.Errorf("%d pods: share %g, not above one pod's %g", c.pods, got, p)
+		}
+	}
+}
+
+// A decode pod's score reaches 1 at the fewer of two states: the waiting
+// count at the queue threshold past the slots, or the fill at the KV
+// threshold where the slots hold that many. On the OLS-sweep line with a
+// 256 cap and the band's top at 0.95, the slots are 83 and the fill reaches
+// 0.8 at 70 requests, before the queue limit 88: the tail is P(n >= 70).
+// With the KV threshold out of reach it is the queue's, P(n >= 88).
+func TestDecodeScoreTail_TheKVLimitBindsFirst(t *testing.T) {
+	d := olsSweep()
+	d.ReplicaCap, d.Band.Hi = 256, 0.95
+	c := int(d.full().slots)
+	if c != 83 {
+		t.Fatalf("precondition: %d slots, want 83", c)
+	}
+	rate := 0.9 * d.kneeRate()
+	w, ok := chainWeights(rate, func(m int) float64 { return d.chainMu(float64(m)) }, c)
+	if !ok {
+		t.Fatal("no chain")
+	}
+	kv, queue := w.atLeast(70), w.atLeast(c+5)
+	if !(kv > queue) {
+		t.Fatalf("precondition: P(n >= 70) %g not above P(n >= 88) %g", kv, queue)
+	}
+	nearRel(t, "KV-bound", decodeScoreTail(d, rate, 5, 0.8), kv, 1e-12)
+	nearRel(t, "queue-bound", decodeScoreTail(d, rate, 5, 10), queue, 1e-12)
 }
 
 // Both switches on, every rate question 1 answers still meets its own

@@ -112,6 +112,10 @@ func (f *answerFlags) checkTTFT() error {
 		return usagef("--assume-a %s, want a duration above 0", f.assumeA)
 	case f.prefill < 0:
 		return usagef("--prefill %d, want 0 (the recorded count) or more", f.prefill)
+	case f.set["prefill-running-cap"] && !f.psOnsets:
+		return usagef("--prefill-running-cap is read only with --ps-onsets")
+	case f.set["prefill-running-cap"] && f.prefillRunningCap < 0:
+		return usagef("--prefill-running-cap %d, want 0 (not known) or more", f.prefillRunningCap)
 	case f.ttftFlagged() && f.set["headroom"] && f.question == replicasQuestion && !(f.headroom > 0 && f.headroom < 1):
 		return usagef("--headroom %g, want a fraction of the knee in (0, 1): at the knee no TTFT exists", f.headroom)
 	case f.ttftFlagged() && f.set["headroom"] && !(f.headroom > 0 && f.headroom <= 1):

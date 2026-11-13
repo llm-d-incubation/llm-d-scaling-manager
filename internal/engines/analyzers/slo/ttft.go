@@ -73,9 +73,10 @@ const SwitchTTFTRouterWait = "slo-ttft-router-wait"
 
 // SwitchTTFTPSOnsets is the switch for whatif.TTFTFleet.PSOnsets: on, the
 // prefill flow-control onset is placed on the processor-sharing stage the
-// price runs on, a pod's prompts past its running cap counted as waiting;
-// the analyzer reads no running cap, so it is priced at 1, the lowest
-// onset. Off, as before, a first-come waiting count. Off from the
+// price runs on, a pod's prompts past its running cap counted as waiting.
+// The analyzer reads no running cap, so the onset is the lower of
+// processor sharing's at a cap of 1 and the first-come one: never above the
+// onset with the switch off. Off, as before, a first-come waiting count. Off from the
 // constructor, at whatif.DefaultPSOnsets, the CLI's --ps-onsets default.
 // It moves the prefill onset, so the cap on the published rate
 // (BoundPrefillOnset) and the AboveFlowControlOnset verdict.
