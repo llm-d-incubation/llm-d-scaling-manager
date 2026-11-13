@@ -1,6 +1,7 @@
 package whatif
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -232,23 +233,26 @@ func gatedStage(capL int, qt, poll float64, held *int) stageSim {
 }
 
 // The gate moves the wait, it does not add to it, up to
-// MaxRouterWaitKneeShare of the knee. Bucket B's fleet on four decode pods:
-// with the prefill pods gated (running cap 1, 10, 64 and 256, the router
-// holding at the upstream threshold of 5, its gate read live or every 50 ms
-// and 200 ms), at prompt cv 0.058 and 0.25, Poisson and Ca^2 4, three seeds,
-// every request's prefill and pull, router wait included, reads no more than
-// 5 % under the processor-sharing price, at the mean, p90 and p95, at 0.85
-// and 0.90 of the knee: the band the stage reads its own simulation in
-// (TestPS_AgainstATandemSimulation). The worst was -4.8 %, at cap 64 and 256,
-// where the router held nothing: the stage's own error. Above the share the
-// margin is gone, and one point pins it: at 0.97 of the knee, Ca^2 4, cap
-// 256, seed 2, the price reads p95 over 20 % short.
+// MaxRouterWaitKneeShare of the knee. Bucket B's fleet on four decode pods,
+// each case run twice on the same seed, so on the same arrivals, prompts and
+// pod draws: once with the prefill pods gated (running cap 1, 10, 64 and 256,
+// the router holding at the upstream threshold of 5, its gate read live or
+// every 50 ms and 200 ms) and once ungated (tandemStage, the processor-sharing
+// stage the price models). Paired, the difference is the gate's own effect.
+// At prompt cv 0.058 and 0.25, Poisson and Ca^2 4, six seeds, at 0.85 and
+// 0.90 of the knee, the gated pods are never more than 2 % slower than the
+// ungated ones at the mean, p90 and p95 (the worst seen was +1.3 %). How
+// far the price itself reads from the ungated stage is
+// TestPS_AgainstATandemSimulation's matter, not the gate's. Past the share
+// the gate's own effect grows, and one point pins it: at 0.97 of the knee,
+// cv 0.058, Ca^2 4, cap 256, a 200 ms poll, seed 2, the gated pods read over
+// 10 % slower (+16.1 % seen).
 func TestFlowControlWait_GatedPodsAreNoSlower(t *testing.T) {
 	if testing.Short() {
 		t.Skip("simulation")
 	}
 	const n = 200000
-	gated := func(cv, ca2, share float64, capL int, poll float64, seed uint64) (stageMix, simSample, float64) {
+	paired := func(t *testing.T, cv, ca2, share float64, seed uint64) (prefillPlan, float64, simSample) {
 		fl := psFleet(cv, ca2)
 		fl.Decode.Replicas = 4
 		pl, u := fl.plan()
@@ -256,50 +260,49 @@ func TestFlowControlWait_GatedPodsAreNoSlower(t *testing.T) {
 			t.Fatal(u)
 		}
 		rate := share * pl.pf.knee()
-		mix, _, bad := pl.pf.psStages(rate, 4, false)
-		if bad != nil {
-			t.Fatal(bad)
-		}
-		var held int
-		sim := simulateTandem(pl.pf, rate, 4, n, seed, gatedStage(capL, FlowControlQueueThreshold, poll, &held))
-		return mix, sim, float64(held) / n
+		return pl.pf, rate, simulateTandem(pl.pf, rate, 4, n, seed, tandemStage)
 	}
-	worst := 0.0
+	slower := func(g, un simSample) [3]float64 {
+		return [3]float64{g.mean/un.mean - 1, g.quantile(0.9)/un.quantile(0.9) - 1, g.quantile(0.95)/un.quantile(0.95) - 1}
+	}
 	for _, cv := range []float64{0.0577, 0.25} {
 		for _, ca2 := range []float64{1, 4} {
-			for _, share := range []float64{0.85, MaxRouterWaitKneeShare} {
-				for _, capL := range []int{1, 10, 64, 256} {
-					for _, poll := range []float64{0, 0.05, 0.2} {
-						for seed := uint64(1); seed <= 3; seed++ {
-							mix, sim, held := gated(cv, ca2, share, capL, poll, seed)
-							for _, k := range []struct {
-								what       string
-								model, sim float64
-							}{
-								{"mean", mix.mean(), sim.mean},
-								{"p90", mix.quantile(0.1), sim.quantile(0.9)},
-								{"p95", mix.quantile(0.05), sim.quantile(0.95)},
-							} {
-								e := k.model/k.sim - 1
-								worst = min(worst, e)
-								if e < -0.05 {
-									t.Errorf("cv %g, Ca^2 %g, %.2f of the knee, cap %d, poll %g s, seed %d (router held %.1f %%), %s: the price reads %+.1f %% under the gated pods",
-										cv, ca2, share, capL, poll, seed, 100*held, k.what, 100*e)
+			t.Run(fmt.Sprintf("cv %g, Ca^2 %g", cv, ca2), func(t *testing.T) {
+				t.Parallel()
+				worst := math.Inf(-1)
+				for _, share := range []float64{0.85, MaxRouterWaitKneeShare} {
+					for seed := uint64(1); seed <= 6; seed++ {
+						pf, rate, un := paired(t, cv, ca2, share, seed)
+						for _, capL := range []int{1, 10, 64, 256} {
+							for _, poll := range []float64{0, 0.05, 0.2} {
+								var held int
+								g := simulateTandem(pf, rate, 4, n, seed, gatedStage(capL, FlowControlQueueThreshold, poll, &held))
+								for i, e := range slower(g, un) {
+									worst = max(worst, e)
+									if e > 0.02 {
+										t.Errorf("%.2f of the knee, cap %d, poll %g s, seed %d (router held %.1f %%), %s: the gated pods %+.1f %% slower than ungated",
+											share, capL, poll, seed, 100*float64(held)/n, [3]string{"mean", "p90", "p95"}[i], 100*e)
+									}
 								}
 							}
 						}
 					}
 				}
-			}
+				t.Logf("worst, gated over ungated: %+.1f %%", 100*worst)
+			})
 		}
 	}
-	t.Logf("worst, the price over the gated pods: %+.1f %%", 100*worst)
-	mix, sim, held := gated(0.0577, 4, 0.97, 256, 0, 2)
-	e := mix.quantile(0.05)/sim.quantile(0.95) - 1
-	t.Logf("past the share: 0.97 of the knee, Ca^2 4, cap 256, seed 2 (router held %.1f %%): p95 %+.1f %%", 100*held, 100*e)
-	if !(e < -0.2) {
-		t.Errorf("past the share the price read p95 %+.1f %% of the gated pods: the pinned shortfall is gone, revisit MaxRouterWaitKneeShare", 100*e)
-	}
+	t.Run("past the share", func(t *testing.T) {
+		t.Parallel()
+		pf, rate, un := paired(t, 0.0577, 4, 0.97, 2)
+		var held int
+		e := slower(simulateTandem(pf, rate, 4, n, 2, gatedStage(256, FlowControlQueueThreshold, 0.2, &held)), un)
+		t.Logf("0.97 of the knee, Ca^2 4, cap 256, poll 200 ms, seed 2 (router held %.1f %%): gated over ungated %+.1f / %+.1f / %+.1f %%",
+			100*float64(held)/n, 100*e[0], 100*e[1], 100*e[2])
+		if !(max(e[0], e[1], e[2]) > 0.1) {
+			t.Errorf("past the share the gated pods read %v of ungated: the pinned slowdown is gone, revisit MaxRouterWaitKneeShare", e)
+		}
+	})
 }
 
 // r2Fleet is the second TTFT staircase's frozen fleet for B-onset (8000-token
@@ -430,5 +433,52 @@ func TestStaircaseR2_TheStepWithARouterWaitReadsShort(t *testing.T) {
 	}
 	if !mean.HasFlag(AboveFlowControlOnset) || mean.HasFlag(FlowControlWaitPriced) {
 		t.Errorf("flags %v: past the share the wait keeps AboveFlowControlOnset", mean.Flags)
+	}
+}
+
+// A rate answer never stands where its own verdict is a miss: across fleets
+// with flow control on (the worked fleet, whose decode onset binds; bucket B
+// and C's on four decode pods, whose prefill onset binds; the second
+// staircase's frozen B-onset and C-onset), the router's wait priced or not,
+// and targets from tight to loose, every rate RateForTTFT answers meets the
+// target by TTFTMeets at that rate. A cap names its bound.
+func TestRateForTTFT_TheAnswerMeetsItsOwnVerdict(t *testing.T) {
+	worked := workedFleet()
+	worked.FlowControl = FlowControl{State: FlowControlOn, QueueThreshold: 5, KVThreshold: 0.8}
+	b, c := psFleet(0.0577, 1), psFleet(0.0577, 4)
+	b.Decode.Replicas, c.Decode.Replicas = 4, 4
+	fleets := map[string]TTFTFleet{"worked": worked, "B": fcFleet(b, false), "C": fcFleet(c, false),
+		"B-onset": fcFleet(r2Fleet("B-onset"), false), "C-onset": fcFleet(r2Fleet("C-onset"), false)}
+	bounds := map[Bound]int{}
+	for name, base := range fleets {
+		for _, priced := range []bool{false, true} {
+			fl := base
+			fl.PriceRouterWait = priced
+			for _, secs := range []float64{0.2, 0.5, 1, 2, 5, 30} {
+				for _, q := range []float64{0, 0.9, 0.95} {
+					target := TTFTTarget{Seconds: secs, Percentile: q}
+					a, ok := RateForTTFT(fl, target).(Answer)
+					if !ok {
+						continue
+					}
+					at := TTFTAt(fl, a.Value, q)
+					met, known := TTFTMeets(at, target)
+					if !met || !known {
+						t.Errorf("%s, priced %v, %g s at q %g: rate %g r/s (bound %v, flags %v) reads %v there, met %v known %v",
+							name, priced, secs, q, a.Value, a.Basis.BoundBy, a.Flags, at, met, known)
+					}
+					if slices.Contains(a.Flags, AboveFlowControlOnset) {
+						t.Errorf("%s, priced %v, %g s at q %g: rate answer flagged AboveFlowControlOnset", name, priced, secs, q)
+					}
+					for _, by := range a.Basis.BoundBy {
+						bounds[by]++
+					}
+				}
+			}
+		}
+	}
+	t.Logf("bounds: %v", bounds)
+	if bounds[BoundPrefillOnset] == 0 || bounds[BoundDecodeOnset] == 0 || bounds[BoundTTFT] == 0 {
+		t.Errorf("not every bound reached: %v", bounds)
 	}
 }

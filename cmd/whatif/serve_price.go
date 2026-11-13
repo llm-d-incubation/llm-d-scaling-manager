@@ -60,7 +60,7 @@ func apiError(err error) error {
 // the recorded counts as the CLI would, the TTFT at the policy's statistic.
 func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest) (*whatifapi.Resolved, error) {
 	f := answerFlags{question: "serve", cycle: "last", model: req.Model, variant: req.DecodeVariant, prefillVariant: req.PrefillVariant,
-		seed: whatif.DefaultResampling().Seed, set: map[string]bool{}, warn: s.warn}
+		seed: whatif.DefaultResampling().Seed, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait}
 	src := whatifapi.SourceRequest{Kind: whatifapi.SourcePrometheus}
 	if req.Source != nil {
 		src = *req.Source
@@ -240,7 +240,7 @@ func seconds(x float64) time.Duration { return time.Duration(math.Round(x * floa
 func (s *servedState) Fleet(k whatifapi.Knobs) (whatifapi.Fleet, error) {
 	f := answerFlags{question: rateQuestion, cycle: "last", variant: s.decodeVariant, prefillVariant: s.prefillVariant,
 		seed: whatif.DefaultResampling().Seed, set: map[string]bool{"ttft": true, "headroom": true}, warn: io.Discard,
-		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom}
+		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom, priceRouterWait: whatif.DefaultPriceRouterWait}
 	set := func(name string) { f.set[name] = true }
 	if k.PromptTokens > 0 {
 		f.inputTokens = k.PromptTokens

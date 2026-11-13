@@ -147,6 +147,24 @@ const minPromptCV = 1e-4
 // validates processor sharing there.
 const MaxPSPromptCV = 0.25
 
+// DefaultPriceRouterWait is TTFTFleet.PriceRouterWait's default, for the CLI
+// (--price-router-wait), the planner API and the SLO analyzer
+// (slo.SwitchTTFTRouterWait) alike: off. The wait it would price is argued
+// and simulated, not measured.
+const DefaultPriceRouterWait = false
+
+// MaxRouterWaitKneeShare is the highest rate, as a share of the prefill knee,
+// at which TTFTFleet.PriceRouterWait takes. Against a paired simulation (the
+// same arrivals with the prefill pods gated and ungated; running caps 1 to
+// 256, the gate read live or every 50 ms and 200 ms, prompt cv 0.058 and
+// 0.25, Poisson and Ca^2 4, six seeds), the gate's own effect up to 0.90 of
+// the knee was at most +1.3 % on the mean, p90 and p95; at 0.97 it reached
+// +16 %. It bounds only the gate's effect: the processor-sharing price's
+// own error against its stage is separate (TestPS_AgainstATandemSimulation;
+// over six seeds up to 9.8 % short at 0.90 of the knee). Past this share the
+// wait keeps AboveFlowControlOnset (TestFlowControlWait_GatedPodsAreNoSlower).
+const MaxRouterWaitKneeShare = 0.9
+
 // FlowControlState is what is known of EPP flow control.
 type FlowControlState int
 
@@ -1166,6 +1184,13 @@ func TTFTAt(fl TTFTFleet, rate, q float64) Result {
 // the decode fill at the answer and Basis.Tier the decode line's tier (both
 // empty with no decode side). Band is nil: the TTFT model is not banded yet.
 //
+// With flow control on it is also capped where the router starts holding
+// requests the price does not take as priced (BoundPrefillOnset): the prefill
+// onset, or with TTFTFleet.PriceRouterWait taking, MaxRouterWaitKneeShare of
+// the prefill knee where that is higher. Above that cap a TTFT is flagged
+// AboveFlowControlOnset, which TTFTMeets reads as a miss, so a rate answer
+// never stands there: the answer is always a rate whose own verdict is met.
+//
 // The cap at the decode onset is not conservative: the onset is where the
 // MEAN endpoint score reaches 1, while the gate reads the current score, and
 // E[max] >= max E, so the gate closes for part of the time below it.
@@ -1192,6 +1217,9 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	if pl.fc.State == FlowControlOn && pl.d != nil && pl.onsets.Decode < limit {
 		limit, limitBy = pl.onsets.Decode, BoundDecodeOnset
 	}
+	if c := pl.prefillCap(); pl.fc.State == FlowControlOn && c < limit {
+		limit, limitBy = c, BoundPrefillOnset
+	}
 	full := pl.bisect(t, limit, true)
 	if !(full > 0) {
 		// The floor is under the target, but by less than the bisection
@@ -1213,7 +1241,10 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 	default:
 		by = []Bound{BoundTTFT}
 	}
-	at := pl.price(min(full, limit*(1-1e-12)), t.Percentile, true, false)
+	// The answer is the rate priced, under the cap: at an onset itself the
+	// verdict there (TTFTMeets) is a miss, which a rate answer never is.
+	full = min(full, limit*(1-1e-12))
+	at := pl.price(full, t.Percentile, true, false)
 	if at.u != nil {
 		return *at.u
 	}
@@ -1235,6 +1266,17 @@ func RateForTTFT(fl TTFTFleet, t TTFTTarget) Result {
 		Fill: fill, BoundBy: by, Tier: tier,
 		TTFT: &TTFTBasis{Floor: floor, KneeRate: pl.lowestKnee(), PrefillOnlyRate: alone},
 	}}
+}
+
+// prefillCap is the highest rate a rate answer may stand at on the prefill
+// side with flow control on: the prefill onset, past which a TTFT is flagged
+// AboveFlowControlOnset, or where the router's wait is taken as priced, the
+// higher of that and MaxRouterWaitKneeShare of the prefill knee.
+func (pl ttftPlan) prefillCap() float64 {
+	if pl.routerWait {
+		return max(pl.onsets.Prefill, MaxRouterWaitKneeShare*pl.pf.knee())
+	}
+	return pl.onsets.Prefill
 }
 
 // bisect is the largest rate below limit whose TTFT meets the target, or

@@ -165,8 +165,10 @@ The rule: **no number on screen without what it rests on.**
     requests; the TTFT is priced, and the region is drawn shaded.
   - `FlowControlWaitPriced`: the same region with the experimental
     router-wait switch on. The API has no such switch: it reads fleets as the
-    CLI does at its default, off, so it shows `AboveFlowControlOnset` today,
-    as the SLO analyzer does.
+    CLI does, at the shared default (`whatif.DefaultPriceRouterWait`, off),
+    so it shows `AboveFlowControlOnset`, as the SLO analyzer does. Its rate
+    answers stop under the prefill onset (bound `prefill flow-control
+    onset`), so a rate it answers is never one the flag calls a miss.
   - `SpreadBeyondProcessorSharing`: the prompt cv is above 0.25, so the TTFT
     is the larger of the processor-sharing and first-come prices.
 - **Refusals are gaps, never zeros.** A curve point the engine refuses is

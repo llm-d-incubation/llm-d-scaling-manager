@@ -92,6 +92,23 @@ func TestTTFT_TheRouterWaitSwitch(t *testing.T) {
 	// With the switch on, inside the share the figure decides.
 	in.routerWait = true
 	assert.False(t, priceTTFT(in, within, targets[0]).unmet, "a figure under the target is met")
+
+	// The rate the analyzer publishes meets the analyzer's own verdict at
+	// that rate, with the switch off and on: question 1 is capped under the
+	// prefill onset, where the verdict turns.
+	for _, routerWait := range []bool{false, true} {
+		in.routerWait = routerWait
+		for _, secs := range []float64{0.5, 2, 100} {
+			target := whatif.TTFTTarget{Seconds: secs, Percentile: 0.9}
+			p := priceTTFT(in, 1, target)
+			if p.rate == nil {
+				continue
+			}
+			at := priceTTFT(in, p.rate.Value, target)
+			assert.False(t, at.unmet, "switch %v, target %g s: rate %g r/s (bound %v) is unmet at itself: %v",
+				routerWait, secs, p.rate.Value, p.rate.Basis.BoundBy, at.at)
+		}
+	}
 }
 
 // notOnTheTTFTPath are the whatif flags the S1 TTFT series does not publish:
@@ -132,20 +149,62 @@ func TestTTFT_EveryModelFlagIsListedOrOffThePath(t *testing.T) {
 			if !ok || g.Tok != token.CONST {
 				continue
 			}
+			// A flag is a constant typed Flag or a Flag("x") conversion; an
+			// untyped string beside flags in one group is a flag that lost
+			// its type, which no list would catch.
+			isFlag := func(vs *ast.ValueSpec) bool {
+				id, ok := vs.Type.(*ast.Ident)
+				return ok && id.Name == "Flag"
+			}
+			conv := func(e ast.Expr) (*ast.BasicLit, bool) {
+				c, ok := e.(*ast.CallExpr)
+				if !ok || len(c.Args) != 1 {
+					return nil, false
+				}
+				if id, ok := c.Fun.(*ast.Ident); !ok || id.Name != "Flag" {
+					return nil, false
+				}
+				lit, ok := c.Args[0].(*ast.BasicLit)
+				return lit, ok
+			}
+			group := false
 			for _, s := range g.Specs {
 				vs := s.(*ast.ValueSpec)
-				if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "Flag" || len(vs.Values) != 1 {
-					continue
+				if isFlag(vs) {
+					group = true
 				}
-				lit, ok := vs.Values[0].(*ast.BasicLit)
-				require.True(t, ok, "flag %s is not a string literal", vs.Names[0].Name)
-				v, err := strconv.Unquote(lit.Value)
-				require.NoError(t, err)
-				declared = append(declared, v)
+				for _, v := range vs.Values {
+					if _, ok := conv(v); ok {
+						group = true
+					}
+				}
+			}
+			for _, s := range g.Specs {
+				vs := s.(*ast.ValueSpec)
+				for i, v := range vs.Values {
+					lit, ok := conv(v)
+					switch {
+					case ok:
+					case isFlag(vs):
+						lit, ok = v.(*ast.BasicLit)
+						require.True(t, ok, "flag %s is not a string literal", vs.Names[i].Name)
+					default:
+						if b, str := v.(*ast.BasicLit); str && b.Kind == token.STRING && vs.Type == nil && group {
+							t.Errorf("%s: %s is an untyped string in a group of flags", name, vs.Names[i].Name)
+						}
+						continue
+					}
+					str, err := strconv.Unquote(lit.Value)
+					require.NoError(t, err)
+					declared = append(declared, str)
+				}
 			}
 		}
 	}
 	require.Greater(t, len(declared), 30, "the parse found the flags")
+	for f := range notOnTheTTFTPath {
+		assert.Contains(t, declared, f, "notOnTheTTFTPath names %s, which whatif no longer declares", f)
+	}
 	for _, f := range declared {
 		listed := slices.Contains(constants.SLOTTFTFlags, f) || slices.Contains(constants.SLOTTFTJointFlags, f)
 		_, off := notOnTheTTFTPath[f]

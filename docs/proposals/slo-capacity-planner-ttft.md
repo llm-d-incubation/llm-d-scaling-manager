@@ -338,7 +338,8 @@ checks it.
 2. **Above the prefill onset**: the router holds the excess, the engines hold
    about the threshold. By default the answer stays the per-pod model, flagged
    `AboveFlowControlOnset`, and a target read at that rate is missed however
-   low the figure. Late binding can only reduce imbalance while the gate is
+   low the figure, so question 1 caps at the prefill onset as it does at the
+   decode one (`BoundPrefillOnset`). Late binding can only reduce imbalance while the gate is
    closed, but one-per-cycle dispatch and stale scores can add delay, so the
    model is not proven conservative there; the pooled M/G/c is printed as the
    optimistic bound. An experimental switch, off by default and shared by the
@@ -1834,8 +1835,21 @@ default, in the CLI, the planner API and the SLO analyzer alike.
 - **One verdict.** `whatif.TTFTMeets` reads a TTFT priced at a rate against a
   target: the figure at most the target, and no `AboveFlowControlOnset`; a
   refusal at the prefill knee or the decode onset is a miss. The SLO
-  analyzer's met/unmet comes from it, so it cannot drift from the model's
-  flags.
+  analyzer's met/unmet is this function.
+- **Question 1 stops where the verdict turns.** With flow control on,
+  `RateForTTFT` is capped under the prefill onset, bound
+  `prefill flow-control onset` (`BoundPrefillOnset`), as it already was under
+  the decode onset. With the switch on the cap is 0.9 of the prefill knee
+  where that is higher. So the rate the CLI and the planner API answer, and
+  the rate the analyzer publishes, is always one its own verdict calls met.
+  Before, a loose target could answer a rate past the onset, flagged
+  `AboveFlowControlOnset`, that the same verdict called a miss. The answer is
+  also the rate priced just under a cap, not the cap itself, where the
+  verdict is a miss. Lower rates mean more replicas: the change errs on the
+  SLO side. `TestRateForTTFT_TheAnswerMeetsItsOwnVerdict` holds the property
+  across fleets, the CLI and API share one fleet
+  (`TestTTFT_TheAPIAndTheCLIReadOneFleet`), and the analyzer's published rate
+  meets its own verdict (`TestTTFT_TheRouterWaitSwitch`).
 - **An experimental switch, off by default.** `TTFTFleet.PriceRouterWait` takes
   the router's wait as inside the processor-sharing prefill stage. A TTFT
   above the onset then carries `FlowControlWaitPriced` in place of
@@ -1865,21 +1879,28 @@ This is an argument, checked in simulation. **No measured step with a real
 router wait validates it** (see the staircase below).
 
 **Checked against a simulation.** `TestFlowControlWait_GatedPodsAreNoSlower`
-simulates two prefill pods behind the gate, with the KV pull on four decode
-pods. Each pod runs at most 1, 10, 64 or 256 prompts. The router holds at the
-upstream threshold of 5 and reads the pods' waiting count either live or as of
-its last poll, every 50 ms or 200 ms. It sends a held request to a pod drawn at
+simulates two prefill pods with the KV pull on four decode pods, each case
+twice on the same seed, so on the same arrivals, prompts and pod draws: once
+with the pods gated and once ungated, as the processor-sharing stage the
+price models. Paired, the difference is the gate's own effect. Gated, each
+pod runs at most 1, 10, 64 or 256 prompts; the router holds at the upstream
+threshold of 5 and reads the pods' waiting count either live or as of its
+last poll, every 50 ms or 200 ms; it sends a held request to a pod drawn at
 random by the pods' shares (the busiest at `f`), not to the first pod that
-frees. Prompt cv is 0.058 and 0.25, arrivals Poisson and Ca² 4, three seeds.
+frees. Prompt cv is 0.058 and 0.25, arrivals Poisson and Ca² 4, six seeds.
 
-- Up to 0.90 of the knee the price read at most 4.8% short of the gated pods
-  at the mean, p90 and p95, inside the 5% the stage reads its own simulation
-  in. The worst points were at caps 64 and 256, where the router held
-  nothing: the stage's own error, not the gate's. A stale gate (50 ms or
-  200 ms) moved the results little.
-- At 0.95 and 0.97 of the knee the margin is gone: the price read up to 34%
-  short (p95, Ca² 4, cap 256, seed 2), again where the router held least.
-  Hence the 0.9 limit; the test pins that point.
+- Up to 0.90 of the knee the gated pods were at most 1.3% slower than the
+  ungated ones at the mean, p90 and p95; the test allows 2%. Mostly they
+  were faster: a running cap serves a narrow spread sooner.
+- At 0.97 of the knee the gate's own effect reached +16% (p90, Ca² 4,
+  cap 256, a 200 ms poll, seed 2). Hence the 0.9 limit; the test pins that
+  point.
+- This bounds the gate, not the price. How far the price reads from the
+  ungated stage is the stage's own error, which applies with the switch off
+  as well: over six seeds it read up to 5.6% short at 0.85 of the knee and
+  9.8% short at 0.90 (p95, cv 0.058, Poisson). The single-seed
+  `TestPS_AgainstATandemSimulation` allows 5%; this wider spread over seeds
+  is a finding for that test, not something this switch changes.
 
 What the simulation leaves out: arrivals are renewal (hyperexponential at
 Ca² > 1), not correlated bursts; the pods are two identical ones, not more
@@ -1909,7 +1930,12 @@ against the slowest of the three repeats at each step:
 The run's report scores the rate the same way ("TTFT at the operating
 point"): targets set from the model's TTFT at 50.1 r/s were met by the client
 up to a median 57.2 r/s (B-onset p90), 58.1 r/s (B-onset p95) and 55.4 r/s
-(C-onset), so the model reads 0.88, 0.86 and 0.90 of the measured rate.
+(C-onset), so the model read 0.88, 0.86 and 0.90 of the measured rate. With
+question 1 capped at the prefill onset, a freeze of the same recording and
+spec now predicts C-onset's flow-control-on rate at its onset, 49.06 r/s, not
+50.12 (0.886 of the measured 55.4), at both p90 and p95; B-onset's moves by
+2e-13 relative, the bisection's resolution under the new limit. No frozen
+file is committed, so no fixture moves.
 
 **The one step where the router held reads far short.** At C-onset's 56.6 r/s
 (0.96 of the frozen knee) the router queue peaked at about 1850 and its wait
@@ -1940,13 +1966,6 @@ tell them apart, so the placement is left as it was.
   held collapsed, and the model reads it 11 to 21 times short. A staircase
   step where the gate closes and the fleet still holds is what would validate
   the switch.
-- Question 1 and the verdict disagree above the prefill onset, as they did
-  before this change. `RateForTTFT`, which the CLI, the planner API and the
-  analyzer's published rate all use, returns a rate above the onset when its
-  figure meets the target, flagged `AboveFlowControlOnset`. The verdict at
-  that rate is a miss. Capping question 1 at the onset would change the
-  answers and the staircase's frozen targets, so it is left for its own
-  change.
 - The decode onset still caps question 1 at the rate where the mean score
   reaches 1. The gate reads the current score, so it closes for part of the
   time below that rate. Neither staircase reached the decode onset (68.9 r/s,

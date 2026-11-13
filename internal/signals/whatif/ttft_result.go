@@ -173,6 +173,11 @@ const (
 	// BoundDecodeOnset is the decode gate's onset with flow control on: an
 	// extra knee, above which the model does not price TTFT.
 	BoundDecodeOnset Bound = "decode flow-control onset"
+	// BoundPrefillOnset is the prefill gate's onset with flow control on,
+	// or with TTFTFleet.PriceRouterWait the share of the prefill knee it
+	// takes up to: past it the router holds requests the price does not take
+	// as priced, and the verdict there is a miss.
+	BoundPrefillOnset Bound = "prefill flow-control onset"
 	// BoundPrefillKnee is the prefill knee, N_p * V_P / (f * E[I_eff]).
 	BoundPrefillKnee Bound = "prefill knee"
 )
