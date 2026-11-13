@@ -1,9 +1,28 @@
 name: Check Signed Commits
-on: pull_request_target
+
+# A merge queue needs every required check to report on the queued merge, and
+# "signed-commits / Check signed commits in PR" is required on main. The shared
+# workflow reads the pull request's commits, and a merge group has no pull
+# request, so on merge_group a job of the same check name reports instead. The
+# PR's commits were checked on the pull request, and the ruleset's
+# required_signatures rule still refuses an unsigned commit on main.
+on:
+  pull_request_target:
+  merge_group:
 
 jobs:
   signed-commits:
+    if: github.event_name == 'pull_request_target'
     uses: llm-d/llm-d-infra/.github/workflows/reusable-signed-commits.yaml@991b7368b05664fdaa9788521e7482655323e0a4 # main
     permissions:
       contents: read
       pull-requests: write
+
+  signed-commits-merge-group:
+    if: github.event_name == 'merge_group'
+    name: signed-commits / Check signed commits in PR
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Checked on the pull request
+        run: echo "The commits were checked on the pull request; required_signatures guards main."

@@ -190,13 +190,15 @@ llmsm_ensure_pod_writes() {
 llmsm_pod_writer_namespaces() {
     local controller_ns="$1" kind="$2" out
     local tmpl='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.triggers}}{{with .metadata}}{{$ns}} {{or .scalerAddress "-"}} {{or .warmPoolName "-"}} {{or .modelID "-"}}{{"\n"}}{{end}}{{end}}{{end}}'
-    if ! out="$(kubectl get scaledobject -A -o go-template="$tmpl" 2>&1)"; then
-        case "$out" in
+    # Streams apart (kc_capture): a notice on stderr is no row.
+    if ! kc_capture get scaledobject -A -o go-template="$tmpl"; then
+        case "$(kc_drop_notices "$KC_ERR")" in
             *"doesn't have a resource type"*) return 0 ;;
         esac
-        printf '%s\n' "$out" >&2
+        kc_err_line "$KC_ERR" >&2
         return 1
     fi
+    out="$KC_OUT"
     # The namespace each address names is read once per row (llmsm_scaler_ns),
     # and compared with the controller one, lower-cased once.
     local ns addr pool model named ctl
@@ -222,7 +224,8 @@ llmsm_pod_writer_namespaces() {
 llmsm_pod_writer_marked_namespaces() {
     local out
     local tmpl='{{range .items}}{{$ns := .metadata.namespace}}{{with .metadata.annotations}}{{if index . "'"$LLMSM_TRANSFER_MARK"'"}}{{$ns}}{{"\n"}}{{end}}{{end}}{{end}}'
-    out="$(kubectl get pods -A -o go-template="$tmpl" 2>&1)" || { printf '%s\n' "$out" >&2; return 1; }
+    kc_capture get pods -A -o go-template="$tmpl" || { kc_err_line "$KC_ERR" >&2; return 1; }
+    out="$KC_OUT"
     printf '%s\n' "$out" | grep -v '^$' | sort -u || true
 }
 
@@ -266,24 +269,26 @@ us_block_state() {
 # when neither can be read: unknown is not off.
 llmsm_live_optimizer_mode() {
     local ns="$1" out state
-    if out="$(kubectl get configmap scaling-manager-controller-status -n "$ns" -o jsonpath='{.data.utilizationShare}' 2>&1)"; then
-        if [ -n "$out" ]; then
-            printf '%s\n' "$out"
+    # Streams apart (kc_capture): with 2>&1 a notice on stderr was the mode.
+    if kc_capture get configmap scaling-manager-controller-status -n "$ns" -o jsonpath='{.data.utilizationShare}'; then
+        if [ -n "$KC_OUT" ]; then
+            printf '%s\n' "$KC_OUT"
             return 0
         fi
     else
-        case "$out" in
+        case "$(kc_drop_notices "$KC_ERR")" in
             *NotFound*|*"not found"*) ;;
-            *) printf '%s\n' "$out" >&2; return 1 ;;
+            *) kc_err_line "$KC_ERR" >&2; return 1 ;;
         esac
     fi
-    if ! out="$(kubectl get configmap scaling-manager-scaling-policy-config -n "$ns" -o jsonpath='{.data.default}' 2>&1)"; then
-        case "$out" in
+    if ! kc_capture get configmap scaling-manager-scaling-policy-config -n "$ns" -o jsonpath='{.data.default}'; then
+        case "$(kc_drop_notices "$KC_ERR")" in
             *NotFound*|*"not found"*) echo off; return 0 ;;
         esac
-        printf '%s\n' "$out" >&2
+        kc_err_line "$KC_ERR" >&2
         return 1
     fi
+    out="$KC_OUT"
     state="$(printf '%s\n' "$out" | us_block_state 2>&1)" || { printf 'the policy in %s does not parse: %s\n' "$ns" "$state" >&2; return 1; }
     printf '%s\n' "${state% *}"
 }
@@ -371,16 +376,19 @@ llmsm_remove_pod_writers() {
         return 0
     fi
     local tmpl='{{range .items}}{{.metadata.namespace}} {{.metadata.name}}{{"\n"}}{{end}}'
-    if ! list="$(kubectl get rolebinding -A -l "$LLMSM_POD_WRITER_LABEL" -o go-template="$tmpl" 2>&1)"; then
-        unread="cluster-wide ($list)" list=""
+    # Streams apart (kc_capture): a notice on stderr is no "<namespace> <name>" row.
+    if kc_capture get rolebinding -A -l "$LLMSM_POD_WRITER_LABEL" -o go-template="$tmpl"; then
+        list="$KC_OUT"
+    else
+        unread="cluster-wide ($(kc_err_line "$KC_ERR"))" list=""
         if [ $# -gt 0 ]; then
             unread=""
             for ns in $(printf '%s\n' "$@" | grep -v '^$' | sort -u); do
-                if one="$(kubectl get rolebinding -n "$ns" -l "$LLMSM_POD_WRITER_LABEL" -o go-template="$tmpl" 2>&1)"; then
+                if kc_capture get rolebinding -n "$ns" -l "$LLMSM_POD_WRITER_LABEL" -o go-template="$tmpl"; then
                     list="$list
-$one"
+$KC_OUT"
                 else
-                    unread="$unread $ns ($one)"
+                    unread="$unread $ns ($(kc_err_line "$KC_ERR"))"
                 fi
             done
         fi

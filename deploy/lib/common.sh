@@ -51,13 +51,79 @@ containsElement() {
 # Sets variables rather than echoing, so the caller stays in its own shell: call
 # it as `kc_capture get ... || rc=$?`, never inside `$( )`.
 kc_capture() {
+    kc_capture_with kubectl "$@"
+}
+
+# kc_capture_with runs `"$@"` (a kubectl wrapper, such as the render's real
+# kubectl) the way kc_capture runs kubectl: KC_OUT is stdout, KC_ERR stderr.
+kc_capture_with() {
     local errf rc=0
     KC_OUT="" KC_ERR=""
     errf="$(mktemp)" || { KC_ERR="mktemp failed"; return 125; }
-    KC_OUT="$(kubectl "$@" 2>"$errf")" || rc=$?
+    KC_OUT="$("$@" 2>"$errf")" || rc=$?
     KC_ERR="$(cat "$errf")"
     rm -f "$errf"
     return "$rc"
+}
+
+# kc_is_notice succeeds when line $1 is something kubectl prints on stderr
+# without the call failing: a klog line (E1113 09:55:01.123456 ... memcache.go
+# "Unhandled Error", the discovery error printed while an aggregated API is
+# down; I... "Waited for ... due to client-side throttling") or an API server
+# "Warning:".
+kc_is_notice() {
+    [[ "$1" =~ ^[IWEF][0-9]{4}\ [0-9:.]+ ]] && return 0
+    case "$1" in Warning:*) return 0 ;; esac
+    return 1
+}
+
+# kc_err_line echoes the one line of kubectl stderr $1 that says why the call
+# failed: "Error from server ...", "Unable to connect to the server ...", "The
+# connection to the server ... was refused", or kubectl's own "error: ...",
+# rather than a notice printed before it (kc_is_notice). Else the first line
+# that is no notice. When stderr held only notices, or nothing, it says so
+# rather than pass a notice off as the error. A loop, not grep -m1 in a pipe:
+# under pipefail the writer of an early-closed pipe fails, and the fallback
+# then ran too.
+kc_err_line() {
+    local line first="" plain=""
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        [ -n "$first" ] || first="$line"
+        case "$line" in
+            "Error from server"*|error:*|"Unable to connect"*|"The connection to the server"*)
+                printf '%s\n' "$line"
+                return 0 ;;
+        esac
+        [ -n "$plain" ] || kc_is_notice "$line" || plain="$line"
+    done <<< "$1"
+    if [ -n "$plain" ]; then
+        printf '%s\n' "$plain"
+    elif [ -n "$first" ]; then
+        printf 'kubectl failed, and its stderr held only notices (%s)\n' "$first"
+    else
+        printf 'kubectl failed with nothing on stderr\n'
+    fi
+}
+
+# kc_drop_notices echoes kubectl stderr $1 without its notices (kc_is_notice):
+# the error itself, all its lines.
+kc_drop_notices() {
+    local line
+    while IFS= read -r line; do
+        kc_is_notice "$line" || printf '%s\n' "$line"
+    done <<< "$1"
+    return 0
+}
+
+# kc_notices echoes the notices (kc_is_notice) in kubectl stderr $1, one per
+# line: what a read that succeeded printed besides its answer.
+kc_notices() {
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] && kc_is_notice "$line" && printf '%s\n' "$line"
+    done <<< "$1"
+    return 0
 }
 
 # kc_not_found reports whether stderr text $1 is the API server saying the
@@ -506,7 +572,7 @@ llmsm_scaler_svc_state() {
     kc_capture get svc scaling-manager-external-scaler -n "$1" -o name || rc=$?
     [ "$rc" -eq 0 ] && return 0
     kc_not_found "$KC_ERR" && return 1
-    LLMSM_SCALER_SVC_ERR="$(printf '%s\n' "$KC_ERR" | grep -v '^[[:space:]]*$' | head -1)"
+    LLMSM_SCALER_SVC_ERR="$(kc_err_line "$KC_ERR")"
     return 2
 }
 
@@ -1746,10 +1812,10 @@ llmsm_render_ns_state() {
     local ns="$1" f out rc=0
     f="$LLMSM_RENDER_WORK/ns/$(printf '%s' "$ns" | sed 's/[^A-Za-z0-9._-]/_/g')"
     if [ -f "$f" ]; then cat "$f"; return 0; fi
-    out="$(llmsm_render_real_kubectl get namespace "$ns" -o name 2>&1)" || rc=$?
+    kc_capture_with llmsm_render_real_kubectl get namespace "$ns" -o name || rc=$?
     if [ "$rc" -eq 0 ]; then
         echo yes > "$f"
-    elif printf '%s' "$out" | grep -qF '(NotFound)'; then
+    elif printf '%s' "$KC_ERR" | grep -qF '(NotFound)'; then
         echo no > "$f"
     else
         echo unknown > "$f"
@@ -2247,19 +2313,33 @@ llmsm_render_delete() {
         else
             # A NotFound for one of several resources is not an error about
             # the others; anything else is kept, and the delete recorded.
-            out="$(llmsm_render_real_kubectl get "$RT_RES" "$RT_NAME" ${RT_NS:+-n "$RT_NS"} -o name 2>&1)" || rc=$?
+            # Streams apart (kc_capture_with): with 2>&1 a notice on stderr
+            # was listed as an object to delete. What was found is stdout;
+            # an error other than NotFound (notices dropped) is kept.
+            kc_capture_with llmsm_render_real_kubectl get "$RT_RES" "$RT_NAME" ${RT_NS:+-n "$RT_NS"} -o name || rc=$?
+            out="$KC_OUT"
             if [ "$rc" -ne 0 ]; then
-                out="$(printf '%s\n' "$out" | grep -vE '\(NotFound\)|the server doesn.t have a resource type' || true)"
+                out="$(printf '%s\n%s\n' "$KC_OUT" "$(kc_drop_notices "$KC_ERR")" \
+                    | grep -vE '^$|\(NotFound\)|the server doesn.t have a resource type' || true)"
+                # A failure that said nothing but notices is still unknown.
+                if [ -z "$out" ] && ! printf '%s' "$KC_ERR" | grep -qE '\(NotFound\)|the server doesn.t have a resource type'; then
+                    out="$(kc_err_line "$KC_ERR")"
+                    out="${out:-kubectl exited $rc}"
+                fi
                 rc=0
             fi
         fi
     elif [ -n "$RT_SELECTOR" ]; then
         if [ "$RT_ALL" = true ]; then
-            out="$(llmsm_render_real_kubectl get "$RT_RES" -A -l "$RT_SELECTOR" -o name 2>&1)" || rc=$?
+            kc_capture_with llmsm_render_real_kubectl get "$RT_RES" -A -l "$RT_SELECTOR" -o name || rc=$?
+            out="$KC_OUT"
+            [ "$rc" -eq 0 ] || out="$(kc_drop_notices "$KC_ERR")"
         elif [ -n "$RT_NS" ] && [ "$(llmsm_render_ns_state "$RT_NS")" = no ]; then
             out=""
         else
-            out="$(llmsm_render_real_kubectl get "$RT_RES" ${RT_NS:+-n "$RT_NS"} -l "$RT_SELECTOR" -o name 2>&1)" || rc=$?
+            kc_capture_with llmsm_render_real_kubectl get "$RT_RES" ${RT_NS:+-n "$RT_NS"} -l "$RT_SELECTOR" -o name || rc=$?
+            out="$KC_OUT"
+            [ "$rc" -eq 0 ] || out="$(kc_drop_notices "$KC_ERR")"
         fi
         if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qE 'the server doesn.t have a resource type'; then
             out=""; rc=0
