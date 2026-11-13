@@ -242,6 +242,7 @@ func loadConfig(cfg *Config, flagSet *flag.FlagSet, configFilePath string, setti
 		learnedBucketRetention: learnedHorizon(ctrl.Log, "LEARNED_STATE_BUCKET_RETENTION",
 			v.GetString("LEARNED_STATE_BUCKET_RETENTION"), v.GetDuration("LEARNED_STATE_BUCKET_RETENTION")),
 		learnedStateSnapshot: v.GetBool("LEARNED_STATE_SNAPSHOT"),
+		kedaHPARepair:        v.GetBool("KEDA_HPA_REPAIR"),
 	}
 
 	cfg.tls = tlsConfig{

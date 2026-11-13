@@ -67,6 +67,16 @@ package controller
 // these objects.
 // +kubebuilder:rbac:groups=keda.sh,resources=scaledobjects,verbs=get
 
+// The KEDA HPA repair (internal/hparepair, KEDA_HPA_REPAIR, off by default)
+// lists HPAs to find the ones KEDA built for this scaler's ScaledObjects
+// without the scaler's External metric, and patches an annotation on such an
+// HPA so KEDA derives it again. Reads go through mgr.GetAPIReader(), so no
+// watch. patch on HPAs, not on ScaledObjects: KEDA re-derives an HPA when one
+// of its annotations changes, and does not when an annotation of the
+// ScaledObject does. The grant ships with the role whether or not the repair
+// is on; with it off nothing lists or patches an HPA.
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;patch
+
 // Kueue quotas, read by the quota limiter when a quota entry sets
 // `kueue.enabled` (internal/kueue.Reader): ClusterQueues carry the nominal
 // quotas, ResourceFlavors name the accelerator behind each flavor, LocalQueues

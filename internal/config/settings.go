@@ -106,7 +106,12 @@ var advancedSettingKeys = []string{
 	"LEARNED_STATE_VARIANT_TIMEOUT",
 	"LEARNED_STATE_BUCKET_RETENTION",
 	"LEARNED_STATE_SNAPSHOT",
+	"KEDA_HPA_REPAIR",
 }
+
+// advancedBoolSettingKeys are the advanced keys that take true or false
+// rather than a duration.
+var advancedBoolSettingKeys = []string{"LEARNED_STATE_SNAPSHOT", "KEDA_HPA_REPAIR"}
 
 // Values of the utilizationShare setting.
 const (
@@ -265,7 +270,7 @@ func parseRestartSettings(data map[string]string, out map[string]string, reject 
 		if v == "" {
 			continue
 		}
-		if k == "LEARNED_STATE_SNAPSHOT" {
+		if slices.Contains(advancedBoolSettingKeys, k) {
 			if _, err := strconv.ParseBool(v); err != nil {
 				reject(k, "%q is not true or false", v)
 				continue

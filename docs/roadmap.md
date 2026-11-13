@@ -58,9 +58,12 @@ state. The gaps themselves are summarized in [known gaps](why.md#known-gaps).
   controller restart can keep its HPA on the CPU default. It is a KEDA bug,
   fixed in KEDA 2.20; upgrade KEDA to 2.21. On older KEDA,
   `make scaledobjects-rewire` fixes it
-  ([KEDA](reference/keda.md#unwired-hpa-before-keda-220)). Considered: the
-  controller re-wires it on its own on older KEDA.
-  [#340](https://github.com/ev-shindin/llm-scaling-manager/issues/340)
+  ([KEDA](reference/keda.md#unwired-hpa-before-keda-220)), and so does the
+  opt-in controller repair, `KEDA_HPA_REPAIR`
+  ([KEDA](reference/keda.md#the-controller-repair-keda_hpa_repair)). Left:
+  measure it on a real KEDA 2.18 or 2.19 install, then consider turning it on
+  by default when the installer finds a KEDA below 2.20.
+  [#45](https://github.com/llm-d-incubation/llm-d-scaling-manager/issues/45)
 - **Make surviving a restart the default.** By default what the controller
   learns about a model's capacity lives in memory, so a restart or a leader
   hand-off re-learns it. `LEARNED_STATE_SNAPSHOT=true` keeps it in the

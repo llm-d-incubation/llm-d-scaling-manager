@@ -56,6 +56,14 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs:
+  - get
+  - list
+  - patch
+- apiGroups:
   - batch
   resources:
   - jobs

@@ -40,6 +40,7 @@ LOGS="kubectl logs -n $NS -l app.kubernetes.io/name=scaling-manager --tail=-1"
 | controller not Ready or crash-looping | pod `0/1` or `CrashLoopBackOff`; log `refusing to start unbounded`; readiness check `gpu-policy` failing | cluster policy unreadable, an invalid `default` entry in the ConfigMap the limiters come from, a `gpu-inventory` limiter declared alone with no node read, a Prometheus setting it refuses, an image older than the manifests | [controller not Ready](#the-controller-is-not-ready-or-crash-looping) |
 | `x509: certificate is valid for ..., not ...` | the controller log at startup | a Prometheus address its certificate does not name | [certificate name mismatch](#prometheus-certificate-name-mismatch) |
 | cluster policy not applied | `LLMSMPolicyNamespaceUnverified`; `llmsm_policy_namespace_unverified == 1` | the controller may not read Namespaces, so it runs on its own ConfigMap | [policy namespace unverified](#cluster-policy-is-not-applied-policy-namespace-unverified) |
+| an HPA stays on the CPU default (KEDA 2.19 and older) | `LLMSMKEDAHPAUnwired`; `LLMSMKEDAHPAWiringUnread`; `llmsm_keda_unwired_hpas > 0`; HPA `TARGETS` reads only `cpu` | KEDA could not reach the scaler when it built the HPA and did not retry; the repair (`KEDA_HPA_REPAIR`) off, denied, or not taken up by KEDA | [HPA on CPU](#an-hpa-stays-on-the-cpu-default) |
 | ScaledObject `READY False` or `TARGETS <unknown>` | `kubectl get scaledobject,hpa -n <ns>` | `scalerAddress` names a namespace with no scaler, `modelID` missing, the controller not Ready, KEDA backing off or keeping the old client certificate after a reinstall | [ScaledObject](#scaledobject-ready-false-or-targets-unknown) |
 | capacity priced high after a restart | TTFT worse after an upgrade or leader change; `P3-k2`/`P4-k1` in `replica-capacity-summary` (or `k2-decision` at `--v=3`) where `P1-obs` was before | `LEARNED_STATE_SNAPSHOT` off, the Role missing, an engine configuration that changed or could not be read | [after a restart](#capacity-priced-high-after-a-restart) |
 | a sequence-bound engine under flow control is short of replicas | TTFT high while the engines' own queues stay under `queueLengthThreshold` and the router holds a queue; `P3-k2` with `batchCapSource=default`, or `P4-k1`, in `k2-decision` at `--v=3`, for replicas whose KV sits well under `kvCacheThreshold` | the engine's `--max-num-seqs` cannot be read (a launcher script, or a value from an `envFrom`), so the replica is priced at 256 sequences or at its KV cache | declare it with the `llm-d.ai/max-num-seqs` annotation, or turn on [`enableBatchCapLearning`](scaling-policy.md#the-batch-cap-llm-daimax-num-seqs-and-enablebatchcaplearning) |
@@ -1457,13 +1458,46 @@ kubectl get endpoints -n "$NS" scaling-manager-external-scaler
 | `TARGETS` reads `cpu: <unknown>/80%` | KEDA never got a metric spec and fell back to CPU | one of the above |
 | The scaler's CA changed while KEDA's operator kept running (a reinstall after the namespace was deleted, or the CA Secret removed): the ScaledObject reads Ready but not Active, the HPA carries only `cpu`, `status.externalMetricNames` is empty, and the controller logs `No active Variants found` every cycle. KEDA logs `certificate signed by unknown authority` and `got empty metric spec`; the controller logs `refused a TLS handshake` with `remote error: tls: bad certificate` or `certificate signed by unknown authority` from KEDA's Pod IP, about once a minute. After five minutes `scalerUnreachable` appears in `scaling-manager-controller-status`, `llmsm_scaler_keda_unreachable` is 1 and `LLMSMExternalScalerUnreachable` fires. `make verify-deployment` says `KEDA's operator still presents an OLD client certificate` and fails | KEDA keeps one connection per scaler address and never closes it, with the CA and client certificate of the old install. An ordinary uninstall keeps the CA so a reinstall avoids this ([what it leaves](upgrade-and-uninstall.md#what-it-leaves)). Changing the ScaledObject (`scalingManagerRewire`) does not help | (cluster admin) `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>` |
 | `make verify-deployment` or `make check-prereqs` says `KEDA cannot reach the external scaler` and that the CA KEDA trusts does not verify the scaler's serving certificate, or that the client CA does not verify KEDA's | the Secret KEDA's `ClusterTriggerAuthentication` reads in KEDA's namespace holds other certificates than the scaler's Secrets | (cluster admin) `make setup-prereqs`, then `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>` |
-| `make verify-deployment` says KEDA did not wire the scaler's metric onto the HPA; the ScaledObject reads Ready, the HPA carries only `cpu` | KEDA asks for the metric spec only when the spec changes. The call failed then (the scaler was restarting or moving TLS mode), and KEDA does not retry. On KEDA 2.19 and older this happens to any ScaledObject created up to two minutes after a controller restart or outage, a KEDA bug fixed in 2.20 ([details](keda.md#unwired-hpa-before-keda-220)) | upgrade KEDA to 2.21. On older KEDA, once the scaler answers, run `make scaledobjects-rewire` or restart the KEDA operator. Run it with the same `NAMESPACE`, `LLMSM_NS` and `SCOPE` as `verify-deployment`; `DRY_RUN=true` only lists them. It changes the trigger key `scalingManagerRewire`, which the scaler ignores, and never deletes a ScaledObject. It exits non-zero while one stays unwired |
+| `make verify-deployment` says KEDA did not wire the scaler's metric onto the HPA; the ScaledObject reads Ready, the HPA carries only `cpu` | KEDA asks for the metric spec only when the spec changes. The call failed then (the scaler was restarting or moving TLS mode), and KEDA does not retry. On KEDA 2.19 and older this happens to any ScaledObject created up to two minutes after a controller restart or outage, a KEDA bug fixed in 2.20 ([details](keda.md#unwired-hpa-before-keda-220)) | upgrade KEDA to 2.21. On older KEDA, once the scaler answers, run `make scaledobjects-rewire` or restart the KEDA operator (or let the [controller repair](#an-hpa-stays-on-the-cpu-default) do it). Run it with the same `NAMESPACE`, `LLMSM_NS` and `SCOPE` as `verify-deployment`; `DRY_RUN=true` only lists them. It changes the trigger key `scalingManagerRewire`, which the scaler ignores, and never deletes a ScaledObject. It exits non-zero while one stays unwired |
 | the replica count never moves, and `llmsm_scaler_undecided_targets` stays above 0 for the namespace | the scaler answers the current count because the model has no usable decision. For a cycle or two after a controller restart or leader change that is normal. `llmsm_scaler_undecided_answers_total` says why: `reason="not-managed"`, or `no-decision` that never stops, means the model is never planned, usually a trigger value that does not parse; `stale` means its decision stopped being republished, so read that model's `scaling-decision` lines | [a bad value freezes the model](scaledobject-trigger.md#model-keys); `external scaler has no decision for this target` names the ScaledObject, and the controller log at `--v=4` names the key |
 | the `Fallback` condition `True`, or `KEDAScalerFailed` that persists | KEDA cannot reach the scaler: the controller is down or not Ready, or the Service has no endpoints | [controller not Ready](#the-controller-is-not-ready-or-crash-looping) |
 | `no children to pick from` in KEDA's log, after an uninstall and reinstall | KEDA's gRPC client is still backing off on a name that did not resolve | (cluster admin) restart the KEDA operator ([details](operations.md#no-children-to-pick-from-after-a-reinstall)) |
 
 More rows: [First-line troubleshooting](operations.md#first-line-troubleshooting).
 Removing or reinstalling the controller: [Upgrade and uninstall](upgrade-and-uninstall.md).
+
+## An HPA stays on the CPU default
+
+On KEDA 2.19 and older, a ScaledObject created or changed within about two
+minutes of a controller restart can get an HPA without the scaler's metric
+([why](keda.md#unwired-hpa-before-keda-220)). The HPA then scales on CPU, and
+the scaling manager's decisions reach nothing. Upgrading KEDA to 2.21 ends it.
+
+Check one ScaledObject:
+
+```bash
+kubectl get hpa -n <namespace> keda-hpa-<scaledobject> -o jsonpath='{.spec.metrics[*].type}{"\n"}'
+# External: wired. Resource only: unwired.
+```
+
+Without the repair, run `make scaledobjects-rewire` or restart the KEDA
+operator. To let the controller do it, turn on `KEDA_HPA_REPAIR`
+([how](keda.md#the-controller-repair-keda_hpa_repair)). With it on:
+
+```bash
+# What it asked for, per ScaledObject
+kubectl get events -n <namespace> --field-selector reason=HPARewireRequested
+# Its log lines
+kubectl logs -n <controller-namespace> deploy/scaling-manager-controller-manager | grep -E 'annotated it so KEDA|KEDA wired|Could not read every HPA|Not allowed to annotate'
+```
+
+| sign | cause | fix |
+| --- | --- | --- |
+| `LLMSMKEDAHPAUnwired`, and `HPARewireRequested` Events keep coming | KEDA still cannot reach the scaler, so each request fails the same way. KEDA logs `got empty metric spec` | check `LLMSMExternalScalerUnreachable` and that the controller is Ready. Then (cluster admin) `kubectl rollout restart deployment/keda-operator -n <KEDA namespace>` |
+| `HPARewireFailed` Events, `llmsm_keda_hpa_rewires_total{outcome="forbidden"}` rising, log `Not allowed to annotate an unwired HPA` | the controller's role has no `patch` on `horizontalpodautoscalers`: it was installed before this release | (cluster admin) `make setup-prereqs` with the install's variables |
+| `LLMSMKEDAHPAWiringUnread`, log `Could not read every HPA or ScaledObject` | the role has no `get` or `list` on `horizontalpodautoscalers`, or `get` on `scaledobjects` in that namespace. The repair does nothing there, and `llmsm_keda_unwired_hpas` keeps its last value | (cluster admin) `make setup-prereqs` with the install's variables |
+| the HPA is unwired and no Event names it | the repair is off, the HPA is younger than 30 seconds, the ScaledObject is paused, or its trigger names another install's scaler | turn on `KEDA_HPA_REPAIR`, or `make scaledobjects-repoint` for a trigger pointing elsewhere |
+| a GitOps tool shows drift on the HPA | the annotation `scaling-manager.llmd.ai/keda-rewire`. KEDA removes it when it next writes the HPA | none. HPAs KEDA owns are rarely in a GitOps source |
 
 ## A model misses, or is never judged against, its SLO
 

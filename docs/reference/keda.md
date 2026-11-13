@@ -57,8 +57,54 @@ Upgrade KEDA to 2.21, which also fixes the CVE above. Until then, run
 `NAMESPACE`, `LLMSM_NS` and `SCOPE` as the install
 ([re-wiring](#the-scalers-tls-in-kedas-namespace)), or restart the KEDA
 operator. On a KEDA below 2.20 the installer says so in its CVE warning, and
-`make verify-deployment` names this cause when it finds an unwired HPA. A
-controller-side repair for older KEDA is planned.
+`make verify-deployment` names this cause when it finds an unwired HPA. If you
+cannot upgrade KEDA, the controller can repair these HPAs itself (below).
+
+### The controller repair (KEDA_HPA_REPAIR)
+
+For a cluster that cannot upgrade KEDA past 2.19. Off by default; on KEDA 2.20
+and later leave it off, since there is nothing to repair.
+
+Turn it on with `KEDA_HPA_REPAIR=true` on the controller (it restarts):
+
+```bash
+kubectl set env deployment/scaling-manager-controller-manager -n <controller-namespace> KEDA_HPA_REPAIR=true
+```
+
+or put `KEDA_HPA_REPAIR: "true"` in the
+[settings ConfigMap](configuration.md#the-settings-configmap) and restart it.
+
+What it does, every 30 seconds, on the leader:
+
+1. Lists the HPAs in the namespaces the controller manages (every namespace
+   for a cluster-scoped install).
+2. Keeps only the HPAs whose owner is a ScaledObject with a trigger naming this
+   install's scaler (`scaling-manager-external-scaler.<controller namespace>`,
+   the same rule as `make scaledobjects-rewire`). It skips paused ScaledObjects
+   and HPAs younger than 30 seconds. No other HPA is read twice or changed.
+3. Calls such an HPA unwired when it has no External metric for the scaler's
+   trigger, or the ScaledObject's `status.externalMetricNames` lacks it. With
+   `scalingModifiers` the HPA always carries one `composite-metric`, so only the
+   status counts.
+4. Adds the annotation `scaling-manager.llmd.ai/keda-rewire: <time>` to the
+   HPA. KEDA reconciles the ScaledObject when an annotation of its HPA changes,
+   asks the scaler for the metric again, and removes the annotation when it
+   rewrites the HPA. The ScaledObject is never written.
+5. Asks again after 30 seconds, doubling up to 10 minutes, until KEDA wires it.
+
+You see each request three ways: a log line (`annotated it so KEDA derives it
+again`), an Event `HPARewireRequested` on the ScaledObject (and `HPARewired`
+once KEDA wired it), and the metrics `llmsm_keda_unwired_hpas` and
+`llmsm_keda_hpa_rewires_total` ([metrics](prometheus.md#keda-hpa-repair-metrics)).
+When it stays unwired, see
+[troubleshooting](troubleshooting.md#an-hpa-stays-on-the-cpu-default).
+
+It needs `get`, `list` and `patch` on `horizontalpodautoscalers`. The
+controller's role carries them from this release on, whether or not the repair
+is on ([security model](security-model.md)). An install upgraded from an older
+release gets them when a cluster admin runs `make setup-prereqs` (or a
+single-command install). Until then the repair logs that it may not read or
+patch HPAs, and `LLMSMKEDAHPAWiringUnread` fires.
 
 ### Upgrading a KEDA the cluster already has
 

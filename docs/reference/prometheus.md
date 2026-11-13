@@ -761,6 +761,35 @@ across a restart, are otherwise visible only in the logs.
     for: 5m
   ```
 
+### KEDA HPA repair metrics
+
+Published only while the [KEDA HPA repair](keda.md#the-controller-repair-keda_hpa_repair)
+(`KEDA_HPA_REPAIR`) is on, by the leader.
+
+### `llmsm_keda_unwired_hpas`
+- **Type**: Gauge
+- **Description**: HPAs KEDA built for a ScaledObject that names this scaler, with no External metric from the scaler, as of the last read of the namespace (every 30 seconds). Such an HPA scales on the CPU default, so the scaling manager's decisions reach nothing. An HPA younger than 30 seconds is not counted yet. When a namespace cannot be read, its last value stays: unread is unknown, not zero.
+- **Labels**: `namespace` (the HPA's; scraped as `exported_namespace`), optional `controller_instance`
+- **Use Case**: Above 0 for a minute or two after a controller restart is the repair at work. Above 0 for 10 minutes means KEDA did not re-derive the HPA: the shipped rules alert, as `LLMSMKEDAHPAUnwired`.
+
+  ```yaml
+  - alert: LLMSMKEDAHPAUnwired
+    expr: max by (exported_namespace) (llmsm_keda_unwired_hpas) > 0
+    for: 10m
+  ```
+
+### `llmsm_keda_hpa_rewires_total`
+- **Type**: Counter
+- **Description**: Annotations the repair put on an unwired HPA so KEDA derives it again. It asks once the HPA is 30 seconds old, then again after 30 seconds, doubling up to 10 minutes, until KEDA wires it.
+- **Labels**: `namespace` (the HPA's; scraped as `exported_namespace`), `outcome`: `requested` (the HPA was annotated), `forbidden` (the controller may not patch HPAs), `failed` (any other error); optional `controller_instance`
+- **Use Case**: `requested` says how often controller restarts leave HPAs unwired on your KEDA. Any `forbidden` means the controller's role lacks `patch` on `horizontalpodautoscalers`.
+
+### `llmsm_keda_hpa_wiring_unread`
+- **Type**: Gauge
+- **Description**: `1` when the repair's last pass could not list the HPAs of a namespace or read a ScaledObject that owns one, so it does not know whether those HPAs are wired and repairs none of them; `0` when it read everything. The controller logs `Could not read every HPA or ScaledObject` when it turns on.
+- **Labels**: optional `controller_instance`
+- **Use Case**: The shipped rules alert after 15 minutes, as `LLMSMKEDAHPAWiringUnread`. Usually the controller's role lacks `get` and `list` on `horizontalpodautoscalers`.
+
 ### Passive mode
 
 ### `llmsm_passive_mode`
@@ -2136,6 +2165,8 @@ notifications link to it.
 | `LLMSMModelHasNoWakeSignal` | warning | 10m | blocked reason `no-wake-signal`: EPP exports no flow-control queue, so a parked model cannot wake. Quiet while the model is parked and EPP refuses its requests: `LLMSMModelParkedWhileRequestsRefused` pages for that at critical, so one cause pages once | enable the EPP `flowControl` feature gate, then restart the EPP Deployment (it reads its config once at start) | [T: will not wake](troubleshooting.md#a-model-will-not-wake-from-zero) |
 | `LLMSMScalerTargetsUndecided` | warning | 10m | `llmsm_scaler_undecided_targets` above 0 in a namespace: the scaler answers those ScaledObjects their current count, so their replica counts are frozen | `llmsm_scaler_undecided_answers_total` says why; the log line `external scaler has no decision for this target` names each one | [T: ScaledObject](troubleshooting.md#scaledobject-ready-false-or-targets-unknown) |
 | `LLMSMExternalScalerUnreachable` | critical | 5m | `llmsm_scaler_keda_unreachable` is 1: the external scaler (mutual TLS) kept refusing handshakes (three or more over a minute or more, within five minutes) and served no call, so KEDA reaches nothing and no model is discovered | `scalerUnreachable` in `scaling-manager-controller-status` names the last refusal reason; `make verify-deployment` names the cause. KEDA's certificates from before a reinstall: restart KEDA's operator | [T: ScaledObject](troubleshooting.md#scaledobject-ready-false-or-targets-unknown) |
+| `LLMSMKEDAHPAUnwired` | warning | 10m | `llmsm_keda_unwired_hpas` above 0 in a namespace: KEDA left HPAs of this scaler's ScaledObjects on the CPU default, and the repair's requests have not made it re-derive them. Only with `KEDA_HPA_REPAIR` on | restart the KEDA operator, or upgrade KEDA to 2.21; check `LLMSMExternalScalerUnreachable` and `outcome="forbidden"` on `llmsm_keda_hpa_rewires_total` | [T: HPA on CPU](troubleshooting.md#an-hpa-stays-on-the-cpu-default) |
+| `LLMSMKEDAHPAWiringUnread` | warning | 15m | `llmsm_keda_hpa_wiring_unread` is 1: the repair cannot list HPAs or read a ScaledObject, so it repairs nothing there | grant `get` and `list` on `horizontalpodautoscalers` (`make setup-prereqs`) | [T: HPA on CPU](troubleshooting.md#an-hpa-stays-on-the-cpu-default) |
 | `LLMSMModelSLOAttainmentLow` | warning | 2m | over the last 30 minutes fewer of a model's requests met its router-measured TTFT target than the objective promises (90% for `p90`), every judged request counted once, with at least 15 judged minutes holding at least half the requests, and no judged reading of the last 5 minutes meeting the objective, while the analyzer still publishes and the model has replicas | observe-only: a tuning finding, not an outage. Check the target can be met at all, then raise the floor or lower the model-level `scaleUpThreshold` (the `slo` entry's own band moves only its prediction), then find the cause in the runbook | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |
 | `LLMSMModelSLOMissed` | warning | 2m | in at least half of the judged minutes of the last 30, and at least 7 of them (one bad interval of a minute reaches six windows), a model's router-measured TPOT mean was above its declared target, while the analyzer still publishes and the model has replicas | observe-only: a tuning finding, not an outage. Check the target can be met at all, then raise the floor or lower the model-level `scaleUpThreshold` (the `slo` entry's own band moves only its prediction), then find the cause in the runbook | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |
 | `LLMSMModelSLOUnjudged` | info | 15m | a target set for 55 of the last 60 minutes, replicas present, nothing judged in the hour, and a cause to act on: excluded for at least half the hour, the router's series missing, or TPOT without requests while the router serves streaming requests. Not for too little traffic | the runbook's table: a fleet that never holds still, the router not scraped or not in the namespace, clients not streaming or not sending `include_usage` | [SLO runbook](troubleshooting.md#a-model-misses-or-is-never-judged-against-its-slo) |

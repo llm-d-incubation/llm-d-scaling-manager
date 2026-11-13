@@ -230,6 +230,12 @@ the block below ([settings](#the-settings-configmap)).
 | --- | --- | --- | --- | --- |
 | **`LEARNED_STATE_SNAPSHOT`** | Controller environment or manager ConfigMap | `false` | Keep what the learners measured (capacity, throughput, latency line, start time) across a restart or leader change, in the ConfigMap `scaling-manager-learned-state`. Off, a restart relearns from cold ([what is kept](install-options.md#learned-state-across-a-restart)) | restart |
 
+### KEDA
+
+| Name | Where set | Default | What it changes | Applies |
+| --- | --- | --- | --- | --- |
+| `KEDA_HPA_REPAIR` | Controller environment or settings ConfigMap | `false` | Annotate an HPA KEDA built without the scaler's metric, so KEDA derives it again. Only for KEDA 2.19 and older, which leave such HPAs after a controller restart ([what it does](keda.md#the-controller-repair-keda_hpa_repair)) | restart |
+
 ### Each workload
 
 | Name | Where set | Default | What it changes | Applies |

@@ -277,6 +277,31 @@ spec:
         summary: "No client reaches the KEDA external scaler of the scaling manager in {{ $labels.namespace }}"
         description: "Grouped by namespace: a controller-level gauge, so the scrape's namespace label is the controller's own. The external scaler (mutual TLS) refused at least three TLS handshakes over a minute or more within the last five minutes and served no call, for five minutes more. KEDA reaches nothing, so KEDA-driven discovery finds no model (the controller logs 'No active Variants found' every cycle) and nothing scales, while every Pod reads Ready. scalerUnreachable in the scaling-manager-controller-status ConfigMap carries the last refusal reason. Likely causes: 'remote error: tls: bad certificate' or 'certificate signed by unknown authority' from KEDA's Pod means KEDA's operator holds a connection with the CA or client certificate of before the scaler's CA changed (the namespace or the CA Secret was replaced); restart it (kubectl rollout restart deployment/keda-operator -n <KEDA namespace>). KEDA's copy of the certificates not matching the scaler: a cluster admin runs make setup-prereqs, then restarts KEDA. 'first record does not look like a TLS handshake': a ScaledObject dials the TLS address in plaintext, without the installer's authenticationRef. make verify-deployment names the cause and the fix."
 
+    # The KEDA HPA repair (KEDA_HPA_REPAIR). Only a controller with the
+    # repair on publishes these series. llmsm_keda_unwired_hpas carries the
+    # HPA's namespace as namespace, which the scrape renames to
+    # exported_namespace. test/alerts/testdata/keda-hpa-repair-alerts.test.yaml
+    # evaluates them.
+    - alert: LLMSMKEDAHPAUnwired
+      expr: max by (exported_namespace) (llmsm_keda_unwired_hpas) > 0
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#an-hpa-stays-on-the-cpu-default"
+        summary: "{{ $value }} HPA(s) in {{ $labels.exported_namespace }} have had no External metric from the scaling manager's scaler for 10 minutes"
+        description: "Grouped by exported_namespace, not namespace: the gauge carries the HPA's namespace, which Prometheus renames because the scrape job already has a namespace label (the controller's). KEDA built these HPAs for ScaledObjects that name this scaler without the scaler's External metric, so they scale on the CPU default and the scaling manager's decisions reach nothing. The KEDA HPA repair (KEDA_HPA_REPAIR) has annotated each one so KEDA derives it again, and KEDA has not. Usual causes: KEDA still cannot reach the scaler (see LLMSMExternalScalerUnreachable and KEDA's log for 'got empty metric spec'), or llmsm_keda_hpa_rewires_total{outcome=\"forbidden\"} is rising because the controller may not patch HPAs. The controller logs each request with the HPA's name; kubectl get events -n <namespace> --field-selector reason=HPARewireRequested lists them. Fix: restart the KEDA operator (kubectl rollout restart deployment/keda-operator -n <KEDA namespace>), or upgrade KEDA to 2.21, which does not leave HPAs unwired."
+
+    - alert: LLMSMKEDAHPAWiringUnread
+      expr: max by (namespace) (llmsm_keda_hpa_wiring_unread) == 1
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        runbook_url: "https://github.com/llm-d-incubation/llm-d-scaling-manager/blob/main/docs/reference/troubleshooting.md#an-hpa-stays-on-the-cpu-default"
+        summary: "The KEDA HPA repair of the scaling manager in {{ $labels.namespace }} cannot read every HPA or ScaledObject"
+        description: "Grouped by namespace: a controller-level gauge, so the scrape's namespace label is the controller's own. For 15 minutes the KEDA HPA repair (KEDA_HPA_REPAIR) could not list the HPAs of a namespace it manages, or read a ScaledObject that owns one, so it does not know whether those HPAs are wired and repairs none of them. llmsm_keda_unwired_hpas keeps its last known value meanwhile. The controller logs 'Could not read every HPA or ScaledObject' with what it could not read. Usually the controller's role lacks get and list on horizontalpodautoscalers (an install from before the repair): have a cluster admin re-run make setup-prereqs, or the install, with the install's variables."
+
     # Kueue cohort borrowing. Only a namespace-scope Kueue quota entry that
     # counts borrowing publishes these series. llmsm_quota_borrow_withheld
     # carries the model namespace as namespace, which the scrape renames to
