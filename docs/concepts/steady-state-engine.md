@@ -388,6 +388,7 @@ model; check the health metrics below.
 | `vllm:kv_cache_usage_perc` | gauge | live tokens-in-use → **demand** |
 | `vllm:num_requests_waiting` | gauge | local queue → **compute-ceiling** trigger + demand |
 | `vllm:num_requests_waiting_by_reason` (`reason="capacity"`) | gauge | on decode of a P/D model, the local queue without requests waiting for their KV from prefill (vLLM v0.20.0 and later) — *optional*: without it the whole queue counts |
+| `vllm:num_requests_kv_fetch_by_stage` (`stage="completed_waiting"`) | gauge | on decode of a P/D model, the requests whose KV has arrived from prefill and that wait for this pod, added back to the queue above (vLLM v0.32.0 and later) — *optional*: without it only the capacity part counts |
 | `vllm:request_prompt_tokens_sum` / `_count` | histogram | average **input** tokens per request |
 | `vllm:request_generation_tokens_sum` / `_count` | histogram | average **output** tokens per request |
 | `vllm:request_generation_tokens_bucket` | histogram | the spread of output lengths: a long request stays resident longer, so it holds more KV per request than the mean says (SGLang: `sglang:generation_tokens_histogram_bucket`) — *optional*: without it every request is priced at the mean length, as before |

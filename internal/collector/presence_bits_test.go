@@ -168,6 +168,8 @@ var presenceBits = []struct {
 		func(m domain.ReplicaMetrics) bool { return m.KvUsageMeanKnown }},
 	{"CapacityQueueKnown", registration.QueryCapacityQueueLength, 2, true, true,
 		func(m domain.ReplicaMetrics) bool { return m.CapacityQueueKnown }},
+	{"LandedQueueKnown", registration.QueryLandedQueueLength, 2, true, true,
+		func(m domain.ReplicaMetrics) bool { return m.LandedQueueKnown }},
 	{"PreemptionRateKnown", registration.QueryPreemptionRate, 0.1, true, true,
 		func(m domain.ReplicaMetrics) bool { return m.PreemptionRateKnown }},
 	{"PrefillComputedTokenRateKnown", registration.QueryPrefillComputedTokenRate, 1000, true, true,
@@ -302,7 +304,7 @@ func TestNonFiniteValuesUnchanged(t *testing.T) {
 		m.AvgITLKnown, m.AvgITLEmpty, m.SpecAcceptedPerStepKnown = false, false, false
 		m.AvgServiceTimeKnown, m.AvgTTFTKnown, m.AvgQueueTimeKnown, m.AvgPrefillTimeKnown, m.AvgKVTransferTimeKnown =
 			false, false, false, false, false
-		m.QueueMinKnown = false
+		m.QueueMinKnown, m.LandedQueueKnown = false, false
 		m.Metadata = nil
 		return m
 	}
@@ -388,6 +390,8 @@ func TestMergePodInstances_PresenceBitsIndependent(t *testing.T) {
 			func(m domain.ReplicaMetrics) bool { return m.KvUsageMeanKnown }},
 		{"CapacityQueueKnown", func(m *domain.ReplicaMetrics) { m.CapacityQueueKnown = false },
 			func(m domain.ReplicaMetrics) bool { return m.CapacityQueueKnown }},
+		{"LandedQueueKnown", func(m *domain.ReplicaMetrics) { m.LandedQueueKnown = false },
+			func(m domain.ReplicaMetrics) bool { return m.LandedQueueKnown }},
 		{"PreemptionRateKnown", func(m *domain.ReplicaMetrics) { m.PreemptionRateKnown = false },
 			func(m domain.ReplicaMetrics) bool { return m.PreemptionRateKnown }},
 		{"PrefillComputedTokenRateKnown", func(m *domain.ReplicaMetrics) { m.PrefillComputedTokenRateKnown = false },
@@ -421,7 +425,8 @@ func TestMergePodInstances_PresenceBitsIndependent(t *testing.T) {
 			PreemptionRateKnown: true, PrefillComputedTokenRateKnown: true,
 			GenerationTokenRateKnown: true, RequestRateKnown: true, RunningRequestsKnown: true,
 			AvgITLKnown: true, QueueLengthKnown: true, AvgServiceTimeKnown: true, AvgTTFTKnown: true,
-			AvgQueueTimeKnown: true, AvgPrefillTimeKnown: true, AvgKVTransferTimeKnown: true, QueueMinKnown: true}
+			AvgQueueTimeKnown: true, AvgPrefillTimeKnown: true, AvgKVTransferTimeKnown: true, QueueMinKnown: true,
+			LandedQueueKnown: true}
 	}
 	for _, cleared := range bits {
 		for _, onRank := range []int{0, 1} {

@@ -433,7 +433,9 @@ Properties, each with a spec in `throughput_floor_test.go`:
   ordered costs latency. Newer vLLM splits the waiting count by reason
   (`vllm:num_requests_waiting_by_reason`, `reason="capacity"` for the
   scheduler's own queue). P1 itself reads that split
-  (`decodeCapacityView`); this test keeps the full count. vLLM keeps a
+  (`decodeCapacityView`, which adds back the requests whose KV has landed
+  where vLLM v0.32.0 and later say which those are); this test keeps the
+  full count. vLLM keeps a
   request deferred until it is scheduled, so on a full decode a landed
   pull that cannot get its blocks reads deferred, and the split alone
   would clear a decode that is full and queued.
