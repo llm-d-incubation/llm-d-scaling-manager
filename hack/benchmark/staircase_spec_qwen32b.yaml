@@ -20,6 +20,14 @@
 #     5%: fewer requests a level would not fit `a`. If the estimate is off by 2, they are
 #     still under a fifth of the prefill. The closed loops at 8000 tokens sit at about 1,
 #     2 and 3.5 times the concurrency that saturates prefill, as r2's did.
+#   - the sweep holds each prompt length 600 s, not 360 s, at twice those rates: about 15%
+#     of the measured prefill (B's prefill knee 4.04 r/s at 8000 tokens on 2 pods, 32k
+#     prompt tokens/s). `a` is the intercept of a curve through the median service time of
+#     each prompt length, refused when its standard error is over half of it
+#     (internal/signals/prefill, MaxAInterceptRelSE). At 360 s and 8% one run passed at
+#     0.35 (intercept 5.8 ms, error 2.0 ms) and the next failed with an error of 5 ms, so
+#     the freeze refused (NoFixedLatency). Three times the requests a length should cut
+#     the error by about 1.8.
 #   - the 1000-token closed loops alternate 240 requests at 1000 output tokens with 400 at
 #     2500, not r2's climb. The decode line fits its intercept only from two steady levels
 #     that both sit in the fill band [0.15, 0.80] and are at least 0.30 apart in KV fill
@@ -28,8 +36,9 @@
 #     so r2's climb had only 0.20 and 0.41 in band, the line stayed on the default
 #     intercept, and the freeze refused (no decodeLine). No 1000:1000 load reaches 0.30
 #     apart: 400 (about 200 running a pod, none queued) is the highest load measured, and
-#     0.41 - 0.15 is 0.26. Extrapolated, not measured: 240 at 1000:1000 fills about 0.25
-#     and 400 at 1000:2500 (mean context 2250 tokens, not 1500) about 0.62.
+#     0.41 - 0.15 is 0.26. 240 at 1000:1000 and 400 at 1000:2500 (mean context 2250
+#     tokens, not 1500) were estimated at 0.25 and 0.62; measured, the line fitted its
+#     intercept with a steady spread of 0.42.
 #   - the ladder is laid by the freeze from this warm-up, as on r2: no rate is set here.
 operatingFraction: 0.85
 percentiles: [90, 95]
@@ -47,7 +56,7 @@ phaseOverheadSeconds: 240
 warmup:
   order: [line, sweep, busy, rest]
   line: {driver: closed, schedule: "420:240:1000:1000,420:400:1000:2500,420:240:1000:1000,420:400:1000:2500,420:24:8000:200,420:48:8000:200,420:80:8000:200"}
-  sweep: {driver: open, schedule: "360:2:1000:32:1,360:1.1:2000:32:1,360:0.55:4000:32:1,360:0.37:6000:32:1,360:0.28:8000:32:1", seed: 11}
+  sweep: {driver: open, schedule: "600:4:1000:32:1,600:2.2:2000:32:1,600:1.1:4000:32:1,600:0.74:6000:32:1,600:0.56:8000:32:1", seed: 11}
   busy: {driver: closed, schedule: "660:48:8000:8"}
   # Quiet at the end: the transfer a freeze reads ages out in 5 minutes.
   rest: {driver: open, schedule: "360:0.28:8000:32:1", seed: 12}
