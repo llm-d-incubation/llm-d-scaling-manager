@@ -15,6 +15,15 @@ type Resolver interface {
 	Resolve(ctx context.Context, req InputsRequest) (*Resolved, error)
 }
 
+// SourceLister is implemented by a Resolver that can list the sources it
+// reads; the server answers GET /v1/sources from it, and with empty lists
+// when the Resolver does not implement it. The server sets SchemaVersion and
+// replaces nil lists with empty ones. An error is answered as writeErr
+// classes it, so it must name no server path.
+type SourceLister interface {
+	Sources(ctx context.Context) (SourcesResponse, error)
+}
+
 // Resolved is a source resolved: the inputs as the API reports them, less
 // their id, and the Pricer that prices fleets from them.
 type Resolved struct {

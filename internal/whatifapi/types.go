@@ -489,6 +489,22 @@ type FlagUse struct {
 	On   []string `json:"on"`
 }
 
+// SourcesResponse is GET /v1/sources: the sources the server reads, which the
+// page's source picker offers.
+type SourcesResponse struct {
+	SchemaVersion int `json:"schemaVersion"`
+	// Prometheus is whether the server reads a Prometheus (--prometheus).
+	Prometheus bool `json:"prometheus"`
+	// Namespace is the one a prometheus source reads when a request names
+	// none, and Namespaces every one it may read.
+	Namespace  string   `json:"namespace,omitempty"`
+	Namespaces []string `json:"namespaces"`
+	// Recordings are the file names a recording source may name, and
+	// RecordingsTruncated whether the server listed only the first of them.
+	Recordings          []string `json:"recordings"`
+	RecordingsTruncated bool     `json:"recordingsTruncated,omitempty"`
+}
+
 // ErrorResponse is a request refused before any pricing.
 type ErrorResponse struct {
 	SchemaVersion int    `json:"schemaVersion"`

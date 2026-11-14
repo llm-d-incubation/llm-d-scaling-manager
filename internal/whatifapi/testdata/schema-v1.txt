@@ -253,3 +253,12 @@ planRequest.traffic.mix.outputTokens number
 planRequest.traffic.mix.promptTokens number
 planRequest.views object
 planRequest.views.allTrafficPerBucket boolean
+sources object
+sources.namespace string
+sources.namespaces array
+sources.namespaces[] string
+sources.prometheus boolean
+sources.recordings array
+sources.recordingsTruncated boolean
+sources.recordings[] string
+sources.schemaVersion number

@@ -1,15 +1,15 @@
 # Capacity planner: a graphical front end for what-if
 
 **Status:** proposal, 2026-11-09; the open questions are settled under
-[Decisions](#decisions). Phase 0, the API, is built: see
-[As built (phase 0)](#as-built-phase-0). The page and later phases are not. It
-builds on
+[Decisions](#decisions). Phase 0, the API, and phase 1, the page, are built:
+see [As built (phase 0)](#as-built-phase-0) and
+[As built (phase 1)](#as-built-phase-1). Later phases are not. It builds on
 `cmd/capacity-planner` and `internal/signals/whatif`, which are
 ([what-if capacity](slo-capacity-planner.md), [end-to-end TTFT](slo-capacity-planner-ttft.md)),
 including the processor-sharing TTFT pricing (PR #16, merged).
 
-**Audience:** contributors. There is no operator page yet; one goes in
-`docs/guides/` when phase 1 ships.
+**Audience:** contributors. Operators start from
+[Plan a P/D fleet with the capacity planner](../guides/capacity-planner/).
 
 ## What this is
 
@@ -709,8 +709,6 @@ contract, and a Grafana row plus a link for monitoring. The page:
 
 ## Phases
 
-| Phase | Ships | Depends on |
-| --- | --- | --- |
 v1 is phases 0 and 1; v2 is phase 2.
 
 | Phase | Ships | Depends on |
@@ -830,6 +828,77 @@ points at five corners each: every price is an optimised union bound, whose
 processor-sharing tail reads incomplete gamma functions. So the page should
 load the curves once per fleet, move the rate on drag, and price a target on
 release (the fallback under [Risks](#risks)). A faster price is engine work.
+
+## As built (phase 1)
+
+`capacity-planner serve` serves the page at `/`, from the same handler as the
+API, so loopback-only and Kubernetes authentication guard it as they guard
+the API. How to use it is in
+[Plan a P/D fleet with the capacity planner](../guides/capacity-planner/);
+how it is built, in [What-if serve](../developer-guide/capacity-planner-serve.md#the-page).
+
+The page is three files in `internal/whatifapi/page/`, embedded with
+`go:embed`: HTML, CSS and plain JavaScript, no chart library, no build step,
+no request to another origin (its Content-Security-Policy allows none). It
+follows [the mock](capacity-planner/example.html): the critical tab with
+regular and batch disabled and saying why; prefill and decode steppers with
+the recorded counts beside them; the rate slider with a number box, to 1.2
+times the lower knee; the TTFT and TPOT statistic pickers (mean, p50 to p99)
+and target sliders with number boxes; the assumed R_q box when a TPOT
+percentile has no learned ratio; the headroom. Under each target, what the
+chosen rate gives and whether it meets it. The binding bar draws the prefill,
+decode and fleet limits on one axis with the chosen rate, the figure without
+headroom where the cap binds, each limit's `BoundBy` verbatim and its span
+over V_P and f, and says to add a decode replica when `HeldByDecodeAdmission`
+holds the prefill limit. Then the +1 steps, the two graphs (target and rate
+as dashed lines, points A and B, the knees and the cap marked, the saturated
+region and the prefill flow-control onset shaded, the V_P and f span or the
+TPOT band shaded, refused points as gaps with the reason on hover), legends,
+a table view, the "if all traffic were bucket b" lines behind a checkbox with
+their own table, the flags drawer with each flag in words and what clears it,
+and the provenance chips of every term. The banner is the API's.
+
+**Where it departs from the design above.**
+
+- **One API addition: `GET /v1/sources`**, the Prometheus namespaces and the
+  recording names the server reads, for the source picker. With no
+  `GET /v1/models`, the model is a text box, empty for a source's only model.
+- **The page can assume V_P, a, the prompt cv and the router hop.** None of
+  the goldens' recordings prices TTFT without one, and a refused term
+  otherwise leaves the page blank. They are the API's `assume` fields.
+- **"Price at" a stated prompt length** stands in for the mock's traffic
+  picker. It sends a stated mix at a bucket's upper edge (`traffic.mix`, as
+  `--assume-input-tokens`), so the whole page, limits included, is that
+  stated shape's: the page says "priced at a 1,024-token prompt (stated
+  shape)", read from the scenario the API priced, and every figure carries
+  `AssumedShape`. It is not called "if all traffic were bucket b": that
+  name stays with the per-bucket view, from which no limit is read. The
+  output length is a number box, sent as the stated mix's output.
+- **`GET /v1/sources` shows every allowed namespace and every recording
+  name** to any user the API answers, and lists at most 1000 recordings,
+  saying when it cut the list (`recordingsTruncated`).
+- **A link carries the scenario** in the address's fragment, though the
+  proposal places that with several models.
+- **Badges.** A figure shows the flags that change how far to trust it by
+  name (the onset flags, `SpreadBeyondProcessorSharing`,
+  `HeldByDecodeAdmission`, the assumed ones) and counts the rest, which the
+  drawer lists; `UnvalidatedTTFT` is the banner.
+- **Provenance chips mark a term refused or flagged, not "assumed".** The
+  inputs carry no per-term "assumed" field; the source's assumptions are
+  listed under the chips in the API's words (`assumed`).
+- **No headless-browser test.** The repo has no browser in its unit tests. The
+  Go tests check that the page is served, embedded, with its types and
+  headers, behind the API's check, loads nothing external, reads only
+  elements it has, and names every flag; the page was looked at in a
+  headless browser against the goldens' recordings, light and dark.
+- **Variants are text boxes** in the source picker, sent as the inputs'
+  `prefillVariant` and `decodeVariant`; the error that asks for one lists the
+  names.
+- **Targets the policy does not set** are the page's (TTFT p90 1 s, TPOT mean
+  50 ms), said so above the limits until you set your own.
+- **Not built:** per-bucket target sliders (the bucket lines take the mix
+  target), dragging a point, a variant select read from `GET /v1/models`, the
+  Prometheus window's age and refresh.
 
 ## Decisions
 

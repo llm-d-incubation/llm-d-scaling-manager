@@ -103,6 +103,10 @@ The answer commands add `3`: a role refused, with the reason printed.
 `replicas-to-slo` and `slo-to-rate` also take the capture flags in place of
 `--recording`, and answer from the window without writing a file.
 
+To look at the recording in the planner's page, put `run.jsonl.gz` (the
+recording, not `run.capture.jsonl.gz`) in a directory and serve it:
+[Plan a P/D fleet with the capacity planner](../capacity-planner/#start-the-planner).
+
 **Go easy on Prometheus.** A capture asks one range query per planner query
 over the whole window: about 56 for one vLLM model. An hour is light; a day
 returns millions of samples, and the usual failure is Prometheus'

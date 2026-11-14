@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Capacity planner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="page/planner.css">
+<script src="page/planner.js" defer></script>
+</head>
+<body>
+<main class="viz-root">
+  <header>
+    <h1>Capacity planner</h1>
+    <div class="sub">
+      <span id="what">No inputs loaded</span>
+      <span class="chip src" id="srcchip" hidden></span>
+    </div>
+    <details id="source" class="card source">
+      <summary>Source: <span id="srcsum">choosing</span></summary>
+      <form id="srcform" class="row">
+        <fieldset class="kind">
+          <legend>Read the fleet from</legend>
+          <label><input type="radio" name="kind" value="prometheus" id="kprom"> Prometheus window</label>
+          <label><input type="radio" name="kind" value="recording" id="krec"> Recording</label>
+        </fieldset>
+        <div class="field" data-kind="prometheus">
+          <label for="ns">Namespace</label>
+          <select id="ns"></select>
+        </div>
+        <div class="field" data-kind="prometheus">
+          <label for="lasthour"><input type="checkbox" id="lasthour" checked> The last hour, ending now</label>
+          <span class="range"><label for="from">From</label> <input type="datetime-local" id="from" disabled>
+            <label for="to">to</label> <input type="datetime-local" id="to" disabled></span>
+        </div>
+        <div class="field" data-kind="recording">
+          <label for="rec">Recording</label>
+          <select id="rec"></select>
+          <span class="hint" id="rectrunc" hidden>The server lists only the first 1000 recordings.</span>
+        </div>
+        <div class="field" data-kind="recording">
+          <label for="cycle">Cycle (0 is the last)</label>
+          <input type="number" id="cycle" min="0" step="1" value="0">
+        </div>
+        <div class="field">
+          <label for="model">Model</label>
+          <input type="text" id="model" placeholder="the only model in the source" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="pvariant">Prefill variant</label>
+          <input type="text" id="pvariant" placeholder="the only one" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="dvariant">Decode variant</label>
+          <input type="text" id="dvariant" placeholder="the only one" autocomplete="off">
+        </div>
+        <button type="submit" id="load">Load</button>
+      </form>
+    </details>
+    <div class="banner" id="banner" role="note" hidden></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </header>
+
+  <section class="card controls" aria-label="Scenario">
+    <div class="group">
+      <h2>Fleet</h2>
+      <div class="stepper">
+        <span class="name" id="plabel">Prefill replicas</span>
+        <button type="button" id="pdec" aria-label="One prefill replica fewer">-</button>
+        <input type="number" id="prefill" min="1" max="64" step="1" aria-labelledby="plabel">
+        <button type="button" id="pinc" aria-label="One prefill replica more">+</button>
+        <span class="now" id="pnow"></span>
+      </div>
+      <div class="stepper">
+        <span class="name" id="dlabel">Decode replicas</span>
+        <button type="button" id="ddec" aria-label="One decode replica fewer">-</button>
+        <input type="number" id="decode" min="1" max="64" step="1" aria-labelledby="dlabel">
+        <button type="button" id="dinc" aria-label="One decode replica more">+</button>
+        <span class="now" id="dnow"></span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>Traffic</h2>
+      <div class="ctl">
+        <label for="rate">Critical, r/s <span class="hint">(all traffic priced as one class)</span></label>
+        <div class="slide"><input type="range" id="rate" min="0" max="10" step="0.01">
+          <input type="number" id="ratebox" min="0" step="0.1" aria-label="Critical rate, requests per second"></div>
+        <div class="at" id="ratenote"></div>
+      </div>
+      <div class="ctl disabled" title="Needs traffic split by priority: see the proposal's Traffic classes">
+        <span>Regular, r/s <b>0</b> <span class="hint">later</span></span>
+        <span>Batch, r/s <b>0</b> <span class="hint">later</span></span>
+      </div>
+      <div class="ctl">
+        <label for="priceas">Price at</label>
+        <select id="priceas">
+          <option value="mix">the current mix</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label for="outtok">Output length, tokens</label>
+        <input type="number" id="outtok" min="1" step="50">
+        <span class="hint" id="outnote"></span>
+      </div>
+    </div>
+    <div class="group">
+      <h2>SLO</h2>
+      <div class="ctl">
+        <label for="ttftstat">TTFT</label>
+        <select id="ttftstat"></select>
+        <div class="slide"><input type="range" id="ttft" aria-label="TTFT target">
+          <input type="number" id="ttftbox" min="0" step="1" aria-label="TTFT target, milliseconds"> ms</div>
+        <div class="at" id="ttftat"></div>
+      </div>
+      <div class="ctl">
+        <label for="tpotstat">TPOT</label>
+        <select id="tpotstat"></select>
+        <div class="slide"><input type="range" id="tpot" aria-label="TPOT target">
+          <input type="number" id="tpotbox" min="0" step="0.1" aria-label="TPOT target, milliseconds"> ms</div>
+        <div class="at" id="tpotat"></div>
+        <div class="ratio" id="ratiorow" hidden>
+          <label for="ratio">Assume R_q (percentile over mean)</label>
+          <input type="number" id="ratio" min="1" step="0.05" placeholder="e.g. 1.3">
+          <div class="hint" id="rationote"></div>
+        </div>
+      </div>
+      <div class="ctl">
+        <label for="headroom">Headroom (fraction of the knee)</label>
+        <input type="number" id="headroom" min="0.05" max="1" step="0.05">
+      </div>
+    </div>
+    <details class="assume" id="assumebox">
+      <summary>Assume a term the source did not learn (<span id="assumecount">none typed</span>)</summary>
+      <div class="row">
+        <div class="field"><label for="a-vp">V_P, prefill tokens/s</label><input type="number" id="a-vp" min="0" step="1000"><span class="hint" id="l-vp"></span></div>
+        <div class="field"><label for="a-a">a, fixed latency, ms</label><input type="number" id="a-a" min="0" step="1"><span class="hint" id="l-a"></span></div>
+        <div class="field"><label for="a-cv">Prompt cv</label><input type="number" id="a-cv" min="0" step="0.1"><span class="hint" id="l-cv"></span></div>
+        <div class="field"><label for="a-hop">Router hop, ms</label><input type="number" id="a-hop" min="0" step="1"><span class="hint" id="l-hop"></span></div>
+      </div>
+      <div class="hint">A typed value replaces the learned one and flags every figure that rests on it. Leave a box empty to use the source's.</div>
+    </details>
+  </section>
+
+  <div class="tabs" role="tablist" aria-label="Traffic class">
+    <button type="button" class="tab" role="tab" id="tab-critical" aria-selected="true" aria-controls="panel">Critical</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" disabled
+      title="Needs traffic split by priority; see the proposal's Traffic classes">Regular (later)</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" disabled
+      title="Needs traffic split by priority; see the proposal's Traffic classes">Batch (later)</button>
+  </div>
+  <section class="card panel" id="panel" role="tabpanel" aria-labelledby="tab-critical">
+    <h2>The most the fleet serves under these SLOs <span class="hint" id="limitsfor"></span></h2>
+    <p class="hint" id="pagetargets" hidden></p>
+    <div class="summary">
+      <div class="hero">
+        <div class="k">Fleet limit</div>
+        <div class="v" id="fleet"></div>
+        <div class="n" id="fleetn"></div>
+        <div class="n" id="chosen"></div>
+      </div>
+      <div class="bars">
+        <svg id="bars" viewBox="0 0 640 120" role="img" aria-labelledby="barsdesc"></svg>
+        <p class="sr" id="barsdesc"></p>
+        <ul class="limits" id="limits"></ul>
+      </div>
+    </div>
+    <ul class="marginal" id="marginal" aria-label="One more replica"></ul>
+
+    <div class="charts">
+      <div class="chart">
+        <h3 id="ttfttitle">TTFT</h3>
+        <div class="cap" id="ttftcap"></div>
+        <svg id="ttftchart" viewBox="0 0 640 340" role="img" aria-labelledby="ttfttitle ttftcap"></svg>
+        <div class="legend" id="ttftlegend"></div>
+        <div class="points" id="ttftpoints"></div>
+        <label class="toggle"><input type="checkbox" id="perbucket"> Show "if all traffic were bucket b" (each bucket priced as its own fleet; no limit is read from it)</label>
+        <div id="buckettable"></div>
+      </div>
+      <div class="chart">
+        <h3 id="tpottitle">TPOT</h3>
+        <div class="cap" id="tpotcap">Time per output token on the decode replicas, for the mix.</div>
+        <svg id="tpotchart" viewBox="0 0 460 340" role="img" aria-labelledby="tpottitle tpotcap"></svg>
+        <div class="legend" id="tpotlegend"></div>
+        <div class="points" id="tpotpoints"></div>
+      </div>
+    </div>
+    <details><summary>Table view: the curves' values</summary><div id="curvetable"></div></details>
+    <p class="note">Dashed horizontal line: the target. Dashed vertical line: the rate you set. Open circle: the figure at
+      that rate. Filled circle: the highest rate that meets the target. Shaded band: the span over V_P and f (TTFT) or
+      the bootstrap band (TPOT). Shaded past the lower knee: saturated, where the model answers nothing.</p>
+  </section>
+
+  <details class="card drawer" id="flagsdrawer">
+    <summary>Flags (<span id="flagcount">0</span>): what the figures rest on</summary>
+    <ul id="flags"></ul>
+  </details>
+  <details class="card drawer" id="inputsdrawer">
+    <summary>Inputs: <span id="inputsum"></span></summary>
+    <div class="chips" id="terms"></div>
+    <ul id="assumed"></ul>
+  </details>
+  <div class="tip" id="tip" hidden></div>
+</main>
+</body>
+</html>

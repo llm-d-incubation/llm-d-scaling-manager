@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +49,9 @@ func runServe(ctx context.Context, args []string, out, warn io.Writer) error {
 	var f serveFlags
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "the Prometheus base URL that inputs with a prometheus source read; empty serves recordings only"
+	for _, name := range []string{"from", "to"} {
+		fs.Lookup(name).Usage = "not for serve: each request names its own window"
+	}
 	fs.StringVar(&f.window.namespace, "namespace", "", "the namespace a prometheus source reads when the request names none")
 	fs.IntVar(&f.window.batchCap, "batch-cap", 0, "the engine's batch cap a window is captured with, as capture --batch-cap")
 	fs.StringVar(&f.recordings, "recordings", "", "a directory of learner recordings a recording source names by file name")
@@ -147,6 +151,11 @@ func (f *serveFlags) handler(fs *flag.FlagSet, warn io.Writer) (http.Handler, er
 	}
 	if f.recordings == "" && f.window.prometheus == "" {
 		return nil, usagef("serve needs --prometheus, --recordings or both: a source to resolve inputs from")
+	}
+	if f.recordings != "" {
+		if fi, err := os.Stat(f.recordings); err != nil || !fi.IsDir() {
+			return nil, usagef("--recordings %s: not a directory", f.recordings)
+		}
 	}
 	allowed, err := f.namespaces()
 	if err != nil {

@@ -34,6 +34,7 @@ source docs/guides/env.sh
 | [Scale a model to zero, and get it back](scale-to-zero/) | release an idle model's accelerators — and check it can wake before it parks |
 | [Test against a full llm-d stack](testing-with-llm-d/) | llm-d + the scaling manager on kind, emulated GPUs, no hardware |
 | [Benchmark the scaling manager](benchmarking/) | drive load through a real stack and compare runs |
+| [Plan a P/D fleet with the capacity planner](capacity-planner/) | a web page on your machine: the TTFT and TPOT a fleet gives, the most it serves under the SLO, and what one more replica changes |
 | [Record a window for the capacity planner](record-for-capacity-planner/) | save a past window of Prometheus for the capacity planner: with `capacity-planner`, or with only curl and jq |
 | [Bridge a scale-up with a warm pool](warm-pool/) | hold models loaded and asleep so a scale-up serves while its replica starts |
 | [Let models borrow from a Kueue cohort](kueue-borrowing/) | a Kueue-bounded quota that grows into GPUs its cohort leaves idle: prerequisites, pilot, reasons, turning it off (experimental) |
