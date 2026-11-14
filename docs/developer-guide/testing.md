@@ -1875,7 +1875,13 @@ shortened run on Qwen3-32B at TP 2, buckets A, B and C, one repeat:
 export STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
 export STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
 export STAIRCASE_PREFILL_MEMORY=64Gi STAIRCASE_DECODE_MEMORY=64Gi
+export BENCHMARK_ENGINE_CACHE_HOSTPATH=/mnt/local/scaling-manager-engine-cache/$BENCHMARK_NAMESPACE
 ```
+
+Keep the engine cache on each node's disk for this model. By default it sits on the
+shared workload volume, and four pods compiling Triton kernels into it at once lose
+files: a pod fails autotune with `No such file or directory: '/engine-cache/triton/...'`,
+stays `Running`, never becomes ready, and the standup times out.
 
 Read what the freeze prints: its last lines are what the prediction assumes. A refused
 freeze aborts the run. After repeat 1 of the gate buckets the run scores them itself,
