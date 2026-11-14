@@ -36,6 +36,7 @@
         <div class="field" data-kind="recording">
           <label for="rec">Recording</label>
           <select id="rec"></select>
+          <span class="hint" id="rectrunc" hidden>The server lists only the first 1000 recordings.</span>
         </div>
         <div class="field" data-kind="recording">
           <label for="cycle">Cycle (0 is the last)</label>
@@ -79,11 +80,11 @@
         <div class="at" id="ratenote"></div>
       </div>
       <div class="ctl disabled" title="Needs traffic split by priority: see the proposal's Traffic classes">
-        <label>Regular, r/s <b>0</b> <span class="hint">later</span></label>
-        <label>Batch, r/s <b>0</b> <span class="hint">later</span></label>
+        <span>Regular, r/s <b>0</b> <span class="hint">later</span></span>
+        <span>Batch, r/s <b>0</b> <span class="hint">later</span></span>
       </div>
       <div class="ctl">
-        <label for="priceas">Price as</label>
+        <label for="priceas">Price at</label>
         <select id="priceas">
           <option value="mix">the current mix</option>
         </select>

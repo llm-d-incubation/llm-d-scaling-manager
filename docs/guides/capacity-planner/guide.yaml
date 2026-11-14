@@ -20,7 +20,7 @@ start:
       kubectl -n ${PROM_NS} port-forward svc/${PROM_SVC} 9090:9090 &
       bin/capacity-planner serve --prometheus http://localhost:9090 --namespace ${NAMESPACE} --kube-state-metrics
   recordings:
-    note: Or from recordings you saved before. Every file in the directory is offered by name.
+    note: From recordings you saved before. Every recording in the directory is offered by name.
     run: |
       bin/capacity-planner serve --recordings ./recordings
 

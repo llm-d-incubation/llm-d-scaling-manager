@@ -866,16 +866,26 @@ and the provenance chips of every term. The banner is the API's.
 - **The page can assume V_P, a, the prompt cv and the router hop.** None of
   the goldens' recordings prices TTFT without one, and a refused term
   otherwise leaves the page blank. They are the API's `assume` fields.
-- **"Price as" one bucket** sends a stated mix at the bucket's upper edge,
-  as the mock's traffic picker does: the limits are then that what-if's,
-  labelled so and flagged `AssumedShape`. The output length is a number box,
-  sent as the stated mix's output.
+- **"Price at" a stated prompt length** stands in for the mock's traffic
+  picker. It sends a stated mix at a bucket's upper edge (`traffic.mix`, as
+  `--assume-input-tokens`), so the whole page, limits included, is that
+  stated shape's: the page says "priced at a 1,024-token prompt (stated
+  shape)", read from the scenario the API priced, and every figure carries
+  `AssumedShape`. It is not called "if all traffic were bucket b": that
+  name stays with the per-bucket view, from which no limit is read. The
+  output length is a number box, sent as the stated mix's output.
+- **`GET /v1/sources` shows every allowed namespace and every recording
+  name** to any user the API answers, and lists at most 1000 recordings,
+  saying when it cut the list (`recordingsTruncated`).
 - **A link carries the scenario** in the address's fragment, though the
   proposal places that with several models.
 - **Badges.** A figure shows the flags that change how far to trust it by
   name (the onset flags, `SpreadBeyondProcessorSharing`,
   `HeldByDecodeAdmission`, the assumed ones) and counts the rest, which the
   drawer lists; `UnvalidatedTTFT` is the banner.
+- **Provenance chips mark a term refused or flagged, not "assumed".** The
+  inputs carry no per-term "assumed" field; the source's assumptions are
+  listed under the chips in the API's words (`assumed`).
 - **No headless-browser test.** The repo has no browser in its unit tests. The
   Go tests check that the page is served, embedded, with its types and
   headers, behind the API's check, loads nothing external, reads only

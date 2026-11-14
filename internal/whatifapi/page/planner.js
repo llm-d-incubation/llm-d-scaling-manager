@@ -1,7 +1,10 @@
 // The capacity planner's page (docs/proposals/capacity-planner.md, "The
-// screen"). It holds no model: every number it shows is one the API returned,
-// and a refused figure is shown as its reason, never as a number. Plain
-// JavaScript, no library, no request to any origin but the one that served it.
+// screen"). It holds no model: every figure it shows is one the API returned
+// (it computes only the axes' ranges, and which of the two knees is lower to
+// place them), and a refused figure is shown as its reason, never as a number.
+// Every string from the API goes into the page through esc. Plain JavaScript,
+// no library, no request to any origin but the one that served it, by paths
+// relative to the page, so that a proxy may serve it under a prefix.
 "use strict";
 
 // FLAG_WORDS is every flag the engine raises, in plain words, and what clears
@@ -42,7 +45,7 @@ const FLAG_WORDS = {
   TierUnstable: ["Resamples fit the ITL line at another tier and move the answer by more than 5%.", "more steady readings"],
   LineNearGate: ["The ITL line sits near the tracker's gate; the answer does not care which side (informational).", "nothing"],
   ExtrapolatedFill: ["The fill is above the highest fill the ITL line was read at: extrapolated.", "readings at higher load"],
-  AssumedShape: ["Priced at a prompt or output length you set, not the measured one.", "price as the current mix"],
+  AssumedShape: ["Priced at a prompt or output length you set, not the measured one.", "price at the current mix"],
   PullUnseen: ["The prefill load is past the pull table's highest bucket: the pull reads low.", "readings at higher prefill load"],
   OverheadMeasured: ["The fixed overhead comes from the prefill pods' histograms.", "nothing (informational)"],
   AssumedPoissonArrivals: ["Arrivals are taken as Poisson: on bursty traffic the TTFT over-promises.", "a stated arrival burstiness (Ca²)"],
@@ -72,7 +75,7 @@ const TPOT_STATS = ["mean", "p50", "p90", "p95", "p99"];
 
 // state is the page's: the sources, the inputs loaded, the knobs, and the
 // last plan drawn.
-const state = {sources: null, inputs: null, plan: null, k: null, inFlight: false, dirty: false, seq: 0};
+const state = {sources: null, inputs: null, plan: null, k: null, inFlight: false, dirty: false, seq: 0, dragging: false};
 
 const el = id => document.getElementById(id);
 
@@ -113,19 +116,41 @@ function fmtNum(v) {
   return String(Number(v.toPrecision(4)));
 }
 
-// figText is a rate figure as text: the number, or "refused (reason)".
-function figText(f, fmt) {
+// figPlain is a figure as plain text: the number, or "refused (reason)".
+function figPlain(f, fmt) {
   const v = val(f);
   return v != null ? fmt(v) : "refused (" + (f && f.refused ? f.refused.reason : "not priced") + ")";
 }
 
-// spanText is a figure's span over V_P and f, for a rate.
-function spanText(f) {
+// figText is figPlain escaped, for HTML.
+function figText(f, fmt) {
+  return esc(figPlain(f, fmt));
+}
+
+// spanPlain is a figure's span over V_P and f, for a rate, as plain text.
+function spanPlain(f) {
   const s = f && f.sensitivity;
   if (!s) return "";
   const lo = s.lo != null ? fmtRate(s.lo) : "refused (" + s.loRefused + ")";
   const hi = s.hi != null ? fmtRate(s.hi) : "refused (" + s.hiRefused + ")";
   return lo + " to " + hi + " over V_P and f";
+}
+
+// spanText is spanPlain escaped, for HTML.
+function spanText(f) {
+  return esc(spanPlain(f));
+}
+
+// shapeOf is what the plan was priced at, in words, read from the scenario
+// the API priced, never from the knobs: the current mix, or a stated shape.
+function shapeOf(p) {
+  const m = p.scenario.mix;
+  if (!m || m === "observed") return "the current mix";
+  const parts = [];
+  if (m.promptTokens) parts.push(`a ${fmtNum(m.promptTokens)}-token prompt`);
+  if (m.outputTokens) parts.push(`a ${fmtNum(m.outputTokens)}-token output`);
+  const flagged = (p.limits.fleet.flags || []).includes("AssumedShape") ? ", AssumedShape" : "";
+  return parts.join(" and ") + " (stated shape" + flagged + ")";
 }
 
 // SHOWN_FLAGS change how far to trust a figure, so they are shown beside it;
@@ -143,12 +168,16 @@ function flagChips(f) {
     (rest.length ? ` <span class="chip" title="${esc(rest.join(", "))}">+${rest.length} more flags</span>` : "");
 }
 
+// setStatus writes the status line, which a screen reader announces. While
+// the rate is dragged it holds its news until the release, but for errors.
 function setStatus(text, error) {
+  if (state.dragging && !error) return;
   el("status").textContent = text;
   el("status").classList.toggle("error", !!error);
 }
 
-// api calls the API on this origin, retrying a busy server's 503.
+// api calls the API on this origin, by a path relative to the page,
+// retrying a busy server's 503.
 async function api(method, path, body) {
   for (let attempt = 0; ; attempt++) {
     const opt = {method, headers: {}};
@@ -177,7 +206,7 @@ async function api(method, path, body) {
 async function start() {
   wire();
   try {
-    state.sources = await api("GET", "/v1/sources");
+    state.sources = await api("GET", "v1/sources");
   } catch (e) {
     setStatus("Could not list the sources: " + e.message, true);
     return;
@@ -185,6 +214,7 @@ async function start() {
   const s = state.sources;
   el("ns").innerHTML = s.namespaces.map(n => `<option${n === s.namespace ? " selected" : ""}>${esc(n)}</option>`).join("");
   el("rec").innerHTML = s.recordings.map(n => `<option>${esc(n)}</option>`).join("");
+  el("rectrunc").hidden = !s.recordingsTruncated;
   el("kprom").disabled = !s.prometheus;
   el("krec").disabled = s.recordings.length === 0;
   // The page opens on a Prometheus window, the last hour ending now; a
@@ -227,26 +257,34 @@ function showKind() {
   el("from").disabled = el("to").disabled = el("lasthour").checked;
 }
 
-// sourceRequest is the source the form names.
+// sourceRequest is the source the form names, or an error saying what the
+// form lacks.
 function sourceRequest() {
   if (kindNow() === "recording") {
+    if (!el("rec").value) throw new Error("pick a recording");
     return {kind: "recording", name: el("rec").value, cycle: Math.max(0, Math.floor(+el("cycle").value || 0))};
   }
   const src = {kind: "prometheus", namespace: el("ns").value};
   if (!el("lasthour").checked) {
-    src.from = new Date(el("from").value).toISOString().replace(/\.\d{3}Z$/, "Z");
-    src.to = new Date(el("to").value).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const from = new Date(el("from").value), to = new Date(el("to").value);
+    if (isNaN(from) || isNaN(to)) throw new Error("give both From and To, or tick the last hour");
+    src.from = from.toISOString().replace(/\.\d{3}Z$/, "Z");
+    src.to = to.toISOString().replace(/\.\d{3}Z$/, "Z");
   }
   return src;
 }
 
+// loadInputs resolves the source the form names. A response that a later
+// load overtook is dropped.
 async function loadInputs() {
-  const req = {source: sourceRequest()};
-  if (el("model").value.trim()) req.model = el("model").value.trim();
-  setStatus(req.source.kind === "prometheus" ? "Reading the Prometheus window (seconds to a minute)..." : "Replaying the recording...");
+  const seq = ++state.seq;
   el("load").disabled = true;
   try {
-    const inputs = await api("POST", "/v1/inputs", req);
+    const req = {source: sourceRequest()};
+    if (el("model").value.trim()) req.model = el("model").value.trim();
+    setStatus(req.source.kind === "prometheus" ? "Reading the Prometheus window (seconds to a minute)..." : "Replaying the recording...");
+    const inputs = await api("POST", "v1/inputs", req);
+    if (seq !== state.seq) return;
     setInputs(inputs);
     if (!state.linkApplied) {
       state.linkApplied = true;
@@ -289,8 +327,8 @@ function setInputs(inputs) {
   slider("ttft", k.ttftTarget * 1000, 1);
   slider("tpot", k.tpotTarget * 1000, 0.1);
   const prompt = val(inputs.observed.promptTokens);
-  el("priceas").innerHTML = `<option value="mix">the current mix${prompt != null ? " (mean prompt " + fmtNum(prompt) + " tokens)" : ""}</option>` +
-    inputs.observed.buckets.map(b => `<option value="${esc(b.name)}">if all traffic were ${esc(b.name)} (every prompt ${fmtNum(b.upperTokens)} tokens)</option>`).join("");
+  el("priceas").innerHTML = `<option value="mix">the current mix${prompt != null ? " (mean prompt " + esc(fmtNum(prompt)) + " tokens)" : ""}</option>` +
+    inputs.observed.buckets.map(b => `<option value="${esc(b.name)}">a ${esc(fmtNum(b.upperTokens))}-token prompt (stated shape)</option>`).join("");
   el("outnote").textContent = k.outputTokens != null ? "observed " + fmtNum(k.outputTokens) : "";
   el("outtok").value = k.outputTokens != null ? Math.round(k.outputTokens) : "";
   el("headroom").value = k.headroom;
@@ -366,10 +404,12 @@ function showSource(inputs) {
     (fleet.prefill ? `prefill ${fleet.prefill.variant}, decode ${fleet.decode.variant}` : `decode ${fleet.decode.variant}`);
 }
 
-// showInputs is the provenance chips: every term with its source, or its
-// refusal.
+// showInputs is the provenance chips: every term with its source as the API
+// names it, its flags, or its refusal. The API marks no term "assumed" by
+// itself: a term with flags is drawn flagged, and the source's assumptions
+// are listed below in the API's words.
 function showInputs(inputs) {
-  let refused = 0, assumed = 0;
+  let refused = 0, flagged = 0;
   el("terms").innerHTML = inputs.terms.map(t => {
     const name = TERM_NAMES[t.name] || t.name;
     let cls = "learned", text, title = t.source || "";
@@ -378,8 +418,7 @@ function showInputs(inputs) {
       text = `${esc(name)} <b>refused</b> ${esc(t.refused.reason)}`;
       title = t.refused.detail;
     } else {
-      const isAssumed = (t.flags && t.flags.length) || /assum|default/i.test(t.source || "");
-      if (isAssumed) { cls = "assumed"; assumed++; }
+      if (t.flags && t.flags.length) { cls = "flagged"; flagged++; }
       text = `${esc(name)} <b>${esc(fmtNum(t.value))}</b>${t.unit ? " " + esc(t.unit) : ""}` + (t.source ? ` · ${esc(t.source)}` : "");
       if (t.flags && t.flags.length) title += " | " + t.flags.join(", ");
     }
@@ -387,7 +426,7 @@ function showInputs(inputs) {
   }).join("");
   el("assumed").innerHTML = (inputs.assumed || []).map(a => `<li>assumed: ${esc(a)}</li>`).join("");
   const s = inputs.source;
-  el("inputsum").textContent = `cycle ${s.cycle} of ${s.totalCycles}, ${inputs.terms.length} terms, ${refused} refused, ${assumed} assumed or flagged`;
+  el("inputsum").textContent = `cycle ${s.cycle} of ${s.totalCycles}, ${inputs.terms.length} terms, ${refused} refused, ${flagged} flagged, ${(inputs.assumed || []).length} assumptions`;
 }
 
 // ---- The link ----
@@ -406,7 +445,8 @@ function applyLink() {
   }
   if (g("ttftStat")) k.ttftStat = g("ttftStat");
   if (g("tpotStat")) k.tpotStat = g("tpotStat");
-  if (g("priceAs")) k.priceAs = g("priceAs");
+  // A bucket the inputs do not name prices the current mix.
+  k.priceAs = state.inputs.observed.buckets.some(b => b.name === g("priceAs")) ? g("priceAs") : "mix";
   k.perBucket = g("perBucket") === "1";
   for (const a of ASSUMABLE) if (num(a.key) != null) k.assume[a.key] = num(a.key);
   fillStats("ttftstat", TTFT_STATS, k.ttftStat);
@@ -494,11 +534,14 @@ async function plan() {
   }
   state.inFlight = true;
   state.dirty = false;
+  // A response priced against inputs a later load replaced is dropped.
+  const seq = state.seq, inputsId = state.inputs.inputsId;
   const t0 = performance.now();
   const slow = setTimeout(() => setStatus("Pricing (a new fleet or view can take seconds)..."), 300);
   try {
-    const out = await api("POST", "/v1/plan", planRequest());
+    const out = await api("POST", "v1/plan", planRequest());
     clearTimeout(slow);
+    if (seq !== state.seq || !state.inputs || inputsId !== state.inputs.inputsId) return;
     state.plan = out;
     if (state.k.rate == null) state.k.rate = out.limits.chosen.rate;
     render();
@@ -543,7 +586,7 @@ function render() {
   el("rate").step = (rmax / 400).toFixed(3);
   el("rate").value = k.rate;
   el("ratenote").textContent = p.limits.chosen.rateSource === "operating point" ? "started at the operating point: the source carries no request rate" : "";
-  el("limitsfor").textContent = k.priceAs === "mix" ? "(priced as the current mix)" : `(priced as if all traffic were ${k.priceAs}: not the mix)`;
+  el("limitsfor").textContent = `(priced at ${shapeOf(p)})`;
   renderAtTarget();
   renderLimits();
   renderTTFT();
@@ -558,10 +601,10 @@ function renderAtTarget() {
   const at = (fig, target) => {
     const v = val(fig);
     if (v == null) return `<span class="miss">refused at ${rate}: ${esc(fig && fig.refused ? fig.refused.reason : "not priced")}</span>`;
-    return `<span class="${v <= target ? "ok" : "miss"}">${fmtSec(v)} at ${rate}${v <= target ? "" : ", misses"}</span>`;
+    return `<span class="${v <= target ? "ok" : "miss"}">${fmtSec(v)} at ${rate}, ${v <= target ? "meets it" : "misses"}.</span>`;
   };
-  el("ttftat").innerHTML = at(p.ttft.line.atRate.figure, p.ttft.line.target) + (state.k.ttftFromPolicy ? "" : ' <span class="hint">the policy sets no TTFT target: set yours</span>');
-  el("tpotat").innerHTML = p.tpot ? at(p.tpot.atRate.figure, p.tpot.target) + (state.k.tpotFromPolicy ? "" : ' <span class="hint">the policy sets no TPOT target: set yours</span>') : "";
+  el("ttftat").innerHTML = at(p.ttft.line.atRate.figure, p.ttft.line.target) + (state.k.ttftFromPolicy ? "" : ' <span class="hint">The policy sets no TTFT target: set yours.</span>');
+  el("tpotat").innerHTML = p.tpot ? at(p.tpot.atRate.figure, p.tpot.target) + (state.k.tpotFromPolicy ? "" : ' <span class="hint">The policy sets no TPOT target: set yours.</span>') : "";
   const ratio = p.tpot && p.tpot.ratio;
   let note = "";
   if (ratio && ratio.refused) note = "R_q is not learned (" + ratio.refused.reason + "): type a ratio, or pick the mean.";
@@ -576,13 +619,14 @@ function renderLimits() {
   el("fleet").textContent = fv != null ? fmtRate(fv) : "refused";
   const notes = [];
   if (fv == null) notes.push(why(f));
-  if (f.capApplied) notes.push(`the operating-point cap binds (headroom ${state.k.headroom}); without headroom: ${figText(f.withoutHeadroom, fmtRate)}`);
-  if (spanText(f)) notes.push(spanText(f));
+  if (f.capApplied) notes.push(`the operating-point cap binds (headroom ${p.scenario.headroom}); without headroom: ${figPlain(f.withoutHeadroom, fmtRate)}`);
+  if (spanPlain(f)) notes.push(spanPlain(f));
   el("fleetn").innerHTML = esc(notes.join("; ")) + (f.flags && f.flags.length ? "<br>" + flagChips(f) : "");
+  // The headroom is the API's figure, as it is: the page derives no share of it.
   const h = val(L.chosen.headroom);
   el("chosen").innerHTML = h == null ? `You chose ${fmtRate(L.chosen.rate)}: no headroom, the limit is refused.` :
     `You chose ${fmtRate(L.chosen.rate)}: <span class="${h >= 0 ? "ok" : "miss"}">headroom ${h >= 0 ? "+" : ""}${fmtRate(h)}` +
-    (fv ? ` (${Math.round(100 * h / fv)}%)` : "") + `${h < 0 ? ", the SLO is missed" : ""}</span>`;
+    `${h < 0 ? ", the SLO is missed" : ""}</span>`;
 
   const binding = f.binding || [];
   const held = (L.prefill.flags || []).includes("HeldByDecodeAdmission");
@@ -648,7 +692,7 @@ function drawBars(rows, fleet, rate) {
   const svg = el("bars");
   svg.setAttribute("viewBox", `0 -10 ${W} ${H + 10}`);
   svg.innerHTML = s;
-  el("barsdesc").textContent = all.map(r => `${r.name} limit ${figText(r.fig, fmtRate)}`).join("; ") + `; you chose ${fmtRate(rate)}.`;
+  el("barsdesc").textContent = all.map(r => `${r.name} limit ${figPlain(r.fig, fmtRate)}`).join("; ") + `; you chose ${fmtRate(rate)}.`;
 }
 
 // ticks are about n round values from 0 to max.
@@ -685,7 +729,7 @@ function pts(curve) {
 function renderTTFT() {
   const p = state.plan, t = p.ttft, k = state.k;
   const m = t.markers, knee = lowerKnee(m);
-  const series = [{cls: "c-mix", name: k.priceAs === "mix" ? "current mix (the limits are read here)" : `priced as all ${k.priceAs} (the limits are read here)`, pts: pts(t.line.curve), band: true}];
+  const series = [{cls: "c-mix", name: `${shapeOf(p)} (the limits are read here)`, pts: pts(t.line.curve), band: true}];
   const dots = [];
   const buckets = t.perBucket || [];
   const names = state.inputs.observed.buckets.map(b => b.name);
@@ -935,9 +979,15 @@ function wire() {
   // prices the two points alone.
   el("rate").oninput = () => {
     if (!ready()) return;
+    state.dragging = true;
     k().rate = +el("rate").value;
     el("ratebox").value = Number(k().rate.toFixed(2));
     schedule(100);
+  };
+  // The release lets the status line speak again, and prices the rate let go.
+  el("rate").onchange = () => {
+    state.dragging = false;
+    if (ready()) schedule(0);
   };
   el("ratebox").onchange = () => {
     const v = +el("ratebox").value;

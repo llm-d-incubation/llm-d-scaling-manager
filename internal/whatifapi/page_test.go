@@ -104,6 +104,13 @@ func TestPageLoadsNothingExternal(t *testing.T) {
 	}
 	html := pageText(t, "index.html")
 	assert.Equal(t, 1, strings.Count(html, "<script"), "one script, by src")
+	// The page reaches its files and the API by paths relative to itself, so
+	// that a proxy may serve it under a prefix.
+	js := pageText(t, "planner.js")
+	for _, abs := range []string{`"/v1/`, "`/v1/", `'/v1/`, `"/page/`} {
+		assert.NotContains(t, js, abs, "an absolute path")
+	}
+	assert.NotContains(t, html, `="/page/`, "an absolute path")
 	assert.NotContains(t, html, "<style")
 }
 

@@ -259,5 +259,6 @@ sources.namespaces array
 sources.namespaces[] string
 sources.prometheus boolean
 sources.recordings array
+sources.recordingsTruncated boolean
 sources.recordings[] string
 sources.schemaVersion number

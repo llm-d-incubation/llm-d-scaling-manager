@@ -40,7 +40,11 @@ make capacity-planner
 
 ## Start the planner
 
-<!-- guide:start start -->
+Pick one source. Each command runs until you stop it.
+
+From Prometheus:
+
+<!-- guide:start.prometheus start -->
 ```bash
 # From Prometheus. Reach it from your machine first; use the Service your Prometheus has.
 # The planner reads the namespace your model servers run in, with the server's own access to Prometheus.
@@ -49,11 +53,17 @@ export PROM_SVC=<prometheus service>
 export NAMESPACE=<model namespace>
 kubectl -n ${PROM_NS} port-forward svc/${PROM_SVC} 9090:9090 &
 bin/capacity-planner serve --prometheus http://localhost:9090 --namespace ${NAMESPACE} --kube-state-metrics
+```
+<!-- guide:start.prometheus end -->
 
-# Or from recordings you saved before. Every file in the directory is offered by name.
+Or from recordings:
+
+<!-- guide:start.recordings start -->
+```bash
+# From recordings you saved before. Every recording in the directory is offered by name.
 bin/capacity-planner serve --recordings ./recordings
 ```
-<!-- guide:start end -->
+<!-- guide:start.recordings end -->
 
 Both sources can be served at once: give both flags. The server prints the
 address it listens on. Stop it with Ctrl-C.
@@ -96,8 +106,11 @@ than one model, type the model's name.
 - **"If all traffic were bucket b".** A checkbox under the TTFT graph adds one
   line per prompt size, each priced as if every request had that prompt. It is
   a what-if about a traffic shift, not the TTFT each size sees inside today's
-  mix, and no limit is read from it. **Price as** prices the whole page, limits
-  included, at one such size.
+  mix, and no limit is read from it.
+- **Price at.** Prices the whole page, limits included, at a prompt length
+  you state instead of the current mix, and **Output length** at an output
+  length you state. The page then says so above the limits, and every figure
+  is flagged `AssumedShape`.
 - **TPOT percentile.** A percentile needs the ratio of that percentile to the
   mean. If the source did not learn it, type an assumed ratio; every figure
   that rests on it is flagged `AssumedTPOTRatio`.

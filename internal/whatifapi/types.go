@@ -499,8 +499,10 @@ type SourcesResponse struct {
 	// none, and Namespaces every one it may read.
 	Namespace  string   `json:"namespace,omitempty"`
 	Namespaces []string `json:"namespaces"`
-	// Recordings are the file names a recording source may name.
-	Recordings []string `json:"recordings"`
+	// Recordings are the file names a recording source may name, and
+	// RecordingsTruncated whether the server listed only the first of them.
+	Recordings          []string `json:"recordings"`
+	RecordingsTruncated bool     `json:"recordingsTruncated,omitempty"`
 }
 
 // ErrorResponse is a request refused before any pricing.

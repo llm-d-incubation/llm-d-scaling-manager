@@ -202,7 +202,7 @@ with none, TokenReview checks the token for the API server's own audiences.
 | --- | --- |
 | `POST /v1/inputs` | Resolves a source for one model: the replay of a recording to a cycle, or a Prometheus window captured and generated in memory (seconds). Returns `inputsId` and every term with its source. |
 | `POST /v1/plan` | Prices a scenario against an `inputsId`. |
-| `GET /v1/sources` | What the server reads, for the page's source picker: whether it reads a Prometheus, the namespaces it may read and the default one, and the file names in `--recordings` (regular, unhidden files, sorted, at most 1000). |
+| `GET /v1/sources` | What the server reads, for the page's source picker: whether it reads a Prometheus, the namespaces it may read and the default one, and every name in `--recordings` that a `recording` source accepts (a regular file or a link to one, under a name that is no path and not hidden), sorted. It lists at most 1000, with `recordingsTruncated` true past that. Any user the API answers sees all of these: every allowed namespace and every recording name. |
 | `GET /` | The page. Its script and style are `GET /page/planner.js` and `GET /page/planner.css`. |
 
 `GET /v1/models` and `POST /v1/size` (inverse mode) are later phases. Any
@@ -217,14 +217,19 @@ loopback names only with `--auth=none`, and a bearer token allowed `get` on
 `/whatif/` (the page) and `/whatif/page/*` (its files) with
 `--auth=kubernetes`. The `/whatif/*` rule above covers both. A browser does not
 send a bearer token by itself: with Kubernetes authentication, open the page
-through a proxy that adds one.
+through a proxy that adds one. The page reaches its files and the API by paths
+relative to itself, so a proxy may serve it under a prefix; open it with the
+trailing slash (`/planner/`, not `/planner`).
 
 The page holds no model. It calls `GET /v1/sources`, `POST /v1/inputs` and
 `POST /v1/plan`, and draws what they return: a refused figure is drawn as a gap
-or its reason, never as a number. Its Content-Security-Policy allows its own
-script, style and API only, and no inline script or style. One plan is in
-flight at a time; a knob moved meanwhile is priced when it returns. The rate
-prices on drag (100 ms after the last move), a target on release.
+or its reason, never as a number, and every string the API returns is escaped
+before it is drawn. It computes only the axes' ranges and which knee is lower.
+Its Content-Security-Policy allows its own script, style and API only, and no
+inline script or style. One plan is in flight at a time; a knob moved
+meanwhile is priced when it returns, and a response priced against inputs a
+later load replaced is dropped. The rate prices on drag (100 ms after the last
+move), a target on release.
 
 The address's fragment carries the source and the knobs
 (`#recording=run.jsonl.gz&prefill=2&rate=6&ttft=0.8&vp=30000`), and the page
@@ -324,7 +329,7 @@ Plan`), see [As built](../proposals/capacity-planner.md#as-built-phase-0).
 | `TestCaching` | The same scenario is the same id and bytes; a rate move prices no curve and no limit; a target move prices limits only. |
 | `TestPageServed`, `TestServeServesThePage` | The page and its files are served from the binary with their content types and security headers; anything else under `/page/` is a 404. |
 | `TestPageBehindAuth` | The page sits behind the API's check: 401 with no token, 403 for a user not allowed `/whatif/`, 403 for a foreign Host on loopback. |
-| `TestPageLoadsNothingExternal`, `TestPageIDsExist` | The page names no other origin and runs no inline script or style; every element its script reads is on it. |
+| `TestPageLoadsNothingExternal`, `TestPageIDsExist` | The page names no other origin, runs no inline script or style, and uses no absolute path; every element its script reads is on it. |
 | `TestPageNamesEveryFlag` | Every flag the engine, the SLO analyzer and the CLI declare has plain words on the page. |
-| `TestServeSources`, `TestSourcesWithoutLister` | `GET /v1/sources` lists the recordings by name and says whether a Prometheus is read; an error names no server path. |
+| `TestServeSources`, `TestSourcesWithoutLister` | `GET /v1/sources` lists every recording a `recording` source accepts, links included, and nothing it refuses; it says when it cut the list, and whether a Prometheus is read; an error names no server path. |
 | `TestCheckListen`, `TestAuthenticate`, `TestServeRefusesUnsafeBinds` | Loopback serves with no token; any other bind refuses to start without `--auth=kubernetes`; with it, a token the SubjectAccessReview does not allow is 403. |

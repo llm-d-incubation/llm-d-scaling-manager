@@ -72,8 +72,8 @@ input[type=number] { width: 80px; font-variant-numeric: tabular-nums; }
 .slide input[type=range] { flex: 1; min-width: 120px; }
 .ctl select { margin-right: 6px; }
 .at { margin-top: 3px; font-variant-numeric: tabular-nums; }
-.ok::before { content: "\2713 "; color: var(--good); font-weight: 700; }
-.miss::before { content: "\2715 "; color: var(--critical); font-weight: 700; }
+.ok::before { content: "\2713\00a0"; color: var(--good); font-weight: 700; }
+.miss::before { content: "\2715\00a0"; color: var(--critical); font-weight: 700; }
 .ratio { margin-top: 6px; }
 .row { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; margin: 8px 0; }
 .assume { grid-column: 1 / -1; margin-top: 0; }

@@ -111,14 +111,28 @@ func (s *servedSources) recordingPath(src whatifapi.SourceRequest) (string, erro
 		return "", whatifapi.InputErrorf("source.namespace, from and to are a prometheus source's")
 	case src.Cycle < 0:
 		return "", whatifapi.InputErrorf("source.cycle %d, want a cycle from 1, or 0 for the last", src.Cycle)
-	case src.Name == "" || src.Name != filepath.Base(src.Name) || strings.ContainsAny(src.Name, `/\:`) || strings.HasPrefix(src.Name, "."):
+	case !recordingName(src.Name):
 		return "", whatifapi.InputErrorf("source.name %q: want a file name in the server's recordings directory, not a path", src.Name)
 	}
-	path := filepath.Join(s.recordings, src.Name)
-	if fi, err := os.Stat(path); err != nil || !fi.Mode().IsRegular() {
+	path, ok := s.recordingFile(src.Name)
+	if !ok {
 		return "", whatifapi.InputErrorf("source.name %q: no such recording in the server's recordings directory", src.Name)
 	}
 	return path, nil
+}
+
+// recordingName reports whether name is one a recording source may give: a
+// file name, not a path, and not hidden.
+func recordingName(name string) bool {
+	return name != "" && name == filepath.Base(name) && !strings.ContainsAny(name, `/\:`) && !strings.HasPrefix(name, ".")
+}
+
+// recordingFile is name's path in the recordings directory, and whether it
+// is a regular file there, a symbolic link followed.
+func (s *servedSources) recordingFile(name string) (string, bool) {
+	path := filepath.Join(s.recordings, name)
+	fi, err := os.Stat(path)
+	return path, err == nil && fi.Mode().IsRegular()
 }
 
 // maxListedRecordings bounds the recordings GET /v1/sources lists.
@@ -126,7 +140,9 @@ const maxListedRecordings = 1000
 
 // Sources is what the server reads, for the page's source picker: whether it
 // reads a Prometheus and in which namespaces, and the recordings a recording
-// source may name (the regular, unhidden files of --recordings, by name).
+// source may name: every name in --recordings that recordingPath accepts (a
+// regular file, a link followed, under a name that is no path and not
+// hidden), so that nothing listed is refused when picked.
 func (s *servedSources) Sources(context.Context) (whatifapi.SourcesResponse, error) {
 	out := whatifapi.SourcesResponse{Prometheus: s.window.prometheus != "", Namespaces: slices.Clone(s.allowed), Recordings: []string{}}
 	if out.Prometheus {
@@ -145,12 +161,17 @@ func (s *servedSources) Sources(context.Context) (whatifapi.SourcesResponse, err
 		return out, errors.New("the server could not list its recordings directory; see its log")
 	}
 	for _, e := range entries {
+		if !recordingName(e.Name()) {
+			continue
+		}
+		if _, ok := s.recordingFile(e.Name()); !ok {
+			continue
+		}
 		if len(out.Recordings) == maxListedRecordings {
+			out.RecordingsTruncated = true
 			break
 		}
-		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") {
-			out.Recordings = append(out.Recordings, e.Name())
-		}
+		out.Recordings = append(out.Recordings, e.Name())
 	}
 	return out, nil
 }
