@@ -25,7 +25,7 @@ excluded and named, and a bucket with a repeat missing has no pass.
 
 gate scores the gate buckets' TTFT at one repeat, and exits 1 on a fail or a missing
 phase: staircase.sh stops the run on it. ca2 prints BUCKET=CA2 for each bursty bucket,
-the mean Ca2 sent over its whole steps, for whatif freeze --ca2.
+the mean Ca2 sent over its whole steps, for capacity-planner freeze --ca2.
 
 Standard library only.
 """

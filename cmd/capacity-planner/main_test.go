@@ -44,7 +44,7 @@ func fleetServer(t *testing.T) *promtest.Server {
 	return srv
 }
 
-// runCLI runs whatif with args and returns its output and error; what it
+// runCLI runs capacity-planner with args and returns its output and error; what it
 // warns about is dropped (runCLIWarn keeps it).
 func runCLI(args ...string) (string, error) {
 	var out bytes.Buffer
@@ -149,7 +149,7 @@ func TestCapture_UsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"no command", nil, "usage: whatif"},
+		{"no command", nil, "usage: capacity-planner"},
 		{"unknown command", []string{"answer"}, "unknown command"},
 		{"no prometheus", []string{"capture", "--namespace", "llm", "--role-of", "decode=app=x", "--from", from, "--to", to, "-o", out}, "--prometheus"},
 		{"no namespace", []string{"capture", "--prometheus", srv.URL, "--role-of", "decode=app=x", "--from", from, "--to", to, "-o", out}, "--namespace"},

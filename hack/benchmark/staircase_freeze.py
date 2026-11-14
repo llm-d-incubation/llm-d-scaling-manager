@@ -4,7 +4,7 @@
   staircase_freeze.py ladder <frozen.json> <spec.json> <ladder.txt> <spec.yaml>
   staircase_freeze.py plan   <frozen.json> <spec.json>
 
-`whatif freeze` writes frozen.json; the spec is staircase_spec.yaml as JSON
+`capacity-planner freeze` writes frozen.json; the spec is staircase_spec.yaml as JSON
 (staircase.sh converts it with yq). ladder writes one phase a line:
 
     name fc schedule runaway seed prefill decode

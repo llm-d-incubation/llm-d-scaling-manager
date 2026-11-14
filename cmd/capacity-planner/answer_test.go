@@ -40,7 +40,7 @@ func runCmd(t *testing.T, args ...string) (string, int) {
 }
 
 // The golden outputs: each command line's output, byte for byte, and its exit
-// code. go test ./cmd/whatif -run TestGolden -update rewrites them.
+// code. go test ./cmd/capacity-planner -run TestGolden -update rewrites them.
 func TestGolden(t *testing.T) {
 	cases := []struct {
 		name string
@@ -87,7 +87,7 @@ func checkGolden(t *testing.T, name string, wantCode int, args []string) {
 	}
 	want, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("%v (go test ./cmd/whatif -run Golden -update writes it)", err)
+		t.Fatalf("%v (go test ./cmd/capacity-planner -run Golden -update writes it)", err)
 	}
 	if w := strings.ReplaceAll(string(want), "\r\n", "\n"); got != w {
 		t.Errorf("output differs from %s\ngot:\n%s\nwant:\n%s", path, got, w)
@@ -481,8 +481,8 @@ func TestJSONSchemaIsDocumented(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.ReplaceAll(string(page), "\r\n", "\n")
-	const open = "<!-- whatif-json-schema-v3: begin -->\n```\n"
-	const closing = "```\n<!-- whatif-json-schema-v3: end -->"
+	const open = "<!-- capacity-planner-json-schema-v3: begin -->\n```\n"
+	const closing = "```\n<!-- capacity-planner-json-schema-v3: end -->"
 	start := strings.Index(text, open)
 	end := strings.Index(text, closing)
 	if start < 0 || end < start {

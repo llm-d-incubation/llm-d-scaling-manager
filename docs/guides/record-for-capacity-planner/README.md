@@ -10,11 +10,11 @@ while the fleet ran.
 
 This guide saves such a window. There are two ways:
 
-1. **With `whatif`.** One command reads the window from Prometheus and writes
+1. **With `capacity-planner`.** One command reads the window from Prometheus and writes
    a recording. Use it when you can build the tool and reach Prometheus.
 2. **With only curl and jq.** Save the raw series to files and send them.
    Anyone with this repository then loads them into a local Prometheus and
-   runs step 1 there. Use it when you cannot run `whatif` where Prometheus is.
+   runs step 1 there. Use it when you cannot run `capacity-planner` where Prometheus is.
 
 [Which series, and what each one feeds](../../reference/capacity-planner-metrics.md)
 is the reference for both.
@@ -47,13 +47,13 @@ curl -s ${PROM_URL}/api/v1/status/buildinfo | jq -r .data.version
 ```
 <!-- guide:prerequisites end -->
 
-## Path 1: record with whatif
+## Path 1: record with capacity-planner
 
 <!-- guide:record start -->
 ```bash
-# From a checkout of the release you run. Needs Go. There is no released whatif binary or image.
-make whatif
-bin/whatif capture -h 2>&1 | head -3
+# From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image.
+make capacity-planner
+bin/capacity-planner capture -h 2>&1 | head -3
 
 # The namespace your model servers run in, and the window to answer from (UTC).
 export NAMESPACE=<model namespace>
@@ -66,16 +66,16 @@ kubectl -n ${NAMESPACE} get deploy <decode deployment> \
 export ENGINE_ARGS="<those arguments, space-separated>"
 
 # Replays the window through the controller's own queries. Exit 0 done, 2 your input (a flag, nothing found), 1 a failed query.
-bin/whatif capture --prometheus ${PROM_URL} --namespace ${NAMESPACE} --kube-state-metrics \
+bin/capacity-planner capture --prometheus ${PROM_URL} --namespace ${NAMESPACE} --kube-state-metrics \
   --from ${FROM} --to ${TO} --engine vllm --engine-args "${ENGINE_ARGS}" \
   -o run.capture.jsonl.gz
 
 # Plays the capture through the analyzers. The result is an ordinary learner recording.
-bin/whatif generate -in run.capture.jsonl.gz -o run.jsonl.gz
+bin/capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
 
 # Ask the planner's two questions. Exit 0 answered, 3 a role refused (the output says why).
-bin/whatif replicas-to-slo --recording run.jsonl.gz --cycle last
-bin/whatif slo-to-rate --recording run.jsonl.gz --cycle last --tpot 20ms@p90
+bin/capacity-planner replicas-to-slo --recording run.jsonl.gz --cycle last
+bin/capacity-planner slo-to-rate --recording run.jsonl.gz --cycle last --tpot 20ms@p90
 ```
 <!-- guide:record end -->
 
@@ -107,7 +107,7 @@ The answer commands add `3`: a role refused, with the reason printed.
 over the whole window: about 56 for one vLLM model. An hour is light; a day
 returns millions of samples, and the usual failure is Prometheus'
 `query.max-samples`. Capture off-peak, or from a copy
-([Load on Prometheus](../../developer-guide/whatif-capture.md#load-on-prometheus)).
+([Load on Prometheus](../../developer-guide/capacity-planner-capture.md#load-on-prometheus)).
 
 ## Path 2: record with curl and jq
 
@@ -261,7 +261,7 @@ does not expand them: a `$(VAR)` or `${VAR}` stays as typed, and an
 entrypoint like `/bin/sh -c "vllm serve ... --max-num-seqs ${SEQS}"` stays one
 script. Where you see either, edit `DECODE_ARGS` (and `PREFILL_ARGS`) in
 `planner-export/window.txt` to the flags the engine really ran with, for
-example `DECODE_ARGS=--max-num-seqs 256 --tensor-parallel-size 2`. `whatif`
+example `DECODE_ARGS=--max-num-seqs 256 --tensor-parallel-size 2`. `capacity-planner`
 splits these on whitespace: a JSON value is written compact (no spaces between
 its tokens), but a space inside one of its strings still splits it.
 
@@ -281,8 +281,8 @@ engine come from the export's `window.txt`. A `STOP:` line means
 <!-- guide:load start -->
 ```bash
 # In a checkout of this repository, with Python 3 and a prometheus binary on PATH (the Prometheus release,
-# or the quay.io/prometheus/prometheus image). Builds whatif and installs promtool.
-make whatif promtool
+# or the quay.io/prometheus/prometheus image). Builds capacity-planner and installs promtool.
+make capacity-planner promtool
 export PROMTOOL=$(ls bin/promtool-* | sort -V | tail -1)
 ${PROMTOOL} --version | head -1
 
@@ -314,8 +314,8 @@ prometheus --config.file=empty.yml --storage.tsdb.path=planner-tsdb \
 until curl -sf http://127.0.0.1:9091/-/ready >/dev/null; do sleep 1; done
 
 # Then capture as in the first path, against the local copy, from 5 minutes into the export.
-# whatif takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
-bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
+# capacity-planner takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
+bin/capacity-planner capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
   --from "${CAPTURE_FROM}" --to "${TO}" --engine "${ENGINE}" --engine-args "${DECODE_ARGS}" \
   -o run.capture.jsonl.gz
 ```
@@ -344,12 +344,12 @@ staleness marks included:
 
 ## Prometheus with a token
 
-`whatif` sends a token only over https, to Prometheus' own host. A plain
+`capacity-planner` sends a token only over https, to Prometheus' own host. A plain
 `kubectl port-forward` gives an http URL, so forward to Prometheus' https port
 and pass the CA and the token:
 
 ```bash
-bin/whatif capture --prometheus https://localhost:9091 --ca-file ca.crt \
+bin/capacity-planner capture --prometheus https://localhost:9091 --ca-file ca.crt \
   --bearer-token-file token ...
 ```
 
@@ -368,7 +368,7 @@ Drop `--kube-state-metrics`, and say which Pods serve which role, one variant
 each, with their GPUs:
 
 ```bash
-bin/whatif capture ... --role-of decode=app=<decode pod label> --role-of prefill=app=<prefill pod label> \
+bin/capacity-planner capture ... --role-of decode=app=<decode pod label> --role-of prefill=app=<prefill pod label> \
   --gpus-per-replica 1 --accelerator <accelerator name>
 ```
 
@@ -377,6 +377,6 @@ Every Pod then reads as Ready, and the capture says so.
 ## See also
 
 - [Metrics the capacity planner needs](../../reference/capacity-planner-metrics.md)
-- [What-if capture and generate](../../developer-guide/whatif-capture.md): how capture works, its flags, its load
+- [Capacity planner capture and generate](../../developer-guide/capacity-planner-capture.md): how capture works, its flags, its load
 - [The capacity planner](../../proposals/capacity-planner.md), and its
   [CLI](../../proposals/slo-capacity-planner.md#cli-reference)

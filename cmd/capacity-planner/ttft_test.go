@@ -56,7 +56,7 @@ func pullTTFT() []string {
 // The golden outputs of the TTFT half: both questions, in text and in JSON,
 // answered and refused. They are regression pins, read back from the code:
 // TestTTFT_HandComputedAtCV2 is what holds a figure to the model. go test
-// ./cmd/whatif -run TestTTFTGolden -update rewrites them.
+// ./cmd/capacity-planner -run TestTTFTGolden -update rewrites them.
 func TestTTFTGolden(t *testing.T) {
 	cases := []struct {
 		name string

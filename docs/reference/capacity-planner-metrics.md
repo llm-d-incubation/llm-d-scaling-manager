@@ -43,7 +43,7 @@ To record a window, follow
 - One series per row: a histogram is listed by the parts the planner reads
   (`_bucket`, `_sum`, `_count`), a counter by its `_total` name.
 
-The [developer page](../developer-guide/whatif-capture.md#where-each-input-comes-from)
+The [developer page](../developer-guide/capacity-planner-capture.md#where-each-input-comes-from)
 maps each query to the field it fills. A test
 (`internal/whatifsource/metrics_doc_test.go`) fails when a query reads a series
 this page does not list, or this page lists one no query reads.

@@ -92,7 +92,7 @@ the analyzer treats it as the nil it was before they existed.
      - `fitLine` calls `Tracker.Observe` and names the source: `own`,
        `pinned`, `pinned-default`, or with no line `declined` or `no-line`;
      - the pricing is `internal/signals/whatif`'s (`decode.go`), shared with
-       the saturation analyzer's derived mu and with the what-if planner;
+       the saturation analyzer's derived mu and with the capacity planner;
      - `whatif.PriceTPOT` inverts `ITL = A·k + B` at the target, clamps to
        the policy's band (`whatif.FillBand`, `[0.15, 0.80]` by default), or
        says `infeasible` when the ITL at its bottom already reaches it;

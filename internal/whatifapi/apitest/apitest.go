@@ -1,5 +1,5 @@
 // Package apitest holds the checks every whatifapi response must pass, for
-// the API's own tests and cmd/whatif's, which run them on the goldens.
+// the API's own tests and cmd/capacity-planner's, which run them on the goldens.
 package apitest
 
 import (

@@ -34,9 +34,9 @@ OLS_SLO="$G/ols-sweep-slo/results.csv"
 TTFT_A="$G/ttft-staircase-a/lines.csv"
 TTFT_B="$G/ttft-staircase-b/lines.csv"
 COUNTS=internal/engines/steadystate/testdata/engine-run-event-counts.txt
-ENGINE_WHATIF=cmd/whatif/testdata/engine-new.golden
-WHATIF=cmd/whatif/testdata/ttft-open-loop-short.golden
-SCHEMA=cmd/whatif/testdata/schema-v1.txt
+ENGINE_PLANNER=cmd/capacity-planner/testdata/engine-new.golden
+PLANNER=cmd/capacity-planner/testdata/ttft-open-loop-short.golden
+SCHEMA=cmd/capacity-planner/testdata/schema-v1.txt
 DOC=docs/reference/metrics.md
 
 # The base commit every fixture PR moves files of.
@@ -47,7 +47,7 @@ git -C "$BASE" config user.email fixture@example.invalid
 git -C "$BASE" config user.name fixture
 for f in "$A_RESULTS" "$A_LINES" "$OLS_RESULTS" "$OLS_SLO" "$TTFT_A" "$TTFT_B" "$G/goldens.yaml" \
     "$G/acceptance/recording.jsonl.gz" "$G/e1/lines.csv" \
-    "$COUNTS" "$WHATIF" "$SCHEMA" "$DOC" cmd/main.go; do
+    "$COUNTS" "$PLANNER" "$SCHEMA" "$DOC" cmd/main.go; do
     mkdir -p "$BASE/$(dirname "$f")"
     echo base >"$BASE/$f"
 done
@@ -115,13 +115,13 @@ pr_with "$COUNTS"
 expect "the engine event counts are a golden" 1 "not named: $COUNTS" "no section"
 expect "the event counts by file name" 0 "names each" "$(section '- `engine-run-event-counts.txt`')"
 expect "the event counts by full path" 0 "names each" "$(section "- \`$COUNTS\`")"
-pr_with "$WHATIF"
-expect "a whatif golden is a golden" 1 "not named: $WHATIF" "no section"
-expect "a whatif golden by glob" 0 "names each" "$(section '- `cmd/whatif/testdata/ttft-*.golden` - one line each')"
-expect "a whatif golden by its file-name glob" 0 "names each" "$(section '- `ttft-*.golden`')"
+pr_with "$PLANNER"
+expect "a capacity-planner golden is a golden" 1 "not named: $PLANNER" "no section"
+expect "a capacity-planner golden by glob" 0 "names each" "$(section '- `cmd/capacity-planner/testdata/ttft-*.golden` - one line each')"
+expect "a capacity-planner golden by its file-name glob" 0 "names each" "$(section '- `ttft-*.golden`')"
 pr_with "$SCHEMA"
-expect "the whatif schema is a golden" 1 "not named: $SCHEMA" "no section"
-expect "the whatif schema by path" 0 "names each" "$(section "- \`$SCHEMA\`")"
+expect "the capacity-planner schema is a golden" 1 "not named: $SCHEMA" "no section"
+expect "the capacity-planner schema by path" 0 "names each" "$(section "- \`$SCHEMA\`")"
 pr_with "$G/goldens.yaml"
 expect "the manifest is a golden" 1 "not named: goldens.yaml" "no section"
 expect "the manifest by name" 0 "names each" "$(section '- `goldens.yaml`')"
@@ -145,17 +145,17 @@ expect "six literals in the fixture are enough" 0 "names each" "$(section '- `tt
 pr_with "$A_RESULTS" "$OLS_RESULTS"
 expect "a literal fixture and three literals" 1 "not named: ols-sweep/results.csv" "$(section '- `acceptance/*csv`')"
 expect "a star does not cross a slash" 1 "does not hold up" "$(section '- `acc*.csv`' '- `ols*.csv`')"
-pr_with "$COUNTS" "$ENGINE_WHATIF"
+pr_with "$COUNTS" "$ENGINE_PLANNER"
 expect "a bare name fails across two golden roots" 1 "line 3 of the body: the name matches goldens under two directories" "$(section '- `eng*`')"
-expect "and takes one root's file" 1 "not named: $ENGINE_WHATIF" "$(section '- `eng*.txt`')"
-expect "a root-bound name takes that root alone" 0 "names each" "$(section "- \`$COUNTS\`" "- \`cmd/whatif/testdata/eng*.golden\`")"
-pr_with "$WHATIF"
-expect "the counts root does not name a whatif golden" 1 "not named: $WHATIF" "$(section '- `internal/engines/steadystate/testdata/ttft-open-loop-short.golden`')"
-expect "the learner root does not name a whatif golden" 1 "not named: $WHATIF" "$(section "- \`$G/ttft-open-loop-short.golden\`")"
+expect "and takes one root's file" 1 "not named: $ENGINE_PLANNER" "$(section '- `eng*.txt`')"
+expect "a root-bound name takes that root alone" 0 "names each" "$(section "- \`$COUNTS\`" "- \`cmd/capacity-planner/testdata/eng*.golden\`")"
+pr_with "$PLANNER"
+expect "the counts root does not name a capacity-planner golden" 1 "not named: $PLANNER" "$(section '- `internal/engines/steadystate/testdata/ttft-open-loop-short.golden`')"
+expect "the learner root does not name a capacity-planner golden" 1 "not named: $PLANNER" "$(section "- \`$G/ttft-open-loop-short.golden\`")"
 pr_with "$COUNTS"
-expect "the whatif root does not name the event counts" 1 "not named: $COUNTS" "$(section '- `cmd/whatif/testdata/engine-run-event-counts.txt`')"
+expect "the capacity-planner root does not name the event counts" 1 "not named: $COUNTS" "$(section '- `cmd/capacity-planner/testdata/engine-run-event-counts.txt`')"
 pr_with "$G/goldens.yaml"
-expect "the whatif root does not name the manifest" 1 "not named: goldens.yaml" "$(section '- `cmd/whatif/testdata/goldens.yaml`')"
+expect "the capacity-planner root does not name the manifest" 1 "not named: goldens.yaml" "$(section '- `cmd/capacity-planner/testdata/goldens.yaml`')"
 pr_with "$G/e1/lines.csv"
 expect "a short fixture name is literal" 0 "names each" "$(section '- `e1/*.csv`')"
 pr_with "$OLS_RESULTS"
@@ -240,10 +240,10 @@ name() {
 }
 for bad in '*' '**' '*/*' '?/*' '*.csv' '*/*.csv' '*.gz' '*e*' '*e*/*' '*/*e*' '*/re*.csv' 'ac*/*.csv' '???/*.csv' \
     '*/*csv' '*golden' '*txt' '*/*json' '*/results.csv' '*/lines.csv' 'ttft-*/lines.csv' 'ttft-*/*.csv' \
-    '?tft-open-loop-short.golden' 'cmd/whatif/testdata/acceptance/results.csv' \
+    '?tft-open-loop-short.golden' 'cmd/capacity-planner/testdata/acceptance/results.csv' \
     'internal/engines/steadystate/testdata/acceptance/results.csv' \
     'acceptance/*' 'acceptance/???' 'acceptance/ab*' '*/*/results.csv' \
-    '*.golden' '*.txt' '*.yaml' 'cmd/whatif/testdata/*' 'cmd/whatif/testdata/*.golden' 'cmd/whatif/testdata/*/ttft-open-loop-short.golden' \
+    '*.golden' '*.txt' '*.yaml' 'cmd/capacity-planner/testdata/*' 'cmd/capacity-planner/testdata/*.golden' 'cmd/capacity-planner/testdata/*/ttft-open-loop-short.golden' \
     'cmd/*/testdata/ttft-open-loop-short.golden' 'internal/engines/steadystate/testdata/*.txt' \
     'internal/engines/steadystate/testdata/*/engine-run-event-counts.txt' \
     "$G/*" "$G/*/*" "$G/*/*.csv" "$G/*/*/lines.csv" \

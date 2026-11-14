@@ -473,7 +473,7 @@ test: manifests generate fmt vet setup-envtest helm check-import-direction check
 	@# check (a few seconds): without -race that spec proves no deadlock and
 	@# nothing more.
 	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/ ./internal/whatifapi/...
-	CGO_ENABLED=1 go test -race -count=1 -timeout 20m -run 'TestServeConcurrent' ./cmd/whatif/
+	CGO_ENABLED=1 go test -race -count=1 -timeout 20m -run 'TestServeConcurrent' ./cmd/capacity-planner/
 
 # The commit a build is made from, recorded in each learner recording's start
 # line (learnrec.BuildCommit), so a golden is added only at the commit that
@@ -489,9 +489,14 @@ learner-golden-add: ## Commit a raw learner recording as a golden: RECORDING=<fi
 	@if [ -z "$(RECORDING)" ] || [ -z "$(NAME)" ] || [ -z "$(SOURCE)" ]; then echo 'usage: make learner-golden-add RECORDING=<raw .jsonl> NAME=<fixture> SOURCE="<scenario, build, policy>" [HEAD_LINES=N] [REPLACE=1]'; exit 1; fi
 	go run -ldflags "$(LEARNREC_LDFLAGS)" ./cmd/learnergolden add -in "$(RECORDING)" -name "$(NAME)" -source "$(SOURCE)" $(if $(HEAD_LINES),-head-lines $(HEAD_LINES)) $(if $(REPLACE),-replace)
 
+.PHONY: capacity-planner
+capacity-planner: ## Build the capacity planner command line (bin/capacity-planner), with the commit a generated recording carries; not in the manager image
+	go build -ldflags "$(LEARNREC_LDFLAGS)" -o bin/capacity-planner ./cmd/capacity-planner
+	@# The old name, for one release: run as whatif, it prints a deprecation note.
+	cp bin/capacity-planner bin/whatif
+
 .PHONY: whatif
-whatif: ## Build the what-if command line (bin/whatif), with the commit a generated recording carries; not in the manager image
-	go build -ldflags "$(LEARNREC_LDFLAGS)" -o bin/whatif ./cmd/whatif
+whatif: capacity-planner ## Deprecated alias of capacity-planner, removed in a later release
 
 .PHONY: learner-goldens
 learner-goldens: ## Rewrite every learner golden from a replay at this commit (only for a golden change the PR names)
@@ -3108,16 +3113,16 @@ benchmark-staircase-resume: ## TTFT staircase: go on with a stopped run on its f
 	@$(STAIRCASE) resume $(IMG)
 
 .PHONY: benchmark-staircase-predict
-benchmark-staircase-predict: whatif ## TTFT staircase: print the frozen prediction of RECORDING=<warm-up recording>, touching no cluster
+benchmark-staircase-predict: capacity-planner ## TTFT staircase: print the frozen prediction of RECORDING=<warm-up recording>, touching no cluster
 	@test -n "$(RECORDING)" || { echo "set RECORDING=<learner recording>"; exit 1; }
-	@bin/whatif freeze --recording $(RECORDING) --spec $(STAIRCASE_SPEC)
+	@bin/capacity-planner freeze --recording $(RECORDING) --spec $(STAIRCASE_SPEC)
 
 .PHONY: benchmark-staircase-freeze
-benchmark-staircase-freeze: whatif ## TTFT staircase: freeze the prediction and write the ladder, once, after the warm-up and before any step
+benchmark-staircase-freeze: capacity-planner ## TTFT staircase: freeze the prediction and write the ladder, once, after the warm-up and before any step
 	@$(STAIRCASE) freeze
 
 .PHONY: benchmark-staircase-redo
-benchmark-staircase-redo: whatif ## TTFT staircase: re-price each bursty bucket at its measured Ca2, targets held; analyze then reads it
+benchmark-staircase-redo: capacity-planner ## TTFT staircase: re-price each bursty bucket at its measured Ca2, targets held; analyze then reads it
 	@$(STAIRCASE) redo
 
 .PHONY: benchmark-staircase-analyze

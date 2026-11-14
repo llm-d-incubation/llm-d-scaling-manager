@@ -29,7 +29,7 @@ import (
 // pass mark: goldens scale out, and were not run to validate this.
 //
 // GREEN IS NOT A PASS. The test holds the figures to the frozen table in
-// cmd/whatif/testdata/decode-validation.golden, so a change to the line, the
+// cmd/capacity-planner/testdata/decode-validation.golden, so a change to the line, the
 // arithmetic or the replay that moves one says so, and the goldens gate, which
 // reads that directory, makes the PR name it. A row past its bound is a
 // finding, frozen as OUT. A check with no data is SKIPPED with a reason, never
@@ -48,7 +48,7 @@ const (
 	decodeKneeBound = 15.0
 )
 
-const decodeTable = "../../../../cmd/whatif/testdata/decode-validation.golden"
+const decodeTable = "../../../../cmd/capacity-planner/testdata/decode-validation.golden"
 
 // decodeCycle is one of a model's cycles, and the clock it ran at.
 type decodeCycle struct {

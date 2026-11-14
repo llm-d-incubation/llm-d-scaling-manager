@@ -84,7 +84,7 @@ func TestServeEndsRequestsAtTheDeadline(t *testing.T) {
 
 // The usage line names every command the CLI runs.
 func TestUsageNamesEveryCommand(t *testing.T) {
-	names, _, _ := strings.Cut(strings.TrimPrefix(usage, "usage: whatif "), " ")
+	names, _, _ := strings.Cut(strings.TrimPrefix(usage, "usage: capacity-planner "), " ")
 	listed := strings.Split(names, "|")
 	for name := range commands {
 		assert.Contains(t, listed, name)

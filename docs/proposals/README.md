@@ -227,6 +227,6 @@ last; it is the unit change that makes the other two land.
   graphical front end for what-if: prefill and decode replicas, a rate and SLO
   targets on sliders, TTFT and TPOT curves with the point at the chosen rate and
   the rate at the target, and the most the fleet serves with the binding role.
-  An HTTP API served by `whatif serve`, a small web page on it that opens on a
+  An HTTP API served by `capacity-planner serve`, a small web page on it that opens on a
   Prometheus window, and Grafana for monitoring only; why v1 prices the
   critical class alone and the current mix as one TTFT line.

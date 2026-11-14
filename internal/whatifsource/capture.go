@@ -152,7 +152,7 @@ var (
 )
 
 // IsInputError reports whether err is the caller's input at fault (the
-// options, the role map, the window), rather than Prometheus: cmd/whatif
+// options, the role map, the window), rather than Prometheus: cmd/capacity-planner
 // exits 2 for one and 1 for any other.
 func IsInputError(err error) bool {
 	for _, input := range []error{ErrInvalidOptions, ErrNoRoleMap, ErrRoleOverlap, ErrWindowTooLarge, ErrNothingAttributed} {

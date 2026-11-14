@@ -10,7 +10,7 @@ import (
 // cost": a slider move answered in under 200 ms on the server), on the
 // processor-sharing fleets of curveFleets and the goldens' parity cases:
 //
-//	go test ./cmd/whatif -run '^$' -bench Plan -benchtime 5x
+//	go test ./cmd/capacity-planner -run '^$' -bench Plan -benchtime 5x
 //
 // Cold is a plan whose curves are priced (a new fleet: a replica count, a
 // statistic, an assumption); slider is a rate move, whose curves are cached.

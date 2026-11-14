@@ -223,7 +223,7 @@ func sweepWindow(prom string) []string {
 		"--batch-cap", "64"}
 }
 
-// filesAnswer answers question the long way: whatif capture -o, whatif
+// filesAnswer answers question the long way: capacity-planner capture -o, capacity-planner
 // generate -o, then the question with --recording, each a command line of
 // its own. window is the --prometheus flags, which capture takes as they
 // are.
@@ -524,7 +524,7 @@ func TestPrometheus_ErrorsNameNoSecret(t *testing.T) {
 }
 
 // --bearer-token-file over https: every request carries the token, and
-// nothing whatif prints, on stdout, stderr or in the error, in text or
+// nothing capacity-planner prints, on stdout, stderr or in the error, in text or
 // JSON, holds it, whether the answer is reached or a query fails. That the
 // token goes to Prometheus' own host only, never on a redirect elsewhere,
 // is TestClient_TheBearerTokenStaysOnItsHost's and
@@ -579,8 +579,8 @@ func TestPrometheus_CaveatsGoToStderr(t *testing.T) {
 	var out, warn bytes.Buffer
 	args := slices.Concat([]string{"replicas-to-slo"}, sweepWindow(srv.URL), []string{"-o", "json"})
 	require.NoError(t, run(context.Background(), args, &out, &warn))
-	assert.Contains(t, warn.String(), "whatif: caveat: "+whatifsource.FlagNoReadiness)
-	assert.Contains(t, warn.String(), "whatif: caveat: "+whatifsource.FlagNoRollouts)
+	assert.Contains(t, warn.String(), "capacity-planner: caveat: "+whatifsource.FlagNoReadiness)
+	assert.Contains(t, warn.String(), "capacity-planner: caveat: "+whatifsource.FlagNoRollouts)
 	decodeOutput(t, out.String())
 	assert.NotContains(t, out.String(), "caveat")
 }

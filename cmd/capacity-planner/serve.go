@@ -86,7 +86,7 @@ func runServe(ctx context.Context, args []string, out, warn io.Writer) error {
 	if srv.TLSConfig != nil {
 		ln = tls.NewListener(ln, srv.TLSConfig)
 	}
-	fmt.Fprintf(warn, "whatif: serving the capacity planner's API on %s (auth %s)\n", ln.Addr(), f.auth)
+	fmt.Fprintf(warn, "capacity-planner: serving the capacity planner's API on %s (auth %s)\n", ln.Addr(), f.auth)
 	return serveUntil(ctx, srv, ln, f.shutdownDeadline)
 }
 

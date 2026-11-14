@@ -21,7 +21,7 @@ If no golden moves, leave it at none.
 
 If the PR moves a golden, replace none with one line per golden: a file under
 internal/engines/analyzers/learnreplay/testdata/goldens/, a
-cmd/whatif/testdata/*.golden, cmd/whatif/testdata/schema-v*.txt, or
+cmd/capacity-planner/testdata/*.golden, cmd/capacity-planner/testdata/schema-v*.txt, or
 internal/engines/steadystate/testdata/engine-run-event-counts.txt. A line is a
 dash, a space, one name in backticks, and optionally a space, a dash, a space and
 what moved and which way:

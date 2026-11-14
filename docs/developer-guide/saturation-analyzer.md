@@ -865,7 +865,7 @@ the 10 min have not been checked on a large fleet.
 saturation line, `slo-variant` (at `-v=3`) on the slo line, and the
 `throughput analyzer: ITL line` summary on the throughput line, which logs only
 when the line goes silent or comes back. Leaving the full fit holds the key's last
-slope (`slopeHeld`), and entering it stays on the pinned fit; the what-if planner
+slope (`slopeHeld`), and entering it stays on the pinned fit; the capacity planner
 reads both as `held` and flags `HeldLine`. A key's first full fit does not wait:
 until then, only it can replace the default `B`. A key that has had one waits even
 if its `B` came out at or under zero and was not kept. Once the dwell ends a new

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Executes the TTFT staircase against a stub kubectl, make and whatif, and runs its
+# Executes the TTFT staircase against a stub kubectl, make and capacity-planner, and runs its
 # arithmetic self-test.
 #
 # A run holds GPUs on a shared cluster for days, and what protects them is exit paths,
@@ -106,14 +106,14 @@ esac
 exit 0
 STUB
 
-cat > "$STUB/whatif" <<'STUB'
+cat > "$STUB/capacity-planner" <<'STUB'
 #!/usr/bin/env bash
-# whatif freeze --recording R --spec S -o OUT
+# capacity-planner freeze --recording R --spec S -o OUT
 while [ $# -gt 0 ]; do
     case $1 in -o) out=$2; shift ;; --spec) spec=$2; shift ;; esac
     shift
 done
-[ -n "${WHATIF_REFUSE:-}" ] && exit 3
+[ -n "${PLANNER_REFUSE:-}" ] && exit 3
 [ -e "$out" ] && exit 2
 sum=$(sha256sum "$spec" | cut -d' ' -f1)
 sed "s/__SPEC__/$sum/" "$FROZEN_FIXTURE" > "$out"
@@ -325,7 +325,7 @@ fresh() {
 # env_line : the stubs' environment, on the restricted PATH.
 env_line() {
     exec_env=("$TOOLS/env" PATH="$RUN_PATH" WORK="$WORK" BENCHMARK_NAMESPACE=stair-ns STAIRCASE_RUN="$RUN" BENCHMARK_PROMETHEUS_URL=http://p:9090
-        STAIRCASE_SPEC="$WORK/spec.yaml" STAIRCASE_ROOT="$WORK" STAIRCASE_WHATIF="$STUB/whatif" FROZEN_FIXTURE="$WORK/frozen.json"
+        STAIRCASE_SPEC="$WORK/spec.yaml" STAIRCASE_ROOT="$WORK" STAIRCASE_CAPACITY_PLANNER="$STUB/capacity-planner" FROZEN_FIXTURE="$WORK/frozen.json"
         STAIRCASE_POLL=0.2 STAIRCASE_TICK=0.1 STAIRCASE_SETTLE=0 STAIRCASE_ARM_POLL=0 STAIRCASE_TEARDOWN_POLL=0 STAIRCASE_TEARDOWN_TRIES=3
         STAIRCASE_LEASE_EVERY=1 STAIRCASE_FREEZE_WAIT=40 STAIRCASE_READY_WAIT=2 STAIRCASE_OWNED_POLL=0 STAIRCASE_WITNESS_RETRY=0
         STAIRCASE_KUBE_RETRY_WAIT=0)
@@ -614,7 +614,7 @@ expect "no freeze in time stops the run" '[ "$rc" != 0 ] && grep -q "no freeze i
 fresh refused
 start STAIRCASE_FREEZE_WAIT=60
 wait_for 'waiting for the freeze' "$RUN/timeline.txt"
-base_env WHATIF_REFUSE=1 bash "$B/staircase.sh" freeze > /dev/null 2>&1
+base_env PLANNER_REFUSE=1 bash "$B/staircase.sh" freeze > /dev/null 2>&1
 wait_run
 expect "a refused freeze aborts the run, not waits out its cap" '[ -e "$RUN/abort" ] && tore_down && [ ! -e "$STATE/steps" ]'
 

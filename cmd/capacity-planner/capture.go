@@ -210,7 +210,7 @@ func (f captureFlags) options(cmd string, warn io.Writer) (whatifsource.Options,
 	}
 	opts.EngineArgs = strings.Fields(f.engineArgs)
 	if f.batchCap > 0 && hasFlag(opts.EngineArgs, batchFlag) {
-		fmt.Fprintf(warn, "whatif: warning: --batch-cap %d and %s in --engine-args both set the batch cap, "+
+		fmt.Fprintf(warn, "capacity-planner: warning: --batch-cap %d and %s in --engine-args both set the batch cap, "+
 			"and may disagree; give one of them\n", f.batchCap, batchFlag)
 	}
 	if f.policy != "" {
@@ -284,7 +284,7 @@ func (f captureFlags) client(warn io.Writer) (promv1.API, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if u.Scheme == schemeHTTPS {
 		if f.insecure {
-			fmt.Fprintf(warn, "whatif: warning: --insecure-skip-verify: %s's certificate is not verified; "+
+			fmt.Fprintf(warn, "capacity-planner: warning: --insecure-skip-verify: %s's certificate is not verified; "+
 				"anyone on the path can read and change what the capture reads\n", u.Host)
 		}
 		tc := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: f.insecure} //nolint:gosec // asked for by --insecure-skip-verify

@@ -20,7 +20,7 @@ import (
 // fleet and the rate that ran. The mean only, and in shadow: nothing sizes
 // from it yet.
 //
-//	whatif joint-ttft --recording FILE [--cycle N|last] [--model M]
+//	capacity-planner joint-ttft --recording FILE [--cycle N|last] [--model M]
 //	                  [--prefill N] [--decode N] [--rate R] [--prompt I] [--hop D] [-o json]
 
 // jointFlags is joint-ttft's flags.

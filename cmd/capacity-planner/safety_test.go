@@ -30,7 +30,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifsource"
 )
 
-// runCLIWarn runs whatif with args under ctx and returns its warnings and
+// runCLIWarn runs capacity-planner with args under ctx and returns its warnings and
 // its error; its output is dropped.
 func runCLIWarn(ctx context.Context, args ...string) (string, error) {
 	var warn bytes.Buffer

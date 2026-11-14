@@ -348,10 +348,10 @@ go test ./internal/engines/analyzers/learnreplay/ ./internal/signals/learnrec/ -
 ### Capture a past window
 
 A run that was not recorded can still be made into a recording, from
-Prometheus alone, while Prometheus holds its series: `whatif capture` reads
-the window's cycle inputs, and `whatif generate` plays them through the
-analyzers ([how it works](whatif-capture.md)). The result is an ordinary
-recording at the commit of the `whatif` that generated it.
+Prometheus alone, while Prometheus holds its series: `capacity-planner capture` reads
+the window's cycle inputs, and `capacity-planner generate` plays them through the
+analyzers ([how it works](capacity-planner-capture.md)). The result is an ordinary
+recording at the commit of the `capacity-planner` that generated it.
 
 `_bucket` series are often kept for days, not weeks. Preserve a window worth
 keeping as a Prometheus snapshot first, and capture it from the snapshot
@@ -402,8 +402,8 @@ the slo analyzer listed, streamed load, router TTFT recorded.
    `--role-of` per variant:
 
    ```bash
-   make whatif
-   bin/whatif capture --prometheus http://localhost:9091 --namespace "$RUN_NS" \
+   make capacity-planner
+   bin/capacity-planner capture --prometheus http://localhost:9091 --namespace "$RUN_NS" \
      --kube-state-metrics --role-of decode=app=ols-decode --role-of prefill=app=ols-prefill \
      --from 2026-11-01T12:00:00Z --to 2026-11-01T13:00:00Z --step 15s \
      --policy ols-sweep-slo-policy.yaml --engine-args "--max-num-seqs=256" \
@@ -423,14 +423,14 @@ the slo analyzer listed, streamed load, router TTFT recorded.
    capture with kube-state-metrics registers (12,500 steps, a little over
    two days at 15 s), which bounds the load; and `whatifsource.MaxSamples`,
    20 million samples held in memory, which grows with the Pods as well.
-   [What-if capture](whatif-capture.md#load-on-prometheus) gives the load
+   [Capacity planner capture](capacity-planner-capture.md#load-on-prometheus) gives the load
    a window puts on Prometheus.
 
 4. Generate the recording, and add it as a golden like any recording
    (below):
 
    ```bash
-   bin/whatif generate -in ols-sweep-slo.capture.jsonl.gz -o ols-sweep-slo.jsonl
+   bin/capacity-planner generate -in ols-sweep-slo.capture.jsonl.gz -o ols-sweep-slo.jsonl
    make learner-golden-add RECORDING=ols-sweep-slo.jsonl NAME=ols-sweep-slo-capture \
      SOURCE="ols-sweep-slo window, captured from its Prometheus snapshot"
    ```
@@ -440,7 +440,7 @@ Its tests use the fake Prometheus in `internal/whatifsource/promtest`, never
 a live one:
 
 ```bash
-go test -p 1 ./internal/whatifsource/... ./cmd/whatif/
+go test -p 1 ./internal/whatifsource/... ./cmd/capacity-planner/
 go test -p 1 ./internal/engines/analyzers/learnreplay/ -run 'TestGenerate|TestMessageWords_AreCurrent'
 go test -p 1 ./internal/engines/steadystate/ -run TestWhatifCapture -v
 ```
@@ -780,13 +780,13 @@ generator, the level windows and the evidence of each run live outside
 the repository; the windows are in the test.
 
 `decode_validation_test.go` learns on the first 60% of every golden's cycles,
-predicts the rest, and holds the figures to `cmd/whatif/testdata/decode-validation.golden`
+predicts the rest, and holds the figures to `cmd/capacity-planner/testdata/decode-validation.golden`
 ([measured on the goldens](../proposals/slo-capacity-planner.md#measured-on-the-goldens)).
 Green says no figure moved: it is not a pass, and a row past its bound stays
 as `OUT`. A change that moves a figure rewrites the file with
 `LEARNREPLAY_WRITE_DECODE_VALIDATION=1 go test -run TestDecodeValidation_OnTheGoldens ./internal/engines/analyzers/learnreplay`,
 and names it in the PR's `goldens:` section, which the gate enforces: a `.golden`
-in that directory is one, wherever its test lives. It lives in `cmd/whatif` for that
+in that directory is one, wherever its test lives. It lives in `cmd/capacity-planner` for that
 reason, though `learnreplay` writes it.
 
 The four `ttft-staircase-*` goldens are four of the six phases of the what-if TTFT
@@ -1514,8 +1514,8 @@ not. The format is strict, line by line:
 
 **What counts as a golden:** every file under
 `internal/engines/analyzers/learnreplay/testdata/goldens/` (outputs,
-recordings and `goldens.yaml`), `cmd/whatif/testdata/*.golden`,
-`cmd/whatif/testdata/schema-v*.txt`, and
+recordings and `goldens.yaml`), `cmd/capacity-planner/testdata/*.golden`,
+`cmd/capacity-planner/testdata/schema-v*.txt`, and
 `internal/engines/steadystate/testdata/engine-run-event-counts.txt`.
 
 **The section.** It starts at one line that is exactly `## goldens:`, at column
@@ -1930,7 +1930,7 @@ confirmed gone; the deadline Job then stays. Confirm with
 make benchmark-staircase-predict RECORDING=<learner recording>
 ```
 
-It prints the frozen file. The same recording and spec give the same bytes. `whatif
+It prints the frozen file. The same recording and spec give the same bytes. `capacity-planner
 freeze` exits 3 when a bucket refuses, with the refusal in the file.
 
 **If the runner dies**, even by `kill -9`, the capture loop stops renewing the lease and

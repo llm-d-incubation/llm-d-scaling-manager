@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// The authentication modes of `whatif serve --auth`.
+// The authentication modes of `capacity-planner serve --auth`.
 const (
 	// AuthNone serves with no authentication: loopback only.
 	AuthNone = "none"
@@ -90,7 +90,7 @@ type Authenticator struct {
 	ttl       time.Duration
 	// logf receives what a failed review says; the client is answered with
 	// a generic message, never the client's error text. It is the server's
-	// stderr, not ctrl.Log: `whatif serve` discards controller-runtime's
+	// stderr, not ctrl.Log: `capacity-planner serve` discards controller-runtime's
 	// logger, which the analyzers a replay runs write to.
 	logf func(format string, args ...any)
 	now  func() time.Time
@@ -212,7 +212,7 @@ func (a *Authenticator) Wrap(next http.Handler) http.Handler {
 		}
 		u, err := a.authenticate(r.Context(), token)
 		if err != nil {
-			a.logf("whatif: token review: %v", err)
+			a.logf("capacity-planner: token review: %v", err)
 			writeError(w, http.StatusInternalServerError, errReview)
 			return
 		}
@@ -223,7 +223,7 @@ func (a *Authenticator) Wrap(next http.Handler) http.Handler {
 		path := authPathPrefix + r.URL.Path
 		allowed, err := a.allowed(r.Context(), u.user, nil, &authzv1.NonResourceAttributes{Path: path, Verb: "get"})
 		if err != nil {
-			a.logf("whatif: subject access review: %v", err)
+			a.logf("capacity-planner: subject access review: %v", err)
 			writeError(w, http.StatusInternalServerError, errReview)
 			return
 		}
@@ -251,7 +251,7 @@ func (a *Authenticator) NamespaceAllowed(ctx context.Context, namespace string) 
 	}
 	allowed, err := a.allowed(ctx, u, namespaceResource(namespace), nil)
 	if err != nil {
-		a.logf("whatif: subject access review: %v", err)
+		a.logf("capacity-planner: subject access review: %v", err)
 		return errReview
 	}
 	if !allowed {
