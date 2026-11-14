@@ -7,7 +7,7 @@ instant query `metric{namespace="NS"}[RANGE]` per metric and time chunk, each
 answer a JSON file named METRIC.CHUNKSTART.json with resultType "matrix". This
 script merges those files into one OpenMetrics file, which
 `promtool tsdb create-blocks-from openmetrics` turns into TSDB blocks for a
-local Prometheus. `whatif capture` then reads the window from that Prometheus
+local Prometheus. `capacity-planner capture` then reads the window from that Prometheus
 as it would from the original.
 
 Chunks overlap at their edges (a range selector includes its end, and in

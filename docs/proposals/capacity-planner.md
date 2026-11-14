@@ -4,7 +4,7 @@
 [Decisions](#decisions). Phase 0, the API, is built: see
 [As built (phase 0)](#as-built-phase-0). The page and later phases are not. It
 builds on
-`cmd/whatif` and `internal/signals/whatif`, which are
+`cmd/capacity-planner` and `internal/signals/whatif`, which are
 ([what-if capacity](slo-capacity-planner.md), [end-to-end TTFT](slo-capacity-planner-ttft.md)),
 including the processor-sharing TTFT pricing (PR #16, merged).
 
@@ -22,7 +22,7 @@ learning the CLI's flags:
 3. "What changes if I add a replica, or tighten the target?"
 
 The what-if engine answers all three today, one CLI call at a time
-(`whatif replicas-to-slo`, `whatif slo-to-rate`). This proposal puts a
+(`capacity-planner replicas-to-slo`, `capacity-planner slo-to-rate`). This proposal puts a
 graphical planner on top of it:
 
 - an HTTP API that returns curves, points and limits as JSON
@@ -33,8 +33,9 @@ graphical planner on top of it:
   not the planner's main home ([Grafana](#can-it-be-built-on-grafana)).
 
 The user-facing name is **capacity planner**. It plans one model's P/D fleet,
-not a cluster, so the name says no more than that. `whatif` stays the name of
-the engine and the CLI.
+not a cluster, so the name says no more than that. The CLI is
+`capacity-planner` too (it was `whatif` before); the engine keeps its package
+name, `internal/signals/whatif`.
 
 ### Scope of v1
 
@@ -124,11 +125,11 @@ installed.
 
 | Source | What it reads | Freshness | Built today | In |
 | --- | --- | --- | --- | --- |
-| Prometheus window (default) | a past window captured and generated in memory (`whatif ... --prometheus --from --to`) | as of the window's end; seconds to replay | yes, in the CLI | v1 |
-| Recording | a `.jsonl.gz` recording, replayed to a cycle (`whatif ... --recording`) | fixed | yes, in the CLI | v1 |
+| Prometheus window (default) | a past window captured and generated in memory (`capacity-planner ... --prometheus --from --to`) | as of the window's end; seconds to replay | yes, in the CLI | v1 |
+| Recording | a `.jsonl.gz` recording, replayed to a cycle (`capacity-planner ... --recording`) | fixed | yes, in the CLI | v1 |
 | Controller | the controller's in-memory learned state for the model, at its last cycle | one cycle, 15 s | no: the read-only handler in [Data per mode](slo-capacity-planner.md#data-per-mode) | later |
 
-To record a window, with `whatif` or with only curl and jq, see
+To record a window, with `capacity-planner` or with only curl and jq, see
 [Record a window for the capacity planner](../guides/record-for-capacity-planner/).
 The series both read are listed in
 [Metrics the capacity planner needs](../reference/capacity-planner-metrics.md).
@@ -460,9 +461,9 @@ One package, `internal/whatifapi`, holds the handlers. It calls
 `internal/signals/whatif` and `learnreplay`, and builds no model of its own:
 every number it returns is one the CLI can also print. It is mounted by:
 
-- **`whatif serve`** (phase 0): a new subcommand of the CLI, serving the API
+- **`capacity-planner serve`** (phase 0): a new subcommand of the CLI, serving the API
   and the page from one binary. It reads recordings from a directory and
-  Prometheus as `whatif capture` does. This is the planner's standalone mode,
+  Prometheus as `capacity-planner capture` does. This is the planner's standalone mode,
   outside the manager image, like the CLI.
 - **the controller** (phase 3, optional): the same handlers on the metrics
   server, off by default, read only, giving the "controller" source. This is
@@ -621,7 +622,7 @@ TTFT at that decode count, then rechecks decode once.
 
 ### Authentication
 
-- `whatif serve` binds `127.0.0.1` by default and serves no auth there: a
+- `capacity-planner serve` binds `127.0.0.1` by default and serves no auth there: a
   person on their own machine, reading Prometheus through a port-forward, as
   the CLI does today.
 - Bound to any other address it requires `--auth=kubernetes`: a bearer token
@@ -635,7 +636,7 @@ TTFT at that decode count, then rechecks decode once.
   server-side directory) and no Prometheus URL in a request (a server flag), so
   it cannot be pointed at an arbitrary host.
 - A saved scenario can be exported pseudonymised with the CLI's existing
-  redaction (`cmd/whatif/redact.go`): no namespace, pod or model names.
+  redaction (`cmd/capacity-planner/redact.go`): no namespace, pod or model names.
 
 ### Several models
 
@@ -695,7 +696,7 @@ place for **planning**.
 | TUI (terminal sliders and plots) | No browser, works over SSH | Plots are coarse; hard to show bands and per-bucket lines; not shareable as a link |
 | Notebook | Flexible for a modeller | Not an operator tool; no auth or caching story |
 
-**Recommendation:** the web page served by `whatif serve`, with the API as the
+**Recommendation:** the web page served by `capacity-planner serve`, with the API as the
 contract, and a Grafana row plus a link for monitoring. The page:
 
 - plain HTML and a small amount of JavaScript, with a chart library vendored
@@ -714,7 +715,7 @@ v1 is phases 0 and 1; v2 is phase 2.
 
 | Phase | Ships | Depends on |
 | --- | --- | --- |
-| 0 | `internal/whatifapi` with `inputs` (Prometheus window by default, recordings; the fixed buckets 1k/4k/8k/32k/128k) and `plan` (mix line, the "all traffic" view, TPOT mean and percentile with `AssumedTPOTRatio`, capped and uncapped limits, marginal); `whatif serve` without a page; timing measured on the goldens and PS fleets | PR #16 (merged) |
+| 0 | `internal/whatifapi` with `inputs` (Prometheus window by default, recordings; the fixed buckets 1k/4k/8k/32k/128k) and `plan` (mix line, the "all traffic" view, TPOT mean and percentile with `AssumedTPOTRatio`, capped and uncapped limits, marginal); `capacity-planner serve` without a page; timing measured on the goldens and PS fleets | PR #16 (merged) |
 | 1 | The page: critical tab, the TTFT mix line and the labelled "all traffic were bucket b" view, TPOT, prefill/decode steppers, rate and target sliders, SLO statistic pickers including the TPOT percentile, the binding bar with the uncapped figure, +1 deltas, flags drawer, provenance chips; source picker opening on a Prometheus window | 0 |
 | 2 | Inverse mode (`/v1/size`); scenario save and compare; user-set bucket edges; optional Grafana Infinity dashboard | 1 (the dashboard: the API from phase 0) |
 | 3 | Grafana monitoring row and link; optional controller source (handler on the metrics server, off by default) | 1 |
@@ -743,7 +744,7 @@ v1 is phases 0 and 1; v2 is phase 2.
 
 ## Tests
 
-- **Parity with the CLI.** For each CLI golden in `cmd/whatif/testdata` that
+- **Parity with the CLI.** For each CLI golden in `cmd/capacity-planner/testdata` that
   has a JSON form (`replicas-to-slo-worked-json`, `slo-to-rate-worked-json`,
   `ttft-rate-worked-json`, `ttft-replicas-worked-json`, the refusals), the
   equivalent `plan` call returns the same limits, points, `BoundBy`, flags and
@@ -772,8 +773,8 @@ v1 is phases 0 and 1; v2 is phase 2.
 
 ## As built (phase 0)
 
-`whatif serve` runs the API on your machine; how to start it, the flags and
-every key are in [What-if serve](../developer-guide/whatif-serve.md). Built:
+`capacity-planner serve` runs the API on your machine; how to start it, the flags and
+every key are in [What-if serve](../developer-guide/capacity-planner-serve.md). Built:
 `POST /v1/inputs` (a recording, or a Prometheus window, the last hour by
 default) and `POST /v1/plan` (the mix line, the "if all traffic were bucket b"
 view, TPOT at the mean or a percentile with `AssumedTPOTRatio`, the capped
@@ -782,7 +783,7 @@ the tests this page asks for.
 
 **Where the numbers come from.** `internal/whatifapi` holds the HTTP layer,
 the caches and the shape of a plan, and no model. Each figure comes from the
-CLI's own code (`cmd/whatif/serve_price.go`): the fleet a scenario prices is
+CLI's own code (`cmd/capacity-planner/serve_price.go`): the fleet a scenario prices is
 the one `slo-to-rate` reads with the flags its knobs stand for, and the TTFT
 and TPOT at a rate are `replicas-to-slo --rate`'s. A test asks each of the
 CLI's ten JSON goldens' questions of the API and finds the same limits,
@@ -809,7 +810,7 @@ points, bounds, flags and refusals.
   bisections.
 
 **Latency, measured** on the server, per request
-(`go test ./cmd/whatif -run '^$' -bench Plan -benchtime 3x`, on one 22-core
+(`go test ./cmd/capacity-planner -run '^$' -bench Plan -benchtime 3x`, on one 22-core
 laptop, on the goldens' recordings). Cold is a new fleet: a replica
 count, a statistic or an assumption moved.
 
@@ -864,4 +865,4 @@ None.
   is most wrong.
 - [SLO tiers](slo-tiers.md): the SLO analyzer, its configuration and the
   metrics the Grafana row reads.
-- [Capturing a window for what-if](../developer-guide/whatif-capture.md).
+- [Capturing a window for what-if](../developer-guide/capacity-planner-capture.md).

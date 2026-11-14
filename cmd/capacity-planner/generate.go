@@ -15,7 +15,7 @@ import (
 
 func runGenerate(ctx context.Context, args []string, out, _ io.Writer) error {
 	fs := newFlags("generate", out)
-	in := fs.String("in", "", "the capture (whatif capture -o), gzipped or not (required)")
+	in := fs.String("in", "", "the capture (capacity-planner capture -o), gzipped or not (required)")
 	dst := fs.String("o", "", "where to write the recording; a name ending in .gz is gzipped (required)")
 	if ok, err := parse(fs, args); !ok {
 		return err
@@ -102,7 +102,7 @@ func startOf(recording []byte) (learnrec.Start, error) {
 	return start, nil
 }
 
-// outputMode is the mode of every file whatif writes: a capture or a
+// outputMode is the mode of every file capacity-planner writes: a capture or a
 // recording holds a cluster's names, so only its owner reads it.
 const outputMode = 0o600
 

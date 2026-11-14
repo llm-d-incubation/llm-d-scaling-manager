@@ -21,10 +21,10 @@ prerequisites:
 
 record:
   build:
-    note: From a checkout of the release you run. Needs Go. There is no released whatif binary or image.
+    note: From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image. On v0.11.1 and earlier the target is make whatif and the binary bin/whatif.
     run: |
-      make whatif
-      bin/whatif capture -h 2>&1 | head -3
+      make capacity-planner
+      bin/capacity-planner capture -h 2>&1 | head -3
   window:
     note: The namespace your model servers run in, and the window to answer from (UTC).
     run: |
@@ -40,18 +40,18 @@ record:
   capture:
     note: Replays the window through the controller's own queries. Exit 0 done, 2 your input (a flag, nothing found), 1 a failed query.
     run: |
-      bin/whatif capture --prometheus ${PROM_URL} --namespace ${NAMESPACE} --kube-state-metrics \
+      bin/capacity-planner capture --prometheus ${PROM_URL} --namespace ${NAMESPACE} --kube-state-metrics \
         --from ${FROM} --to ${TO} --engine vllm --engine-args "${ENGINE_ARGS}" \
         -o run.capture.jsonl.gz
   generate:
     note: Plays the capture through the analyzers. The result is an ordinary learner recording.
     run: |
-      bin/whatif generate -in run.capture.jsonl.gz -o run.jsonl.gz
+      bin/capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
   ask:
     note: Ask the planner's two questions. Exit 0 answered, 3 a role refused (the output says why).
     run: |
-      bin/whatif replicas-to-slo --recording run.jsonl.gz --cycle last
-      bin/whatif slo-to-rate --recording run.jsonl.gz --cycle last --tpot 20ms@p90
+      bin/capacity-planner replicas-to-slo --recording run.jsonl.gz --cycle last
+      bin/capacity-planner slo-to-rate --recording run.jsonl.gz --cycle last --tpot 20ms@p90
 
 manual:
   window:
@@ -197,9 +197,9 @@ load:
   tools:
     note: |
       In a checkout of this repository, with Python 3 and a prometheus binary on PATH (the Prometheus release,
-      or the quay.io/prometheus/prometheus image). Builds whatif and installs promtool.
+      or the quay.io/prometheus/prometheus image). Builds capacity-planner and installs promtool.
     run: |
-      make whatif promtool
+      make capacity-planner promtool
       export PROMTOOL=$(ls bin/promtool-* | sort -V | tail -1)
       ${PROMTOOL} --version | head -1
   inspect:
@@ -239,8 +239,8 @@ load:
   capture:
     note: |
       Then capture as in the first path, against the local copy, from 5 minutes into the export.
-      whatif takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
+      capacity-planner takes one set of engine arguments: the decode Deployment's. PREFILL_ARGS is there to read.
     run: |
-      bin/whatif capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
+      bin/capacity-planner capture --prometheus http://127.0.0.1:9091 --namespace "${NAMESPACE}" --kube-state-metrics \
         --from "${CAPTURE_FROM}" --to "${TO}" --engine "${ENGINE}" --engine-args "${DECODE_ARGS}" \
         -o run.capture.jsonl.gz

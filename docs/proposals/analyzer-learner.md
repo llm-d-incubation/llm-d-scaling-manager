@@ -731,7 +731,7 @@ format, set out in [testing](../developer-guide/testing.md#the-goldens-section),
 not Markdown: two reviews found paths through a Markdown parser written in bash,
 and the check is for honest mistakes, since a PR runs its own copy of it. So the
 pasted summary goes under the next heading, not in the section. The check watches
-more than this rule's replay outputs: also the `cmd/whatif` goldens and schema,
+more than this rule's replay outputs: also the `cmd/capacity-planner` goldens and schema,
 `goldens.yaml`, and each `recording.jsonl.gz`, so a retaken recording or a new
 fixture is named too. It compares file names only. The direction and the pasted
 summary stay with the reviewer, and nothing machine-checks them. Run on the 77
@@ -1022,10 +1022,10 @@ instead of carrying a copy; replay resolves the reference. That brings the
 cost back to one input per model per cycle, whatever the policy lists, and
 needs no change to what a replay reads.
 
-**R2: `whatif capture` and a `Generate` replay mode.**
+**R2: `capacity-planner capture` and a `Generate` replay mode.**
 
 ```
-whatif capture --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...) \
+capacity-planner capture --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...) \
     --from T0 --to T1 [--step 15s] [--policy FILE] -o run.jsonl.gz
 ```
 

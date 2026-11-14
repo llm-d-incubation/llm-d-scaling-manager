@@ -1551,7 +1551,7 @@ must hold out and freeze is in
 
 | Piece | What it does |
 | --- | --- |
-| `whatif freeze` | The prediction: a warm-up recording and a spec in, one JSON file out, the same bytes for the same inputs. It reads the fleet as `slo-to-rate` does. It refuses to replace a file, and exits 3 when a bucket refuses |
+| `capacity-planner freeze` | The prediction: a warm-up recording and a spec in, one JSON file out, the same bytes for the same inputs. It reads the fleet as `slo-to-rate` does. It refuses to replace a file, and exits 3 when a bucket refuses |
 | `staircase_spec.yaml` | The buckets, steps, warm-up, stop rule and falsifiers, hashed into the frozen file |
 | `staircase_freeze.py` | The ladder, with each step's hold lengthened until its window holds 4 relaxation times, and the GPU-hours. It refuses a warm-up that fails S2's gate |
 | `staircase_load.py` | The open-loop driver. A `RUNAWAY` line names its rule, `client-p90` or `max-inflight` |
@@ -1565,7 +1565,7 @@ its first request, not at the log's stamp, and is cut at the stop, so five clien
 figures move in their last digit (B off p95 1.74 to 1.73, B on p95 19.8 to 19.9 r/s,
 and three mean TPOT rates by 0.1 r/s). No mark moves. The two steps the in-flight cap
 cut short, step 7 of B off and C off, used to be read over a window past the stop. On
-M2's warm-up `whatif freeze` gives the knees, onsets, `R_q` and mean TPOT of the frozen
+M2's warm-up `capacity-planner freeze` gives the knees, onsets, `R_q` and mean TPOT of the frozen
 file. Its targets differ, as they should: the frozen file predates the decode term.
 
 **A saturated transfer floors the price only once it is the truth.** S1 and the CLI
@@ -2491,7 +2491,7 @@ the percentile is J2's.
 `PullUnseen`, `RouterHopAssumed`), with no `statistic` label since they are
 means; `inverted` on `llmsm_slo_ttft_vp_source`; and a `slo-ttft-joint` line in
 the cycle log with the parts and what the engines measured beside them.
-`whatif joint-ttft --recording FILE [--prefill N] [--decode N] [--rate R]`
+`capacity-planner joint-ttft --recording FILE [--prefill N] [--decode N] [--rate R]`
 prices any fleet from a recording, and exits 3 on a refusal.
 
 ### The model row

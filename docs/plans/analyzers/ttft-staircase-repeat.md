@@ -72,7 +72,7 @@ exist yet, not a missing directory; every save went through.
 | TTFT target | `TTFTAt` at the operating rate, flow control off, at p90 and p95 | From M2 |
 | Target floor | At least 1.2 times the model's floor; the frozen file says when this raised a target | PROPOSED. M2's A sat 1.03x over its floor, where a target says nothing of a rate |
 | TPOT target | Mean TPOT priced at the operating rate, and that times the warm-up's `R_q` | From M2 |
-| Predicted rate | `RateForTTFT` at the target, in the flow-control state run. Bucket C and `H-ca*` are re-priced at their measured `Ca²`, targets held (`whatif freeze --targets --ca2`) | Page |
+| Predicted rate | `RateForTTFT` at the target, in the flow-control state run. Bucket C and `H-ca*` are re-priced at their measured `Ca²`, targets held (`capacity-planner freeze --targets --ca2`) | Page |
 | Steps | 0.40, 0.60, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00 of the knee | PROPOSED. 0.85 is a step, so the mark interpolates over a short span |
 | Hold | 10 minutes, first 3 discarded, lengthened to fit 4 relaxation times, at most 25 minutes | Page, with a cap |
 | Stop | Client p90 above twice the p90 target over the whole window | Page |

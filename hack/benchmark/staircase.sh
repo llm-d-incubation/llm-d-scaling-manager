@@ -60,7 +60,8 @@ LOAD_IMAGE="${STAIRCASE_LOAD_IMAGE:-ghcr.io/llm-d/llm-d-benchmark:v0.7.8}"
 PROM="${BENCHMARK_PROMETHEUS_URL:-}"
 SLO_TTFT="${STAIRCASE_SLO_TTFT:-200ms}"
 SCENARIO="${BENCHMARK_SPEC:-guides/pd-disaggregation}"
-WHATIF="${STAIRCASE_WHATIF:-$ROOT/bin/whatif}"
+# STAIRCASE_WHATIF is the old name, read for one release.
+PLANNER="${STAIRCASE_CAPACITY_PLANNER:-${STAIRCASE_WHATIF:-$ROOT/bin/capacity-planner}}"
 # The longest held-out prompt, its spread and the answer must fit.
 MAX_MODEL_LEN="${STAIRCASE_MAX_MODEL_LEN:-40960}"
 # Unset: the scenario's own tensor-parallel size and prefill memory, as before.
@@ -744,8 +745,8 @@ cmd_freeze() {
     [ -d "$R/phases" ] && die "a phase has run: a prediction after a step is not a prediction"
     rec=$(largest_recording)
     [ -n "$rec" ] || die "no warm-up recording under $R/recordings-warmup"
-    [ -x "$WHATIF" ] || die "$WHATIF: build it with make whatif"
-    "$WHATIF" freeze --recording "$rec" --spec "$R/spec.yaml" -o "$R/frozen.json" || refuse_freeze "whatif freeze refused"
+    [ -x "$PLANNER" ] || die "$PLANNER: build it with make capacity-planner"
+    "$PLANNER" freeze --recording "$rec" --spec "$R/spec.yaml" -o "$R/frozen.json" || refuse_freeze "capacity-planner freeze refused"
     "$PY" "$HERE/staircase_freeze.py" ladder "$R/frozen.json" "$R/spec.json" "$R/ladder.txt" "$R/spec.yaml" || refuse_freeze "no ladder"
     "$PY" "$HERE/staircase_freeze.py" plan "$R/frozen.json" "$R/spec.json" | tee "$R/plan.md"
     (cd "$R" && sha256sum frozen.json ladder.txt spec.yaml spec.json > frozen.sha256) || refuse_freeze "hashing failed"
@@ -1031,7 +1032,7 @@ cmd_resume() {
     if [ "$HERE" != "$R/bin" ]; then
         cp -f "$HERE"/staircase* "$HERE/closed_loop_sweep.py" "$R/bin/" || die "cannot copy the tooling"
     fi
-    STAIRCASE_COPY=1 STAIRCASE_RESUME=1 STAIRCASE_PRIOR="$prior" STAIRCASE_ROOT="$ROOT" STAIRCASE_WHATIF="$WHATIF" \
+    STAIRCASE_COPY=1 STAIRCASE_RESUME=1 STAIRCASE_PRIOR="$prior" STAIRCASE_ROOT="$ROOT" STAIRCASE_CAPACITY_PLANNER="$PLANNER" \
         exec bash "$R/bin/staircase.sh" run "$1"
 }
 
@@ -1048,7 +1049,7 @@ cmd_run() {
         cp -f "$SPEC" "$R/spec.yaml" || die "no spec at $SPEC"
         command -v yq >/dev/null || die "yq not found"
         yq -o=json "$R/spec.yaml" > "$R/spec.json" || die "spec does not parse"
-        STAIRCASE_COPY=1 STAIRCASE_ROOT="$ROOT" STAIRCASE_WHATIF="$WHATIF" exec bash "$R/bin/staircase.sh" run "$1"
+        STAIRCASE_COPY=1 STAIRCASE_ROOT="$ROOT" STAIRCASE_CAPACITY_PLANNER="$PLANNER" exec bash "$R/bin/staircase.sh" run "$1"
     fi
     STARTED=0; CAP=; CHILD=
     SESSION="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -1320,8 +1321,8 @@ cmd_redo() {
     for rec in $ca2; do args+=(--ca2 "$rec"); done
     [ ${#args[@]} -gt 0 ] || die "no bucket with a measured Ca2"
     rm -f "$R/frozen-measured-ca2.json"
-    "$WHATIF" freeze --recording "$(largest_recording)" --spec "$R/spec.yaml" --targets "$R/frozen.json" "${args[@]}" \
-        -o "$R/frozen-measured-ca2.json" || die "whatif freeze refused"
+    "$PLANNER" freeze --recording "$(largest_recording)" --spec "$R/spec.yaml" --targets "$R/frozen.json" "${args[@]}" \
+        -o "$R/frozen-measured-ca2.json" || die "capacity-planner freeze refused"
     echo "$R/frozen-measured-ca2.json: $ca2"
 }
 

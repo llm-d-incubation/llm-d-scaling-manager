@@ -32,13 +32,13 @@ set -u
 # Where the goldens are. A file under any of these is a golden.
 GOLDEN_DIR="internal/engines/analyzers/learnreplay/testdata/goldens"
 COUNTS_DIR="internal/engines/steadystate/testdata"
-WHATIF_DIR="cmd/whatif/testdata"
+PLANNER_DIR="cmd/capacity-planner/testdata"
 is_golden() {
     case "$1" in
         "$GOLDEN_DIR"/*) return 0 ;;
         "$COUNTS_DIR"/engine-run-event-counts.txt) return 0 ;;
-        "$WHATIF_DIR"/*.golden) return 0 ;;
-        "$WHATIF_DIR"/schema-v*.txt) return 0 ;;
+        "$PLANNER_DIR"/*.golden) return 0 ;;
+        "$PLANNER_DIR"/schema-v*.txt) return 0 ;;
     esac
     return 1
 }
@@ -56,7 +56,7 @@ relative() {
     case "$1" in
         "$GOLDEN_DIR"/*) ROOT="$GOLDEN_DIR" ;;
         "$COUNTS_DIR"/*) ROOT="$COUNTS_DIR"; DEPTH=1 ;;
-        "$WHATIF_DIR"/*) ROOT="$WHATIF_DIR"; DEPTH=1 ;;
+        "$PLANNER_DIR"/*) ROOT="$PLANNER_DIR"; DEPTH=1 ;;
     esac
     [ -z "$ROOT" ] || REL="${1#"$ROOT"/}"
 }

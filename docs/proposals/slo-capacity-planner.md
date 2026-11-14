@@ -1,6 +1,6 @@
 # What-if capacity: from an SLO to a rate, and from replicas to an SLO
 
-**Status:** proposal, 2026-11-02. `cmd/whatif` is built, both questions from a
+**Status:** proposal, 2026-11-02. `cmd/capacity-planner` is built, both questions from a
 recording or from Prometheus: see [the CLI reference](#cli-reference) and
 [what is measured](#measured-on-the-goldens). Per-bucket answers, aggregated TTFT
 (M1) and the controller's handler are not. The decode half reuses
@@ -40,7 +40,7 @@ from a recording, from a live Prometheus with no controller installed, or
 | --- | --- |
 | **Decode** | Reuses the ITL line and the SLO analyzer's TPOT pricing unchanged, moved to a `signals` package so a CLI can call them. A per-request TPOT percentile is the mean times a ratio `R_q` learned from the router's per-request TPOT histogram. Decode admission is a birth-death chain over the batch cap's slots. |
 | **TTFT** | Per-pod queue with the measured imbalance; the router's flow-control queue only above the rate where it starts holding requests; prefill capacity as a token throughput from sources that cannot over-state it; parts combined by convolution and an optimised union bound. See [end-to-end TTFT](slo-capacity-planner-ttft.md). |
-| **Packaging** | `internal/signals/whatif` and `internal/signals/prefill`, an adapter `internal/whatifsource`, a CLI `cmd/whatif`. |
+| **Packaging** | `internal/signals/whatif` and `internal/signals/prefill`, an adapter `internal/whatifsource`, a CLI `cmd/capacity-planner`. |
 | **Validated** | TPOT is measured against the goldens: [the table](#measured-on-the-goldens), 6 of 8 lines the planner answers on in bound. The decode knee and prefill's own latency are not validated: no golden has the data. TTFT on a fixed-replica staircase, flow control off and on, prints UNVALIDATED until a run passes. |
 | **Refuses** | With no evidence for a term, rather than guessing. |
 
@@ -51,7 +51,7 @@ the decode side from the `ols-sweep` golden's last ITL line, `V_P` assumed
 because that golden holds no evidence of it. The bands are illustrative.
 
 ```
-$ whatif replicas-to-slo --recording ols-sweep.jsonl.gz --cycle last \
+$ capacity-planner replicas-to-slo --recording ols-sweep.jsonl.gz --cycle last \
     --model m --prefill 1 --decode 1 --ttft-percentile 90 --assume-vp 30000 \
     --tpot-percentile 90 --assume-tpot-ratio 1.3
 knee            13.31 r/s   decode, batch cap binds at fill 0.732
@@ -64,7 +64,7 @@ flags: flow control inferred off (no queue series); T_xfer omitted (not collecte
        prompt spread assumed (cv 1)
 estimate from cycles 1-226, not a guarantee; see basis (-o json)
 
-$ whatif slo-to-rate --recording ols-sweep.jsonl.gz --cycle last \
+$ capacity-planner slo-to-rate --recording ols-sweep.jsonl.gz --cycle last \
     --model m --prefill 1 --decode 1 --tpot 4ms --ttft 200ms@p95 --assume-vp 30000
 role     est. rate at SLO   bound by                                basis
 decode   11.32 r/s          operating-point cap (TPOT alone: 12.03)  ols [11.0 .. 11.5]
@@ -126,7 +126,7 @@ analyzer, the slo analyzer (switch `slo-kv-per-request-output-dispersion`), the
 throughput analyzer (switch `throughput-kv-per-request-output-dispersion`, ev-shindin/llm-scaling-manager#433) and
 [the CLI](#recording-mode-as-built-d3). TPOT per accepted token under speculative
 decoding (ev-shindin/llm-scaling-manager#274, PR ev-shindin/llm-scaling-manager#430) is applied once, where the saturation analyzer fits its
-line (`domain.ReplicaMetrics.ITLPerToken`). `cmd/whatif` applies nothing of its
+line (`domain.ReplicaMetrics.ITLPerToken`). `cmd/capacity-planner` applies nothing of its
 own: it prices that line, so it inherits the correction. That rests on reading the
 code: no committed recording speculates. The slo analyzer still reads step time
 ([where decode is most wrong](#where-decode-is-most-wrong)).
@@ -387,7 +387,7 @@ adds them, because the TTFT model reads a missing value as 0 otherwise.
 after the cycle named and reads the learned state: the answer is what the
 controller knew then. Of the real goldens, `ols-sweep` answers decode and the
 prefill `a`; `pd-restart` publishes no line; `e1` and `e1-tuned` list slo as
-notRun; none has router TTFT. **Capture** (`whatif capture`) makes a recording
+notRun; none has router TTFT. **Capture** (`capacity-planner capture`) makes a recording
 from Prometheus alone for a past window; it is specified with the recorder.
 
 **Standalone.** The collector's query templates and
@@ -443,7 +443,7 @@ TTFT's rows are on [its page](slo-capacity-planner-ttft.md#where-it-is-most-wron
 | `internal/signals/prefill` (new) | `V_P`, `a`, `f`, their windows and admission | 30 |
 | `internal/signals/whatif` (new) | decode pricing (moved), the closed form, the chain, the queues, the inversions, bands, basis, `Answer`/`Unanswerable` | 32, an arm before `internal/signals/*`, above `floor` (31) so an edge from `floor` is caught |
 | `internal/whatifsource` (new) | Prometheus to `ReplicaMetrics`, the role map, readiness fallback, snapshot reader, capture | outside the pipeline, like `controller`; the only new importer of `collector/source` and a client |
-| `cmd/whatif` | flags, output, exit codes | `make whatif`; not in the manager image |
+| `cmd/capacity-planner` | flags, output, exit codes | `make capacity-planner`; not in the manager image |
 
 **D1 moves** `priceTPOT`, `reachableFill`, `replicaTokenRate`, `realisedFill`,
 `fillBand`, `pricing` (from `slo/price.go`) and `deriveMuAtCap`,
@@ -476,7 +476,7 @@ is [the staircase](slo-capacity-planner-ttft.md#ground-truth-and-the-staircase).
 
 `TestDecodeValidation_OnTheGoldens` does this over all 23 goldens, the four staircase
 ones among them, and freezes every line in
-`cmd/whatif/testdata/decode-validation.golden`: 56 lines, one per variant. Green means
+`cmd/capacity-planner/testdata/decode-validation.golden`: 56 lines, one per variant. Green means
 the figures did not move. It is not a pass, and a row past its bound stays in the file
 as `OUT`. The file sits there so that the goldens gate makes a PR name it.
 
@@ -574,18 +574,18 @@ is made.**
 | PR | What | Goldens | Depends on |
 | --- | --- | --- | --- |
 | R1 | Recorder fields for TTFT: [the learner rules, 2.9](analyzer-learner.md#29-recorder-fields-for-ttft-and-capture) | regenerated, values unchanged | — |
-| R2 | `whatif capture` and the `Generate` replay mode; creates `internal/whatifsource`, which D4 extends | none | R1 |
+| R2 | `capacity-planner capture` and the `Generate` replay mode; creates `internal/whatifsource`, which D4 extends | none | R1 |
 | Recordings | Prefill-stress (30k prompts, 3 prefill pods, decode below its ceiling, fixed replicas); the staircase warm-ups, flow control off and on | — | R1 |
 | Capture | The `ols-sweep-slo` window, from its Prometheus snapshot | — | R2 |
-| D1 | Move the decode pricing into `whatif` at layer 32. Proof: vectors captured from `main` before the move, frozen, asserted bit-identical; the fails-on-main rule is waived for a pure move | none move | — |
+| D1 | Move the decode pricing into `capacity-planner` at layer 32. Proof: vectors captured from `main` before the move, frozen, asserted bit-identical; the fails-on-main rule is waived for a pure move | none move | — |
 | D2 | Closed form, TPOT inversions, the admission chain, `Answer`/`Unanswerable`, property cases. Deletes D1's frozen vectors and `TestMovedPricingIsBitIdentical` if it changes a moved function (regenerable from bf493785a). Also D2: `PriceTPOT` with a NaN band edge returns `OK: true` with a NaN fill (only `PricingK` checks the band); `DerivedMu.CapAtMeasured`, set only by the saturation analyzer, and the string `Why` codes are candidates to move out or type | none | D1 |
-| D3 | Accessors, the replay function, bands, basis, `cmd/whatif` from a recording or snapshot, footer, exit codes | none | D2 |
+| D3 | Accessors, the replay function, bands, basis, `cmd/capacity-planner` from a recording or snapshot, footer, exit codes | none | D2 |
 | D4 | Standalone answers from `--prometheus`; no switch (adapter only) | none | D3, R2 |
 | P1 | `internal/signals/prefill`, observing: `V_P`, `a`, `f`; logs only; switch `prefill-capacity-observe`. On `ols-sweep` it fits `a` and refuses `V_P` and `f` | none | — |
 | P2 | The prefill-stress recordings as goldens, and P3 checked against them: runs 1 to 4 ([the recordings](slo-tiers.md#the-p2-recordings)). [As built](slo-capacity-planner-ttft.md#as-built-p2): P3 under-predicts the router's TTFT at light load and at saturation | adds four | P1, R1, the runs |
-| P3 | The TTFT model in `whatif`; UNVALIDATED; no switch. Built before P2, against closed-form and synthetic cases, because the prefill-stress runs were blocked on cluster access: [as built](slo-capacity-planner-ttft.md#as-built-p3) | none | P2 (to validate), D2 |
+| P3 | The TTFT model in `capacity-planner`; UNVALIDATED; no switch. Built before P2, against closed-form and synthetic cases, because the prefill-stress runs were blocked on cluster access: [as built](slo-capacity-planner-ttft.md#as-built-p3) | none | P2 (to validate), D2 |
 | TTFT CLI | `--ttft`, `--ttft-percentile`, `--assume-vp` and `--prefill` on both questions, from every source: [as built](#ttft-as-built) | none | P3, D4 |
-| S1, S2 | The SLO analyzer prices TTFT, shadow then enforce, on the same `prefill` and `whatif` library: [SLO tiers, phase 2](slo-tiers.md#phase-2-ttft) | with its switch | S1: P3. S2: S1, Q1, M2 |
+| S1, S2 | The SLO analyzer prices TTFT, shadow then enforce, on the same `prefill` and `capacity-planner` library: [SLO tiers, phase 2](slo-tiers.md#phase-2-ttft) | with its switch | S1: P3. S2: S1, Q1, M2 |
 | M1 | Per-bucket and mix answers; aggregated TTFT | none | P3, R1, ev-shindin/llm-scaling-manager#276 |
 | M2 | The staircase run; an operator page in `docs/reference/`; drops UNVALIDATED if it passes | — | D4, P3 |
 | Q1 | Issue the queue-minimum and KV-transfer-time queries every cycle, not only while a recording is on, and add the per-request computed-prefill-token histogram (`vllm:request_prefill_kv_computed_tokens_bucket`, per instance), for namespaces holding a model whose policy sets a TTFT target: busy minutes fire in production, the measured effective-prompt spread replaces S1's assumed `cv` 2, and `TransferOmitted` clears where a decode pod reads a transfer time. Before S2, not S1: [S1 decisions](slo-tiers.md#s1-decisions). [As built](slo-tiers.md#as-built-q1) | none: the queue minimum and transfer time are in recordings already; the histogram is new, so recordings made after Q1 carry it, and the switch `slo-ttft-measured-spread` replays those both ways | P1's busy minutes (PR ev-shindin/llm-scaling-manager#470) |
@@ -715,16 +715,16 @@ batch cap; nothing is written. **`--role-of <role>=<selector>`**, repeated, for
 example `--role-of prefill=app=m-prefill`.
 
 ```
-$ whatif slo-to-rate --prometheus https://prom.example:9091 --namespace llm --model m --tpot 4ms
+$ capacity-planner slo-to-rate --prometheus https://prom.example:9091 --namespace llm --model m --tpot 4ms
 error: cannot tell prefill from decode pods: pass --kubeconfig, or --role-of <role>=<selector>
 exit 2
 
-$ whatif slo-to-rate --prometheus https://prom.example:9091 --namespace llm \
+$ capacity-planner slo-to-rate --prometheus https://prom.example:9091 --namespace llm \
     --role-of prefill=app=m-prefill --role-of decode=app=m-decode --model m --tpot 4ms
 decode   refused: NoBatchCap (no kubeconfig and no --batch-cap)
 exit 3
 
-$ whatif slo-to-rate --prometheus https://prom.example:9091 --namespace llm \
+$ capacity-planner slo-to-rate --prometheus https://prom.example:9091 --namespace llm \
     --role-of prefill=app=m-prefill --role-of decode=app=m-decode \
     --batch-cap 64 --model m --tpot 4ms --input-bucket huge
 decode   9.8 r/s   TPOT, fill 0.43   pinned-B (learned B), admitted without readiness [8.9 .. 10.4]
@@ -781,7 +781,7 @@ Exit codes: `0` every role answered; `3` a role refused (output still printed);
 
 ### Recording mode, as built (D3)
 
-`whatif replicas-to-slo` and `whatif slo-to-rate` answer for decode from a
+`capacity-planner replicas-to-slo` and `capacity-planner slo-to-rate` answer for decode from a
 recording, `--recording FILE --cycle N|last`. TTFT, prefill and the fleet row
 came later: [TTFT, as built](#ttft-as-built).
 
@@ -830,11 +830,11 @@ came later: [TTFT, as built](#ttft-as-built).
 
 ### Prometheus mode, as built (D4)
 
-`whatif replicas-to-slo` and `whatif slo-to-rate` also answer from a window of
+`capacity-planner replicas-to-slo` and `capacity-planner slo-to-rate` also answer from a window of
 Prometheus, in place of `--recording`:
 
 ```
-whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS
+capacity-planner replicas-to-slo|slo-to-rate --prometheus URL --namespace NS
     (--kube-state-metrics | --role-of ROLE=SELECTOR ...) --from T0 --to T1
     [--step 15s] [--policy FILE] [--engine vllm|sglang] [--engine-args "ARGS"]
     [--batch-cap N] [--gpus-per-replica 1] [--accelerator NAME]
@@ -845,22 +845,22 @@ whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS
 
 - **What it is.** An adapter, with no switch and no pricing of its own. It
   captures the window into memory with `whatifsource.Capture`, the same call
-  `whatif capture` makes, then plays the capture through the analyzers with
-  the same `Generate` call `whatif generate` makes, then answers from that
+  `capacity-planner capture` makes, then plays the capture through the analyzers with
+  the same `Generate` call `capacity-planner generate` makes, then answers from that
   recording as `--recording` does (`learnreplay.StateAt` at `--cycle`, the
   last by default). The answer is the one the three commands give on files:
 
   ```
-  whatif capture --prometheus URL --namespace NS --role-of ... --from T0 --to T1 -o w.capture.jsonl.gz
-  whatif generate -in w.capture.jsonl.gz -o w.jsonl
-  whatif slo-to-rate --recording w.jsonl --namespace NS --tpot 4ms
+  capacity-planner capture --prometheus URL --namespace NS --role-of ... --from T0 --to T1 -o w.capture.jsonl.gz
+  capacity-planner generate -in w.capture.jsonl.gz -o w.jsonl
+  capacity-planner slo-to-rate --recording w.jsonl --namespace NS --tpot 4ms
   ```
 
   `TestPrometheus_TheAnswerIsTheFilesAnswer` holds the two to the same
   output, byte for byte in text and in JSON, but for `source`, which names
   where the answer was read from.
 - **The window's flags are capture's**, with the same meaning, defaults and
-  checks: [What-if capture](../developer-guide/whatif-capture.md) lists
+  checks: [What-if capture](../developer-guide/capacity-planner-capture.md) lists
   them, and its safety holds here too (the timeout, the token sent over https
   to Prometheus' own host only, the CA file, the window and sample bounds
   that `--force` lifts, every sample on the step grid). Without
@@ -883,7 +883,7 @@ whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS
   mode. The role map is `--kube-state-metrics` or `--role-of`, as for
   capture.
 - **Warnings** (`--insecure-skip-verify`, a batch cap given twice) and
-  the capture's caveats, as `generate` prints them (`whatif: caveat: ...`),
+  the capture's caveats, as `generate` prints them (`capacity-planner: caveat: ...`),
   go to stderr, so that `-o json` is still one object.
 - **The text answer** opens with the window it was answered from:
   `answered for NS/MODEL from URL, T0 to T1 every STEP (captured and
@@ -916,7 +916,7 @@ whatif replicas-to-slo|slo-to-rate --prometheus URL --namespace NS
 
 ### TTFT, as built
 
-`whatif replicas-to-slo` and `whatif slo-to-rate` answer TTFT for one P/D
+`capacity-planner replicas-to-slo` and `capacity-planner slo-to-rate` answer TTFT for one P/D
 fleet, from `--recording`, from the files `capture` and `generate` write, and
 from `--prometheus`. All three replay the same recording, so they give the
 same answer: `TestPrometheus_TheTTFTAnswerIsTheFilesAnswer` holds them to it,
@@ -944,7 +944,7 @@ TTFT: the decode answers are as they were.
 | `f` | P1's own at the pod count, `--prefill N` included: a reading of that count, so unflagged, where S1 clamps at any other count | One pod: none, exactly 1. Otherwise `min(N_p, max(1.5, f))`, `f` the learned figure at the recorded count or the raw share, flagged `AssumedImbalance` (S1, decision 1). The raw share is the largest over the last 5 cycles that read one, at the current pod count: a pod with no rate counts as one that computed nothing, and an idle tail forgets nothing, as in S1. It reads serving rows, not S1's settled ones: a pod warming up reads low, which raises the share, the permitted side |
 | Prompt | `--assume-input-tokens`, else computed tokens over requests on the prefill rows, over the last 20 cycles with traffic | The decode variant's `IL·(1 − hit)`, named. Neither is `NoTraffic` |
 | `cv` | The computed-token histogram (Q1), pooled over the prompt's cycles and pods, through the window S1 keeps too (`whatif.PromptWindow`). Held at 3 and named `clamped` past the histogram's last bound. A recording made before Q1 has none. `--assume-prompt-cv` overrides all of it | 2, flagged `AssumedPromptSpread` (S1) |
-| Arrivals | `--arrival-cv2`, on the prefill queue | Poisson, flagged `AssumedPoissonArrivals`, the S1 flag, kept in `cmd/whatif` because P3 has none |
+| Arrivals | `--arrival-cv2`, on the prefill queue | Poisson, flagged `AssumedPoissonArrivals`, the S1 flag, kept in `cmd/capacity-planner` because P3 has none |
 | `T_xfer` | Decode rows' `AvgKVTransferTime` over the measured prompt | Left out, flagged `TransferOmitted` |
 | Decode term | With a decode line: `D` and `R` as the recording's cycles teach them ([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)), in place of `T_xfer` and `ITL` | `D`: a quiet row's figure held at slope 10, flagged `DecodeStepSlopeAssumed`, or the old sum, flagged `DecodeTermOmitted`. `R`: 20 ms, or `--assume-router-hop`, flagged `RouterHopAssumed`. Each is named on the `assumed` row with why no fit stands, and in `ttft` in the JSON with the term as priced |
 | Decode side | The decode variant's line, if `whatif.KneeRate` prices it | The decode engine's `AvgTTFT`, readings above 0 only: the largest of the last 5 cycles, with that cycle's prompt, flagged `DecodeEngineMeasured`. A cycle with no reading holds an empty slot, so the figure ages out of an idle tail. Else left out, flagged `DecodeSideOmitted` and `DecodeTTFTUnmeasured` |
@@ -1119,7 +1119,7 @@ shape disagree with the tokens read. It cannot say which is wrong.
 ### JSON output
 
 `-o json` (or `--output json`) writes one object. Abridged from the worked
-example (`cmd/whatif/testdata/replicas-to-slo-worked-json.golden`; of its
+example (`cmd/capacity-planner/testdata/replicas-to-slo-worked-json.golden`; of its
 four results only `meanTPOT` is kept here):
 
 ```json
@@ -1226,7 +1226,7 @@ four results only `meanTPOT` is kept here):
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | The schema below. Removing, renaming or retyping a key, or changing its meaning, is a new version; a key absent unless a new flag asks for it is not. `cmd/whatif` is in no release. |
+| `schemaVersion` | The schema below. Removing, renaming or retyping a key, or changing its meaning, is a new version; a key absent unless a new flag asks for it is not. `cmd/capacity-planner` is in no release. |
 | `question` | `replicas-to-slo` or `slo-to-rate`. |
 | `source` | The recording, the model, `firstCycle` (1), `lastCycle` (the cycle answered at) and `totalCycles` (the recording's), with their clocks. With `--prometheus`, `recording` is empty and `window` names the window: `prometheus` (the URL's scheme and host alone), `from`, `to`, `stepSeconds`, and `roles` (`kube-state-metrics` or `role-of`); absent in recording mode. Absent on an error object. |
 | `bands` | How the bands were drawn: block bootstrap, `blockCycles`, `resamples`, `seed`, the percentiles. Absent on an error object. |
@@ -1245,13 +1245,13 @@ four results only `meanTPOT` is kept here):
 To read a figure, for example the mean TPOT in milliseconds:
 
 ```
-whatif replicas-to-slo --recording run.jsonl.gz -o json | jq '.roles[0].results.meanTPOT.answer.value * 1000'
+capacity-planner replicas-to-slo --recording run.jsonl.gz -o json | jq '.roles[0].results.meanTPOT.answer.value * 1000'
 ```
 
-Every key path, with its JSON type, for `schemaVersion` 3 (the `cmd/whatif`
+Every key path, with its JSON type, for `schemaVersion` 3 (the `cmd/capacity-planner`
 tests hold the wire types to this list):
 
-<!-- whatif-json-schema-v3: begin -->
+<!-- capacity-planner-json-schema-v3: begin -->
 ```
 bands object
 bands.blockCycles number
@@ -1578,7 +1578,7 @@ source.window.roles string
 source.window.stepSeconds number
 source.window.to string
 ```
-<!-- whatif-json-schema-v3: end -->
+<!-- capacity-planner-json-schema-v3: end -->
 
 ## See also
 

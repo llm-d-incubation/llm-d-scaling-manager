@@ -1,13 +1,13 @@
-# What-if serve: the capacity planner's API
+# Capacity planner serve: the HTTP API
 
-`whatif serve` runs the capacity planner's HTTP API on your machine. You
+`capacity-planner serve` runs the capacity planner's HTTP API on your machine. You
 resolve a source once (a recording, or a window of Prometheus), then ask for
 plans against it: curves, the two points on each graph, the fleet's limits and
 what one more replica of each role would change. Every figure is one the
-`whatif` CLI also prints, from the same code.
+`capacity-planner` CLI also prints, from the same code.
 
 This is phase 0 of [the capacity planner](../proposals/capacity-planner.md):
-the API, no page. Like the rest of `whatif`, it is a contributor and operator
+the API, no page. Like the rest of `capacity-planner`, it is a contributor and operator
 tool and is not in the manager image.
 
 ## Start it
@@ -15,17 +15,20 @@ tool and is not in the manager image.
 From a recordings directory:
 
 ```
-go build -o bin/whatif ./cmd/whatif
-bin/whatif serve --recordings ./recordings
+make capacity-planner
+bin/capacity-planner serve --recordings ./recordings
 ```
+
+`make capacity-planner` stamps the commit into the build, as the recordings
+it makes carry it.
 
 It listens on `127.0.0.1:8080` and prints the address on stderr. Stop it with
 Ctrl-C.
 
-From Prometheus (through a port-forward, as `whatif capture` reads it):
+From Prometheus (through a port-forward, as `capacity-planner capture` reads it):
 
 ```
-bin/whatif serve --prometheus http://localhost:9090 --namespace llm --kube-state-metrics
+bin/capacity-planner serve --prometheus http://localhost:9090 --namespace llm --kube-state-metrics
 ```
 
 Both sources can be served at once.
@@ -68,7 +71,7 @@ point (headroom times the lower knee).
 | Flag | What it does |
 | --- | --- |
 | `--recordings DIR` | Recordings a `recording` source names by file name. |
-| `--prometheus URL` | The Prometheus a `prometheus` source reads. With it, every [capture flag](whatif-capture.md) but `--from`, `--to` and `-o` applies: the role map, `--step`, `--policy`, the engine, TLS and the bearer token. The window comes with each request. |
+| `--prometheus URL` | The Prometheus a `prometheus` source reads. With it, every [capture flag](capacity-planner-capture.md) but `--from`, `--to` and `-o` applies: the role map, `--step`, `--policy`, the engine, TLS and the bearer token. The window comes with each request. |
 | `--namespace NS` | The namespace a `prometheus` source reads when the request names none. |
 | `--allowed-namespaces NS,...` | The namespaces a `prometheus` source may read. Default `--namespace` alone; with `--prometheus` one of the two is required. A request for any other namespace is 403, and a namespace that is not a DNS-1123 label a 400. |
 | `--batch-cap N` | The engine's batch cap a window is captured with, as `capture --batch-cap`. |
@@ -104,15 +107,17 @@ server's to allow (`--allowed-namespaces`), and with `--auth=kubernetes` the
 user's too: `get` on `pods` there. Access to the API itself is `get` on the
 non-resource URL `/whatif/` plus the path, for every method: a `POST
 /v1/plan` is authorized as `get` on `/whatif/v1/plan`, since the API changes
-nothing.
+nothing. The path keeps the command's old name, so RBAC written for an earlier
+release still applies.
 
-The RBAC for a group `planners` that reads the namespace `llm`:
+The RBAC for a group `planners`, and the ServiceAccount `planner` the token
+example below uses, that read the namespace `llm`:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: whatif-planner
+  name: capacity-planner
 rules:
 - nonResourceURLs: ["/whatif/*"]
   verbs: ["get"]
@@ -120,21 +125,24 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: whatif-planner
+  name: capacity-planner
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: whatif-planner
+  name: capacity-planner
 subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: planners
+- kind: ServiceAccount
+  name: planner
+  namespace: llm
 ---
 # One Role and RoleBinding per namespace in --allowed-namespaces.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: whatif-planner-reader
+  name: capacity-planner-reader
   namespace: llm
 rules:
 - apiGroups: [""]
@@ -144,16 +152,19 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: whatif-planner-reader
+  name: capacity-planner-reader
   namespace: llm
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: whatif-planner-reader
+  name: capacity-planner-reader
 subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: planners
+- kind: ServiceAccount
+  name: planner
+  namespace: llm
 ```
 
 The server's own identity (its kubeconfig) needs `create` on
@@ -161,20 +172,26 @@ The server's own identity (its kubeconfig) needs `create` on
 `subjectaccessreviews.authorization.k8s.io`, as `system:auth-delegator`
 grants.
 
-A request with a token, from a ServiceAccount `planner` in `llm`:
+A request with a token, from the ServiceAccount `planner` in `llm` that the
+bindings above name. Start the server; it runs in the foreground:
 
 ```
-bin/whatif serve --auth=kubernetes --listen 0.0.0.0:8443 \
+bin/capacity-planner serve --auth=kubernetes --listen 0.0.0.0:8443 \
   --tls-cert-file tls.crt --tls-key-file tls.key \
   --prometheus https://prometheus.example:9090 --kube-state-metrics --namespace llm
+```
+
+Then, in another terminal:
+
+```
 TOKEN=$(kubectl -n llm create token planner)
 curl -s --cacert ca.crt https://planner.example:8443/v1/inputs \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"model": "qwen3-32b", "source": {"kind": "prometheus", "namespace": "llm"}}'
 ```
 
-A token minted for another audience (`kubectl create token --audience whatif`)
-is accepted only when the server is started with `--token-audiences whatif`;
+A token minted for another audience (`kubectl create token --audience capacity-planner`)
+is accepted only when the server is started with `--token-audiences capacity-planner`;
 with none, TokenReview checks the token for the API server's own audiences.
 
 ## Endpoints
@@ -255,14 +272,14 @@ targets and the headroom. So moving the rate prices the two points alone;
 moving a target prices the limits again, not the curves; a new replica count
 or assumption prices everything.
 
-Measured on the goldens' recordings (`go test ./cmd/whatif -run '^$' -bench
+Measured on the goldens' recordings (`go test ./cmd/capacity-planner -run '^$' -bench
 Plan`), see [As built](../proposals/capacity-planner.md#as-built-phase-0).
 
 ## Tests
 
 | Test | Holds |
 | --- | --- |
-| `TestServeParity` (`cmd/whatif`) | Every JSON golden in `cmd/whatif/testdata`, asked of the API, gives the same limits, points, bounds, flags and refusals. |
+| `TestServeParity` (`cmd/capacity-planner`) | Every JSON golden in `cmd/capacity-planner/testdata`, asked of the API, gives the same limits, points, bounds, flags and refusals. |
 | `TestServeCurvesAgreeWithPoints` | Each curve point is `TTFTAt` and `SLOAtReplicas` at its rate; point B lies on the curve; past the lower knee every point is refused `Saturated`. |
 | `TestSchemaIsPinned` (`internal/whatifapi`) | The key list. `-update` rewrites it. |
 | `TestPlanRefusalShape`, `apitest.CheckFigures` | No number beside a refusal, and no refusal written as 0, on every response. |

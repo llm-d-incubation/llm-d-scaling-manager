@@ -258,7 +258,7 @@ func (f *answerFlags) recordingData(ctx context.Context) (string, []byte, error)
 	return f.recording, data, nil
 }
 
-// windowRecording is the recording `whatif capture` and then `whatif
+// windowRecording is the recording `capacity-planner capture` and then `capacity-planner
 // generate` would write for the window the flags name, made in memory
 // along the same path: whatifsource.Capture writes the capture as capture
 // writes its file, gzipped, and generateRecording plays it as generate
@@ -299,7 +299,7 @@ func (f *answerFlags) captureAndGenerate(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("generate: the generated recording: %w", err)
 	}
 	for _, c := range start.Caveats {
-		fmt.Fprintf(f.warn, "whatif: caveat: %s\n", c)
+		fmt.Fprintf(f.warn, "capacity-planner: caveat: %s\n", c)
 	}
 	return rep.Recording, nil
 }

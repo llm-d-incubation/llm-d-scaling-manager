@@ -35,7 +35,7 @@ const retryAfterSeconds = "1"
 
 // Config is the server's configuration.
 type Config struct {
-	// Resolver resolves sources (cmd/whatif's).
+	// Resolver resolves sources (cmd/capacity-planner's).
 	Resolver Resolver
 	// WhatifSchema names the CLI schema the answer, refusal and flag shapes
 	// follow ("schema-v3").

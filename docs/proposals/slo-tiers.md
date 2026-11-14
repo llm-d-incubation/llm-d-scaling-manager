@@ -1381,7 +1381,7 @@ P2](slo-capacity-planner-ttft.md#as-built-p3-after-p2), 7 each at p90 and p95:
    replicas that rate spreads over: `Prefill.Replicas` is every Ready prefill
    replica of the model, at this variant's `V_P` and `f`, which loads each of
    its pods as its share would. The per-replica rate is the whole rate over
-   those replicas. `whatif` is unchanged. With one prefill variant nothing moves.
+   those replicas. `capacity-planner` is unchanged. With one prefill variant nothing moves.
    Before this, two equal variants behind one decode replica read 0.065 s where
    the whole rate reads 0.90 s, and read a rate above the decode onset as met
    (`TestTTFT_TheDecodeSideTakesTheWholeRate`,
@@ -1520,7 +1520,7 @@ is known, but it is no transfer time, so `TransferOmitted` stands
 cycle. So they print one figure for one traffic. S1 keeps a window per variant
 from the first row to carry a histogram, and sweeps and forgets it with its other
 TTFT windows. Only `cv` comes from it: S1 still prices the cycle's own prompt,
-where the CLI prices the window's. `whatif` prices as before. The CLI names a
+where the CLI prices the window's. `capacity-planner` prices as before. The CLI names a
 held `cv` as `clamped`.
 
 Why not one cycle: at 40 requests a minute with 2% of prompts at 20000 tokens and

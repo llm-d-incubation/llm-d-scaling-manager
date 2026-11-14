@@ -1,5 +1,5 @@
 # The next TTFT staircase: docs/plans/analyzers/ttft-staircase-repeat.md says why
-# each line is here. `whatif freeze` reads the prediction's half, staircase_freeze.py
+# each line is here. `capacity-planner freeze` reads the prediction's half, staircase_freeze.py
 # the ladder's. Nothing here may change once the warm-up starts: the frozen file
 # carries this file's hash.
 operatingFraction: 0.85

@@ -1,26 +1,26 @@
-# What-if capture and Generate
+# Capacity planner capture and Generate
 
-`whatif capture` turns a past window in Prometheus into the inputs the
-analyzers would have read, and `whatif generate` plays them through the
+`capacity-planner capture` turns a past window in Prometheus into the inputs the
+analyzers would have read, and `capacity-planner generate` plays them through the
 analyzers as a controller's cycles would have. The output is an ordinary
 learner recording. The design is R2 in
 [the learner proposal, 2.9](../proposals/analyzer-learner.md#29-recorder-fields-for-ttft-and-capture).
 How to run it on a real window is in
 [Testing: Capture a past window](testing.md#capture-a-past-window). For
 operators, [Record a window for the capacity planner](../guides/record-for-capacity-planner/)
-covers recording, with `whatif` or with only curl and jq, and
+covers recording, with `capacity-planner` or with only curl and jq, and
 [Metrics the capacity planner needs](../reference/capacity-planner-metrics.md)
 lists every raw series the queries below read.
 
 ```
-whatif capture  --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...)
-                --from T0 --to T1 -o run.capture.jsonl.gz
-                [--step 15s] [--policy FILE]
-                [--engine vllm|sglang] [--engine-args "ARGS"] [--batch-cap N]
-                [--gpus-per-replica 1] [--accelerator NAME]
-                [--bearer-token-file FILE] [--ca-file FILE] [--insecure-skip-verify]
-                [--timeout 2m30s] [--force]
-whatif generate -in run.capture.jsonl.gz -o run.jsonl
+capacity-planner capture  --prometheus URL --namespace NS (--kube-state-metrics | --role-of ROLE=SELECTOR ...)
+                          --from T0 --to T1 -o run.capture.jsonl.gz
+                          [--step 15s] [--policy FILE]
+                          [--engine vllm|sglang] [--engine-args "ARGS"] [--batch-cap N]
+                          [--gpus-per-replica 1] [--accelerator NAME]
+                          [--bearer-token-file FILE] [--ca-file FILE] [--insecure-skip-verify]
+                          [--timeout 2m30s] [--force]
+capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl
 ```
 
 | Flag | What it does |
@@ -43,15 +43,15 @@ whatif generate -in run.capture.jsonl.gz -o run.jsonl
 | `--force` | Capture past the load and memory bounds below. |
 | `-o` | Where to write the capture. Written beside it and renamed over it when whole, so a failed run leaves the file that was there. |
 
-`whatif generate` takes `-in` (the capture, gzipped or not) and `-o` (the
+`capacity-planner generate` takes `-in` (the capture, gzipped or not) and `-o` (the
 recording; a name ending in `.gz` is gzipped). Both commands write their
 file with mode 0600, through a temporary file renamed over it.
 
-`make whatif` builds `bin/whatif`, with the commit in the build. The command
+`make capacity-planner` builds `bin/capacity-planner`, with the commit in the build. The command
 is not in the manager image.
 
 To answer the planner's questions from a window without writing either
-file, give the same flags to `whatif replicas-to-slo` or `whatif
+file, give the same flags to `capacity-planner replicas-to-slo` or `capacity-planner
 slo-to-rate` in place of `--recording`: they capture and generate in memory
 along this same path, and answer as `--recording` would on the files.
 [Prometheus mode](../proposals/slo-capacity-planner.md#prometheus-mode-as-built-d4)
@@ -69,8 +69,8 @@ inside the analyzers).
 The answer commands price a P/D fleet's TTFT when a TTFT flag is given:
 
 ```
-whatif replicas-to-slo --recording run.jsonl --ttft-percentile 90 [--assume-vp TOKENS] [--assume-a D] [--prefill N]
-whatif slo-to-rate     --recording run.jsonl --tpot 4ms --ttft 200ms@p95 [--assume-vp TOKENS] [--assume-a D] [--prefill N]
+capacity-planner replicas-to-slo --recording run.jsonl --ttft-percentile 90 [--assume-vp TOKENS] [--assume-a D] [--prefill N]
+capacity-planner slo-to-rate     --recording run.jsonl --tpot 4ms --ttft 200ms@p95 [--assume-vp TOKENS] [--assume-a D] [--prefill N]
 ```
 
 `--prometheus` takes the same flags, and gives the same answer.
@@ -110,7 +110,7 @@ internal one. The inputs, the rows and the JSON are in
 ## The joint TTFT model
 
 ```bash
-whatif joint-ttft --recording run.jsonl [--cycle N|last] [--model M] [--prefill N] [--decode N] [--rate R] [--prompt I] [--hop D] [-o json]
+capacity-planner joint-ttft --recording run.jsonl [--cycle N|last] [--model M] [--prefill N] [--decode N] [--rate R] [--prompt I] [--hop D] [-o json]
 ```
 
 Prices the joint prefill and decode model's mean TTFT at a fleet, from what
@@ -123,7 +123,7 @@ and the rate that ran. `--prompt 0` prices at the prompt the work was read at.
 At bucket B of the staircase, its 120th cycle, with a third decode pod:
 
 ```console
-$ whatif joint-ttft --recording ttft-staircase-b-off.jsonl.gz --cycle 120 --decode 3
+$ capacity-planner joint-ttft --recording ttft-staircase-b-off.jsonl.gz --cycle 120 --decode 3
 joint TTFT, ns-01/model-02 at cycle 120: 2 prefill + 3 decode at 29.80 req/s (ran 2 + 2 at 29.80)
   mean TTFT 145.0 ms (engines 125.0 ms, hop 20.0 ms)
     overhead a(rho_p) 23.6 ms, prefill T_P 39.5 ms at rho_p 0.371
@@ -341,7 +341,7 @@ Each of these is either flagged in the capture or fixed by what it writes:
   from engine Pods only, the rollout and multi-Pod flags, the step grid,
   the window-size and sample bounds, and whose fault each error is
   (`IsInputError`).
-- `cmd/whatif`: the flags, usage errors (exit 2), a Prometheus error
+- `cmd/capacity-planner`: the flags, usage errors (exit 2), a Prometheus error
   (exit 1, and the capture that was at `-o` kept), the step and the
   window, and `generate`; the bearer token kept off a redirect's host and
   off http on the same host, refused for http or when empty, TLS flags

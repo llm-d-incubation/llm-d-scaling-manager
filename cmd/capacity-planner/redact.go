@@ -15,7 +15,7 @@ const redactMark = "REDACTED"
 // the form a URL quotes it in, and inside the whole query.
 const minQueryValue = 4
 
-// redactedURL is the Prometheus URL as whatif prints it: its scheme and host
+// redactedURL is the Prometheus URL as capacity-planner prints it: its scheme and host
 // alone. Any other part can carry a secret (a password in the userinfo, a
 // token in the query, a key in the path: /t/TOKEN/api), and nothing tells
 // which does, so all of them are dropped, not redacted. A string that does

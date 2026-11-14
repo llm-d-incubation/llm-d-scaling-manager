@@ -25,7 +25,7 @@ import (
 
 // Generate (docs/proposals/analyzer-learner.md, 2.9, R2) is the third mode:
 // it makes a recording from a capture, a file of cycle inputs that
-// `whatif capture` built from Prometheus alone (internal/whatifsource).
+// `capacity-planner capture` built from Prometheus alone (internal/whatifsource).
 // A capture has no engine events and no store records to hold a replay to,
 // so Generate plays each cycle through the analyzers itself, in the order an
 // engine cycle calls them, and compares nothing: its recording, carrying the
@@ -138,7 +138,7 @@ type genModel struct {
 
 // CaptureError is a capture Generate cannot play: unreadable, cut off, out
 // of order, or naming a variant its window does not. The capture is at
-// fault, not the analyzers; cmd/whatif exits 2 for it, and 1 for any other
+// fault, not the analyzers; cmd/capacity-planner exits 2 for it, and 1 for any other
 // error.
 type CaptureError struct{ Err error }
 
