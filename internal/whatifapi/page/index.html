@@ -46,6 +46,14 @@
           <label for="model">Model</label>
           <input type="text" id="model" placeholder="the only model in the source" autocomplete="off">
         </div>
+        <div class="field">
+          <label for="pvariant">Prefill variant</label>
+          <input type="text" id="pvariant" placeholder="the only one" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="dvariant">Decode variant</label>
+          <input type="text" id="dvariant" placeholder="the only one" autocomplete="off">
+        </div>
         <button type="submit" id="load">Load</button>
       </form>
     </details>
@@ -141,7 +149,8 @@
       title="Needs traffic split by priority; see the proposal's Traffic classes">Batch (later)</button>
   </div>
   <section class="card panel" id="panel" role="tabpanel" aria-labelledby="tab-critical">
-    <h2>Most the fleet serves under these SLOs <span class="hint" id="limitsfor"></span></h2>
+    <h2>The most the fleet serves under these SLOs <span class="hint" id="limitsfor"></span></h2>
+    <p class="hint" id="pagetargets" hidden></p>
     <div class="summary">
       <div class="hero">
         <div class="k">Fleet limit</div>

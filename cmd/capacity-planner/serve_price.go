@@ -156,12 +156,16 @@ func (s *servedSources) Sources(context.Context) (whatifapi.SourcesResponse, err
 	}
 	entries, err := os.ReadDir(s.recordings)
 	if err != nil {
-		// The error would name the server's path: say only that it failed.
-		fmt.Fprintf(s.warn, "capacity-planner: listing recordings: %v\n", err)
+		// The error would name the server's path: say only that it failed,
+		// and log it where there is a log.
+		if s.warn != nil {
+			fmt.Fprintf(s.warn, "capacity-planner: listing recordings: %v\n", err)
+		}
 		return out, errors.New("the server could not list its recordings directory; see its log")
 	}
 	for _, e := range entries {
-		if !recordingName(e.Name()) {
+		// A directory is never a recording; a link is stat'ed below.
+		if e.IsDir() || !recordingName(e.Name()) {
 			continue
 		}
 		if _, ok := s.recordingFile(e.Name()); !ok {

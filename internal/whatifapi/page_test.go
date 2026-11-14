@@ -1,6 +1,8 @@
 package whatifapi
 
 import (
+	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -55,10 +57,25 @@ func TestPageServed(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), want.contains, path)
 	}
 	assert.Contains(t, pageText(t, "index.html"), `href="page/planner.css"`)
+
+	// The policy's directives, read one by one: nothing but the page's own
+	// origin, and no inline script or style.
+	rec := get(h, "/", "")
+	directives := map[string]string{}
+	for _, d := range strings.Split(rec.Header().Get("Content-Security-Policy"), ";") {
+		name, value, _ := strings.Cut(strings.TrimSpace(d), " ")
+		directives[name] = value
+	}
+	for name, want := range map[string]string{"default-src": "'none'", "script-src": "'self'", "style-src": "'self'",
+		"connect-src": "'self'", "frame-ancestors": "'none'", "base-uri": "'none'", "form-action": "'none'"} {
+		assert.Equal(t, want, directives[name], "Content-Security-Policy %s", name)
+	}
+	assert.NotContains(t, rec.Header().Get("Content-Security-Policy"), "unsafe-")
+	assert.Equal(t, "no-referrer", rec.Header().Get("Referrer-Policy"))
 	for _, path := range []string{"/page/", "/page/index.html", "/page/page.go", "/index.html"} {
 		assert.Equal(t, http.StatusNotFound, get(h, path, "").Code, path)
 	}
-	rec := httptest.NewRecorder()
+	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{}")))
 	assert.Equal(t, http.StatusNotFound, rec.Code, "the page is GET only")
 }
@@ -185,6 +202,35 @@ func TestPageNamesEveryFlag(t *testing.T) {
 	for _, flag := range flags {
 		assert.Contains(t, js, "\n  "+flag+": [", "FLAG_WORDS has no words for %s", flag)
 	}
+}
+
+// listingResolver is a stub resolver whose listing answers sources or err.
+type listingResolver struct {
+	stubResolver
+	sources SourcesResponse
+	err     error
+}
+
+func (r *listingResolver) Sources(context.Context) (SourcesResponse, error) { return r.sources, r.err }
+
+// A listing that fails is answered by its class, as any error is: the
+// caller's is 400, a forbidden one 403, any other 500, never a listing.
+func TestSourcesListingFails(t *testing.T) {
+	for err, code := range map[error]int{
+		errors.New("the server could not list its recordings directory"): http.StatusInternalServerError,
+		InputErrorf("bad"):                    http.StatusBadRequest,
+		ForbiddenError{Err: errors.New("no")}: http.StatusForbidden,
+	} {
+		rec := get(New(Config{Resolver: &listingResolver{err: err}}).Handler(), "/v1/sources", "")
+		assert.Equal(t, code, rec.Code, "%v", err)
+		assert.Contains(t, rec.Body.String(), `"error"`)
+		assert.NotContains(t, rec.Body.String(), `"recordings"`)
+	}
+	// A listing's nil lists are written empty, and the schema version is the
+	// server's.
+	rec := get(New(Config{Resolver: &listingResolver{sources: SourcesResponse{SchemaVersion: 99, Prometheus: true}}}).Handler(), "/v1/sources", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"schemaVersion": 1, "prometheus": true, "namespaces": [], "recordings": []}`, rec.Body.String())
 }
 
 // A resolver that cannot list its sources answers GET /v1/sources with none,

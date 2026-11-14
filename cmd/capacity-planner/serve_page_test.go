@@ -57,16 +57,37 @@ func TestServeSources(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, whatifapi.SourcesResponse{Prometheus: true, Namespace: "llm", Namespaces: []string{"llm", "other"}, Recordings: []string{}}, s)
 
-	many := &servedSources{recordings: t.TempDir(), warn: io.Discard}
-	for i := range maxListedRecordings + 1 {
+	// With no --namespace, the default is the first allowed; with no
+	// Prometheus there is none.
+	noDefault := &servedSources{window: captureFlags{prometheus: "http://prom.example:9090"}, allowed: []string{"b", "a"}}
+	s, err = noDefault.Sources(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "b", s.Namespace)
+	s, err = (&servedSources{allowed: []string{"llm"}}).Sources(t.Context())
+	require.NoError(t, err)
+	assert.False(t, s.Prometheus)
+	assert.Empty(t, s.Namespace)
+
+	// Exactly the cap is the whole listing; one more is cut, and says so.
+	many := &servedSources{recordings: t.TempDir()}
+	for i := range maxListedRecordings {
 		require.NoError(t, os.WriteFile(filepath.Join(many.recordings, fmt.Sprintf("r%04d.jsonl.gz", i)), nil, 0o644))
 	}
 	s, err = many.Sources(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, s.Recordings, maxListedRecordings)
+	assert.False(t, s.RecordingsTruncated, "a listing of exactly the cap is whole")
+	require.NoError(t, os.WriteFile(filepath.Join(many.recordings, "z.jsonl.gz"), nil, 0o644))
+	s, err = many.Sources(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, s.Recordings, maxListedRecordings)
 	assert.True(t, s.RecordingsTruncated, "a listing cut at the cap says so")
 
-	gone := &servedSources{recordings: filepath.Join(t.TempDir(), "gone"), warn: io.Discard}
+	// A failed listing names no path, with or without a log to write to.
+	gone := &servedSources{recordings: filepath.Join(t.TempDir(), "gone")}
+	_, err = gone.Sources(t.Context())
+	require.Error(t, err)
+	gone.warn = io.Discard
 	_, err = gone.Sources(t.Context())
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "gone", "an error names no server path")

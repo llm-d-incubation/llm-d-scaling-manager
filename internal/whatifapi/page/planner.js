@@ -10,7 +10,7 @@
 // FLAG_WORDS is every flag the engine raises, in plain words, and what clears
 // it. A flag missing here is shown by its name (TestPageNamesEveryFlag).
 const FLAG_WORDS = {
-  UnvalidatedTTFT: ["The TTFT model is not validated: it reads up to about 33% low at light load. Not a bound.", "a fresh frozen staircase run that validates the model"],
+  UnvalidatedTTFT: ["The TTFT model is not validated, and its figures are not a bound. On the validation recordings (not this fleet) it read high at an assumed prompt spread and up to 33% low at the spread actually sent; the banner gives the figures.", "a fresh frozen staircase run that validates the model"],
   AssumedVP: ["V_P, the prefill token rate, is the value you typed, not a learned one.", "learn V_P: run at a load that keeps a prefill pod busy for a minute"],
   VPLowerBound: ["V_P comes from a lower bound (the peak under a queue): the limits under-promise.", "a window where a prefill pod is busy without a queue"],
   VPAboveSlopeBound: ["V_P is above what the low-load fit allows: one of the two readings is wrong.", "more low-load readings, or a busy-minutes reading of V_P"],
@@ -69,6 +69,11 @@ const TERM_NAMES = {
   itlLine: "ITL line", capacityTokens: "KV capacity", kvPerRequest: "KV per request", batchCap: "batch cap",
   tpotRatio: "R_q", prefill: "prefill",
 };
+
+// PAGE_TTFT and PAGE_TPOT are the objectives the page sets when the policy
+// sets none: a TTFT target is required to read a prefill limit.
+const PAGE_TTFT = {statistic: "p90", seconds: 1};
+const PAGE_TPOT = {statistic: "mean", seconds: 0.05};
 
 const TTFT_STATS = ["mean", "p50", "p90", "p95", "p99"];
 const TPOT_STATS = ["mean", "p50", "p90", "p95", "p99"];
@@ -133,6 +138,8 @@ function spanPlain(f) {
   if (!s) return "";
   const lo = s.lo != null ? fmtRate(s.lo) : "refused (" + s.loRefused + ")";
   const hi = s.hi != null ? fmtRate(s.hi) : "refused (" + s.hiRefused + ")";
+  // Ends that print the same are one figure: V_P and f do not move it.
+  if (lo === hi) return lo + " at every V_P and f corner";
   return lo + " to " + hi + " over V_P and f";
 }
 
@@ -228,6 +235,8 @@ async function start() {
     el("ns").value = linked.get("namespace");
   }
   if (linked.get("model")) el("model").value = linked.get("model");
+  if (linked.get("prefillVariant")) el("pvariant").value = linked.get("prefillVariant");
+  if (linked.get("decodeVariant")) el("dvariant").value = linked.get("decodeVariant");
   if (!kind) {
     setStatus("This server reads no source: start it with --prometheus or --recordings.", true);
     el("source").open = true;
@@ -282,6 +291,8 @@ async function loadInputs() {
   try {
     const req = {source: sourceRequest()};
     if (el("model").value.trim()) req.model = el("model").value.trim();
+    if (el("pvariant").value.trim()) req.prefillVariant = el("pvariant").value.trim();
+    if (el("dvariant").value.trim()) req.decodeVariant = el("dvariant").value.trim();
     setStatus(req.source.kind === "prometheus" ? "Reading the Prometheus window (seconds to a minute)..." : "Replaying the recording...");
     const inputs = await api("POST", "v1/inputs", req);
     if (seq !== state.seq) return;
@@ -307,14 +318,15 @@ function setInputs(inputs) {
   state.inputs = inputs;
   state.plan = null;
   const p = inputs.policy || {};
-  const ttft = p.ttft || {statistic: "p90", seconds: 1};
-  const tpot = p.tpot || {statistic: "mean", seconds: 0.05};
+  // With no policy objective the page sets one, and says so beside the
+  // limits until you set your own (ttftDefault, tpotDefault).
+  const ttft = p.ttft || PAGE_TTFT, tpot = p.tpot || PAGE_TPOT;
   state.k = {
     prefill: inputs.fleet.prefill ? Math.max(1, inputs.fleet.prefill.replicas) : 0,
     decode: Math.max(1, inputs.fleet.decode.replicas),
     rate: null,
-    ttftStat: ttft.statistic, ttftTarget: ttft.seconds, ttftFromPolicy: !!p.ttft,
-    tpotStat: tpot.statistic, tpotTarget: tpot.seconds, tpotFromPolicy: !!p.tpot,
+    ttftStat: ttft.statistic, ttftTarget: ttft.seconds, ttftDefault: !p.ttft,
+    tpotStat: tpot.statistic, tpotTarget: tpot.seconds, tpotDefault: !p.tpot,
     ratio: null, headroom: p.headroom || 0.85,
     priceAs: "mix", outputTokens: val(inputs.observed.outputTokens),
     perBucket: false,
@@ -426,7 +438,17 @@ function showInputs(inputs) {
   }).join("");
   el("assumed").innerHTML = (inputs.assumed || []).map(a => `<li>assumed: ${esc(a)}</li>`).join("");
   const s = inputs.source;
-  el("inputsum").textContent = `cycle ${s.cycle} of ${s.totalCycles}, ${inputs.terms.length} terms, ${refused} refused, ${flagged} flagged, ${(inputs.assumed || []).length} assumptions`;
+  state.inputSum = `cycle ${s.cycle} of ${s.totalCycles}, ${inputs.terms.length} terms, ${refused} refused, ${flagged} flagged, ` +
+    `${(inputs.assumed || []).length} assumed by the source`;
+  showTyped();
+}
+
+// showTyped counts the terms you typed, beside their boxes and in the inputs'
+// summary.
+function showTyped() {
+  const n = state.k ? Object.keys(state.k.assume).length + (state.k.ratio != null && state.k.tpotStat !== "mean" ? 1 : 0) : 0;
+  el("assumecount").textContent = n ? n + " typed" : "none typed";
+  el("inputsum").textContent = (state.inputSum || "") + `, ${n} typed by you`;
 }
 
 // ---- The link ----
@@ -445,6 +467,9 @@ function applyLink() {
   }
   if (g("ttftStat")) k.ttftStat = g("ttftStat");
   if (g("tpotStat")) k.tpotStat = g("tpotStat");
+  // A link's objectives are its author's, not the page's defaults.
+  if (num("ttft") != null || g("ttftStat")) k.ttftDefault = false;
+  if (num("tpot") != null || g("tpotStat")) k.tpotDefault = false;
   // A bucket the inputs do not name prices the current mix.
   k.priceAs = state.inputs.observed.buckets.some(b => b.name === g("priceAs")) ? g("priceAs") : "mix";
   k.perBucket = g("perBucket") === "1";
@@ -459,8 +484,7 @@ function applyLink() {
   el("perbucket").checked = k.perBucket;
   el("ratio").value = k.ratio != null ? k.ratio : "";
   for (const a of ASSUMABLE) if (k.assume[a.key] != null) el("a-" + a.box).value = Number((k.assume[a.key] * a.scale).toPrecision(6));
-  const n = Object.keys(k.assume).length;
-  el("assumecount").textContent = n ? n + " typed" : "none typed";
+  showTyped();
   syncControls();
 }
 
@@ -474,13 +498,20 @@ function writeLink() {
     p.set("namespace", state.inputs.namespace);
   }
   if (el("model").value.trim()) p.set("model", el("model").value.trim());
+  if (el("pvariant").value.trim()) p.set("prefillVariant", el("pvariant").value.trim());
+  if (el("dvariant").value.trim()) p.set("decodeVariant", el("dvariant").value.trim());
   if (state.inputs.fleet.prefill) p.set("prefill", k.prefill);
   p.set("decode", k.decode);
   if (k.rate != null) p.set("rate", Number(k.rate.toFixed(3)));
-  p.set("ttftStat", k.ttftStat);
-  p.set("ttft", k.ttftTarget);
-  p.set("tpotStat", k.tpotStat);
-  p.set("tpot", k.tpotTarget);
+  // The page's default objectives are left out, so they stay marked as such.
+  if (!k.ttftDefault) {
+    p.set("ttftStat", k.ttftStat);
+    p.set("ttft", k.ttftTarget);
+  }
+  if (!k.tpotDefault) {
+    p.set("tpotStat", k.tpotStat);
+    p.set("tpot", k.tpotTarget);
+  }
   if (k.ratio != null) p.set("ratio", k.ratio);
   p.set("headroom", k.headroom);
   if (k.priceAs !== "mix") p.set("priceAs", k.priceAs);
@@ -603,13 +634,37 @@ function renderAtTarget() {
     if (v == null) return `<span class="miss">refused at ${rate}: ${esc(fig && fig.refused ? fig.refused.reason : "not priced")}</span>`;
     return `<span class="${v <= target ? "ok" : "miss"}">${fmtSec(v)} at ${rate}, ${v <= target ? "meets it" : "misses"}.</span>`;
   };
-  el("ttftat").innerHTML = at(p.ttft.line.atRate.figure, p.ttft.line.target) + (state.k.ttftFromPolicy ? "" : ' <span class="hint">The policy sets no TTFT target: set yours.</span>');
-  el("tpotat").innerHTML = p.tpot ? at(p.tpot.atRate.figure, p.tpot.target) + (state.k.tpotFromPolicy ? "" : ' <span class="hint">The policy sets no TPOT target: set yours.</span>') : "";
+  el("ttftat").innerHTML = at(p.ttft.line.atRate.figure, p.ttft.line.target) + (state.k.ttftDefault ? ' <span class="hint">The policy sets no TTFT target: this one is the page\'s. Set yours.</span>' : "");
+  el("tpotat").innerHTML = p.tpot ? at(p.tpot.atRate.figure, p.tpot.target) + (state.k.tpotDefault ? ' <span class="hint">The policy sets no TPOT target: this one is the page\'s. Set yours.</span>' : "") : "";
+  const set = [];
+  if (state.k.ttftDefault) set.push(`TTFT ${PAGE_TTFT.statistic} ${fmtSec(PAGE_TTFT.seconds)}`);
+  if (state.k.tpotDefault) set.push(`TPOT ${PAGE_TPOT.statistic} ${fmtSec(PAGE_TPOT.seconds)}`);
+  el("pagetargets").textContent = set.length ? `Targets set by the page, not the policy: ${set.join(", ")}. Set your own above.` : "";
+  el("pagetargets").hidden = !set.length;
   const ratio = p.tpot && p.tpot.ratio;
   let note = "";
   if (ratio && ratio.refused) note = "R_q is not learned (" + ratio.refused.reason + "): type a ratio, or pick the mean.";
   else if (ratio && ratio.value != null) note = `R_q ${fmtNum(ratio.value)} (${ratio.source || "?"})`;
   el("rationote").textContent = note;
+}
+
+// aboveCap marks a rate the target allows past the operating-point cap: the
+// fleet's limit stops at the cap, not there.
+function aboveCap(p, rate) {
+  const cap = val(p.ttft.markers.operatingCap);
+  return rate != null && cap != null && rate > cap ? ` (above the cap ${fmtRate(cap)})` : "";
+}
+
+// bindsWithoutHeadroom is the role whose limit the fleet's figure without
+// headroom is: the prefill limit, or decode's without the cap (its uncapped
+// figure, else its limit). It compares the API's figures and computes none.
+function bindsWithoutHeadroom(L) {
+  const wh = val(L.fleet.withoutHeadroom);
+  if (wh == null) return "";
+  const roles = [];
+  if (val(L.prefill) === wh) roles.push("prefill");
+  if (L.decode && (L.decode.uncapped != null ? L.decode.uncapped : val(L.decode)) === wh) roles.push("decode");
+  return roles.join(" and ");
 }
 
 // renderLimits is the hero, the binding bar and the +1 steps.
@@ -619,7 +674,10 @@ function renderLimits() {
   el("fleet").textContent = fv != null ? fmtRate(fv) : "refused";
   const notes = [];
   if (fv == null) notes.push(why(f));
-  if (f.capApplied) notes.push(`the operating-point cap binds (headroom ${p.scenario.headroom}); without headroom: ${figPlain(f.withoutHeadroom, fmtRate)}`);
+  if (f.capApplied) {
+    notes.push(`the operating-point cap binds (headroom ${p.scenario.headroom}); without headroom: ${figPlain(f.withoutHeadroom, fmtRate)}` +
+      (bindsWithoutHeadroom(L) ? `, where ${bindsWithoutHeadroom(L)} binds` : ""));
+  }
   if (spanPlain(f)) notes.push(spanPlain(f));
   el("fleetn").innerHTML = esc(notes.join("; ")) + (f.flags && f.flags.length ? "<br>" + flagChips(f) : "");
   // The headroom is the API's figure, as it is: the page derives no share of it.
@@ -744,9 +802,10 @@ function renderTTFT() {
   const ymax = Math.max(3 * Math.max(...targets), floor != null ? floor * 1.3 : 0);
   const B = val(t.line.atTarget.rate), A = val(t.line.atRate.figure);
   const belowFloor = t.line.atTarget.rate.refused && t.line.atTarget.rate.refused.reason === "TargetBelowFloor";
-  const aSide = B == null || B >= t.line.atRate.rate ? "left" : "right";
+  // On a rising curve, below-right of A and above-left of B are off the line.
+  const aSide = "right";
   if (A != null) dots.push({x: t.line.atRate.rate, y: A, cls: "c-mix", label: `${fmtSec(A)} at ${fmtRate(t.line.atRate.rate)}`, below: true, side: aSide});
-  if (B != null) dots.push({x: B, y: t.line.target, cls: "c-mix", filled: true, label: `${fmtRate(B)} meets it`, side: aSide === "left" ? "right" : "left"});
+  if (B != null) dots.push({x: B, y: t.line.target, cls: "c-mix", filled: true, label: `${fmtRate(B)} meets it${aboveCap(p, B)}`, side: aSide === "left" ? "right" : "left"});
   const markers = [];
   if (val(m.prefillKnee) != null) markers.push({x: val(m.prefillKnee), label: "prefill knee"});
   if (val(m.decodeKnee) != null) markers.push({x: val(m.decodeKnee), label: "decode knee"});
@@ -763,7 +822,7 @@ function renderTTFT() {
   el("ttftlegend").innerHTML = legend(series, onset != null);
   el("ttftpoints").innerHTML =
     `<div>Open circle, the TTFT at your rate: <b>${figText(t.line.atRate.figure, fmtSec)}</b> ${flagChips(t.line.atRate.figure)}</div>` +
-    `<div>Filled circle, the rate at ${fmtSec(t.line.target)}: <b>${figText(t.line.atTarget.rate, fmtRate)}</b>` +
+    `<div>Filled circle, the rate at ${fmtSec(t.line.target)}: <b>${figText(t.line.atTarget.rate, fmtRate)}</b>${esc(aboveCap(p, val(t.line.atTarget.rate)))}` +
     (t.line.atTarget.rate.refused ? " " + esc(why(t.line.atTarget.rate)) : "") + ` ${flagChips(t.line.atTarget.rate)}</div>` +
     `<div>Floor: ${figText(t.line.floor, fmtSec)}</div>`;
 }
@@ -785,9 +844,9 @@ function renderTPOT() {
   const series = [{cls: "c-mix", name: `TPOT ${t.statistic}`, pts: pts(t.curve), band: true}];
   const dots = [];
   const A = val(t.atRate.figure), B = val(t.atTarget.rate);
-  const aSide = B == null || B >= rate ? "left" : "right";
+  const aSide = "right";
   if (A != null) dots.push({x: rate, y: A, cls: "c-mix", label: `${fmtSec(A)} at ${fmtRate(rate)}`, below: true, side: aSide});
-  if (B != null) dots.push({x: B, y: t.target, cls: "c-mix", filled: true, label: `${fmtRate(B)} meets it`, side: aSide === "left" ? "right" : "left"});
+  if (B != null) dots.push({x: B, y: t.target, cls: "c-mix", filled: true, label: `${fmtRate(B)} meets it${aboveCap(p, B)}`, side: aSide === "left" ? "right" : "left"});
   const belowFloor = t.atTarget.rate.refused && t.atTarget.rate.refused.reason === "TargetBelowFloor";
   const markers = [];
   if (knee != null) markers.push({x: knee, label: "decode knee"});
@@ -800,7 +859,7 @@ function renderTPOT() {
   const u = t.atTarget.rate.uncapped;
   el("tpotpoints").innerHTML =
     `<div>Open circle, the TPOT at your rate: <b>${figText(t.atRate.figure, fmtSec)}</b> ${flagChips(t.atRate.figure)}</div>` +
-    `<div>Filled circle, the rate at ${fmtSec(t.target)}: <b>${figText(t.atTarget.rate, fmtRate)}</b>` +
+    `<div>Filled circle, the rate at ${fmtSec(t.target)}: <b>${figText(t.atTarget.rate, fmtRate)}</b>${esc(aboveCap(p, val(t.atTarget.rate)))}` +
     (u != null ? ` (TPOT alone would allow ${fmtRate(u)})` : "") +
     (t.atTarget.rate.refused ? " " + esc(why(t.atTarget.rate)) : "") + ` ${flagChips(t.atTarget.rate)}</div>` +
     `<div>Floor: ${figText(t.floor, fmtSec)}</div>`;
@@ -929,7 +988,8 @@ function hover(svg, o, g) {
 // lines' points.
 function renderTables() {
   const p = state.plan, ttft = pts(p.ttft.line.curve), tpot = p.tpot ? pts(p.tpot.curve) : [];
-  const cell = q => q ? (q.y != null ? fmtSec(q.y) + (q.lo != null && q.hi != null ? ` (${fmtSec(q.lo)} to ${fmtSec(q.hi)})` : "") : "refused: " + esc(q.why)) : "";
+  const band = q => q.lo == null || q.hi == null || fmtSec(q.lo) === fmtSec(q.hi) ? "" : ` (${fmtSec(q.lo)} to ${fmtSec(q.hi)})`;
+  const cell = q => q ? (q.y != null ? fmtSec(q.y) + band(q) : "refused: " + esc(q.why)) : "";
   el("curvetable").innerHTML = "<table><tr><th>rate</th><th>TTFT " + esc(p.ttft.statistic) + "</th>" + (p.tpot ? "<th>TPOT " + esc(p.tpot.statistic) + "</th>" : "") + "</tr>" +
     ttft.map((q, i) => `<tr><td>${fmtRate(q.x)}</td><td>${cell(q)}</td>${p.tpot ? `<td>${cell(tpot[i])}</td>` : ""}</tr>`).join("") + "</table>";
   const b = p.ttft.perBucket || [];
@@ -948,7 +1008,12 @@ function renderFlags() {
   const flags = state.plan.flags || [];
   el("flagcount").textContent = flags.length;
   el("flags").innerHTML = flags.map(f => {
-    const w = FLAG_WORDS[f.flag];
+    let w = FLAG_WORDS[f.flag];
+    // UnvalidatedTTFT says what the banner says, in the banner's own words:
+    // the API takes them from the constant the controller publishes.
+    if (f.flag === "UnvalidatedTTFT" && state.plan.banner) {
+      w = [state.plan.banner + " These figures come from the validation recordings, not from this fleet.", w[1]];
+    }
     const places = [...new Set(f.on.map(o => o.replace(/\.(curve|floor|knees.*)$/, "").replace(/^ttft\.perBucket\./, "bucket ")))];
     return `<li><b>${esc(f.flag)}</b>: ${esc(w ? w[0] : "see the what-if proposal for this flag")}` +
       (w ? ` <span class="hint">Clears with: ${esc(w[1])}.</span>` : "") +
@@ -995,27 +1060,31 @@ function wire() {
   };
   // A target prices on release: it reprices the limits, which takes up to
   // seconds on a TTFT fleet.
-  const target = (id, key, scale) => {
+  // A target or statistic you set is yours, no longer the page's default.
+  const target = (id, scale) => {
     el(id).oninput = () => { el(id + "box").value = Number((+el(id).value).toFixed(scale < 1 ? 1 : 0)); };
-    el(id).onchange = () => { if (ready()) { k()[key] = +el(id).value / 1000; schedule(0); } };
+    el(id).onchange = () => { if (ready()) { k()[id + "Target"] = +el(id).value / 1000; k()[id + "Default"] = false; schedule(0); } };
     el(id + "box").onchange = () => {
       const v = +el(id + "box").value;
-      if (ready() && v > 0) { k()[key] = v / 1000; el(id).value = v; schedule(0); }
+      if (ready() && v > 0) { k()[id + "Target"] = v / 1000; k()[id + "Default"] = false; el(id).value = v; schedule(0); }
     };
   };
-  target("ttft", "ttftTarget", 1);
-  target("tpot", "tpotTarget", 0.1);
-  el("ttftstat").onchange = () => { if (ready()) { k().ttftStat = el("ttftstat").value; schedule(0); } };
+  target("ttft", 1);
+  target("tpot", 0.1);
+  el("ttftstat").onchange = () => { if (ready()) { k().ttftStat = el("ttftstat").value; k().ttftDefault = false; schedule(0); } };
   el("tpotstat").onchange = () => {
     if (!ready()) return;
     k().tpotStat = el("tpotstat").value;
+    k().tpotDefault = false;
     el("ratiorow").hidden = k().tpotStat === "mean";
+    showTyped();
     schedule(0);
   };
   el("ratio").onchange = () => {
     if (!ready()) return;
     const v = +el("ratio").value;
     k().ratio = el("ratio").value === "" || !(v > 0) ? null : v;
+    showTyped();
     schedule(0);
   };
   el("headroom").onchange = () => {
@@ -1033,8 +1102,7 @@ function wire() {
       const raw = el("a-" + a.box).value, v = +raw;
       if (raw === "" || !(v >= 0)) delete k().assume[a.key];
       else k().assume[a.key] = v / a.scale;
-      const n = Object.keys(k().assume).length;
-      el("assumecount").textContent = n ? n + " typed" : "none typed";
+      showTyped();
       schedule(0);
     };
   }

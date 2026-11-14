@@ -891,9 +891,14 @@ and the provenance chips of every term. The banner is the API's.
   headers, behind the API's check, loads nothing external, reads only
   elements it has, and names every flag; the page was looked at in a
   headless browser against the goldens' recordings, light and dark.
+- **Variants are text boxes** in the source picker, sent as the inputs'
+  `prefillVariant` and `decodeVariant`; the error that asks for one lists the
+  names.
+- **Targets the policy does not set** are the page's (TTFT p90 1 s, TPOT mean
+  50 ms), said so above the limits until you set your own.
 - **Not built:** per-bucket target sliders (the bucket lines take the mix
-  target), dragging a point, a variant picker, the Prometheus window's age and
-  refresh.
+  target), dragging a point, a variant select read from `GET /v1/models`, the
+  Prometheus window's age and refresh.
 
 ## Decisions
 

@@ -54,6 +54,11 @@ curl -s localhost:8080/v1/inputs -H 'Content-Type: application/json' -d '{"model
              "from": "2026-11-09T10:00:00Z", "to": "2026-11-09T11:00:00Z"}}'
 ```
 
+`model` may be left out when the source holds one model. A model with more
+than one variant of a role names the one to price with `prefillVariant` and
+`decodeVariant` (the CLI's `--prefill-variant` and `--variant`), beside
+`model`; the error that asks for one lists the names.
+
 The answer carries an `inputsId`. Price a scenario against it:
 
 ```
@@ -72,7 +77,7 @@ point (headroom times the lower knee).
 
 | Flag | What it does |
 | --- | --- |
-| `--recordings DIR` | Recordings a `recording` source names by file name. |
+| `--recordings DIR` | Recordings a `recording` source names by file name. Serve refuses to start if it is not a directory. |
 | `--prometheus URL` | The Prometheus a `prometheus` source reads. With it, every [capture flag](capacity-planner-capture.md) but `--from`, `--to` and `-o` applies: the role map, `--step`, `--policy`, the engine, TLS and the bearer token. The window comes with each request. |
 | `--namespace NS` | The namespace a `prometheus` source reads when the request names none. |
 | `--allowed-namespaces NS,...` | The namespaces a `prometheus` source may read. Default `--namespace` alone; with `--prometheus` one of the two is required. A request for any other namespace is 403, and a namespace that is not a DNS-1123 label a 400. |
@@ -202,7 +207,7 @@ with none, TokenReview checks the token for the API server's own audiences.
 | --- | --- |
 | `POST /v1/inputs` | Resolves a source for one model: the replay of a recording to a cycle, or a Prometheus window captured and generated in memory (seconds). Returns `inputsId` and every term with its source. |
 | `POST /v1/plan` | Prices a scenario against an `inputsId`. |
-| `GET /v1/sources` | What the server reads, for the page's source picker: whether it reads a Prometheus, the namespaces it may read and the default one, and every name in `--recordings` that a `recording` source accepts (a regular file or a link to one, under a name that is no path and not hidden), sorted. It lists at most 1000, with `recordingsTruncated` true past that. Any user the API answers sees all of these: every allowed namespace and every recording name. |
+| `GET /v1/sources` | What the server reads, for the page's source picker: whether it reads a Prometheus, the namespaces it may read and the default one, and the file names in `--recordings` that a `recording` source may name (a regular file or a link to one, under a name that is no path and not hidden), sorted. It does not open them: a file that is not a learner recording is listed, and refused when loaded. It lists at most 1000, with `recordingsTruncated` true past that. Any user the API answers sees all of these: every allowed namespace and every recording name. |
 | `GET /` | The page. Its script and style are `GET /page/planner.js` and `GET /page/planner.css`. |
 
 `GET /v1/models` and `POST /v1/size` (inverse mode) are later phases. Any
@@ -331,5 +336,6 @@ Plan`), see [As built](../proposals/capacity-planner.md#as-built-phase-0).
 | `TestPageBehindAuth` | The page sits behind the API's check: 401 with no token, 403 for a user not allowed `/whatif/`, 403 for a foreign Host on loopback. |
 | `TestPageLoadsNothingExternal`, `TestPageIDsExist` | The page names no other origin, runs no inline script or style, and uses no absolute path; every element its script reads is on it. |
 | `TestPageNamesEveryFlag` | Every flag the engine, the SLO analyzer and the CLI declare has plain words on the page. |
+| `TestSourcesListingFails` | A listing that fails is answered by its error's class, never as a listing. |
 | `TestServeSources`, `TestSourcesWithoutLister` | `GET /v1/sources` lists every recording a `recording` source accepts, links included, and nothing it refuses; it says when it cut the list, and whether a Prometheus is read; an error names no server path. |
 | `TestCheckListen`, `TestAuthenticate`, `TestServeRefusesUnsafeBinds` | Loopback serves with no token; any other bind refuses to start without `--auth=kubernetes`; with it, a token the SubjectAccessReview does not allow is 403. |

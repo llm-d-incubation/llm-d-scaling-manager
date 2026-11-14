@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -213,6 +214,7 @@ func TestServeRefusesUnsafeBinds(t *testing.T) {
 		{[]string{"serve", "--recordings", dir, "--listen", "0.0.0.0:0", "--auth", "kubernetes"}, "--tls-cert-file"},
 		{[]string{"serve", "--listen", "127.0.0.1:0"}, "--prometheus, --recordings"},
 		{[]string{"serve", "--recordings", dir, "--from", "2026-11-09T10:00:00Z"}, "each request names"},
+		{[]string{"serve", "--recordings", filepath.Join(dir, "missing"), "--listen", "127.0.0.1:0"}, "not a directory"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := run(ctx, c.args, io.Discard, io.Discard)

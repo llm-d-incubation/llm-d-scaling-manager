@@ -4,7 +4,7 @@
 name: capacity-planner
 
 build:
-  note: From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image.
+  note: From a clone of the release you run. Needs Go 1.26 or later. There is no released capacity-planner binary or image.
   run: |
     make capacity-planner
 
@@ -13,18 +13,39 @@ start:
     note: |
       From Prometheus. Reach it from your machine first; use the Service your Prometheus has.
       The planner reads the namespace your model servers run in, with the server's own access to Prometheus.
+      --kube-state-metrics reads each Pod's role and readiness from kube-state-metrics in the same Prometheus.
+      ENGINE_ARGS are the decode Deployment's engine arguments, read as the record guide reads them: kube-state-metrics
+      does not export them. Without them the planner does not know what they set, such as the batch cap; the Inputs
+      drawer then shows the batch cap's source.
     run: |
       export PROM_NS=<prometheus namespace>
       export PROM_SVC=<prometheus service>
       export NAMESPACE=<model namespace>
+      export ENGINE_ARGS="<the decode Deployment's engine arguments, space-separated>"
       kubectl -n ${PROM_NS} port-forward svc/${PROM_SVC} 9090:9090 &
-      bin/capacity-planner serve --prometheus http://localhost:9090 --namespace ${NAMESPACE} --kube-state-metrics
+      bin/capacity-planner serve --prometheus http://localhost:9090 --namespace ${NAMESPACE} --kube-state-metrics \
+        --engine vllm --engine-args "${ENGINE_ARGS}"
   recordings:
-    note: From recordings you saved before. Every recording in the directory is offered by name.
+    note: |
+      From recordings you saved with the record guide. Put each recording `generate` wrote (run.jsonl.gz) in one
+      directory; the capture (run.capture.jsonl.gz) is not a recording. Every file in the directory is offered by name.
     run: |
+      mkdir -p recordings
+      mv run.jsonl.gz recordings/
       bin/capacity-planner serve --recordings ./recordings
 
 open:
   note: The server listens on your machine only. Leave it running and open the page.
   run: |
     xdg-open http://127.0.0.1:8080/ || open http://127.0.0.1:8080/
+
+stop:
+  note: Ctrl-C stops the server. Then stop the port-forward, if you started one.
+  run: |
+    kill %1
+
+tunnel:
+  note: From your laptop, to a planner running on a host you reach by SSH. The browser then names 127.0.0.1, which the server answers.
+  run: |
+    ssh -N -L 8080:127.0.0.1:8080 <user>@<host>
+    # then open http://127.0.0.1:8080/ on your laptop

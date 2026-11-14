@@ -448,10 +448,22 @@ func TestWantsJSON(t *testing.T) {
 // --rate is an input, not banded; --batch-cap 0 takes the priced cap and
 // its source; an assumed length says so, a measured one names its cycles.
 func TestInputsSayWhereTheyCameFrom(t *testing.T) {
-	out, _ := runCmd(t, "replicas-to-slo", "--recording", olsSweep, "--rate", "1", "--batch-cap", "0", "-o", "json",
+	out, code := runCmd(t, "replicas-to-slo", "--recording", olsSweep, "--rate", "1", "--batch-cap", "0", "-o", "json",
 		"--assume-output-tokens", "1000")
+	// A command that failed, or a figure it refused, says so here rather
+	// than as a nil dereference below.
+	if code != 0 {
+		t.Fatalf("replicas-to-slo: exit %d\n%s", code, out)
+	}
 	w := decodeOutput(t, out)
+	if len(w.Roles) == 0 {
+		t.Fatalf("no role in the output:\n%s", out)
+	}
 	role := w.Roles[0]
+	if role.Results.OperatingRate == nil || role.Results.OperatingRate.Answer == nil ||
+		role.Results.MeanTPOT == nil || role.Results.MeanTPOT.Answer == nil {
+		t.Fatalf("the operating rate or the TPOT is not answered:\n%s", out)
+	}
 	if b := role.Results.OperatingRate.Answer.Band; b != nil {
 		t.Errorf("--rate is banded %+v", b)
 	}
