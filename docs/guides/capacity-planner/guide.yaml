@@ -1,0 +1,30 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here -- see hack/render-guides.py -- so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: capacity-planner
+
+build:
+  note: From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image.
+  run: |
+    make capacity-planner
+
+start:
+  prometheus:
+    note: |
+      From Prometheus. Reach it from your machine first; use the Service your Prometheus has.
+      The planner reads the namespace your model servers run in, with the server's own access to Prometheus.
+    run: |
+      export PROM_NS=<prometheus namespace>
+      export PROM_SVC=<prometheus service>
+      export NAMESPACE=<model namespace>
+      kubectl -n ${PROM_NS} port-forward svc/${PROM_SVC} 9090:9090 &
+      bin/capacity-planner serve --prometheus http://localhost:9090 --namespace ${NAMESPACE} --kube-state-metrics
+  recordings:
+    note: Or from recordings you saved before. Every file in the directory is offered by name.
+    run: |
+      bin/capacity-planner serve --recordings ./recordings
+
+open:
+  note: The server listens on your machine only. Leave it running and open the page.
+  run: |
+    xdg-open http://127.0.0.1:8080/ || open http://127.0.0.1:8080/
