@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 B="$ROOT/hack/benchmark"
 PY="$(command -v python3 || command -v python)" || { echo "FAIL: python3 not found"; exit 1; }
-EXPECTED_CHECKS=147
+EXPECTED_CHECKS=149
 
 WORK="$(mktemp -d)"
 STUB="$WORK/bin"
@@ -86,6 +86,15 @@ if "$PY" "$B/staircase_load.py" --url u --model m --out "$WORK/o" --schedule 600
 else
     bad "the driver prints the Ca2 it will send"
 fi
+
+# The planner's old variable, STAIRCASE_WHATIF, is read until v0.12.0: alone it is used,
+# and with the new one set too the new one wins. The line is evaluated as the script has it.
+planner_line=$(grep '^PLANNER=' "$B/staircase.sh")
+planner() { env -i ROOT=/root-of-tree "$@" bash -c "$planner_line"'; printf %s "$PLANNER"'; }
+expect "STAIRCASE_WHATIF alone names the planner" \
+    '[ "$(grep -c "^PLANNER=" "$B/staircase.sh")" = 1 ] && [ "$(planner STAIRCASE_WHATIF=/old/whatif)" = /old/whatif ]'
+expect "STAIRCASE_CAPACITY_PLANNER wins over STAIRCASE_WHATIF" \
+    '[ "$(planner STAIRCASE_WHATIF=/old/whatif STAIRCASE_CAPACITY_PLANNER=/new/cp)" = /new/cp ] && [ "$(planner)" = /root-of-tree/bin/capacity-planner ]'
 
 cat > "$STUB/make" <<'STUB'
 #!/usr/bin/env bash

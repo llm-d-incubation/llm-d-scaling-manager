@@ -16,6 +16,10 @@ func TestInvokedAsDeprecated(t *testing.T) {
 		{"bin/whatif", true},
 		{"/usr/local/bin/whatif", true},
 		{"whatif.exe", true},
+		{"WHATIF.EXE", true},
+		{"/opt/bin/WhatIf.Exe", true},
+		{".exe", false},
+		{"whatif.exe.exe", false},
 		{"capacity-planner", false},
 		{"bin/capacity-planner", false},
 		{"capacity-planner.exe", false},
@@ -30,4 +34,5 @@ func TestInvokedAsDeprecated(t *testing.T) {
 func TestDeprecationNoteNamesTheNewCommand(t *testing.T) {
 	assert.Contains(t, deprecationNote, progName)
 	assert.Contains(t, deprecationNote, "deprecated")
+	assert.Contains(t, deprecationNote, "whatif will be removed in v0.12.0")
 }

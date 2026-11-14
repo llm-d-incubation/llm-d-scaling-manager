@@ -48,8 +48,8 @@
 //
 // The command was named whatif before. Run under that name (make
 // capacity-planner also builds bin/whatif), it works the same and first
-// prints a one-line deprecation note to stderr. The old name goes in the
-// release after the next.
+// prints a one-line deprecation note to stderr. whatif will be removed in
+// v0.12.0.
 package main
 
 import (
@@ -73,13 +73,16 @@ const deprecatedName = "whatif"
 
 // deprecationNote is printed to stderr when the command runs as
 // deprecatedName.
-const deprecationNote = "whatif: deprecated: the command is now capacity-planner (make capacity-planner, bin/capacity-planner); whatif will be removed in a later release"
+const deprecationNote = "whatif: deprecated: the command is now capacity-planner (make capacity-planner, bin/capacity-planner); whatif will be removed in v0.12.0"
 
 // invokedAsDeprecated reports whether argv0, the path the command was run
-// as, names the old command: whatif, or whatif.exe on Windows.
+// as, names the old command: whatif, or whatif.exe on Windows, in any case.
 func invokedAsDeprecated(argv0 string) bool {
 	base := filepath.Base(argv0)
-	return strings.TrimSuffix(base, ".exe") == deprecatedName
+	if len(base) > len(".exe") && strings.EqualFold(base[len(base)-len(".exe"):], ".exe") {
+		base = base[:len(base)-len(".exe")]
+	}
+	return strings.EqualFold(base, deprecatedName)
 }
 
 func main() {

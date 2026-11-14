@@ -492,11 +492,11 @@ learner-golden-add: ## Commit a raw learner recording as a golden: RECORDING=<fi
 .PHONY: capacity-planner
 capacity-planner: ## Build the capacity planner command line (bin/capacity-planner), with the commit a generated recording carries; not in the manager image
 	go build -ldflags "$(LEARNREC_LDFLAGS)" -o bin/capacity-planner ./cmd/capacity-planner
-	@# The old name, for one release: run as whatif, it prints a deprecation note.
-	cp bin/capacity-planner bin/whatif
+	@# The old name until v0.12.0: run as whatif, it prints a deprecation note.
+	ln -sf capacity-planner bin/whatif
 
 .PHONY: whatif
-whatif: capacity-planner ## Deprecated alias of capacity-planner, removed in a later release
+whatif: capacity-planner ## Deprecated alias of capacity-planner; whatif will be removed in v0.12.0
 
 .PHONY: learner-goldens
 learner-goldens: ## Rewrite every learner golden from a replay at this commit (only for a golden change the PR names)

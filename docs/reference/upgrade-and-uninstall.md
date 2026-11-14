@@ -129,17 +129,21 @@ changed, and there is no compatibility path. Reinstall.
 3. Install from this tree and re-create what you need. Learned state, tuned
    policy, labels on namespaces and ScaledObject addresses are not carried over.
 
-### Upgrading from v0.11.1
+### Upgrading from v0.11.1 to v0.11.2
 
 The `whatif` command is now `capacity-planner`. Nothing on the cluster changes.
 
 - Build it with `make capacity-planner` and run `bin/capacity-planner`. The
   subcommands and flags are the same.
 - `make whatif` and `bin/whatif` still work for this release. `bin/whatif`
-  prints a one-line deprecation note to stderr and then runs as before. Both
-  go in a later release, so update your scripts now.
+  prints a one-line deprecation note to stderr and then runs as before.
+  whatif will be removed in v0.12.0, so update your scripts now.
 - `capacity-planner serve` still authorizes on the URL path `/whatif/`, so
   RBAC written for an earlier release keeps working.
+- The API's `whatifSchema` JSON field keeps its name too.
+- The serve guide's example RBAC is now named `capacity-planner`. If you
+  applied the old example, you can delete its `whatif-planner` ClusterRole and
+  ClusterRoleBinding, or keep using them: the rules are the same.
 
 ### Upgrading from v0.11.0-rc1 to v0.11.0
 
