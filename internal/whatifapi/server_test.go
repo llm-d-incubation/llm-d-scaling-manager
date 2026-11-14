@@ -68,6 +68,7 @@ func TestSchemaIsPinned(t *testing.T) {
 	walked := map[string]reflect.Type{
 		"inputsRequest": reflect.TypeFor[InputsRequest](), "inputs": reflect.TypeFor[InputsResponse](),
 		"planRequest": reflect.TypeFor[PlanRequest](), "plan": reflect.TypeFor[PlanResponse](), "error": reflect.TypeFor[ErrorResponse](),
+		"sources": reflect.TypeFor[SourcesResponse](),
 	}
 	for typ, name := range namedTypes {
 		walked[name] = typ
@@ -351,6 +352,6 @@ func TestRequestsRefused(t *testing.T) {
 		})
 	}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	assert.Equal(t, http.StatusNotFound, rec.Code, "phase 0 serves no page")
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code, "GET /v1/models is not built")
 }

@@ -110,10 +110,40 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/inputs", s.handleInputs)
 	mux.HandleFunc("POST /v1/plan", s.handlePlan)
+	mux.HandleFunc("GET /v1/sources", s.handleSources)
+	mux.HandleFunc("GET /{$}", servePage)
+	mux.HandleFunc("GET /page/", servePage)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, fmt.Errorf("%s %s: no such endpoint; phase 0 serves POST /v1/inputs and POST /v1/plan, and no page", r.Method, r.URL.Path))
+		writeError(w, http.StatusNotFound, fmt.Errorf("%s %s: no such endpoint; the server serves POST /v1/inputs, POST /v1/plan, GET /v1/sources and the page at /",
+			r.Method, r.URL.Path))
 	})
 	return mux
+}
+
+// handleSources is GET /v1/sources: the sources the resolver reads, or none
+// when it cannot list them.
+func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
+	out := SourcesResponse{Namespaces: []string{}, Recordings: []string{}}
+	if l, ok := s.resolver.(SourceLister); ok {
+		var err error
+		if out, err = l.Sources(r.Context()); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if out.Namespaces == nil {
+			out.Namespaces = []string{}
+		}
+		if out.Recordings == nil {
+			out.Recordings = []string{}
+		}
+	}
+	out.SchemaVersion = SchemaVersion
+	body, err := marshal(out)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeBody(w, body)
 }
 
 // handleInputs is POST /v1/inputs: the source resolved, kept under its id,

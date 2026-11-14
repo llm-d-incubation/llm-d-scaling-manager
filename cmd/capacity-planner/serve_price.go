@@ -121,6 +121,40 @@ func (s *servedSources) recordingPath(src whatifapi.SourceRequest) (string, erro
 	return path, nil
 }
 
+// maxListedRecordings bounds the recordings GET /v1/sources lists.
+const maxListedRecordings = 1000
+
+// Sources is what the server reads, for the page's source picker: whether it
+// reads a Prometheus and in which namespaces, and the recordings a recording
+// source may name (the regular, unhidden files of --recordings, by name).
+func (s *servedSources) Sources(context.Context) (whatifapi.SourcesResponse, error) {
+	out := whatifapi.SourcesResponse{Prometheus: s.window.prometheus != "", Namespaces: slices.Clone(s.allowed), Recordings: []string{}}
+	if out.Prometheus {
+		out.Namespace = s.window.namespace
+		if out.Namespace == "" && len(s.allowed) > 0 {
+			out.Namespace = s.allowed[0]
+		}
+	}
+	if s.recordings == "" {
+		return out, nil
+	}
+	entries, err := os.ReadDir(s.recordings)
+	if err != nil {
+		// The error would name the server's path: say only that it failed.
+		fmt.Fprintf(s.warn, "capacity-planner: listing recordings: %v\n", err)
+		return out, errors.New("the server could not list its recordings directory; see its log")
+	}
+	for _, e := range entries {
+		if len(out.Recordings) == maxListedRecordings {
+			break
+		}
+		if e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") {
+			out.Recordings = append(out.Recordings, e.Name())
+		}
+	}
+	return out, nil
+}
+
 // checkNamespace refuses a namespace a request may not read through the
 // server's Prometheus: one that is no DNS-1123 label, one not among the
 // allowed, or, with Kubernetes authentication, one whose Pods the user may
