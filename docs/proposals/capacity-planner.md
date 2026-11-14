@@ -168,7 +168,11 @@ The rule: **no number on screen without what it rests on.**
     CLI does, at the shared default (`whatif.DefaultPriceRouterWait`, off),
     so it shows `AboveFlowControlOnset`, as the SLO analyzer does. Its rate
     answers stop under the prefill onset (bound `prefill flow-control
-    onset`), so a rate it answers is never one the flag calls a miss.
+    onset`), so a rate it answers is never one the flag calls a miss. Nor
+    does it have switches for the onset placement (`--ps-onsets`) or the
+    decode gate's charge (`--charge-decode-gate`): both are unvalidated and
+    off by default, and the API answers at the shared defaults so that a
+    page it draws is the controller's.
   - `SpreadBeyondProcessorSharing`: the prompt cv is above 0.25, so the TTFT
     is the larger of the processor-sharing and first-come prices.
 - **Refusals are gaps, never zeros.** A curve point the engine refuses is
@@ -297,8 +301,8 @@ beside it, labelled "without headroom", whenever the cap is what binds.
 The `BoundBy` the engine returns is shown verbatim beside each limit: `TTFT`,
 `TTFT` then `decode admission` (flagged `HeldByDecodeAdmission`: the decode
 side's admission wait is what holds the prefill limit down, so the fix is a
-decode replica, not a prefill one), `decode flow-control onset`, `prefill
-knee`, `TPOT`, `batch cap`, `band top`, `operating-point cap`. The
+decode replica, not a prefill one), `decode flow-control onset`, `decode
+gate closed share` (only with `--charge-decode-gate`), `prefill knee`, `TPOT`, `batch cap`, `band top`, `operating-point cap`. The
 `HeldByDecodeAdmission` case is why the binding role is not always the role
 named on the limit's row, and the screen says which replica to add.
 

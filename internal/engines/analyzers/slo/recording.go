@@ -100,8 +100,10 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchITLRestartUnderName, SwitchITLIdleOnEvidence and
 // SwitchITLForgetReachesTheLine, SwitchITLOneSidedAtCap, SwitchTTFTPrice,
 // SwitchTTFTMeasuredSpread, SwitchTTFTMeasuredTransfer,
-// SwitchTTFTProcessorSharing, SwitchTTFTRouterWait, SwitchTTFTJointInputs and SwitchKVPerRequestOutputDispersion; a name it does not know is an error, and sets nothing. Never called on a production
-// path; a test holds that.
+// SwitchTTFTProcessorSharing, SwitchTTFTRouterWait, SwitchTTFTPSOnsets,
+// SwitchTTFTDecodeGateCharge, SwitchTTFTJointInputs and
+// SwitchKVPerRequestOutputDispersion; a name it does not know is an error,
+// and sets nothing. Never called on a production path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
 	rest := maps.Clone(switches)
 	fields := a.switchFields()
@@ -170,6 +172,11 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// The router's flow-control wait in the processor-sharing prefill
 		// stage, experimental and off by default (ttft.go).
 		SwitchTTFTRouterWait: &a.ttftRouterWait,
+		// The prefill onset on the processor-sharing stage, and the decode
+		// gate's closed share charged to the published rate, both off by
+		// default (ttft.go).
+		SwitchTTFTPSOnsets:         &a.ttftPSOnsets,
+		SwitchTTFTDecodeGateCharge: &a.ttftDecodeGateCharge,
 		// J1: the joint prefill and decode model's inputs, in shadow
 		// (ttft_joint.go).
 		SwitchTTFTJointInputs: &a.ttftJointInputs,

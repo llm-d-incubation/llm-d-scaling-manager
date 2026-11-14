@@ -238,6 +238,8 @@ METRICS_CERT_NAME
 METRICS_CERT_PATH
 METRICS_SECURE
 MalformedHistogram
+MaxDecodeGateClosedShare
+MaxPSPromptCV
 MeasuredLowConfirmFor
 Metrics
 Mimir
@@ -780,6 +782,7 @@ coldVariants
 collect
 collecting
 combined
+come
 comes
 comma-separated
 commit
@@ -2166,6 +2169,7 @@ priork2|
 priors
 probe
 processing
+processor
 processorSharing
 produced
 product
@@ -2242,6 +2246,7 @@ re-mark
 re-transitions
 reach
 reached
+reaches
 read
 read-error
 readable
@@ -2622,6 +2627,7 @@ slo-itl-waits-after-controller-restart
 slo-kv-per-request-output-dispersion
 slo-model
 slo-transient
+slo-ttft-decode-gate-charge
 slo-ttft-decode-term
 slo-ttft-joint
 slo-ttft-joint-inputs
@@ -2629,6 +2635,7 @@ slo-ttft-measured-spread
 slo-ttft-measured-transfer
 slo-ttft-price
 slo-ttft-processor-sharing
+slo-ttft-ps-onsets
 slo-ttft-quiet-transfer
 slo-ttft-router-wait
 slo-ttft-variant

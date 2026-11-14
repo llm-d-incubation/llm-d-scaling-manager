@@ -112,6 +112,12 @@ func (f *answerFlags) checkTTFT() error {
 		return usagef("--assume-a %s, want a duration above 0", f.assumeA)
 	case f.prefill < 0:
 		return usagef("--prefill %d, want 0 (the recorded count) or more", f.prefill)
+	case f.set["prefill-running-cap"] && (f.prefillRunningCap < 0 || f.prefillRunningCap > whatif.MaxRunningCap):
+		return usagef("--prefill-running-cap %d, want 0 (unknown) to %d", f.prefillRunningCap, whatif.MaxRunningCap)
+	case f.set["prefill-running-cap"] && !f.psOnsets:
+		return usagef("--prefill-running-cap is read only with --ps-onsets")
+	case f.set["charge-decode-gate"] && f.chargeDecodeGate && f.question != rateQuestion:
+		return usagef("--charge-decode-gate is read only by %s: %s prices TTFT at a rate, which the charge does not move", rateQuestion, f.question)
 	case f.ttftFlagged() && f.set["headroom"] && f.question == replicasQuestion && !(f.headroom > 0 && f.headroom < 1):
 		return usagef("--headroom %g, want a fraction of the knee in (0, 1): at the knee no TTFT exists", f.headroom)
 	case f.ttftFlagged() && f.set["headroom"] && !(f.headroom > 0 && f.headroom <= 1):
@@ -379,6 +385,10 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	// measured. whatif gates it on processor sharing itself
 	// (whatif.TTFTFleet.PriceRouterWait).
 	pf.fleet.PriceRouterWait = f.priceRouterWait
+	// Off by default, as in the SLO analyzer (whatif.DefaultPSOnsets,
+	// whatif.DefaultChargeDecodeGate).
+	pf.fleet.PSOnsets, pf.fleet.ChargeDecodeGate = f.psOnsets, f.chargeDecodeGate
+	pf.fleet.Prefill.RunningCap = f.prefillRunningCap
 	f.prefillShape(pf, ps)
 	if f.set["assume-router-hop"] {
 		pf.assumedHop = &f.assumeRouterHop
@@ -390,12 +400,47 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	}
 	pf.flowControl(st)
 	f.arrivals(pf)
+	f.onsetNotes(pf)
 	if f.prefillVariant != "" && len(st.Prefill) > 1 {
 		pf.assume("the whole rate on prefill variant %s (--prefill-variant; the model has %d)", ps.Variant, len(st.Prefill))
 	}
 	pf.raiseFlags(ps)
 	pf.describe()
 	return pf
+}
+
+// onsetNotes says what --ps-onsets and --charge-decode-gate did to the fleet,
+// as --price-router-wait shows FlowControlWaitPriced: the placement of the
+// prefill onset, and whether the decode gate was charged. Nothing with
+// neither flag, so the default output does not move.
+func (f *answerFlags) onsetNotes(pf *pricedFleet) {
+	if f.psOnsets {
+		switch p, ok := whatif.PrefillOnsetPlacement(pf.fleet); {
+		case !ok:
+			pf.assume("--ps-onsets not applied: no prefill onset (flow control is not on)")
+		case p == whatif.PlacedProcessorSharing:
+			pf.assume("prefill onset on processor sharing at a running cap of %d (--ps-onsets)", f.prefillRunningCap)
+		case p == whatif.PlacedLowerWideSpread:
+			capText := strconv.Itoa(f.prefillRunningCap)
+			if f.prefillRunningCap == 0 {
+				capText = "1 (not known)"
+			}
+			pf.assume("prefill onset the lower of processor sharing at a running cap of %s and first come: prompt cv %s is past %s (--ps-onsets)",
+				capText, num(pf.fleet.Prefill.PromptCV), num(whatif.MaxPSPromptCV))
+		default:
+			pf.assume("prefill onset %s (--ps-onsets)", p)
+		}
+	}
+	if f.chargeDecodeGate {
+		g, ok := whatif.DecodeGateChargeFor(pf.fleet, whatif.TTFTTarget{Seconds: 1, Percentile: pf.q})
+		switch {
+		case !ok:
+		case g == whatif.GateCappedForMean:
+			pf.assume("the mean capped where the decode gate is closed %s%% of the time (--charge-decode-gate)", num(100*whatif.MaxDecodeGateClosedShare))
+		default:
+			pf.assume("%s (--charge-decode-gate)", g)
+		}
+	}
 }
 
 // arrivals is the arrival process. --arrival-cv2 reaches the prefill queue

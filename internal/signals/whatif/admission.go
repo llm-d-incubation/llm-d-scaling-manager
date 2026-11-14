@@ -130,26 +130,58 @@ type chain struct{ wait, decay, seqs float64 }
 // birthDeath solves the chain with arrival rate lam, completion rate mu(m)
 // with m requests in service for m in 1..c, and mu(c) above c. ok is false when
 // lam >= mu(c), a rate is unusable, or c is outside [1, maxSlots], the bound
-// that keeps the one state per slot it allocates finite.
-//
-// The stationary weights are products of lam/mu(m), which overflow long before
-// c reaches a large engine's batch cap, so they are summed in logs.
+// that keeps the one state per slot it allocates finite (solveChain).
 func birthDeath(lam float64, mu func(m int) float64, c int) (chain, bool) {
-	if c < 1 || c > maxSlots || !Finite(lam) || lam < 0 {
-		return chain{}, false
-	}
-	muC := mu(c)
-	if !Finite(muC) || !(muC > lam) {
+	w, ok := solveChain(lam, mu, c)
+	if !ok {
 		return chain{}, false
 	}
 	if lam == 0 {
-		return chain{decay: muC}, true
+		return chain{decay: w.muC}, true
+	}
+	var seqs float64
+	for m, e := range w.below {
+		seqs += float64(m) * e
+	}
+	seqs += float64(c) * w.tail
+	return chain{wait: w.tail / w.z, decay: w.muC - lam, seqs: seqs / w.z}, true
+}
+
+// chainWeights are a solved chain's stationary weights, each over one common
+// factor exp(scale): below[m] for each state m < slots, tail for every state
+// n >= slots together, z their sum. The tail is geometric at rho =
+// lam/mu(slots), and logTail is its weight in logs, unscaled. With no
+// arrivals (noArrivals) the chain stays in state 0: only muC, slots and
+// noArrivals are set, and atLeast reads no other field.
+type chainWeights struct {
+	below          []float64
+	tail, z        float64
+	rho, muC       float64
+	slots          int
+	noArrivals     bool
+	logTail, scale float64
+}
+
+// solveChain solves the chain birthDeath reads, with the same ok.
+//
+// The stationary weights are products of lam/mu(m), which overflow long before
+// c reaches a large engine's batch cap, so they are summed in logs.
+func solveChain(lam float64, mu func(m int) float64, c int) (chainWeights, bool) {
+	if c < 1 || c > maxSlots || !Finite(lam) || lam < 0 {
+		return chainWeights{}, false
+	}
+	muC := mu(c)
+	if !Finite(muC) || !(muC > lam) {
+		return chainWeights{}, false
+	}
+	if lam == 0 {
+		return chainWeights{muC: muC, slots: c, noArrivals: true}, true
 	}
 	logW := make([]float64, c+1)
 	for m := 1; m <= c; m++ {
 		mm := mu(m)
 		if !Finite(mm) || !(mm > 0) {
-			return chain{}, false
+			return chainWeights{}, false
 		}
 		logW[m] = logW[m-1] + math.Log(lam/mm)
 	}
@@ -161,14 +193,31 @@ func birthDeath(lam float64, mu func(m int) float64, c int) (chain, bool) {
 	for _, w := range logW[:c] {
 		hi = max(hi, w)
 	}
-	var z, seqs float64
-	for m, w := range logW[:c] {
-		e := math.Exp(w - hi)
-		z += e
-		seqs += float64(m) * e
+	w := chainWeights{below: make([]float64, c), rho: rho, muC: muC, slots: c, logTail: logTail, scale: hi}
+	for m, lw := range logW[:c] {
+		w.below[m] = math.Exp(lw - hi)
+		w.z += w.below[m]
 	}
-	tail := math.Exp(logTail - hi)
-	z += tail
-	seqs += float64(c) * tail
-	return chain{wait: tail / z, decay: muC - lam, seqs: seqs / z}, true
+	w.tail = math.Exp(logTail - hi)
+	w.z += w.tail
+	return w, true
+}
+
+// atLeast is the chain's stationary P(n >= k): the states from k below the
+// slots and the tail, or past the slots the tail's geometric share
+// rho^(k - c) of it, in logs so a deep k underflows to 0, not to NaN.
+func (w chainWeights) atLeast(k int) float64 {
+	switch {
+	case k <= 0:
+		return 1
+	case w.noArrivals:
+		return 0
+	case k >= w.slots:
+		return math.Exp(w.logTail - w.scale + float64(k-w.slots)*math.Log(w.rho) - math.Log(w.z))
+	}
+	var s float64
+	for _, e := range w.below[k:] {
+		s += e
+	}
+	return min((s+w.tail)/w.z, 1)
 }

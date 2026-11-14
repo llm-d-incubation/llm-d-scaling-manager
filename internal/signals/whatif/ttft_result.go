@@ -173,6 +173,13 @@ const (
 	// BoundDecodeOnset is the decode gate's onset with flow control on: an
 	// extra knee, above which the model does not price TTFT.
 	BoundDecodeOnset Bound = "decode flow-control onset"
+	// BoundDecodeGateCharge is the decode gate's closed share below its
+	// onset, charged to the answer with TTFTFleet.ChargeDecodeGate: in a
+	// percentile's tail, or capping a mean at MaxDecodeGateClosedShare. It is
+	// not BoundDecodeOnset, so the SLO analyzer does not read it as
+	// decode-bound and still publishes a per-replica rate: the charge trims
+	// the target's margin, it does not stand for the decode side's capacity.
+	BoundDecodeGateCharge Bound = "decode gate closed share"
 	// BoundPrefillOnset is the prefill gate's onset with flow control on,
 	// or with TTFTFleet.PriceRouterWait the share of the prefill knee it
 	// takes up to: past it the router holds requests the price does not take

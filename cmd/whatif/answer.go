@@ -59,6 +59,11 @@ type answerFlags struct {
 	// priceRouterWait is --price-router-wait, a TTFT flag (ttft.go):
 	// experimental, off by default.
 	priceRouterWait bool
+	// psOnsets is --ps-onsets, chargeDecodeGate --charge-decode-gate and
+	// prefillRunningCap --prefill-running-cap, TTFT flags (ttft.go): off by
+	// default, as in the SLO analyzer.
+	psOnsets, chargeDecodeGate bool
+	prefillRunningCap          int
 	// engineTPOT says R_q was read from the engine's TPOT histogram
 	// (tpotRatioFor).
 	engineTPOT bool
@@ -106,6 +111,9 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.prefillVariant, "prefill-variant", "", "the prefill variant to price, when the model has several")
 	fs.DurationVar(&f.assumeA, "assume-a", 0, "a, the fixed latency one request pays on a prefill pod (11ms), in place of the learned one (flagged)")
 	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "experimental, unvalidated: take the router's flow-control wait as inside the processor-sharing prefill price (FlowControlWaitPriced)")
+	fs.BoolVar(&f.psOnsets, "ps-onsets", whatif.DefaultPSOnsets, "experimental, unvalidated: place the prefill flow-control onset on the processor-sharing model, the prompts past --prefill-running-cap counted as waiting")
+	fs.IntVar(&f.prefillRunningCap, "prefill-running-cap", 0, "with --ps-onsets, the most prompts a prefill pod computes at once (about max_num_batched_tokens over the prompt); 0 (unknown, the default) takes the lower of processor sharing at 1 and first come")
+	fs.BoolVar(&f.chargeDecodeGate, "charge-decode-gate", whatif.DefaultChargeDecodeGate, "experimental, unvalidated, slo-to-rate only: charge the time the decode flow-control gate is closed below its onset to the rate answer")
 	fs.StringVar(&f.inputBucket, "input-bucket", "", "not supported: per-bucket answers are the planner's M1")
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "answer from a window of this Prometheus (base URL), captured and generated in memory, in place of --recording"

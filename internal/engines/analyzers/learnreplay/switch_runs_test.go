@@ -150,6 +150,13 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// onset, and no committed recording's cycle reaches a priced fleet. Its
 	// unit tests hold it (heldBy).
 	slo.SwitchTTFTRouterWait: nil,
+	// The prefill onset on the processor-sharing stage, and the decode gate's
+	// closed share charged to the published rate, both off in production
+	// (whatif.DefaultPSOnsets, whatif.DefaultChargeDecodeGate). They move no
+	// golden: both need flow control on and a priced fleet, and no committed
+	// recording's cycle reaches one. Their unit tests hold them (heldBy).
+	slo.SwitchTTFTPSOnsets:         nil,
+	slo.SwitchTTFTDecodeGateCharge: nil,
 	// J1 of the joint prefill and decode TTFT sizing: the joint inputs in
 	// shadow, and the inverted V_P where P1 refused V_P. Base: main at
 	// 90d1489. Alone it moves no golden: it runs inside S1's pricing, which
@@ -1332,6 +1339,14 @@ var heldBy = map[string][]heldTest{
 	// switch on and off through priceTTFT and asserts both flags and verdicts.
 	slo.SwitchTTFTRouterWait: {
 		{"../slo", "TestTTFT_TheRouterWaitSwitch"},
+	},
+	// The onset switches: it prices one fleet with both on and off through
+	// priceTTFT, and asserts the onsets, the shared rate and the verdicts.
+	slo.SwitchTTFTPSOnsets: {
+		{"../slo", "TestTTFT_TheOnsetSwitches"},
+	},
+	slo.SwitchTTFTDecodeGateCharge: {
+		{"../slo", "TestTTFT_TheOnsetSwitches"},
 	},
 	// The first runs the switch on and off through Analyze and asserts both;
 	// the model row replays the staircase goldens with it on.
