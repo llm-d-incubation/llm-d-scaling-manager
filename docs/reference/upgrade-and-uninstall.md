@@ -134,16 +134,32 @@ changed, and there is no compatibility path. Reinstall.
 The `whatif` command is now `capacity-planner`. Nothing on the cluster changes.
 
 - Build it with `make capacity-planner` and run `bin/capacity-planner`. The
-  subcommands and flags are the same.
-- `make whatif` and `bin/whatif` still work for this release. `bin/whatif`
-  prints a one-line deprecation note to stderr and then runs as before.
-  whatif will be removed in v0.12.0, so update your scripts now.
+  subcommands and flags are the same. `go build ./cmd/whatif` and
+  `go run ./cmd/whatif` are now `./cmd/capacity-planner`.
+- `make whatif` and `bin/whatif` still work for this release. whatif will be
+  removed in v0.12.0, so update your scripts now.
+- Errors and warnings on stderr now start with `capacity-planner:`, also when
+  you run `bin/whatif`. `bin/whatif` also prints one deprecation line on
+  stderr first. Keep stderr out of JSON output: do not use `2>&1` when you
+  parse `-o json`.
+- The TTFT staircase reads `STAIRCASE_CAPACITY_PLANNER`. It still reads the
+  old `STAIRCASE_WHATIF` until v0.12.0.
+- The developer pages moved: `whatif-capture.md` is now
+  [capacity-planner-capture.md](../developer-guide/capacity-planner-capture.md)
+  and `whatif-serve.md` is now
+  [capacity-planner-serve.md](../developer-guide/capacity-planner-serve.md).
 - `capacity-planner serve` still authorizes on the URL path `/whatif/`, so
   RBAC written for an earlier release keeps working.
 - The API's `whatifSchema` JSON field keeps its name too.
-- The serve guide's example RBAC is now named `capacity-planner`. If you
-  applied the old example, you can delete its `whatif-planner` ClusterRole and
-  ClusterRoleBinding, or keep using them: the rules are the same.
+- The serve guide's example token audience is now `capacity-planner`, not
+  `whatif`. If your clients mint tokens for `whatif`, keep
+  `--token-audiences whatif`, or list both
+  (`--token-audiences whatif,capacity-planner`), until they mint the new one.
+- The serve guide's example RBAC is now named `capacity-planner` and
+  `capacity-planner-reader`. To move to it, apply the new example first. Then
+  delete the old `whatif-planner` ClusterRole and ClusterRoleBinding, and the
+  `whatif-planner-reader` Role and RoleBinding in each namespace. Or keep the
+  old objects: the rules are the same.
 
 ### Upgrading from v0.11.0-rc1 to v0.11.0
 

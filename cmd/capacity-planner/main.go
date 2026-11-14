@@ -71,9 +71,13 @@ const progName = "capacity-planner"
 // deprecatedName is the command's old name, still accepted for one release.
 const deprecatedName = "whatif"
 
+// deprecatedNameRemovedIn is the release that drops deprecatedName.
+const deprecatedNameRemovedIn = "v0.12.0"
+
 // deprecationNote is printed to stderr when the command runs as
 // deprecatedName.
-const deprecationNote = "whatif: deprecated: the command is now capacity-planner (make capacity-planner, bin/capacity-planner); whatif will be removed in v0.12.0"
+const deprecationNote = deprecatedName + ": deprecated: the command is now " + progName +
+	" (make " + progName + ", bin/" + progName + "); " + deprecatedName + " will be removed in " + deprecatedNameRemovedIn
 
 // invokedAsDeprecated reports whether argv0, the path the command was run
 // as, names the old command: whatif, or whatif.exe on Windows, in any case.
@@ -85,10 +89,16 @@ func invokedAsDeprecated(argv0 string) bool {
 	return strings.EqualFold(base, deprecatedName)
 }
 
-func main() {
-	if invokedAsDeprecated(os.Args[0]) {
-		fmt.Fprintln(os.Stderr, deprecationNote)
+// warnIfDeprecated writes deprecationNote to stderr when argv0 names the
+// old command, and nothing otherwise.
+func warnIfDeprecated(argv0 string, stderr io.Writer) {
+	if invokedAsDeprecated(argv0) {
+		fmt.Fprintln(stderr, deprecationNote)
 	}
+}
+
+func main() {
+	warnIfDeprecated(os.Args[0], os.Stderr)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()

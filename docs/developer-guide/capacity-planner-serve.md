@@ -15,9 +15,12 @@ tool and is not in the manager image.
 From a recordings directory:
 
 ```
-go build -o bin/capacity-planner ./cmd/capacity-planner
+make capacity-planner
 bin/capacity-planner serve --recordings ./recordings
 ```
+
+`make capacity-planner` stamps the commit into the build, as the recordings
+it makes carry it.
 
 It listens on `127.0.0.1:8080` and prints the address on stderr. Stop it with
 Ctrl-C.
@@ -107,7 +110,8 @@ non-resource URL `/whatif/` plus the path, for every method: a `POST
 nothing. The path keeps the command's old name, so RBAC written for an earlier
 release still applies.
 
-The RBAC for a group `planners` that reads the namespace `llm`:
+The RBAC for a group `planners`, and the ServiceAccount `planner` the token
+example below uses, that read the namespace `llm`:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -130,6 +134,9 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: planners
+- kind: ServiceAccount
+  name: planner
+  namespace: llm
 ---
 # One Role and RoleBinding per namespace in --allowed-namespaces.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -155,6 +162,9 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group
   name: planners
+- kind: ServiceAccount
+  name: planner
+  namespace: llm
 ```
 
 The server's own identity (its kubeconfig) needs `create` on
@@ -162,12 +172,18 @@ The server's own identity (its kubeconfig) needs `create` on
 `subjectaccessreviews.authorization.k8s.io`, as `system:auth-delegator`
 grants.
 
-A request with a token, from a ServiceAccount `planner` in `llm`:
+A request with a token, from the ServiceAccount `planner` in `llm` that the
+bindings above name. Start the server; it runs in the foreground:
 
 ```
 bin/capacity-planner serve --auth=kubernetes --listen 0.0.0.0:8443 \
   --tls-cert-file tls.crt --tls-key-file tls.key \
   --prometheus https://prometheus.example:9090 --kube-state-metrics --namespace llm
+```
+
+Then, in another terminal:
+
+```
 TOKEN=$(kubectl -n llm create token planner)
 curl -s --cacert ca.crt https://planner.example:8443/v1/inputs \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

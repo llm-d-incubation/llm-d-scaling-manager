@@ -51,7 +51,7 @@ curl -s ${PROM_URL}/api/v1/status/buildinfo | jq -r .data.version
 
 <!-- guide:record start -->
 ```bash
-# From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image. On v0.11.x and earlier the target is make whatif and the binary bin/whatif.
+# From a checkout of the release you run. Needs Go. There is no released capacity-planner binary or image. On v0.11.1 and earlier the target is make whatif and the binary bin/whatif.
 make capacity-planner
 bin/capacity-planner capture -h 2>&1 | head -3
 

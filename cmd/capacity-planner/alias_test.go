@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,4 +36,16 @@ func TestDeprecationNoteNamesTheNewCommand(t *testing.T) {
 	assert.Contains(t, deprecationNote, progName)
 	assert.Contains(t, deprecationNote, "deprecated")
 	assert.Contains(t, deprecationNote, "whatif will be removed in v0.12.0")
+}
+
+// The note goes to the writer main gives as stderr, as one line, and only
+// under the old name.
+func TestWarnIfDeprecated(t *testing.T) {
+	var old bytes.Buffer
+	warnIfDeprecated("bin/whatif", &old)
+	assert.Equal(t, deprecationNote+"\n", old.String())
+
+	var current bytes.Buffer
+	warnIfDeprecated("bin/capacity-planner", &current)
+	assert.Empty(t, current.String())
 }
