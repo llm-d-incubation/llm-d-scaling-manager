@@ -19,8 +19,14 @@
 #     at 8000 tokens). The sweep and the rest send about 8% of that, where r2 sent 3 to
 #     5%: fewer requests a level would not fit `a`. If the estimate is off by 2, they are
 #     still under a fifth of the prefill. The closed loops at 8000 tokens sit at about 1,
-#     2 and 3.5 times the concurrency that saturates prefill, as r2's did; the 1000-token
-#     ones keep r2's, which already bracket decode's knee on either model.
+#     2 and 3.5 times the concurrency that saturates prefill, as r2's did.
+#   - the 1000-token closed loops go low, high, low, high (30, 400, 60, 400), not r2's
+#     climb. The decode line fits its intercept only from two steady levels at least 0.30
+#     apart in KV fill (internal/signals/itl, DefaultMinKSpread). Measured on this model:
+#     fill 0.03, 0.10, 0.20 and 0.41 at 30, 100, 200 and 400, so r2's climb never stepped
+#     by more than 0.21, the line stayed on the default intercept, and the freeze refused
+#     (no decodeLine). 30 to 400 and 60 to 400 step by about 0.38 and 0.35; at 400 each
+#     decode pod ran about 200 requests and queued none.
 #   - the ladder is laid by the freeze from this warm-up, as on r2: no rate is set here.
 operatingFraction: 0.85
 percentiles: [90, 95]
@@ -37,7 +43,7 @@ seedBase: 3000
 phaseOverheadSeconds: 240
 warmup:
   order: [line, sweep, busy, rest]
-  line: {driver: closed, schedule: "420:30:1000:1000,420:100:1000:1000,420:200:1000:1000,420:400:1000:1000,420:24:8000:200,420:48:8000:200,420:80:8000:200"}
+  line: {driver: closed, schedule: "420:30:1000:1000,420:400:1000:1000,420:60:1000:1000,420:400:1000:1000,420:24:8000:200,420:48:8000:200,420:80:8000:200"}
   sweep: {driver: open, schedule: "360:2:1000:32:1,360:1.1:2000:32:1,360:0.55:4000:32:1,360:0.37:6000:32:1,360:0.28:8000:32:1", seed: 11}
   busy: {driver: closed, schedule: "660:48:8000:8"}
   # Quiet at the end: the transfer a freeze reads ages out in 5 minutes.
