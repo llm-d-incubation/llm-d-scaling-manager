@@ -20,6 +20,17 @@
 #     5%: fewer requests a level would not fit `a`. If the estimate is off by 2, they are
 #     still under a fifth of the prefill. The closed loops at 8000 tokens sit at about 1,
 #     2 and 3.5 times the concurrency that saturates prefill, as r2's did.
+#   - the sweep holds each prompt length 900 s, not 360 s, at the same rates. `a` is the
+#     intercept of a curve through the median service time of each prompt length, refused
+#     when its standard error is over half of it (internal/signals/prefill,
+#     MaxAInterceptRelSE). Only minutes with a prefill pod busy at most 10% of the time
+#     count (LowLoadOccupancy), so the rates cannot go up: at 8000 tokens a request takes
+#     about 0.5 s, and 0.28 r/s on 2 pods is already 7%. The line phase's 1000-token loads
+#     also pass that test now, but their prefill runs slow beside a decode at 0.6 KV fill:
+#     on one run its six minutes read 0.060 to 0.075 s where the sweep's read 0.057 to
+#     0.059 s, the minutes' spread rose from 1.7% to 10%, the error from 2.0 ms to 5 ms,
+#     and the freeze refused (NoFixedLatency). Two and a half times the sweep's minutes
+#     outweigh them.
 #   - the 1000-token closed loops alternate 240 requests at 1000 output tokens with 400 at
 #     2500, not r2's climb. The decode line fits its intercept only from two steady levels
 #     that both sit in the fill band [0.15, 0.80] and are at least 0.30 apart in KV fill
@@ -28,8 +39,9 @@
 #     so r2's climb had only 0.20 and 0.41 in band, the line stayed on the default
 #     intercept, and the freeze refused (no decodeLine). No 1000:1000 load reaches 0.30
 #     apart: 400 (about 200 running a pod, none queued) is the highest load measured, and
-#     0.41 - 0.15 is 0.26. Extrapolated, not measured: 240 at 1000:1000 fills about 0.25
-#     and 400 at 1000:2500 (mean context 2250 tokens, not 1500) about 0.62.
+#     0.41 - 0.15 is 0.26. 240 at 1000:1000 and 400 at 1000:2500 (mean context 2250
+#     tokens, not 1500) were estimated at 0.25 and 0.62; measured, the line fitted its
+#     intercept with a steady spread of 0.42.
 #   - the ladder is laid by the freeze from this warm-up, as on r2: no rate is set here.
 operatingFraction: 0.85
 percentiles: [90, 95]
@@ -47,7 +59,7 @@ phaseOverheadSeconds: 240
 warmup:
   order: [line, sweep, busy, rest]
   line: {driver: closed, schedule: "420:240:1000:1000,420:400:1000:2500,420:240:1000:1000,420:400:1000:2500,420:24:8000:200,420:48:8000:200,420:80:8000:200"}
-  sweep: {driver: open, schedule: "360:2:1000:32:1,360:1.1:2000:32:1,360:0.55:4000:32:1,360:0.37:6000:32:1,360:0.28:8000:32:1", seed: 11}
+  sweep: {driver: open, schedule: "900:2:1000:32:1,900:1.1:2000:32:1,900:0.55:4000:32:1,900:0.37:6000:32:1,900:0.28:8000:32:1", seed: 11}
   busy: {driver: closed, schedule: "660:48:8000:8"}
   # Quiet at the end: the transfer a freeze reads ages out in 5 minutes.
   rest: {driver: open, schedule: "360:0.28:8000:32:1", seed: 12}
