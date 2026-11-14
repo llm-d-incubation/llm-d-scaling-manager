@@ -1875,7 +1875,7 @@ shortened run on Qwen3-32B at TP 2, buckets A, B and C, one repeat:
 export STAIRCASE_SPEC=$PWD/hack/benchmark/staircase_spec_qwen32b.yaml
 export STAIRCASE_MODEL=Qwen/Qwen3-32B STAIRCASE_TP=2
 export STAIRCASE_PREFILL_MEMORY=64Gi STAIRCASE_DECODE_MEMORY=64Gi
-export BENCHMARK_ENGINE_CACHE_HOSTPATH=/mnt/local/wva-engine-cache/$BENCHMARK_NAMESPACE
+export BENCHMARK_ENGINE_CACHE_HOSTPATH=/mnt/local/scaling-manager-engine-cache/$BENCHMARK_NAMESPACE
 ```
 
 Keep the engine cache on each node's disk for this model. By default it sits on the
