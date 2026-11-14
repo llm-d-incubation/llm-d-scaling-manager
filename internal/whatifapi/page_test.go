@@ -27,12 +27,13 @@ func get(h http.Handler, path, auth string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// pageText is an embedded file of the page.
+// pageText is an embedded file of the page, its line ends as LF: a Windows
+// checkout embeds CRLF.
 func pageText(t *testing.T, name string) string {
 	t.Helper()
 	b, err := pageFS.ReadFile("page/" + name)
 	require.NoError(t, err)
-	return string(b)
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
 }
 
 // The page is served from the binary at / with its files under /page/, each
