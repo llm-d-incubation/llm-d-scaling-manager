@@ -181,13 +181,17 @@ const minAboveContextSequences = 8
 // residentReading is the KV the fleet's running requests hold, summed, how
 // many they are, the summed capacity of the replicas they run on, and the
 // band's lower edge they were read at. holding is the requests that hold KV
-// without running, where the replica says (holdingNotRunning).
+// without running, where the replica says (holdingNotRunning). variant is
+// the variant of the replicas read, and mixed says they were of more than
+// one (k2ResidentKV reads it).
 type residentReading struct {
 	tokens    float64
 	running   int
 	holding   int
 	capTokens float64
 	minK      float64
+	variant   string
+	mixed     bool
 }
 
 // holders is the requests the tokens in use are spread over under rule:
@@ -308,6 +312,11 @@ func fleetResidentKVPerRequest(replicas []domain.ReplicaMetrics, rolesByVariant 
 		r.running += rm.RunningRequests
 		r.holding += holdingNotRunning(rm)
 		r.capTokens += float64(rm.TotalKvCapacityTokens)
+		if r.variant == "" {
+			r.variant = rm.VariantName
+		} else if r.variant != rm.VariantName {
+			r.mixed = true
+		}
 	}
 	return r
 }

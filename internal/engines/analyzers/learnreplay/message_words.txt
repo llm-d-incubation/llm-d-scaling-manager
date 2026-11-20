@@ -1533,6 +1533,7 @@ k2
 k2-compute
 k2-decision
 k2-decode-budget-at-computed-prompt
+k2-derived-at-resident-kv
 k2-first-reading-waits-for-a-second
 k2-held-dropped
 k2-key-bucket-held
@@ -1543,6 +1544,7 @@ k2-unsettled-joined
 k2-unsettled-window
 k2-waits-after-a-rollout
 k2-waits-after-controller-restart
+k2AtContext
 k2Borrows
 k2ComputeBound
 k2Cycles
@@ -2480,6 +2482,7 @@ resident
 residentDemand
 residentKVBound
 residentKVBoundFleet
+residentKVPerRequest
 residentKVPerSeq
 residentRunning
 residual

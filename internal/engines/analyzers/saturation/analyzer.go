@@ -534,6 +534,10 @@ type SaturationAnalyzer struct {
 	// llm-d-incubation/llm-d-scaling-manager#201, pd_decode_queue.go): off
 	// from the constructor; only a replay turns it on (SetSwitchesForReplay).
 	decodeLandedNeedsBound bool
+	// k2AtResidentKV is SwitchK2DerivedAtResidentKV (issue
+	// llm-d-incubation/llm-d-scaling-manager#201, k2_resident_kv.go): off
+	// from the constructor; only a replay turns it on (SetSwitchesForReplay).
+	k2AtResidentKV bool
 	// itlBaselineFromFloor is SwitchITLBaselineFromFloor
 	// (itl_baseline_floor.go): off from the constructor; only a replay
 	// turns it on.

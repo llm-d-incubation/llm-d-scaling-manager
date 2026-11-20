@@ -73,7 +73,7 @@ func priceBudget(t *testing.T, rm domain.ReplicaMetrics, role string, on bool) *
 	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchK2DecodeBudgetAtComputedPrompt: on}))
 	cfg := &config.ScalingPolicy{KvCacheThreshold: 0.8, ScaleUpThreshold: 0.85, QueueLengthThreshold: 5}
 	rc := a.computeReplicaCapacity(rm, cfg, tuningOf(cfg), "test-model", "test-ns", 32, role, "H100",
-		outputKeys{k2: budgetOut, mu: budgetOut}, budgetOut, budgetIn, 0, whatif.DerivedMu{}, servedRates{}, false, false, replicaRouting{}, false, logr.Discard())
+		outputKeys{k2: budgetOut, mu: budgetOut}, budgetOut, budgetIn, 0, whatif.DerivedMu{}, servedRates{}, false, false, replicaRouting{}, false, residentKVLine{}, logr.Discard())
 	require.NotNil(t, rc)
 	return rc
 }

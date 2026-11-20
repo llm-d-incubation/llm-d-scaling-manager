@@ -342,6 +342,18 @@ steps    = O / (1 + accepted)
 N_steady = min(B x steps / (prompt + (1 + k) x steps), S)
 ```
 
+The derived `k2` prices each resident request at its context. An engine that
+holds more KV a request than that (an indexer's keys, a draft model's KV)
+reads `k2` low by that factor against demand. The replay switch
+`k2-derived-at-resident-kv` (`SwitchK2DerivedAtResidentKV`,
+`k2_resident_kv.go`) prices it at the fleet's resident reading instead, where
+`kv-per-request-above-context` took the reading above the context from the
+priced variant alone and no shape change is outstanding. It only raises `k2`,
+never above `k1`; the store, the lower bound and the zero-replica estimate
+keep the figure at the context. Beside `k2-decode-budget-at-computed-prompt`
+it under-asks on a day-long P/D replay: `N_steady` read 16-19 a rank where the
+ranks ran 2-6.
+
 A replica that reports no computed prompt or no completions is priced as
 before. The switch is off from the constructor.
 
@@ -377,8 +389,8 @@ one (`atCapBatchCap`):
 | `slo` analyzer's per-rank cap (`priceVariant`) | `StatedBatchCap`, else `BatchCap`; `slo-variant` logs `batchCap` and `batchCapSource` | `slo.SwitchBatchCapPerRank` |
 
 A landed pull is a backlog only where the scheduler can stop before it. On a
-decode below its stated cap on every rank (running summed over ranks under
-the per-rank cap) and with its busiest rank's KV under `kvCacheThreshold`, a
+decode below its stated cap on every rank (its busiest rank's estimated
+running count, `busiestRankRunning`, under the per-rank cap) and with its busiest rank's KV under `kvCacheThreshold`, a
 landed request waits for the next step, and the one-minute peak of that wait
 is a burst, not a backlog. Read as one, five landed requests on a rank at 24 %
 KV met the queue threshold of 5 and recorded a `k2` at 24 % of the cache

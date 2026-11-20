@@ -848,7 +848,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 			c.fleetHitRate, priced, served[rm.VariantName], downstreamSaturated, mixed[rm.VariantName],
 			replicaRouting{
 				kvFromInstant: c.tune.kvFromInstant(raw, c.busyNowRoles[domain.CanonicalRole(role)]),
-			}, c.shapeChanging, c.logger)
+			}, c.shapeChanging, c.a.k2ResidentKV(fleetShape, residentBoundFleet, c.shapeChanging, c.resident, rm.VariantName), c.logger)
 		if rc != nil {
 			// A derived figure inherits the borrowed-ness of the line it came
 			// from. Set here rather than threaded through

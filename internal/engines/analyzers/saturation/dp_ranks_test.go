@@ -96,7 +96,7 @@ func TestReplicaCapacityPricesEveryRank(t *testing.T) {
 		rm.EngineRanks = ranks
 		cfg := &config.ScalingPolicy{KvCacheThreshold: 0.8, ScaleUpThreshold: 0.85, QueueLengthThreshold: 10}
 		return a.computeReplicaCapacity(rm, cfg, tuningOf(cfg), "m", "ns", 8, domain.RoleDecode, "H200",
-			outputKeys{k2: 1000, mu: 1000}, 1000, 1000, 0, whatif.DerivedMu{}, servedRates{}, false, false, replicaRouting{}, false, logr.Discard())
+			outputKeys{k2: 1000, mu: 1000}, 1000, 1000, 0, whatif.DerivedMu{}, servedRates{}, false, false, replicaRouting{}, false, residentKVLine{}, logr.Discard())
 	}
 
 	eight := price(8)

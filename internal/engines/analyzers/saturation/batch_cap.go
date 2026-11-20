@@ -127,11 +127,15 @@ const BatchCapRankSpread = 0.10
 // pricedBatchCap is one engine rank's batch cap a derived k2 is priced at,
 // and its source. A zero perRank is no cap: no derived k2 can be priced.
 // budget is how the rank's token budget is spent per request where that is
-// not I + O (decodeStepBudget); only the derived k2 reads it.
+// not I + O (decodeStepBudget); only the derived k2 reads it. resident is
+// the KV the rank's resident requests are read to hold where the derived k2
+// prices them at that and not at their context (k2ResidentKV); the zero
+// value is the context.
 type pricedBatchCap struct {
-	perRank int64
-	source  string
-	budget  stepBudget
+	perRank  int64
+	source   string
+	budget   stepBudget
+	resident residentKVLine
 }
 
 // learnedBatchCap is a variant's learned batch cap: the most sequences per

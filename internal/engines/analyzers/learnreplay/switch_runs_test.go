@@ -1059,6 +1059,11 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 	// Their unit tests hold them (heldBy).
 	saturation.SwitchK2DecodeBudgetAtComputedPrompt: nil,
 	saturation.SwitchDecodeLandedNeedsABound:        nil,
+	// The follow-up to PR #205: the derived k2 prices a request at the
+	// resident KV read above the context. Off from the constructor, so every
+	// golden replay runs it off, and off alone from all on moves nothing. Its
+	// unit tests hold it (heldBy).
+	saturation.SwitchK2DerivedAtResidentKV: nil,
 	// llm-d-incubation/llm-d-scaling-manager#188 prices a resident reading
 	// above the whole context as read: off from the constructor, so every
 	// golden replay runs it off, and off alone from all on moves nothing. Its
@@ -1321,6 +1326,13 @@ var heldBy = map[string][]heldTest{
 	saturation.SwitchDecodeLandedNeedsABound: {
 		{"../saturation", "TestDecodeLandedNeedsABound_ARoomyDecodeRecordsNoK2"},
 		{"../saturation", "TestDecodeBudgetSwitches_OffFromTheConstructor"},
+	},
+	// The follow-up to PR #205: each fails with the switch off.
+	saturation.SwitchK2DerivedAtResidentKV: {
+		{"../saturation", "TestK2DerivedAtResidentKV_PricesTheReadingAboveTheContext"},
+		{"../saturation", "TestK2DerivedAtResidentKV_HeldAtK1"},
+		{"../saturation", "TestK2DerivedAtResidentKV_TheGate"},
+		{"../saturation", "TestK2DerivedAtResidentKV_TheStoreKeepsTheContext"},
 	},
 	// llm-d-incubation/llm-d-scaling-manager#188: each runs the switch on
 	// and off and asserts both.

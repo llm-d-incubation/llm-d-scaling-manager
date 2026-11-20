@@ -74,7 +74,7 @@ func TestDecodeLandedNeedsABound_ARoomyDecodeRecordsNoK2(t *testing.T) {
 // backlog with the switch on, as before.
 func TestDecodeLandedNeedsABound_ABoundReplicaStillRecords(t *testing.T) {
 	for name, row := range map[string]domain.ReplicaMetrics{
-		"a rank may be at its cap": landedRow(64, 0.24),
+		"a rank may be at its cap": landedRow(200, 0.24),
 		"the busiest rank is full": landedRow(9, 0.85),
 		"a request waits for capacity": func() domain.ReplicaMetrics {
 			return withReason(landedRow(9, 0.24), 5)
@@ -149,9 +149,33 @@ func TestDecodeLandedNeedsABound_BusiestRankRunning(t *testing.T) {
 	unread := landedRow(10, 0.24)
 	unread.KvCacheUsage = 0
 	assert.InDelta(t, 10.0, busiestRankRunning(unread), 1e-9, "no mean KV: the sum")
+	noBusiest := landedRow(10, 0.24)
+	noBusiest.MaxRankKvCacheUsage = 0
+	assert.InDelta(t, 10.0, busiestRankRunning(noBusiest), 1e-9, "no busiest rank's KV: the sum, not the mean")
 	one := landedRow(10, 0.24)
 	one.EngineRanks = 1
 	assert.InDelta(t, 10.0, busiestRankRunning(one), 1e-9, "one rank: the count")
+}
+
+// The cap is one rank's; the running count is the pod's, summed over its
+// four ranks. With no budget stated only the cap and the KV decide. 80
+// running, 32 on the busiest rank (80 / 4 x 1.6), is under a cap of 64: no
+// rank is at it, and the landed requests leave the queue. Read against the
+// sum, 80 was over 64. 200 running, 80 on the busiest rank, may be at it.
+func TestDecodeLandedNeedsABound_TheCapIsOneRanks(t *testing.T) {
+	unstated := budgetParams()
+	unstated.MaxNumBatchedTokens, unstated.EffectiveMaxBatchedTokens = 0, 0
+	out := func(raw domain.ReplicaMetrics) bool {
+		view := decodeCapacityView(raw, domain.RoleDecode, 64)
+		require.Equal(t, 5, view.BusiestRankQueue(), "precondition: the view counts the landed five")
+		return landedWithoutBound(view, raw, domain.RoleDecode, 64, 0.8, unstated).BusiestRankQueue() == 0
+	}
+	require.InDelta(t, 32, busiestRankRunning(landedRow(80, 0.24)), 1e-9)
+	assert.True(t, out(landedRow(80, 0.24)), "80 over four ranks, 32 on the busiest: under one rank's cap")
+	assert.False(t, out(landedRow(200, 0.24)), "80 on the busiest rank: it may be at its cap")
+	one := landedRow(80, 0.24)
+	one.EngineRanks = 1
+	assert.False(t, out(one), "one rank running 80: over its cap")
 }
 
 func TestDecodeBudgetSwitches_OffFromTheConstructor(t *testing.T) {
