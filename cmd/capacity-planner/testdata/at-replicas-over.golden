@@ -9,13 +9,13 @@ mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that r
 summary     50%                80%                    100%               seen
   measured  620/4.9 @24.99 ok  1554/8.3 @39.98 MISS*  -/23.6 @49.97 SAT  539/4.9 @20.00 ok
 verdicts
-  measured  OVER-PROVISIONED: at the stated load of 20.0 r/s, decode: one fewer holds; prefill: no spare (52.9% under its operating point); needs 2 prefill + 2 decode (has 2 + 3) (decode knee unvalidated).
+  measured  OVER-PROVISIONED: at the stated load of 20.0 r/s, decode: one fewer holds; prefill: no spare (52.9% under its operating point); needs 2 prefill + 2 decode (has 2 + 3); the same at f 1 to 1.5 (decode knee unvalidated).
 
 shape measured: IL 8003 OL 200, prefix hit 0.00 (measured, cycles 269-288)
 utilization at the load judged
   decode        KV fill 0.024 (band top 0.8), slots 10 of 333, wait p 0.000
   prefill       utilization pooled 0.40, worst pod 0.40 (f 1)
-  verdict       OVER-PROVISIONED: at the stated load of 20.0 r/s, decode: one fewer holds; prefill: no spare (52.9% under its operating point); needs 2 prefill + 2 decode (has 2 + 3) (decode knee unvalidated).
+  verdict       OVER-PROVISIONED: at the stated load of 20.0 r/s, decode: one fewer holds; prefill: no spare (52.9% under its operating point); needs 2 prefill + 2 decode (has 2 + 3); the same at f 1 to 1.5 (decode knee unvalidated).
 capacity            req/s     out tok/s   bound by
   prefill knee      49.97     9993        prefill compute: N_p 2 x V_P / (f 1.000 x 8001 tokens)
   decode knee       55.48     11094       decode band top at fill 0.798

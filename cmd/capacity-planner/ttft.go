@@ -626,12 +626,27 @@ func (f *answerFlags) prefillInputs(pf *pricedFleet, ps *learnreplay.PrefillStat
 		p.Replicas, pf.in.ReplicasFrom = f.prefill, "--prefill"
 		pf.in.Replicas = f.prefill
 	}
-	if f.imbalanceAcrossCounts {
+	switch {
+	case f.fixedImbalance > 0 && p.Replicas >= 2:
+		// The report's sensitivity to f (fSensitivity): one f at every
+		// count P1 has not learned; a learned count keeps its own, as every
+		// other reading does, so no row prices a measured count other than
+		// it ran.
+		if v, ok := whatif.ImbalanceReadingsOf(ps.Estimate, ps.Pods, ps.RawShare).LearnedAt(p.Replicas); ok {
+			p.Imbalance, p.ImbalanceAssumed, pf.in.ImbalanceSource = v, false, sourceLearned
+			break
+		}
+		p.Imbalance, p.ImbalanceAssumed = min(float64(p.Replicas), f.fixedImbalance), true
+		pf.in.ImbalanceSource = num(f.fixedImbalance) + " for the sensitivity to f"
+	case f.imbalanceAcrossCounts && whatif.ImbalanceReadingsOf(ps.Estimate, ps.Pods, ps.RawShare).LearnedAny():
+		// The curve needs a count P1 learned: with none, its
+		// whatif.FreshImbalance is the analyzer's figure after a restart,
+		// not a reading, and the floor below stands.
 		p.Imbalance, p.ImbalanceAssumed, pf.in.ImbalanceSource = imbalanceAcross(ps, p.Replicas)
 		if p.ImbalanceAssumed {
 			pf.assume("f %s on %d pods (%s)", num(p.Imbalance), p.Replicas, pf.in.ImbalanceSource)
 		}
-	} else {
+	default:
 		p.Imbalance, p.ImbalanceAssumed, pf.in.ImbalanceSource = imbalanceAt(ps, p.Replicas)
 		if p.ImbalanceAssumed {
 			pf.assume("f %s on %d pods (none learned at that count)", num(p.Imbalance), p.Replicas)
@@ -659,14 +674,15 @@ func imbalanceAcross(ps *learnreplay.PrefillState, pods int) (f float64, assumed
 // raw share. A learned f is never carried unchanged to another count, and one
 // pod's exact 1 never reaches two.
 func imbalanceAt(ps *learnreplay.PrefillState, pods int) (f float64, assumed bool, source string) {
-	if v, ok := ps.Estimate.FByPods[pods]; ok && v >= 1 {
+	r := whatif.ImbalanceReadingsOf(ps.Estimate, ps.Pods, ps.RawShare)
+	if v, ok := r.LearnedAt(pods); ok {
 		return v, false, sourceLearned
 	}
 	if pods == 1 {
 		return 0, false, "one pod"
 	}
 	base := ps.RawShare
-	if v, ok := ps.Estimate.FByPods[ps.Pods]; ok && v >= 1 {
+	if v, ok := r.LearnedAt(ps.Pods); ok {
 		base = v
 	}
 	return min(float64(pods), max(whatif.ImbalanceFloor, base)), true, shapeAssumed

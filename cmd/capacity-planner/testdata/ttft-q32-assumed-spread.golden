@@ -2,10 +2,10 @@ knee            16.95 r/s   decode, band top binds at fill 0.796; OUTSIDE VALIDA
 operating rate  3.44 r/s    [2.54 .. 3.96]   0.85 x prefill knee (scaleUpThreshold); prefill knee OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
 mean TPOT       12.34 ms                     line held; at the prefill knee's rate; OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
 prefill knee    4.05 r/s    [2.99 .. 4.65]   N_p 2 x V_P 17043 x (1 - 0.05 margin) / (f 1 x 8000 tokens); OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
-TTFT p90        19228.0 ms  [9872.3 .. Saturated] end to end; OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721)
+TTFT p90        19233.1 ms  [9877.5 .. Saturated] end to end; OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721)
                 (bands: V_P and f +-15%, a sweep, not a confidence interval)
-                (floor 2329.4 ms, pooled 9739.8 ms, worst pod utilization 0.850)
-ttft inputs     V_P 17046 learned (peak-under-queue, at 7984 tokens); a 9.01 ms learned; f 1 (learned); N_p 2 (--prefill); prompt 8000 tokens (assumed); decode by its line, term measured, hop measured
+                (floor 2334.6 ms, pooled 9745.0 ms, worst pod utilization 0.850)
+ttft inputs     V_P 17046 learned (peak-under-queue, at 7984 tokens); a 14.29 ms learned; f 1 (learned); N_p 2 (--prefill); prompt 8000 tokens (assumed); decode by its line, term measured, hop measured
 assumed         prompt 8000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
 shape           IL 8000 OL 200 (assumed), output spread D 1.141 (measured)
 engine          vLLM release not recorded

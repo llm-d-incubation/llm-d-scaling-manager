@@ -246,8 +246,9 @@ func TestTTFT_TheSpreadOrder(t *testing.T) {
 }
 
 // The asked-for TTFT is priced from the same fleet the page's worked example
-// computes by hand. The page assumes cv 1, and a 1.6 ms above P1's: the
-// figures are the page's, read 1.6 ms lower as it says they would.
+// computes by hand. The page assumes cv 1, and a of 12.6 ms; the planner's is 13.24 ms
+// (the median overhead, issue llm-d-incubation/llm-d-scaling-manager#306), so
+// the figures are the page's, read 0.6 ms higher.
 func TestTTFT_TheWorkedExampleFromTheRecording(t *testing.T) {
 	st := workedState(t)
 	f := answerFlags{question: "replicas-to-slo", set: map[string]bool{"assume-vp": true, "prefill": true, "decode": true,
@@ -261,7 +262,7 @@ func TestTTFT_TheWorkedExampleFromTheRecording(t *testing.T) {
 	require.Nil(t, fleets[0].refused)
 	fl := fleets[0].fleet
 	require.NotNil(t, fl.Decode, "the worked example prices decode by its line")
-	near(t, "a", fl.Prefill.FixedLatency, 0.01104, 0.0001)
+	near(t, "a", fl.Prefill.FixedLatency, 0.01324, 0.0001)
 	assert.False(t, fl.Prefill.VPMargin != 0, "an assumed V_P carries no margin")
 	fl.Prefill.PromptCV = 1
 	// The page's sum: the old one. This recording reads no decode TTFT, so the
@@ -275,13 +276,13 @@ func TestTTFT_TheWorkedExampleFromTheRecording(t *testing.T) {
 
 	got, ok := whatif.TTFTAt(fl, 11.32, 0.9).(whatif.TTFT)
 	require.True(t, ok)
-	near(t, "TTFT p90", got.Seconds, 0.160-0.0016, 0.001)
-	near(t, "independent", got.Independent, 0.154-0.0016, 0.001)
-	near(t, "floor", got.Floor, 0.0916-0.0016, 0.001)
+	near(t, "TTFT p90", got.Seconds, 0.160+0.0006, 0.001)
+	near(t, "independent", got.Independent, 0.154+0.0006, 0.001)
+	near(t, "floor", got.Floor, 0.0916+0.0006, 0.001)
 	near(t, "rho", got.PrefillUtilization, 0.377, 0.001)
 	got95, ok := whatif.TTFTAt(fl, 11.32, 0.95).(whatif.TTFT)
 	require.True(t, ok)
-	near(t, "TTFT p95", got95.Seconds, 0.231-0.0016, 0.001)
+	near(t, "TTFT p95", got95.Seconds, 0.231+0.0006, 0.001)
 
 	rate, ok := whatif.RateForTTFT(fl, whatif.TTFTTarget{Seconds: 0.2, Percentile: 0.95}).(whatif.Answer)
 	require.True(t, ok)
@@ -334,7 +335,7 @@ func TestTTFT_TheAssumedRouterHop(t *testing.T) {
 // line, so TTFT is a + q90(W + O) + D:
 //
 //	I 15974.91866, V_P 130000, so E[S] 0.122883990 s; rate 6.917093 r/s, rho 0.85
-//	a 0.011579102 s, D 0.073850679 s (the decode engine's, I under its prompt)
+//	a 0.014432285 s, D 0.073850679 s (the decode engine's, I under its prompt)
 //	O is a gamma of cv 2 and mean E[S]: shape 1/4, scale 4 E[S]
 //	W is 0, or with probability rho exponential at r, the smaller of Kingman's
 //	2(1 - rho)/(E[S](1 + cv^2)) = 0.488265 and the root of
@@ -342,7 +343,7 @@ func TestTTFT_TheAssumedRouterHop(t *testing.T) {
 //	P(W + O > t) = P(O > t) + rho integral_0^t f_O(x) exp(-r(t - x)) dx = 0.1
 //	at t = 4.667512539 s, by scipy's quad and brentq
 //
-// so 4.752942 s, and the floor a + q90(O) + D is 0.454275 s. The agreement is
+// so 4.755796 s, and the floor a + q90(O) + D is 0.457128 s. The agreement is
 // the arithmetic's: it says nothing of a real pod.
 func TestTTFT_HandComputedAtCV2(t *testing.T) {
 	firstCome(t)
@@ -353,15 +354,15 @@ func TestTTFT_HandComputedAtCV2(t *testing.T) {
 	require.GreaterOrEqual(t, i, 0, out)
 	in := w.Roles[i].TTFT
 	near(t, "the prompt", in.PromptTokens, 15974.91866, 1e-4)
-	near(t, "a", in.FixedLatencySeconds, 0.011579102, 1e-8)
+	near(t, "a", in.FixedLatencySeconds, 0.014432285, 1e-8)
 	near(t, "cv", in.PromptCV, 2, 0)
 	require.NotNil(t, in.Rate)
 	near(t, "the rate", *in.Rate, 6.917093, 1e-5)
 	ans := w.Roles[i].Results.TTFT.Answer
 	require.NotNil(t, ans, out)
 	near(t, "the decode term", ans.Parts.DecodeEngine, 0.073850679, 1e-8)
-	near(t, "TTFT p90", ans.Value, 4.752942, 1e-5)
-	near(t, "floor", ans.Basis.Floor, 0.454275, 1e-5)
+	near(t, "TTFT p90", ans.Value, 4.755796, 1e-5)
+	near(t, "floor", ans.Basis.Floor, 0.457128, 1e-5)
 	near(t, "rho", ans.Parts.PrefillUtilization, 0.85, 1e-9)
 }
 

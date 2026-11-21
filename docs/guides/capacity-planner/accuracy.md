@@ -75,14 +75,14 @@ This table is generated from the rows the planner ships:
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | +0..+20% | p10-p90, min-max -1..+21% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +2..+16% | p10-p90, min-max +0..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +30..+95% | p10-p90, min-max +28..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +19..+108% | p10-p90, min-max +16..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +6..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +31..+93% | p10-p90, min-max +23..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +34..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 | ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 

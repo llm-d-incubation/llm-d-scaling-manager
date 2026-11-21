@@ -97,6 +97,9 @@ type reporter struct {
 	results []whatif.Result
 	assumed []string
 	pv      pricedVariant
+	// fixedF, above zero, prices every fleet at that f on more than one
+	// prefill pod: the needed search's sensitivity to f (fSensitivity).
+	fixedF float64
 }
 
 // fleetKey names a fleet priced: the shape, the counts and the statistics.
@@ -104,6 +107,7 @@ type fleetKey struct {
 	shape        int
 	np, nd       int
 	ttftQ, tpotQ float64
+	fixedF       float64
 }
 
 // Report is POST /v1/report on the replayed state.
@@ -351,7 +355,7 @@ func (r *reporter) sloTPOTQ() float64 {
 // fleet is the fleet at the shape priced, np prefill and nd decode replicas
 // (0 the recorded count), at the statistics asked; one per key.
 func (r *reporter) fleet(np, nd int, ttftQ, tpotQ float64) (*servedFleet, error) {
-	k := fleetKey{r.shape, np, nd, ttftQ, tpotQ}
+	k := fleetKey{r.shape, np, nd, ttftQ, tpotQ, r.fixedF}
 	if sf, ok := r.fleets[k]; ok {
 		return sf, nil
 	}
@@ -365,7 +369,7 @@ func (r *reporter) fleet(np, nd int, ttftQ, tpotQ float64) (*servedFleet, error)
 	if !r.sh.Measured {
 		kn.PromptTokens, kn.OutputTokens, kn.PrefixHit = r.sh.IL, r.sh.OL, r.sh.Hit
 	}
-	sf, err := r.s.fleetAt(kn)
+	sf, err := r.s.fleetAtImbalance(kn, r.fixedF)
 	if err != nil {
 		return nil, err
 	}
@@ -649,7 +653,7 @@ func (r *reporter) evaluateAt(np, nd int, rate float64, words bool) (fleetEval, 
 		return e, fmt.Errorf("pricing %s: %w", fleetText(np, nd), err)
 	}
 	if sf.pf.refused == nil && sf.pf.fleet.Prefill.ImbalanceAssumed {
-		e.fAssumed = fmt.Sprintf("prefill f %s assumed at %d pods", num(sf.pf.fleet.Prefill.Imbalance), sf.pf.fleet.Prefill.Replicas)
+		e.fAssumed = fmt.Sprintf("prefill f %.3g assumed at %d pods", sf.pf.fleet.Prefill.Imbalance, sf.pf.fleet.Prefill.Replicas)
 	}
 	e.prefillKnee, e.decodeKnee = sf.PrefillKnee(), sf.DecodeKnee()
 	pk, pok := e.prefillKnee.(whatif.Answer)
@@ -1362,7 +1366,10 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 		}
 		return fmt.Sprintf("needs at least %d decode (has %d)", d, nd), nil, nil
 	}
-	n, unmet, err := whatifapi.SmallestFleet(whatifapi.FleetCounts{Prefill: bound, Decode: bound}, decodeHolds, holds)
+	search := func() (whatifapi.FleetCounts, string, error) {
+		return whatifapi.SmallestFleet(whatifapi.FleetCounts{Prefill: bound, Decode: bound}, decodeHolds, holds)
+	}
+	n, unmet, err := search()
 	switch {
 	case err != nil:
 		return "", nil, err
@@ -1409,7 +1416,17 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 			words = append(words, fmt.Sprintf("or %d + %d", alt.Prefill, alt.Decode))
 		}
 	}
-	return strings.Join(words, ", "), notes, nil
+	if r.brief || n.Prefill < 2 {
+		// A growth line is short, and its own search is enough; on one
+		// prefill pod there is no f the answer rests on.
+		return strings.Join(words, ", "), notes, nil
+	}
+	sens, err := r.fSensitivity(search)
+	if err != nil {
+		return "", nil, err
+	}
+	out.FSensitivity = sens
+	return strings.Join(words, ", ") + fSensitivityWords(n, sens), notes, nil
 }
 
 // targetWords names what a holding fleet holds: every target, or its

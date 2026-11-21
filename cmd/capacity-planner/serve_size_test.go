@@ -166,9 +166,12 @@ func BenchmarkSizeAnswerPlan(b *testing.B) {
 	b.ReportMetric(float64(n.Prefill), "prefill")
 }
 
-// Sized on the worst corner, the benchmark's question has a TTFT floor above
-// its 200 ms target at that corner: the size is that refusal, at any count,
-// never the bound reached with a shortfall that points the wrong way.
+// Sized on the worst corner (SizeOnLow), the benchmark's question has a TTFT floor above
+// its 200 ms target: the size is that refusal, at any count, never the bound
+// reached with a shortfall that points the wrong way. Since the planner's a reads the
+// median overhead (issue llm-d-incubation/llm-d-scaling-manager#306), the
+// floor at the learned figures is above it too, 200.7 ms, so the refusal is
+// the base figure's, not only the corner's.
 func TestServeSizeLowUnderTheFloor(t *testing.T) {
 	h, _ := servedAPI(t)
 	in, _ := apiInputs(t, h, "ols-sweep.jsonl.gz", "model-02")
@@ -180,7 +183,7 @@ func TestServeSizeLowUnderTheFloor(t *testing.T) {
 	require.NotNil(t, out.Unmet)
 	t.Logf("%s: %s", out.Unmet.Refused.Reason, out.Unmet.Refused.Detail)
 	assert.Equal(t, "TargetBelowFloor", out.Unmet.Refused.Reason)
-	assert.Contains(t, out.Unmet.Refused.Detail, "worst corner of V_P and f")
+	assert.Contains(t, out.Unmet.Refused.Detail, "at or below the TTFT floor")
 	assert.NotContains(t, out.Unmet.Refused.Detail, "short of")
 }
 

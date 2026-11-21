@@ -1,6 +1,7 @@
 package prefill
 
 import (
+	"cmp"
 	"math"
 	"slices"
 )
@@ -69,7 +70,9 @@ import (
 //
 // AvgTTFT - AvgServiceTime holds a constant overhead (tokenization,
 // scheduling, the HTTP path) beside the engine wait; with no queue there is
-// no wait, and the least of it is added to a.
+// no wait, and the least of it is added to a, or the median with
+// Cycle.AMedianOverhead (the planner's: the least of a few noisy minutes
+// sits under the typical one).
 //
 // The low-load fit bounds V_P from above, a validation signal and not a
 // source: a step of B tokens of prompts of length I costs about
@@ -87,7 +90,9 @@ import (
 // under LowLoadOccupancy, so a prompt rarely shares a step. The readings are
 // excluded by that state. QueueLength has no presence bit until the TTFT
 // recorder fields land; the occupancy test holds a row whose queue was not
-// read to low load anyway.
+// read to low load anyway. With Cycle.ALowLoadByRate the occupancy is read
+// against the prompt cluster's service time, not the minute's own
+// (lowLoadByRate), so a slow minute is not cut for being slow.
 //
 // On an aggregated pod the service time includes decode, and a is refused.
 
@@ -173,25 +178,40 @@ const (
 	SingularFit LineReason = "SingularFit"
 )
 
-// fixed sets a on est from the key's low-load samples; lineOnly fits the
-// line alone, as P1 shipped.
-func (est *Estimate) fixed(ks *keyState, disaggregated, lineOnly bool) {
-	if !disaggregated {
+// fixed sets a on est from the key's low-load samples. c.ALineOnly fits the
+// line alone, as P1 shipped; c.ALowLoadByRate judges low load by rate
+// (lowLoadByRate); c.AMedianOverhead adds the median overhead, not the least.
+func (est *Estimate) fixed(ks *keyState, c Cycle) {
+	if !c.Disaggregated {
 		est.ARefused = AggregatedRefused
 		return
 	}
-	var xs, ys []float64
-	overhead, overheadOK := 0.0, false
+	lineOnly := c.ALineOnly
+	var low []sample
 	for _, name := range ks.podNames() {
 		for _, s := range ks.pods[name].samples {
-			if !s.lowLoad {
-				continue
-			}
-			xs, ys = append(xs, s.ieff), append(ys, s.svc)
-			if s.overheadOK && (!overheadOK || s.overhead < overhead) {
-				overhead, overheadOK = s.overhead, true
+			if s.lowLoad {
+				low = append(low, s)
 			}
 		}
+	}
+	if c.ALowLoadByRate {
+		low = lowLoadByRate(low)
+	}
+	var xs, ys, overheads []float64
+	overhead, overheadOK := 0.0, false
+	for _, s := range low {
+		xs, ys = append(xs, s.ieff), append(ys, s.svc)
+		if !s.overheadOK {
+			continue
+		}
+		overheads = append(overheads, s.overhead)
+		if !overheadOK || s.overhead < overhead {
+			overhead, overheadOK = s.overhead, true
+		}
+	}
+	if c.AMedianOverhead && overheadOK {
+		overhead = median(overheads)
 	}
 	est.ASamples = len(xs)
 	if len(xs) < MinFixedSamples {
@@ -254,6 +274,60 @@ func (est *Estimate) fixed(ks *keyState, disaggregated, lineOnly bool) {
 		est.AOverhead, est.AOverheadKnown = overhead, true
 		est.A += overhead
 	}
+}
+
+// lowLoadByRate is the candidates that are low load by rate
+// (Cycle.ALowLoadByRate, issue llm-d-incubation/llm-d-scaling-manager#306):
+// a minute's request rate times its prompt cluster's reference service time
+// at most LowLoadOccupancy. The test P1 shipped reads the minute's own
+// service time, so at a given rate a minute whose prefill ran slow is cut
+// and one that ran fast is kept: it selects on the response it then fits,
+// and the intercept reads low. Here the service time the rate is read
+// against is the median service time of the slower-rate half of the other
+// candidates within MaxClusterWidth of its prompt either way: the half is
+// chosen by rate, and the minute itself is left out, so its own outcome does
+// not decide whether it is kept. A minute with no such neighbour has no
+// cluster to read, and keeps the test P1 shipped.
+//
+// The candidates are indexed in rate order once, and each minute walks that
+// order over its neighbours, so a key of a few thousand minutes costs a few
+// million comparisons and no copies.
+func lowLoadByRate(cands []sample) []sample {
+	byRate := make([]int, len(cands))
+	for i := range byRate {
+		byRate[i] = i
+	}
+	slices.SortStableFunc(byRate, func(a, b int) int { return cmp.Compare(cands[a].rankRate, cands[b].rankRate) })
+	near := func(i, j int) bool {
+		return i != j && cands[j].ieff <= MaxClusterWidth*cands[i].ieff && cands[i].ieff <= MaxClusterWidth*cands[j].ieff
+	}
+	out := make([]sample, 0, len(cands))
+	var svcs []float64
+	for i, s := range cands {
+		n := 0
+		for j := range cands {
+			if near(i, j) {
+				n++
+			}
+		}
+		ref := s.svc
+		if n > 0 {
+			svcs = svcs[:0]
+			for _, j := range byRate {
+				if len(svcs) == (n+1)/2 {
+					break
+				}
+				if near(i, j) {
+					svcs = append(svcs, cands[j].svc)
+				}
+			}
+			ref = median(svcs)
+		}
+		if s.rankRate*ref <= LowLoadOccupancy {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // quadFit is the quadratic s = a + b*I + c*I*I, the standard error of a, the

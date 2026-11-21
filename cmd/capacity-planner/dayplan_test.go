@@ -415,8 +415,8 @@ func TestDayPlanStaircaseNeededTotalRises(t *testing.T) {
 	assert.Positive(t, neededTotalRises(t, p.Buckets))
 }
 
-// The fleet a bucket had is judged whole at the bucket's rate. At 14:55 of
-// the day the fewest replicas in all are 3 prefill and 2 decode for 18.07
+// The fleet a bucket had is judged whole at the bucket's rate. At 14:50 of
+// the day the fewest replicas in all are 3 prefill and 2 decode for 17.97
 // r/s; the fleet that ran, 2 prefill and 3 decode, as many in all, serves it
 // too, so the bucket is no SLO risk, though prefill alone (2 against 3) reads
 // short. At 10:15 the fewest in all are 1 prefill and 2 decode, where a
@@ -433,7 +433,7 @@ func TestDayPlanVerdictIsTheFleetItHad(t *testing.T) {
 		t.Fatalf("no bucket at %s", hhmm)
 		return nil
 	}
-	b := at("14:55")
+	b := at("14:50")
 	require.NotNil(t, b.Needed.Prefill)
 	assert.Equal(t, whatifapi.DayNeeded{Prefill: ptrInt(3), Decode: 2}, *b.Needed)
 	assert.Greater(t, *b.Needed.Prefill, b.Actual.Prefill, "the case: prefill alone reads short")

@@ -555,13 +555,25 @@
       ],
       "verdict": {
         "verdict": "UNDER-PROVISIONED",
-        "summary": "UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).",
+        "summary": "UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2); the same at f 1 to 1.5 (prefill f 1 assumed at 3 pods).",
         "scope": "fleet",
         "reason": "2 prefill + 2 decode: 41.70 r/s is 1.1x the fleet knee of 36.98 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms. Add decode: decode sets the knee",
         "needed": {
           "prefill": 3,
           "decode": 3,
-          "maxReplicas": 32
+          "maxReplicas": 32,
+          "fSensitivity": [
+            {
+              "f": 1,
+              "prefill": 3,
+              "decode": 3
+            },
+            {
+              "f": 1.5,
+              "prefill": 3,
+              "decode": 3
+            }
+          ]
         },
         "roles": [],
         "shrink": [],

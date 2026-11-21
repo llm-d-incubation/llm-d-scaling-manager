@@ -28,7 +28,7 @@
       "role": "prefill",
       "term": "ttft",
       "reason": "TargetBelowFloor",
-      "detail": "target 0.5 s at or below the TTFT floor 0.6788 s",
+      "detail": "target 0.5 s at or below the TTFT floor 0.681 s",
       "hint": "The TTFT target is under the TTFT at zero load: no replica count meets it. Raise the TTFT target above the floor in the detail.",
       "effect": "Prefill is not sized: decode is sized alone, on its TPOT target and its knee times headroom.",
       "buckets": 4
@@ -79,7 +79,7 @@
         "decode": 1
       },
       "limit": {
-        "value": 1.3622779373899458,
+        "value": 1.3621165894891216,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -101,7 +101,7 @@
         ]
       },
       "hadLimit": {
-        "value": 1.3622779373899458,
+        "value": 1.3621165894891216,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -166,7 +166,7 @@
         "decode": 2
       },
       "limit": {
-        "value": 2.716313627870333,
+        "value": 2.715850980955678,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -188,7 +188,7 @@
         ]
       },
       "hadLimit": {
-        "value": 1.3622779373899458,
+        "value": 1.3621165894891216,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -253,7 +253,7 @@
         "decode": 4
       },
       "limit": {
-        "value": 11.731843882702066,
+        "value": 11.716883768168724,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -276,7 +276,7 @@
         ]
       },
       "hadLimit": {
-        "value": 3.087802507640303,
+        "value": 3.0873295181928446,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -343,7 +343,7 @@
         "decode": 2
       },
       "limit": {
-        "value": 35.39168272366424,
+        "value": 35.27416112709824,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -365,7 +365,7 @@
         ]
       },
       "hadLimit": {
-        "value": 13.555893210131739,
+        "value": 13.485721817078078,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -428,7 +428,7 @@
         "decode": 2
       },
       "limit": {
-        "value": 36.15022476314212,
+        "value": 35.96310104831588,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -450,7 +450,7 @@
         ]
       },
       "hadLimit": {
-        "value": 13.56558476257338,
+        "value": 13.49522646812186,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -715,7 +715,7 @@
         "decode": 2
       },
       "limit": {
-        "value": 17.179636983424583,
+        "value": 17.142151665821235,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -737,7 +737,7 @@
         ]
       },
       "hadLimit": {
-        "value": 9.075521922811769,
+        "value": 9.071385525289092,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -801,7 +801,7 @@
         "decode": 1
       },
       "limit": {
-        "value": 16.76289886158615,
+        "value": 16.72989384359654,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"
@@ -824,7 +824,7 @@
         ]
       },
       "hadLimit": {
-        "value": 5.801037343836157,
+        "value": 5.746874313832301,
         "unit": "r/s",
         "boundBy": [
           "TTFT p95, end to end"

@@ -72,7 +72,7 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 	f := answerFlags{question: "serve", cycle: "last", model: req.Model, variant: req.DecodeVariant, prefillVariant: req.PrefillVariant,
 		serveSelfCheck: req.SelfCheck != nil && *req.SelfCheck,
 		seed:           whatif.DefaultResampling().Seed, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait,
-		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: whatif.DefaultImbalanceAcrossCounts}
+		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts}
 	src := whatifapi.SourceRequest{Kind: whatifapi.SourcePrometheus}
 	if req.Source != nil {
 		src = *req.Source
@@ -352,7 +352,7 @@ func (s *servedSources) resolved(f *answerFlags, st *learnreplay.State, data *re
 		return nil, apiError(err)
 	}
 	pricer := &servedState{st: st, decodeVariant: f.variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
-		imbalanceAcrossCounts: whatif.DefaultImbalanceAcrossCounts}
+		imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts}
 	res := &whatifapi.Resolved{
 		Inputs:  inputsDoc(f, st, &variants[0], ps, fleets[0], info),
 		Content: content,
@@ -377,7 +377,7 @@ type servedState struct {
 	// hint is the words a refusal names a calm cycle in: the source's.
 	hint hintSource
 	// imbalanceAcrossCounts is --imbalance-across-counts on at-replicas;
-	// the server prices at the shared default.
+	// the server prices at the planner's default.
 	imbalanceAcrossCounts bool
 }
 
@@ -397,7 +397,13 @@ func (s *servedState) Fleet(k whatifapi.Knobs) (whatifapi.Fleet, error) {
 // fleetAt is Fleet as the fleet itself, for the report, which reads the
 // variant and the prefill inputs it was priced from.
 func (s *servedState) fleetAt(k whatifapi.Knobs) (*servedFleet, error) {
-	f := answerFlags{question: rateQuestion, cycle: "last", variant: s.decodeVariant, prefillVariant: s.prefillVariant, hint: s.hint, hintSet: true,
+	return s.fleetAtImbalance(k, 0)
+}
+
+// fleetAtImbalance is fleetAt with f, above zero, at every prefill count
+// above one (answerFlags.fixedImbalance): the report's sensitivity to f.
+func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*servedFleet, error) {
+	f := answerFlags{fixedImbalance: fixedF, question: rateQuestion, cycle: "last", variant: s.decodeVariant, prefillVariant: s.prefillVariant, hint: s.hint, hintSet: true,
 		seed: whatif.DefaultResampling().Seed, set: map[string]bool{"ttft": true, "headroom": true}, warn: io.Discard,
 		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom, priceRouterWait: whatif.DefaultPriceRouterWait,
 		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: s.imbalanceAcrossCounts}

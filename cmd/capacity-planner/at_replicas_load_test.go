@@ -27,13 +27,16 @@ func atReplicasJSON(t *testing.T, args ...string) whatifapi.ReportResponse {
 // hides the peak. On the staircase the mean is 31.59 r/s, the p95 41.70 and
 // the peak 43.24: by default the load judged is the p95, and at the peak
 // three prefill and four decode replicas, over-provisioned at the mean, are
-// under-provisioned: 43.24 is past 0.85 of their 49.99 r/s knee. On the
+// under-provisioned: 43.24 is past 0.85 of their 49.99 r/s knee, priced at
+// f 1.5 on the third pod (--imbalance-across-counts=false; read off the
+// curve, f is 1 there and the knee 74 r/s, issue
+// llm-d-incubation/llm-d-scaling-manager#300). On the
 // throughput sweep the mean is 6.9 r/s, the p95 26.9 and the peak 30.04, past
 // 0.85 of the 30.88 r/s decode knee: under-provisioned at the default and at
 // the peak.
 func TestAtReplicas_JudgedAtTheBusyLoad(t *testing.T) {
 	t.Run("staircase 3 prefill + 4 decode", func(t *testing.T) {
-		args := atStair("--prefill", "3", "--decode", "4")
+		args := atStair("--prefill", "3", "--decode", "4", "--imbalance-across-counts=false")
 		rep := atReplicasJSON(t, args...)
 		require.NotNil(t, rep.Load.Rate.Value)
 		assert.InDelta(t, 41.70, *rep.Load.Rate.Value, 0.005, "the default load is the p95, not the mean")

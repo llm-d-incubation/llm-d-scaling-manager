@@ -16,7 +16,7 @@ import (
 // prefill knee at that count rises with the lower f.
 func TestTTFT_TheImbalanceAcrossCountsSwitch(t *testing.T) {
 	a := newTTFTRig(ttftEstimate(), prefillRows("pre", 4000)).a
-	require.Equal(t, whatif.DefaultImbalanceAcrossCounts, a.ttftImbalanceAcrossCounts, "the analyzer's default is the CLI's")
+	require.Equal(t, whatif.DefaultImbalanceAcrossCounts, a.ttftImbalanceAcrossCounts, "the analyzer reads the shared default, off")
 	require.False(t, a.ttftImbalanceAcrossCounts, "opt-in: off by default")
 	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchTTFTImbalanceAcrossCounts: true}))
 	require.True(t, a.ttftImbalanceAcrossCounts)

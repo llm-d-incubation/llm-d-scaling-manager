@@ -94,8 +94,13 @@ type answerFlags struct {
 	// (tpotRatioFor).
 	engineTPOT bool
 	// imbalanceAcrossCounts is --imbalance-across-counts, a TTFT flag
-	// (ttft.go): opt-in, off by default, as in the SLO analyzer.
+	// (ttft.go): on by default (whatif.DefaultPlannerImbalanceAcrossCounts),
+	// where the SLO analyzer's is off.
 	imbalanceAcrossCounts bool
+	// fixedImbalance, above zero, is f at every prefill count above one,
+	// assumed: the report's sensitivity to f (fSensitivity). No flag sets
+	// it.
+	fixedImbalance float64
 	// window is the --prometheus mode's flags, capture's own, and its
 	// namespace the --namespace both modes take; captured is the window
 	// read, once it is. question names the command, and warn is where a
@@ -149,7 +154,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&f.prefillRunningCap, "prefill-running-cap", 0, "with --ps-onsets, the most prompts a prefill pod computes at once (about max_num_batched_tokens over the prompt); 0 (unknown, the default) takes the lower of processor sharing at 1 and first come")
 	fs.BoolVar(&f.chargeDecodeGate, "charge-decode-gate", whatif.DefaultChargeDecodeGate, "experimental, unvalidated, slo-to-rate only: charge the time the decode flow-control gate is closed below its onset to the rate answer")
 	fs.StringVar(&f.inputBucket, "input-bucket", "", "not supported: per-bucket answers are the planner's M1")
-	fs.BoolVar(&f.imbalanceAcrossCounts, "imbalance-across-counts", whatif.DefaultImbalanceAcrossCounts, fmt.Sprintf("opt-in: at a prefill count P1 has not learned, price f off a curve fitted to the counts it learned, or %g with none, in place of max(%g, f) (flagged AssumedImbalance either way)", whatif.FreshImbalance, whatif.ImbalanceFloor))
+	fs.BoolVar(&f.imbalanceAcrossCounts, "imbalance-across-counts", whatif.DefaultPlannerImbalanceAcrossCounts, fmt.Sprintf("at a prefill count P1 has not learned, price f off a curve fitted to the counts it learned; with none learned, and with =false, max(%g, f) (flagged AssumedImbalance either way)", whatif.ImbalanceFloor))
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "answer from a window of this Prometheus (base URL), captured and generated in memory, in place of --recording"
 	fs.Lookup("from").Usage = "with --prometheus, the window's start: RFC 3339 or Unix seconds, to the millisecond (required)"

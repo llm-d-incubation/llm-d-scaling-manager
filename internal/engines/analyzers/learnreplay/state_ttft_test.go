@@ -98,7 +98,12 @@ func TestStateAt_ReadsP1Through(t *testing.T) {
 	require.Len(t, st.Prefill, 1)
 	ps = st.Prefill[0]
 	require.True(t, ps.EstimateRead)
-	assert.InDelta(t, 0.01158, ps.Estimate.A, 0.00001)
+	// The planner's replay turns on the median overhead and the low-load
+	// test by rate (PlannerSwitches, issue
+	// llm-d-incubation/llm-d-scaling-manager#306): 14.43 ms, where P1's
+	// own replay, with the least overhead, reads 11.58 ms
+	// (TestTTFTValidation_P1OnTheGoldens).
+	assert.InDelta(t, 0.01443, ps.Estimate.A, 0.00001)
 	assert.NotEmpty(t, ps.Estimate.VPRefused)
 	assert.Equal(t, prefill.AModelQuadratic, ps.Estimate.AModel)
 	assert.Positive(t, ps.PromptTokens)

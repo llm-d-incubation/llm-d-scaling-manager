@@ -202,6 +202,15 @@ type Cycle struct {
 	// minutes only (busiestMinutes), not from every minute
 	// (saturation.SwitchPrefillFBusyMinutes).
 	FBusyMinutes bool
+	// ALowLoadByRate reads a minute as low load, for the fit of a, by its
+	// request rate against its prompt cluster's service time
+	// (lowLoadByRate), not against its own: a minute whose prefill ran slow
+	// is not cut for it (saturation.SwitchPrefillALowLoadByRate).
+	ALowLoadByRate bool
+	// AMedianOverhead adds the median overhead (AvgTTFT - AvgServiceTime) of
+	// the low-load minutes to a, not the least
+	// (saturation.SwitchPrefillAMedianOverhead).
+	AMedianOverhead bool
 	// Now is the cycle's time.
 	Now time.Time
 }
@@ -256,7 +265,8 @@ type Estimate struct {
 	VPPromptTokens float64
 
 	// A is the fixed latency in seconds: the low-load fit's intercept plus
-	// the least overhead (AvgTTFT - AvgServiceTime) seen at low load. Zero
+	// the least overhead (AvgTTFT - AvgServiceTime) seen at low load, the
+	// median with Cycle.AMedianOverhead. Zero
 	// when refused. AOverheadKnown is false when no low-load minute carried a
 	// TTFT, and then A is the intercept alone.
 	A              float64
@@ -351,8 +361,11 @@ type sample struct {
 	// what VPPromptTokens averages over the minutes V_P rests on.
 	prompt float64
 	// lowLoad: admitted to the fit of a, at ieff and svc, with the
-	// overhead when overheadOK.
+	// overhead when overheadOK. With Cycle.ALowLoadByRate it is a candidate
+	// the fit judges by rankRate, the request rate (per engine rank with
+	// Cycle.ALowLoadPerRank).
 	lowLoad    bool
+	rankRate   float64
 	ieff       float64
 	svc        float64
 	overhead   float64
@@ -501,9 +514,16 @@ func (o *Observer) Observe(c Cycle) Estimate {
 		if c.ALowLoadPerRank {
 			occupancy /= float64(rm.Ranks())
 		}
+		// By rate, the occupancy test waits for the fit: it reads the rate
+		// against the prompt cluster's service time, not this minute's
+		// (lowLoadByRate), so every quiet minute is kept as a candidate.
 		if c.Disaggregated && steady && rm.QueueLength == 0 && rrOK && finitePositive(svc) &&
-			occupancy <= LowLoadOccupancy {
+			(c.ALowLoadByRate || occupancy <= LowLoadOccupancy) {
 			s.lowLoad, s.ieff, s.svc = true, ieff, svc
+			s.rankRate = rr
+			if c.ALowLoadPerRank {
+				s.rankRate /= float64(rm.Ranks())
+			}
 			if finitePositive(rm.AvgTTFT) && rm.AvgTTFT >= svc {
 				s.overhead, s.overheadOK = rm.AvgTTFT-svc, true
 			}
@@ -520,7 +540,7 @@ func (o *Observer) Observe(c Cycle) Estimate {
 
 	ks.noteImbalance(shares, allAdmitted, c.Now)
 	est.capacity(ks, c, sglang)
-	est.fixed(ks, c.Disaggregated, c.ALineOnly)
+	est.fixed(ks, c)
 	if c.AFromTiming {
 		switch est.ARefused {
 		case "":

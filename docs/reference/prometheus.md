@@ -1460,7 +1460,7 @@ model reads all of them `0`, including the two marked "on every answer":
 | `UnvalidatedTTFT` | On every answer: the model has not passed its validation. |
 | `AssumedPromptSpread` | No computed-token histogram read, or no request in it: a spread of 2 is assumed. SGLang has no such histogram. |
 | `AssumedPoissonArrivals` | On every answer: Poisson arrivals are assumed, which over-promises on bursty traffic. |
-| `AssumedImbalance` | The imbalance `f` was not learned at this pod count: assumed, at least 1.5. With the opt-in replay switch `slo-ttft-imbalance-across-counts` (off by default, as is the CLI's `--imbalance-across-counts`), read off a curve fitted to the counts that were learned, or 1.15 with none. |
+| `AssumedImbalance` | The imbalance `f` was not learned at this pod count: assumed, at least 1.5. With the opt-in replay switch `slo-ttft-imbalance-across-counts` (off by default), read off a curve fitted to the counts that were learned, or 1.15 with none. The capacity planner reads the curve by default where some count was learned (`--imbalance-across-counts=false` turns it off). |
 | `ImbalanceNotSustained` | One pod read 80% of the work or more, but not over the whole window: priced at that high `f`, not `routing-bound`. |
 | `OutputSpreadUnread` | A decode line was priced with no output-length histogram: the KV a request holds takes no spread of output lengths, which over-promises by 7 to 44% on a real spread. |
 | `VPLowerBound` | `V_P` is a lower bound. |

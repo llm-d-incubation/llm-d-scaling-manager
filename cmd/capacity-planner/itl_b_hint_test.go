@@ -68,7 +68,7 @@ func TestPinnedDefaultBHint_NamesTheFloorWhereItWorks(t *testing.T) {
 // without, not one given at its default; --imbalance-across-counts, which
 // the fits do price with, is replayed and outside.
 func TestSelfCheckStatedSwitches(t *testing.T) {
-	f := answerFlags{psOnsets: true, priceRouterWait: false, imbalanceAcrossCounts: !whatif.DefaultImbalanceAcrossCounts,
+	f := answerFlags{psOnsets: true, priceRouterWait: false, imbalanceAcrossCounts: !whatif.DefaultPlannerImbalanceAcrossCounts,
 		set: map[string]bool{"ps-onsets": true, "price-router-wait": true, "imbalance-across-counts": true}}
 	st, err := f.stated()
 	require.NoError(t, err)

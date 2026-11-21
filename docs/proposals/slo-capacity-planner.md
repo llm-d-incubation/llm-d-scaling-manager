@@ -82,7 +82,7 @@ estimate from cycles 1-226, not a guarantee; see basis (-o json)
 
 These are the proposal's figures, at `cv` 1. [As built](#ttft-as-built) the CLI
 assumes S1's `cv` 2, prints no TTFT band and adds a `prefill knee` row: the same
-commands read 373 ms and 0.25 r/s, the 20 ms a hop the recording has no fit of
+commands read 376 ms and 0.15 r/s, the 20 ms a hop the recording has no fit of
 ([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)). The prefill
 pod is priced as processor sharing
 ([as built](slo-capacity-planner-ttft.md#as-built-processor-sharing)), but past a prompt
@@ -469,11 +469,12 @@ From the `ols-sweep` golden: the last published line (`A` = 0.004438,
 one decode pod. `IL` = `OL` = 1000, no prefix hits. `a` = 10.1 ms plus the
 2.5 ms overhead, from the golden. (That 10.1 ms is an intercept fitted
 against the long-window prompt mean; P1's fit against the effective prompt
-gives 8.36 ms and the overhead 2.68 ms, so `a` is 11.04 ms, not 12.6
-([end-to-end TTFT](slo-capacity-planner-ttft.md#what-is-derivable-today)).
-The example is left as computed: `a` enters only the request's own
+gives 8.36 ms and the least overhead 2.68 ms, so `a` is 11.04 ms, not 12.6
+([end-to-end TTFT](slo-capacity-planner-ttft.md#what-is-derivable-today));
+the planner adds the median overhead, and its `a` is 13.24 ms (issue
+#306). The example is left as computed: `a` enters only the request's own
 latency, not utilization or the knee, so the TTFT figures and the TTFT
-floor below would each read about 1.6 ms lower.) **`V_P` = 30,000 tok/s is assumed**: the
+floor below would each read about 0.6 ms higher in the planner.) **`V_P` = 30,000 tok/s is assumed**: the
 golden's prefill pod never queued, so the tool refuses `V_P` from it. Prompt
 spread: coefficient of variation 1, assumed. Flow control inferred off. The
 figures are reproduced by two independent scripts.
@@ -836,14 +837,14 @@ the run's frozen curve.
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | +0..+20% | p10-p90, min-max -1..+21% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +2..+16% | p10-p90, min-max +0..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +30..+95% | p10-p90, min-max +28..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +19..+108% | p10-p90, min-max +16..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +6..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +31..+93% | p10-p90, min-max +23..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +34..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 | ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 
@@ -1255,7 +1256,7 @@ TTFT: the decode answers are as they were.
 | `--assume-router-hop 8ms` | The hop between the router and the engines, in place of the learned or default one, flagged `RouterHopAssumed` |
 | `--prefill N` | Prefill pods to price; 0 takes the serving pods at the cycle |
 | `--prefill-variant V` | The prefill variant to price, when the model has several: the CLI prices one fleet, and a usage error says so otherwise. It gets the whole rate, named as assumed |
-| `--assume-a 11ms` | `a`, the fixed latency one request pays on a prefill pod, in place of the learned one, flagged `AssumedA` and printed `a ASSUMED`, with any learned figure beside it (`a 8.00 ms ASSUMED, learned 11.04 ms`, and `fixedLatencyLearned` in the JSON). For a fleet of one prompt length, which gives P1 no fit |
+| `--assume-a 11ms` | `a`, the fixed latency one request pays on a prefill pod, in place of the learned one, flagged `AssumedA` and printed `a ASSUMED`, with any learned figure beside it (`a 8.00 ms ASSUMED, learned 13.24 ms`, and `fixedLatencyLearned` in the JSON). For a fleet of one prompt length, which gives P1 no fit |
 
 **Where each input comes from.**
 
@@ -1316,28 +1317,29 @@ named under `bound by`.
 
 ```
 prefill knee    30.00 r/s   [25.50 .. 34.50] N_p 1 x V_P 30000 / (f 1 x 1000 tokens); UNVALIDATED; V_P ASSUMED
-TTFT p90        373.4 ms    [302.6 .. 489.1] end to end; UNVALIDATED; V_P ASSUMED
+TTFT p90        375.6 ms    [304.8 .. 491.4] end to end; UNVALIDATED; V_P ASSUMED
                 (bands: V_P +-15%, a sweep, not a confidence interval)
-                (343.4 ms if prefill and decode waits were independent)
-                (floor 133.3 ms, pooled 331.4 ms, worst pod utilization 0.377)
-ttft inputs     V_P 30000 ASSUMED; a 11.04 ms learned; f 1 (one pod); N_p 1 (--prefill); prompt 1000 tokens (assumed); decode by its line, term omitted, hop assumed
+                (345.6 ms if prefill and decode waits were independent)
+                (floor 135.5 ms, pooled 333.6 ms, worst pod utilization 0.377)
+ttft inputs     V_P 30000 ASSUMED; a 13.24 ms learned; f 1 (one pod); N_p 1 (--prefill); prompt 1000 tokens (assumed); decode by its line, term omitted, hop assumed
 assumed         V_P 30000 tok/s (--assume-vp); prompt 1000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); decode term omitted (no fit, TooFewDecodeMinutes, and no quiet decode row): T_xfer + ITL stands for it; router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
 ```
 
 That is the worked example with the CLI's `cv` of 2 and an assumed 20 ms hop. At
 that spread the price is the larger of processor sharing's and the first-come
-queue's (flag `SpreadBeyondProcessorSharing`), here first come's, so 373 ms where
+queue's (flag `SpreadBeyondProcessorSharing`), here first come's, so 376 ms where
 the page, at `cv` 1 on the old sum, has 160 ms (processor sharing alone reads 250
-ms); `a` is P1's 11.04 ms. Question 1 at 200 ms p95 reads 0.25 r/s where the page
-has 11.10, and the JSON's note says the assumed term moved it from 1.19.
-`--assume-prompt-cv 1`, the page's `cv`, reads 9.64 (processor sharing's, the
-larger there), and `--arrival-cv2 4` on top of it 4.21
-(`TestInputs_TheWorkedExampleAtTheStatedInputs`; 10.80 and 4.80 first come).
+ms); `a` is the planner's 13.24 ms (the median overhead, issue #306). Question 1 at
+200 ms p95 reads 0.15 r/s where the page has 11.10, and the JSON's note says
+the assumed term moved it from 1.08. `--assume-prompt-cv 1`, the page's `cv`,
+reads 9.45 (processor sharing's, the larger there), and `--arrival-cv2 4` on
+top of it 4.11 (`TestInputs_TheWorkedExampleAtTheStatedInputs`; 10.73 and
+4.68 first come).
 `TestTTFT_TheWorkedExampleFromTheRecording` puts `cv` 1, the old sum and the
 first-come queue back on the fleet the CLI read, and gets the page's figures within
-1 ms, 1.6 ms lower as the page says. `TestTTFT_HandComputedAtCV2` holds a figure at
+1 ms, 0.6 ms higher: the planner's `a` is 0.6 ms above the page's. `TestTTFT_HandComputedAtCV2` holds a figure at
 `cv` 2 through the command, priced first come, to a calculation that reads no Go:
-4.752942 s on run 4 at `--assume-vp 130000` (2.46 s as processor sharing).
+4.755796 s on run 4 at `--assume-vp 130000` (about 2.46 s as processor sharing).
 Both check the arithmetic. Neither validates the model. The `ttft-*.golden`
 files are regression pins, read back from the code.
 

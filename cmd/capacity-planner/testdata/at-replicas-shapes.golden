@@ -11,19 +11,19 @@ summary                     50%                80%                  5r/s        
   1k/1k EXTRAPOLATED        133/4.9 @17.78 ok  152/9.0 @28.45 ok    125/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
   16k/200/0.3 EXTRAPOLATED  667/5.0 @9.08 ok   1015/10.8 @14.53 ok  567/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
 verdicts
-  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
+  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2); the same at f 1 to 1.5 (prefill f 1 assumed at 3 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 3 prefill + 4 decode (has 2 + 2) (prefill f 1 assumed at 3 pods).
   1k/1k EXTRAPOLATED        UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2).
                             x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2).
-  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2) (prefill f 1.5 assumed at 5 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
+  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 4 prefill + 6 decode (has 2 + 2); at f 1 needs 4 + 6, at f 1.5 needs 5 + 6 (prefill f 1 assumed at 4 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 4 prefill + 7 decode (has 2 + 2) (prefill f 1 assumed at 4 pods).
 
 shape measured: IL 8003 OL 200, prefix hit 0.00 (measured, cycles 269-288)
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 222, wait p saturated
   prefill       utilization pooled 0.83, worst pod 0.83 (f 1)
-  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
-                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
+  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2); the same at f 1 to 1.5 (prefill f 1 assumed at 3 pods).
+                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 3 prefill + 4 decode (has 2 + 2) (prefill f 1 assumed at 3 pods).
 capacity            req/s     out tok/s   bound by
   prefill knee      49.97     9993        prefill compute: N_p 2 x V_P / (f 1.000 x 8001 tokens)
   decode knee       36.98     7396        decode band top at fill 0.798
@@ -70,8 +70,8 @@ shape 16k/200/0.3: IL 16384 OL 200, prefix hit 0.30 (asked)
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 108, wait p saturated
   prefill       utilization pooled 1.20, worst pod 1.20 (f 1)
-  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2) (prefill f 1.5 assumed at 5 pods).
-                x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
+  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 4 prefill + 6 decode (has 2 + 2); at f 1 needs 4 + 6, at f 1.5 needs 5 + 6 (prefill f 1 assumed at 4 pods).
+                x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 4 prefill + 7 decode (has 2 + 2) (prefill f 1 assumed at 4 pods).
 capacity            req/s     out tok/s   bound by
   prefill knee      34.86     6973        prefill compute: N_p 2 x V_P / (f 1.000 x 11469 tokens)
   decode knee       18.17     3633        decode band top at fill 0.790

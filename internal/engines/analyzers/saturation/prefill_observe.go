@@ -105,6 +105,25 @@ const SwitchPrefillQueueByCapacity = "prefill-queue-by-capacity"
 // SwitchPrefillALowLoadPerRank is.
 const SwitchPrefillFBusyMinutes = "prefill-f-busy-minutes"
 
+// SwitchPrefillALowLoadByRate is the replay switch for which minutes the fit
+// of a reads as low load (prefill.Cycle.ALowLoadByRate). On, a quiet minute
+// (no queue) is low load when its request rate times its prompt cluster's
+// service time is at most prefill.LowLoadOccupancy. Off, its rate times its
+// own service time, as P1 shipped: at a given rate a minute whose prefill
+// ran slow is cut, so the fit selects on the response it reads and its
+// intercept reads low (issue llm-d-incubation/llm-d-scaling-manager#306).
+// Planner-only, as SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillALowLoadByRate = "prefill-a-low-load-by-rate"
+
+// SwitchPrefillAMedianOverhead is the replay switch for the overhead a adds
+// to the intercept (prefill.Cycle.AMedianOverhead). On, the median of the
+// low-load minutes' AvgTTFT - AvgServiceTime. Off, the least, as P1
+// shipped: the least of ten to thirty noisy minutes sits about two standard
+// deviations under the typical one, and a smaller a prices TTFT lower
+// (issue llm-d-incubation/llm-d-scaling-manager#306). Planner-only, as
+// SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillAMedianOverhead = "prefill-a-median-overhead"
+
 // prefillKVFull is the pods of rows whose KV cache is full (kvFull at
 // kvCacheThreshold), nil when none is. A full prefill pod can hold a queue
 // it cannot schedule, so its minute is not a busy one.
@@ -310,7 +329,8 @@ func (c *cycle) observePrefill() {
 			QueueMin: queueMin, KVFull: kvFullPods, DownstreamSaturated: c.decodeSaturated,
 			Bound: bounds[variant], Settle: view, ALineOnly: !a.prefillAQuadratic,
 			ALowLoadPerRank: a.prefillALowLoadPerRank, AFromTiming: a.prefillAEngineTiming,
-			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes, Now: now,
+			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes,
+			ALowLoadByRate: a.prefillALowLoadByRate, AMedianOverhead: a.prefillAMedianOverhead, Now: now,
 		})
 		a.stashPrefillEstimate(c.input.Namespace, c.input.ModelID, variant, est, now)
 		c.logger.V(perReplicaLogLevel).Info("prefill-capacity-observed",

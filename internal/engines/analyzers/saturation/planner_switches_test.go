@@ -19,13 +19,14 @@ import (
 // The capacity planner's switches, through Analyze: off from the
 // constructor, so the controller never runs them (TestPlannerSwitches_OffFromTheConstructor).
 
-// TestPlannerSwitches_OffFromTheConstructor holds the seven planner-only
+// TestPlannerSwitches_OffFromTheConstructor holds the nine planner-only
 // switches off in a new analyzer: the controller's behaviour is P1's.
 func TestPlannerSwitches_OffFromTheConstructor(t *testing.T) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	fields := a.switchFields()
 	for _, name := range []string{SwitchPrefillALowLoadPerRank, SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
-		SwitchPrefillFBusyMinutes, SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor} {
+		SwitchPrefillFBusyMinutes, SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
+		SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor} {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s is planner-only: off from the constructor", name)
 	}
@@ -467,4 +468,70 @@ func TestITLHoldSteadySlope_ARampDownThroughAnalyze(t *testing.T) {
 	require.True(t, off.HasLine)
 	assert.InDelta(t, onPlateau.LineSlope, on.LineSlope, 1e-9, "on, the plateau's slope holds")
 	assert.Greater(t, off.LineSlope, 1.3*offPlateau.LineSlope, "off, the ramp-down's slope is fitted")
+}
+
+// noisyLowLoadCycle runs one cycle of the harness's P/D model with one
+// prefill pod at a rate that holds it at occupancy 0.085 on prompts of ieff
+// tokens, its service time m times the pod's and its TTFT overhead the
+// given seconds. It returns the variant's estimate.
+func (h *observeHarness) noisyLowLoadCycle(ieff, m, overhead float64) prefill.Estimate {
+	h.t.Helper()
+	states := []domain.VariantReplicaState{
+		{VariantName: "decode", Role: domain.RoleDecode, AcceleratorName: "H100", CurrentReplicas: 1, GPUsPerReplica: 1},
+		{VariantName: "prefill", Role: domain.RolePrefill, AcceleratorName: "H100", CurrentReplicas: 1, GPUsPerReplica: 1},
+	}
+	svc := 0.008 + 2e-6*ieff
+	rr := 0.085 / svc
+	dec := makeReplicaMetrics("decode-0", "decode", 5000, 16000, 0, 4000, 500)
+	pre := makeReplicaMetrics("prefill-0", "prefill", 0, 16000, 0, ieff, 1)
+	pre.RequestRate, pre.RequestRateKnown = rr, true
+	pre.PrefillComputedTokenRate, pre.PrefillComputedTokenRateKnown = rr*ieff, true
+	pre.AvgServiceTime, pre.AvgTTFT = m*svc, m*svc+overhead
+	_, err := h.a.Analyze(h.ctx, makeAnalyzerInput([]domain.ReplicaMetrics{dec, pre}, states))
+	require.NoError(h.t, err)
+	h.clock = h.clock.Add(time.Minute)
+	est, _, ok := h.a.PrefillEstimate("test-ns", "test-model", "prefill")
+	require.True(h.t, ok)
+	return est
+}
+
+// noisyLowLoadRun is six minutes at each of three prompt lengths, the
+// service time cycling 1.0, 1.0, 0.8, 1.25, 0.8, 1.25 times the pod's and
+// the overhead 2 to 6 ms, with sw set.
+func noisyLowLoadRun(t *testing.T, sw map[string]bool) prefill.Estimate {
+	h := newObserveHarness(t, &capacity.EngineParams{Engine: inferenceengine.EngineVLLM})
+	require.NoError(t, h.a.SetSwitchesForReplay(sw))
+	mults := []float64{1.0, 1.0, 0.8, 1.25, 0.8, 1.25}
+	overheads := []float64{0.002, 0.004, 0.006, 0.003, 0.005, 0.004}
+	var est prefill.Estimate
+	for _, l := range []float64{1000, 3000, 6000} {
+		for j, m := range mults {
+			est = h.noisyLowLoadCycle(l, m, overheads[j])
+		}
+	}
+	return est
+}
+
+// SwitchPrefillALowLoadByRate reaches the observation through Analyze
+// (issue llm-d-incubation/llm-d-scaling-manager#306): on, the minutes whose
+// prefill ran slow at the rate the others ran at are low load too; off, they
+// are cut and the intercept reads low.
+func TestPrefillALowLoadByRate_SlowMinutesThroughAnalyze(t *testing.T) {
+	on := noisyLowLoadRun(t, map[string]bool{SwitchPrefillALowLoadByRate: true})
+	off := noisyLowLoadRun(t, map[string]bool{SwitchPrefillALowLoadByRate: false})
+	require.Empty(t, on.ARefused, "%+v", on)
+	require.Empty(t, off.ARefused, "%+v", off)
+	assert.Greater(t, on.ASamples, off.ASamples)
+	assert.Greater(t, on.AIntercept, off.AIntercept)
+}
+
+// SwitchPrefillAMedianOverhead reaches the observation through Analyze: on,
+// a adds the low-load minutes' median overhead; off, the least.
+func TestPrefillAMedianOverhead_ThroughAnalyze(t *testing.T) {
+	on := noisyLowLoadRun(t, map[string]bool{SwitchPrefillAMedianOverhead: true})
+	off := noisyLowLoadRun(t, map[string]bool{SwitchPrefillAMedianOverhead: false})
+	require.Empty(t, on.ARefused, "%+v", on)
+	require.Empty(t, off.ARefused, "%+v", off)
+	assert.Greater(t, on.AOverhead, off.AOverhead)
+	assert.InDelta(t, off.AIntercept, on.AIntercept, 1e-12, "the overhead alone moves")
 }

@@ -3,11 +3,11 @@ operating rate  11.32 r/s   0.85 x knee (scaleUpThreshold)
 mean TPOT       3.66 ms     [3.65 .. 3.70]   line ols, observed fill up to 0.50; OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
 TPOT p90        4.76 ms     [4.74 .. 4.81]   per request; R_q 1.3 ASSUMED (no TPOT histogram); OUTSIDE VALIDATED REGION (TPOT percentiles: never scored against a client)
 prefill knee    30.00 r/s   [25.50 .. 34.50] N_p 1 x V_P 30000 / (f 1 x 1000 tokens); OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25); V_P ASSUMED
-TTFT p90        373.4 ms    [302.6 .. 489.1] end to end; OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721); V_P ASSUMED
+TTFT p90        375.6 ms    [304.8 .. 491.4] end to end; OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721); V_P ASSUMED
                 (bands: V_P +-15%, a sweep, not a confidence interval)
-                (343.4 ms if prefill and decode waits were independent)
-                (floor 133.3 ms, pooled 331.4 ms, worst pod utilization 0.377)
-ttft inputs     V_P 30000 ASSUMED; a 11.04 ms learned; f 1 (one pod); N_p 1 (--prefill); prompt 1000 tokens (assumed); decode by its line, term omitted, hop assumed
+                (345.6 ms if prefill and decode waits were independent)
+                (floor 135.5 ms, pooled 333.6 ms, worst pod utilization 0.377)
+ttft inputs     V_P 30000 ASSUMED; a 13.24 ms learned; f 1 (one pod); N_p 1 (--prefill); prompt 1000 tokens (assumed); decode by its line, term omitted, hop assumed
 assumed         V_P 30000 tok/s (--assume-vp); prompt 1000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); decode term omitted (no fit, TooFewDecodeMinutes, and no quiet decode row): T_xfer + ITL stands for it; router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread; flow control off (no queue series); Poisson arrivals
 shape           IL 1000 OL 1000 (assumed)
 engine          vLLM release not recorded

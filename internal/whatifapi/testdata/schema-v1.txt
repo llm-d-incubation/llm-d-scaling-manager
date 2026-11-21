@@ -856,6 +856,12 @@ report.shapes[].growth[].verdict.needed.alternatives[].decode number
 report.shapes[].growth[].verdict.needed.alternatives[].prefill number
 report.shapes[].growth[].verdict.needed.decode number
 report.shapes[].growth[].verdict.needed.decodeOnly boolean
+report.shapes[].growth[].verdict.needed.fSensitivity array
+report.shapes[].growth[].verdict.needed.fSensitivity[] object
+report.shapes[].growth[].verdict.needed.fSensitivity[].decode number
+report.shapes[].growth[].verdict.needed.fSensitivity[].f number
+report.shapes[].growth[].verdict.needed.fSensitivity[].prefill number
+report.shapes[].growth[].verdict.needed.fSensitivity[].unmet string
 report.shapes[].growth[].verdict.needed.maxReplicas number
 report.shapes[].growth[].verdict.needed.prefill number
 report.shapes[].growth[].verdict.needed.unmet string
@@ -927,6 +933,12 @@ report.shapes[].verdict.needed.alternatives[].decode number
 report.shapes[].verdict.needed.alternatives[].prefill number
 report.shapes[].verdict.needed.decode number
 report.shapes[].verdict.needed.decodeOnly boolean
+report.shapes[].verdict.needed.fSensitivity array
+report.shapes[].verdict.needed.fSensitivity[] object
+report.shapes[].verdict.needed.fSensitivity[].decode number
+report.shapes[].verdict.needed.fSensitivity[].f number
+report.shapes[].verdict.needed.fSensitivity[].prefill number
+report.shapes[].verdict.needed.fSensitivity[].unmet string
 report.shapes[].verdict.needed.maxReplicas number
 report.shapes[].verdict.needed.prefill number
 report.shapes[].verdict.needed.unmet string

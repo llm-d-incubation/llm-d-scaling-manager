@@ -204,7 +204,10 @@ func TestAtReplicas_OverProvisionedNamesTheRole(t *testing.T) {
 	assert.Equal(t, whatifapi.VerdictUnder, v.Verdict, v.Reason)
 	assert.Equal(t, []string{roleDecode}, v.Grow, v.Summary)
 	require.NotNil(t, v.Needed)
-	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 2, Decode: 2, MaxReplicas: whatifapi.DefaultSizeBound}, *v.Needed)
+	got := *v.Needed
+	assert.Len(t, got.FSensitivity, len(sensitivityImbalances), "two prefill pods rest on f")
+	got.FSensitivity = nil // TestAtReplicas_TheFleetNeededAtEachF
+	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 2, Decode: 2, MaxReplicas: whatifapi.DefaultSizeBound}, got)
 	assert.Contains(t, v.Summary, "needs 2 prefill + 2 decode (has 2 + 1)")
 }
 

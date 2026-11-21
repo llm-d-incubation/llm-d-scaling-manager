@@ -1,7 +1,7 @@
 Day plan for ns-01/model-02, 2026-11-01 21:50 to 2026-11-01 22:55 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
 SLO: TTFT p95 500ms, TPOT mean 4ms; headroom 0.85. TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.
 
-REFUSED prefill's TTFT (TargetBelowFloor), in 4 buckets: target 0.5 s at or below the TTFT floor 0.6788 s
+REFUSED prefill's TTFT (TargetBelowFloor), in 4 buckets: target 0.5 s at or below the TTFT floor 0.681 s
   what to do: The TTFT target is under the TTFT at zero load: no replica count meets it. Raise the TTFT target above the floor in the detail.
   what the plan did: Prefill is not sized: decode is sized alone, on its TPOT target and its knee times headroom.
 

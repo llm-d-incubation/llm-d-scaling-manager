@@ -1,6 +1,6 @@
 role     est. rate at SLO   bound by                                 basis
 prefill  3.44 r/s           TTFT p95                                 OUTSIDE VALIDATED REGION (--router-wait-in-prefill stated, which the run did not price) [2.52 .. 4.04] at V_P and f +-15%
-         inputs V_P 17046 learned (peak-under-queue, at 7984 tokens); a 9.01 ms learned; f 1 (learned); N_p 2 (--prefill); prompt 8000 tokens (assumed); decode by its line, term measured, hop measured
+         inputs V_P 17046 learned (peak-under-queue, at 7984 tokens); a 14.29 ms learned; f 1 (learned); N_p 2 (--prefill); prompt 8000 tokens (assumed); decode by its line, term measured, hop measured
          assumed prompt 8000 tokens (--assume-input-tokens); prompt cv 0.0577 (--assume-prompt-cv); flow control on (--flow-control); flow-control thresholds 5 and 0.8 (upstream defaults); arrivals Ca^2 4 (--arrival-cv2); Poisson arrivals at decode admission (--arrival-cv2 does not reach it); the router's wait past the prefill onset inside the prefill price, measured on router v1.0.0 (--router-wait-in-prefill)
 fleet    3.44 r/s           TTFT p95, end to end                     OUTSIDE VALIDATED REGION (--router-wait-in-prefill stated, which the run did not price) [2.52 .. 3.96] at V_P and f +-15%
 flags: UnvalidatedTTFT; VPLowerBound; VPScaledToPrompt; AssumedPromptSpread; FlowControlWaitPriced; BelowFittedBand; KVBoundSlots; AssumedShape (IL 8000, OL 200); HeldLine; AssumedPoissonArrivals; TransferHeld; AssumedArrivalCV2

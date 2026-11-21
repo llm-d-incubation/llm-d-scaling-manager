@@ -73,7 +73,7 @@
         "replicas": 2,
         "replicasFrom": "--decode",
         "headroom": 0.85,
-        "rate": 3.440468108887058,
+        "rate": 3.4404938563752423,
         "rateSource": "headroom x prefill knee",
         "engine": {
           "engine": "vllm",
@@ -113,10 +113,10 @@
         },
         "operatingRate": {
           "answer": {
-            "value": 3.440468108887058,
+            "value": 3.4404938563752423,
             "unit": "r/s",
             "basis": {
-              "fill": 0.04504851800465884,
+              "fill": 0.045048917044771424,
               "kneeRate": 16.95075000755562,
               "floor": 0,
               "uncapped": 0,
@@ -132,17 +132,17 @@
               "AssumedPromptSpread"
             ],
             "sensitivity": {
-              "lo": 2.542954689177391,
-              "hi": 3.9565383252201167
+              "lo": 2.542973719929527,
+              "hi": 3.9565679348315284
             }
           }
         },
         "meanTPOT": {
           "answer": {
-            "value": 0.012339508247017008,
+            "value": 0.012339525204965016,
             "unit": "s",
             "basis": {
-              "fill": 0.04504851800465884,
+              "fill": 0.045048917044771424,
               "kneeRate": 16.95075000755562,
               "floor": 0.0108191875128338,
               "uncapped": 0,
@@ -186,7 +186,7 @@
           "blockSizeSource": "not recorded"
         },
         "percentile": 0.9,
-        "rate": 3.440468108887058,
+        "rate": 3.4404938563752423,
         "rateSource": "headroom x prefill knee",
         "replicas": 2,
         "replicasFrom": "--prefill",
@@ -194,7 +194,7 @@
         "vpSource": "learned",
         "vpOrigin": "peak-under-queue",
         "vpPromptTokens": 7984.303256867742,
-        "fixedLatencySeconds": 0.009011691426531434,
+        "fixedLatencySeconds": 0.014291269449856045,
         "fixedLatencySource": "learned",
         "imbalance": 1,
         "imbalanceSource": "learned",
@@ -226,11 +226,11 @@
       "results": {
         "knee": {
           "answer": {
-            "value": 4.0476095398671275,
+            "value": 4.047639831029697,
             "unit": "r/s",
             "basis": {
               "fill": 0,
-              "kneeRate": 4.0476095398671275,
+              "kneeRate": 4.047639831029697,
               "floor": 0,
               "uncapped": 0,
               "boundBy": [
@@ -245,8 +245,8 @@
               "AssumedPromptSpread"
             ],
             "sensitivity": {
-              "lo": 2.991711399032225,
-              "hi": 4.654750970847196
+              "lo": 2.9917337881523847,
+              "hi": 4.654785805684151
             },
             "validation": {
               "validated": false,
@@ -257,12 +257,12 @@
         },
         "ttft": {
           "answer": {
-            "value": 7.599109523510692,
+            "value": 7.604335036671834,
             "unit": "s",
             "basis": {
               "fill": 0,
-              "kneeRate": 4.0476095398671275,
-              "floor": 0.8405156392690134,
+              "kneeRate": 4.047639831029697,
+              "floor": 0.845791442225147,
               "uncapped": 0,
               "boundBy": [],
               "tier": "held"
@@ -282,27 +282,27 @@
               "HeldLine"
             ],
             "parts": {
-              "independent": 7.599109523510692,
-              "pooled": 7.599109523510692,
-              "decodeShare": 7.567059772573089e-41,
-              "engineWait": 2.800006577142657,
-              "kvPullWait": 0.0009052648279237142,
-              "ownPrefill": 0.8063670010530012,
-              "decodeWait": 1.1201927286682039e-41,
+              "independent": 7.604335036671834,
+              "pooled": 7.604335036671834,
+              "decodeShare": 7.571071657197904e-41,
+              "engineWait": 2.7999856228438675,
+              "kvPullWait": 0.000905271875344851,
+              "ownPrefill": 0.811642881258892,
+              "decodeWait": 1.1207887655833125e-41,
               "firstStep": 0,
-              "decodeEngine": 0.017714939431497434,
+              "decodeEngine": 0.01771508573732236,
               "routerHop": 0,
-              "prefillUtilization": 0.8499999999999999,
+              "prefillUtilization": 0.85,
               "vpMarginApplied": 0.05,
               "waitScale": 0,
               "waitOffset": 0,
-              "decodeWaitProbability": 7.567059772573089e-41,
-              "prefillKnee": 4.0476095398671275,
+              "decodeWaitProbability": 7.571071657197904e-41,
+              "prefillKnee": 4.047639831029697,
               "decodeKnee": 16.95075000755562
             },
             "sensitivity": {
-              "lo": 3.830185105522033,
-              "hi": 1870592203661731.8,
+              "lo": 3.8354387487299015,
+              "hi": 7.604335036671834,
               "refused": "Saturated"
             },
             "validation": {

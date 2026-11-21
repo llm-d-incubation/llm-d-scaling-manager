@@ -112,7 +112,7 @@
         "replicasFrom": "recording",
         "vp": 130000,
         "vpSource": "assumed",
-        "fixedLatencySeconds": 0.011579102043789449,
+        "fixedLatencySeconds": 0.014432285034633677,
         "fixedLatencySource": "learned",
         "imbalance": 1,
         "imbalanceSource": "one pod",
@@ -168,12 +168,12 @@
         },
         "ttft": {
           "answer": {
-            "value": 4.752942320485787,
+            "value": 4.755795503476631,
             "unit": "s",
             "basis": {
               "fill": 0,
               "kneeRate": 8.137756614884937,
-              "floor": 0.45427486135652967,
+              "floor": 0.4571280443473739,
               "uncapped": 0,
               "boundBy": [],
               "tier": ""
@@ -188,12 +188,12 @@
               "AssumedPoissonArrivals"
             ],
             "parts": {
-              "independent": 4.752942320485787,
-              "pooled": 4.608934125978665,
+              "independent": 4.755795503476631,
+              "pooled": 4.611787308969509,
               "decodeShare": 0,
               "engineWait": 1.7408565206723094,
               "kvPullWait": 0,
-              "ownPrefill": 0.13446309173830542,
+              "ownPrefill": 0.13731627472914967,
               "decodeWait": 0,
               "firstStep": 0,
               "decodeEngine": 0.07385067939758301,
@@ -207,8 +207,8 @@
               "decodeKnee": 0
             },
             "sensitivity": {
-              "lo": 2.396292728904328,
-              "hi": 4.752942320485787,
+              "lo": 2.399145911895172,
+              "hi": 4.755795503476631,
               "refused": "Saturated"
             },
             "validation": {

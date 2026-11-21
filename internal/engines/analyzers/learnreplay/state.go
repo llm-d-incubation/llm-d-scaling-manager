@@ -246,6 +246,12 @@ type shapeSample struct {
 //     counted by its capacity part only, so deferred waits are not a queue.
 //   - saturation.SwitchPrefillFBusyMinutes: f, the prefill imbalance, the
 //     median of the busiest minutes, not of every minute.
+//   - saturation.SwitchPrefillALowLoadByRate: a's low-load minutes read by
+//     their rate against their prompt cluster's service time, not their own.
+//   - saturation.SwitchPrefillAMedianOverhead: a's overhead the median of
+//     the low-load minutes', not the least. Both raise a; on the staircase
+//     backtests and the Qwen3-32B validation table no figure moves under
+//     what was measured (issue llm-d-incubation/llm-d-scaling-manager#306).
 //   - saturation.SwitchITLAdaptiveBandFloor: the ITL band's floor lowered to
 //     the fill a low-fill fleet has.
 //
@@ -267,6 +273,8 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillAEngineTiming:   true,
 		saturation.SwitchPrefillQueueByCapacity: true,
 		saturation.SwitchPrefillFBusyMinutes:    true,
+		saturation.SwitchPrefillALowLoadByRate:  true,
+		saturation.SwitchPrefillAMedianOverhead: true,
 		saturation.SwitchITLAdaptiveBandFloor:   true,
 	}}
 }

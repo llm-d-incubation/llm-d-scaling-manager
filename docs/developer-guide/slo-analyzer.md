@@ -54,8 +54,9 @@ The TTFT pricing's switches, each a `TTFTFleet` field and a replay switch:
   the only way on, and no policy key sets them.
 
 One more switch sets an input, not a `TTFTFleet` field:
-`slo-ttft-imbalance-across-counts` (off, the CLI's `--imbalance-across-counts`
-default, `whatif.DefaultImbalanceAcrossCounts`). It sets `f` at a prefill pod
+`slo-ttft-imbalance-across-counts` (off, `whatif.DefaultImbalanceAcrossCounts`;
+the capacity planner's `--imbalance-across-counts` is on by default,
+`whatif.DefaultPlannerImbalanceAcrossCounts`, issue #300). It sets `f` at a prefill pod
 count P1 has not learned (`ttftInputs.imbalanceAcross`,
 `whatif.ImbalanceReadings.At`). Off, `min(N, max(1.5, f))`. On:
 

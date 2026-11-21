@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"testing"
 
@@ -16,13 +17,15 @@ import (
 )
 
 // --imbalance-across-counts is the SLO analyzer's
-// slo.SwitchTTFTImbalanceAcrossCounts: opt-in, off by default, at the shared
-// default, and on with the flag.
+// slo.SwitchTTFTImbalanceAcrossCounts, on by default in the planner
+// (whatif.DefaultPlannerImbalanceAcrossCounts, issue
+// llm-d-incubation/llm-d-scaling-manager#300) where the analyzer's is off,
+// and off with =false.
 func TestTTFT_ImbalanceAcrossCountsFlag(t *testing.T) {
 	for _, c := range []struct {
 		args []string
 		want bool
-	}{{nil, whatif.DefaultImbalanceAcrossCounts}, {[]string{"--imbalance-across-counts"}, true}, {[]string{"--imbalance-across-counts=false"}, false}} {
+	}{{nil, true}, {[]string{"--imbalance-across-counts"}, true}, {[]string{"--imbalance-across-counts=false"}, false}} {
 		var f answerFlags
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -30,7 +33,8 @@ func TestTTFT_ImbalanceAcrossCountsFlag(t *testing.T) {
 		require.NoError(t, fs.Parse(c.args))
 		assert.Equal(t, c.want, f.imbalanceAcrossCounts, "%v", c.args)
 	}
-	require.False(t, whatif.DefaultImbalanceAcrossCounts, "opt-in: off by default")
+	require.True(t, whatif.DefaultPlannerImbalanceAcrossCounts, "the planner reads the curve by default")
+	require.False(t, whatif.DefaultImbalanceAcrossCounts, "the SLO analyzer's stays opt-in")
 }
 
 // f at a count read across counts: the learned count's own, one pod's none,
@@ -112,8 +116,8 @@ func TestTTFT_ImbalanceAcrossCountsOnTheStaircase(t *testing.T) {
 	require.Contains(t, st.Prefill[0].Estimate.FByPods, 2, "precondition: P1 learned f at two pods")
 	learned := whatif.ImbalanceReadingsOf(st.Prefill[0].Estimate, st.Prefill[0].Pods, st.Prefill[0].RawShare).At(3)
 
-	off, offRate := read()
-	on, onRate := read("--imbalance-across-counts")
+	off, offRate := read("--imbalance-across-counts=false")
+	on, onRate := read()
 	t.Logf("f(2) %.4f; at 3 pods off f %.4f (%s) rate %.3f, on f %.4f (%s) rate %.3f",
 		st.Prefill[0].Estimate.FByPods[2], off.Imbalance, off.ImbalanceSource, offRate, on.Imbalance, on.ImbalanceSource, onRate)
 	assert.Equal(t, whatif.ImbalanceFloor, off.Imbalance)
@@ -127,13 +131,13 @@ func TestTTFT_ImbalanceAcrossCountsOnTheStaircase(t *testing.T) {
 // sized past its two prefill pods notes f off the curve, not the 1.5 floor.
 func TestTTFT_ImbalanceAcrossCountsReachesAtReplicas(t *testing.T) {
 	args := atStair("--shape", "measured", "--load", "seen", "--load-seen-x", "1.2")
-	off, code := runCmd(t, args...)
+	off, code := runCmd(t, append(args, "--imbalance-across-counts=false")...)
 	require.Equal(t, 0, code, off)
 	require.Contains(t, off, "prefill f 1.5 assumed at 3 pods", "precondition: the search reaches three prefill pods")
-	on, code := runCmd(t, append(args, "--imbalance-across-counts")...)
+	on, code := runCmd(t, args...)
 	require.Equal(t, 0, code, on)
 	assert.NotContains(t, on, "prefill f 1.5 assumed")
-	assert.Contains(t, on, "prefill f "+num(whatif.ImbalanceReadings{ByPods: map[int]float64{2: stairF2(t)}}.At(3).F)+" assumed at 3 pods")
+	assert.Contains(t, on, fmt.Sprintf("prefill f %.3g assumed at 3 pods", whatif.ImbalanceReadings{ByPods: map[int]float64{2: stairF2(t)}}.At(3).F))
 }
 
 // stairF2 is the f P1 learned at two pods on the staircase.

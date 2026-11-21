@@ -67,13 +67,23 @@ Three derivations matter here:
   `AvgServiceTime` is the prefill time and `AvgTTFT − AvgServiceTime` is the
   engine wait. That difference holds a constant overhead (tokenization,
   scheduling, the HTTP path): on `ols-sweep` it is never below 2.5 ms with no
-  queue. Its low-load minimum is added to `a`. The wait derivation works for
+  queue. Its low-load minimum is added to `a`. Two planner-only replay
+  switches, which the capacity planner turns on (issue #306), add the
+  median instead
+  (`saturation.SwitchPrefillAMedianOverhead`), since the least of ten to
+  thirty noisy minutes sits under the typical one and a smaller `a` prices
+  TTFT lower, and read a minute as low load by its rate against its prompt
+  cluster's service time, not its own
+  (`saturation.SwitchPrefillALowLoadByRate`): read against its own, a
+  minute whose prefill ran slow is cut at a rate a fast one is kept at, and
+  the fit reads the fast ones. The wait derivation works for
   vLLM and SGLang (SGLang's service time is e2e minus `queue_time`).
 - **On an aggregated pod** it does not work: service time includes decode, and
   `AvgServiceTime − (OL − 1)·ITLPerToken` subtracts two large numbers. The
   per-stage `request_prefill_time_seconds` is needed.
 - **`ols-sweep`** has one prefill pod that never queued. It supports `a`
-  and the low-load slope, not `V_P` or `f`. `a` is 11.04 ms: an
+  and the low-load slope, not `V_P` or `f`. P1's `a` is 11.04 ms (the
+  capacity planner, with the median overhead, reads 13.24 ms): an
   intercept of 8.36 ms, fitted against the effective prompt over low-load
   minutes, plus the least overhead, 2.68 ms. An earlier
   revision said 10.1 ms: that was an intercept fitted against

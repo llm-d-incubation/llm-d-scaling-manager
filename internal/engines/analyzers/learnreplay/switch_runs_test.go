@@ -1098,6 +1098,8 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 	saturation.SwitchPrefillAEngineTiming:   nil,
 	saturation.SwitchPrefillQueueByCapacity: nil,
 	saturation.SwitchPrefillFBusyMinutes:    nil,
+	saturation.SwitchPrefillALowLoadByRate:  nil,
+	saturation.SwitchPrefillAMedianOverhead: nil,
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
 	saturation.SwitchITLHoldSteadySlope:     nil,
 	saturation.SwitchITLLineAtFloor:         nil,
@@ -1435,6 +1437,17 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestImbalance_TooFewBusyMinutesTakeTheBusiest"},
 		{"../../../signals/prefill", "TestImbalance_BusyIsComputedTokensNotRequests"},
 		{"../saturation", "TestPrefillFBusyMinutes_LightMinutesThroughAnalyze"},
+	},
+	saturation.SwitchPrefillALowLoadByRate: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestLowLoadByRate_ASlowMinuteIsNotCut"},
+		{"../../../signals/prefill", "TestLowLoadByRate_LoadedAndQueuedMinutesAreExcluded"},
+		{"../saturation", "TestPrefillALowLoadByRate_SlowMinutesThroughAnalyze"},
+	},
+	saturation.SwitchPrefillAMedianOverhead: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestMedianOverhead_TheTypicalMinuteNotTheLeast"},
+		{"../saturation", "TestPrefillAMedianOverhead_ThroughAnalyze"},
 	},
 	saturation.SwitchITLHoldSteadySlope: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},

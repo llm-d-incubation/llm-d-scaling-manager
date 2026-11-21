@@ -580,6 +580,15 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
   check("the sentence does not repeat the fleet needed", vl.rest === "at the p95 load of 41.7 r/s, 1.6x the fleet knee of 26.7 r/s, the fleet saturates (prefill f 1.5 assumed at 19 pods).",
     vl.rest);
   check("the chip carries it", vl.needs === "needs 19 prefill + 5 decode (has 2 + 2), or 18 + 6");
+  const fs = verdictLine({verdict: "UNDER-PROVISIONED", needed: {prefill: 3, decode: 3, maxReplicas: 32,
+    fSensitivity: [{f: 1, prefill: 3, decode: 3}, {f: 1.5, prefill: 4, decode: 3}]},
+    summary: "UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 38 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2); at f 1 needs 3 + 3, at f 1.5 needs 4 + 3 (prefill f 1 assumed at 3 pods)."}, "", has);
+  check("the fleet needed at each f is part of the clause", fs.rest === "at the p95 load of 41.7 r/s, 1.1x the fleet knee of 38 r/s, the fleet saturates (prefill f 1 assumed at 3 pods).", fs.rest);
+  check("the chip carries the fleet at each f", fs.needs === "needs 3 prefill + 3 decode (has 2 + 2); at f 1 needs 3 + 3, at f 1.5 needs 4 + 3", fs.needs);
+  check("an f that moves nothing says so", neededText({prefill: 3, decode: 3, maxReplicas: 32,
+    fSensitivity: [{f: 1, prefill: 3, decode: 3}, {f: 1.5, prefill: 3, decode: 3}]}, has) === "needs 3 prefill + 3 decode (has 2 + 2); the same at f 1 to 1.5");
+  check("an f no fleet holds at says so", neededText({prefill: 3, decode: 3, maxReplicas: 32,
+    fSensitivity: [{f: 1, prefill: 3, decode: 3}, {f: 1.5, unmet: "fleet"}]}, has) === "needs 3 prefill + 3 decode (has 2 + 2); at f 1 needs 3 + 3, at f 1.5 no fleet holds");
   const vs = verdictLine({verdict: "UNDER-PROVISIONED", needed: {prefill: 5, decode: 5, maxReplicas: 32},
     summary: "UNDER-PROVISIONED: 1.6x the fleet knee (38.1 r/s); needs 5 prefill + 5 decode (has 2 + 2)."}, "", has);
   check("a short growth sentence loses only the clause", vs.rest === "1.6x the fleet knee (38.1 r/s).", vs.rest);
@@ -656,7 +665,7 @@ if (failures.length) {
 }
 // EXPECTED_CASES is how many cases this file runs: a case that silently
 // stops running (an early return, a renamed function) fails the check.
-const EXPECTED_CASES = 318;
+const EXPECTED_CASES = 322;
 if (passed !== EXPECTED_CASES) {
   console.error(`check-planner-scenarios: ${passed} cases ran; expected ${EXPECTED_CASES}`);
   process.exit(1);

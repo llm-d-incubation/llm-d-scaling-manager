@@ -92,9 +92,10 @@ const SwitchTTFTPSOnsets = "slo-ttft-ps-onsets"
 // max(whatif.ImbalanceFloor, f)). A count P1 learned prices at its own f
 // either way, and any other is flagged AssumedImbalance, as is any f read
 // from rows of several engine ranks (prefill.Estimate.FMultiRank). Off
-// from the constructor, at whatif.DefaultImbalanceAcrossCounts, the CLI's
-// --imbalance-across-counts default, so the analyzer and the CLI answer the
-// same; only SetSwitchesForReplay turns it on. It moves only the f of an
+// from the constructor, at whatif.DefaultImbalanceAcrossCounts; only
+// SetSwitchesForReplay turns it on. The capacity planner's
+// --imbalance-across-counts is on by default
+// (whatif.DefaultPlannerImbalanceAcrossCounts). It moves only the f of an
 // unlearned count.
 const SwitchTTFTImbalanceAcrossCounts = "slo-ttft-imbalance-across-counts"
 

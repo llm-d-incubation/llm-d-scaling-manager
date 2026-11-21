@@ -17,10 +17,10 @@ hour (UTC)        rate mean  rate p95 need P need D  had P  had D
 2026-11-01 11:00      11.67     13.79      2      2      2      3  over (waste)
 2026-11-01 12:00      13.24     15.52      2      2      2      3  over (waste)
 2026-11-01 13:00      14.54     16.86      2      2      2      3  over (waste)
-2026-11-01 14:00      15.45     17.83      3      2      2      3  ok
+2026-11-01 14:00      15.45     17.83      3      2      2      3  UNDER (SLO risk)
 2026-11-01 15:00      15.92     18.28      3      2      2      3  UNDER (SLO risk)
 2026-11-01 16:00      15.92     18.27      3      2      2      3  UNDER (SLO risk)
-2026-11-01 17:00      15.45     17.82      3      2      2      3  ok
+2026-11-01 17:00      15.45     17.82      3      2      2      3  UNDER (SLO risk)
 2026-11-01 18:00      14.54     16.86      2      2      2      3  over (waste)
 2026-11-01 19:00      13.25     15.51      2      2      2      3  over (waste)
 2026-11-01 20:00      11.67     13.81      2      2      2      3  over (waste)
@@ -28,12 +28,12 @@ hour (UTC)        rate mean  rate p95 need P need D  had P  had D
 2026-11-01 22:00       8.09      9.86      1      1      2      3  over (waste)
 2026-11-01 23:00       6.33      7.77      1      1      2      3  over (waste)
 
-buckets: 282 sized (22 under, 257 over, 3 match; 282 for the p95, 0 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 0 too little data, 6 no data
+buckets: 282 sized (26 under, 253 over, 3 match; 282 for the p95, 0 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 0 too little data, 6 no data
 needed: at the busiest bucket 3 prefill + 2 decode, at the quietest 1 prefill + 1 decode (the fewest replicas in all; another mix may serve too)
-replica-hours over the 282 sized buckets: needed 34.50 prefill + 35.00 decode, had 47.00 prefill + 70.50 decode
-GPU-hours over the sized buckets: needed 69.50, had 117.50
+replica-hours over the 282 sized buckets: needed 34.83 prefill + 35.00 decode, had 47.00 prefill + 70.50 decode
+GPU-hours over the sized buckets: needed 69.83, had 117.50
 had over every bucket with data: 47.00 prefill + 70.50 decode replica-hours, 117.50 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
-hours under (SLO risk): 15:00, 16:00
+hours under (SLO risk): 14:00, 15:00, 16:00, 17:00
 hours over (waste): 00:00, 01:00, 02:00, 03:00, 04:00, 05:00, 06:00, 07:00, 08:00, 09:00, 10:00, 11:00, 12:00, 13:00, 18:00, 19:00, 20:00, 21:00, 22:00, 23:00
 flags: UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeTermOmitted, RouterHopAssumed, SpreadBeyondProcessorSharing, FlowControlInferredOff, HeldByDecodeAdmission, AssumedShape, OutputSpreadUnread, AssumedPoissonArrivals, AssumedImbalance
 note: Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.

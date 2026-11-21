@@ -811,8 +811,9 @@ function verdictLine(v, fallback, has) {
 }
 
 // NEEDS_CLAUSE is the "needs P prefill + D decode (has p + d), or a + b"
-// clause of a summary.
-const NEEDS_CLAUSE = /;?\s*needs [^;()]*\(has \d+ \+ \d+\)(,? or \d+ \+ \d+)*/;
+// clause of a summary, with the fleet needed at each f after it
+// (fSensitivityText).
+const NEEDS_CLAUSE = /;?\s*needs [^;()]*\(has \d+ \+ \d+\)(,? or \d+ \+ \d+)*(; (the same at f [\d.]+ to [\d.]+|at f [\d.]+ (needs \d+ \+ \d+|no fleet holds)(, at f [\d.]+ (needs \d+ \+ \d+|no fleet holds))*))?/;
 
 // neededText is the fleet a verdict needs, in words: "needs 3 prefill +
 // 4 decode (has 2 + 2)", "or 4 + 3" for each alternative, "at least" where
@@ -823,7 +824,19 @@ function neededText(n, has) {
   const now = has ? ` (has ${has.prefill} + ${has.decode})` : "";
   if (n.decodeOnly) return `needs at least ${n.decode} decode${has ? ` (has ${has.decode})` : ""}; prefill is not priced`;
   const alt = (n.alternatives || []).map(a => `or ${a.prefill} + ${a.decode}`).join(", ");
-  return `needs ${n.prefill} prefill + ${n.decode} decode${now}` + (alt ? ", " + alt : "");
+  return `needs ${n.prefill} prefill + ${n.decode} decode${now}` + (alt ? ", " + alt : "") + fSensitivityText(n);
+}
+
+// fSensitivityText is the fleet needed at each fixed prefill imbalance f, as
+// the summary words it: "; at f 1 needs 3 + 3, at f 1.5 needs 4 + 3", or
+// "; the same at f 1 to 1.5"; "" with none.
+function fSensitivityText(n) {
+  const rows = (n && n.fSensitivity) || [];
+  if (!rows.length) return "";
+  if (rows.every(r => !r.unmet && r.prefill === n.prefill && r.decode === n.decode)) {
+    return `; the same at f ${rows[0].f} to ${rows[rows.length - 1].f}`;
+  }
+  return "; " + rows.map(r => r.unmet ? `at f ${r.f} no fleet holds` : `at f ${r.f} needs ${r.prefill} + ${r.decode}`).join(", ");
 }
 
 // roleLines is a verdict's per-role judgment: a line per role, whether it has

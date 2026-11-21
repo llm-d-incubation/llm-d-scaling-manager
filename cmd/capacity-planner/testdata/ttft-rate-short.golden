@@ -2,8 +2,8 @@ role     est. rate at SLO   bound by                                 basis
 decode   refused: NoLine (no ITL line learned by cycle 105)
          shape IL 10770 OL 16 (measured, cycles 83-102), output spread D 1.000 (measured)
          engine vLLM release not recorded
-prefill  2.65 r/s           TTFT p90                                 OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721); V_P ASSUMED [1.74 .. 3.67] at V_P +-15%
-         inputs V_P 130000 ASSUMED; a 11.58 ms learned; f 1 (one pod); N_p 1 (recording); prompt 15975 tokens (measured, cycles 83-102); decode engine TTFT 73.9 ms at 16608 tokens, measured
+prefill  2.64 r/s           TTFT p90                                 OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721); V_P ASSUMED [1.73 .. 3.66] at V_P +-15%
+         inputs V_P 130000 ASSUMED; a 14.43 ms learned; f 1 (one pod); N_p 1 (recording); prompt 15975 tokens (measured, cycles 83-102); decode engine TTFT 73.9 ms at 16608 tokens, measured
          assumed V_P 130000 tok/s (--assume-vp); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
 fleet    refused: NoLine (no ITL line learned by cycle 105)
 flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; DecodeEngineMeasured; SpreadBeyondProcessorSharing; FlowControlInferredOff; AssumedPoissonArrivals

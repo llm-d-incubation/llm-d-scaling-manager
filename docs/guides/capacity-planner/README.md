@@ -559,9 +559,14 @@ It replays the recording once and answers, for each shape and load:
   Each role's standing is in the sentence ("decode: one fewer holds even
   at the peak 43.2 r/s; prefill: no spare (1.9% under its operating
   point)"), with any prefill imbalance f that no run learned at that pod
-  count. That f is assumed at 1.5. With `--imbalance-across-counts`
-  (opt-in), it is read off the pod counts that were learned, or 1.15 with
-  none. The `checks` lines give each fleet tried and its numbers.
+  count. That f is read off the pod counts that were learned; with none
+  learned, or with `--imbalance-across-counts=false`, it is assumed at
+  least 1.5.
+  Since no run measured it, the sentence also gives the fleet needed at f 1
+  and at f 1.5 on every count above one prefill pod ("at f 1 needs 3 + 3,
+  at f 1.5 needs 4 + 3", or "the same at f 1 to 1.5"), and `-o json` gives
+  them as `needed.fSensitivity`. The `checks` lines give each fleet tried
+  and its numbers.
 - **Per shape:** utilization at the load (decode KV fill, batch slots, wait
   probability; prefill utilization pooled and on the busiest pod), the
   prefill, decode and fleet knees in req/s and output tok/s with what binds
@@ -592,12 +597,12 @@ summary                     50%                80%                  5r/s        
   1k/1k EXTRAPOLATED        133/4.9 @17.78 ok  152/9.0 @28.45 ok    125/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
   16k/200/0.3 EXTRAPOLATED  667/5.0 @9.08 ok   1015/10.8 @14.53 ok  567/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
 verdicts
-  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
+  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2); the same at f 1 to 1.5 (prefill f 1 assumed at 3 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 3 prefill + 4 decode (has 2 + 2) (prefill f 1 assumed at 3 pods).
   1k/1k EXTRAPOLATED        UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2).
                             x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2).
-  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2) (prefill f 1.5 assumed at 5 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
+  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 4 prefill + 6 decode (has 2 + 2); at f 1 needs 4 + 6, at f 1.5 needs 5 + 6 (prefill f 1 assumed at 4 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 4 prefill + 7 decode (has 2 + 2) (prefill f 1 assumed at 4 pods).
 ```
 
 Read the `not validated` lines after each shape (not shown above): the decode knee read 44% to 103%

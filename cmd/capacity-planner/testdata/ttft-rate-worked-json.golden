@@ -142,7 +142,7 @@
         "replicasFrom": "--prefill",
         "vp": 30000,
         "vpSource": "assumed",
-        "fixedLatencySeconds": 0.011035504164968402,
+        "fixedLatencySeconds": 0.01324442951800158,
         "fixedLatencySource": "learned",
         "imbalance": 1,
         "imbalanceSource": "one pod",
@@ -168,24 +168,24 @@
           "no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread",
           "flow control off (no queue series)",
           "Poisson arrivals",
-          "an assumed decode term moves this answer from 1.187 to 0.2506"
+          "an assumed decode term moves this answer from 1.083 to 0.148"
         ]
       },
       "results": {
         "rate": {
           "answer": {
-            "value": 0.25063609988609226,
+            "value": 0.14797785633779015,
             "unit": "r/s",
             "basis": {
-              "fill": 0.004523186773091,
+              "fill": 0.002656502889689807,
               "kneeRate": 13.313632625239457,
-              "floor": 0.19460685106698072,
+              "floor": 0.1968157764200139,
               "uncapped": 0,
               "boundBy": [
                 "TTFT"
               ],
               "tier": "ols",
-              "prefillOnlyRate": 0.25063609988609226
+              "prefillOnlyRate": 0.14797785633779015
             },
             "flags": [
               "UnvalidatedTTFT",
@@ -202,8 +202,8 @@
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {
-              "lo": 0.25063609988609226,
-              "hi": 1.6396930872300244,
+              "lo": 0.14797785633779015,
+              "hi": 1.5003844539974223,
               "refused": "TargetBelowFloor"
             },
             "validation": {
@@ -221,7 +221,7 @@
       "results": {
         "rate": {
           "answer": {
-            "value": 0.25063609988609226,
+            "value": 0.14797785633779015,
             "unit": "r/s",
             "basis": {
               "fill": 0,
@@ -248,8 +248,8 @@
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {
-              "lo": 0.25063609988609226,
-              "hi": 1.6396930872300244,
+              "lo": 0.14797785633779015,
+              "hi": 1.5003844539974223,
               "refused": "TargetBelowFloor"
             },
             "validation": {
