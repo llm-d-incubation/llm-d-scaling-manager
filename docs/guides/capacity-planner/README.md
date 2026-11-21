@@ -446,12 +446,18 @@ Limits of both:
 ## Find the fleet a rate needs
 
 Above the controls, pick **What fleet does this traffic need?** Then set the
-rate and the targets as before. The page finds the fewest replicas that serve
-that rate under your targets, and the replica counts become its answer: you
-read them, you do not set them.
+rate and the targets as before. The page finds the fleet of the fewest GPUs
+that serves that rate under your targets, and the replica counts become its
+answer: you read them, you do not set them.
 
-- **The answer.** The fewest replicas in all; of two fleets as few, the one
-  with fewer decode replicas. Beside it: the fleet limit at that fleet, the headroom
+- **The answer.** The fewest GPUs: each role's replicas times its GPUs per
+  replica, as the source states them. Of two fleets with as few GPUs, the
+  one with fewer replicas, then the one with fewer decode replicas. When
+  both roles take the same GPUs a replica, that is the fewest replicas.
+  When they differ it can trade one role for the other: with 8-GPU prefill
+  and 1-GPU decode replicas, 8 prefill + 5 decode (69 GPUs) rather than
+  9 + 4 (76 GPUs). When the source does not state both roles' GPUs, it
+  counts replicas. Beside it: the fleet limit at that fleet, the headroom
   over your rate, and the role and target that bind.
 - **Why not fewer.** One prefill replica fewer, and one decode replica fewer,
   each with the rate it would serve and how far short of yours that is.
@@ -547,15 +553,24 @@ It replays the recording once and answers, for each shape and load:
     ("(decode only)"): the report never calls such a fleet right-sized or
     over-provisioned, and gives no fleet rate at the SLO.
 
-  UNDER and OVER name the fleet needed: the smallest that holds every
-  target at the load with headroom, found by the same search as
-  [`POST /v1/size`](api.md#the-size), for example "needs 3 prefill +
-  3 decode (has 2 + 2)". A role it cuts must hold at the window's peak
+  UNDER and OVER name the fleet needed: the cheapest that holds every
+  target at the load with headroom (the fewest GPUs, as
+  [`POST /v1/size`](api.md#the-size) finds them), for example "needs 3
+  prefill + 3 decode (has 2 + 2)". A role it cuts must hold at the window's peak
   too, as a spare must, so it never cuts a role the sentence says has no
   spare unless it also adds replicas of the other role, and then it says
-  so ("trading prefill for decode"). Other mixes of the same size that
+  so ("trading prefill for decode"). Other mixes of as many replicas that
   hold are listed too. With the prefill side not priced it says "needs at
   least 3 decode".
+  When the roles take different GPUs a replica, a `needed` line under the
+  verdict gives the GPUs of the fleet and of the other mixes. A right-sized
+  fleet gets that line too when another mix holds on fewer GPUs.
+  `--spare N` adds N replicas of each role to the fleet needed, on the same
+  line: the fleet that still holds with N replicas of each role lost (see
+  [Size for failures, minReplicaCount and quota](#size-for-failures-minreplicacount-and-quota)).
+  On a right-sized fleet the spare is added to the fleet judged, or to the
+  mix of fewer GPUs when one holds. When no
+  fleet within the bound holds, there is no `needed` line.
   Each role's standing is in the sentence ("decode: one fewer holds even
   at the peak 43.2 r/s; prefill: no spare (1.9% under its operating
   point)"), with any prefill imbalance f that no run learned at that pod
@@ -655,10 +670,11 @@ It exits 3: four buckets of 4k-token prompts cannot meet a 500 ms TTFT at
 any replica count, so their prefill is not sized and their decode is sized
 alone. A higher `--ttft` sizes them.
 
-- **Needed.** The fewest replicas that serve the bucket's rate under the SLO
-  and headroom: the fewest in all, ties going to fewer decode replicas, as
-  **What fleet does this traffic need?** finds them. Another mix may serve the
-  rate too. An hour's need is its busiest bucket's.
+- **Needed.** The fleet of the fewest GPUs that serves the bucket's rate under
+  the SLO and headroom, ties going to fewer replicas, then fewer decode
+  replicas, as **What fleet does this traffic need?** finds it. With both
+  roles at the same GPUs a replica, that is the fewest replicas. Another mix
+  may serve the rate too. An hour's need is its busiest bucket's.
 - **Sized for.** Each bucket is sized for the p95 of its cycles' rates when it
   holds 20 cycles or more (5 minutes at a 15 s cycle), else for their mean,
   which is less conservative, flagged `FewCyclesForP95`. `--size-for
@@ -700,6 +716,53 @@ alone. A higher `--ttft` sizes them.
   replicas that long before the rate arrives.
 - **JSON.** `-o json` prints every bucket, as `POST /v1/dayplan` returns it
   ([the day plan](api.md#the-day-plan)).
+
+## Size for failures, minReplicaCount and quota
+
+Every fleet the planner names, "needed" included, is the smallest that holds
+your targets with **no replica lost**. It does not plan for a node, a zone or a
+Pod going away. A fleet of 2 prefill + 2 decode loses half of a role to one
+lost replica, and with it most of the rate that role carried, until a
+replacement starts (on a GPU fleet, often minutes).
+
+Add the spare yourself, and decide how many from your failure domains:
+
+- **N+1.** One spare replica of each role: `--spare 1` on `at-replicas`, or
+  `"spare": 1` on [`POST /v1/size`](api.md#the-size) and
+  [`POST /v1/report`](api.md#the-report). The answer adds the spare to each
+  role, with its GPUs, and that fleet still holds with one replica of each
+  role lost at once.
+- **Larger failure domains.** When one node or one zone holds several
+  replicas of a role, the spare is the most replicas of that role one domain
+  holds: spread the role with a topology spread constraint, then set
+  `--spare` to the most replicas of the role that any one domain holds. A replica that spans
+  nodes (a LeaderWorkerSet group) is lost whole when one of its nodes is.
+
+Then map the answer onto the ScaledObject and the quota:
+
+- **`minReplicaCount`** per role: the quietest need plus the spare. Take the
+  quietest need from [the day plan](#plan-replicas-over-a-day) (`needed: at
+  the quietest ...`), or from `at-replicas --load-statistic mean` over a quiet
+  window, and add the spare. Below it, a failure at the trough leaves the
+  role under its need for a whole replica start.
+- **`maxReplicaCount`** per role: that role's largest need over the day (the
+  largest `needed.prefill` and `needed.decode` over the day plan's
+  `buckets[]` in `-o json`) plus the spare, with room for the growth you plan for (`--load-seen-x`). Take
+  each role's own largest need over the buckets, not the busiest bucket's
+  mix: each role scales on its own signal, and the prefill need need not peak
+  where the rate does. Between the two bounds the autoscaler sets the count.
+- **Quota.** Per accelerator type, the GPUs of those largest needs plus the
+  spare, summed over every model the quota covers, plus room for a rollout's
+  surge Pods: the `withSpare.gpus` of a size gives one model's at one rate.
+  Below that, the quota refuses the spare replicas at the peak
+  ([the quota limiter](../../reference/quota-limiter.md)).
+
+The planner sizes on each role's GPUs per replica as the source states them:
+a recording made by the scaling manager, or a capture with
+`--kube-state-metrics`, reads them from the Pods. A capture without it takes
+1 for every role (`--gpus-per-replica` sets one count for every role), and
+the answer is then the fewest replicas. A source that states no GPUs for a
+role is sized on replicas too, and the size says `minimizes: "replicas"`.
 
 ## Set your own prompt buckets
 

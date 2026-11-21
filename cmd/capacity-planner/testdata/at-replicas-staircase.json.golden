@@ -561,7 +561,13 @@
         "needed": {
           "prefill": 3,
           "decode": 3,
-          "maxReplicas": 32
+          "maxReplicas": 32,
+          "minimizes": "gpus",
+          "gpusPerReplica": {
+            "prefill": 1,
+            "decode": 1
+          },
+          "gpus": 6
         },
         "roles": [],
         "shrink": [],

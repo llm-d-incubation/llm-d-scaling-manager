@@ -201,8 +201,12 @@ up to the bound) and then bisecting back, so the cost grows with the answer,
 not with the bound: a rate one replica of each serves prices one fleet.
 
 The search is `whatifapi.SmallestFleet`, which `at-replicas`' needed fleet
-runs too. Its answer is the fewest replicas in all; of two as few, the one with
-fewer decode replicas.
+and the day plan's buckets run too. It ranks fleets by cost, each role's
+replicas times its weight (`whatifapi.ReplicaCost`: the inputs'
+`RoleInfo.GPUsPerReplica`, or 1 each where either role's is not stated),
+then by the replicas in all, then by decode replicas. With equal weights that
+is the fewest replicas in all, ties to fewer decode, the order before
+v0.12.3.
 
 1. Decode's floor: the fewest decode replicas whose own limit (TPOT, and the
    operating-point cap on decode's knee) reaches the rate, priced at one
@@ -210,13 +214,17 @@ fewer decode replicas.
    asked, one. No fleet with fewer decode replicas reaches the rate.
 2. From the floor up, the fewest prefill replicas whose fleet limit reaches
    the rate at each decode count, each search bounded by the count before
-   (more decode never needs more prefill). It stops once a decode count alone
-   reaches the best total found, or one prefill replica serves. This is the
+   (more decode never needs more prefill). At one decode count the fewest
+   prefill replicas rank first on every key. It stops once one prefill
+   replica beside the decode count ranks no better than the best found
+   (every fleet with more decode is at least that on each key), or one
+   prefill replica serves. `TestSmallestFleet_MatchesExhaustive` checks the
+   stop against trying every fleet in the bound. This is the
    coupling: decode admission holds the prefill limit down, and where it sets
    most of a TTFT, the floor's prefill count can be several times what one
    more decode replica needs (on the staircase at TTFT p95, 19 prefill + 5
-   decode against 5 + 6). Taking the fewest in all also makes the answer rise
-   with the rate.
+   decode against 5 + 6). Taking the cheapest in all also makes the answer's
+   cost rise with the rate.
 
 A limit reaches the rate when it is no more than a billionth under it: limits
 are bisections' answers, and on the worked recording the fleet limit wanders

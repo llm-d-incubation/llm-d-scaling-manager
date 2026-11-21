@@ -73,6 +73,17 @@ func variantParams(st *learnreplay.State, variant string) *capacity.EngineParams
 	return nil
 }
 
+// variantGPUs is the named variant's GPUs per replica as the state holds
+// them; 0 where it holds none.
+func variantGPUs(st *learnreplay.State, variant string) int {
+	for i := range st.Variants {
+		if st.Variants[i].Variant == variant {
+			return st.Variants[i].GPUsPerReplica
+		}
+	}
+	return 0
+}
+
 // variantEngine is the wire's account of the named variant's engine; nil
 // where the state holds no parameters for it.
 func variantEngine(st *learnreplay.State, variant string) *wireEngine {

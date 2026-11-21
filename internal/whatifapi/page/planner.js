@@ -989,7 +989,7 @@ function syncControls() {
   el("mplan").checked = !sizing;
   el("msize").checked = sizing;
   el("msize").disabled = !state.inputs.fleet.prefill;
-  el("modenote").textContent = sizing ? "Set the rate and the targets; the page finds the fewest replicas a role that meet them." :
+  el("modenote").textContent = sizing ? "Set the rate and the targets; the page finds the fleet of the fewest GPUs (replicas, where the source states no GPUs) that meets them." :
     "Set the replicas; the page prices the most they serve.";
   el("maxrow").hidden = !sizing;
   el("maxrep").value = k.maxRep;
@@ -1092,8 +1092,10 @@ function renderSize() {
     const low = z.sizeOn === "low";
     el("sizetitle").textContent = `The fleet ${rate} needs`;
     el("sizeanswer").innerHTML = `<div class="v">${fleetText(f)}</div>` +
-      `<div>The fewest replicas whose fleet limit reaches ${rate}` + (low ? " at the worst corner of V_P and f" : "") +
-      ` (the fewest in all; of two as few, the one with fewer decode replicas). ` +
+      `<div>The ${a.gpus != null ? "fewest GPUs" : "fewest replicas"} whose fleet limit reaches ${rate}` + (low ? " at the worst corner of V_P and f" : "") +
+      (a.gpus != null ? ` (${a.gpus} GPUs at ${a.gpusPerReplica.prefill} a prefill and ${a.gpusPerReplica.decode} a decode replica; ` +
+        `of two as few, the one with fewer replicas, then fewer decode). ` :
+        ` (the fewest in all; of two as few, the one with fewer decode replicas). `) +
       `Fleet limit <b>${figText(a.limit, fmtRate)}</b>, <span class="ok">headroom +${h != null ? fmtRate(h) : "refused"}</span> over the rate` +
       (low ? " at the worst corner" : "") + `; ${esc(rolesText(a.binding, "bind"))}${by ? ", " + esc(by) : ""}. ${flagChips(a.limit)}</div>` +
       lowNote(a.limit, z) + heldNote(a);

@@ -57,6 +57,9 @@ type ReportRequest struct {
 	// "pNN", or "mean" for the mean alone; absent, p90.
 	TPOTStatistic string  `json:"tpotStatistic,omitempty"`
 	Assume        *Assume `json:"assume,omitempty"`
+	// Spare adds that many replicas of each role to a verdict's needed
+	// fleet (ReportNeeded.WithSpare); 0 to 64, absent for none.
+	Spare *int `json:"spare,omitempty"`
 }
 
 // ReportQuery is a ReportRequest checked and read into numbers: the question
@@ -88,6 +91,9 @@ type ReportQuery struct {
 	Assume         Assume
 	// ArrivalCV2 is a stated Ca^2, nil for Poisson (Knobs').
 	ArrivalCV2 *float64
+	// Spare is the replicas of each role added to the needed fleet; 0 for
+	// none.
+	Spare int
 }
 
 // ReportShapeAsk is one request shape: Measured, or the mean prompt and
@@ -389,8 +395,9 @@ type ReportVerdict struct {
 	Scope   string `json:"scope"`
 	Reason  string `json:"reason"`
 	// Needed is the smallest fleet that holds every target at the load with
-	// headroom, on an UNDER-PROVISIONED or OVER-PROVISIONED verdict; nil on
-	// the others. A role it cuts holds its own check at the peak too, as
+	// headroom, on an UNDER-PROVISIONED or OVER-PROVISIONED verdict. On
+	// RIGHT-SIZED with a spare asked (ReportQuery.Spare) it is the fleet
+	// judged, not searched (Minimizes empty), for its spare; nil otherwise. A role it cuts holds its own check at the peak too, as
 	// Spare asks, so Needed cuts a role with no spare only in trade for
 	// more of the other role (Grow).
 	Needed *ReportNeeded `json:"needed,omitempty"`
@@ -402,14 +409,16 @@ type ReportVerdict struct {
 	Checks []ReportCheck `json:"checks"`
 }
 
-// ReportNeeded is the smallest fleet that holds every target at the load
+// ReportNeeded is the cheapest fleet that holds every target at the load
 // with headroom, found by POST /v1/size's search (SmallestFleet) on the
-// report's own check, a role it cuts holding its own check at the peak.
-// DecodeOnly is a prefill side that does not price:
+// report's own check, a role it cuts holding its own check at the peak:
+// the fewest GPUs where the source states both roles' GPUs per replica,
+// else the fewest replicas (Minimizes), ties to fewer replicas, then fewer
+// decode. DecodeOnly is a prefill side that does not price:
 // Decode is then the fewest decode replicas, and Prefill is 0. Alternatives
-// are the other mixes of the same total that also hold. Unmet says no fleet
-// within MaxReplicas of each role holds, and which role fell short; the
-// counts are then 0.
+// are the other mixes of the same total replicas that also hold, which may
+// take more GPUs. Unmet says no fleet within MaxReplicas of each role
+// holds, and which role fell short; the counts are then 0.
 type ReportNeeded struct {
 	Prefill      int           `json:"prefill"`
 	Decode       int           `json:"decode"`
@@ -417,6 +426,18 @@ type ReportNeeded struct {
 	Alternatives []FleetCounts `json:"alternatives,omitempty"`
 	Unmet        string        `json:"unmet,omitempty"`
 	MaxReplicas  int           `json:"maxReplicas"`
+	// Minimizes is what the search minimised (MinimizesGPUs or
+	// MinimizesReplicas); absent on a decode-only need, a count of one role.
+	Minimizes string `json:"minimizes,omitempty"`
+	// GPUsPerReplica is each role's GPUs per replica as the source states
+	// them, and GPUs the needed fleet's; absent where a counted role's are
+	// not stated, and GPUs absent with Unmet.
+	GPUsPerReplica *FleetCounts `json:"gpusPerReplica,omitempty"`
+	GPUs           *int         `json:"gpus,omitempty"`
+	// WithSpare is the needed fleet with the spare asked added to each
+	// role counted (ReportQuery.Spare): it still holds with that many
+	// replicas of each role lost at once. Absent with no spare or Unmet.
+	WithSpare *SpareFleet `json:"withSpare,omitempty"`
 }
 
 // ReportRole is one role's standing at the load: Spare says one replica
@@ -584,6 +605,12 @@ func ReportQueryOf(req ReportRequest) (ReportQuery, error) {
 			return q, InputErrorf("%s %g, want a finite value above 0", c.name, *c.x)
 		}
 		*c.to = *c.x
+	}
+	if req.Spare != nil {
+		if *req.Spare < 0 || *req.Spare > MaxSpare {
+			return q, InputErrorf("spare %d, want 0 to %d replicas of each role", *req.Spare, MaxSpare)
+		}
+		q.Spare = *req.Spare
 	}
 	if req.Headroom != nil {
 		if h := *req.Headroom; !(h > 0 && h < 1) {

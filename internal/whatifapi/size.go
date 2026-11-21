@@ -54,8 +54,9 @@ func reaches(x, rate float64) bool { return x >= rate*(1-reachTolerance) }
 // error, not the caller's.
 var errNotMonotone = errors.New("the size's search does not hold on this fleet")
 
-// handleSize is POST /v1/size: the fewest replicas per role whose fleet
-// limit reaches a rate, or why none within the bound does.
+// handleSize is POST /v1/size: the fleet of the fewest GPUs (or replicas,
+// where GPUs are not stated) whose fleet limit reaches a rate, or why none
+// within the bound does.
 func (s *Server) handleSize(w http.ResponseWriter, r *http.Request) {
 	var req SizeRequest
 	if !readJSON(w, r, &req) {
@@ -136,6 +137,12 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	spare := 0
+	if req.Spare != nil {
+		if spare = *req.Spare; spare < 0 || spare > MaxSpare {
+			return nil, InputErrorf("spare %d, want 0 to %d replicas of each role", spare, MaxSpare)
+		}
+	}
 	sc, err := scenarioOf(&e.doc, req.planAt(FleetCounts{Prefill: 1, Decode: 1}))
 	if err != nil {
 		return nil, err
@@ -147,7 +154,17 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Spare hashes only when asked, so that a size with none keeps the id it
+	// had before spares were asked of it.
 	id := contentID("size", struct {
+		Scenario Scenario
+		Bound    FleetCounts
+		On       string
+		Spare    int `json:",omitempty"`
+	}{sc, bound, on, spare})
+	// The search does not depend on the spare: it is kept under the id of
+	// the same size with none, so that asking for a spare searches once.
+	searchID := contentID("size", struct {
 		Scenario Scenario
 		Bound    FleetCounts
 		On       string
@@ -163,7 +180,7 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 			return nil, errBusy
 		}
 		defer func() { <-s.planSlots }()
-		found, ok := s.searches.get(id)
+		found, ok := s.searches.get(searchID)
 		if !ok {
 			if s.onSearch != nil {
 				s.onSearch()
@@ -173,7 +190,7 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 			if found, err = z.search(ctx); err != nil {
 				return nil, err
 			}
-			found = s.searches.add(id, found)
+			found = s.searches.add(searchID, found)
 		}
 		out := *found
 		if found.Answer != nil {
@@ -182,9 +199,14 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 			if err := s.planAnswer(ctx, req, *sc.Rate, on == SizeOnLow, out.Answer); err != nil {
 				return nil, err
 			}
+			if g := e.doc.Fleet.GPUsPerReplica(); g.Prefill > 0 && g.Decode > 0 {
+				a.GPUsPerReplica, a.GPUs = &g, FleetGPUs(a.Fleet, g)
+			}
+			a.WithSpare = WithSpare(a.Fleet, spare, e.doc.Fleet.GPUsPerReplica())
 		}
 		out.SchemaVersion, out.WhatifSchema, out.SizeID, out.InputsID, out.Banner = SchemaVersion, s.whatifSchema, id, e.id, banner
-		out.Rate, out.MaxReplicas, out.SizeOn = *sc.Rate, bound, on
+		out.Rate, out.MaxReplicas, out.SizeOn, out.Spare = *sc.Rate, bound, on, spare
+		_, out.Minimizes = ReplicaCost(e.doc.Fleet.GPUsPerReplica())
 		body, err := marshal(out)
 		if err != nil {
 			return nil, err
@@ -294,6 +316,12 @@ func (z *sizer) atDecode(ctx context.Context, n FleetCounts) (sizeEval, error) {
 		return z.at(ctx, n)
 	}
 	return z.priced(ctx, z.plain, n, false)
+}
+
+// cost is what the search weighs a replica of each role by, and the
+// objective that makes (ReplicaCost): the inputs' GPUs per replica.
+func (z *sizer) cost() (FleetCounts, string) {
+	return ReplicaCost(z.e.doc.Fleet.GPUsPerReplica())
 }
 
 // searched is how many fleets the search priced.
@@ -415,7 +443,8 @@ func smallest(lo, hi int, ok func(int) (bool, error)) (int, bool, error) {
 // at the scenario's targets. A fleet with one replica fewer of either role
 // that also serves the rate is errNotMonotone.
 func (z *sizer) search(ctx context.Context) (*SizeResponse, error) {
-	n, unmet, err := SmallestFleet(z.bound, func(n FleetCounts) (bool, error) {
+	cost, _ := z.cost()
+	n, unmet, err := SmallestFleet(z.bound, cost, func(n FleetCounts) (bool, error) {
 		v, err := z.atDecode(ctx, n)
 		return err == nil && z.decodeMeets(v), err
 	}, func(n FleetCounts) (bool, error) {
@@ -448,37 +477,84 @@ func (z *sizer) search(ctx context.Context) (*SizeResponse, error) {
 	return &SizeResponse{Answer: a, Searched: z.searched()}, nil
 }
 
+// The objectives a size's search minimises (SizeResponse.Minimizes).
+const (
+	// MinimizesGPUs is the fewest GPUs: each role's replicas times its GPUs
+	// per replica, as the source states them.
+	MinimizesGPUs = "gpus"
+	// MinimizesReplicas is the fewest replicas in all, where the source does
+	// not state both roles' GPUs per replica.
+	MinimizesReplicas = "replicas"
+)
+
+// ReplicaCost is what a size's search weighs one replica of each role by:
+// its GPUs per replica, prefill and decode, when both are stated (above 0),
+// else 1 each, which counts replicas. The objective it minimises is
+// MinimizesGPUs with GPUs stated, else MinimizesReplicas.
+func ReplicaCost(gpusPerReplica FleetCounts) (FleetCounts, string) {
+	if gpusPerReplica.Prefill > 0 && gpusPerReplica.Decode > 0 {
+		return gpusPerReplica, MinimizesGPUs
+	}
+	return FleetCounts{Prefill: 1, Decode: 1}, MinimizesReplicas
+}
+
+// Cost is n's replicas weighed by w, a role's weight below 1 counting as 1:
+// with w a role's GPUs per replica, the fleet's GPUs.
+func (n FleetCounts) Cost(w FleetCounts) int {
+	return n.Prefill*max(w.Prefill, 1) + n.Decode*max(w.Decode, 1)
+}
+
+// cheaper reports whether fleet a ranks before b in a size's search: the
+// lower cost under w, then the fewer replicas in all, then the fewer decode
+// replicas. With every weight 1 it is the fewer replicas, then the fewer
+// decode, the order the search took before it weighed GPUs.
+func cheaper(a, b, w FleetCounts) bool {
+	if ca, cb := a.Cost(w), b.Cost(w); ca != cb {
+		return ca < cb
+	}
+	if ta, tb := a.Prefill+a.Decode, b.Prefill+b.Decode; ta != tb {
+		return ta < tb
+	}
+	return a.Decode < b.Decode
+}
+
 // SmallestFleet is the search POST /v1/size runs, on any test of a fleet:
-// the fleet of the fewest replicas in all that holds, ties going to the one
-// with the fewer decode replicas. Replicas are counted alike: a role's GPUs
-// per replica are not weighed.
+// the fleet that holds at the least cost, cost being each role's replicas
+// times its weight in cost (Cost: a role's GPUs per replica, or 1 each to
+// count replicas, ReplicaCost), ties going to the fewer replicas in all,
+// then to the fewer decode replicas. With 8-GPU prefill and 1-GPU decode
+// replicas, 8 prefill + 5 decode (69 GPUs) is taken over 9 + 4 (76 GPUs);
+// with the roles' weights equal it is the fewest replicas in all.
 //
 //  1. decode's floor, on decodeHolds, its own limit, which the prefill count
 //     does not move: tried at one prefill replica. No fleet with fewer
 //     decode replicas holds, since holds asks decode's limit too.
 //  2. from that floor up, the fewest prefill replicas that hold at each
 //     decode count: never more than at the count before, so each search is
-//     bounded by the last. It stops once a decode count alone reaches the
-//     best total found, or one prefill replica holds.
+//     bounded by the last. At a decode count, the fewest prefill replicas
+//     are the cheapest fleet on every key. It stops once one prefill
+//     replica beside the decode count ranks no better than the best found
+//     (every fleet with more decode replicas is at least that on each key,
+//     so none ranks better), or one prefill replica holds.
 //
 // Taking decode's floor and then the prefill that joins it is not enough:
 // where decode admission sets most of a TTFT, more prefill replicas buy
 // little of it, and the floor's prefill count can be several times what
-// one more decode replica needs. The fewest in all is also what makes the
-// answer rise with the rate, as the set of fleets that hold shrinks.
+// one more decode replica needs. The cheapest in all is also what makes the
+// answer's cost rise with the rate, as the set of fleets that hold shrinks.
 //
 // With none within the bound, unmet names the role that fell short:
 // "decode" for decode's own limit, "fleet" for the two together. The tests
 // are taken to be monotone in each count, as a limit is.
-func SmallestFleet(bound FleetCounts, decodeHolds, holds func(FleetCounts) (bool, error)) (n FleetCounts, unmet string, err error) {
+func SmallestFleet(bound, cost FleetCounts, decodeHolds, holds func(FleetCounts) (bool, error)) (n FleetCounts, unmet string, err error) {
 	maxP, maxD := bound.Prefill, bound.Decode
 	d0, ok, err := smallest(1, maxD, func(d int) (bool, error) { return decodeHolds(FleetCounts{Prefill: 1, Decode: d}) })
 	if err != nil || !ok {
 		return n, roleDecode, err
 	}
-	best, found, pMax := 0, false, maxP
+	found, pMax := false, maxP
 	for d := d0; d <= maxD; d++ {
-		if found && d+1 >= best {
+		if found && !cheaper(FleetCounts{Prefill: 1, Decode: d}, n, cost) {
 			break
 		}
 		p, ok, err := smallest(1, pMax, func(p int) (bool, error) { return holds(FleetCounts{Prefill: p, Decode: d}) })
@@ -488,8 +564,8 @@ func SmallestFleet(bound FleetCounts, decodeHolds, holds func(FleetCounts) (bool
 		if !ok {
 			continue
 		}
-		if !found || p+d < best {
-			n, best, found = FleetCounts{Prefill: p, Decode: d}, p+d, true
+		if c := (FleetCounts{Prefill: p, Decode: d}); !found || cheaper(c, n, cost) {
+			n, found = c, true
 		}
 		if p == 1 {
 			break
@@ -511,6 +587,10 @@ func SmallestCount(lo, hi int, ok func(int) (bool, error)) (int, bool, error) {
 // DefaultSizeBound is the most replicas of a role a size tries unless asked
 // for more.
 const DefaultSizeBound = defaultSizeBound
+
+// MaxSpare is the most spare replicas of each role a size or a report adds
+// to its fleet: the most replicas of a role a scenario prices.
+const MaxSpare = maxReplicas
 
 // unmet is the size refused at the bound fleet n: the refusal of the role's
 // figure there, when the model refuses it (a term refused, a target under

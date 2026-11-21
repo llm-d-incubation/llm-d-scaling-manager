@@ -323,8 +323,12 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 		return fmt.Sprintf("%.2f prefill + %.2f decode", *r.Prefill, r.Decode)
 	}
 	if s.PeakNeeded != nil {
-		fmt.Fprintf(&b, "needed: at the busiest bucket %s, at the quietest %s (the fewest replicas in all; another mix may serve too)\n",
-			neededText(s.PeakNeeded), neededText(s.MinNeeded))
+		fewest := "the fewest replicas in all"
+		if g := s.SizedOnGPUs; g != nil {
+			fewest = fmt.Sprintf("the fewest GPUs, at %d a prefill and %d a decode replica", g.Prefill, g.Decode)
+		}
+		fmt.Fprintf(&b, "needed: at the busiest bucket %s, at the quietest %s (%s; another mix may serve too)\n",
+			neededText(s.PeakNeeded), neededText(s.MinNeeded), fewest)
 		fmt.Fprintf(&b, "replica-hours over the %d sized buckets: needed %s, had %s\n",
 			c.Sized, hours(s.NeededReplicaHours), hours(s.HadReplicaHours))
 		if s.NeededGPUHours != nil {

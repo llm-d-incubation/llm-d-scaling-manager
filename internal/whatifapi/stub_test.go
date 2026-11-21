@@ -53,6 +53,8 @@ type stubResolver struct {
 	noPrefillRole bool
 	// knees counts the DecodeKnee calls.
 	knees atomic.Int64
+	// gpus, when set, is each role's GPUs per replica the inputs state.
+	gpus *FleetCounts
 }
 
 var pinnedB = whatif.Unanswerable{Reason: whatif.PinnedDefaultB, Detail: "stub: a pinned-b line on the default intercept"}
@@ -82,6 +84,9 @@ func (r *stubResolver) Resolve(_ context.Context, req InputsRequest) (*Resolved,
 		Policy: PolicyInfo{TTFT: &PolicyObjective{Statistic: "p90", Seconds: 0.2}, TPOT: &PolicyObjective{Statistic: "mean", Seconds: 0.012},
 			Headroom: 0.85, FlowControl: "off, inferred"},
 		Terms: []Term{}, Assumed: []string{"Poisson arrivals"}}
+	if r.gpus != nil {
+		in.Fleet.Prefill.GPUsPerReplica, in.Fleet.Decode.GPUsPerReplica = r.gpus.Prefill, r.gpus.Decode
+	}
 	if req.Model == "decode-only" || r.noPrefillRole {
 		in.Fleet.Prefill = nil
 	}

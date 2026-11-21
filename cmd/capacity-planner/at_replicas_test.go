@@ -204,7 +204,9 @@ func TestAtReplicas_OverProvisionedNamesTheRole(t *testing.T) {
 	assert.Equal(t, whatifapi.VerdictUnder, v.Verdict, v.Reason)
 	assert.Equal(t, []string{roleDecode}, v.Grow, v.Summary)
 	require.NotNil(t, v.Needed)
-	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 2, Decode: 2, MaxReplicas: whatifapi.DefaultSizeBound}, *v.Needed)
+	gpus := 4
+	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 2, Decode: 2, MaxReplicas: whatifapi.DefaultSizeBound, Minimizes: whatifapi.MinimizesGPUs,
+		GPUsPerReplica: &whatifapi.FleetCounts{Prefill: 1, Decode: 1}, GPUs: &gpus}, *v.Needed)
 	assert.Contains(t, v.Summary, "needs 2 prefill + 2 decode (has 2 + 1)")
 }
 

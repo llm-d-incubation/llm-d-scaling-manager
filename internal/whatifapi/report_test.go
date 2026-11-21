@@ -107,15 +107,15 @@ func TestReportQueryOf_ReadsAGoodQuestion(t *testing.T) {
 func TestSmallestFleet_FewestInAll(t *testing.T) {
 	decodeHolds := func(n FleetCounts) (bool, error) { return n.Decode >= 5, nil }
 	holds := func(n FleetCounts) (bool, error) { return n.Decode >= 5 && n.Prefill*(n.Decode-4) >= 18, nil }
-	n, unmet, err := SmallestFleet(FleetCounts{Prefill: 32, Decode: 32}, decodeHolds, holds)
+	n, unmet, err := SmallestFleet(FleetCounts{Prefill: 32, Decode: 32}, FleetCounts{}, decodeHolds, holds)
 	require.NoError(t, err)
 	assert.Empty(t, unmet)
 	assert.Equal(t, FleetCounts{Prefill: 6, Decode: 7}, n)
 
-	_, unmet, err = SmallestFleet(FleetCounts{Prefill: 3, Decode: 6}, decodeHolds, holds)
+	_, unmet, err = SmallestFleet(FleetCounts{Prefill: 3, Decode: 6}, FleetCounts{}, decodeHolds, holds)
 	require.NoError(t, err)
 	assert.Equal(t, roleFleet, unmet)
-	_, unmet, err = SmallestFleet(FleetCounts{Prefill: 32, Decode: 4}, decodeHolds, holds)
+	_, unmet, err = SmallestFleet(FleetCounts{Prefill: 32, Decode: 4}, FleetCounts{}, decodeHolds, holds)
 	require.NoError(t, err)
 	assert.Equal(t, roleDecode, unmet)
 }

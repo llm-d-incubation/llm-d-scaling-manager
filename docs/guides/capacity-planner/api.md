@@ -197,7 +197,7 @@ way.
 | --- | --- |
 | `inputsId` | `sha256:` and a hash of the recording's bytes, the cycle, the model and the variants. The same source gives the same id. |
 | `source` | The kind, the recording's name or the window, the cycle read and how many the recording holds. |
-| `fleet` | The prefill and the decode variant, with their replica counts at the cycle. |
+| `fleet` | The prefill and the decode variant, with their replica counts at the cycle and `gpusPerReplica` where the source states it. |
 | `observed` | The mean prompt and output and the prompt's spread; the default buckets (1k, 4k, 8k, 32k, 128k, each named by its upper edge) and the one the mean prompt falls in. The request rate and the share per bucket are refused (`NoPerRequestLengths`): the source carries neither. |
 | `policy` | The policy's TTFT and TPOT objectives, the headroom (`scaleUpThreshold`), and the flow-control state. |
 | `terms` | V_P, a, f, the prompt and its cv, the KV transfer, the router hop, the ITL line, the KV capacity and per-request KV, the batch cap, the context window (`maxModelLen`), and R_q at p90: each with its source, or the refusal that stopped it. |
@@ -284,20 +284,28 @@ The full key list is pinned in
 | `traffic.classes.critical.rate` | required | The rate to size for. |
 | `maxReplicas` | `{"prefill": 32, "decode": 32}` | The most replicas of a role it tries, 1 to 64 each. |
 | `sizeOn` | `point` | What the fleet must reach the rate with: `point`, its limit, or `low`, the low end of the limit's span over V_P and f (about five times the cost). |
+| `spare` | `0` | Replicas of each role to add to the answer, 0 to 64: `answer.withSpare` is the fleet that still serves the rate with that many replicas of each role lost. |
 
 The inputs must have a prefill variant; a source with none is a 400. The search
-finds the fewest replicas in all whose fleet limit reaches the rate; of two as
-few, the one with fewer decode replicas. A role's GPUs per replica are not
-weighed. The report's `needed` fleet is found the same way, and a fleet with
-fewer replicas of a role than the one judged must also hold that role at the
-peak.
+finds the fleet of the fewest GPUs whose fleet limit reaches the rate: each
+role's replicas times its GPUs per replica, as the inputs state them
+(`fleet.prefill.gpusPerReplica`, `fleet.decode.gpusPerReplica`). Of two with
+as few GPUs, the one with fewer replicas in all, then the one with fewer
+decode replicas. With both roles at the same GPUs a replica, that is the
+fewest replicas, as before v0.12.3; where the inputs do not state both, it
+counts replicas (`minimizes: "replicas"`). The report's `needed` fleet is
+found the same way, and a fleet with fewer replicas of a role than the one
+judged must also hold that role at the peak.
 
 | Key | What it is |
 | --- | --- |
-| `sizeId` | A hash of the scenario, the bound and `sizeOn`. The same size gives the same id and bytes. |
-| `rate`, `maxReplicas`, `sizeOn` | What was asked. |
+| `sizeId` | A hash of the scenario, the bound, `sizeOn` and a `spare` above 0. The same size gives the same id and bytes. |
+| `rate`, `maxReplicas`, `sizeOn`, `spare` | What was asked; `spare` absent at 0. |
+| `minimizes` | What the search minimised: `gpus`, or `replicas` where the inputs do not state both roles' GPUs per replica. |
 | `searched` | How many fleets the search priced, besides the answer's plan. |
-| `answer.fleet` | The fewest replicas. |
+| `answer.fleet` | The fleet of the fewest GPUs (or replicas). |
+| `answer.gpusPerReplica`, `answer.gpus` | Each role's GPUs per replica and the fleet's GPUs; absent where the inputs do not state both roles'. `answer.withSpare.gpus` is absent likewise. |
+| `answer.withSpare` | With `spare` above 0: `spare`, `fleet` (the answer plus `spare` replicas of each role) and its `gpus`. It serves the rate with `spare` replicas of each role lost at once, since the answer does. Map it onto `minReplicaCount`, `maxReplicaCount` and quota as [the guide](README.md#size-for-failures-minreplicacount-and-quota) says. |
 | `answer.limit`, `answer.binding` | The plan's `limits.fleet` at that fleet, with its span in `sensitivity`, and the role that binds; `limit.boundBy` says which SLO or cap sets it. Sized on `point`, the span's low end may be under the rate. |
 | `answer.headroom` | The limit less the rate; sized `low`, the span's low end less the rate. |
 | `answer.fewerPrefill`, `answer.fewerDecode` | The fleet with one replica fewer of that role: its limit, its shortfall (`headroom`, negative), and the role that binds. Absent when the role has one replica. |
@@ -342,6 +350,7 @@ Every field but `inputsId` has a default.
 | `ttftStatistics` | `["p50", "p90"]` | The TTFT statistics the tables print, at most 4. |
 | `tpotStatistic` | `p90` | The TPOT percentile printed beside the mean; `mean` for the mean alone. |
 | `assume` | none | As for a plan: `vp`, `a`, `promptCV`, `routerHop`, `tpotRatio`, `itlB`, `itlBFromFloor`, `flowControl`, `routerWait`. |
+| `spare` | `0` | Replicas of each role added to a verdict's `needed` fleet, 0 to 64 (the CLI's `--spare`): `needed.withSpare`. |
 
 The answer:
 
@@ -354,7 +363,7 @@ The answer:
 | `shapes[].utilization` | At the load judged: decode's KV fill, batch slots occupied of the fleet's slots, and wait probability; prefill's utilization pooled and on the busiest pod. |
 | `shapes[].capacity` | The prefill, decode and fleet knees, the operating point and the highest rate that holds every target (`maxAtSLO`), each with output tokens a second and what binds it. |
 | `shapes[].table[]` | One row per load: TTFT at each statistic, TPOT mean and percentile, and `e2eMeanSum`, TTFT mean + (OL - 1) x TPOT mean, a sum of means and not a percentile. `cell` is the row in the summary: TTFT p90, the TPOT percentile (the mean where it is refused; `tpot.statistic` says which), and `mark`, the SLO judged at its own statistics (`met`, `missed`, `missed at onset` for a TTFT past the prefill flow-control onset, `saturated`, `unknown`, `no target`). |
-| `shapes[].verdict` | `UNDER-PROVISIONED` when the load judged is past headroom times the fleet knee or a target is missed there; `OVER-PROVISIONED` when a role has a replica to spare: one fewer of it holds every target at the load judged, and the role's own knee and target at the peak (`shrink` names the roles); `RIGHT-SIZED` otherwise; `roles[]` is each role's `spare` and `detail`; `needed` (on UNDER and OVER) is the smallest fleet that holds, `{prefill, decode, decodeOnly, alternatives, unmet, maxReplicas}`, by the search `/v1/size` runs; each role it cuts also holds its own knee and target at the peak, as a `spare` must, so it cuts a role with no spare only in trade for more of the other, which the summary says ("trading prefill for decode"); `grow` names the roles it adds to, and on OVER can name a role `shrink` names too; `NOT JUDGED` with no knee, no load, a target its own check cannot price, or a prefill side that does not price (`scope` `decode only`: never right-sized or over-provisioned, and no `maxAtSLO`). `summary` is one plain sentence, `reason` gives the numbers, and `checks` each fleet tried. |
+| `shapes[].verdict` | `UNDER-PROVISIONED` when the load judged is past headroom times the fleet knee or a target is missed there; `OVER-PROVISIONED` when a role has a replica to spare: one fewer of it holds every target at the load judged, and the role's own knee and target at the peak (`shrink` names the roles); `RIGHT-SIZED` otherwise; `roles[]` is each role's `spare` and `detail`; `needed` (on UNDER and OVER, and on RIGHT-SIZED as below) is the cheapest fleet that holds, `{prefill, decode, decodeOnly, alternatives, unmet, maxReplicas, minimizes, gpusPerReplica, gpus, withSpare}`, by the search `/v1/size` runs (`alternatives` are other mixes of as many replicas, which may take more GPUs; `minimizes` is absent on a decode-only need and on the fleet judged; `gpus` and `gpusPerReplica` are absent where a counted role's GPUs are not stated, and on a decode-only need `gpus` counts decode alone; `withSpare` is absent with `unmet`; on RIGHT-SIZED it is a mix of fewer GPUs that holds when the roles' GPUs differ, else with a `spare` the fleet judged); each role it cuts also holds its own knee and target at the peak, as a `spare` must, so it cuts a role with no spare only in trade for more of the other, which the summary says ("trading prefill for decode"); `grow` names the roles it adds to, and on OVER can name a role `shrink` names too; `NOT JUDGED` with no knee, no load, a target its own check cannot price, or a prefill side that does not price (`scope` `decode only`: never right-sized or over-provisioned, and no `maxAtSLO`). `summary` is one plain sentence, `reason` gives the numbers, and `checks` each fleet tried. |
 | `shapes[].growth[]` | One per growth load asked, in order: `load` (`seen x1.5`), `x`, the `rate` judged at, and a `verdict` of the same form. A what-if beside `verdict`, never in its place. |
 | `notValidated` | What no run has validated: the decode knee read 44% to 103% high on the goldens, and TTFT is unvalidated. |
 
@@ -397,9 +406,9 @@ bucket when the stated length lies outside what the buckets observed.
 | Key | What it is |
 | --- | --- |
 | `from`, `to`, `step`, `sizeFor`, `sizeForSource`, `minRequests`, `ttft`, `tpot`, `headroom`, `maxReplicas` | What was planned. |
-| `buckets[]` | `start`, `samples` (cycles), `requests`, `rate` (`mean`, `p95`, `max` of its cycle rates), `sizedFor` and `sizedRate`, `shape`, `status`, `needed` and `limit` (sized: the fewest replicas in all, ties to fewer decode, and another mix may serve too; `needed.prefill` absent and `needed.atLeast` true when prefill is not priced, decode then a lower bound), `unmet` and `unmetRole` (beyond the bound), `actual` (the median serving pods of the priced prefill and decode variants), `hadLimit` (the limit of the fleet it had, priced whole), `verdict` (`under` when `hadLimit` falls short of the rate, `over` when one replica fewer of either role still serves it, `match`, `refused`) and `flags`. |
+| `buckets[]` | `start`, `samples` (cycles), `requests`, `rate` (`mean`, `p95`, `max` of its cycle rates), `sizedFor` and `sizedRate`, `shape`, `status`, `needed` and `limit` (sized: the fewest GPUs, or the fewest replicas where the roles' GPUs per replica are equal or not stated, ties to fewer replicas, then fewer decode, and another mix may serve too; `needed.prefill` absent and `needed.atLeast` true when prefill is not priced, decode then a lower bound), `unmet` and `unmetRole` (beyond the bound), `actual` (the median serving pods of the priced prefill and decode variants), `hadLimit` (the limit of the fleet it had, priced whole), `verdict` (`under` when `hadLimit` falls short of the rate, `over` when one replica fewer of either role still serves it, `match`, `refused`) and `flags`. |
 | `hours[]` | Per UTC hour: the rate over its cycles, the need of its busiest sized bucket (the one of the highest sized rate), the fewest pods it had, `unmet` (buckets beyond the bound), and the verdict: `under` when any bucket was under or beyond the bound, `refused` when every bucket with data was refused, `over` when every sized bucket was over. |
-| `summary` | `peakNeeded` and `minNeeded` (the needs of the busiest and the quietest sized buckets), replica-hours and GPU-hours needed and had over the sized buckets (absent when none was sized; prefill's hours and the GPU-hours also when any sized bucket did not price prefill, `counts.prefillNotPriced`), `hadReplicaHoursAll` and `hadGpuHoursAll` over every bucket with data, `underHours`, `overHours`, `refusedHours`, and the counts, including how many buckets were sized for each statistic. |
+| `summary` | `peakNeeded` and `minNeeded` (the needs of the busiest and the quietest sized buckets), `sizedOnGpus` (the GPUs per replica the search weighed each role by, present only where they differ between the roles), replica-hours and GPU-hours needed and had over the sized buckets (absent when none was sized; prefill's hours and the GPU-hours also when any sized bucket did not price prefill, `counts.prefillNotPriced`), `hadReplicaHoursAll` and `hadGpuHoursAll` over every bucket with data, `underHours`, `overHours`, `refusedHours`, and the counts, including how many buckets were sized for each statistic. |
 | `searched` | How many fleets the plan priced. |
 | `refused[]` | Every term the source cannot price at any rate, with `role`, `term` (`ttft`, `tpot`, `decodeKnee`), `reason`, `detail`, `hint` (what to do), `effect` (what the plan did instead) and `buckets`. Empty when every term priced. |
 | `notes` | What it does not price: scale-up lag (it sizes steady state), and the prefix hit rate. |

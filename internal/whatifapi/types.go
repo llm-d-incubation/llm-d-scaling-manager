@@ -97,9 +97,23 @@ type FleetInfo struct {
 // RoleInfo is one role's variant and its replica count at the cycle, and
 // the engine it runs.
 type RoleInfo struct {
-	Variant  string      `json:"variant"`
-	Replicas int         `json:"replicas"`
-	Engine   *EngineInfo `json:"engine,omitempty"`
+	Variant  string `json:"variant"`
+	Replicas int    `json:"replicas"`
+	// GPUsPerReplica is the GPUs one replica requests, as the source states
+	// it; absent where it states none. A size weighs replicas by it
+	// (ReplicaCost).
+	GPUsPerReplica int         `json:"gpusPerReplica,omitempty"`
+	Engine         *EngineInfo `json:"engine,omitempty"`
+}
+
+// GPUsPerReplica is each role's GPUs per replica as the inputs state them, 0
+// for a role they do not state or a fleet with no prefill variant.
+func (f FleetInfo) GPUsPerReplica() FleetCounts {
+	out := FleetCounts{Decode: f.Decode.GPUsPerReplica}
+	if f.Prefill != nil {
+		out.Prefill = f.Prefill.GPUsPerReplica
+	}
+	return out
 }
 
 // EngineInfo is the engine a variant runs: which one, for vLLM the release
@@ -661,8 +675,8 @@ type UploadResponse struct {
 	UploadedAt    string `json:"uploadedAt"`
 }
 
-// SizeRequest is POST /v1/size: the fewest replicas per role whose fleet
-// limit reaches the rate, under the SLO. The rate is required; every other
+// SizeRequest is POST /v1/size: the fleet of the fewest GPUs (SizeAnswer)
+// whose fleet limit reaches the rate, under the SLO. The rate is required; every other
 // field defaults as a plan's does. MaxReplicas bounds the search per role.
 type SizeRequest struct {
 	InputsID    string      `json:"inputsId"`
@@ -674,6 +688,10 @@ type SizeRequest struct {
 	// SizeOn is what a fleet must reach the rate with: "point", its limit
 	// (the default), or "low", the low end of its span over V_P and f.
 	SizeOn string `json:"sizeOn,omitempty"`
+	// Spare is the replicas of each role to add to the answer so that the
+	// fleet still serves the rate with that many of each role lost
+	// (SizeAnswer.WithSpare); 0 to maxReplicas, absent for none.
+	Spare *int `json:"spare,omitempty"`
 	// BucketEdges are refused: a size prices the mix line alone, and the
 	// edges shape only a plan's "if all traffic were bucket b" view.
 	BucketEdges []int `json:"bucketEdges,omitempty"`
@@ -693,17 +711,33 @@ type SizeResponse struct {
 	MaxReplicas FleetCounts `json:"maxReplicas"`
 	// SizeOn is "point" or "low", as asked.
 	SizeOn string `json:"sizeOn"`
+	// Minimizes is what the search minimised: "gpus" (MinimizesGPUs) where
+	// the inputs state both roles' GPUs per replica, else "replicas"
+	// (MinimizesReplicas). Ties go to fewer replicas in all, then to fewer
+	// decode replicas.
+	Minimizes string `json:"minimizes"`
+	// Spare is the spare replicas of each role asked, absent for none.
+	Spare int `json:"spare,omitempty"`
 	// Searched is how many fleets the search priced, the answer's plan aside.
 	Searched int         `json:"searched"`
 	Answer   *SizeAnswer `json:"answer,omitempty"`
 	Unmet    *SizeUnmet  `json:"unmet,omitempty"`
 }
 
-// SizeAnswer is the fewest replicas per role: decode's fewest first, then
-// prefill's fewest at that decode count. Limit, Headroom and Binding are the
-// plan's at the fleet, and Plan is that plan, as POST /v1/plan returns it.
+// SizeAnswer is the cheapest fleet that serves the rate: the fewest GPUs, or
+// the fewest replicas where GPUs are not stated (SizeResponse.Minimizes).
+// Limit, Headroom and Binding are the plan's at the fleet, and Plan is that
+// plan, as POST /v1/plan returns it.
 type SizeAnswer struct {
 	Fleet FleetCounts `json:"fleet"`
+	// GPUsPerReplica is each role's GPUs per replica and GPUs the fleet's,
+	// both absent where the inputs do not state both roles'.
+	GPUsPerReplica *FleetCounts `json:"gpusPerReplica,omitempty"`
+	GPUs           *int         `json:"gpus,omitempty"`
+	// WithSpare is the fleet with the spare replicas asked added to each
+	// role: it still serves the rate with that many replicas of each role
+	// lost at once, since Fleet does. Absent with no spare asked.
+	WithSpare *SpareFleet `json:"withSpare,omitempty"`
 	// Limit is the fleet's limit (the plan's limits.fleet). Headroom is what
 	// the size is on less the rate: the limit, or sized on the low end the
 	// limit's span's low end, the same basis as the steps' Headroom.
@@ -716,6 +750,41 @@ type SizeAnswer struct {
 	FewerPrefill *SizeStep    `json:"fewerPrefill,omitempty"`
 	FewerDecode  *SizeStep    `json:"fewerDecode,omitempty"`
 	Plan         PlanResponse `json:"plan"`
+}
+
+// SpareFleet is a fleet needed plus Spare replicas of each role: Fleet, and
+// its GPUs where both roles' GPUs per replica are stated. Losing up to Spare
+// replicas of each role at once leaves at least the fleet needed, which
+// holds. A plan of 2 prefill + 2 decode loses half a role to one replica
+// lost; with a spare of 1 it is 3 + 3.
+type SpareFleet struct {
+	Spare int         `json:"spare"`
+	Fleet FleetCounts `json:"fleet"`
+	GPUs  *int        `json:"gpus,omitempty"`
+}
+
+// WithSpare is n plus spare replicas of each role, with its GPUs where
+// gpusPerReplica states both roles'; nil for a spare of 0. A role at 0 (a
+// decode-only need, with no prefill counted) stays at 0.
+func WithSpare(n FleetCounts, spare int, gpusPerReplica FleetCounts) *SpareFleet {
+	if spare <= 0 {
+		return nil
+	}
+	f := FleetCounts{Prefill: n.Prefill, Decode: n.Decode + spare}
+	if n.Prefill > 0 {
+		f.Prefill += spare
+	}
+	return &SpareFleet{Spare: spare, Fleet: f, GPUs: FleetGPUs(f, gpusPerReplica)}
+}
+
+// FleetGPUs is n's GPUs at gpusPerReplica, or nil where it does not state a
+// role n counts.
+func FleetGPUs(n, gpusPerReplica FleetCounts) *int {
+	if gpusPerReplica.Decode <= 0 || (n.Prefill > 0 && gpusPerReplica.Prefill <= 0) {
+		return nil
+	}
+	g := n.Prefill*gpusPerReplica.Prefill + n.Decode*gpusPerReplica.Decode
+	return &g
 }
 
 // SizeStep is one fleet the search priced: its limit, as the plan's +1

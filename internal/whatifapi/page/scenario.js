@@ -803,7 +803,7 @@ function verdictLine(v, fallback, has) {
   const text = (v && v.summary) || fallback || word;
   // rest is the sentence after its verdict, which the page sets in bold.
   let rest = text.startsWith(word + ": ") ? text.slice(word.length + 2) : text;
-  const needs = neededText(v && v.needed, has);
+  const needs = neededText(v && v.needed, has, word);
   // The fleet needed is shown as its own chip, so the sentence does not
   // repeat it.
   if (needs) rest = rest.replace(NEEDS_CLAUSE, "").replace(/;\s*\(/, " (").replace(/[;,]\s*\./, ".");
@@ -817,8 +817,16 @@ const NEEDS_CLAUSE = /;?\s*needs [^;()]*\(has \d+ \+ \d+\)(,? or \d+ \+ \d+)*/;
 // neededText is the fleet a verdict needs, in words: "needs 3 prefill +
 // 4 decode (has 2 + 2)", "or 4 + 3" for each alternative, "at least" where
 // the prefill side is not priced, or the bound no fleet within serves.
-function neededText(n, has) {
+function neededText(n, has, verdict) {
+  // A right-sized fleet carries a needed fleet only for its spare or a
+  // cheaper mix in GPUs: no "needs" chip beside a fleet that holds.
   if (!n) return "";
+  if (verdict === "RIGHT-SIZED") {
+    const w = n.withSpare, gp = g => g != null ? ` = ${g} GPUs` : "";
+    if (n.minimizes) return `a mix of fewer GPUs also holds: ${n.prefill} prefill + ${n.decode} decode${gp(n.gpus)}` +
+      (w ? `; with ${w.spare} spare of each role ${w.fleet.prefill} + ${w.fleet.decode}${gp(w.gpus)}` : "");
+    return w ? `with ${w.spare} spare of each role: ${w.fleet.prefill} prefill + ${w.fleet.decode} decode${gp(w.gpus)}` : "";
+  }
   if (n.unmet) return `no fleet up to ${n.maxReplicas} replicas serves this (${n.unmet} does not reach the load)`;
   const now = has ? ` (has ${has.prefill} + ${has.decode})` : "";
   if (n.decodeOnly) return `needs at least ${n.decode} decode${has ? ` (has ${has.decode})` : ""}; prefill is not priced`;

@@ -10,7 +10,9 @@ import (
 )
 
 // The fleet a verdict says is needed rises with the load and is the fewest
-// replicas in all: for each shape, across a sweep of loads, its total never
+// replicas in all (the staircase states 1 GPU a replica for both roles, where
+// the fewest GPUs are the fewest replicas; TestAtReplicas_NeededFewestGPUs
+// checks unequal GPUs): for each shape, across a sweep of loads, its total never
 // falls as the load rises, it holds, and no fleet of one replica fewer in
 // all holds. The TTFT target is at p95, where decode admission sets most of
 // the 16k-prompt shape's TTFT: there a search that fixes decode at its own
