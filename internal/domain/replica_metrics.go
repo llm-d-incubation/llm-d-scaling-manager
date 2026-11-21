@@ -898,6 +898,35 @@ func (m ReplicaMetrics) BusiestRankKvUsage() float64 {
 	return m.MaxRankKvCacheUsage
 }
 
+// BusiestRankFillRatio is how much fuller the record's busiest rank is than
+// the mean of its ranks: MaxRankKvCacheUsage over KvCacheUsage, two readings
+// of the same one-minute peaks per rank (the max of them and their mean), so
+// at least 1. ok is false with one rank, or where either was not read.
+//
+// The ranks of a data-parallel MoE engine step in lockstep: vLLM pads every
+// rank's step to the busiest one's batch and runs the expert all-to-all
+// across them, so the pod's step time follows its busiest rank, while its
+// balancer evens out request counts, not KV (issue
+// llm-d-incubation/llm-d-scaling-manager#312).
+func (m ReplicaMetrics) BusiestRankFillRatio() (float64, bool) {
+	if m.Ranks() <= 1 || !(m.MaxRankKvCacheUsage > 0) || !(m.KvCacheUsage > 0) {
+		return 0, false
+	}
+	return max(m.MaxRankKvCacheUsage/m.KvCacheUsage, 1), true
+}
+
+// BusiestRankKvUsageForITL is KvUsageForITL carried to the busiest rank:
+// times BusiestRankFillRatio, at most 1. Where the ratio was not read it is
+// KvUsageForITL, the least the busiest rank holds.
+func (m ReplicaMetrics) BusiestRankKvUsageForITL() float64 {
+	k := m.KvUsageForITL()
+	r, ok := m.BusiestRankFillRatio()
+	if !ok {
+		return k
+	}
+	return min(k*r, 1)
+}
+
 // KvUsageForITL is the k an ITL(k) reading pairs with AvgITL: KvUsageMean,
 // taken over the same minute as the ITL's rate, when it was read, and
 // otherwise KvUsageInstant (issue ev-shindin/llm-scaling-manager#393). The instant k against a minute's

@@ -403,6 +403,9 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 		if w := pv.itlBNotUsed(); w != "" {
 			pf.assume("%s", w)
 		}
+		if w := pv.busiestRankAssumed(); w != "" {
+			pf.assume("%s", w)
+		}
 		if domain.CanonicalRole(pv.state.Role) == domain.RoleBoth {
 			pf.refused = aggregatedRefusal(pv.state.Variant)
 			return pf

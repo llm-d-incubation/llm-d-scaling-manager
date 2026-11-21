@@ -52,17 +52,18 @@ func engineTPOTWindow(rows []domain.ReplicaMetrics, roles map[string]string) (wh
 // decodeFill is the decode replicas' mean KV fill in one cycle, the fill a
 // TPOT window of the cycle is filed under for R_q by fill
 // (whatif.TPOTWindow.Fill). Each serving decode row reads the k its ITL pairs
-// with (domain.ReplicaMetrics.KvUsageForITL); a row with no fill read, a
-// prefill row, and a row that serves nothing yet (prefill.Serving) are left
-// out. ok is false with no row left.
-func decodeFill(rows []domain.ReplicaMetrics, roles map[string]string) (float64, bool) {
+// with (domain.ReplicaMetrics.KvUsageForITL, or at the busiest rank for a
+// variant busiest names: fillForITL); a row with no fill read, a prefill row,
+// and a row that serves nothing yet (prefill.Serving) are left out. ok is
+// false with no row left.
+func decodeFill(rows []domain.ReplicaMetrics, roles map[string]string, busiest func(variant string) bool) (float64, bool) {
 	sum, n := 0.0, 0
 	for _, rm := range rows {
 		if !rm.KvUsageMeanKnown && !rm.KvUsageInstantKnown || !prefill.Serving(rm) ||
 			domain.CanonicalRole(roles[rm.VariantName]) == domain.RolePrefill {
 			continue
 		}
-		k := rm.KvUsageForITL()
+		k := fillForITL(rm, busiest)
 		if !whatif.Finite(k) || k < 0 {
 			continue
 		}

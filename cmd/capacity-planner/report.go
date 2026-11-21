@@ -187,6 +187,9 @@ func (r *reporter) shapeReport(ctx context.Context, np, nd int) (whatifapi.Repor
 	if r.pv.bandFloor > 0 {
 		r.addAssumed(adaptedBandFloorWords(r.pv))
 	}
+	if w := r.pv.busiestRankAssumed(); w != "" {
+		r.addAssumed(w)
+	}
 	if w := r.pv.itlBWords(); w != "" {
 		r.addAssumed(w)
 	}

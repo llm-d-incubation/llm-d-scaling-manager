@@ -36,11 +36,47 @@ type lineSamples struct {
 	// drops as idle, and the floor below the band is read from
 	// (whatif.BelowBand.LeastITL, itl.BelowBandFloor), each with its fill.
 	below map[string][]itl.Observation
+	// ratios is each variant's latest busiest/mean rank fill ratios
+	// (domain.ReplicaMetrics.BusiestRankFillRatio), at most
+	// busiestRatioRows of them, from rows whose busiest rank fills at least
+	// the band's bottom; kept only for a variant whose line is read at its
+	// busiest rank (saturation.SwitchMoEBusiestRank).
+	ratios map[string][]float64
+}
+
+// busiestRatioRows is how many rows a variant's busiest/mean rank fill ratio
+// is the median of: one row a replica a cycle, so an hour of one replica at
+// the default 15 s cycle, 7.5 minutes of eight.
+const busiestRatioRows = 240
+
+// busiestRatio is the median of the variant's ratios, 0 with none.
+func (l *lineSamples) busiestRatio(variant string) float64 {
+	rs := l.ratios[variant]
+	if len(rs) == 0 {
+		return 0
+	}
+	s := slices.Sorted(slices.Values(rs))
+	if n := len(s); n%2 == 1 {
+		return s[n/2]
+	}
+	return (s[len(s)/2-1] + s[len(s)/2]) / 2
+}
+
+// fillForITL is the k a row's ITL pairs with as the line was read: at the
+// busiest rank where busiest says the variant's line is
+// (saturation.SwitchMoEBusiestRank), the mean over the ranks otherwise. A nil
+// busiest reads the mean.
+func fillForITL(rm domain.ReplicaMetrics, busiest func(variant string) bool) float64 {
+	if busiest != nil && busiest(rm.VariantName) {
+		return rm.BusiestRankKvUsageForITL()
+	}
+	return rm.KvUsageForITL()
 }
 
 func newLineSamples() *lineSamples {
 	return &lineSamples{steady: map[string][]whatif.LineRow{}, ramps: map[string][]whatif.LineRow{},
-		above: map[string][]whatif.LineRow{}, fills: map[string][]fillAt{}, below: map[string][]itl.Observation{}}
+		above: map[string][]whatif.LineRow{}, fills: map[string][]fillAt{}, below: map[string][]itl.Observation{},
+		ratios: map[string][]float64{}}
 }
 
 // leastBelowBand is the variant's floor below the band, in seconds
@@ -65,8 +101,10 @@ func (l *lineSamples) rows(variant string) []whatif.LineRow {
 // note reads one cycle: every row of a variant that is not prefill, with a
 // token rate, at a fill the check compares. A row above the band is kept to
 // be counted, and is not compared: no answer reads the line there
-// (whatif.ReachableFill, and the band's clamp).
-func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
+// (whatif.ReachableFill, and the band's clamp). busiest names the variants
+// whose line is read at the busiest rank (fillForITL): their rows are read
+// there too, and their busiest/mean ratios kept.
+func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, busiest func(variant string) bool) {
 	policy, _ := in.Config.(*config.ScalingPolicy)
 	steady := policy.ITLSteadiness()
 	bottom, top := policy.ITLBand()
@@ -75,7 +113,17 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
 		if !prefill.Serving(rm) || domain.CanonicalRole(roles[rm.VariantName]) == domain.RolePrefill {
 			continue
 		}
-		k := rm.KvUsageForITL()
+		k := fillForITL(rm, busiest)
+		// The ratio's filter reads the busiest rank's peak, not fillForITL's
+		// k, on purpose: it asks whether the pod was loaded as the band's
+		// bottom counts load, at the rank that sets its step.
+		if r, ok := rm.BusiestRankFillRatio(); ok && busiest != nil && busiest(rm.VariantName) &&
+			rm.BusiestRankKvUsage() >= bottom {
+			l.ratios[rm.VariantName] = append(l.ratios[rm.VariantName], r)
+			if n := len(l.ratios[rm.VariantName]); n > busiestRatioRows {
+				l.ratios[rm.VariantName] = l.ratios[rm.VariantName][n-busiestRatioRows:]
+			}
+		}
 		s := shape.New(rm.AvgInputTokens, rm.AvgOutputTokens, rm.PrefixCacheHitRate)
 		if rm.AvgOutputTokensSquaredKnown {
 			s = s.WithOutputDispersion(shape.Dispersion(rm.AvgOutputTokens, rm.AvgOutputTokensSquared))

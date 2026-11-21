@@ -179,7 +179,7 @@ func termsOf(f *answerFlags, st *learnreplay.State, pv *pricedVariant, pf *price
 		add("itlA", pv.state.Tier, figure(pv.decode.Line.A, "s"))
 		add("itlB", pv.state.Tier, figure(pv.decode.Line.B, "s"))
 	}
-	add("capacityTokens", "", figure(pv.decode.CapacityTokens, "tokens"))
+	add("capacityTokens", pv.capacitySource(), figure(pv.decode.CapacityTokens, "tokens"))
 	add("kvPerRequest", pv.kvSource, figure(pv.decode.KVPerRequest, "tokens"))
 	add("batchCap", pv.state.BatchCapSource, figure(float64(pv.perRank), "sequences per rank"))
 	add(whatifapi.TermMaxModelLen, "engine arguments", contextOf(st.Variants, pf.variant, pv.state.Variant))

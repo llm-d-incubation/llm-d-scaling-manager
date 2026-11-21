@@ -133,6 +133,8 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 			parts = append(parts, fmt.Sprintf("%s (%s, %s)", f, ms(pv.itlB.Seconds), pv.itlB.Source))
 		case adaptedBandFloor:
 			parts = append(parts, fmt.Sprintf("%s (%.2f, the policy's %.2f)", f, pv.bandFloor, pv.bandPolicyFloor))
+		case busiestRankFill:
+			parts = append(parts, fmt.Sprintf("%s (%s)", f, busiestRankWords(pv.state.BusiestRankRatio)))
 		case whatif.LineNearGate:
 			parts = append(parts, fmt.Sprintf("%s (%d/%d)", f, pv.lines.TierChanges(), pv.lines.Drawn))
 		default:
@@ -140,4 +142,13 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 		}
 	}
 	fmt.Fprintf(b, "flags: %s\n", strings.Join(parts, "; "))
+}
+
+// busiestRankWords says what a BusiestRankFill figure's fill is, and the
+// ratio its capacity was priced at.
+func busiestRankWords(ratio float64) string {
+	if !(ratio > 1) {
+		return "busiest rank not read: fill is the mean over the ranks, priced at the whole capacity, optimistic by the spread unseen"
+	}
+	return fmt.Sprintf("fill is the busiest rank's; mean fill = fill / %.2f, a lower bound on the ratio", ratio)
 }

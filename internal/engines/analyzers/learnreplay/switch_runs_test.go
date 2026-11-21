@@ -1117,6 +1117,13 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 	// golden replay runs it off, and off alone from all on moves nothing.
 	// Its unit tests hold it (heldBy).
 	saturation.SwitchDecodeOwesRouterBacklog: nil,
+	// llm-d-incubation/llm-d-scaling-manager#312 reads a data-parallel MoE
+	// engine's line at its busiest rank: off from the constructor, so every
+	// golden replay runs it off, and off alone from all on moves nothing. On,
+	// it moves nothing either: no committed recording runs expert
+	// parallelism over more than one data-parallel rank. Its unit tests hold
+	// it (heldBy).
+	saturation.SwitchMoEBusiestRank: nil,
 	// llm-d-incubation/llm-d-scaling-manager#169 item 1: the ITL line's B
 	// pinned through the floor below the band while unlearned. Off from the
 	// constructor, so every golden replay runs it off, and off alone from
@@ -1409,6 +1416,19 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestDecodeRouterBacklog_DecodeBoundPDIsChargedTheQueue"},
 		{"../saturation", "TestDecodeRouterBacklog_PrefillBoundIsUnchanged"},
 		{"../saturation", "TestDecodeRouterBacklog_OffFromTheConstructor"},
+	},
+	// llm-d-incubation/llm-d-scaling-manager#312: off from the constructor,
+	// and the reading, the planner's rows and its price run on and off.
+	saturation.SwitchMoEBusiestRank: {
+		{"../saturation", "TestMoEBusiestRank_OffFromTheConstructor"},
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../saturation", "TestMoEBusiestRank_OnlyExpertParallelDataParallel"},
+		{"../saturation", "TestMoEBusiestRank_LineReadAtTheBusiestRank"},
+		{"../saturation", "TestBusiestRankRows"},
+		{".", "TestLineSamples_BusiestRankRowsAndRatio"},
+		{".", "TestLineSamples_BusiestRatioMedianOfLoadedRows"},
+		{"../../../../cmd/capacity-planner", "TestBusiestRank_ReplayToPrice"},
+		{"../../../../cmd/capacity-planner", "TestBusiestRankCapacity_PricesTheMeanAtTheTopOverTheRatio"},
 	},
 	// The capacity planner's switches: each runs the switch on and off and
 	// asserts both, and the first holds all six off from the constructor.

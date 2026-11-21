@@ -934,6 +934,32 @@ p90 TTFT on the B-off and B-on phases reads 15% to 23% under; the lift alone,
 on the steeper line the hold replaces, reads TPOT higher still (1.84 to
 2.06).
 
+`saturation.SwitchMoEBusiestRank` (`moe-dp-busiest-rank`, issue
+llm-d-incubation/llm-d-scaling-manager#312) is planner-only, off, and
+replay-only: no CLI flag or API field sets it, and it is not in
+`learnreplay.PlannerSwitches`. vLLM runs the data-parallel ranks of an
+expert-parallel MoE engine in lockstep, so a pod steps at its busiest rank,
+while its balancer evens out request counts, not KV. On, for a vLLM variant
+with expert parallelism over more than one local data-parallel rank
+(`SaturationAnalyzer.BusiestRankFillFor`), `fitLines` hands the ITL tracker
+its rows with each fill carried to the busiest rank (`busiestRankRows`, the
+fill times `domain.ReplicaMetrics.BusiestRankFillRatio`, at most 1), so the
+line and the band are that rank's. The tracker itself is unchanged. The replay does the same for its rows and its TPOT fill
+(`learnreplay.fillForITL`), and keeps the median busiest/mean ratio of the
+rows whose busiest rank fills the band's bottom or more
+(`VariantState.BusiestRankRatio`): the ratio is read on a loaded pod's peak
+on purpose, since an idle pod's spread is not the one it runs at the band's
+top. The planner prices the variant's capacity over that ratio
+(`busiestRankCapacity` in `cmd/capacity-planner`), and names the flag
+`BusiestRankFill` with the ratio in its text, its assumed inputs and the
+capacity's source. Limits: the ratio is of one-minute peaks per rank, a lower
+bound on the instantaneous busiest/mean ratio where the hottest rank changes
+inside the minute, so the price stays optimistic by the difference;
+`whatif.CheckLine` prices every row at the median ratio, not the row's own;
+and the analyzer's derived mu (`whatif.DeriveMuAtCap`) still takes the whole
+capacity with the busiest-rank line. The evidence is synthetic: no
+committed recording runs data parallelism.
+
 A saturated fleet has few steady readings: `k` swings between above the band
 and its dips into it by more than `DefaultMaxKDrift`, and on a two-namespace
 run the steady readings numbered 0 on almost every cycle. So the pinned fit

@@ -28,10 +28,10 @@ func TestDecodeFill(t *testing.T) {
 		row("p", 0.9, 0.9, true, true),   // prefill
 		notReady, bridge,
 	}
-	k, ok := decodeFill(rows, roles)
+	k, ok := decodeFill(rows, roles, nil)
 	assert.True(t, ok)
 	assert.InDelta(t, 0.3, k, 1e-12)
 
-	_, ok = decodeFill([]domain.ReplicaMetrics{row("p", 0.5, 0.5, true, true)}, roles)
+	_, ok = decodeFill([]domain.ReplicaMetrics{row("p", 0.5, 0.5, true, true)}, roles, nil)
 	assert.False(t, ok, "a cycle with no decode row has no fill")
 }

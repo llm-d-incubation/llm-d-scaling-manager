@@ -25,7 +25,7 @@ func lineInput(k, il float64) domain.AnalyzerInput {
 func noteCycles(t0 time.Time, inputs ...domain.AnalyzerInput) *lineSamples {
 	l := newLineSamples()
 	for i, in := range inputs {
-		l.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second))
+		l.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second), nil)
 	}
 	return l
 }
@@ -103,7 +103,7 @@ func TestLineSamples_APrefillRowIsNoRow(t *testing.T) {
 	in := lineInput(0.5, 1000)
 	in.VariantStates = []domain.VariantReplicaState{{VariantName: "v", Role: "prefill"}}
 	l := newLineSamples()
-	l.note(in, 1, lineT0)
+	l.note(in, 1, lineT0, nil)
 	assert.Empty(t, l.rows("v"))
 }
 
