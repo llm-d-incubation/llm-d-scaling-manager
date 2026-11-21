@@ -1093,6 +1093,8 @@ TTFT model's (P3) are listed in
 [its as-built section](slo-capacity-planner-ttft.md#as-built-p3).
 
 Exit codes: `0` every role answered; `3` a role refused (output still printed);
+`4` (at-replicas, and a report's `exitCode`) answered, and the self-check found
+the figures a verdict rests on inconsistent, `3` taking precedence;
 `2` usage or input error; `1` internal error. `whatif.ExitCode` applies them:
 `2` if any result is `InvalidInput`, else `3` if any is refused, else `0`.
 A command stopped by SIGINT or SIGTERM exits `130` or `143` and says so on
@@ -1977,6 +1979,13 @@ selfCheck.checks[] object
 selfCheck.checks[].detail string
 selfCheck.checks[].name string
 selfCheck.checks[].passed boolean
+selfCheck.covered object
+selfCheck.covered.fleets array
+selfCheck.covered.fleets[] object
+selfCheck.covered.fleets[].decode number
+selfCheck.covered.fleets[].prefill number
+selfCheck.covered.rateHi number
+selfCheck.covered.rateLo number
 selfCheck.folds array
 selfCheck.folds[] object
 selfCheck.folds[].fitTo string
@@ -1992,28 +2001,44 @@ selfCheck.status string
 selfCheck.tpot object
 selfCheck.tpot.bias number
 selfCheck.tpot.judged number
+selfCheck.tpot.levels number
 selfCheck.tpot.low number
+selfCheck.tpot.minRatio number
+selfCheck.tpot.nearKnee object
+selfCheck.tpot.nearKnee.steps number
+selfCheck.tpot.nearKnee.worst number
 selfCheck.tpot.overloaded number
 selfCheck.tpot.pastKnee object
 selfCheck.tpot.pastKnee.hi number
 selfCheck.tpot.pastKnee.lo number
 selfCheck.tpot.refused map
+selfCheck.tpot.servedPastKnee number
 selfCheck.tpot.statistic string
 selfCheck.tpot.steps number
 selfCheck.tpot.within number
+selfCheck.tpot.withinBound number
 selfCheck.trust string
 selfCheck.ttft object
 selfCheck.ttft.bias number
 selfCheck.ttft.judged number
+selfCheck.ttft.levels number
 selfCheck.ttft.low number
+selfCheck.ttft.minRatio number
+selfCheck.ttft.nearKnee object
+selfCheck.ttft.nearKnee.steps number
+selfCheck.ttft.nearKnee.worst number
 selfCheck.ttft.overloaded number
 selfCheck.ttft.pastKnee object
 selfCheck.ttft.pastKnee.hi number
 selfCheck.ttft.pastKnee.lo number
 selfCheck.ttft.refused map
+selfCheck.ttft.servedPastKnee number
 selfCheck.ttft.statistic string
 selfCheck.ttft.steps number
 selfCheck.ttft.within number
+selfCheck.ttft.withinBound number
+selfCheck.untrusted array
+selfCheck.untrusted[] string
 selfCheck.why string
 selfCheck.withoutStated array
 selfCheck.withoutStated[] string

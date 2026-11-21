@@ -532,6 +532,8 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
   check("a p90 TPOT SLO shows the p90", vp.rows[0].cells[0].text === "TTFT 500 ms · TPOT 16 ms", vp.rows[0].cells[0].text);
   check("a p90 TPOT SLO is named in the legend", vp.legendStats.startsWith("Each cell is TTFT p95 · TPOT p90."), vp.legendStats);
   check("a rate load is not named twice", vp.header[0] === "10r/s", vp.header[0]);
+  check("a verdict carries what the self-check says of it", S("verdictLine")({verdict: "RIGHT-SIZED", summary: "RIGHT-SIZED: holds.", trust: "not trusted: x"}).trust === "not trusted: x");
+  check("a verdict the self-check says nothing of has no trust", S("verdictLine")({verdict: "RIGHT-SIZED", summary: "RIGHT-SIZED: holds."}).trust === "");
   check("a TTFT is read at the SLO's statistic, not the first one", v.rows[0].cells[0].text.startsWith("TTFT 637 ms"), v.rows[0].cells[0].text);
   check("a cell's parts stay apart for wrapping", JSON.stringify(vp.rows[0].cells[0].parts) === JSON.stringify(["TTFT 500 ms", "TPOT 16 ms"]));
 
@@ -656,7 +658,7 @@ if (failures.length) {
 }
 // EXPECTED_CASES is how many cases this file runs: a case that silently
 // stops running (an early return, a renamed function) fails the check.
-const EXPECTED_CASES = 318;
+const EXPECTED_CASES = 320;
 if (passed !== EXPECTED_CASES) {
   console.error(`check-planner-scenarios: ${passed} cases ran; expected ${EXPECTED_CASES}`);
   process.exit(1);

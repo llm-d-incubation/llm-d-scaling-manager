@@ -216,7 +216,7 @@ function btPredictionCSV(p) {
 }
 
 // SC_BADGE is a self-check's status as its badge says it.
-const SC_BADGE = {ok: "self-check ok", weak: "self-check weak", inconsistent: "self-check: inconsistent", notRun: "self-check not run"};
+const SC_BADGE = {ok: "self-check held on its own steps", weak: "self-check weak", inconsistent: "self-check: inconsistent", notRun: "self-check not run"};
 
 // selfCheckBadge is the badge of a source's self-check: its words and its
 // class.

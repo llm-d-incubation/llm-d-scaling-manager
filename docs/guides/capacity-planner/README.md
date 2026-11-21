@@ -571,7 +571,11 @@ It replays the recording once and answers, for each shape and load:
 
 The targets are the policy's unless `--ttft` and `--tpot` set them. Exit 0
 means the report answered, whatever the verdict, saturated fleets included;
-exit 3 means a shape's verdict is NOT JUDGED. Scripts read the verdict from
+exit 3 means a shape's verdict is NOT JUDGED; exit 4 means the report
+answered and the self-check found the figures a verdict rests on
+inconsistent with the recording (the verdict says `self-check: not
+trusted`; [the self-check](check.md#the-self-check-beside-every-answer)).
+Scripts read the verdict from
 `-o json`
 (`shapes[].verdict.verdict`), which prints the same report as
 [`POST /v1/report`](api.md#the-report).

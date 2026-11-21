@@ -807,7 +807,8 @@ function verdictLine(v, fallback, has) {
   // The fleet needed is shown as its own chip, so the sentence does not
   // repeat it.
   if (needs) rest = rest.replace(NEEDS_CLAUSE, "").replace(/;\s*\(/, " (").replace(/[;,]\s*\./, ".");
-  return {verdict: word, text, rest, needs, unmet: !!(v && v.needed && v.needed.unmet)};
+  // trust is what the source's self-check says of the verdict (#298).
+  return {verdict: word, text, rest, needs, unmet: !!(v && v.needed && v.needed.unmet), trust: (v && v.trust) || ""};
 }
 
 // NEEDS_CLAUSE is the "needs P prefill + D decode (has p + d), or a + b"

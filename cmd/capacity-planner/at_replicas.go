@@ -108,6 +108,7 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	rep.SchemaVersion = whatifapi.SchemaVersion
 	rep.Source.Recording = f.recording
 	rep.SelfCheck = f.checked
+	rep.JudgeTrust()
 	if f.output == outputJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
@@ -320,6 +321,9 @@ func reportText(r *whatifapi.ReportResponse) string {
 	verdicts[0] = []string{"verdicts"}
 	for _, s := range r.Shapes {
 		verdicts = append(verdicts, []string{"  " + shapeName(s), s.Verdict.Summary})
+		if s.Verdict.Trust != "" {
+			verdicts = append(verdicts, []string{"", "self-check: " + s.Verdict.Trust + "."})
+		}
 		for _, g := range s.Growth {
 			verdicts = append(verdicts, []string{"", growthText(g)})
 		}
@@ -438,6 +442,9 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	}
 	fmt.Fprintf(b, "  %-14s%s\n", rolePrefill, pre)
 	fmt.Fprintf(b, "  %-14s%s\n", "verdict", s.Verdict.Summary)
+	if s.Verdict.Trust != "" {
+		fmt.Fprintf(b, "  %-14s%s\n", "self-check", s.Verdict.Trust+".")
+	}
 	for _, g := range s.Growth {
 		fmt.Fprintf(b, "  %-14s%s\n", "", growthText(g))
 	}
@@ -483,7 +490,11 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 
 // growthText is a growth what-if's verdict line.
 func growthText(g whatifapi.ReportGrowth) string {
-	return fmt.Sprintf("x%s (%s): %s", num(g.X), rateWords(g.Rate), g.Verdict.Summary)
+	s := fmt.Sprintf("x%s (%s): %s", num(g.X), rateWords(g.Rate), g.Verdict.Summary)
+	if g.Verdict.Trust != "" {
+		s += " Self-check: " + g.Verdict.Trust + "."
+	}
+	return s
 }
 
 // refusedDetail is a refused figure's detail, "" otherwise.
