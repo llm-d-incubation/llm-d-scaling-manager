@@ -306,6 +306,9 @@ func reportText(r *whatifapi.ReportResponse) string {
 	}
 	fmt.Fprintf(&b, "%s/%s  P/D %s + %d decode (%s)  window %s, cycle %d of %d\n", r.Source.Namespace, r.Source.Model,
 		prefill, fl.Decode, fl.DecodeVariant, windowText(r.Source), r.Source.Cycle, r.Source.TotalCycles)
+	if g := r.Source.Gaps.Text(); g != "" {
+		fmt.Fprintf(&b, "%-16s%s: the load and the figures are read from the cycles present\n", "window gaps", g)
+	}
 	if e := fl.DecodeEngine; e != nil {
 		fmt.Fprintf(&b, "%-16s%s\n", "decode engine", engineInfoText(e))
 	}
@@ -341,8 +344,11 @@ func reportText(r *whatifapi.ReportResponse) string {
 func loadText(l whatifapi.ReportLoad) string {
 	s := figText(l.Rate, "%.2f r/s", 1)
 	switch l.Source {
-	case "observed":
-		s += fmt.Sprintf(", the %s of the %d of %d cycles with traffic", l.Statistic, l.CyclesWithTraffic, l.Cycles)
+	case sourceObserved:
+		// A refused load (WindowGapAtPeak) read no statistic to name.
+		if l.Seen != nil {
+			s += fmt.Sprintf(", the %s of the %d of %d cycles with traffic", l.Statistic, l.CyclesWithTraffic, l.Cycles)
+		}
 	case sourceAsked:
 		s += " (--load-seen)"
 	}

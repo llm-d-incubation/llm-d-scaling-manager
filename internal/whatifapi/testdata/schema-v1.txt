@@ -953,6 +953,15 @@ report.slo.ttft.target number
 report.source object
 report.source.cycle number
 report.source.firstAt string
+report.source.gaps object
+report.source.gaps.cycleSeconds number
+report.source.gaps.expectedCycles number
+report.source.gaps.flagged boolean
+report.source.gaps.largestGapFrom string
+report.source.gaps.largestGapSeconds number
+report.source.gaps.largestGapTo string
+report.source.gaps.missingShare number
+report.source.gaps.presentCycles number
 report.source.lastAt string
 report.source.model string
 report.source.namespace string

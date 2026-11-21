@@ -278,7 +278,7 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 	}
 	fmt.Fprintf(&b, "; headroom %.2f. %s\n", p.Headroom, p.Banner)
 	for _, r := range p.Refused {
-		what := map[string]string{"ttft": "prefill's TTFT", "tpot": "decode's TPOT", "decodeKnee": "decode's knee"}[r.Term]
+		what := map[string]string{"ttft": "prefill's TTFT", "tpot": "decode's TPOT", "decodeKnee": "decode's knee", "window": "the busiest bucket"}[r.Term]
 		fmt.Fprintf(&b, "\nREFUSED %s (%s), in %d buckets: %s\n  what to do: %s\n  what the plan did: %s\n",
 			what, r.Reason, r.Buckets, r.Detail, r.Hint, r.Effect)
 	}

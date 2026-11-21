@@ -29,7 +29,7 @@ const DAY_GAP = 30;
 // DAY_TICK_STEPS are the time axis' tick spacings, seconds, smallest first.
 const DAY_TICK_STEPS = [300, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
 // DAY_TERMS names a refused term in words.
-const DAY_TERMS = {ttft: "prefill's TTFT", tpot: "decode's TPOT", decodeKnee: "decode's knee"};
+const DAY_TERMS = {ttft: "prefill's TTFT", tpot: "decode's TPOT", decodeKnee: "decode's knee", window: "the busiest bucket"};
 
 // dayTime is an RFC 3339 time as seconds since the epoch.
 function dayTime(s) { return Date.parse(s) / 1000; }

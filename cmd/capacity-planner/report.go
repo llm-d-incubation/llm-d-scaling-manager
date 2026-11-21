@@ -84,6 +84,9 @@ type reporter struct {
 	loadWords string
 	// loadStat is the statistic the load was read at ("p95", "stated").
 	loadStat string
+	// loadRefused is why the observed load was refused (gapAtPeak), nil
+	// otherwise; load is then 0.
+	loadRefused *whatif.Unanswerable
 	// peak is the window's peak a shrink must also hold at, 0 with a stated
 	// load; brief shortens the verdict's sentence, for a growth line.
 	peak   float64
@@ -140,7 +143,7 @@ func buildReport(ctx context.Context, st *learnreplay.State, s *servedState, q w
 	np, nd := r.counts(base)
 	out := &whatifapi.ReportResponse{Question: reportQuestion, Shapes: []whatifapi.ReportShape{}, NotValidated: []string{}}
 	out.Source = whatifapi.ReportSource{Namespace: st.Namespace, Model: st.ModelID, Cycle: st.Cycle, TotalCycles: st.Cycles,
-		FirstAt: st.FirstAt, LastAt: st.At}
+		FirstAt: st.FirstAt, LastAt: st.At, Gaps: whatifapi.WindowGapsOf(st.CycleTimes)}
 	out.Fleet = whatifapi.ReportFleet{Prefill: np, Decode: nd, PrefillVariant: base.pf.variant, DecodeVariant: base.pv.state.Variant,
 		PrefillFrom: from(q.Prefill), DecodeFrom: from(q.Decode),
 		DecodeEngine: engineInfo(base.pv.state.Params)}
@@ -410,8 +413,9 @@ func (r *reporter) addAssumed(words ...string) {
 
 // loadOf is the load the fleet is judged at: the query's, else the statistic
 // asked (p95 by default) of the per-cycle arrival rate over the window's
-// cycles that read one above 0. A growth load is a what-if of its own
-// (shapeReport), never the load judged at. The mean, p95 and
+// cycles that read one above 0, refused (WindowGapAtPeak) when a gap in the
+// window could hide its peak (gapAtPeak). A growth load is a what-if of
+// its own (shapeReport), never the load judged at. The mean, p95 and
 // peak are reported whichever is judged, and the busiest RollingWindow.
 func (r *reporter) loadOf(l *whatifapi.ReportLoad) {
 	l.Cycles = len(r.st.ArrivalRates)
@@ -432,14 +436,22 @@ func (r *reporter) loadOf(l *whatifapi.ReportLoad) {
 		mean, p95, peak := stats[whatifapi.LoadMean], stats[whatifapi.LoadP95], stats[whatifapi.LoadPeak]
 		l.Mean, l.P95, l.Peak = &mean, &p95, &peak
 		l.P95IsPeak = len(rates) < minP95Cycles
-		l.Rolling = rollingPeak(r.st.ArrivalRates, cycleSeconds(r.st), whatifapi.RollingWindow.Seconds())
+		gaps := whatifapi.WindowGapsOf(r.st.CycleTimes)
+		l.Rolling = rollingPeak(r.st.ArrivalRates, rollingCycle(r.st, gaps), whatifapi.RollingWindow.Seconds())
+		if !(r.q.LoadSeen > 0) {
+			r.loadRefused = gapAtPeak(r.st.ArrivalRates, r.st.CycleTimes, gaps, l.Rolling)
+		}
 	}
 	var seen float64
 	switch {
 	case r.q.LoadSeen > 0:
 		seen, l.Source, l.Statistic = r.q.LoadSeen, sourceAsked, loadStated
+	case r.loadRefused != nil:
+		l.Source = sourceObserved
+		l.Rate = whatifapi.FigureOf(*r.loadRefused, unitRate, false)
+		return
 	case len(rates) > 0:
-		seen, l.Source = stats[l.Statistic], "observed"
+		seen, l.Source = stats[l.Statistic], sourceObserved
 		r.peak = stats[whatifapi.LoadPeak]
 	default:
 		l.Source = "none"
@@ -494,22 +506,9 @@ func rollingPeak(rates []float64, cycle, window float64) *whatifapi.ReportRollin
 		return nil
 	}
 	k := max(int(math.Round(window/cycle)), 1)
-	if len(rates) < k {
+	end, peak := busiestStretch(rates, k)
+	if end < 0 {
 		return nil
-	}
-	var sum, peak float64
-	for i, x := range rates {
-		if whatif.Finite(x) && x > 0 {
-			sum += x
-		}
-		if i >= k {
-			if y := rates[i-k]; whatif.Finite(y) && y > 0 {
-				sum -= y
-			}
-		}
-		if i >= k-1 {
-			peak = max(peak, sum/float64(k))
-		}
 	}
 	return &whatifapi.ReportRolling{WindowSeconds: float64(k) * cycle, Cycles: k, Peak: peak}
 }
@@ -791,6 +790,7 @@ var plainReasons = map[string]string{
 	string(whatif.TPOTQuantileUnbounded): "TPOT past the histogram",
 	string(whatif.TokenGapPercentile):    "not a per-request percentile",
 	string(whatif.NoTraffic):             "no traffic",
+	whatifapi.ReasonWindowGapAtPeak:      "a window gap at the peak",
 	string(whatif.NoLine):                "no decode line",
 	string(whatif.PinnedDefaultB):        "no decode line",
 	string(whatif.NoCapacity):            "no KV capacity",
@@ -922,7 +922,11 @@ func (r *reporter) use(u *whatifapi.ReportUse, base *servedFleet, ev fleetEval) 
 	slots := slotsPerReplica(d)
 	u.Decode.Slots = slots * int64(d.Replicas)
 	if !(r.load > 0) {
-		f := whatifapi.FigureOf(whatif.Unanswerable{Reason: whatif.NoTraffic, Detail: "no load to judge at"}, "", false)
+		no := whatif.Unanswerable{Reason: whatif.NoTraffic, Detail: "no load to judge at"}
+		if r.loadRefused != nil {
+			no = *r.loadRefused
+		}
+		f := whatifapi.FigureOf(no, "", false)
 		u.Decode.KVFill, u.Decode.SlotsOccupied, u.Decode.WaitProbability = f, f, f
 		u.Prefill.Pooled, u.Prefill.WorstPod = f, f
 		return
@@ -1143,6 +1147,10 @@ func (r *reporter) verdict(np, nd int, base fleetEval) (whatifapi.ReportVerdict,
 	case !base.kneeOK:
 		v.Verdict = whatifapi.VerdictNotJudged
 		v.Summary = fmt.Sprintf("%s: the decode knee is not priced (%s).", v.Verdict, refusalWords(base.decodeKnee))
+		return v, nil
+	case r.loadRefused != nil:
+		v.Verdict = whatifapi.VerdictNotJudged
+		v.Summary = fmt.Sprintf("%s: %s.", v.Verdict, refusalWords(*r.loadRefused))
 		return v, nil
 	case !(r.load > 0):
 		v.Verdict = whatifapi.VerdictNotJudged
@@ -1498,6 +1506,9 @@ func refusalWords(res whatif.Result) string {
 		return "the TPOT histogram cannot give that percentile; judge TPOT at the mean"
 	case whatif.NoTraffic:
 		return "the recording saw no traffic of this shape"
+	case whatifapi.ReasonWindowGapAtPeak:
+		return "a gap in the window borders its busiest stretch, so the load may have been higher than the window shows; " +
+			"capture the window again, or state a load (--load-seen)"
 	case whatif.NoLine:
 		return "the recording learned no usable decode latency line"
 	case whatif.PinnedDefaultB:
@@ -1553,3 +1564,6 @@ func measuredText(pv pricedVariant) string {
 
 // sourceAsked is a figure the question stated rather than the source read.
 const sourceAsked = "asked"
+
+// sourceObserved is a load the source read.
+const sourceObserved = "observed"

@@ -8,7 +8,15 @@
     "cycle": 289,
     "totalCycles": 289,
     "firstAt": "2026-11-06T02:18:37.855280585Z",
-    "lastAt": "2026-11-06T03:30:45.104261899Z"
+    "lastAt": "2026-11-06T03:30:45.104261899Z",
+    "gaps": {
+      "cycleSeconds": 15.021506602,
+      "expectedCycles": 289,
+      "presentCycles": 289,
+      "missingShare": 0,
+      "largestGapSeconds": 0,
+      "flagged": false
+    }
   },
   "fleet": {
     "prefill": 2,

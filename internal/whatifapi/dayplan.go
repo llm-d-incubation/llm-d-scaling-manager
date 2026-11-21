@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
@@ -126,6 +127,10 @@ const (
 	// FlagFleetRefused is a bucket whose fleet limit the source refuses at
 	// more replicas than one (Refused, term fleet).
 	FlagFleetRefused = "FleetRefused"
+	// FlagWindowGapAtPeak is a bucket refused because a gap in the window,
+	// at least RollingWindow long, borders it while it is the busiest sized
+	// bucket (Refused, term window; refuseGapAtPeak).
+	FlagWindowGapAtPeak = "WindowGapAtPeak"
 	// FlagOtherVariantsServed is a bucket in which a prefill or decode
 	// variant other than the priced ones served: the rate is the model's,
 	// and part of it went to pods Actual does not count.
@@ -188,6 +193,9 @@ type DayPlanResponse struct {
 	Searched int `json:"searched"`
 	// Notes are what the plan does not price, in words.
 	Notes []string `json:"notes"`
+	// Gaps is how much of the source's span its cycles cover; absent with
+	// fewer than three distinct cycles. A bucket inside a gap has no data.
+	Gaps *WindowGaps `json:"gaps,omitempty"`
 }
 
 // DayRefusal is a term the source cannot price at any rate: the role it
@@ -628,6 +636,9 @@ const (
 	// termFleet is a fleet's limit refused at more replicas than one, which
 	// the probe at one replica a role did not see.
 	termFleet = "fleet"
+	// termWindow is the busiest bucket, refused beside a gap in the window
+	// (refuseGapAtPeak).
+	termWindow = "window"
 )
 
 // addRefusal adds r to refused, once per role, term and reason.
@@ -998,6 +1009,13 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 	for _, g := range groups {
 		out.Searched += g.z.searched() + len(g.limits)
 	}
+	times := make([]time.Time, len(series))
+	for i, x := range series {
+		times[i] = x.At
+	}
+	slices.SortFunc(times, time.Time.Compare)
+	out.Gaps = WindowGapsOf(times)
+	q.refuseGapAtPeak(out)
 	q.countRefused(out)
 	if stated {
 		k := q.k
@@ -1011,6 +1029,10 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 		}
 	}
 	out.Hours = hoursOf(series, out.Buckets)
+	if g := out.Gaps.Text(); g != "" {
+		out.Notes = append(out.Notes, "Window gaps: "+g+". A bucket inside a gap has no data, and one a gap cuts into is sized "+
+			"from the cycles present: a gap over the busiest hours sizes them low.")
+	}
 	out.Summary = summaryOf(out.Buckets, out.Hours, q.step, gpus)
 	out.Notes = append(out.Notes,
 		"Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.",
@@ -1037,13 +1059,53 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 func (q *dayQuestion) countRefused(out *DayPlanResponse) {
 	for i := range out.Refused {
 		r := &out.Refused[i]
-		flag := map[string]string{termTPOT: FlagTPOTNotPriced, termTTFT: FlagPrefillNotPriced, termFleet: FlagFleetRefused}[r.Term]
+		flag := map[string]string{termTPOT: FlagTPOTNotPriced, termTTFT: FlagPrefillNotPriced, termFleet: FlagFleetRefused,
+			termWindow: FlagWindowGapAtPeak}[r.Term]
 		for _, b := range out.Buckets {
-			if (flag != "" && slices.Contains(b.Flags, flag)) || (r.Term == termDecodeKnee && b.Status == BucketRefused) {
+			if (flag != "" && slices.Contains(b.Flags, flag)) || (r.Term == termDecodeKnee && b.Status == BucketRefused && !slices.Contains(b.Flags, FlagWindowGapAtPeak)) {
 				r.Buckets++
 			}
 		}
 	}
+}
+
+// refuseGapAtPeak refuses the busiest sized bucket, the one of the highest
+// sized rate (the summary's peak), while a gap in the window borders it
+// (WindowGaps.GapAt: a gap at least RollingWindow long with a cycle either
+// side of it in the bucket, so that the gap cuts into the bucket or covers
+// one beside it). The gap could hide minutes busier than the bucket read:
+// its need is not given, and the next busiest takes its place.
+func (q *dayQuestion) refuseGapAtPeak(out *DayPlanResponse) {
+	var gaps []string
+	for {
+		var peak *DayBucket
+		for i := range out.Buckets {
+			if peakBucket(out.Buckets[i], peak, false) {
+				peak = &out.Buckets[i]
+			}
+		}
+		if peak == nil {
+			break
+		}
+		gap := out.Gaps.GapAt(peak.Start, peak.Start.Add(q.step-time.Nanosecond))
+		if gap == "" {
+			break
+		}
+		peak.Status, peak.Verdict = BucketRefused, DayVerdictRefused
+		peak.Needed, peak.Limit, peak.HadLimit = nil, nil, nil
+		peak.Flags = appendNew(peak.Flags, FlagWindowGapAtPeak)
+		gaps = appendNew(gaps, gap)
+	}
+	if len(gaps) == 0 {
+		return
+	}
+	addRefusal(&out.Refused, DayRefusal{Role: roleFleet, Term: termWindow, Reason: ReasonWindowGapAtPeak,
+		Detail: fmt.Sprintf("A gap in the window (%s) borders its busiest bucket: the load in the gap was not read and may have been higher.",
+			strings.Join(gaps, "; ")),
+		Hint: "Capture the window again so that it holds the gap's minutes, or, from Prometheus, plan a window without the gap " +
+			"(--from and --to; in the API, the inputs request's source.from and source.to).",
+		Effect: "Each busiest bucket a gap borders is not sized, down to the first that none borders; the busiest need is read " +
+			"from the buckets left, and may read low."})
 }
 
 // appendNew appends each of xs not already in s.

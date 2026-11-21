@@ -101,6 +101,10 @@ type State struct {
 	// it (QueryModelArrivalRate): 0 where it read none, which a failed query
 	// and an idle cycle both read as.
 	ArrivalRates []float64
+	// CycleTimes is the clock of every cycle up to Cycle, oldest first, one
+	// per ArrivalRates entry: where the recording has holes
+	// (whatifapi.WindowGapsOf).
+	CycleTimes []time.Time
 }
 
 // VariantState is one variant's learned state at the cycle: everything the
@@ -365,6 +369,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		lines    = newLineSamples()
 		cycleAt  = map[time.Time]int{}
 		arrivals []float64
+		times    []time.Time
 		ranges   = map[string]ShapeRange{}
 	)
 	// Read once: the switches are set before the replay starts.
@@ -395,6 +400,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		cycleAt[ev.Now] = n
 		fill, fillOK := decodeFill(in.ReplicaMetrics, rolesOf(in))
 		arrivals = append(arrivals, in.ArrivalRate)
+		times = append(times, ev.Now)
 		if w, ok := tpotWindow(in.RouterLatency); ok {
 			windows = append(windows, withFill(w, fill, fillOK))
 		}
@@ -454,7 +460,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		return nil, nil, fmt.Errorf("learnreplay: the replay ended after %d of the %d cycles of %s/%s", n, cycle, ns, model)
 	}
 	st.FirstAt, st.TPOTWindows, st.EngineTPOTWindows, st.Cycles = firstAt, windows, engine, total
-	st.ArrivalRates = arrivals
+	st.ArrivalRates, st.CycleTimes = arrivals, times
 	for i := range st.Variants {
 		st.Variants[i].ReadingsFrom, st.Variants[i].ReadingsTo = cyclesSpanned(st.Variants[i].LineReadings, cycleAt)
 		st.Variants[i].LineRows = lines.rows(st.Variants[i].Variant)
@@ -470,6 +476,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		s.FirstAt, s.Cycles = firstAt, total
 		s.TPOTWindows, s.EngineTPOTWindows = slices.Clone(windows[:sn.windows]), slices.Clone(engine[:sn.engine])
 		s.ArrivalRates = slices.Clone(arrivals[:sn.arrived])
+		s.CycleTimes = slices.Clone(times[:sn.arrived])
 		for i := range s.Variants {
 			s.Variants[i].ReadingsFrom, s.Variants[i].ReadingsTo = cyclesSpanned(s.Variants[i].LineReadings, cycleAt)
 			s.Variants[i].LineRows = sn.rows[s.Variants[i].Variant]
