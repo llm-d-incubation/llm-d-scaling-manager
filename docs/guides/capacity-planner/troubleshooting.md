@@ -99,6 +99,24 @@ bottom by both. A figure read below the band carries `BelowFittedBand`.
 | `503` "the request ended before it was priced" | The client went away or timed out. Ask again. |
 | `500` | A server error; the message, or with `--auth=kubernetes` the server's stderr, says what. |
 
+## A recording is refused: engine rows do not stand for the fleet
+
+You see "the engine rows do not stand for the fleet" (CLI exit 2, or a
+`400` from the server). The planner reads a replica as its engine rows. It
+refuses a recording where:
+
+- the engine rows' request rate is more than 20% under the router's, over
+  the cycles where the router's queue is empty (4 such cycles or more), or
+- a role's engine rows are under three quarters of its serving replicas, in
+  the median cycle.
+
+Both happen on multi-Pod groups (LeaderWorkerSet, DisaggregatedSet) where
+only one rank's engine is scraped. Every per-replica figure would read low.
+
+Fix: scrape every rank's engine metrics (a PodMonitor or ServiceMonitor
+that selects every Pod of the group, not only the leader), then record
+again. Until then the planner cannot price this fleet.
+
 ## Recording a window
 
 The [record guide](../record-for-capacity-planner/) commands exit `0` when

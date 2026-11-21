@@ -302,6 +302,10 @@ arguments are built at start, in a script or from environment variables,
 neither shows them: copy them from the engine's startup log instead (vLLM
 prints them on its `non-default args` line) into `window.txt`. Each Pod's
 own rank flags, such as `--data-parallel-rank`, can stay as the leader's.
+Prometheus must scrape every rank's engine, not only the leader's: the
+planner refuses a recording whose engine rows count fewer replicas, or a
+lower request rate, than the fleet served
+([troubleshooting](../capacity-planner/troubleshooting.md#a-recording-is-refused-engine-rows-do-not-stand-for-the-fleet)).
 
 Send `planner-export.tgz`. It holds metric labels (Pod, node and model names)
 and `window.txt`: the window, the engine and the workloads' engine

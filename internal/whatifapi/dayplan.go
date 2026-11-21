@@ -51,6 +51,15 @@ type SeriesSample struct {
 	// FlowControlSeries says the cycle read the router's flow-control queue
 	// series.
 	FlowControlSeries bool
+	// EngineRate is the decode and unsplit rows' request rate, summed,
+	// PrefillReplicas and DecodeReplicas the priced variants' serving
+	// replicas as their states give them, 0 where none is stated, and
+	// RouterQueued a cycle whose router queue held requests
+	// (learnreplay.CycleSample): what EngineRowsShort compares the rows
+	// with.
+	EngineRate                      float64
+	PrefillReplicas, DecodeReplicas int
+	RouterQueued                    bool
 }
 
 // The day plan's defaults and bounds.

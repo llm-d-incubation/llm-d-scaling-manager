@@ -52,6 +52,21 @@ type CycleSample struct {
 	// FlowControlSeries says the cycle read the router's flow-control queue
 	// series (domain.AnalyzerInput.FlowControlSeries).
 	FlowControlSeries bool
+	// EngineRate is the request rate of every decode and every unsplit
+	// ("both") row of the model that reports a rate, summed, whatever ArrivalRate is:
+	// where every replica's engine is read it is the router's rate, and
+	// where a multi-Pod group's rows report one rank of several it is a
+	// fraction of it (issue llm-d-incubation/llm-d-scaling-manager#331).
+	EngineRate float64
+	// PrefillReplicas and DecodeReplicas are the counted variants' serving
+	// replicas as the cycle's variant states give them (CurrentReplicas
+	// less PendingReplicas), summed; 0 where none is stated. Beside
+	// PrefillPods and DecodePods they say whether a replica is one engine
+	// row.
+	PrefillReplicas, DecodeReplicas int
+	// RouterQueued says the router's flow-control queue held requests at
+	// the cycle: arrivals then run ahead of what the engines complete.
+	RouterQueued bool
 }
 
 // SeriesVariants names the variants a series counts: the prefill and the
@@ -132,7 +147,8 @@ func seriesScan(src Source, q StateQuery, v SeriesVariants, withLatency bool) ([
 // sampleOf is one cycle's sample of in, read at at, of the variants v
 // names.
 func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSample {
-	s := CycleSample{At: at, ArrivalRate: in.ArrivalRate, FlowControlSeries: in.FlowControlSeries()}
+	s := CycleSample{At: at, ArrivalRate: in.ArrivalRate, FlowControlSeries: in.FlowControlSeries(),
+		RouterQueued: in.SchedulerQueue != nil && in.SchedulerQueue.QueueSize > 0}
 	roles := rolesOf(in)
 	counted := func(variant, role string) bool {
 		switch role {
@@ -150,16 +166,21 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 		switch domain.CanonicalRole(vs.Role) {
 		case domain.RolePrefill:
 			s.PrefillGPUs = max(s.PrefillGPUs, vs.GPUsPerReplica)
+			s.PrefillReplicas += max(vs.CurrentReplicas-vs.PendingReplicas, 0)
 		case domain.RoleDecode:
 			s.DecodeGPUs = max(s.DecodeGPUs, vs.GPUsPerReplica)
+			s.DecodeReplicas += max(vs.CurrentReplicas-vs.PendingReplicas, 0)
 		}
 	}
-	var weight, il, ol, hit, modelRate float64
+	var weight, il, ol, hit, modelRate, bothRate float64
 	var prompted []domain.ReplicaMetrics
 	for _, rm := range in.ReplicaMetrics {
 		role := domain.CanonicalRole(roles[rm.VariantName])
 		if role == domain.RoleDecode && rm.RequestRateKnown && rm.RequestRate > 0 {
 			modelRate += rm.RequestRate
+		}
+		if role == domain.RoleBoth && rm.RequestRateKnown && rm.RequestRate > 0 {
+			bothRate += rm.RequestRate
 		}
 		if !counted(rm.VariantName, role) {
 			if (role == domain.RolePrefill || role == domain.RoleDecode) && prefill.Serving(rm) {
@@ -202,6 +223,7 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 	if weight > 0 {
 		s.PromptTokens, s.OutputTokens, s.PrefixHitRate, s.HasShape = il/weight, ol/weight, hit/weight, true
 	}
+	s.EngineRate = modelRate + bothRate
 	s.RateKnown = in.ArrivalRate > 0 || modelRate == 0
 	if !s.RateKnown {
 		s.ArrivalRate = modelRate

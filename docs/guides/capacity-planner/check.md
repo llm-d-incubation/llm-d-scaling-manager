@@ -127,6 +127,11 @@ On the page it is a badge beside the source, with the same lines under it.
 | inconsistent | The planner and this recording disagree: the median ratio is outside 0.8 to 1.25, fewer than half the steps are within 20%, or the planner called the fleet overloaded in half the steps where it served. The line says which figures not to trust. |
 | not run | The recording is shorter than an hour, carries no latency, or is not a P/D fleet; fewer than 6 steps could be scored for each figure (the refusals are named); or, on the server, it ran out of its time budget. The line says which. |
 
+A recording whose engine rows do not stand for the fleet gets no badge: the
+planner refuses it outright, as an input error. That happens on multi-Pod
+groups where only one rank's engine is scraped. See
+[troubleshooting](troubleshooting.md#a-recording-is-refused-engine-rows-do-not-stand-for-the-fleet).
+
 On **inconsistent**, the answer offers an issue to file: a link to a new
 GitHub issue, prefilled with diagnostics. It holds the planner's version,
 the checks that failed and their numbers, the refusals, the token-size

@@ -351,6 +351,11 @@ func (s *servedSources) resolved(f *answerFlags, st *learnreplay.State, data *re
 	if err != nil {
 		return nil, apiError(err)
 	}
+	if why := whatifapi.EngineRowsShort(series); why != "" {
+		// Every per-replica rate and knee would read low by the ranks the
+		// rows leave out (issue llm-d-incubation/llm-d-scaling-manager#331).
+		return nil, whatifapi.InputErrorf("%s; the planner reads a replica as its engine rows, so it prices nothing from this recording; %s", why, engineRowsFix)
+	}
 	pricer := &servedState{st: st, decodeVariant: f.variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
 		imbalanceAcrossCounts: whatif.DefaultImbalanceAcrossCounts}
 	res := &whatifapi.Resolved{

@@ -56,6 +56,17 @@ func busyPrefillRow(pod string, rr, ieff float64) domain.ReplicaMetrics {
 // busyFleetRecording captures the fleet and generates its recording.
 func busyFleetRecording(t *testing.T) string {
 	t.Helper()
+	return busyFleetRecordingOf(t, 1)
+}
+
+// busyFleetRecordingOf is busyFleetRecording of a fleet whose replicas are
+// groups of one engine row in groupOf: the variants state groupOf times the
+// rows as replicas, and the router serves groupOf times the rows' rate, as
+// on a fleet of multi-Pod groups whose rows report one rank of several
+// (issue llm-d-incubation/llm-d-scaling-manager#331). 1 is the busy fleet,
+// its router serving the rows' rate.
+func busyFleetRecordingOf(t *testing.T, groupOf int) string {
+	t.Helper()
 	var buf bytes.Buffer
 	rec := learnrec.New(&buf, 0)
 	h := capacity.DefaultHorizons()
@@ -87,18 +98,22 @@ func busyFleetRecording(t *testing.T) string {
 		for j := range 2 {
 			rows = append(rows, busyPrefillRow(fmt.Sprintf("pre-%d", j), 1+3*rng.Float64(), 1000+5000*rng.Float64()))
 		}
-		rec.Record(learnreplay.KindCaptureCycle, at, learnreplay.CaptureCycle{Input: learnrec.InputOf(domain.AnalyzerInput{
+		in := domain.AnalyzerInput{
 			ModelID: "m", Namespace: "ns", ReplicaMetrics: rows, Config: policy,
 			VariantStates: []domain.VariantReplicaState{
-				{VariantName: "dec", CurrentReplicas: 9, DesiredReplicas: 9, GPUsPerReplica: 1, Role: domain.RoleDecode, AcceleratorName: "H100"},
-				{VariantName: "pre", CurrentReplicas: 2, DesiredReplicas: 2, GPUsPerReplica: 4, Role: domain.RolePrefill, AcceleratorName: "H100"},
+				{VariantName: "dec", CurrentReplicas: 9 * groupOf, DesiredReplicas: 9 * groupOf, GPUsPerReplica: 1, Role: domain.RoleDecode, AcceleratorName: "H100"},
+				{VariantName: "pre", CurrentReplicas: 2 * groupOf, DesiredReplicas: 2 * groupOf, GPUsPerReplica: 4, Role: domain.RolePrefill, AcceleratorName: "H100"},
 			},
-		})})
+		}
+		for _, rm := range rows[:9] {
+			in.ArrivalRate += float64(groupOf) * rm.RequestRate
+		}
+		rec.Record(learnreplay.KindCaptureCycle, at, learnreplay.CaptureCycle{Input: learnrec.InputOf(in)})
 	}
 	require.NoError(t, rec.Err())
 	rep, err := generateRecording(context.Background(), buf.Bytes())
 	require.NoError(t, err)
-	path := filepath.Join(t.TempDir(), "busy.jsonl")
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("busy-%d.jsonl", groupOf))
 	require.NoError(t, os.WriteFile(path, rep.Recording, 0o600))
 	return path
 }

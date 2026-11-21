@@ -259,20 +259,27 @@ func seriesAndLatencyOf(src learnreplay.Source, st *learnreplay.State, v learnre
 	if err != nil {
 		return nil, nil, err
 	}
-	out := make([]whatifapi.SeriesSample, len(cycles))
-	for i, c := range cycles {
-		out[i] = whatifapi.SeriesSample{At: c.At, Rate: c.ArrivalRate, RateKnown: c.RateKnown, Prefill: c.PrefillPods, Decode: c.DecodePods,
-			PrefillGPUs: c.PrefillGPUs, DecodeGPUs: c.DecodeGPUs, PromptTokens: c.PromptTokens, OutputTokens: c.OutputTokens,
-			PrefixHitRate: c.PrefixHitRate, HasShape: c.HasShape, OtherPods: c.OtherPods,
-			PromptComputedRate: c.PromptComputedRate, PromptRequestRate: c.PromptRequestRate, PromptBuckets: c.PromptBuckets,
-			FlowControlSeries: c.FlowControlSeries}
-	}
+	out := seriesSamplesOf(cycles)
 	ls := make([]whatifapi.LatencySample, len(lat))
 	for i, l := range lat {
 		ls[i] = whatifapi.LatencySample{At: l.At, Router: l.Router, EngineTTFT: l.EngineTTFT, EngineTTFTMean: l.EngineTTFTMean,
 			EngineTPOT: l.EngineTPOT, EngineITLMean: l.EngineITLMean}
 	}
 	return out, ls, nil
+}
+
+// seriesSamplesOf is the cycles as the planner API's series.
+func seriesSamplesOf(cycles []learnreplay.CycleSample) []whatifapi.SeriesSample {
+	out := make([]whatifapi.SeriesSample, len(cycles))
+	for i, c := range cycles {
+		out[i] = whatifapi.SeriesSample{At: c.At, Rate: c.ArrivalRate, RateKnown: c.RateKnown, Prefill: c.PrefillPods, Decode: c.DecodePods,
+			PrefillGPUs: c.PrefillGPUs, DecodeGPUs: c.DecodeGPUs, PromptTokens: c.PromptTokens, OutputTokens: c.OutputTokens,
+			PrefixHitRate: c.PrefixHitRate, HasShape: c.HasShape, OtherPods: c.OtherPods,
+			PromptComputedRate: c.PromptComputedRate, PromptRequestRate: c.PromptRequestRate, PromptBuckets: c.PromptBuckets,
+			FlowControlSeries: c.FlowControlSeries, EngineRate: c.EngineRate, PrefillReplicas: c.PrefillReplicas,
+			DecodeReplicas: c.DecodeReplicas, RouterQueued: c.RouterQueued}
+	}
+	return out
 }
 
 // runConfigOf is what the state says of the configuration the fleet ran:

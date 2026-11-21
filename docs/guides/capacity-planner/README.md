@@ -437,6 +437,9 @@ says so.
 
 Limits of both:
 
+- A recording must hold every rank's engine rows. Where only the leader's
+  are scraped, the planner refuses it
+  ([troubleshooting](troubleshooting.md#a-recording-is-refused-engine-rows-do-not-stand-for-the-fleet)).
 - The quiet-minute test per engine assumes a group's data-parallel ranks
   share its load evenly, and context-parallel ranks (PCP, DCP) are not
   counted as engines.

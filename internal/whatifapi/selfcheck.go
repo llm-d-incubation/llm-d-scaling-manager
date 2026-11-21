@@ -405,6 +405,7 @@ func selfCheckEntry(ctx context.Context, e *inputsEntry, folds []FoldFit, info S
 		}
 		return sc
 	}
+	short := EngineRowsShort(e.series)
 	switch {
 	case len(e.series) < 2:
 		return notRun("the recording holds too few cycles")
@@ -417,6 +418,10 @@ func selfCheckEntry(ctx context.Context, e *inputsEntry, folds []FoldFit, info S
 		return notRun("the planner prices a P/D fleet, and the recording has no prefill variant")
 	case len(folds) == 0:
 		return notRun("no fit was read at an earlier cycle")
+	case short != "":
+		// A backstop: the CLI and the server refuse such a recording
+		// before a self-check runs.
+		return notRun(short)
 	}
 	req, stated := info.Stated.replayed()
 	sc.Stated, sc.WithoutStated, sc.outside = stated, info.Stated.notReplayed(), info.Stated.outside()
