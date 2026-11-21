@@ -275,6 +275,12 @@ func (a *SaturationAnalyzer) noteITL(key string, replicas []domain.ReplicaMetric
 			// it was.
 			kv = append(kv, "pinnedAtFloor", r.PinnedAtFloor, "floor", r.Floor, "floorK", r.FloorK)
 		}
+		if adm.HoldsFloorBaseline && r.PinnedAtFloor {
+			// Only with SwitchITLFloorBaselineHeld on (itl_baseline_floor.go):
+			// floorBHeld says this cycle read no floor and B is the last one
+			// read; floorBAge is how long ago that was, -1 when unknown.
+			kv = append(kv, "floorBHeld", r.FloorBHeld, "floorBAge", floorBAge(r.FloorBAt, now))
+		}
 		logger.V(logging.DEFAULT).Info("itl-fit", kv...)
 	case r.Declined:
 		logger.V(logging.DEFAULT).Info("itl-fit-declined", "variant", variantName, "held", r.Held)

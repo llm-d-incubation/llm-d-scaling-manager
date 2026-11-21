@@ -82,6 +82,11 @@ type Options struct {
 	// (Report.Recording is nil): a replay read for its state (StateAt) would
 	// otherwise hold a second copy of the recording it reads.
 	discardRecording bool
+	// sloOptional, when set, sets no slo switch on a recording that ran no
+	// slo analyzer, where otherwise that is an error: the planner's replay
+	// (StateAt) reads its slo switches for its own windows too
+	// (PlannerSwitches), on any recording.
+	sloOptional bool
 }
 
 // build makes the analyzers and the store a recording's start describes.
@@ -159,6 +164,14 @@ func (r *replayer) setSwitches() error {
 		case PackageSaturation:
 			err = r.sat.SetSwitchesForReplay(sw)
 		case PackageSLO:
+			if r.slo == nil && r.opts.sloOptional {
+				// No analyzer to set them on, but the names are still
+				// checked: a misspelled one is an error here too.
+				if err := slo.New(nil, nil).SetSwitchesForReplay(sw); err != nil {
+					return fmt.Errorf("learnreplay: %w", err)
+				}
+				continue
+			}
 			if r.slo == nil {
 				return errors.New("learnreplay: switches for the slo analyzer, which the run did not have")
 			}

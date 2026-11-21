@@ -4,17 +4,17 @@ acceptance ns-01/model-02 freeze 3 of 4 variant-03 no-line; tpot SKIPPED no line
 acceptance ns-01/model-03 freeze 8 of 12 variant-04 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 acceptance ns-01/model-03 freeze 8 of 12 variant-05 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 acceptance ns-01/model-03 freeze 8 of 12 variant-06 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-e1 ns-01/model-02 freeze 229 of 381 variant-01 pinned-B; tpot -3.0% over 327 rows, in of +-10%, unclamped -39.1%, 165 below the band, 130 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 14 saturated windows: PinnedDefaultB
-e1 ns-02/model-03 freeze 229 of 381 variant-01 pinned-B; tpot +59.9% over 244 rows, OUT of +-10%, unclamped -36.6%, 153 below the band, 73 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 15 saturated windows: PinnedDefaultB
-e1-tuned ns-01/model-02 freeze 225 of 374 variant-01 pinned-B; tpot -4.8% over 311 rows, in of +-10%, unclamped -39.1%, 164 below the band, 112 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 15 saturated windows: PinnedDefaultB
-e1-tuned ns-02/model-03 freeze 225 of 374 variant-01 pinned-B; tpot +75.2% over 244 rows, OUT of +-10%, unclamped -33.8%, 154 below the band, 69 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 16 saturated windows: PinnedDefaultB
+e1 ns-01/model-02 freeze 229 of 381 variant-01 pinned-B; tpot -5.3% over 327 rows, in of +-10%, unclamped -1.5%, 165 below the band, 130 above it; knee +1.8% over 14 rows, in of +-15%
+e1 ns-02/model-03 freeze 229 of 381 variant-01 pinned-B; tpot -1.7% over 244 rows, in of +-10%, unclamped -1.7%, 153 below the band, 73 above it; knee -12.8% over 15 rows, in of +-15%
+e1-tuned ns-01/model-02 freeze 225 of 374 variant-01 pinned-B; tpot -8.7% over 311 rows, in of +-10%, unclamped -5.6%, 164 below the band, 112 above it; knee +6.6% over 15 rows, in of +-15%
+e1-tuned ns-02/model-03 freeze 225 of 374 variant-01 pinned-B; tpot +1.3% over 244 rows, in of +-10%, unclamped +1.3%, 154 below the band, 69 above it; knee -22.8% over 16 rows, OUT of +-15%
 engine ns-01/model-01 freeze 8 of 12 variant-01 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-01 freeze 8 of 12 variant-02 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-02 freeze 3 of 4 variant-03 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-03 freeze 8 of 12 variant-04 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-03 freeze 8 of 12 variant-05 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-03 freeze 8 of 12 variant-06 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-mu-paths ns-01/model-01 freeze 29 of 48 variant-01 ols; tpot -4.9% over 76 rows, in of +-10%, unclamped -0.0%, 0 below the band, 38 above it; knee -28.5% over 38 rows, OUT of +-15%
+mu-paths ns-01/model-01 freeze 29 of 48 variant-01 ols; tpot -4.9% over 76 rows, in of +-10%, unclamped -0.0%, 0 below the band, 38 above it; knee +43.0% over 38 rows, OUT of +-15%
 mu-paths ns-01/model-01 freeze 29 of 48 variant-02 ols; tpot -9.8% over 95 rows, in of +-10%, unclamped -0.0%, 0 below the band, 57 above it; knee -41.5% over 19 rows, OUT of +-15%
 mu-paths ns-01/model-01 freeze 29 of 48 variant-03 ols; tpot -0.0% over 57 rows, in of +-10%, unclamped -0.0%, 0 below the band, 0 above it; knee SKIPPED no saturated window off a ramp held out
 mu-paths ns-01/model-01 freeze 29 of 48 variant-04 pinned-B; tpot +0.0% over 57 rows, in of +-10%, unclamped +0.0%, 0 below the band, 19 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 19 saturated windows: PinnedDefaultB
@@ -46,11 +46,11 @@ ttft-saturated ns-01/model-02 freeze 116 of 193 variant-01 no-line; tpot SKIPPED
 ttft-saturated ns-01/model-02 freeze 116 of 193 variant-02 prefill; own SKIPPED P1 refused a: TooFewLowLoadMinutes
 ttft-staircase-a-off ns-01/model-02 freeze 77 of 128 variant-01 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 ttft-staircase-a-off ns-01/model-02 freeze 77 of 128 variant-02 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-ttft-staircase-b-off ns-01/model-02 freeze 174 of 289 variant-01 pinned-B; tpot -18.7% over 210 rows, OUT of +-10%, unclamped -18.7%, 0 below the band, 23 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 16 saturated windows: PinnedDefaultB
+ttft-staircase-b-off ns-01/model-02 freeze 174 of 289 variant-01 pinned-B; tpot -1.7% over 210 rows, in of +-10%, unclamped -1.7%, 0 below the band, 23 above it; knee +8.9% over 16 rows, in of +-15%
 ttft-staircase-b-off ns-01/model-02 freeze 174 of 289 variant-02 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-ttft-staircase-b-on ns-01/model-02 freeze 174 of 289 variant-01 pinned-B; tpot -22.1% over 227 rows, OUT of +-10%, unclamped -22.1%, 1 below the band, 0 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 13 saturated windows: PinnedDefaultB
+ttft-staircase-b-on ns-01/model-02 freeze 174 of 289 variant-01 pinned-B; tpot -4.9% over 227 rows, in of +-10%, unclamped -4.9%, 1 below the band, 0 above it; knee +17.2% over 13 rows, OUT of +-15%
 ttft-staircase-b-on ns-01/model-02 freeze 174 of 289 variant-02 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-ttft-staircase-c-on ns-01/model-02 freeze 176 of 292 variant-01 pinned-B; tpot -21.2% over 227 rows, OUT of +-10%, unclamped -21.2%, 2 below the band, 0 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 1 saturated windows: PinnedDefaultB
+ttft-staircase-c-on ns-01/model-02 freeze 176 of 292 variant-01 pinned-B; tpot -6.0% over 227 rows, in of +-10%, unclamped -6.0%, 2 below the band, 0 above it; knee SKIPPED 1 rows, want 5
 ttft-staircase-c-on ns-01/model-02 freeze 176 of 292 variant-02 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-ttft-three-pods ns-01/model-02 freeze 122 of 203 variant-01 pinned-B; tpot -9.4% over 237 rows, in of +-10%, unclamped -9.4%, 40 below the band, 0 above it, on a line the planner refuses; knee SKIPPED no saturated window off a ramp held out
+ttft-three-pods ns-01/model-02 freeze 122 of 203 variant-01 pinned-B; tpot -3.7% over 237 rows, in of +-10%, unclamped -3.7%, 40 below the band, 0 above it; knee SKIPPED no saturated window off a ramp held out
 ttft-three-pods ns-01/model-02 freeze 122 of 203 variant-02 prefill; own SKIPPED P1 refused a: TooFewLowLoadMinutes

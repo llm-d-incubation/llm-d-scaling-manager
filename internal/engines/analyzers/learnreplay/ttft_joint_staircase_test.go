@@ -175,7 +175,7 @@ func jointModelRow(t *testing.T, fixture string) []jointStep {
 	}
 	bounds := staircaseStepBounds(rates)
 
-	samples := newTTFTSamples()
+	samples := newTTFTSamples(false)
 	var frozen *prefill.JointEstimate
 	var steps []jointStep
 	next := 0

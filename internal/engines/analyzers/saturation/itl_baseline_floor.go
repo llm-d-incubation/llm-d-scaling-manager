@@ -1,6 +1,8 @@
 package saturation
 
 import (
+	"time"
+
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 )
@@ -25,15 +27,51 @@ import (
 // read at no fill, B would be high by A times that fill, and the line would
 // price under the truth past its readings. The one-sided rule
 // (SwitchITLOneSidedAtCap) is set against the pinned fit as against the
-// default. A learned B ends it. Off, as before, the default. Off from the
-// constructor: the controller keeps the default until a GPU check clears it.
+// default. A learned B ends it. Off, as before, the default. On from the
+// constructor since a GPU check on a Qwen3-32B P/D fleet on H200, where the
+// B it pinned sat 4-6 % under the measured low-load TPOT floor; a replay
+// turns it off. The floor is read each cycle from readings at most
+// itl.DefaultObservationMaxAge old: a fleet held in the band past that, none
+// of its replicas below it, reads no floor, and is back on the default B
+// unless SwitchITLFloorBaselineHeld holds the last one.
 const SwitchITLBaselineFromFloor = "saturation-itl-baseline-from-floor"
+
+// SwitchITLFloorBaselineHeld is the replay switch for a floor-pinned B on the
+// cycles that read no floor (issue llm-d-incubation/llm-d-scaling-manager#333).
+// With SwitchITLBaselineFromFloor on, a fleet held inside the band longer
+// than itl.DefaultObservationMaxAge, none of its replicas below it, has no
+// floor left to read: off, its line goes back to the 6 ms default B and its
+// slope steps up, about 40 % in a unit probe, with no change in load. On, the
+// pinned fit keeps the B the key last read from its floor
+// (itl.Admission.HoldsFloorBaseline): kept on the key's held slope, exported
+// with it (SlopeSnapshot.FloorB, FloorBAt) and restored with it, and swept
+// with the key, as a learned B is. A newer floor or a full fit replaces it; a
+// pinned reading under it, or a slope fitted under other engine arguments,
+// ends it. Nothing without SwitchITLBaselineFromFloor. On from the
+// constructor; a replay turns it off.
+const SwitchITLFloorBaselineHeld = "saturation-itl-floor-baseline-held"
 
 // baselineFromFloorOn reports SwitchITLBaselineFromFloor.
 func (a *SaturationAnalyzer) baselineFromFloorOn() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.itlBaselineFromFloor
+}
+
+// floorBaselineHeldOn reports SwitchITLFloorBaselineHeld.
+func (a *SaturationAnalyzer) floorBaselineHeldOn() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.itlFloorBaselineHeld
+}
+
+// floorBAge is how long before now a floor-pinned B was read from its floor
+// (itl.Reading.FloorBAt), for the itl-fit line; -1s when that is unknown.
+func floorBAge(at, now time.Time) time.Duration {
+	if at.IsZero() {
+		return -time.Second
+	}
+	return now.Sub(at)
 }
 
 // floorOnShapeChange drops a decode variant's floor below the band while the

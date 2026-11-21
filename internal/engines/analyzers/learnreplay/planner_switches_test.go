@@ -7,19 +7,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
 // The planner's switches are on in StateAt's replay unless the caller sets
-// one, and every one is a switch its package accepts.
+// one, but for the held floor B, which is off, and every one is a switch its
+// package accepts.
 func TestPlannerSwitches_StateAtTurnsThemOn(t *testing.T) {
 	got := withPlannerSwitches(nil)
 	require.Equal(t, PlannerSwitches(), got)
 	for name, on := range got[PackageSaturation] {
-		assert.True(t, on, name)
+		assert.Equal(t, name != saturation.SwitchITLFloorBaselineHeld, on, name)
 	}
 	a := saturation.NewSaturationAnalyzer(capacity.NewStore())
 	require.NoError(t, a.SetSwitchesForReplay(got[PackageSaturation]))
+	for name, on := range got[PackageSLO] {
+		assert.True(t, on, name)
+	}
+	require.NoError(t, slo.New(nil, nil).SetSwitchesForReplay(got[PackageSLO]))
 
 	// A caller's own setting wins, and its other switches are kept.
 	mine := map[string]map[string]bool{

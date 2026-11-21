@@ -76,7 +76,9 @@
 // (serve.go, internal/whatifapi; docs/developer-guide/capacity-planner-serve.md).
 //
 // Exit codes: 0 done, and every role answered; 3 a role refused (the
-// output is still printed); 2 a usage or input error (a bad flag, an
+// output is still printed); 4 at-replicas answered, and its self-check
+// found the figures a verdict rests on inconsistent (whatifapi.ExitUntrusted;
+// 3 takes precedence); 2 a usage or input error (a bad flag, an
 // unreadable or malformed capture or recording, overlapping --role-of
 // selectors, a window too large without --force); 1 anything else (a failed
 // Prometheus query, a Generate or a replay that fails inside the analyzers);
@@ -263,6 +265,48 @@ func exitCode(err error) int {
 
 const usage = "usage: capacity-planner at-replicas|backtest|capture|compare|day-plan|freeze|generate|joint-ttft|predict|replicas-to-slo|serve|slo-to-rate|strip-latency|version [flags]; -h after a command lists its flags"
 
+// commandHelp is what each command answers or does, in the order help lists
+// them: the questions first, then the checks, then the tools.
+var commandHelp = []struct{ name, what string }{
+	{"at-replicas", "judge a fleet of N prefill and decode replicas at the load the window saw (and the loads --load asks): knees, SLO against load, " +
+		"a verdict, and how many replicas it needs (the answer to \"how many replicas?\")"},
+	{"replicas-to-slo", "the latency a fleet of N replicas gives: its knee, the operating rate below it, and the TPOT " +
+		"(and TTFT) there; it does not search for a replica count (at-replicas does)"},
+	{"slo-to-rate", "the highest rate a fleet of N replicas carries within a TPOT (and TTFT) target"},
+	{"day-plan", "the prefill and decode replicas each stretch of a window needed, beside the ones it had"},
+	{"joint-ttft", "the mean TTFT of the joint prefill and decode model at a fleet and a rate (in shadow: nothing sizes from it)"},
+	{"backtest", "fit on one window and predict another from its inputs alone, beside what the fleet measured there"},
+	{"predict", "a backtest's first step: predict a window to a file"},
+	{"compare", "a backtest's second step: compare a prediction file with the window measured"},
+	{"strip-latency", "write a recording with every measured latency taken out: the load alone, to share for predict"},
+	{"capture", "read a past window from Prometheus into a capture file"},
+	{"generate", "turn a capture into a recording, replayed through the analyzers"},
+	{"freeze", "write the prediction a TTFT staircase run is scored against, before the run"},
+	{"serve", "serve the planner's HTTP API and page"},
+	{"version", "print the release and commit"},
+}
+
+// helpText is the usage and every command with what it does.
+func helpText() string {
+	var b strings.Builder
+	b.WriteString(usage + "\n\ncommands:\n")
+	for _, c := range commandHelp {
+		fmt.Fprintf(&b, "  %-16s%s\n", c.name, c.what)
+	}
+	return b.String()
+}
+
+// commandWhat is what the named command does, "" for one commandHelp does
+// not list.
+func commandWhat(name string) string {
+	for _, c := range commandHelp {
+		if c.name == name {
+			return c.what
+		}
+	}
+	return ""
+}
+
 // command is one subcommand: it parses its own flags from args and writes
 // what it reports to out, and its warnings to warn (stderr).
 type command func(ctx context.Context, args []string, out, warn io.Writer) error
@@ -302,7 +346,7 @@ func run(ctx context.Context, args []string, out, warn io.Writer) error {
 			}
 			return cmd(ctx, []string{"-h"}, out, warn)
 		}
-		_, err := fmt.Fprintln(out, usage)
+		_, err := io.WriteString(out, helpText())
 		return err
 	}
 	cmd, ok := commands[args[0]]
@@ -317,6 +361,12 @@ func run(ctx context.Context, args []string, out, warn io.Writer) error {
 func newFlags(name string, out io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(progName+" "+name, flag.ContinueOnError)
 	fs.SetOutput(out)
+	if what := commandWhat(name); what != "" {
+		fs.Usage = func() {
+			fmt.Fprintf(fs.Output(), "%s %s: %s\n\nflags:\n", progName, name, what)
+			fs.PrintDefaults()
+		}
+	}
 	return fs
 }
 

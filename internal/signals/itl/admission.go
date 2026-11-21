@@ -156,6 +156,16 @@ type Admission struct {
 	// default. The saturation analyzer sets it under its own switch (issue
 	// llm-d-incubation/llm-d-scaling-manager#169).
 	BaselineFromFloor bool
+	// HoldsFloorBaseline, with BaselineFromFloor, keeps the B a key's last
+	// pinned fit read from its floor for the cycles that read none: the
+	// floor's readings age out at DefaultObservationMaxAge, and a fleet held
+	// inside the band longer than that would go back to DefaultBaselineSec
+	// with no change in load (Tracker.heldFloorB, issue
+	// llm-d-incubation/llm-d-scaling-manager#333). A newer floor or a full
+	// fit replaces it; a pinned reading under it, or other engine
+	// arguments, ends it. Without it, as before, a cycle with no floor pins
+	// the default. The saturation analyzer sets it under its own switch.
+	HoldsFloorBaseline bool
 	// TierHysteresis latches the key's tier: the full fit is taken at the
 	// set values (DefaultMinSamples, DefaultMinKSpread), kept down to the
 	// clear values (DefaultClearMinSamples, DefaultClearKSpread), and within

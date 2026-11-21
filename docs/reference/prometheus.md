@@ -1941,7 +1941,7 @@ per pod, at `--v=3`.
 
 ### `llmsm_itl_line_intercept`
 - **Type**: Gauge
-- **Description**: Intercept B of the same line, in seconds: the inter-token latency the line predicts at an empty cache. It is not always a fitted hardware floor: when the readings span too little of k for a free fit, the intercept is pinned to a learned or default value and only the slope is fitted, and a free fit on noisy readings can put it below zero. Present and absent with `llmsm_itl_line_slope`.
+- **Description**: Intercept B of the same line, in seconds: the inter-token latency the line predicts at an empty cache. It is not always a fitted hardware floor: when the readings span too little of k for a free fit, the intercept is pinned to a learned value, to one read from the replicas' latency at low load, or to the default (no label tells these apart; the `itl-fit` log line does), and only the slope is fitted, and a free fit on noisy readings can put it below zero. Present and absent with `llmsm_itl_line_slope`.
 - **Labels**: as `llmsm_itl_line_slope`
 - **Use Case**: Compare a variant's floor across accelerators; an intercept far from the card's usual figure is a fit on too narrow a range of k.
 

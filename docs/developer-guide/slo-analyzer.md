@@ -89,6 +89,17 @@ Known gaps (the first blocks flipping the default):
 
 It is replay-only too.
 
+`slo-ttft-hop-unqueued` (off) sets which router windows teach the decode
+term's hop R (`prefill.DecodeTermCycle.HopUnqueued`). On, a window counts
+only when none of its cycles had a serving prefill row with requests waiting for
+compute: the capacity part of the waiting count where the pod publishes it,
+else the whole count. Off, as before, a queued window counts too. Its R is
+then the queue's timing: two means of many seconds, read over different
+windows while both climb. The capacity planner's replay turns it on
+(`learnreplay.PlannerSwitches`) and reads it for its own decode term windows.
+That holds on a recording with no slo analyzer too
+(llm-d-incubation/llm-d-scaling-manager#281).
+
 `slo-ttft-low-load-decode-ttft` (off) sets the decode engine's measured TTFT,
 which prices the decode side when no decode line does
 (`whatif.TTFTFleet.DecodeTTFT`). Off, it is the largest of the last five
