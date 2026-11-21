@@ -532,6 +532,16 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
   check("a p90 TPOT SLO shows the p90", vp.rows[0].cells[0].text === "TTFT 500 ms · TPOT 16 ms", vp.rows[0].cells[0].text);
   check("a p90 TPOT SLO is named in the legend", vp.legendStats.startsWith("Each cell is TTFT p95 · TPOT p90."), vp.legendStats);
   check("a rate load is not named twice", vp.header[0] === "10r/s", vp.header[0]);
+  // A p99 TPOT SLO over a table that prints p90: the cell carries the p99,
+  // and a cell with none never shows the p90 under the p99's name (#299).
+  const p99 = {ttft: {statistic: "p95", target: 2}, tpot: {statistic: "p99", target: 0.03}};
+  const at99 = cell => reportView({slo: p99, load: {rate: {value: 10}}, loads: ["10r/s"], shapes: [{label: "measured", capacity: knees(38.14, "decode"),
+    verdict: {}, utilization: {decode: {}, prefill: {}}, table: [Object.assign(row("10r/s", 10, {value: 0.5}, {value: 0.00699}, "met"), {cell})]}]}).rows[0].cells[0].text;
+  check("a p99 TPOT SLO shows the cell's p99", at99({mark: "met", tpot: {statistic: "p99", value: 0.0251}}) === "TTFT 500 ms · TPOT 25 ms",
+    at99({mark: "met", tpot: {statistic: "p99", value: 0.0251}}));
+  check("a p99 TPOT SLO never shows the table's p90; the mean says so", at99({mark: "met"}) === "TTFT 500 ms · TPOT 7.0 ms (mean)",at99({mark: "met"}));
+  check("a verdict carries what the self-check says of it", S("verdictLine")({verdict: "RIGHT-SIZED", summary: "RIGHT-SIZED: holds.", trust: "not trusted: x"}).trust === "not trusted: x");
+  check("a verdict the self-check says nothing of has no trust", S("verdictLine")({verdict: "RIGHT-SIZED", summary: "RIGHT-SIZED: holds."}).trust === "");
   check("a TTFT is read at the SLO's statistic, not the first one", v.rows[0].cells[0].text.startsWith("TTFT 637 ms"), v.rows[0].cells[0].text);
   check("a cell's parts stay apart for wrapping", JSON.stringify(vp.rows[0].cells[0].parts) === JSON.stringify(["TTFT 500 ms", "TPOT 16 ms"]));
 
@@ -656,7 +666,7 @@ if (failures.length) {
 }
 // EXPECTED_CASES is how many cases this file runs: a case that silently
 // stops running (an early return, a renamed function) fails the check.
-const EXPECTED_CASES = 318;
+const EXPECTED_CASES = 322;
 if (passed !== EXPECTED_CASES) {
   console.error(`check-planner-scenarios: ${passed} cases ran; expected ${EXPECTED_CASES}`);
   process.exit(1);

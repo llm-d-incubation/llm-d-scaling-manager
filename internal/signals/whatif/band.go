@@ -52,7 +52,7 @@ type Refit struct {
 	// key's slope holds its A.
 	Line itl.Model
 	// Baseline is the intercept the pinned fit pins: the key's last full
-	// fit's, or itl.DefaultBaselineSec.
+	// fit's, the floor's below the band, or itl.DefaultBaselineSec.
 	Baseline float64
 	// MinSettled is the steady gate's MinSettledSamples, 0 for the default.
 	MinSettled int

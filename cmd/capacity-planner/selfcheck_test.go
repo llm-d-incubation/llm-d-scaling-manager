@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,14 +29,20 @@ var selfCheckQ32 = []string{"at-replicas", "--recording", q32Recording, "--ttft"
 // variants, file. (Each run replays the q32 warm-up: two runs, not more.)
 func TestSelfCheckGolden(t *testing.T) {
 	withSelfCheck(t)
-	checkGolden(t, "at-replicas-q32-self-check", 0, selfCheckQ32)
+	// The verdict rests on the figures the self-check finds inconsistent:
+	// it is printed, says not trusted, and exits ExitUntrusted (#298).
+	checkGolden(t, "at-replicas-q32-self-check", whatifapi.ExitUntrusted, selfCheckQ32)
 	out, code := runCmd(t, append(selfCheckQ32, "-o", "json")...)
-	require.Equal(t, 0, code, out)
+	require.Equal(t, whatifapi.ExitUntrusted, code, out)
 	var rep whatifapi.ReportResponse
 	require.NoError(t, json.Unmarshal([]byte(out), &rep))
+	assert.Equal(t, whatifapi.ExitUntrusted, rep.ExitCode)
 	sc := rep.SelfCheck
 	require.NotNil(t, sc)
 	assert.Equal(t, whatifapi.SelfCheckInconsistent, sc.Status, sc.Line)
+	assert.Contains(t, sc.Untrusted, "ttft")
+	require.NotEmpty(t, rep.Shapes)
+	assert.True(t, strings.HasPrefix(rep.Shapes[0].Verdict.Trust, whatifapi.TrustNot+": "), rep.Shapes[0].Verdict.Trust)
 	require.NotEmpty(t, sc.IssueURL)
 	u, err := url.Parse(sc.IssueURL)
 	require.NoError(t, err)

@@ -47,10 +47,9 @@ import (
 // with the kind it fails with, not a wider bound. The probe draws nothing from
 // its seed, so each case runs on one.
 
-// probeStarts is the measured range of a replica's start (docs/reference/
-// start-time.md): 15 s a snapshot restore, 90 s the simulator's default,
-// 463 s a cold JIT cache.
-var probeStarts = []time.Duration{15 * time.Second, probeStart, 463 * time.Second}
+// probeStarts is the measured range of a replica's start
+// (learnertest.MeasuredStarts).
+var probeStarts = learnertest.MeasuredStarts()
 
 // probeRouter is one of the two bounds on the real router a start probe runs
 // under, and the suffix its case names carry.

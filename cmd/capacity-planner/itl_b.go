@@ -16,8 +16,9 @@ import (
 // (issue llm-d-incubation/llm-d-scaling-manager#225). A pinned-B line on the
 // default intercept (itl.DefaultBaselineSec) is refused as PinnedDefaultB:
 // its slope was fitted against a B no engine was seen to have. On a real P/D
-// window that is every cycle, because the tracker learns B only from a full
-// fit. --assume-itl-b states B, and the slope is fitted again through it on
+// window that is every cycle with no full fit and no floor read below the
+// band in the last 30 minutes (saturation.SwitchITLBaselineFromFloor).
+// --assume-itl-b states B, and the slope is fitted again through it on
 // the same readings (itl.Refit), so the line still runs through what the
 // replicas read and only its extrapolation moves. Every figure on it is
 // flagged AssumedITLB and outside the validated region (pricedVariant.stated).
@@ -234,6 +235,15 @@ func (pv pricedVariant) itlBRowText() string {
 		return strings.TrimPrefix(w, "ITL B ")
 	}
 	return strings.TrimPrefix(pv.itlBNotUsed(), "ITL B ")
+}
+
+// noLineHint is what to do about a variant that learned no ITL line: the
+// line needs decode's KV-cache use to span 0.30 or more (troubleshooting.md,
+// NoLine). It names both sources' words, so that the CLI's refusal and the
+// API's are the same.
+func (pv pricedVariant) noLineHint() string {
+	return "; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is " +
+		"learned (--cycle; source.cycle on the API), or record a busier window"
 }
 
 // pinnedDefaultBHint is what a PinnedDefaultB refusal adds: how to state B,

@@ -517,7 +517,12 @@ func TestITLOneSided_TheHeldSlopeKeepsThePriceAndEndsWithTheHold(t *testing.T) {
 		}
 		return o
 	}
-	o := run(nil)
+	// Both arms run SwitchITLBaselineFromFloor off: on, the idle replicas'
+	// floor below the band pins B at the truth's, and the line through it is
+	// the truth with or without the one-sided rule. The default B is the case
+	// the rule exists for.
+	noFloor := map[string]bool{SwitchITLBaselineFromFloor: false}
+	o := run(noFloor)
 	t.Logf("last fit %s (%.5f s at k %.2f), held to %s (%.5f s), silent from %s; truth %.5f s",
 		o.lastFit, o.lastFitLine.ITLAt(oneSidedK), oneSidedK, o.lastHeld, o.held.ITLAt(oneSidedK), o.firstSilent, truth)
 	require.False(t, o.held.IsZero(), "premise: the slope was held")
@@ -529,7 +534,7 @@ func TestITLOneSided_TheHeldSlopeKeepsThePriceAndEndsWithTheHold(t *testing.T) {
 	require.True(t, o.lastHeld-o.lastFit <= time.Hour && o.firstSilent-o.lastFit > time.Hour,
 		"the hold ended %s after the last fit, want just past 1h", o.firstSilent-o.lastFit)
 
-	off := run(map[string]bool{SwitchITLOneSidedAtCap: false})
+	off := run(map[string]bool{SwitchITLOneSidedAtCap: false, SwitchITLBaselineFromFloor: false})
 	require.Less(t, off.held.ITLAt(oneSidedK), truth, "negative control: off, the held line was not under the truth")
 }
 

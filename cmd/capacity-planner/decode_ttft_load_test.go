@@ -53,15 +53,19 @@ func stairPrefill(t *testing.T, phase, cycle string) wireRole {
 // read 0.12 to 0.18 s at the lowest step. At the last cycle the planner
 // refuses it and names the latest calm cycle. Before the collapse, and at the
 // cycle it names, the decode side is calm and the floor is that side plus
-// the prefill's own few tens of ms.
+// the prefill's own few tens of ms. At c-on's cycle 240 the line is pinned
+// through the floor below the band (saturation.SwitchITLBaselineFromFloor),
+// so it prices and the decode side is the line's, not the engine's TTFT.
 func TestDecodeTTFTUnderLoad_StaircaseCollapse(t *testing.T) {
 	for _, c := range []struct {
 		phase   string
 		waiting string
 		calm    int
+		// lineAt240 says the decode line prices at cycle 240.
+		lineAt240 bool
 	}{
-		{"b-off", "decode TTFT 16.6 s was measured with 283 requests waiting on decode capacity", 249},
-		{"c-on", "decode TTFT 9.0 s was measured with 254 requests waiting on decode capacity", 249},
+		{"b-off", "decode TTFT 16.6 s was measured with 283 requests waiting on decode capacity", 249, false},
+		{"c-on", "decode TTFT 9.0 s was measured with 254 requests waiting on decode capacity", 249, true},
 	} {
 		t.Run(c.phase, func(t *testing.T) {
 			last := stairPrefill(t, c.phase, "")
@@ -78,6 +82,13 @@ func TestDecodeTTFTUnderLoad_StaircaseCollapse(t *testing.T) {
 				require.NotNil(t, r.Results.Rate.Answer, "cycle %s", cycle)
 				assert.Zero(t, r.TTFT.DecodeTTFTCalmCycle, "cycle %s", cycle)
 				decode, floor := r.TTFT.DecodeTTFTSeconds, r.Results.Rate.Answer.Basis.Floor
+				if c.lineAt240 && cycle == "240" {
+					assert.Equal(t, "line", r.TTFT.DecodeSide, "cycle %s", cycle)
+					assert.Zero(t, decode, "cycle %s: the engine's TTFT is not read", cycle)
+					assert.Positive(t, floor, "cycle %s: the line prices a floor", cycle)
+					assert.Less(t, floor, 0.3, "cycle %s: the floor is calm", cycle)
+					continue
+				}
 				assert.Less(t, decode, 0.3, "cycle %s: the decode engine TTFT is calm", cycle)
 				assert.Less(t, floor-decode, 0.1, "cycle %s: the rest of the floor is prefill's", cycle)
 			}
