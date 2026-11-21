@@ -29,7 +29,7 @@ SLO vs load        r/s    TTFT p50/90 ms            TPOT mean/p90 ms            
   load seen (87%)  26.90  no prefill speed learned  3.14/TPOT bucket too wide       no prefill speed learned
 checks
   1 prefill + 1 decode  does not hold: 26.90 r/s is above 0.85 x the fleet knee 30.88 r/s = 26.25 r/s; prefill not priced (no prefill speed learned); TPOT mean 3.1 ms meets 5.0 ms
-flags: DecodeOnly; ExtrapolatedFill; CoarseTPOTBucket; EngineTPOTHistogram
+flags: DecodeOnly; BatchBeyondFit; ExtrapolatedFill; CoarseTPOTBucket; EngineTPOTHistogram
 
 not validated:
   - decode knee: not validated; it read 44% to 103% high on the goldens (docs/proposals/slo-capacity-planner.md, Measured on the goldens)

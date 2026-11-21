@@ -107,6 +107,7 @@
               "tier": "pinned-B"
             },
             "flags": [
+              "BatchBeyondFit",
               "ExtrapolatedFill"
             ],
             "validation": {
@@ -135,6 +136,7 @@
               "tier": "pinned-B"
             },
             "flags": [
+              "BatchBeyondFit",
               "ExtrapolatedFill"
             ]
           }
@@ -156,6 +158,7 @@
               "tier": "pinned-B"
             },
             "flags": [
+              "BatchBeyondFit",
               "ExtrapolatedFill"
             ],
             "validation": {

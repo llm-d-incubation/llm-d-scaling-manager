@@ -111,7 +111,8 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
@@ -199,6 +200,7 @@
               "BelowFittedBand",
               "AssumedShape",
               "OutputSpreadUnread",
+              "BatchBeyondFit",
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {
@@ -245,6 +247,7 @@
               "BelowFittedBand",
               "AssumedShape",
               "OutputSpreadUnread",
+              "BatchBeyondFit",
               "AssumedPoissonArrivals"
             ],
             "sensitivity": {

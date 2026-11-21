@@ -16,7 +16,7 @@ replica-hours over the 11 sized buckets: needed 1.75 decode (prefill not priced 
 had over every bucket with data: 1.08 prefill + 1.08 decode replica-hours, 2.17 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
 hours under (SLO risk): 22:00
 hours over (waste): none
-flags: WindowShape, UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeTermOmitted, RouterHopAssumed, SpreadBeyondProcessorSharing, FlowControlInferredOff, HeldByDecodeAdmission, KVBoundSlots, AssumedShape, OutputSpreadUnread, AssumedPoissonArrivals, ExtrapolatedFill, AssumedImbalance, PrefillNotPriced
+flags: WindowShape, UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeTermOmitted, RouterHopAssumed, SpreadBeyondProcessorSharing, FlowControlInferredOff, HeldByDecodeAdmission, KVBoundSlots, AssumedShape, OutputSpreadUnread, AssumedPoissonArrivals, ExtrapolatedFill, AssumedImbalance, BatchBeyondFit, PrefillNotPriced
 note: Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.
 note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
 note: Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.

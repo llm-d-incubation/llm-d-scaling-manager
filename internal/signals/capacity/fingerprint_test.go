@@ -90,6 +90,11 @@ var fingerprintExcluded = []string{
 	"GpuMemoryUtilizationSet",
 	"BlockSizeSet",
 	"ExtensibleKVCache",
+	// Not hashed: the CUDA-graph capture ceiling and SGLang's mixed chunk,
+	// read only for the capacity planner's warnings. Hashing them would move
+	// every stored digest for a flag nothing prices.
+	"CUDAGraphCaptureMax",
+	"MixedChunk",
 }
 
 func TestFingerprintCoversEveryEngineParamsField(t *testing.T) {
@@ -243,6 +248,10 @@ func TestFingerprintIgnoresTheResolvedInputs(t *testing.T) {
 			p.BlockSizeSet = !p.BlockSizeSet
 		case "ExtensibleKVCache":
 			p.ExtensibleKVCache = 1
+		case "CUDAGraphCaptureMax":
+			p.CUDAGraphCaptureMax = 64
+		case "MixedChunk":
+			p.MixedChunk = true
 		default:
 			t.Fatalf("no case for excluded field %s", name)
 		}

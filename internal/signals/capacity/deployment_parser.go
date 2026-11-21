@@ -133,6 +133,24 @@ type EngineParams struct {
 	IsV1Engine            bool    // VLLM_USE_V1 env detection (default: true since v0.8); always true for SGLang
 	ChunkedPrefillEnabled bool    // true for V1, or --enable-chunked-prefill
 
+	// CUDAGraphCaptureMax is the largest batch the engine captures a CUDA
+	// graph for, as its flags state it (cuda_graphs.go): on vLLM in tokens,
+	// from --max-cudagraph-capture-size, the largest of --cuda-graph-sizes,
+	// or the same keys of --compilation-config; on SGLang in requests, from
+	// --cuda-graph-max-bs. 0 is not stated (the release's default), and
+	// CUDAGraphsOff (-1) no graphs at all: vLLM -O0 or a cudagraph_mode of
+	// NONE. A batch past it runs eager, slower per step than the graphs a
+	// line was fitted on. Read only to flag a plan past it (the capacity
+	// planner); not hashed or compared, so it moves no digest, and left out
+	// of a recording while 0, so one made before it reads back byte for
+	// byte.
+	CUDAGraphCaptureMax int64 `learnrec:"omitzero"`
+	// MixedChunk is SGLang's --enable-mixed-chunk: an aggregated SGLang pod
+	// runs a prefill chunk and the decode batch in one step. Without it a
+	// prefill step stalls every running sequence, which an ITL line linear in
+	// fill does not model. Read and kept as MixedChunk is.
+	MixedChunk bool `learnrec:"omitzero"`
+
 	// MaxNumSeqsSet is true when MaxNumSeqs was read from the engine's flag
 	// (directly or through a resolved variable reference), false when it is
 	// the default. The default is a guess: vLLM V1 picks 1024 on large
@@ -868,11 +886,18 @@ var shortFlags = map[string]string{
 	"-dp": "--data-parallel-size",
 }
 
+// optimizationLevelFlag is vLLM's --optimization-level, which -O0 to -O3
+// spell (optimizationLevelShort).
+const optimizationLevelFlag = "--optimization-level"
+
 // longFlag returns tok as a long flag, a short alias spelled out; ok is false
 // for a token that is not a flag this parser reads.
 func longFlag(tok string) (string, bool) {
 	if strings.HasPrefix(tok, "--") {
 		return tok, true
+	}
+	if level, ok := optimizationLevelShort(tok); ok {
+		return optimizationLevelFlag + "=" + level, true
 	}
 	name, rest, hasEq := strings.Cut(tok, "=")
 	long, ok := shortFlags[name]
@@ -981,6 +1006,9 @@ func parseArgsWith(args []string, params *EngineParams, env map[string]string,
 
 		if hasValue {
 			value, i = joinArithmetic(value, args, i)
+			if key == cudaGraphSizesKey {
+				value, i = joinSizes(value, args, i)
+			}
 			resolved, ok := resolveRefs(value, env)
 			if !ok {
 				// The reference named something the container does not
@@ -1171,6 +1199,8 @@ func applyParam(key, value string, params *EngineParams) applyResult {
 		params.EnforceEager = true
 	case "no_enforce_eager":
 		params.EnforceEager = false
+	case "max_cudagraph_capture_size", cudaGraphSizesKey, "compilation_config", "optimization_level":
+		return applyCUDAGraphs(key, value, params)
 	case "enable_chunked_prefill":
 		params.ChunkedPrefillEnabled = true
 	case "no_enable_chunked_prefill":
@@ -1246,6 +1276,9 @@ func applyParam(key, value string, params *EngineParams) applyResult {
 			}
 			addSpeculativePart(params, key, value)
 			return applyOK
+		}
+		if sub, ok := strings.CutPrefix(key, compilationDotted); ok && sub != "" {
+			return applyCUDAGraphs(sub, value, params)
 		}
 		// Not a flag this parser maps. parseArgsWith decides whether
 		// that is harmless or the wrong-parser signal.

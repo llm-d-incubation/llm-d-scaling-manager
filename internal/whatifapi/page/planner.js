@@ -67,6 +67,18 @@ const FLAG_WORDS = {
   ImbalanceNotSustained: ["The imbalance f was high but has not held over the window: priced at it, the cautious side.", "a longer window"],
   FlowControlMismatch: ["The declared flow-control setting disagrees with the router's series: priced as declared.", "match the policy to the router"],
   LineMismatch: ["The recording's readings do not support the ITL line: the figure is printed, flagged.", "a window with readings across the load"],
+  MoEDataParallel: ["A MoE engine with expert parallelism and several data-parallel ranks: the ranks step together at the busiest one's pace, but the fill priced is their mean, so the busiest rank can run out of KV first.", "nothing yet: the busiest rank is not modeled"],
+  StepBudgetBindsBatch: ["The batch priced, times the tokens each sequence takes a step (1 plus the speculative tokens), is past the engine's step token budget: the engine runs fewer sequences than the knee assumes.", "a larger --max-num-batched-tokens, or --batch-cap at the budget's batch"],
+  PastCUDAGraphCeiling: ["The batch priced is past the largest the engine captures a CUDA graph for, or the engine runs no graphs: those steps run eager and slower than the line.", "a capture size at or above the batch"],
+  HybridAttention: ["The model mixes full attention with sliding-window, chunked or linear layers: the KV a request holds and the ITL line are not those of full attention.", "nothing yet: hybrid attention is not modeled"],
+  MLAAttention: ["The model uses multi-head latent attention: KV is small, so the batch cap or the step budget, not the KV, usually bounds the batch. The CLI's flags line says which.", "nothing (informational)"],
+  HostBoundTPOTTail: ["The engine's latency per token with an empty cache is under 5 ms: the TPOT percentile's tail is host jitter and reads low.", "a mean TPOT target"],
+  KVConnectorUnmodeled: ["A KV connector other than NIXL: the transfer was modeled on NIXL only.", "nothing yet"],
+  KVOffload: ["KV offloading past GPU memory: capacity is priced on the GPU's KV only, and a request served from the offload tier is slower than the line.", "nothing yet"],
+  SGLangNoMixedChunk: ["An aggregated SGLang pod without --enable-mixed-chunk: a prefill step stalls every running sequence.", "--enable-mixed-chunk"],
+  ExtensibleKVCache: ["vLLM's extensible KV cache: the KV capacity read at start-up can grow while the engine runs.", "--no-enable-extensible-kv-cache, or a recording of the grown cache"],
+  DefaultBatchCapBelowRelease: ["The batch cap priced is the parser's default of 256, but this vLLM release runs 1024 on this accelerator: the decode figures can ask for up to 4 times too many replicas.", "--max-num-seqs on the engine, or --batch-cap"],
+  BatchBeyondFit: ["The shape's KV per request is under half that of the rows the ITL line was read on, and the batch priced is past the largest they held: ITL also rises with batch tokens, which the line does not carry across shapes.", "a recording at this shape"],
 };
 
 // BUCKET_NOTE is what the per-bucket lines are, every time they are drawn.

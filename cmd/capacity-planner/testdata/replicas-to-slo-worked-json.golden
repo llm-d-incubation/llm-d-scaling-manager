@@ -114,6 +114,7 @@
             "flags": [
               "AssumedShape",
               "OutputSpreadUnread",
+              "BatchBeyondFit",
               "ExtrapolatedFill"
             ],
             "validation": {
@@ -143,7 +144,8 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ]
           }
         },
@@ -165,7 +167,8 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
@@ -193,7 +196,8 @@
             "flags": [
               "AssumedTPOTRatio",
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,

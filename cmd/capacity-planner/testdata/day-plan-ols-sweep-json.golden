@@ -361,6 +361,7 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -381,6 +382,7 @@
           "FlowControlInferredOff",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -402,6 +404,7 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
+        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -446,6 +449,7 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -467,6 +471,7 @@
           "BelowFittedBand",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -488,6 +493,7 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
+        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -733,6 +739,7 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -754,6 +761,7 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -775,6 +783,7 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
+        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -820,6 +829,7 @@
           "KVBoundSlots",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -842,6 +852,7 @@
           "KVBoundSlots",
           "AssumedShape",
           "OutputSpreadUnread",
+          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -864,6 +875,7 @@
         "KVBoundSlots",
         "AssumedShape",
         "OutputSpreadUnread",
+        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },

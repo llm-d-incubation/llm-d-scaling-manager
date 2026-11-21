@@ -4,5 +4,5 @@ mean TPOT       3.27 ms                      line held; OUTSIDE VALIDATED REGION
 shape           IL 1003 OL 500 (measured, cycles 81-100)
 engine          vLLM release not recorded
 line check      ok at another shape (rows at KV 3002 a request, priced at 1321): median 1.2% off the rate read, line low; 1 of 20 rows past 15%, worst 80.2%, fill 0.49-0.57, cycles 32-95; left out 20 on a ramp, 0 above the band, 0 older than 30m0s
-flags: OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); HeldLine
+flags: OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); HeldLine; BatchBeyondFit (KV 1321 a request against the rows' 3002; up to 64 sequences a rank priced, 57 seen)
 estimate from no readings of the line's own of a 226-cycle recording read to cycle 100, not a guarantee; see basis (-o json)

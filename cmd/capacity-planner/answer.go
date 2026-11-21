@@ -412,7 +412,10 @@ type pricedVariant struct {
 	// replaced; 0 where the policy's stood.
 	bandFloor, bandPolicyFloor float64
 	flags                      []whatif.Flag
-	lines                      whatif.LineResamples
+	// notes are the engine configurations the decode model does not cover
+	// (engineNotes), each also in flags.
+	notes []engineNote
+	lines whatif.LineResamples
 	// model is the model served, and stated the pricing flags set that put
 	// every figure outside the envelope (statedOutside).
 	model  string
@@ -593,6 +596,10 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 			if pv.check.Mismatch() {
 				pv.flags = append(pv.flags, lineMismatch)
 			}
+		}
+		pv.notes = pv.engineNotes()
+		for _, n := range pv.notes {
+			pv.flags = append(pv.flags, n.flag)
 		}
 		if vs.Refitted {
 			pv.lines = whatif.BootstrapLines(vs.Readings, whatif.Refit{Tier: vs.Tier, Line: vs.Line,

@@ -4,5 +4,5 @@ mean TPOT       3.09 ms     [3.09 .. 3.10]   line pinned-B, observed fill up to 
 shape           IL 1000 OL 602 (measured, cycles 64-83), output spread D 1.304 (measured)
 engine          vLLM release not recorded
 line check      ok at another shape (rows at KV 3062 a request, priced at 1393): median 11.2% off the rate read, line high; 0 of 10 rows past 15%, worst 14.7%, fill 0.48-0.58, cycles 33-42; left out 17 on a ramp, 0 above the band, 0 older than 30m0s
-flags: ExtrapolatedFill (fill 0.680, 0.396 above the readings)
+flags: BatchBeyondFit (KV 1393 a request against the rows' 3062; up to 64 sequences a rank priced, 25 seen); ExtrapolatedFill (fill 0.680, 0.396 above the readings)
 estimate from 14 readings (cycles 64-77) of a 83-cycle recording, not a guarantee; see basis (-o json)

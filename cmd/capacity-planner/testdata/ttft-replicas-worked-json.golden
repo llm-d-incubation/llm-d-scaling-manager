@@ -108,6 +108,7 @@
             "flags": [
               "AssumedShape",
               "OutputSpreadUnread",
+              "BatchBeyondFit",
               "ExtrapolatedFill"
             ],
             "validation": {
@@ -137,7 +138,8 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ]
           }
         },
@@ -159,7 +161,8 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
@@ -274,7 +277,8 @@
               "FlowControlInferredOff",
               "AssumedPoissonArrivals",
               "AssumedShape",
-              "OutputSpreadUnread"
+              "OutputSpreadUnread",
+              "BatchBeyondFit"
             ],
             "parts": {
               "independent": 0.3434393200155779,

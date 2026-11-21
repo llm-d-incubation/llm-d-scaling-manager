@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/annotations"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 )
 
 // vLLM changes its own defaults between releases, and a fleet can run several
@@ -233,6 +234,41 @@ func vllmDefaultMaxNumBatchedTokens(v VLLMVersion, accelerator string) int64 {
 	}
 }
 
+// VLLMDefaultMaxNumSeqs is the OpenAI server's --max-num-seqs when the flag
+// is absent, for one accelerator: 1024 on the tiers whose step budget is 8192
+// or more (70 GiB or more, not an A100, and from v0.33 not a GB10), 256
+// otherwise -- the same rule and table as vllmDefaultMaxNumBatchedTokens. An
+// accelerator this package cannot size gets 256, the parser's default
+// (EngineParams.MaxNumSeqs), which is never above what the engine runs.
+//
+// The parser keeps 256 (defaultEngineParams): MaxNumSeqs is hashed into the
+// fingerprint, and moving its default would move every stored digest and the
+// controller's caps with it. The capacity planner reads this to say when the
+// 256 it priced at is below the engine's own default.
+func VLLMDefaultMaxNumSeqs(v VLLMVersion, accelerator string) int64 {
+	if vllmDefaultMaxNumBatchedTokens(v, accelerator) >= 8192 {
+		if _, ok := acceleratorMemoryGiB(accelerator); ok {
+			return 1024
+		}
+	}
+	return 256
+}
+
+// ExtensibleKVCacheOn reports whether a vLLM engine runs v0.34's extensible
+// KV cache: on by default from v0.34 (vllmDefaultGPUMemoryUtilization says
+// when it stays off), or turned on by its flag. The KV capacity it starts
+// with can then grow, so the capacity a recording read at start-up may not
+// be what the engine holds later.
+func (p *EngineParams) ExtensibleKVCacheOn() bool {
+	if p == nil || p.Engine == inferenceengine.EngineSGLang || p.ExtensibleKVCache < 0 {
+		return false
+	}
+	if p.ExtensibleKVCache > 0 {
+		return true
+	}
+	return p.VLLMVersion.AtLeast(0, 34) && vllmDefaultGPUMemoryUtilization(p.VLLMVersion, p) == 1.0
+}
+
 // batchedDPBudget is vLLM's DEFAULT_MAX_NUM_BATCHED_TOKENS_FOR_BATCHED_DP.
 const batchedDPBudget = 256
 
@@ -248,6 +284,12 @@ func usesBatchedDPMoE(p *EngineParams) bool {
 	backend := layoutValue(p, "all2all_backend")
 	return p.ExpertParallel && parallelSize(p.DataParallelSize) > 1 &&
 		(backend == "deepep_low_latency" || backend == "nixl_ep")
+}
+
+// BatchedDPMoE reports whether p is a wide-EP engine with a batched
+// all-to-all and DP > 1 (usesBatchedDPMoE): deepep_low_latency or nixl_ep.
+func (p *EngineParams) BatchedDPMoE() bool {
+	return p != nil && usesBatchedDPMoE(p)
 }
 
 // layoutValue is the value MemoryLayout records for key, or "".

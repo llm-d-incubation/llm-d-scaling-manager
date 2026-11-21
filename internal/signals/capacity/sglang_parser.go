@@ -142,6 +142,14 @@ func applySGLangParam(key, value string, params *EngineParams) applyResult {
 		}
 	case "disable_cuda_graph":
 		params.EnforceEager = true
+	case "cuda_graph_max_bs":
+		v, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || v < 1 {
+			return applyUnusable
+		}
+		params.CUDAGraphCaptureMax = v
+	case "enable_mixed_chunk":
+		params.MixedChunk = true
 	case "dp_size", "data_parallel_size":
 		return applyParallelSize(value, &params.DataParallelSize)
 	case "pp_size", "pipeline_parallel_size":

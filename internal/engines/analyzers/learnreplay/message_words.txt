@@ -11,6 +11,7 @@
 --metric-annotations-allowlist
 --metric-labels-allowlist
 --model-path
+--optimization-level
 --pipeline-parallel-size
 --role-of
 --step
@@ -19,6 +20,7 @@
 -1
 -1000
 -Inf
+-O
 -byte
 -c
 -dp
@@ -851,6 +853,7 @@ comparable
 compared
 compatible
 compatible-variant-live
+compilation_config
 complete
 completed
 completedPerQueuedReplica
@@ -927,6 +930,10 @@ creation
 crept
 critical
 crossed
+cuda_graph_max_bs
+cuda_graph_sizes
+cudagraph_capture_sizes
+cudagraph_mode
 current
 current-replicas
 currentNeedGPUs
@@ -1120,6 +1127,7 @@ enable_eplb
 enable_expert_parallel
 enable_extensible_kv_cache
 enable_hierarchical_cache
+enable_mixed_chunk
 enable_prefix_caching
 enabled
 enables
@@ -1829,6 +1837,7 @@ maxRatio
 maxReplicas
 maxRoles
 maxWait
+max_cudagraph_capture_size
 max_model_len
 max_num_active_seqs
 max_num_batched_tokens
@@ -2128,6 +2137,7 @@ operating-point-cap
 operation
 operator
 optimization
+optimization_level
 optimizer
 optimizer.type
 options

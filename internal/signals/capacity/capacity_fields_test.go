@@ -87,6 +87,10 @@ var (
 		"GpuMemoryUtilizationSet": "provenance of the compared GpuMemoryUtilization",
 		"BlockSizeSet":            "provenance of the compared BlockSize",
 		"ExtensibleKVCache":       "resolved into the compared GpuMemoryUtilization",
+		// Latency, not token capacity, like EnforceEager; read only for the
+		// capacity planner's warnings.
+		"CUDAGraphCaptureMax": "affects latency past the capture, not token capacity",
+		"MixedChunk":          "affects latency on SGLang aggregated pods, not token capacity",
 		// The engine's code. It can move capacity across a release, but a tag
 		// changes on every rebuild, and comparing it would refuse every record
 		// across a routine rollout -- for estimateStoredCapacity a refused

@@ -136,6 +136,10 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 		case whatif.LineNearGate:
 			parts = append(parts, fmt.Sprintf("%s (%d/%d)", f, pv.lines.TierChanges(), pv.lines.Drawn))
 		default:
+			if d := pv.engineNoteText(f); d != "" {
+				parts = append(parts, fmt.Sprintf("%s (%s)", f, d))
+				continue
+			}
 			parts = append(parts, string(f))
 		}
 	}

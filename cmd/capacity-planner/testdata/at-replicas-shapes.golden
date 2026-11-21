@@ -39,7 +39,7 @@ SLO vs load              r/s    TTFT p50/90 ms  TPOT mean/p90 ms  e2e mean (sum)
 checks
   2 prefill + 2 decode  does not hold: 41.70 r/s is 1.1x the fleet knee of 36.98 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms
 assumed: V_P 200000 tok/s (--assume-vp); a 20ms (--assume-a); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow-control thresholds 5 and 0.8 (upstream defaults); Poisson arrivals
-flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; ExtrapolatedFill; RouterHopAssumed; SpreadBeyondProcessorSharing; BelowFittedBand; KVBoundSlots; AssumedPoissonArrivals; AssumedA; PromptSpreadAbovePeak; CoarseTPOTBucket
+flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; ExtrapolatedFill; RouterHopAssumed; SpreadBeyondProcessorSharing; BelowFittedBand; KVBoundSlots; AssumedPoissonArrivals; AssumedA; PromptSpreadAbovePeak; CoarseTPOTBucket; HostBoundTPOTTail
 
 shape 1k/1k: IL 1024 OL 1024, prefix hit 0.00 (asked)
   EXTRAPOLATED: IL 1024 outside the 7989-8014 seen; OL 1024 outside the 200-201 seen
@@ -63,7 +63,7 @@ SLO vs load              r/s    TTFT p50/90 ms  TPOT mean/p90 ms  e2e mean (sum)
 checks
   2 prefill + 2 decode  does not hold: 41.70 r/s is 1.2x the fleet knee of 35.56 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms
 assumed: V_P 200000 tok/s (--assume-vp); a 20ms (--assume-a); prompt 1024 tokens (--shape); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow-control thresholds 5 and 0.8 (upstream defaults); Poisson arrivals
-flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; AssumedShape; RouterHopAssumed; SpreadBeyondProcessorSharing; AssumedPoissonArrivals; AssumedA; BelowFittedBand; PromptSpreadAbovePeak; CoarseTPOTBucket
+flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; AssumedShape; BatchBeyondFit; RouterHopAssumed; SpreadBeyondProcessorSharing; AssumedPoissonArrivals; AssumedA; BelowFittedBand; PromptSpreadAbovePeak; CoarseTPOTBucket; HostBoundTPOTTail
 
 shape 16k/200/0.3: IL 16384 OL 200, prefix hit 0.30 (asked)
   EXTRAPOLATED: IL 16384 outside the 7989-8014 seen; prefix hit 0.30 outside the 0.00-0.00 seen
@@ -87,7 +87,7 @@ SLO vs load              r/s    TTFT p50/90 ms  TPOT mean/p90 ms  e2e mean (sum)
 checks
   2 prefill + 2 decode  does not hold: 41.70 r/s is 2.3x the fleet knee of 18.17 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms
 assumed: V_P 200000 tok/s (--assume-vp); a 20ms (--assume-a); prompt 11469 tokens (--shape); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow-control thresholds 5 and 0.8 (upstream defaults); Poisson arrivals
-flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; AssumedShape; ExtrapolatedFill; RouterHopAssumed; SpreadBeyondProcessorSharing; HeldByDecodeAdmission; KVBoundSlots; AssumedPoissonArrivals; AssumedA; BelowFittedBand; PromptSpreadAbovePeak; CoarseTPOTBucket
+flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; AssumedShape; ExtrapolatedFill; RouterHopAssumed; SpreadBeyondProcessorSharing; HeldByDecodeAdmission; KVBoundSlots; AssumedPoissonArrivals; AssumedA; BelowFittedBand; PromptSpreadAbovePeak; CoarseTPOTBucket; HostBoundTPOTTail
 
 not validated:
   - decode knee: not validated; it read 44% to 103% high on the goldens (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
