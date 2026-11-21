@@ -153,7 +153,8 @@ type VariantState struct {
 	CapacityTokens float64
 	// BatchCap is the cap per engine rank the analyzer prices the variant
 	// at, BatchCapSource where it came from (flags, declared, learned,
-	// default; "" with none), and Ranks the engine ranks per replica.
+	// default, or step-budget with saturation.SwitchPlannerCapAtStepBudget
+	// on; "" with none), and Ranks the engine ranks per replica.
 	BatchCap       int64
 	BatchCapSource string
 	Ranks          int
@@ -248,6 +249,13 @@ type shapeSample struct {
 //     median of the busiest minutes, not of every minute.
 //   - saturation.SwitchITLAdaptiveBandFloor: the ITL band's floor lowered to
 //     the fill a low-fill fleet has.
+//   - saturation.SwitchPlannerCapAtStepBudget: the batch cap per rank held
+//     to the batch the step token budget runs, ceil(budget / (1 + k)) with k
+//     speculative tokens (issue llm-d-incubation/llm-d-scaling-manager#302).
+//     It only ever lowers the cap: the knee and the sequences a replica is
+//     priced at fall, and the line is read at the knee's lower fill, so the
+//     ITL and TPOT at the knee fall with it. No committed recording runs a
+//     budget under its cap times 1 + k, so no golden moves with it on.
 //
 // saturation.SwitchITLHoldSteadySlope is planner-only too but not listed:
 // the line it holds is right at a given fill, and the planner then reads
@@ -268,6 +276,7 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillQueueByCapacity: true,
 		saturation.SwitchPrefillFBusyMinutes:    true,
 		saturation.SwitchITLAdaptiveBandFloor:   true,
+		saturation.SwitchPlannerCapAtStepBudget: true,
 	}}
 }
 

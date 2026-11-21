@@ -139,8 +139,8 @@ func TestEngine_TheLiveWorkloadWinsOverTheFlags(t *testing.T) {
 
 	text, code := runCmd(t, slices.Concat([]string{"replicas-to-slo"}, sweepWindow(withKSM("").URL), []string{"--kube-state-metrics"})...)
 	require.Equal(t, 0, code, text)
-	assert.Contains(t, text, "vLLM 0.34 (from image tag); for reference, not priced yet: "+
-		"step budget 8192 (default), GPU memory 1 (default), block size 64 (default)")
+	assert.Contains(t, text, "vLLM 0.34 (from image tag); step budget 8192 (default), priced as a cap on the batch per rank; "+
+		"for reference, not priced yet: GPU memory 1 (default), block size 64 (default)")
 
 	// A flag that names another release is not used, and the capture says
 	// so, naming both.

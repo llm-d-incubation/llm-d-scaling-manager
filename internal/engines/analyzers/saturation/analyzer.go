@@ -529,6 +529,10 @@ type SaturationAnalyzer struct {
 	// prefillQueueByCapacity is SwitchPrefillQueueByCapacity: off from the
 	// constructor, planner-only (learnreplay.PlannerSwitches).
 	prefillQueueByCapacity bool
+	// muAtStepBudget is SwitchMuAtStepBudget, and plannerCapAtStepBudget
+	// SwitchPlannerCapAtStepBudget (step_budget_cap.go): both off from the
+	// constructor; the second is planner-only.
+	muAtStepBudget, plannerCapAtStepBudget bool
 	// prefillFBusyMinutes is SwitchPrefillFBusyMinutes, and
 	// itlHoldSteadySlope SwitchITLHoldSteadySlope: off from the
 	// constructor, planner-only (learnreplay.PlannerSwitches).

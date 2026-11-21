@@ -26,6 +26,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
@@ -105,6 +106,9 @@ type Analyzer struct {
 	// turns them off (SetSwitchesForReplay).
 	batchCapAdmission bool
 	batchCapPerRank   bool
+	// capAtStepBudget is SwitchCapAtStepBudget (issue
+	// llm-d-incubation/llm-d-scaling-manager#302): off from the constructor.
+	capAtStepBudget bool
 
 	// settle is the engine's settle tracker, read-only (WithSettleView);
 	// nil when the engine gave none, and ownSettle, observed by the
@@ -236,6 +240,20 @@ const SwitchBatchCapAdmission = "slo-batch-cap-admission"
 // and the parser's default where neither does. Off, as before, at the
 // flags' cap or the default (capacity.EngineParams.BatchCap).
 const SwitchBatchCapPerRank = "slo-batch-cap-per-rank"
+
+// SwitchCapAtStepBudget is the replay switch that holds the batch cap a vLLM
+// replica is priced at to the batch its step token budget runs:
+// ceil(budget / (1 + k)) sequences a rank with k speculative tokens
+// (whatif.StepBudgetCap), as saturation.SwitchMuAtStepBudget holds the
+// saturation analyzer's derived mu (issue
+// llm-d-incubation/llm-d-scaling-manager#302). vLLM's scheduler takes 1 + k
+// tokens of max_num_batched_tokens per running request and runs no more once
+// it is spent. Off from the constructor, as before: at the cap alone. On, it
+// moves nothing on a dense engine at the default budget, and prices a wide-EP
+// decode at the batched all-to-all's budget of 256 with MTP k = 3 at 64
+// sequences a rank where it priced 256. No recording holds such an engine:
+// the evidence is synthetic.
+const SwitchCapAtStepBudget = "slo-cap-at-step-budget"
 
 type acceleratorMemo struct {
 	name     string
@@ -546,6 +564,9 @@ const (
 	batchCapFlags    = "flags"
 	batchCapDeclared = "declared"
 	batchCapDefault  = "default"
+	// batchCapStepBudget is a cap held to the step budget's batch
+	// (SwitchCapAtStepBudget).
+	batchCapStepBudget = "step-budget"
 	// batchCapNone is no cap to read: for the line's admission, none the
 	// flags or the annotation state; for the price, none at all (the scale
 	// target unread). Nothing is at it, and nothing is capped by it. The
@@ -668,6 +689,11 @@ func (a *Analyzer) pricedBatchCap(params *capacity.EngineParams) (int64, string)
 	}
 	if batchCap <= 0 {
 		source = batchCapNone
+	}
+	if a.capAtStepBudget && params != nil && params.Engine != inferenceengine.EngineSGLang && batchCap > 0 {
+		if held := whatif.StepBudgetCap(batchCap, params.EffectiveMaxBatchedTokens, params.SpeculativeTokens()); held < batchCap {
+			batchCap, source = held, batchCapStepBudget
+		}
 	}
 	return batchCap, source
 }

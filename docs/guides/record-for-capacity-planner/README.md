@@ -533,7 +533,7 @@ capture prints the release and where it came from on each variant's line,
 and every answer repeats it:
 
 ```
-engine          vLLM 0.34 (from image tag); for reference, not priced yet: step budget 8192 (default), GPU memory 1 (default), block size 64 (default)
+engine          vLLM 0.34 (from image tag); step budget 8192 (default), priced as a cap on the batch per rank; for reference, not priced yet: GPU memory 1 (default), block size 64 (default)
 ```
 
 The capture adds a `flag:` line when:

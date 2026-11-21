@@ -95,6 +95,7 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SetSwitchesForReplay sets the package's replay switches by name: the test
 // seam a replay drives one named change through (analyzer-learner.md, 2.5).
 // The switches are SwitchBatchCapAdmission, SwitchBatchCapPerRank,
+// SwitchCapAtStepBudget,
 // SwitchITLReadsSettle, SwitchITLWaitsAfterRestart,
 // SwitchITLKeepsSettleThroughMissingRow, SwitchITLReadsFinitePodMean,
 // SwitchITLRestartUnderName, SwitchITLIdleOnEvidence and
@@ -125,6 +126,9 @@ func (a *Analyzer) switchFields() map[string]*bool {
 	return map[string]*bool{
 		SwitchBatchCapAdmission: &a.batchCapAdmission,
 		SwitchBatchCapPerRank:   &a.batchCapPerRank,
+		// Issue llm-d-incubation/llm-d-scaling-manager#302: the price's cap
+		// held to the step budget's batch. Off from the constructor.
+		SwitchCapAtStepBudget: &a.capAtStepBudget,
 
 		// Learner PR 4a: the line on the settle tracker (settle.go).
 		SwitchITLReadsSettle:                  &a.itlReadsSettle,

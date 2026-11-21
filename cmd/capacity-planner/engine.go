@@ -17,12 +17,15 @@ const (
 	engineDefault       = "default"
 	engineNotRecorded   = "not recorded"
 	notPricedYetWording = "for reference, not priced yet"
+	// stepBudgetPricedWording says how the answers read the step budget.
+	stepBudgetPricedWording = "priced as a cap on the batch per rank"
 )
 
 // wireEngine is the engine a variant runs: which one, for vLLM the release
 // and where it was read from, and the figures that release's defaults decide
-// where the engine's flags set none. It is reported for reference: no answer
-// reads these figures yet.
+// where the engine's flags set none. Of these, the answers read only the step
+// budget, as a cap on the batch per rank (saturation's
+// SwitchPlannerCapAtStepBudget); the rest are reported for reference.
 type wireEngine struct {
 	Engine string `json:"engine"`
 	// VLLMVersion is the release ("0.34"), absent when unknown, and
@@ -136,7 +139,7 @@ func engineInfoText(e *whatifapi.EngineInfo) string {
 	if e.StepBudgetSource == engineNotRecorded {
 		return e.Summary
 	}
-	return fmt.Sprintf("%s; %s: step budget %d (%s), GPU memory %s (%s), block size %d (%s)", e.Summary,
-		notPricedYetWording, e.StepBudget, e.StepBudgetSource, num(e.GPUMemoryUtilization), e.GPUMemoryUtilizationSource,
-		e.BlockSize, e.BlockSizeSource)
+	return fmt.Sprintf("%s; step budget %d (%s), %s; %s: GPU memory %s (%s), block size %d (%s)", e.Summary,
+		e.StepBudget, e.StepBudgetSource, stepBudgetPricedWording, notPricedYetWording, num(e.GPUMemoryUtilization),
+		e.GPUMemoryUtilizationSource, e.BlockSize, e.BlockSizeSource)
 }

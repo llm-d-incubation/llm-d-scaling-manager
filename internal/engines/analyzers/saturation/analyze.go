@@ -819,6 +819,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 				batchCap = c.a.pricingBatchCap(c.input.Namespace, c.input.ModelID, rm.VariantName, engineParams,
 					c.cfg.EnableBatchCapLearning)
 			}
+			batchCap = atStepBudget(batchCap, engineParams, c.a.muAtStepBudget)
 			if batchCap.perRank <= 0 {
 				// No cap at all (the scale target unread): say so, not "".
 				batchCap.source = batchCapNone

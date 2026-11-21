@@ -214,6 +214,8 @@ func (f *answerFlags) checkSource() error {
 // --batch-cap is then the engine's batch cap the window is captured with,
 // as capture's is (windowOptions), and the engine prices at it, so the
 // answer is the one capture, generate and --recording give, flag for flag.
+// A stated cap is taken as given: it is not held to the step budget
+// (saturation.SwitchPlannerCapAtStepBudget holds the analyzer's).
 func (f *answerFlags) pricedBatchCap() int64 {
 	if f.prometheus() {
 		return 0
