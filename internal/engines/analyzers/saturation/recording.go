@@ -226,8 +226,8 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		SwitchKVPerRequestHitsResident: &a.kvHitsResident,
 
 		// llm-d-incubation/llm-d-scaling-manager#188: a resident reading
-		// above the whole context is priced as read. Off from the
-		// constructor.
+		// above the whole context is priced as read. On from the
+		// constructor since v0.12.3.
 		SwitchKVPerRequestAboveContext: &a.kvAboveContext,
 
 		// ev-shindin/llm-scaling-manager#438: a data-parallel variant at zero replicas is priced at

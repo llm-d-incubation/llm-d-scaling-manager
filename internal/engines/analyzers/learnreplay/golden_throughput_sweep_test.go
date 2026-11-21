@@ -146,9 +146,13 @@ func throughputPaths(paths map[string]int64) map[string]int64 {
 // The floor check itself, on a fixture that exists now: mu-paths runs the
 // throughput analyzer in-process. With the steady gate on its replay reaches
 // full and pinned fits; with it off, neither, and the check names each. Its
-// settling count is zero by construction (no joiner warms up past the
-// line's admission there), so a floor on it fails on either: the reason the
-// required set waits for the recording.
+// settling count was zero until the recording was taken again for
+// llm-d-incubation/llm-d-scaling-manager#188 (yv-a measured at 3,
+// learner_mupath_test.go). The new recording also carries the events the
+// recorder gained since the old one was made (settle.Observe,
+// throughput.NoteVariantsPresent), and its readings now settle (64 with the
+// line on the tracker), so a settling floor holds on it with the line on and
+// fails with it off.
 func TestGoldens_TheThroughputFloorCheckFails(t *testing.T) {
 	rec := readGoldenRecording(t, "mu-paths")
 	floor := throughputSweepFloor{fixture: "mu-paths", paths: map[string]int64{
@@ -168,5 +172,6 @@ func TestGoldens_TheThroughputFloorCheckFails(t *testing.T) {
 	assert.Contains(t, got[0], "mu-paths: the throughput line's path throughput-itl-ols ran 0 times, under its floor of 1")
 
 	settling := throughputSweepFloor{fixture: "mu-paths", paths: map[string]int64{throughput.PathITLSettling: 1}}
-	assert.Len(t, throughputFloorProblems(settling, on.Paths), 1, "the in-process goldens stamp no reading settling")
+	assert.Empty(t, throughputFloorProblems(settling, on.Paths), "yv-a's readings settle with the line on the tracker")
+	assert.Len(t, throughputFloorProblems(settling, off.Paths), 1, "and none with the parent's line")
 }

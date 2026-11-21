@@ -525,8 +525,8 @@ func checkCompletionsHigh(s fcShape) func(uint64) error {
 
 // switchKVAboveContext is the replay switch that prices a resident reading
 // above the context as read (llm-d-incubation/llm-d-scaling-manager#188), by
-// name: it is not in this build until both changes are, and fcShape.switches
-// leaves out a name the build does not know.
+// name. It is on from the constructor; the case names it so it stays on if
+// the default moves.
 const switchKVAboveContext = "kv-per-request-above-context"
 
 // checkTwiceTheContext: prefill-bound P/D whose decode rows report their

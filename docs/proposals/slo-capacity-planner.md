@@ -643,12 +643,12 @@ coincide there, unless a row sits under the variant's floor below the band.
 | Golden | Tier at the freeze | Mean TPOT error | Unclamped | Rows | Rows clamped | Against ±10% | Knee error | Windows | Against ±15% |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ols-sweep` | pinned-B | -3.9% | -3.9% | 87 | 7 | in | SKIPPED: 2 windows | | |
-| `ols-sweep-slo` | held | +10.5% | +10.5% | 33 | 0 | **out** | +70.1% | 7 | **out** |
-| `ols-sweep-slo-restart` | pinned-B | -8.5% | -8.5% | 54 | 3 | in | +103.4% | 5 | **out** |
+| `ols-sweep-slo` | held | +10.5% | +10.5% | 33 | 0 | **out** | +67.9% | 7 | **out** |
+| `ols-sweep-slo-restart` | pinned-B | -8.5% | -8.5% | 54 | 3 | in | +99.1% | 5 | **out** |
 | `throughput-sweep` | held | +3.5% | +3.5% | 33 | 0 | in | SKIPPED: none off a ramp | | |
 | `throughput-sweep-restart` | held | +50.1% | +32.6% | 124 | 124, all below | **out** | SKIPPED: none off a ramp | | |
-| `mu-paths` variant-01 (synthetic) | ols | -4.9% | 0.0% | 76 | 38 above | in | +76.3% | 38 | **out** |
-| `mu-paths` variant-02 (synthetic) | ols | -9.8% | 0.0% | 95 | 57 above | in | +44.4% | 19 | **out** |
+| `mu-paths` variant-01 (synthetic) | ols | -4.9% | 0.0% | 76 | 38 above | in | +43.0% | 38 | **out** |
+| `mu-paths` variant-02 (synthetic) | ols | -9.8% | 0.0% | 95 | 57 above | in | -41.5% | 19 | **out** |
 | `mu-paths` variant-03 (synthetic) | ols | 0.0% | 0.0% | 57 | 0 | in | SKIPPED: none off a ramp | | |
 
 **On a line the planner refuses** (`PinnedDefaultB`, or held from one), so the tool
@@ -664,7 +664,7 @@ are SKIPPED for that refusal, or for no saturated window off a ramp:
 | `ttft-staircase-b-off` | -18.7% | -18.7% | 210 | 23 | **out** |
 | `ttft-staircase-b-on` | -22.1% | -22.1% | 227 | 1 | **out** |
 | `ttft-staircase-c-on` | -21.2% | -21.2% | 227 | 2 | **out** |
-| `ttft-three-pods` | -9.4% | -9.4% | 237 | 44 | in |
+| `ttft-three-pods` | -9.4% | -9.4% | 237 | 40 | in |
 
 **What it says.**
 
@@ -675,7 +675,8 @@ are SKIPPED for that refusal, or for no saturated window off a ramp:
   each is priced at the band's bottom. Unclamped it still reads 32.6% slow. `e1`
   model-02 and `e1-tuned` model-02 are in bound only through
   the clamp: unclamped both read 39.1% fast. Those are lines the planner refuses.
-- **Decode knee:** four figures, all out, from 44.4% to 103.4% high. Two are
+- **Decode knee:** four figures, all out: three high, from 43.0% to 99.1%, and `mu-paths`
+  variant-02 41.5% low. Two are
   synthetic. The other two are `ols-sweep-slo` runs, recorded before `QueueMin`, so
   a "saturated window" is a queue seen at one instant, not a busy minute. Treat the
   knee as not validated: no golden saturates a line the planner answers on, off a
