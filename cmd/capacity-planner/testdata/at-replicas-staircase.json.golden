@@ -51,6 +51,7 @@
     "mean": 31.59170423955871,
     "p95": 41.7,
     "peak": 43.24,
+    "p95Modulation": 41.658088992699376,
     "rolling": {
       "windowSeconds": 120.20136059205555,
       "cycles": 8,
@@ -82,27 +83,37 @@
       "outputTokens": 199.97577579895813,
       "prefixHitRate": 0,
       "source": "measured, cycles 269-288",
+      "loadShape": {
+        "statistic": "p95",
+        "inputTokens": 8001.465219986615,
+        "outputTokens": 199.98767816409364,
+        "prefixHitRate": 0,
+        "cycles": 15,
+        "fromCycle": 247,
+        "toCycle": 283,
+        "mismatch": false
+      },
       "extrapolated": false,
       "utilization": {
         "decode": {
           "kvFill": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "bandTop": 0.8,
           "slotsOccupied": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "slots": 222,
           "waitProbability": {
             "refused": {
               "reason": "Saturated",
-              "detail": "41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "41.7 r/s at or above the knee 36.98 r/s"
             }
           }
         },
@@ -148,6 +159,11 @@
           "flags": [
             "ExtrapolatedFill"
           ],
+          "validation": {
+            "validated": false,
+            "label": "OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)",
+            "outside": "arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25"
+          },
           "outputTokensPerSecond": 7396.031728752224,
           "binds": "decode band top at fill 0.798"
         },
@@ -295,17 +311,16 @@
               ]
             },
             "tpot": {
-              "statistic": "p90",
-              "value": 0.004999917963493543,
+              "statistic": "mean",
+              "value": 0.003153175255424744,
               "unit": "s",
               "band": {
-                "lo": 0.004872742612921775,
-                "hi": 0.005035912842411187
+                "lo": 0.003072972705812775,
+                "hi": 0.0031758752601755862
               },
-              "floor": 0.004872742612921775,
+              "floor": 0.003072972705812775,
               "flags": [
-                "BelowFittedBand",
-                "CoarseTPOTBucket"
+                "BelowFittedBand"
               ]
             },
             "mark": "met"
@@ -414,17 +429,16 @@
               ]
             },
             "tpot": {
-              "statistic": "p90",
-              "value": 0.010798266509783123,
+              "statistic": "mean",
+              "value": 0.006809877083731042,
               "unit": "s",
               "band": {
-                "lo": 0.007423150526527075,
-                "hi": 0.011071723409494498
+                "lo": 0.004681375720249567,
+                "hi": 0.006982331419160296
               },
-              "floor": 0.004872742612921775,
+              "floor": 0.003072972705812775,
               "flags": [
-                "BelowFittedBand",
-                "CoarseTPOTBucket"
+                "BelowFittedBand"
               ]
             },
             "mark": "met"
@@ -440,28 +454,28 @@
               "statistic": "p50",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             {
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             }
           ],
           "tpotMean": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 36.98 r/s at or above the knee 36.98 r/s"
             }
           },
           "tpotPercentile": {
             "statistic": "p90",
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s",
+              "detail": "rate 36.98 r/s at or above the knee 36.98 r/s",
               "flags": [
                 "CoarseTPOTBucket"
               ]
@@ -470,7 +484,7 @@
           "e2eMeanSum": {
             "refused": {
               "reason": "AboveDecodeOnset",
-              "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+              "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
             }
           },
           "cell": {
@@ -478,14 +492,14 @@
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             "tpot": {
               "statistic": "mean",
               "refused": {
                 "reason": "Saturated",
-                "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s"
+                "detail": "rate 36.98 r/s at or above the knee 36.98 r/s"
               }
             },
             "mark": "saturated"
@@ -501,28 +515,28 @@
               "statistic": "p50",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             {
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             }
           ],
           "tpotMean": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "tpotPercentile": {
             "statistic": "p90",
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s",
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s",
               "flags": [
                 "CoarseTPOTBucket"
               ]
@@ -531,7 +545,7 @@
           "e2eMeanSum": {
             "refused": {
               "reason": "AboveDecodeOnset",
-              "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+              "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
             }
           },
           "cell": {
@@ -539,14 +553,14 @@
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             "tpot": {
               "statistic": "mean",
               "refused": {
                 "reason": "Saturated",
-                "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+                "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
               }
             },
             "mark": "saturated"
@@ -555,13 +569,15 @@
       ],
       "verdict": {
         "verdict": "UNDER-PROVISIONED",
-        "summary": "UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).",
+        "summary": "UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 3 pods).",
         "scope": "fleet",
         "reason": "2 prefill + 2 decode: 41.70 r/s is 1.1x the fleet knee of 36.98 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms. Add decode: decode sets the knee",
         "needed": {
           "prefill": 3,
           "decode": 3,
-          "maxReplicas": 32
+          "maxReplicas": 32,
+          "decodeAtErrorBound": 6,
+          "decodeKneeError": 1.03
         },
         "roles": [],
         "shrink": [],
@@ -605,7 +621,7 @@
     }
   ],
   "notValidated": [
-    "decode knee: not validated; it read 44% to 103% high on the goldens (docs/proposals/slo-capacity-planner.md, Measured on the goldens)",
+    "decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 44% to 103% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)",
     "TTFT is not a bound, and is validated only where its figure says so: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. V_P ASSUMED. a ASSUMED.",
     "e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile"
   ],

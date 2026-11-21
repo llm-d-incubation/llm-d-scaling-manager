@@ -2,23 +2,26 @@ ns-01/model-02  P/D 1 prefill (variant-02) + 1 decode (variant-01)  window 2026-
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
 load judged     26.90 r/s, the p95 of the 80 of 83 cycles with traffic
-load seen       per cycle (1-minute rates): mean 6.91, p95 26.90, peak 30.04 r/s; busiest 2m0s (8 cycles): 25.94 r/s
+load seen       per cycle (1-minute rates): mean 6.91, p95 26.90, peak 30.04 r/s; p95 less counting noise 26.89; busiest 2m0s (8 cycles): 25.94 r/s
 SLO             TPOT mean 5.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TPOT mean 5.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary     50%               80%               100%            seen
-  measured  -/2.5m @15.44 ok  -/3.0m @24.70 ok  -/- @30.88 SAT  -/3.1m @26.90 ok
+summary     50%              80%              100%            seen
+  measured  -/2.5 @15.44 ok  -/3.0 @24.70 ok  -/- @30.88 SAT  -/3.1 @26.90 ok
 verdicts
-  measured  UNDER-PROVISIONED (decode only): at the p95 load of 26.9 r/s, the fleet runs past its operating point of 26.2 r/s (0.85 of its 30.9 r/s knee); needs at least 2 decode (has 1).
+  measured  UNDER-PROVISIONED (decode only): at the p95 load of 26.9 r/s, the fleet runs past its operating point of 26.2 r/s (0.85 of its 30.9 r/s knee); needs at least 2 decode (has 1), 3 decode if the decode knee reads 103% high.
 
 shape measured: IL 1000 OL 602, prefix hit 0.00 (measured, cycles 64-83)
+  the load's cycles (the p95 and above: 5, cycles 79-83): IL 1000 OL 500, prefix hit 0.00
+  SHAPE/LOAD MISMATCH: the load is priced at a shape more than 20% off the traffic that made it; --shape load prices it at its own
 utilization at the load judged
   decode        KV fill 0.540 (band top 0.7), slots 51 of 64, wait p 0.119
   prefill       utilization pooled no prefill speed learned, worst pod no prefill speed learned
-  verdict       UNDER-PROVISIONED (decode only): at the p95 load of 26.9 r/s, the fleet runs past its operating point of 26.2 r/s (0.85 of its 30.9 r/s knee); needs at least 2 decode (has 1).
+  verdict       UNDER-PROVISIONED (decode only): at the p95 load of 26.9 r/s, the fleet runs past its operating point of 26.2 r/s (0.85 of its 30.9 r/s knee); needs at least 2 decode (has 1), 3 decode if the decode knee reads 103% high.
 capacity            req/s     out tok/s   bound by
   prefill knee      no prefill speed learned            P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
   decode knee       30.88     18589       decode batch cap at fill 0.680
+                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
   fleet knee        30.88     18589       decode (prefill not priced)
   operating (0.85)  26.25     15801       0.85 x fleet knee (scaleUpThreshold)
   max at SLO        no prefill speed learned            no fleet rate: the prefill side is not priced, and decode alone does not bound the fleet (slo-to-rate gives none either): P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
@@ -29,8 +32,8 @@ SLO vs load        r/s    TTFT p50/90 ms            TPOT mean/p90 ms            
   load seen (87%)  26.90  no prefill speed learned  3.14/TPOT bucket too wide       no prefill speed learned
 checks
   1 prefill + 1 decode  does not hold: 26.90 r/s is above 0.85 x the fleet knee 30.88 r/s = 26.25 r/s; prefill not priced (no prefill speed learned); TPOT mean 3.1 ms meets 5.0 ms
-flags: DecodeOnly; ExtrapolatedFill; CoarseTPOTBucket; EngineTPOTHistogram
+flags: DecodeOnly; ExtrapolatedFill; CoarseTPOTBucket; EngineTPOTHistogram; ShapeLoadMismatch
 
 not validated:
-  - decode knee: not validated; it read 44% to 103% high on the goldens (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
+  - decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 44% to 103% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
   - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile

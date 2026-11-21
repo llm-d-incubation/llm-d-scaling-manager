@@ -723,9 +723,11 @@ mutation-checked:
 ### Calibration envelope, as built
 
 Every figure the planner prints carries the envelope's verdict
-(`whatif.Envelope`, `internal/signals/whatif/envelope.go`): `validated: error
-LO..HI% (RANGE, n=N; SOURCE)` when a measured row's region holds it, `OUTSIDE
-VALIDATED REGION (why)` when none does. Validated means measured, not accurate.
+(`whatif.Envelope`, `internal/signals/whatif/envelope.go`): `validated
+in-sample: error LO..HI% (RANGE, n=N[ load levels, M readings]; SOURCE)` when
+a measured row's region holds it (`validated on a holdout` for a row whose run
+never tuned the planner, `EnvelopeRow.Holdout`), `OUTSIDE VALIDATED REGION
+(why)` when none does. Validated means measured, not accurate.
 For an operator's reading:
 [how accurate each figure is](../guides/capacity-planner/accuracy.md).
 
@@ -757,8 +759,9 @@ until a run prices it:
 A row also says what kind of range its error is, and over how many independent
 readings:
 
-- p10-p90 with min-max, for 5 or more point readings;
-- min-max, under 5;
+- p10-p90 with min-max, for 10 or more independent load levels (readings
+  that repeat a level count once: `EnvelopeRow.Independent`);
+- min-max, under 10;
 - a bracket between ladder steps;
 - one-sided, where the run stopped short.
 
@@ -825,9 +828,9 @@ the run's frozen curve.
 | decode-knee | 1000-token prompts, 1000 out, Ca^2 1 | at most +3% | one-sided | 1 |  | off |
 | flow-control-onset | 8000-token prompts, 200 out, Ca^2 1 | -4..+2% | bracket | 1 |  | on |
 | flow-control-onset | 8000-token prompts, 200 out, Ca^2 4 | -7..-4% | bracket | 1 |  | on |
-| mean TPOT | 1000-token prompts, 1000 out, Ca^2 1 | +2..+15% | p10-p90, min-max +1..+18% | 12 at 6 load levels | 0.400 to 0.900 | any |
-| mean TPOT | 8000-token prompts, 200 out, Ca^2 1 | -2..+1% | p10-p90, min-max -3..+1% | 12 at 6 load levels | 0.096 to 0.215 | any |
-| mean TPOT | 8000-token prompts, 200 out, Ca^2 4 | -4..-2% | p10-p90, min-max -5..-1% | 10 at 6 load levels | 0.096 to 0.203 | any |
+| mean TPOT | 1000-token prompts, 1000 out, Ca^2 1 | +1..+18% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | any |
+| mean TPOT | 8000-token prompts, 200 out, Ca^2 1 | -3..+1% | min-max | 6 load levels (12 readings) | 0.096 to 0.215 | any |
+| mean TPOT | 8000-token prompts, 200 out, Ca^2 4 | -5..-1% | min-max | 6 load levels (10 readings) | 0.096 to 0.203 | any |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 1 | at most +3% | one-sided | 1 |  | off |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 4 | at most +3% | one-sided | 1 |  | off |
 | rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
@@ -836,15 +839,15 @@ the run's frozen curve.
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -5..+18% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -2..+16% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -4..+14% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +27..+149% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +15..+156% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +5..+174% | min-max | 6 load levels (12 readings) | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +22..+127% | min-max | 6 load levels (9 readings) | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +33..+167% | min-max | 6 load levels (9 readings) | 0.400 to 0.850 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +37..+186% | min-max | 6 load levels (9 readings) | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 
 The TTFT readings are 6 load levels, each with flow control off and on (C on: 3
@@ -1093,6 +1096,8 @@ TTFT model's (P3) are listed in
 [its as-built section](slo-capacity-planner-ttft.md#as-built-p3).
 
 Exit codes: `0` every role answered; `3` a role refused (output still printed);
+`4` (at-replicas, and a report's `exitCode`) answered, and the self-check found
+the figures a verdict rests on inconsistent, `3` taking precedence;
 `2` usage or input error; `1` internal error. `whatif.ExitCode` applies them:
 `2` if any result is `InvalidInput`, else `3` if any is refused, else `0`.
 A command stopped by SIGINT or SIGTERM exits `130` or `143` and says so on
@@ -1977,6 +1982,13 @@ selfCheck.checks[] object
 selfCheck.checks[].detail string
 selfCheck.checks[].name string
 selfCheck.checks[].passed boolean
+selfCheck.covered object
+selfCheck.covered.fleets array
+selfCheck.covered.fleets[] object
+selfCheck.covered.fleets[].decode number
+selfCheck.covered.fleets[].prefill number
+selfCheck.covered.rateHi number
+selfCheck.covered.rateLo number
 selfCheck.folds array
 selfCheck.folds[] object
 selfCheck.folds[].fitTo string
@@ -1992,28 +2004,44 @@ selfCheck.status string
 selfCheck.tpot object
 selfCheck.tpot.bias number
 selfCheck.tpot.judged number
+selfCheck.tpot.levels number
 selfCheck.tpot.low number
+selfCheck.tpot.minRatio number
+selfCheck.tpot.nearKnee object
+selfCheck.tpot.nearKnee.steps number
+selfCheck.tpot.nearKnee.worst number
 selfCheck.tpot.overloaded number
 selfCheck.tpot.pastKnee object
 selfCheck.tpot.pastKnee.hi number
 selfCheck.tpot.pastKnee.lo number
 selfCheck.tpot.refused map
+selfCheck.tpot.servedPastKnee number
 selfCheck.tpot.statistic string
 selfCheck.tpot.steps number
 selfCheck.tpot.within number
+selfCheck.tpot.withinBound number
 selfCheck.trust string
 selfCheck.ttft object
 selfCheck.ttft.bias number
 selfCheck.ttft.judged number
+selfCheck.ttft.levels number
 selfCheck.ttft.low number
+selfCheck.ttft.minRatio number
+selfCheck.ttft.nearKnee object
+selfCheck.ttft.nearKnee.steps number
+selfCheck.ttft.nearKnee.worst number
 selfCheck.ttft.overloaded number
 selfCheck.ttft.pastKnee object
 selfCheck.ttft.pastKnee.hi number
 selfCheck.ttft.pastKnee.lo number
 selfCheck.ttft.refused map
+selfCheck.ttft.servedPastKnee number
 selfCheck.ttft.statistic string
 selfCheck.ttft.steps number
 selfCheck.ttft.within number
+selfCheck.ttft.withinBound number
+selfCheck.untrusted array
+selfCheck.untrusted[] string
 selfCheck.why string
 selfCheck.withoutStated array
 selfCheck.withoutStated[] string

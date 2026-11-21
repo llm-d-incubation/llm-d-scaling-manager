@@ -10,7 +10,7 @@ import (
 
 // Every figure the planner prints says how far off it read where it was
 // measured (whatif.Envelope; docs/guides/capacity-planner/accuracy.md):
-// "validated: error ..." inside a measured region, "OUTSIDE VALIDATED
+// "validated in-sample: error ..." inside a measured region, "OUTSIDE VALIDATED
 // REGION (...)" anywhere else. This file builds what the envelope judges a
 // figure by: its kind, its class, its rate over its knee, and its flags.
 

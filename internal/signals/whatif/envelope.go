@@ -210,11 +210,12 @@ type Region struct {
 
 // The kinds of range a row's error is.
 const (
-	// SpreadPercentiles is the 10th to the 90th percentile of 5 or more
-	// point readings, with ErrorMin and ErrorMax beside it.
+	// SpreadPercentiles is the 10th to the 90th percentile of point
+	// readings at MinPercentileLevels independent levels or more, with
+	// ErrorMin and ErrorMax beside it.
 	SpreadPercentiles = "p10-p90"
-	// SpreadMinMax is the lowest to the highest of fewer than 5 point
-	// readings.
+	// SpreadMinMax is the lowest to the highest point reading, at fewer than
+	// MinPercentileLevels independent levels.
 	SpreadMinMax = "min-max"
 	// SpreadBracket is the ends of brackets: the measured figure lay between
 	// two ladder steps, so each reading is a range, not a point.
@@ -245,6 +246,36 @@ type EnvelopeRow struct {
 	// load levels they were taken at (0 where each reading is its own).
 	Readings int `json:"readings"`
 	Levels   int `json:"levels,omitempty"`
+	// Holdout says the run was never used to tune the planner: its rows are
+	// out-of-sample. False is in-sample: the run tuned the planner's
+	// constants or is one of its goldens, so its error is how well the
+	// planner fits the run it was fitted on, a floor on the error elsewhere.
+	Holdout bool `json:"holdout,omitempty"`
+}
+
+// MinPercentileLevels is the fewest independent readings a p10-p90 is read
+// over: below it, the 10th and 90th percentiles are the 2nd and the
+// next-to-last readings, and the range is a min-max (#308).
+const MinPercentileLevels = 10
+
+// Independent is how many independent readings the row's error rests on:
+// its load levels where readings repeat a level (a level read twice, once
+// per flow-control phase, is one reading of the planner, priced the same),
+// else its readings.
+func (r *EnvelopeRow) Independent() int {
+	if r.Levels > 0 && r.Levels < r.Readings {
+		return r.Levels
+	}
+	return r.Readings
+}
+
+// CountText is the row's count in words: "n=6 load levels, 12 readings"
+// where readings repeat a level, else "n=12".
+func (r *EnvelopeRow) CountText() string {
+	if r.Independent() != r.Readings {
+		return fmt.Sprintf("n=%d load levels, %d readings", r.Independent(), r.Readings)
+	}
+	return fmt.Sprintf("n=%d", r.Readings)
 }
 
 // Envelope is the planner's measured accuracy.
@@ -296,8 +327,9 @@ func ParseEnvelope(raw []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("envelope: row %d: no error on either side", i)
 		case !slices.Contains([]string{SpreadPercentiles, SpreadMinMax, SpreadBracket, SpreadOneSided}, r.Spread):
 			return Envelope{}, fmt.Errorf("envelope: row %d: spread %q", i, r.Spread)
-		case r.Spread == SpreadPercentiles && r.Readings < 5:
-			return Envelope{}, fmt.Errorf("envelope: row %d: a p10-p90 of %d readings: under 5 is a min-max", i, r.Readings)
+		case r.Spread == SpreadPercentiles && r.Independent() < MinPercentileLevels:
+			return Envelope{}, fmt.Errorf("envelope: row %d: a p10-p90 over %d independent readings: under %d is a min-max",
+				i, r.Independent(), MinPercentileLevels)
 		}
 	}
 	return e, nil
@@ -314,32 +346,34 @@ type Validation struct {
 // Validated reports whether a row holds the figure.
 func (v Validation) Validated() bool { return v.Row != nil }
 
-// String is the figure's label: "validated: error -2..+16% (p10-p90,
-// min-max -5..+18%, n=12; q32 staircase)" or "OUTSIDE VALIDATED REGION
-// (why)". The count and the kind of range are always printed.
+// String is the figure's label: "validated in-sample: error -5..+18%
+// (min-max, n=6 load levels, 12 readings; q32 staircase)" or "OUTSIDE
+// VALIDATED REGION (why)". The count, independent first, the kind of range
+// and whether the run is a holdout are always printed.
 func (v Validation) String() string {
 	r := v.Row
 	if r == nil {
 		return "OUTSIDE VALIDATED REGION (" + v.Outside + ")"
 	}
-	n := fmt.Sprintf("n=%d", r.Readings)
-	if r.Levels > 0 && r.Levels != r.Readings {
-		n += fmt.Sprintf(" at %d load levels", r.Levels)
+	n := r.CountText()
+	head := "validated in-sample"
+	if r.Holdout {
+		head = "validated on a holdout"
 	}
 	switch r.Spread {
 	case SpreadPercentiles:
-		return fmt.Sprintf("validated: error %s (p10-p90, min-max %s, %s; %s)", ErrorText(r.ErrorLo, r.ErrorHi),
+		return fmt.Sprintf("%s: error %s (p10-p90, min-max %s, %s; %s)", head, ErrorText(r.ErrorLo, r.ErrorHi),
 			ErrorText(r.ErrorMin, r.ErrorMax), n, r.Source)
 	case SpreadMinMax:
-		return fmt.Sprintf("validated: error %s (min-max, %s; %s)", ErrorText(r.ErrorLo, r.ErrorHi), n, r.Source)
+		return fmt.Sprintf("%s: error %s (min-max, %s; %s)", head, ErrorText(r.ErrorLo, r.ErrorHi), n, r.Source)
 	case SpreadBracket:
 		what := "between ladder steps"
 		if r.Readings == 1 {
 			what = "single reading, between two ladder steps"
 		}
-		return fmt.Sprintf("validated: error %s (%s, %s; %s)", ErrorText(r.ErrorLo, r.ErrorHi), n, what, r.Source)
+		return fmt.Sprintf("%s: error %s (%s, %s; %s)", head, ErrorText(r.ErrorLo, r.ErrorHi), n, what, r.Source)
 	}
-	return fmt.Sprintf("validated: one-sided, error %s (%s, not crossed within the steps run; %s)", ErrorText(r.ErrorLo, r.ErrorHi), n, r.Source)
+	return fmt.Sprintf("%s: one-sided, error %s (%s, not crossed within the steps run; %s)", head, ErrorText(r.ErrorLo, r.ErrorHi), n, r.Source)
 }
 
 // ErrorText prints a signed error range in percent: "-2..+16%", or one side

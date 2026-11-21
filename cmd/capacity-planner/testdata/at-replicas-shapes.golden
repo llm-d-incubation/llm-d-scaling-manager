@@ -2,31 +2,33 @@ ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
 load judged     41.70 r/s, the p95 of the 282 of 289 cycles with traffic
-load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; busiest 2m0s (8 cycles): 42.13 r/s
+load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; p95 less counting noise 41.66; busiest 2m0s (8 cycles): 42.13 r/s
 SLO             TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary                     50%                80%                  5r/s              seen            seen x1.2
-  measured                  617/5.0 @18.49 ok  1944/10.8 @29.59 ok  388/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  1k/1k EXTRAPOLATED        133/4.9 @17.78 ok  152/9.0 @28.45 ok    125/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  16k/200/0.3 EXTRAPOLATED  667/5.0 @9.08 ok   1015/10.8 @14.53 ok  567/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+summary                     50%                80%                 5r/s              seen            seen x1.2
+  measured                  617/3.2 @18.49 ok  1944/6.8 @29.59 ok  388/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  1k/1k EXTRAPOLATED        133/3.1 @17.78 ok  152/5.6 @28.45 ok   125/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  16k/200/0.3 EXTRAPOLATED  667/3.2 @9.08 ok   1015/6.8 @14.53 ok  567/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
 verdicts
-  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
-  1k/1k EXTRAPOLATED        UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2).
-  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2) (prefill f 1.5 assumed at 5 pods).
-                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
+  measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 3 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2), 7 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 4 pods).
+  1k/1k EXTRAPOLATED        UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 103% high.
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2), 7 decode if the decode knee reads 103% high.
+  16k/200/0.3 EXTRAPOLATED  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2), 11 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 5 pods).
+                            x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2), 14 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 6 pods).
 
 shape measured: IL 8003 OL 200, prefix hit 0.00 (measured, cycles 269-288)
+  the load's cycles (the p95 and above: 15, cycles 247-283): IL 8001 OL 200, prefix hit 0.00
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 222, wait p saturated
   prefill       utilization pooled 0.83, worst pod 0.83 (f 1)
-  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
-                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
+  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 3 pods).
+                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2), 7 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 4 pods).
 capacity            req/s     out tok/s   bound by
   prefill knee      49.97     9993        prefill compute: N_p 2 x V_P / (f 1.000 x 8001 tokens)
   decode knee       36.98     7396        decode band top at fill 0.798
+                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
   fleet knee        36.98     7396        decode
   operating (0.85)  31.44     6287        0.85 x fleet knee (scaleUpThreshold)
   max at SLO        29.71     5941        TTFT p90, end to end
@@ -43,14 +45,16 @@ flags: UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; ExtrapolatedFill; Router
 
 shape 1k/1k: IL 1024 OL 1024, prefix hit 0.00 (asked)
   EXTRAPOLATED: IL 1024 outside the 7989-8014 seen; OL 1024 outside the 200-201 seen
+  the load's cycles (the p95 and above: 15, cycles 247-283): IL 8001 OL 200, prefix hit 0.00
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 512, wait p saturated
   prefill       utilization pooled 0.11, worst pod 0.11 (f 1)
-  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2).
-                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2).
+  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.2x the fleet knee of 35.6 r/s, the fleet saturates; needs 1 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 103% high.
+                x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (35.6 r/s); needs 1 prefill + 4 decode (has 2 + 2), 7 decode if the decode knee reads 103% high.
 capacity            req/s     out tok/s   bound by
   prefill knee      390.47    399839      prefill compute: N_p 2 x V_P / (f 1.000 x 1024 tokens)
   decode knee       35.56     36416       decode batch cap at fill 0.349
+                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
   fleet knee        35.56     36416       decode
   operating (0.85)  30.23     30954       0.85 x fleet knee (scaleUpThreshold)
   max at SLO        34.52     35351       TTFT p90, end to end
@@ -67,14 +71,16 @@ flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; Assum
 
 shape 16k/200/0.3: IL 16384 OL 200, prefix hit 0.30 (asked)
   EXTRAPOLATED: IL 16384 outside the 7989-8014 seen; prefix hit 0.30 outside the 0.00-0.00 seen
+  the load's cycles (the p95 and above: 15, cycles 247-283): IL 8001 OL 200, prefix hit 0.00
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 108, wait p saturated
   prefill       utilization pooled 1.20, worst pod 1.20 (f 1)
-  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2) (prefill f 1.5 assumed at 5 pods).
-                x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
+  verdict       UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 2.3x the fleet knee of 18.2 r/s, the fleet saturates; needs 5 prefill + 6 decode (has 2 + 2), 11 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 5 pods).
+                x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2), 14 decode if the decode knee reads 103% high (prefill f 1.5 assumed at 6 pods).
 capacity            req/s     out tok/s   bound by
   prefill knee      34.86     6973        prefill compute: N_p 2 x V_P / (f 1.000 x 11469 tokens)
   decode knee       18.17     3633        decode band top at fill 0.790
+                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
   fleet knee        18.17     3633        decode
   operating (0.85)  15.44     3088        0.85 x fleet knee (scaleUpThreshold)
   max at SLO        16.54     3308        TTFT p90, end to end
@@ -90,6 +96,6 @@ assumed: V_P 200000 tok/s (--assume-vp); a 20ms (--assume-a); prompt 11469 token
 flags: ExtrapolatedShape; UnvalidatedTTFT; AssumedVP; AssumedPromptSpread; AssumedShape; ExtrapolatedFill; RouterHopAssumed; SpreadBeyondProcessorSharing; HeldByDecodeAdmission; KVBoundSlots; AssumedPoissonArrivals; AssumedA; BelowFittedBand; PromptSpreadAbovePeak; CoarseTPOTBucket
 
 not validated:
-  - decode knee: not validated; it read 44% to 103% high on the goldens (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
+  - decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 44% to 103% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
   - TTFT is not a bound, and is validated only where its figure says so: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. V_P ASSUMED. a ASSUMED.
   - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile

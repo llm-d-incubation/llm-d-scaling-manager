@@ -1,6 +1,7 @@
 package whatif
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,8 @@ func TestEnvelope_TheShippedFileValidatesTheMeasuredRegion(t *testing.T) {
 	for _, q := range []float64{0, 0.9, 0.95} {
 		v := e.Judge(Figure{Kind: FigureTTFT, Percentile: q, Class: envelopeH200(), KneeShare: 0.8})
 		require.True(t, v.Validated(), "q %g: %s", q, v)
-		assert.Regexp(t, `^validated: error [+-]\d+\.\.[+-]\d+% \(p10-p90, min-max [+-]\d+\.\.[+-]\d+%, n=\d+ at \d+ load levels; q32 staircase\)$`, v.String())
+		// Six load levels read twice: a min-max over 6, in-sample (#308).
+		assert.Regexp(t, `^validated in-sample: error [+-]\d+\.\.[+-]\d+% \(min-max, n=6 load levels, \d+ readings; q32 staircase\)$`, v.String())
 	}
 	tpot := e.Judge(Figure{Kind: FigureMeanTPOT, Class: envelopeH200(), KneeShare: 0.1})
 	assert.True(t, tpot.Validated(), tpot.String())
@@ -116,7 +118,7 @@ func TestEnvelope_RegionBounds(t *testing.T) {
 	f := Figure{Kind: FigureTTFT, Class: FigureClass{Topology: TopologyPD, FlowControl: FlowControlNameOn}}
 	v := e.Judge(f)
 	require.True(t, v.Validated(), "Ca^2 0 reads as Poisson, and nothing else is bounded")
-	assert.Equal(t, "validated: error -5..+15% (min-max, n=3; a run)", v.String())
+	assert.Equal(t, "validated in-sample: error -5..+15% (min-max, n=3; a run)", v.String())
 	f.Class.ArrivalCV2 = 4
 	assert.Equal(t, "OUTSIDE VALIDATED REGION (arrivals Ca^2 4, measured 0.8 to 1.25)", e.Judge(f).String())
 	f.Class.ArrivalCV2, f.Class.FlowControl = 1.25, FlowControlNameOff
@@ -130,11 +132,37 @@ func TestEnvelope_TheLabelSaysTheCountAndTheRange(t *testing.T) {
 	row := func(spread string, n int, lo, hi *float64) Validation {
 		return Validation{Row: &EnvelopeRow{Source: "r", Spread: spread, Readings: n, ErrorLo: lo, ErrorHi: hi, ErrorMin: x(-0.1), ErrorMax: x(0.3)}}
 	}
-	assert.Equal(t, "validated: error -5..+15% (p10-p90, min-max -10..+30%, n=12; r)", row(SpreadPercentiles, 12, x(-0.05), x(0.15)).String())
-	assert.Equal(t, "validated: error -5..+15% (min-max, n=3; r)", row(SpreadMinMax, 3, x(-0.05), x(0.15)).String())
-	assert.Equal(t, "validated: error +5..+11% (n=1, single reading, between two ladder steps; r)", row(SpreadBracket, 1, x(0.05), x(0.11)).String())
-	assert.Equal(t, "validated: error -4..+2% (n=2, between ladder steps; r)", row(SpreadBracket, 2, x(-0.04), x(0.02)).String())
-	assert.Equal(t, "validated: one-sided, error at most -6% (n=1, not crossed within the steps run; r)", row(SpreadOneSided, 1, nil, x(-0.06)).String())
+	assert.Equal(t, "validated in-sample: error -5..+15% (p10-p90, min-max -10..+30%, n=12; r)", row(SpreadPercentiles, 12, x(-0.05), x(0.15)).String())
+	assert.Equal(t, "validated in-sample: error -5..+15% (min-max, n=3; r)", row(SpreadMinMax, 3, x(-0.05), x(0.15)).String())
+	assert.Equal(t, "validated in-sample: error +5..+11% (n=1, single reading, between two ladder steps; r)", row(SpreadBracket, 1, x(0.05), x(0.11)).String())
+	assert.Equal(t, "validated in-sample: error -4..+2% (n=2, between ladder steps; r)", row(SpreadBracket, 2, x(-0.04), x(0.02)).String())
+	assert.Equal(t, "validated in-sample: one-sided, error at most -6% (n=1, not crossed within the steps run; r)", row(SpreadOneSided, 1, nil, x(-0.06)).String())
+	// The count is the independent levels first: 12 readings at 6 levels is
+	// 6 (#308). A holdout run says so.
+	lv := row(SpreadMinMax, 12, x(-0.05), x(0.15))
+	lv.Row.Levels = 6
+	assert.Equal(t, "validated in-sample: error -5..+15% (min-max, n=6 load levels, 12 readings; r)", lv.String())
+	lv.Row.Holdout = true
+	assert.Equal(t, "validated on a holdout: error -5..+15% (min-max, n=6 load levels, 12 readings; r)", lv.String())
+}
+
+// A p10-p90 needs MinPercentileLevels independent readings: under it the
+// 10th and 90th percentiles are the second and the next-to-last reading.
+// Readings that repeat a level count once (#308).
+func TestEnvelope_APercentileSpreadNeedsTenLevels(t *testing.T) {
+	x := func(v float64) *float64 { return &v }
+	load := func(readings, levels int) error {
+		row := EnvelopeRow{Figure: FigureTTFT, Shape: "s", Source: "r", Spread: SpreadPercentiles, Readings: readings, Levels: levels,
+			ErrorLo: x(-0.05), ErrorHi: x(0.15), Region: Region{Topology: TopologyPD}}
+		b, err := json.Marshal(Envelope{Rows: []EnvelopeRow{row}})
+		require.NoError(t, err)
+		_, err = ParseEnvelope(b)
+		return err
+	}
+	assert.NoError(t, load(10, 0))
+	assert.NoError(t, load(12, 10))
+	assert.ErrorContains(t, load(9, 0), "under 10 is a min-max")
+	assert.ErrorContains(t, load(12, 6), "a p10-p90 over 6 independent readings: under 10 is a min-max")
 }
 
 // The error prints both sides, or the one a bounded reading gives, and

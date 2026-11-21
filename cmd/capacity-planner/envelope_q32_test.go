@@ -614,7 +614,7 @@ func q32Row(b q32Bucket, g *q32Group) whatif.EnvelopeRow {
 		row.Levels = len(levels)
 		row.ErrorMin, row.ErrorMax = fptr(errs[0]), fptr(errs[len(errs)-1])
 		row.ErrorLo, row.ErrorHi, row.Spread = row.ErrorMin, row.ErrorMax, whatif.SpreadMinMax
-		if len(errs) >= 5 {
+		if row.Independent() >= whatif.MinPercentileLevels {
 			row.ErrorLo, row.ErrorHi = fptr(percentileOf(errs, 0.1)), fptr(percentileOf(errs, 0.9))
 			row.Spread = whatif.SpreadPercentiles
 		}
@@ -700,7 +700,7 @@ func TestStaircaseQ32_TheShippedEnvelopeJudgesTheRun(t *testing.T) {
 	v := env.Judge(in)
 	require.True(t, v.Validated(), v.String())
 	assert.Equal(t, q32Source, v.Row.Source)
-	assert.Contains(t, v.String(), "validated: error ")
+	assert.Contains(t, v.String(), "validated in-sample: error ")
 
 	past := in
 	past.KneeShare = 0.99
@@ -790,8 +790,8 @@ func q32TableText(rows []whatif.EnvelopeRow) string {
 			rng += ", min-max " + whatif.ErrorText(r.ErrorMin, r.ErrorMax)
 		}
 		n := strconv.Itoa(r.Readings)
-		if r.Levels > 0 && r.Levels != r.Readings {
-			n += fmt.Sprintf(" at %d load levels", r.Levels)
+		if r.Independent() != r.Readings {
+			n = fmt.Sprintf("%d load levels (%d readings)", r.Independent(), r.Readings)
 		}
 		share := ""
 		if r.Region.MaxKneeShare > 0 {

@@ -646,7 +646,7 @@ func (pv pricedVariant) qualify(r whatif.Result) whatif.Result {
 	a, ok := r.(whatif.Answer)
 	if !ok {
 		if u, ok := r.(whatif.Unanswerable); ok && u.Reason == whatif.NoLine && pv.state.Line.IsZero() {
-			u.Detail = fmt.Sprintf("no ITL line learned by cycle %d", pv.cycle)
+			u.Detail = fmt.Sprintf("no ITL line learned by cycle %d", pv.cycle) + pv.noLineHint()
 			return u
 		}
 		if u, ok := r.(whatif.Unanswerable); ok && u.Reason == whatif.PinnedDefaultB {

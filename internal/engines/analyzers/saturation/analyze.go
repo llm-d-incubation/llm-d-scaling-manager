@@ -819,6 +819,7 @@ func (c *cycle) priceReplicas(ctx context.Context) ([]capacity.ReplicaCapacity, 
 				batchCap = c.a.pricingBatchCap(c.input.Namespace, c.input.ModelID, rm.VariantName, engineParams,
 					c.cfg.EnableBatchCapLearning)
 			}
+			batchCap = atStepBudget(batchCap, engineParams, c.a.muAtStepBudget)
 			if batchCap.perRank <= 0 {
 				// No cap at all (the scale target unread): say so, not "".
 				batchCap.source = batchCapNone
@@ -1011,7 +1012,11 @@ func (c *cycle) logDerivedMu(l derivedMuLog) {
 		// held it to: none, lower (the hit rate's discount), upper
 		// (no discount), no-hit, no-reading or off (issue ev-shindin/llm-scaling-manager#277);
 		// residentKVBoundFleet the same for kvReqFleet.
+		// residentHolding is the requests on a P/D decode that hold
+		// KV without running, which SwitchKVPerRequestAboveContext
+		// spreads the reading over as well (#188).
 		"residentKVPerSeq", c.resident.perSeq(), "residentRunning", c.resident.running,
+		"residentHolding", c.resident.holding,
 		"residentKVBound", l.residentBound, "residentKVBoundFleet", l.residentBoundFleet,
 		"replicaKvTokens", rm.TotalKvCapacityTokens,
 		// Per engine rank; the replica admits engineRanks times the

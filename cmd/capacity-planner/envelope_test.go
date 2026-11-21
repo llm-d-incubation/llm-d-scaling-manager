@@ -104,5 +104,5 @@ func TestEnvelope_ABatchCapPutsTheQ32TTFTOutside(t *testing.T) {
 	}
 	require.NotEmpty(t, ttft, text)
 	assert.Contains(t, ttft, "OUTSIDE VALIDATED REGION (--batch-cap stated, which the run did not price)")
-	assert.NotContains(t, text, "validated: error")
+	assert.NotRegexp(t, `validated[^:]*: error`, text)
 }

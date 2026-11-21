@@ -114,8 +114,9 @@ func refusedFigure(u *Refusal) Figure {
 // row whose region holds it, or why none does.
 type Validation struct {
 	Validated bool `json:"validated"`
-	// Label is the verdict in words: "validated: error -2..+16% (q32
-	// staircase)", or "OUTSIDE VALIDATED REGION (why)".
+	// Label is the verdict in words: "validated in-sample: error -5..+18%
+	// (min-max, n=6 load levels, 12 readings; q32 staircase)", or "OUTSIDE
+	// VALIDATED REGION (why)".
 	Label string `json:"label"`
 	// Source, Shape, ErrorLo, ErrorHi and Readings are the row that holds
 	// the figure, absent outside it. The errors are signed shares, the model

@@ -1,6 +1,7 @@
 package saturation
 
 import (
+	"math/rand/v2"
 	"testing"
 	"time"
 
@@ -24,6 +25,14 @@ import (
 func aboveOn(t *testing.T) func(*SaturationAnalyzer) {
 	return func(a *SaturationAnalyzer) {
 		require.NoError(t, a.SetSwitchesForReplay(map[string]bool{"kv-per-request-above-context": true}))
+	}
+}
+
+// aboveOff turns the switch off, as a replay does: the switch is on from the
+// constructor.
+func aboveOff(t *testing.T) func(*SaturationAnalyzer) {
+	return func(a *SaturationAnalyzer) {
+		require.NoError(t, a.SetSwitchesForReplay(map[string]bool{"kv-per-request-above-context": false}))
 	}
 }
 
@@ -52,7 +61,7 @@ func TestKVAboveContext_AReadingAboveTheContextIsPricedAsRead(t *testing.T) {
 	assert.Equal(t, "above-context", on["residentKVBound"])
 	assert.Equal(t, "above-context", on["residentKVBoundFleet"])
 
-	off := hitMu(t, cachingRow(0.9, 30), nil)
+	off := hitMu(t, cachingRow(0.9, 30), aboveOff(t))
 	assert.InDelta(t, 1050, off["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, "upper", off["residentKVBound"])
 	assert.Less(t, on["rate"], off["rate"], "more KV a request, fewer sequences, a lower mu")
@@ -80,7 +89,7 @@ func TestKVAboveContext_TheCountGateTakesTheReading(t *testing.T) {
 	assert.Equal(t, "above-context", on["residentKVBound"])
 	assert.InDelta(t, 68_000.0/3000, on["seqs"], 1e-9)
 
-	off := hitMu(t, cachingRow(0.3, 10), nil)
+	off := hitMu(t, cachingRow(0.3, 10), aboveOff(t))
 	assert.InDelta(t, 550, off["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, "no-reading", off["residentKVBound"])
 }
@@ -110,7 +119,7 @@ func TestKVAboveContext_FewLongRequestsBelowTheContextAreNoReading(t *testing.T)
 	above := hitMu(t, row(2_000_000, 8, 220_000), aboveOn(t))
 	assert.Equal(t, residentBoundAboveContext, above["residentKVBound"])
 	assert.InDelta(t, 220_000, above["kvReqPerSeq"], 1e-6)
-	off := hitMu(t, row(2_000_000, 8, 220_000), nil)
+	off := hitMu(t, row(2_000_000, 8, 220_000), aboveOff(t))
 	assert.Equal(t, residentBoundNoReading, off["residentKVBound"])
 	assert.InDelta(t, 10_500, off["kvReqPerSeq"], 1e-6)
 }
@@ -127,6 +136,18 @@ func noHitRow(capTokens int64, running int, tokens float64) domain.ReplicaMetric
 	return rm
 }
 
+// prefillVariant is a prefill variant beside variant-d: with it, variant-d is
+// the decode of a prefill/decode split (hitsMuOf).
+var prefillVariant = domain.VariantReplicaState{
+	VariantName: "variant-p", Role: domain.RolePrefill, AcceleratorName: "H200", GPUsPerReplica: 1,
+}
+
+// pdMu is hitMu on the decode of a prefill/decode split.
+func pdMu(t *testing.T, rm domain.ReplicaMetrics, edit func(*SaturationAnalyzer)) map[string]any {
+	t.Helper()
+	return hitsMuOf(t, []domain.ReplicaMetrics{rm}, edit, prefillVariant)
+}
+
 // A P/D decode pulling 30 prompts from prefill beside 4 running: vLLM
 // allocates the pulled prompts' blocks first and counts the 30 as waiting.
 // 342,000 tokens over the 4 read 85,500 a request, 8.1 times the context;
@@ -134,30 +155,64 @@ func noHitRow(capTokens int64, running int, tokens float64) domain.ReplicaMetric
 func TestKVAboveContext_RequestsPullingTheirKVHoldIt(t *testing.T) {
 	rm := noHitRow(1_000_000, 4, 342_000)
 	rm.QueueLength, rm.CapacityQueueLength, rm.CapacityQueueKnown = 30, 0, true
-	on := hitMu(t, rm, aboveOn(t))
+	on := pdMu(t, rm, aboveOn(t))
 	assert.Equal(t, residentBoundLower, on["residentKVBound"])
 	assert.InDelta(t, 10_500, on["kvReqPerSeq"], 1e-6, "not 85,500")
-	off := hitMu(t, rm, nil)
+	off := pdMu(t, rm, aboveOff(t))
 	assert.Equal(t, residentBoundNoHit, off["residentKVBound"])
 
 	// Requests waiting for capacity hold no KV: with all 30 of them waiting
 	// for capacity the 4 running are the ones read, at 85,500 each, and 4 are
 	// fewer than minAboveContextSequences: no reading.
 	rm.CapacityQueueLength = 30
-	capWait := hitMu(t, rm, aboveOn(t))
+	capWait := pdMu(t, rm, aboveOn(t))
 	assert.Equal(t, residentBoundNoReading, capWait["residentKVBound"])
+}
+
+// The requests held without running are counted on the decode of a
+// prefill/decode split only. Ten running requests and ten deferred hold
+// 420,000 tokens against a context of 10,500: over the 20 that hold them on
+// a P/D decode, 21,000 a request; over the 10 running on an aggregated
+// replica, whose deferred requests hold no pulled KV, 42,000. A landed
+// series of 0 does not drop the ten (the ones still pulling hold their
+// blocks too), and a replica that publishes only the landed series counts
+// those.
+func TestKVAboveContext_HoldersAreCountedOnADisaggregatedDecode(t *testing.T) {
+	rm := noHitRow(1_000_000, 10, 420_000)
+	rm.QueueLength, rm.CapacityQueueLength, rm.CapacityQueueKnown = 10, 0, true
+	pd := pdMu(t, rm, aboveOn(t))
+	assert.InDelta(t, 21_000, pd["kvReqPerSeq"], 1e-6)
+	agg := hitMu(t, rm, aboveOn(t))
+	assert.InDelta(t, 42_000, agg["kvReqPerSeq"], 1e-6, "an aggregated replica counts its running requests only")
+
+	rm.LandedQueueLength, rm.LandedQueueKnown = 0, true
+	landed := pdMu(t, rm, aboveOn(t))
+	assert.InDelta(t, 21_000, landed["kvReqPerSeq"], 1e-6, "the pulling requests still count")
+	assert.EqualValues(t, 10, landed["residentHolding"])
+
+	rm.CapacityQueueKnown, rm.LandedQueueLength = false, 10
+	landed = pdMu(t, rm, aboveOn(t))
+	assert.InDelta(t, 21_000, landed["kvReqPerSeq"], 1e-6, "the landed series where the queue is not split by reason")
 }
 
 // Three running requests with 40,000-token prompts in a shape whose mean is
 // 10,000: 121,500 tokens, 40,500 a request, four times the context. They are
 // the long tail of the workload, not KV held beyond it, and three are fewer
-// than minAboveContextSequences: no reading.
+// than minAboveContextSequences: no reading. Five more requests held
+// without running on a P/D decode spread it to 15,188 over eight, still
+// above the context, and three are still the requests running: no reading.
 func TestKVAboveContext_AFewLongPromptsAreNoReading(t *testing.T) {
 	on := hitMu(t, noHitRow(500_000, 3, 121_500), aboveOn(t))
 	assert.Equal(t, residentBoundNoReading, on["residentKVBound"])
 	assert.InDelta(t, 10_500, on["kvReqPerSeq"], 1e-6, "not 40,500")
-	off := hitMu(t, noHitRow(500_000, 3, 121_500), nil)
+	off := hitMu(t, noHitRow(500_000, 3, 121_500), aboveOff(t))
 	assert.Equal(t, residentBoundNoHit, off["residentKVBound"])
+
+	queued := noHitRow(500_000, 3, 121_500)
+	queued.QueueLength, queued.CapacityQueueLength, queued.CapacityQueueKnown = 5, 0, true
+	held := pdMu(t, queued, aboveOn(t))
+	assert.Equal(t, residentBoundNoReading, held["residentKVBound"], "the guard counts the running requests")
+	assert.InDelta(t, 10_500, held["kvReqPerSeq"], 1e-6, "not 15,188")
 
 	// Eight such requests are read as they are: the scrape cannot tell a
 	// long tail from KV held beyond the prompt (minAboveContextSequences).
@@ -167,13 +222,93 @@ func TestKVAboveContext_AFewLongPromptsAreNoReading(t *testing.T) {
 
 // A running count that lags the KV it is read against: 20 requests hold
 // 210,000 tokens, the scrape reads 6 running, 35,000 a request. Six are
-// fewer than minAboveContextSequences: no reading.
+// fewer than minAboveContextSequences: no reading. Two more held without
+// running on a P/D decode (one-minute peaks, not the scrape's instant) make
+// eight holders at 26,250 each, and six running: still no reading.
 func TestKVAboveContext_ALaggingRunningCountIsNoReading(t *testing.T) {
 	on := hitMu(t, noHitRow(500_000, 6, 210_000), aboveOn(t))
 	assert.Equal(t, residentBoundNoReading, on["residentKVBound"])
 	assert.InDelta(t, 10_500, on["kvReqPerSeq"], 1e-6, "not 35,000")
-	off := hitMu(t, noHitRow(500_000, 6, 210_000), nil)
+	off := hitMu(t, noHitRow(500_000, 6, 210_000), aboveOff(t))
 	assert.Equal(t, residentBoundNoHit, off["residentKVBound"])
+
+	queued := noHitRow(500_000, 6, 210_000)
+	queued.QueueLength, queued.CapacityQueueLength, queued.CapacityQueueKnown = 2, 0, true
+	held := pdMu(t, queued, aboveOn(t))
+	assert.Equal(t, residentBoundNoReading, held["residentKVBound"], "the guard counts the running requests")
+	assert.InDelta(t, 10_500, held["kvReqPerSeq"], 1e-6, "not 26,250")
+}
+
+// A reading the requests held without running spread under the context is
+// not priced under the one read without them: 30 running and 70 held on a
+// P/D decode hold 450,000 tokens against a discount of 5500 and a context
+// of 10,500 (hit 0.5). Over the 100, 4500 a request, under the discount;
+// over the 30 running, as the switch off reads, 15,000, held at the context.
+// On prices the context, the off bound, not the discount.
+func TestKVAboveContext_NeverUnderTheSwitchOffPrice(t *testing.T) {
+	rm := noHitRow(1_000_000, 30, 450_000)
+	rm.PrefixCacheHitRate = 0.5
+	rm.QueueLength, rm.CapacityQueueLength, rm.CapacityQueueKnown = 70, 0, true
+	on := pdMu(t, rm, aboveOn(t))
+	off := pdMu(t, rm, aboveOff(t))
+	assert.InDelta(t, 10_500, off["kvReqPerSeq"], 1e-6)
+	assert.Equal(t, residentBoundUpper, off["residentKVBound"])
+	assert.InDelta(t, 10_500, on["kvReqPerSeq"], 1e-6, "not the discount of 5500")
+	assert.Equal(t, residentBoundUpper, on["residentKVBound"], "the off bound priced it")
+}
+
+// randomResidentCase is a random shape and fleet reading, with requests held
+// without running.
+func randomResidentCase(rng *rand.Rand) (shape.Shape, residentReading) {
+	s := shape.New(1+rng.Float64()*50_000, 1+rng.Float64()*5000, rng.Float64()).WithOutputDispersion(1 + 3*rng.Float64())
+	if rng.IntN(4) == 0 {
+		s = shape.New(s.AvgInputTokens, s.AvgOutputTokens, 0).WithOutputDispersion(s.OutputDispersion)
+	}
+	r := residentReading{
+		tokens: rng.Float64() * 2e7, running: rng.IntN(60), holding: rng.IntN(200),
+		capTokens: rng.Float64() * 2e6, minK: 0.15 * rng.Float64(),
+	}
+	return s, r
+}
+
+// Whatever the shape, the reading and the requests held without running,
+// the switch on never prices a request under the switch off: the requests
+// held only spread a reading over more requests, and the guard only drops
+// one, and neither takes the price under v0.12.2's.
+func TestKVAboveContext_OnIsNeverUnderOff(t *testing.T) {
+	rng := rand.New(rand.NewPCG(188, 1))
+	for i := range 20_000 {
+		s, r := randomResidentCase(rng)
+		for _, sglang := range []bool{false, true} {
+			on, bound := withResidentKV(s, r, residentRule{aboveContext: true, heldAtContext: sglang})
+			off, offBound := withResidentKV(s, r, residentRule{heldAtContext: sglang})
+			require.GreaterOrEqual(t, on.KVreq, off.KVreq,
+				"case %d (sglang %v): on %s %v under off %s %v, reading %+v", i, sglang, bound, on.KVreq, offBound, off.KVreq, r)
+		}
+	}
+}
+
+// Whatever the shape and the reading, with the switch on the price is never
+// under the discount (s.KVreq), only KVreq moves, and on SGLang it is never
+// over the context. The rule on its own (priceResidentReading, without the floor at
+// the switch-off price) holds the discount too: shape.PriceResident's floor.
+func TestKVAboveContext_TheDiscountIsTheFloor(t *testing.T) {
+	rng := rand.New(rand.NewPCG(188, 2))
+	for i := range 20_000 {
+		s, r := randomResidentCase(rng)
+		for _, sglang := range []bool{false, true} {
+			rule := residentRule{aboveContext: true, heldAtContext: sglang}
+			raw, rawBound := priceResidentReading(s, r, rule)
+			require.GreaterOrEqual(t, raw.KVreq, s.KVreq, "case %d (sglang %v, %s): the rule under the discount", i, sglang, rawBound)
+			got, bound := withResidentKV(s, r, rule)
+			require.GreaterOrEqual(t, got.KVreq, s.KVreq, "case %d (sglang %v, %s): under the discount", i, sglang, bound)
+			if sglang {
+				require.LessOrEqual(t, got.KVreq, s.Context()*(1+1e-12), "case %d (%s): SGLang over the context", i, bound)
+			}
+			got.KVreq = s.KVreq
+			require.Equal(t, s, got, "case %d: only KVreq moves", i)
+		}
+	}
 }
 
 // A reading below the discount keeps the gate at the discount, on or off:
@@ -224,7 +359,7 @@ func TestKVAboveContext_ANoHitShapeIsReadAboveItsContext(t *testing.T) {
 	assert.InDelta(t, 1050, held["kvReqPerSeq"], 1e-9, "1000 a request is below the context: held at it")
 	assert.Equal(t, residentBoundLower, held["residentKVBound"])
 
-	off := hitMu(t, noHit, nil)
+	off := hitMu(t, noHit, aboveOff(t))
 	assert.InDelta(t, 1050, off["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, residentBoundNoHit, off["residentKVBound"])
 }
@@ -240,9 +375,16 @@ func TestKVAboveContext_NothingWithoutHitsResident(t *testing.T) {
 	assert.Equal(t, residentBoundOff, got["residentKVBound"])
 }
 
-// The controller keeps the bound: the switch is off in a new analyzer.
-func TestKVAboveContext_OffFromTheConstructor(t *testing.T) {
+// The controller prices a reading above the context as read: the switch is
+// on in a new analyzer, and an analyzer with no replay switches set prices
+// TestKVAboveContext_AReadingAboveTheContextIsPricedAsRead's 3000 tokens a
+// request as read, not at the context of 1050.
+func TestKVAboveContext_OnFromTheConstructor(t *testing.T) {
 	fields := NewSaturationAnalyzer(capacity.NewStore()).switchFields()
 	require.Contains(t, fields, "kv-per-request-above-context")
-	assert.False(t, *fields["kv-per-request-above-context"])
+	assert.True(t, *fields["kv-per-request-above-context"])
+
+	got := hitMu(t, cachingRow(0.9, 30), nil)
+	assert.InDelta(t, 3000, got["kvReqPerSeq"], 1e-9, "priced as read, not at the context")
+	assert.Equal(t, "above-context", got["residentKVBound"])
 }

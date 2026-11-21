@@ -31,7 +31,7 @@ capacity planner's pages:
 | [The metrics it needs](metrics.md) | every series it reads, and what your Prometheus must keep |
 | [Troubleshooting](troubleshooting.md) | every refusal and error, with its fix |
 | [Check the planner on your own data](check.md) | fit it on part of a recording, predict the rest, and compare with what the fleet measured |
-| [How accurate each figure is](accuracy.md) | what `validated: error ...` and `OUTSIDE VALIDATED REGION` mean, and what was measured |
+| [How accurate each figure is](accuracy.md) | what `validated in-sample: error ...` and `OUTSIDE VALIDATED REGION` mean, and what was measured |
 
 ## Prerequisites
 
@@ -514,20 +514,37 @@ It replays the recording once and answers, for each shape and load:
 
 - **Load judged.** The p95 of the arrival rate the window read, one reading
   per cycle with traffic. The report prints the mean, p95 and peak, and the
-  busiest 2 minutes (a rolling mean). `--load-statistic mean|p95|peak` picks
+  busiest 2 minutes (a rolling mean). `--load-statistic mean|p95|peak|p95-modulation` picks
   the one judged; `--load-seen` states a load instead. The mean hides a busy
   part: on the staircase sample it is 31.6 r/s, the p95 41.7 and the peak
   43.2.
+- **Counting noise.** Each reading is a 1-minute rate, so even a steady
+  Poisson stream reads above its rate at the p95 (about 21% at 1 r/s, 6% at
+  12 r/s), and the queueing model already prices that noise. The report
+  prints the p95 less it, `p95 less counting noise`; `--load-statistic
+  p95-modulation` judges at it. A steady load is then judged near its mean,
+  a load that swings near its p95.
+- **The load's shape.** Under each shape the report prints the shape of the
+  cycles the load was read from (for the p95, every cycle at or above it).
+  When the mix moved in the window, the measured shape (the last cycles')
+  is not that traffic: a measured shape more than 20% off it in prompt or
+  output length is flagged `ShapeLoadMismatch`, and `--shape load` prices
+  the load at its own cycles' shape. On the guide's sample the p95, 29.7
+  r/s, ran at 1000/500 tokens while the measured shape is 4569/1855: the
+  measured shape needs 14 prefill + 23 decode, `--shape load` 4 + 2, what
+  `day-plan` sizes the same rate at.
 - **Growth.** `--load "seen x1.5"` (also `seen×1.5`, `seen*1.5`) asks what
   50% more traffic does: a column of its own and a short `x1.5 (...)` line
   under the verdict. It never changes the verdict at the load seen.
   `--load-seen-x 1.5` is an alias that adds the same column.
-- **Summary.** One row per shape (`--shape`, repeatable: `measured`, or
-  `IL/OL[/hit]` in tokens, `k` for 1024), one column per load (`--load`,
+- **Summary.** One row per shape (`--shape`, repeatable: `measured`,
+  `load`, or `IL/OL[/hit]` in tokens, `k` for 1024), one column per load (`--load`,
   repeatable: `80%` of that shape's fleet knee, `5r/s`, `seen`, or
   `seen x1.5`). A cell
-  such as `617/5.0 @18.49 ok` is TTFT p90 617 ms and TPOT p90 5.0 ms at
-  18.49 r/s, and the SLO's own statistics are met there. The mark is `ok`
+  such as `617/3.2 @18.49 ok` is the TTFT and TPOT at the statistics the
+  SLO judges (here TTFT p90 617 ms and TPOT mean 3.2 ms; with no target,
+  TTFT p90 and the `--tpot-percentile`) at 18.49 r/s, and both targets are
+  met there. The mark is `ok`
   met, `MISS` missed, `MISS*` missed because the rate is past the prefill
   flow-control onset (the router queues) though the figure is within, `SAT`
   saturated, `?` not judged. A TPOT ending in `m` is the mean, where the
@@ -541,7 +558,9 @@ It replays the recording once and answers, for each shape and load:
     target at the window's peak too, since removing capacity is the costly
     mistake.
   - RIGHT-SIZED: the fleet holds, and no role has a replica to spare.
-  - NOT JUDGED: a figure the verdict needs is refused (the sentence says
+  - NOT JUDGED: the window contradicts the model (its own fleet carried
+    more than 1.25x the knee for 3 minutes), or a figure the verdict needs
+    is refused (the sentence says
     which), there is no load, or the prefill side is not priced and decode
     alone holds. With no prefill speed learned, decode alone is judged
     ("(decode only)"): the report never calls such a fleet right-sized or
@@ -571,26 +590,30 @@ It replays the recording once and answers, for each shape and load:
 
 The targets are the policy's unless `--ttft` and `--tpot` set them. Exit 0
 means the report answered, whatever the verdict, saturated fleets included;
-exit 3 means a shape's verdict is NOT JUDGED. Scripts read the verdict from
+exit 3 means a shape's verdict is NOT JUDGED; exit 4 means the report
+answered and the self-check found the figures a verdict rests on
+inconsistent with the recording (the verdict says `self-check: not
+trusted`; [the self-check](check.md#the-self-check-beside-every-answer)).
+Scripts read the verdict from
 `-o json`
 (`shapes[].verdict.verdict`), which prints the same report as
 [`POST /v1/report`](api.md#the-report).
 
-With v0.12.1, the sample above prints (the start of it):
+With v0.12.3, the sample above prints (the start of it):
 
 ```text
 ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-11-06 02:18-03:30Z, cycle 289 of 289
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
 load judged     41.70 r/s, the p95 of the 282 of 289 cycles with traffic
-load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; busiest 2m0s (8 cycles): 42.13 r/s
+load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; p95 less counting noise 41.66; busiest 2m0s (8 cycles): 42.13 r/s
 SLO             TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary                     50%                80%                  5r/s              seen            seen x1.2
-  measured                  617/5.0 @18.49 ok  1944/10.8 @29.59 ok  388/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  1k/1k EXTRAPOLATED        133/4.9 @17.78 ok  152/9.0 @28.45 ok    125/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  16k/200/0.3 EXTRAPOLATED  667/5.0 @9.08 ok   1015/10.8 @14.53 ok  567/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+summary                     50%                80%                 5r/s              seen            seen x1.2
+  measured                  617/3.2 @18.49 ok  1944/6.8 @29.59 ok  388/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  1k/1k EXTRAPOLATED        133/3.1 @17.78 ok  152/5.6 @28.45 ok   125/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  16k/200/0.3 EXTRAPOLATED  667/3.2 @9.08 ok   1015/6.8 @14.53 ok  567/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
 verdicts
   measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
                             x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
@@ -600,8 +623,17 @@ verdicts
                             x1.2 (50.0 r/s): UNDER-PROVISIONED: 2.8x the fleet knee (18.2 r/s); needs 6 prefill + 7 decode (has 2 + 2) (prefill f 1.5 assumed at 6 pods).
 ```
 
-Read the `not validated` lines after each shape (not shown above): the decode knee read 44% to 103%
-high on the goldens, and TTFT is not validated.
+Read the label under the decode knee in each shape's capacity table: inside
+the region a run measured it reads `validated in-sample: one-sided, error at
+most +3%`; outside it, the `not validated` lines after the shape add that the
+knee read 44% to 103% high on the 0.6B goldens, and the needed fleet gives the
+decode count at that error beside the point answer
+([accuracy](accuracy.md#what-was-measured)). TTFT is not validated.
+
+A verdict is NOT JUDGED when the window contradicts the model: the fleet
+priced, or a smaller one, carried more than 1.25x the fleet knee for 3
+minutes without a break. The summary says how far and for how long; the
+knee reads low for that window, so no fleet is sized on it.
 
 ## Plan replicas over a day
 

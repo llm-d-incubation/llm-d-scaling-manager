@@ -236,6 +236,15 @@ func (pv pricedVariant) itlBRowText() string {
 	return strings.TrimPrefix(pv.itlBNotUsed(), "ITL B ")
 }
 
+// noLineHint is what to do about a variant that learned no ITL line: the
+// line needs decode's KV-cache use to span 0.30 or more (troubleshooting.md,
+// NoLine). It names both sources' words, so that the CLI's refusal and the
+// API's are the same.
+func (pv pricedVariant) noLineHint() string {
+	return "; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is " +
+		"learned (--cycle; source.cycle on the API), or record a busier window"
+}
+
 // pinnedDefaultBHint is what a PinnedDefaultB refusal adds: how to state B,
 // in the words of the question's source, or why the stated B was not used.
 func (pv pricedVariant) pinnedDefaultBHint() string {

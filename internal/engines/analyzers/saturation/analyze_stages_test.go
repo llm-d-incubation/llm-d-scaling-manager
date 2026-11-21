@@ -62,7 +62,7 @@ var derivedMuFields = []string{
 	"rate",
 	"replicaKvTokens",
 	"reportOnly",
-	"residentKVBound", "residentKVBoundFleet", "residentKVPerSeq", "residentRunning",
+	"residentHolding", "residentKVBound", "residentKVBoundFleet", "residentKVPerSeq", "residentRunning",
 	"seqs",
 	"shapeG", "shapeTermC", "shapeTermIdentified",
 	"tokenSec",
