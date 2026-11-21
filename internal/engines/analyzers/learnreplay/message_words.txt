@@ -1922,6 +1922,7 @@ moved
 moves
 ms
 mu
+mu-at-step-budget
 mu-exact-repeat-is-use
 mu-forget-reported
 mu-key-bucket-held
@@ -2258,6 +2259,7 @@ placement-timeout
 placementTimeout
 plan
 planned
+planner-cap-at-step-budget
 planning
 planningFrom
 plans
@@ -2549,6 +2551,7 @@ reserved
 residency
 resident
 residentDemand
+residentHolding
 residentKVBound
 residentKVBoundFleet
 residentKVPerSeq
@@ -2840,6 +2843,7 @@ slo-transient
 slo-ttft
 slo-ttft-decode-gate-charge
 slo-ttft-decode-term
+slo-ttft-hop-unqueued
 slo-ttft-imbalance-across-counts
 slo-ttft-joint
 slo-ttft-joint-inputs
@@ -2960,6 +2964,7 @@ steadyHeldThreshold
 steadySpread
 steered
 step
+step-budget
 steps
 still
 stop

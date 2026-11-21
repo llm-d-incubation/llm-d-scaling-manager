@@ -51,11 +51,15 @@ func (a *SaturationAnalyzer) ITLOneSided(key string) (adm itl.Admission, raised 
 }
 
 // PricingBatchCap is the batch cap per engine rank the analyzer prices a
-// variant at and its source ("flags", "declared", "learned", "default", or ""
-// with none), in pricingBatchCap's order. learning is the policy's
-// enableBatchCapLearning. A learned cap read here is not stamped as used.
+// variant at and its source ("flags", "declared", "learned", "default",
+// "step-budget", or "" with none), in pricingBatchCap's order. learning is
+// the policy's enableBatchCapLearning. A learned cap read here is not stamped
+// as used. With SwitchPlannerCapAtStepBudget on, the cap is held to the batch
+// the step budget runs, source "step-budget" where that lowers it
+// (atStepBudget).
 func (a *SaturationAnalyzer) PricingBatchCap(namespace, modelID, variant string,
 	params *capacity.EngineParams, learning bool) (perRank int64, source string) {
 	p := a.pricingBatchCapFor(namespace, modelID, variant, params, learning, false)
+	p = atStepBudget(p, params, a.plannerCapAtStepBudget)
 	return p.perRank, p.source
 }

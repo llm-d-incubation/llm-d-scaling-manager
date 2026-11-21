@@ -313,11 +313,11 @@ func (d Decode) fillAtRate(rate float64) Result {
 	}
 	knee := d.kneeRate()
 	if rate >= knee {
-		return refuse(Saturated, fmt.Sprintf("rate %g r/s at or above the knee %g r/s", rate, knee))
+		return refuse(Saturated, fmt.Sprintf("rate %.4g r/s at or above the knee %.4g r/s", rate, knee))
 	}
 	k, ok := d.fillAtReplicaRate(rate / float64(d.Replicas))
 	if !ok {
-		return refuse(Saturated, fmt.Sprintf("no fill carries %g r/s", rate))
+		return refuse(Saturated, fmt.Sprintf("no fill carries %.4g r/s", rate))
 	}
 	return Answer{Value: k, Basis: Basis{Fill: k, KneeRate: knee, Tier: d.Tier}}
 }
@@ -491,7 +491,7 @@ func RateForTPOT(d Decode, q RateQuery) Result {
 			// on, so it is refused rather than reported at the uncapped one.
 			kop, ok := d.fillAtReplicaRate(op / float64(d.Replicas))
 			if !ok {
-				return refuse(Saturated, fmt.Sprintf("no fill carries the operating point %g r/s", op))
+				return refuse(Saturated, fmt.Sprintf("no fill carries the operating point %.4g r/s", op))
 			}
 			rate, k, by, below = op, kop, nil, kop < d.Band.Lo
 		}

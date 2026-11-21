@@ -107,6 +107,9 @@ const (
 	// the derived mu, no cap at all (the scale target unread).
 	batchCapNone    = "none"
 	batchCapDefault = "default"
+	// batchCapStepBudget is a cap the step budget lowered (atStepBudget,
+	// SwitchMuAtStepBudget and SwitchPlannerCapAtStepBudget).
+	batchCapStepBudget = "step-budget"
 )
 
 // BatchCapPlateauCycles is how many cycles in a row a pod's running count

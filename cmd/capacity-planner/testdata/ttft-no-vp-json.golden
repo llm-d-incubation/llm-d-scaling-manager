@@ -72,7 +72,7 @@
         "rate": {
           "refused": {
             "reason": "NoLine",
-            "detail": "no ITL line learned by cycle 105"
+            "detail": "no ITL line learned by cycle 105; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window"
           }
         }
       }
@@ -110,7 +110,7 @@
         "rate": {
           "refused": {
             "reason": "NoLine",
-            "detail": "no ITL line learned by cycle 105"
+            "detail": "no ITL line learned by cycle 105; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window"
           }
         }
       }

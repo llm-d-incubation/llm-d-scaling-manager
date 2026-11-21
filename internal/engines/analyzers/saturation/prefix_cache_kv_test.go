@@ -47,6 +47,13 @@ func cachingRow(kv float64, running int) domain.ReplicaMetrics {
 // returns the first derived-mu line.
 func hitsMu(t *testing.T, rows []domain.ReplicaMetrics, edit func(*SaturationAnalyzer)) map[string]any {
 	t.Helper()
+	return hitsMuOf(t, rows, edit)
+}
+
+// hitsMuOf is hitsMu with more variant states beside variant-d's: a prefill
+// variant makes variant-d the decode of a prefill/decode split.
+func hitsMuOf(t *testing.T, rows []domain.ReplicaMetrics, edit func(*SaturationAnalyzer), more ...domain.VariantReplicaState) map[string]any {
+	t.Helper()
 	ctx, logs := observedCtx(t)
 	store := capacity.NewStore()
 	store.Update("test-ns", "test-model", "variant-d", capacity.Record{
@@ -58,10 +65,10 @@ func hitsMu(t *testing.T, rows []domain.ReplicaMetrics, edit func(*SaturationAna
 	if edit != nil {
 		edit(a)
 	}
-	in := makeAnalyzerInput(rows, []domain.VariantReplicaState{
+	in := makeAnalyzerInput(rows, append([]domain.VariantReplicaState{
 		{VariantName: "variant-d", Role: domain.RoleDecode, AcceleratorName: "H200",
 			CurrentReplicas: len(rows), GPUsPerReplica: 1},
-	})
+	}, more...))
 	_, err := a.Analyze(ctx, in)
 	require.NoError(t, err)
 	fields := requireLogged(t, logs, "derived-mu")
@@ -100,14 +107,19 @@ func TestKVHitsResident_TheMeasuredKVPricesTheDerivedMu(t *testing.T) {
 // KVreq (20,000 tokens over 50 requests, 400 each: requests part way through
 // their prefill) it is the shape's 550, no more sharing than the hit rate
 // allows. Above the shape with no hit (90,000 over 50, 1800 each) it is
-// 1050. The log names the bound.
+// 1050 with SwitchKVPerRequestAboveContext off; on, as from the constructor,
+// it is priced as read (prefix_cache_kv_above_test.go). The log names the
+// bound.
 func TestKVHitsResident_TheReadingIsBoundedByTheHitRate(t *testing.T) {
 	low := hitMu(t, cachingRow(0.2, 50), nil)
 	assert.InDelta(t, 550, low["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, residentBoundLower, low["residentKVBound"])
-	high := hitMu(t, cachingRow(0.9, 50), nil)
+	high := hitMu(t, cachingRow(0.9, 50), aboveOff(t))
 	assert.InDelta(t, 1050, high["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, residentBoundUpper, high["residentKVBound"])
+	read := hitMu(t, cachingRow(0.9, 50), nil)
+	assert.InDelta(t, 1800, read["kvReqPerSeq"], 1e-9, "the constructor's switch prices it as read")
+	assert.Equal(t, residentBoundNone, read["residentKVBound"])
 	// Between the two it is the reading: 30,000 over 40, 750 each.
 	assert.InDelta(t, 750, hitMu(t, cachingRow(0.3, 40), nil)["kvReqPerSeq"], 1e-9)
 
@@ -197,7 +209,7 @@ func TestKVHitsResident_TheGPSCheckPricesTheMeasuredKV(t *testing.T) {
 // On a P/D fleet only decode is read. A prefill replica holds the KV of
 // prompts it is handing to decode, 90,000 tokens over 10 running here; read,
 // it would pull the decode reading of 1000 a request to 140,000 / 60 = 2333,
-// past the upper bound.
+// past the context.
 func TestKVHitsResident_APrefillReplicaIsNotRead(t *testing.T) {
 	ctx, logs := observedCtx(t)
 	store := capacity.NewStore()
@@ -266,23 +278,29 @@ func TestKVHitsResident_TheFewestRequestsFollowTheShape(t *testing.T) {
 	assert.InDelta(t, 1200, enough["kvReqPerSeq"], 1e-6)
 }
 
-// A fleet with no hits prices as before, whatever is read: the two bounds
-// are one figure.
+// A fleet with no hits prices as before, whatever is read, with
+// SwitchKVPerRequestAboveContext off: the two bounds are one figure. On, as
+// from the constructor, a reading above the context is priced as read
+// (TestKVAboveContext_ANoHitShapeIsReadAboveItsContext).
 func TestKVHitsResident_NoHitsPricesAsBefore(t *testing.T) {
 	rm := cachingRow(0.9, 50)
 	rm.PrefixCacheHitRate = 0
-	on := hitMu(t, rm, nil)
+	on := hitMu(t, rm, aboveOff(t))
 	assert.InDelta(t, 1050, on["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, residentBoundNoHit, on["residentKVBound"], "not upper: there is no discount to take back")
 	assert.Equal(t, residentBoundNoHit, on["residentKVBoundFleet"])
 	assert.InDelta(t, 1050, hitMu(t, rm, hitsOff)["kvReqPerSeq"], 1e-9)
+	read := hitMu(t, rm, nil)
+	assert.InDelta(t, 1800, read["kvReqPerSeq"], 1e-9, "the constructor's switch prices it as read")
+	assert.Equal(t, residentBoundNone, read["residentKVBound"])
 }
 
 // While a shape change is outstanding the reading is kept, held to the bounds
 // of the shape priced: the short-window shape (2000 in, 100 out, hit 0.5)
 // runs from 1050 to 2050, and 80,000 tokens over 50 requests read 1600, so
 // mu is priced at 1600. Above the new shape's upper bound (95,000 over 40,
-// 2375) it is 2050. Off, at the discount's 1050.
+// 2375) it is 2050 with SwitchKVPerRequestAboveContext off, and 2375 on, as
+// from the constructor. Off, at the discount's 1050.
 func TestKVHitsResident_AShapeChangeKeepsTheReadingInTheNewBounds(t *testing.T) {
 	swap := func(kv float64, running int, edit func(*SaturationAnalyzer)) map[string]any {
 		store := capacity.NewStore()
@@ -318,12 +336,15 @@ func TestKVHitsResident_AShapeChangeKeepsTheReadingInTheNewBounds(t *testing.T) 
 	// hit) bounds the same reading by its own figures.
 	assert.InDelta(t, 1600, on["kvReqFleet"], 1e-9)
 
-	high := swap(0.95, 40, nil)
+	high := swap(0.95, 40, aboveOff(t))
 	require.Equal(t, true, high["muShortWindow"])
 	assert.InDelta(t, 2050, high["kvReqPerSeq"], 1e-9)
 	assert.Equal(t, residentBoundUpper, high["residentKVBound"])
 	assert.InDelta(t, 2275, high["kvReqFleet"], 1e-9, "the fleet's upper bound, not the new shape's")
 	assert.Equal(t, residentBoundUpper, high["residentKVBoundFleet"])
+	read := swap(0.95, 40, nil)
+	assert.InDelta(t, 2375, read["kvReqPerSeq"], 1e-9, "the constructor's switch prices it as read")
+	assert.Equal(t, residentBoundNone, read["residentKVBound"])
 
 	// 44,000 over 40, 1100: inside the new shape's bounds, under the
 	// fleet's discount.
@@ -434,8 +455,9 @@ func TestKVHitsResident_AShapeThatIsNotFiniteIsNeverRead(t *testing.T) {
 	assert.Equal(t, math.MaxInt32, minResidentSequences(shape.Shape{AvgInputTokens: 1000, AvgOutputTokens: math.Inf(1)}))
 }
 
-// Whatever the shape and the reading, the price is never under the
-// discount nor over no discount, and only KVreq moves.
+// Whatever the shape and the reading, with SwitchKVPerRequestAboveContext off
+// (residentRule{}), the price is never under the discount nor over no
+// discount, and only KVreq moves.
 func TestKVHitsResident_TheReadingStaysInsideTheBounds(t *testing.T) {
 	rng := rand.New(rand.NewPCG(277, 3))
 	for i := range 2000 {

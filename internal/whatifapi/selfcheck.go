@@ -42,15 +42,23 @@ const (
 )
 
 // The self-check's rules: a figure is inconsistent with its recording when
-// its median ratio lies outside [selfCheckBiasLo, selfCheckBiasHi] or fewer
-// than selfCheckWithinLo of its steps are within BacktestTolerance; weak
-// when fewer than selfCheckWithinOK are, or it was scored over fewer than
-// selfCheckStepsOK steps. Fewer than selfCheckMinSteps scored steps judge
-// nothing. The planner calling the fleet overloaded in selfCheckSaturated
-// or more of the judged steps, where the fleet measured a figure, is
-// inconsistent too.
+// its median ratio lies outside [selfCheckBiasFail, selfCheckBiasHi], fewer than
+// selfCheckWithinLo of its steps are within BacktestTolerance, more than
+// selfCheckLowShare read low or any one under selfCheckFloor, its worst
+// tenth near the knee reads outside [selfCheckFloor, selfCheckNearKneeHi],
+// or it called the fleet overloaded where it served unqueued
+// (selfcheck_rules.go); weak when its median ratio lies under
+// selfCheckBiasLo (the window is lopsided: reading low costs an SLO, reading
+// high costs replicas), fewer than selfCheckWithinOK are within,
+// it was scored over fewer than selfCheckStepsOK steps or
+// selfCheckLevelsOK load levels, or the within share's bootstrap bound over
+// the levels is under selfCheckWithinLo. Fewer than selfCheckMinSteps
+// scored steps judge nothing. The planner calling the fleet overloaded in
+// selfCheckSaturated or more of the judged steps, where the fleet measured
+// a figure, is inconsistent too.
 const (
-	selfCheckBiasLo    = 0.8
+	selfCheckBiasFail  = 0.8
+	selfCheckBiasLo    = 0.95
 	selfCheckBiasHi    = 1.25
 	selfCheckWithinLo  = 0.5
 	selfCheckWithinOK  = 0.7
@@ -88,6 +96,14 @@ type SelfCheck struct {
 	// steps; absent where not scored.
 	TTFT *SelfCheckFigure `json:"ttft,omitempty"`
 	TPOT *SelfCheckFigure `json:"tpot,omitempty"`
+	// Untrusted names the figures an inconsistent self-check says not to
+	// trust: "ttft" (prefill sizing and the TTFT figures), "tpot" (decode
+	// sizing and the TPOT figures). An answer whose verdict rests on one
+	// says so (ReportVerdict.Trust).
+	Untrusted []string `json:"untrusted,omitempty"`
+	// Covered is the rates and fleets the self-check tested; an answer at
+	// another is not covered by it. Absent where no step was judged.
+	Covered *SelfCheckCoverage `json:"covered,omitempty"`
 	// Folds is each cut: what was fitted, what was predicted.
 	Folds []SelfCheckFold `json:"folds"`
 	// Checks is each rule, passed or not.
@@ -345,6 +361,17 @@ type SelfCheckFigure struct {
 	Judged     int   `json:"judged"`
 	Overloaded int   `json:"overloaded"`
 	PastKnee   *Band `json:"pastKnee,omitempty"`
+	// Levels is the independent load levels the scored steps fall in, and
+	// WithinBound the within share's lower bound over them (a cluster
+	// bootstrap's 10th percentile); MinRatio the lowest step's ratio;
+	// NearKnee the steps at 0.8 to 1.0 of the knee; ServedPastKnee the
+	// steps called overloaded that the fleet served unqueued
+	// (selfcheck_rules.go).
+	Levels         int                `json:"levels"`
+	WithinBound    *float64           `json:"withinBound,omitempty"`
+	MinRatio       *float64           `json:"minRatio,omitempty"`
+	NearKnee       *SelfCheckNearKnee `json:"nearKnee,omitempty"`
+	ServedPastKnee int                `json:"servedPastKnee"`
 	// Refused is the other refusals, by reason.
 	Refused map[string]int `json:"refused"`
 }
@@ -463,6 +490,16 @@ func selfCheckEntry(ctx context.Context, e *inputsEntry, folds []FoldFit, info S
 	}
 	sum := summarize(steps, false)
 	sc.TTFT, sc.TPOT = selfCheckFigure(sum.TTFT, sum.Judged), selfCheckFigure(sum.TPOT, sum.Judged)
+	for _, x := range []struct {
+		f    *SelfCheckFigure
+		ttft bool
+	}{{sc.TTFT, true}, {sc.TPOT, false}} {
+		if x.f != nil {
+			pts, overloaded := selfCheckPoints(steps, x.ttft, x.f.Statistic)
+			x.f.scoreSteps(pts, overloaded, x.ttft)
+		}
+	}
+	sc.Covered = coverageOf(steps)
 	span := sc.Folds[len(sc.Folds)-1].TestTo.Sub(sc.Folds[0].FitTo)
 	sc.judge(e, span, info)
 	return sc
@@ -508,6 +545,7 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 			sc.Checks = append(sc.Checks, rule)
 			bad = append(bad, rule.Detail)
 			trustNot = append(trustNot, x.what)
+			sc.Untrusted = append(sc.Untrusted, strings.ToLower(x.name))
 			parts = append(parts, fmt.Sprintf("%s: called the fleet overloaded in %d of %d steps it served", x.name, f.Overloaded, f.Judged))
 			judged = append(judged, x.name)
 			continue
@@ -519,19 +557,18 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		}
 		judged = append(judged, x.name)
 		within := float64(f.Within) / float64(f.Steps)
-		parts = append(parts, fmt.Sprintf("p90 %s within 20%% in %d of %d steps (median ratio %.2f)", x.name, f.Within, f.Steps, *f.Bias))
-		biasOK := *f.Bias >= selfCheckBiasLo && *f.Bias <= selfCheckBiasHi
-		sc.Checks = append(sc.Checks,
-			SelfCheckRule{Name: strings.ToLower(x.name) + "-bias", Passed: biasOK,
-				Detail: fmt.Sprintf("median ratio %.2f, want %.2f to %.2f", *f.Bias, selfCheckBiasLo, selfCheckBiasHi)},
-			SelfCheckRule{Name: strings.ToLower(x.name) + "-within", Passed: within >= selfCheckWithinLo,
-				Detail: fmt.Sprintf("within 20%% in %.0f%% of the steps, want %.0f%% or more", within*100, selfCheckWithinLo*100)})
+		parts = append(parts, fmt.Sprintf("p90 %s within 20%% in %d of %d steps at %d load levels (median ratio %.2f)", x.name, f.Within, f.Steps,
+			f.Levels, *f.Bias))
+		name := strings.ToLower(x.name)
+		rules, failed, loose := sc.figureRules(name, x.name, f, within)
+		sc.Checks = append(sc.Checks, rules...)
 		switch {
-		case !biasOK || within < selfCheckWithinLo:
-			bad = append(bad, fmt.Sprintf("p90 %s: median ratio %.2f, within 20%% in %.0f%% of %d steps", x.name, *f.Bias, within*100, f.Steps))
+		case len(failed) > 0:
+			bad = append(bad, fmt.Sprintf("p90 %s: %s", x.name, strings.Join(failed, "; ")))
 			trustNot = append(trustNot, x.what)
-		case within < selfCheckWithinOK || f.Steps < selfCheckStepsOK:
-			weak = append(weak, fmt.Sprintf("p90 %s within 20%% in %.0f%% of %d steps", x.name, within*100, f.Steps))
+			sc.Untrusted = append(sc.Untrusted, name)
+		case len(loose) > 0:
+			weak = append(weak, fmt.Sprintf("p90 %s: %s", x.name, strings.Join(loose, "; ")))
 			trustOK = append(trustOK, x.what+" (loosely)")
 		default:
 			trustOK = append(trustOK, x.what)
@@ -558,7 +595,7 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		return
 	}
 	sc.Line = fmt.Sprintf("%s: tested on the last %s of this recording, each part predicted from a fit on what came before it, %s.",
-		sc.lead("Self-check"), durationWords(span), strings.Join(parts, "; ")) + sc.tail()
+		sc.lead("Self-check"), durationWords(span), strings.Join(parts, "; ")) + sc.coveredSentence() + sc.tail()
 	switch {
 	case len(bad) > 0:
 		sc.Status = SelfCheckInconsistent
@@ -577,6 +614,61 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 	if sc.Status == SelfCheckInconsistent {
 		sc.IssueURL = selfCheckIssueURL(sc, e, info)
 	}
+}
+
+// figureRules judges one scored figure, named name ("ttft") and label
+// ("TTFT"), within the share of its steps within: every rule, what failed
+// (inconsistent) and what is loose (weak), each in words.
+func (sc *SelfCheck) figureRules(name, label string, f *SelfCheckFigure, within float64) (rules []SelfCheckRule, failed, loose []string) {
+	rule := func(suffix string, passed bool, detail string) {
+		rules = append(rules, SelfCheckRule{Name: name + "-" + suffix, Passed: passed, Detail: detail})
+		if !passed {
+			failed = append(failed, detail)
+		}
+	}
+	rule("bias", *f.Bias >= selfCheckBiasFail && *f.Bias <= selfCheckBiasHi,
+		fmt.Sprintf("median ratio %.2f, want %.2f to %.2f", *f.Bias, selfCheckBiasFail, selfCheckBiasHi))
+	rule("within", within >= selfCheckWithinLo,
+		fmt.Sprintf("within 20%% in %.0f%% of the steps, want %.0f%% or more", within*100, selfCheckWithinLo*100))
+	low := float64(f.Low) / float64(f.Steps)
+	rule("low", low <= selfCheckLowShare,
+		fmt.Sprintf("read more than 20%% low in %d of %d steps (%.0f%%), want %.0f%% or fewer", f.Low, f.Steps, low*100, selfCheckLowShare*100))
+	if f.MinRatio != nil {
+		rule("floor", *f.MinRatio >= selfCheckFloor,
+			fmt.Sprintf("the lowest step read %.2f of measured, want %.2f or more", *f.MinRatio, selfCheckFloor))
+	}
+	if k := f.NearKnee; k != nil && k.Steps >= selfCheckNearKneeMin {
+		rule("near-knee", k.Worst >= selfCheckFloor && k.Worst <= selfCheckNearKneeHi,
+			fmt.Sprintf("at 0.8 to 1.0 of the knee the worst tenth of %d steps read %.2f of measured, want %.2f to %.2f",
+				k.Steps, k.Worst, selfCheckFloor, selfCheckNearKneeHi))
+	}
+	if f.Overloaded > 0 && name == "ttft" {
+		served := f.ServedPastKnee >= selfCheckServedMin && float64(f.ServedPastKnee) >= selfCheckServedShare*float64(f.Overloaded)
+		rule("knee", !served,
+			fmt.Sprintf("called the fleet overloaded in %d steps; in %d of them it measured a p90 %s within %.1fx of its steps below 0.8 of the knee, "+
+				"so its queue did not grow: the knee reads low", f.Overloaded, f.ServedPastKnee, label, selfCheckServedX))
+	}
+	if *f.Bias >= selfCheckBiasFail && *f.Bias < selfCheckBiasLo {
+		loose = append(loose, fmt.Sprintf("it leans low (median ratio %.2f, under %.2f)", *f.Bias, selfCheckBiasLo))
+	}
+	if within < selfCheckWithinOK || f.Steps < selfCheckStepsOK {
+		loose = append(loose, fmt.Sprintf("within 20%% in %.0f%% of %d steps", within*100, f.Steps))
+	}
+	if f.Levels < selfCheckLevelsOK {
+		loose = append(loose, fmt.Sprintf("%d independent load levels, fewer than %d", f.Levels, selfCheckLevelsOK))
+	}
+	if b := f.WithinBound; b != nil && *b < selfCheckWithinLo {
+		loose = append(loose, fmt.Sprintf("the within share could be as low as %.0f%% over the load levels", *b*100))
+	}
+	return rules, failed, loose
+}
+
+// coveredSentence is what the line adds of what the self-check tested.
+func (sc *SelfCheck) coveredSentence() string {
+	if sc.Covered == nil {
+		return ""
+	}
+	return " It tested " + sc.Covered.Words() + ": an answer at another rate or fleet is not covered by it."
 }
 
 // selfCheckIssueRepo is the repository a self-check's issue is offered in.
@@ -619,6 +711,7 @@ func selfCheckIssueURL(sc *SelfCheck, e *inputsEntry, info SelfCheckInfo) string
 		}
 		fmt.Fprintf(&b, "%s p90: steps %d, within20 %d, median ratio %s, read low %d, judged %d, overloaded %d", x.name, x.f.Steps, x.f.Within,
 			bias, x.f.Low, x.f.Judged, x.f.Overloaded)
+		fmt.Fprintf(&b, ", levels %d, served past knee %d", x.f.Levels, x.f.ServedPastKnee)
 		for _, r := range slices.Sorted(maps.Keys(x.f.Refused)) {
 			fmt.Fprintf(&b, ", refused %s %d", r, x.f.Refused[r])
 		}

@@ -88,21 +88,21 @@
           "kvFill": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "bandTop": 0.8,
           "slotsOccupied": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "slots": 222,
           "waitProbability": {
             "refused": {
               "reason": "Saturated",
-              "detail": "41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "41.7 r/s at or above the knee 36.98 r/s"
             }
           }
         },
@@ -295,17 +295,16 @@
               ]
             },
             "tpot": {
-              "statistic": "p90",
-              "value": 0.004999917963493543,
+              "statistic": "mean",
+              "value": 0.003153175255424744,
               "unit": "s",
               "band": {
-                "lo": 0.004872742612921775,
-                "hi": 0.005035912842411187
+                "lo": 0.003072972705812775,
+                "hi": 0.0031758752601755862
               },
-              "floor": 0.004872742612921775,
+              "floor": 0.003072972705812775,
               "flags": [
-                "BelowFittedBand",
-                "CoarseTPOTBucket"
+                "BelowFittedBand"
               ]
             },
             "mark": "met"
@@ -414,17 +413,16 @@
               ]
             },
             "tpot": {
-              "statistic": "p90",
-              "value": 0.010798266509783123,
+              "statistic": "mean",
+              "value": 0.006809877083731042,
               "unit": "s",
               "band": {
-                "lo": 0.007423150526527075,
-                "hi": 0.011071723409494498
+                "lo": 0.004681375720249567,
+                "hi": 0.006982331419160296
               },
-              "floor": 0.004872742612921775,
+              "floor": 0.003072972705812775,
               "flags": [
-                "BelowFittedBand",
-                "CoarseTPOTBucket"
+                "BelowFittedBand"
               ]
             },
             "mark": "met"
@@ -440,28 +438,28 @@
               "statistic": "p50",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             {
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             }
           ],
           "tpotMean": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 36.98 r/s at or above the knee 36.98 r/s"
             }
           },
           "tpotPercentile": {
             "statistic": "p90",
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s",
+              "detail": "rate 36.98 r/s at or above the knee 36.98 r/s",
               "flags": [
                 "CoarseTPOTBucket"
               ]
@@ -470,7 +468,7 @@
           "e2eMeanSum": {
             "refused": {
               "reason": "AboveDecodeOnset",
-              "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+              "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
             }
           },
           "cell": {
@@ -478,14 +476,14 @@
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "36.984638260324516 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "36.98 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             "tpot": {
               "statistic": "mean",
               "refused": {
                 "reason": "Saturated",
-                "detail": "rate 36.984638260324516 r/s at or above the knee 36.984638260324516 r/s"
+                "detail": "rate 36.98 r/s at or above the knee 36.98 r/s"
               }
             },
             "mark": "saturated"
@@ -501,28 +499,28 @@
               "statistic": "p50",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             {
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             }
           ],
           "tpotMean": {
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
             }
           },
           "tpotPercentile": {
             "statistic": "p90",
             "refused": {
               "reason": "Saturated",
-              "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s",
+              "detail": "rate 41.7 r/s at or above the knee 36.98 r/s",
               "flags": [
                 "CoarseTPOTBucket"
               ]
@@ -531,7 +529,7 @@
           "e2eMeanSum": {
             "refused": {
               "reason": "AboveDecodeOnset",
-              "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+              "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
             }
           },
           "cell": {
@@ -539,14 +537,14 @@
               "statistic": "p90",
               "refused": {
                 "reason": "AboveDecodeOnset",
-                "detail": "41.7 r/s at or above the decode gate's onset 35.74811315725482 r/s"
+                "detail": "41.7 r/s at or above the decode gate's onset 35.75 r/s"
               }
             },
             "tpot": {
               "statistic": "mean",
               "refused": {
                 "reason": "Saturated",
-                "detail": "rate 41.7 r/s at or above the knee 36.984638260324516 r/s"
+                "detail": "rate 41.7 r/s at or above the knee 36.98 r/s"
               }
             },
             "mark": "saturated"

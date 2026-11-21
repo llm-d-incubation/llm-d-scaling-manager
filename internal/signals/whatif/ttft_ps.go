@@ -250,7 +250,7 @@ func (pl prefillPlan) psStages(rate float64, decodePods int, pooled bool) (stage
 	if decodePods > 0 && pl.pull > 0 {
 		es2, lam2 = i*pl.pull, rate/float64(decodePods)
 		if !(lam2*es2 < 1) {
-			u := refuse(Saturated, fmt.Sprintf("the KV pull saturates the %d decode pods at %g r/s (utilization %g)",
+			u := refuse(Saturated, fmt.Sprintf("the KV pull saturates the %d decode pods at %.4g r/s (utilization %.3g)",
 				decodePods, rate, lam2*es2))
 			return stageMix{}, psParts{}, &u
 		}

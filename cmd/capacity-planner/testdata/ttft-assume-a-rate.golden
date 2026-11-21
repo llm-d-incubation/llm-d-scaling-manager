@@ -1,11 +1,11 @@
 role     est. rate at SLO   bound by                                 basis
-decode   refused: NoLine (no ITL line learned by cycle 193)
+decode   refused: NoLine (no ITL line learned by cycle 193; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window)
          shape IL 36661 OL 16 (measured, cycles 171-190), output spread D 1.000 (measured)
          engine vLLM release not recorded
 prefill  2.70 r/s           TTFT p95                                 OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721); a ASSUMED [2.18 .. 3.22] at V_P +-15%
          inputs V_P 134775 learned (busy-minutes, at 31816 tokens); a 11.00 ms ASSUMED; f 1 (one pod); N_p 1 (recording); prompt 36966 tokens (measured, cycles 170-189); decode engine TTFT 211.2 ms at 36925 tokens, measured
          assumed a 11ms (--assume-a); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
-fleet    refused: NoLine (no ITL line learned by cycle 193)
+fleet    refused: NoLine (no ITL line learned by cycle 193; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window)
 flags: UnvalidatedTTFT; AssumedPromptSpread; DecodeEngineMeasured; SpreadBeyondProcessorSharing; FlowControlInferredOff; AssumedPoissonArrivals; AssumedA
 estimate from no readings of the line's own of a 193-cycle recording, not a guarantee; see basis (-o json)
 TTFT is not a bound, and is validated only where its figure says so: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it. a ASSUMED.

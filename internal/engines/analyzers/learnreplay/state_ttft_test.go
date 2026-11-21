@@ -63,7 +63,7 @@ func TestTTFTSamples_CarryTheHistogram(t *testing.T) {
 	}
 	in := domain.AnalyzerInput{ReplicaMetrics: []domain.ReplicaMetrics{row(true), row(true), row(false)},
 		VariantStates: []domain.VariantReplicaState{{VariantName: "pre", Role: domain.RolePrefill}}}
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	// What the slo analyzer's window reads from the same rows.
 	var same whatif.PromptWindow
 	start := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
@@ -181,7 +181,7 @@ func TestTTFTSamples_TheTerm(t *testing.T) {
 		r.CapacityQueueKnown = true
 		return r
 	}
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	in := pdInput(prefillRow("p0", 1000, 1))
 	s.note(in, 1, time.Unix(0, 0))
 	s.noteTerm(in, time.Unix(0, 0), args)
@@ -205,7 +205,7 @@ func TestTTFTSamples_TheTerm(t *testing.T) {
 	assert.True(t, fit.HopAssumed, "this recording holds no router mean")
 
 	// A held router teaches no hop, here as in S1.
-	busy := newTTFTSamples()
+	busy := newTTFTSamples(false)
 	for i := range 60 {
 		rows := pdInput(prefillRow("p0", 1000, 1), row(0.003))
 		for j := range rows.ReplicaMetrics {
@@ -226,7 +226,7 @@ func TestTTFTSamples_TheTerm(t *testing.T) {
 // The prompt is computed tokens over requests across the cycles, and a cycle
 // with no traffic does not read as a prompt of nothing.
 func TestTTFTSamples_Prompt(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	s.note(pdInput(prefillRow("p0", 1000, 1)), 1, time.Time{})
 	s.note(pdInput(prefillRow("p0", 9000, 3)), 2, time.Time{})
 	s.note(pdInput(prefillRow("p0", 0, 0)), 3, time.Time{})
@@ -242,7 +242,7 @@ func TestTTFTSamples_Prompt(t *testing.T) {
 
 // A row that is not serving is not read: not Ready, or a warm-pool bridge.
 func TestTTFTSamples_ReadsServingRowsOnly(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	notReady := prefillRow("p1", 100000, 1)
 	notReady.Ready = false
 	bridge := prefillRow("p2", 100000, 1)
@@ -259,7 +259,7 @@ func TestTTFTSamples_ReadsServingRowsOnly(t *testing.T) {
 // that read one, and restarts at another pod count.
 func TestTTFTSamples_RawShare(t *testing.T) {
 	share := func(rows ...domain.ReplicaMetrics) (float64, float64, bool) {
-		s := newTTFTSamples()
+		s := newTTFTSamples(false)
 		s.note(pdInput(rows...), 1, time.Time{})
 		return s.shares["pre"].read()
 	}
@@ -273,7 +273,7 @@ func TestTTFTSamples_RawShare(t *testing.T) {
 	got, _, _ = share(prefillRow("p0", 500, 1))
 	assert.Zero(t, got, "one pod has no share")
 
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	s.note(pdInput(prefillRow("p0", 900, 1), prefillRow("p1", 100, 1)), 1, time.Time{}) // 1.8, on two pods
 	s.note(pdInput(prefillRow("p0", 500, 1)), 2, time.Time{})                           // one pod: restarts
 	s.note(pdInput(prefillRow("p0", 300, 1), prefillRow("p1", 200, 1)), 3, time.Time{}) // two pods: restarts, 1.2
@@ -303,7 +303,7 @@ func TestTTFTSamples_RawShare(t *testing.T) {
 // The decode engine's TTFT is a pair: the largest cycle's mean, with that
 // cycle's prompt, each mean weighted by the rows' request rates.
 func TestTTFTSamples_EngineTTFTIsAPair(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	s.note(pdInput(prefillRow("p0", 8000, 1), decodeRow("d0", 0.1, 1), decodeRow("d1", 0.3, 3)), 1, time.Time{}) // 0.25 at 8000
 	s.note(pdInput(prefillRow("p0", 2000, 1), decodeRow("d0", 0.05, 1)), 2, time.Time{})                         // 0.05 at 2000
 	require.Len(t, s.engineTTFT["dec"], 2)
@@ -316,7 +316,7 @@ func TestTTFTSamples_EngineTTFTIsAPair(t *testing.T) {
 	assert.Zero(t, s.engineTTFT["dec"][2])
 
 	// Rows with no request rate read equally.
-	u := newTTFTSamples()
+	u := newTTFTSamples(false)
 	d0, d1 := decodeRow("d0", 0.1, 0), decodeRow("d1", 0.3, 0)
 	u.note(pdInput(prefillRow("p0", 2000, 1), d0, d1), 1, time.Time{})
 	assert.InDelta(t, 0.2, u.engineTTFT["dec"][0].Seconds, 1e-9)
@@ -334,7 +334,7 @@ func TestTTFTSamples_EngineTTFTIsAPair(t *testing.T) {
 
 // A zero is no reading of a latency: it does not pull a mean low.
 func TestTTFTSamples_ZeroReadingsAreSkipped(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	zero := decodeRow("d1", 0, 1)
 	zero.AvgKVTransferTime, zero.AvgKVTransferTimeKnown = 0, true
 	d0 := decodeRow("d0", 0.1, 1)
@@ -427,7 +427,7 @@ func TestStateAt_AQueueIsFlowControl(t *testing.T) {
 // The transfer is the mean over the rows that read one, and an unread row is
 // not a zero.
 func TestTTFTSamples_Transfer(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	d0 := decodeRow("d0", 0.1, 1)
 	d0.AvgKVTransferTime, d0.AvgKVTransferTimeKnown = 0.02, true
 	d1 := decodeRow("d1", 0.1, 1)
@@ -446,7 +446,7 @@ func TestTTFTSamples_TheJointFeedIsS1s(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	args := func(string) string { return "args-a" }
 	vllm := func(string) bool { return false }
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	for range prefill.MinJointReadings {
 		s.noteJoint(in, now, args, vllm)
 	}
@@ -454,7 +454,7 @@ func TestTTFTSamples_TheJointFeedIsS1s(t *testing.T) {
 	require.Empty(t, est.PrefillWorkRefused)
 	assert.InDelta(t, 4000, est.PrefillWorkPrompt, 1e-9, "vLLM reads the prompt from the computed-token rate")
 
-	sglang := newTTFTSamples()
+	sglang := newTTFTSamples(false)
 	for range prefill.MinJointReadings {
 		sglang.noteJoint(in, now, args, func(v string) bool { return v == "pre" })
 	}
@@ -465,7 +465,7 @@ func TestTTFTSamples_TheJointFeedIsS1s(t *testing.T) {
 
 	two := in
 	two.VariantStates = append(slices.Clone(in.VariantStates), domain.VariantReplicaState{VariantName: "dec2", Role: domain.RoleDecode})
-	other := newTTFTSamples()
+	other := newTTFTSamples(false)
 	for range prefill.MinJointReadings {
 		other.noteJoint(two, now, args, vllm)
 	}
@@ -482,7 +482,7 @@ func TestTTFTSamples_TheBacklogOutlivesTheQueue(t *testing.T) {
 		r.CapacityQueueKnown, r.CapacityQueueLength, r.QueueLength = true, capacity, capacity+2
 		return r
 	}
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	t0 := time.Unix(1000, 0)
 	cycle := 0
 	step := func(ttft float64, capacity int) (whatif.DecodeTTFT, int) {
@@ -516,7 +516,7 @@ func TestTTFTSamples_TheBacklogOutlivesTheQueue(t *testing.T) {
 // A row that does not say why its requests wait reads no backlog and marks
 // the window unread, for a window's length.
 func TestTTFTSamples_AnUnreadBacklogIsSaid(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	r := decodeRow("d0", 9, 10)
 	r.QueueLength = 300
 	s.note(pdInput(prefillRow("p0", 8000, 1), r), 1, time.Unix(0, 0))
@@ -565,7 +565,7 @@ func TestTTFTSamples_AnIdleTailIsNotCalm(t *testing.T) {
 		r.CapacityQueueKnown, r.CapacityQueueLength = true, capacity
 		return r
 	}
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	t0 := time.Unix(1000, 0)
 	note := func(cycle int, rows ...domain.ReplicaMetrics) {
 		s.note(pdInput(append([]domain.ReplicaMetrics{prefillRow("p0", 8000, 1)}, rows...)...), cycle, t0.Add(time.Duration(cycle)*15*time.Second))
@@ -587,7 +587,7 @@ func TestTTFTSamples_AnIdleTailIsNotCalm(t *testing.T) {
 // A window that begins inside a backlog's tail cannot see the backlog: its
 // first cycles are not named calm on less than a whole window.
 func TestTTFTSamples_AShortWindowIsNotCalm(t *testing.T) {
-	s := newTTFTSamples()
+	s := newTTFTSamples(false)
 	r := decodeRow("d0", 0.15, 10)
 	r.CapacityQueueKnown = true
 	for c := 1; c < whatif.TTFTWindowCycles; c++ {

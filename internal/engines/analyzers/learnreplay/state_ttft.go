@@ -132,10 +132,15 @@ type ttftSamples struct {
 	terms     map[string]*prefill.DecodeTermWindow
 	// joint is the model's joint TTFT readings (noteJoint).
 	joint *prefill.JointWindow
+	// hopUnqueued is slo.SwitchTTFTHopUnqueued, for the decode term's
+	// router windows (noteTerm).
+	hopUnqueued bool
 }
 
-func newTTFTSamples() *ttftSamples {
-	return &ttftSamples{prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
+// newTTFTSamples returns empty windows; hopUnqueued is
+// slo.SwitchTTFTHopUnqueued.
+func newTTFTSamples(hopUnqueued bool) *ttftSamples {
+	return &ttftSamples{hopUnqueued: hopUnqueued, prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
 		engineTTFT: map[string][]whatif.DecodeTTFT{}, backlogs: map[string]*backlogTrack{},
 		transfers: map[string]*prefill.TransferWindow{},
 		terms:     map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow()}
@@ -387,7 +392,8 @@ func (t *ttftSamples) noteTerm(in domain.AnalyzerInput, now time.Time, args func
 		x.Observe(now, rowsOfVariant(in.ReplicaMetrics, v))
 		w.Observe(prefill.DecodeTermCycle{Now: now, Prefill: pre, Decode: rowsOfVariant(in.ReplicaMetrics, v),
 			PromptTokens: prompt, Router: in.RouterLatency,
-			RouterHeld: in.SchedulerQueue != nil && in.SchedulerQueue.QueueSize > 0})
+			RouterHeld:  in.SchedulerQueue != nil && in.SchedulerQueue.QueueSize > 0,
+			HopUnqueued: t.hopUnqueued})
 	}
 }
 

@@ -65,7 +65,14 @@ How to read it:
   where our own accuracy runs measured the planner. For a real fleet this is
   often none, and then this check, not the benchmark, is your evidence.
 - **Not judged**: steps whose measurement reaches into the first minutes of
-  the test or over a change of replicas, and steps with no traffic.
+  the test or over a change of replicas, and steps with no traffic. Also
+  steps whose measurement window runs both near the knee (a minute at 0.8
+  of it or more) and far under it (a minute at a quarter of that or less):
+  "a burst near the knee in its window". Their requests arrived at, or
+  queued behind, a load the step's mean rate hides, so no steady-state
+  figure at that mean is comparable. Neither TTFT nor TPOT is scored there.
+  A load past the knee shorter than the measurement window is therefore
+  never scored; the summary counts such steps.
 
 Below that are each step and then the scores: the mean, p50, p90 and p95 of
 TTFT and TPOT, then the same split by load. The page draws the same steps over
@@ -92,7 +99,7 @@ what the fleet measured. The result comes first, in one line:
 
 ```text
 Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it,
-p90 TTFT within 20% in 0 of 9 steps (median ratio 1.90); p90 TPOT within 20% in 10 of 10 steps (median ratio 0.94). [inconsistent]
+p90 TTFT within 20% in 2 of 7 steps (median ratio 1.34); p90 TPOT within 20% in 8 of 8 steps (median ratio 0.94). [inconsistent]
   Do not trust prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures (loosely) held.
 ```
 
@@ -122,10 +129,23 @@ On the page it is a badge beside the source, with the same lines under it.
 
 | Badge | Means |
 | --- | --- |
-| ok | The planner predicted this recording well, over 12 steps or more with 70% of them within 20%: you can size from its figures. |
-| weak | It held, but over fewer than 12 steps or with fewer than 70% of them within 20%. Size with care. |
-| inconsistent | The planner and this recording disagree: the median ratio is outside 0.8 to 1.25, fewer than half the steps are within 20%, or the planner called the fleet overloaded in half the steps where it served. The line says which figures not to trust. |
+| held on its own steps (`ok` in JSON) | The planner predicted this recording's own steps well: 12 steps or more at 4 load levels or more, 70% of them within 20%, a median ratio from 0.95 to 1.25, and the within share still at least half when the levels are resampled. It tested only the rates and replica counts the recording ran: it says nothing of other fleets. |
+| weak | It held, but over fewer than 12 steps or 4 load levels, with fewer than 70% of the steps within 20%, leaning low (a median ratio from 0.80 to 0.95), or with a within share that could be under half once the levels are resampled. Size with care. |
+| inconsistent | The planner and this recording disagree. The line says which figures not to trust, and why: the median ratio is outside 0.80 to 1.25; fewer than half the steps are within 20%; more than 15% of the steps read more than 20% low, or any one read under 0.67 of measured; at 0.8 to 1.0 of the knee the worst tenth of the steps (3 or more) read outside 0.67 to 2 times measured; the planner called the fleet overloaded in half the steps where it served; or it called the fleet overloaded in steps where the fleet's measured p90 TTFT stayed within 1.5x of the median of its steps below 0.8 of the knee, so its queue did not grow (2 or more, and a fifth of those steps): the knee reads low. |
 | not run | The recording is shorter than an hour, carries no latency, or is not a P/D fleet; fewer than 6 steps could be scored for each figure (the refusals are named); or, on the server, it ran out of its time budget. The line says which. |
+
+The steps are not independent: a load level holds for several steps, and
+both cuts come from one recording. The line counts the load levels (a run of
+steps at one fleet and a rate within 15% of the level's first; one step off a
+level the run returns to stays in it), and the
+within share's bound resamples whole levels.
+
+The line ends with what the check tested: `It tested 2.10 to 9.84 r/s at 2
+prefill + 2 decode`. An `at-replicas` verdict at another rate, fleet or
+shape says `not covered by the self-check`. A verdict that rests on the
+figures an inconsistent self-check names says `not trusted`, and the command
+exits 4 (`verdict.trust` and `exitCode` in the JSON); the verdict is still
+printed.
 
 On **inconsistent**, the answer offers an issue to file: a link to a new
 GitHub issue, prefilled with diagnostics. It holds the planner's version,
@@ -196,9 +216,9 @@ On the page: **Blind: predict now, compare later**, under the check.
 Size from the planner when, below the load it thinks the fleet can carry:
 
 - the p90 TTFT is within 20% in most of the steps it gave a figure for;
-- the median ratio is between about 0.95 and 1.2 (leaning a little high
+- the median ratio is between 0.95 and 1.25 (leaning a little high
   costs replicas, leaning low costs the SLO);
-- it read few steps more than 20% low;
+- it read few steps more than 20% low (15% or fewer), and none under 0.67;
 - it gave no figure only where the fleet really was overloaded.
 
 ## If the result is bad

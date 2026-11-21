@@ -1,8 +1,8 @@
 role     est. rate at SLO   bound by                                 basis
-prefill  2.48 r/s           TTFT p90                                 OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721) [1.70 .. 3.05] at V_P and f +-15%
+prefill  2.54 r/s           TTFT p90                                 OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721) [1.75 .. 3.13] at V_P and f +-15%
          inputs V_P 17046 learned (peak-under-queue, at 7984 tokens); a 9.01 ms learned; f 1 (learned); N_p 2 (--prefill); prompt 8000 tokens (assumed); decode by its line, term measured, hop measured
          assumed prompt 8000 tokens (--assume-input-tokens); prompt cv 2 (no computed-prompt histogram); flow control off (no queue series); Poisson arrivals
-fleet    2.48 r/s           TTFT p90, end to end                     OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721) [1.70 .. 3.05] at V_P and f +-15%
+fleet    2.54 r/s           TTFT p90, end to end                     OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), measured at cv 0.0462 to 0.0721) [1.75 .. 3.13] at V_P and f +-15%
 flags: UnvalidatedTTFT; VPLowerBound; VPScaledToPrompt; AssumedPromptSpread; SpreadBeyondProcessorSharing; FlowControlInferredOff; BelowFittedBand; KVBoundSlots; AssumedShape (IL 8000, OL 200); HeldLine; AssumedPoissonArrivals; TransferHeld
 estimate from no readings of the line's own of a 580-cycle recording, not a guarantee; see basis (-o json)
 TTFT is not a bound, and is validated only where its figure says so: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it.
