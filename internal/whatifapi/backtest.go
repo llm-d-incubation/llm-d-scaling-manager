@@ -98,6 +98,27 @@ const (
 	// priced ones also served: the model's rate and the router's latency
 	// are the whole model's, the replicas priced are not.
 	ExcludedOtherVariants = "otherVariants"
+	// ExcludedBurst is a step whose measurement window runs both near the
+	// knee and far under it (burstIn): most often the start or the end of a
+	// load near the knee, though an on-off load reads the same. Its requests
+	// mostly arrived at that load, or queued behind it, and its mean rate is
+	// no rate the fleet ran at.
+	ExcludedBurst = "burst"
+)
+
+// BurstPeakKneeShare and BurstTroughShare are what makes a step's window a
+// burst (burstIn): a cycle at BurstPeakKneeShare of the knee or more, and
+// another at BurstTroughShare of that cycle's rate or less. A steady step
+// near the knee passes, bursty arrivals included: on the Qwen3-32B
+// staircase's C phases (Ca^2 4, 3.2 to 3.5 r/s) a window's one-minute
+// rates fell to 0.38 of its busiest minute and no lower. Where a load
+// starts or stops in the window, they fell to 0.17 or less: the warm-up's
+// two steps on the burst read from 0.04 and 0 r/s to 4.3 r/s, against a
+// knee of 4.08 r/s. Stated, not fitted
+// (llm-d-incubation/llm-d-scaling-manager#278).
+const (
+	BurstPeakKneeShare = 0.8
+	BurstTroughShare   = 0.25
 )
 
 // The reasons one figure of a judged step is not scored.
@@ -313,6 +334,7 @@ type BacktestExcluded struct {
 	WarmUp        int `json:"warmUp"`
 	NotPriced     int `json:"notPriced"`
 	OtherVariants int `json:"otherVariants"`
+	Burst         int `json:"burst"`
 }
 
 // BacktestScore is one statistic's score.
@@ -1039,6 +1061,25 @@ func measuredNote(source string, pd bool) string {
 	return w
 }
 
+// burstIn says a step's window holds a change of load near the knee: a cycle
+// whose rate is BurstPeakKneeShare of knee or more, and one at
+// BurstTroughShare of that rate or less. lo and hi are the least and the
+// largest rate read; a cycle with no rate is not read.
+func burstIn(samples []SeriesSample, knee float64) (lo, hi float64, ok bool) {
+	n := 0
+	for _, x := range samples {
+		if !x.RateKnown {
+			continue
+		}
+		if n == 0 {
+			lo, hi = x.Rate, x.Rate
+		}
+		lo, hi = min(lo, x.Rate), max(hi, x.Rate)
+		n++
+	}
+	return lo, hi, n > 1 && knee > 0 && hi >= BurstPeakKneeShare*knee && lo <= BurstTroughShare*hi
+}
+
 // stepOf predicts one step: its inputs, read over the cycles of its
 // measurement window, why it is not judged, and each statistic predicted.
 // It reads no latency: scoreStep sets the measurement beside it.
@@ -1079,6 +1120,10 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		return out
 	}
 	if pred.knee != nil {
+		if lo, hi, ok := burstIn(seriesAt(q.test.series, st.window), *pred.knee); ok && out.Excluded == "" && in.rate < *pred.knee {
+			out.Excluded, out.Detail = ExcludedBurst, fmt.Sprintf("its measurement window holds the start or the end of a load near the knee: cycles from %.2f to %.2f r/s against a knee of %.2f r/s, so its mean rate, %.2f r/s, is no rate the fleet ran at",
+				lo, hi, *pred.knee, in.rate)
+		}
 		out.KneeShare = ptr(in.rate / *pred.knee)
 		out.Load = loadBand(*out.KneeShare)
 	}
@@ -1526,6 +1571,8 @@ func summarize(steps []BacktestStep, target bool) BacktestSummary {
 			s.Excluded.NotPriced++
 		case ExcludedOtherVariants:
 			s.Excluded.OtherVariants++
+		case ExcludedBurst:
+			s.Excluded.Burst++
 		}
 	}
 	s.TTFT, s.TPOT = scoresOf(steps)
@@ -1870,7 +1917,7 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 		n    int
 		what string
 	}{{e.WarmUp, "warm-up"}, {e.Scaling, "replicas changing"}, {e.NoTraffic, "no traffic"}, {e.NoMeasurement, "no measured requests"},
-		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}} {
+		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}, {e.Burst, "a burst near the knee in its window"}} {
 		if x.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", x.n, x.what))
 		}

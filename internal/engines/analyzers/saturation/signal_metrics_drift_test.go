@@ -68,6 +68,7 @@ var derivedMuMetricFields = map[string]derivedMuField{
 	"outputDispersion":     {excluded: "a term of kvReqPerSeq (ev-shindin/llm-scaling-manager#276), and published with it: the shape family (stage 1), not built yet"},
 	"residentKVPerSeq":     {excluded: "the measured KV per running request (ev-shindin/llm-scaling-manager#277), which kvReqPerSeq is that reading held to its bounds: the shape family (stage 1), not built yet"},
 	"residentRunning":      {excluded: "how many running requests residentKVPerSeq was measured over (ev-shindin/llm-scaling-manager#277): a term of kvReqPerSeq, published with it"},
+	"residentHolding":      {excluded: "how many requests on a P/D decode hold KV without running, which the reading is spread over as well (#188): a term of kvReqPerSeq, published with it"},
 	"reportOnly":           {excluded: "an aggregated line's figure is reported, not priced (ev-shindin/llm-scaling-manager#432); llmsm_service_rate_per_replica publishes it as source=derived-report-only"},
 	"residentKVBound":      {excluded: "which bound kvReqPerSeq held residentKVPerSeq to (ev-shindin/llm-scaling-manager#277), a label, not a figure: the shape family (stage 1), not built yet"},
 	"residentKVBoundFleet": {excluded: "which bound kvReqFleet held residentKVPerSeq to (ev-shindin/llm-scaling-manager#277), a label, not a figure: the shape family (stage 1), not built yet"},

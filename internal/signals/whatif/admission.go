@@ -106,12 +106,12 @@ func DecodeAdmission(d Decode, rate float64) Result {
 	// Before the chain allocates: past the knee there is nothing to solve.
 	knee := d.kneeRate()
 	if rate >= knee {
-		return refuse(Saturated, fmt.Sprintf("%g r/s at or above the knee %g r/s", rate, knee))
+		return refuse(Saturated, fmt.Sprintf("%.4g r/s at or above the knee %.4g r/s", rate, knee))
 	}
 	c := int(p.slots)
 	ch, ok := birthDeath(rate/float64(d.Replicas), func(m int) float64 { return d.chainMu(float64(m)) }, c)
 	if !ok {
-		return refuse(Saturated, fmt.Sprintf("%g r/s per replica: the chain has no stationary state", rate/float64(d.Replicas)))
+		return refuse(Saturated, fmt.Sprintf("%.4g r/s per replica: the chain has no stationary state", rate/float64(d.Replicas)))
 	}
 	flags := p.flags()
 	if p.by == BoundBandTop {

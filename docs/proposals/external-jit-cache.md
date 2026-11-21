@@ -4,8 +4,14 @@
 per-variable rule over the four variables on main, the report, the conflict
 and its revert, the refusal, and `engine-cache-keys` / `-verify`; see
 [An external cache manager](../reference/workload-preparation.md#an-external-cache-manager).
-Not built: the five variables of the cache-variable PR (#213), the bytecode
-offer for images before vLLM v0.32, and the start-time decisions.
+Not built: the bytecode offer for images before vLLM v0.32, and the
+start-time decisions. Dropped: the five variables of the cache-variable PR
+(#213). A GPU run measured four of them (not `XDG_CACHE_HOME`) and found that
+`VLLM_CACHE_ROOT` already keeps DeepGEMM and the
+compiled model, and that the rest saved no more start time than starts vary
+(one model, one GPU); see
+[What `VLLM_CACHE_ROOT` already covers](../reference/workload-preparation.md#what-vllm_cache_root-already-covers).
+The variable lists below predate that result.
 
 **What you do.** If another component owns your engine's compile caches:
 
@@ -96,7 +102,7 @@ as a conflict and says:
 ```
 deployment/qwen-decode: engine caches owned externally (scaling-manager.llmd.ai/engine-cache-owner=external)
   store: claim jit-store, mounted read-write by cache-sync; see Trust
-  TORCHINDUCTOR_CACHE_DIR: not set in the pod spec; patched under /engine-cache
+  TRITON_CACHE_DIR: not set in the pod spec; patched under /engine-cache
 ```
 
 If the store is not visible in the pod spec (mounted inside the manager's
@@ -109,7 +115,7 @@ container, for example):
 The patch file carries one comment:
 
 ```yaml
-# engine caches: owned externally; only TORCHINDUCTOR_CACHE_DIR is ours (see the report)
+# engine caches: owned externally; only TRITON_CACHE_DIR is ours (see the report)
 ```
 
 ### Writable files
@@ -237,7 +243,7 @@ that does not exist yet, so each fails on the parent commit:
 
 - `external`, every variable covered: no engine-cache patch, no "COMPILES FROM
   NOTHING", the "owned externally" line, guard text still offered.
-- `external`, `TORCHINDUCTOR_CACHE_DIR` uncovered: ours for it, and its report
+- `external`, `TRITON_CACHE_DIR` uncovered: ours for it, and its report
   line.
 - `external`, owner sets `VLLM_CACHE_ROOT` but not `FLASHINFER_WORKSPACE_BASE`:
   `FLASHINFER_WORKSPACE_BASE` emitted alone.

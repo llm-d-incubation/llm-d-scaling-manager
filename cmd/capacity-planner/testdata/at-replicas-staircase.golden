@@ -2,16 +2,17 @@ ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
 load judged     41.70 r/s, the p95 of the 282 of 289 cycles with traffic
-load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; busiest 2m0s (8 cycles): 42.13 r/s
+load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; p95 less counting noise 41.66; busiest 2m0s (8 cycles): 42.13 r/s
 SLO             TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary     50%                80%                  100%            seen
-  measured  617/5.0 @18.49 ok  1944/10.8 @29.59 ok  -/- @36.98 SAT  -/- @41.70 SAT
+summary     50%                80%                 100%            seen
+  measured  617/3.2 @18.49 ok  1944/6.8 @29.59 ok  -/- @36.98 SAT  -/- @41.70 SAT
 verdicts
   measured  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
 
 shape measured: IL 8003 OL 200, prefix hit 0.00 (measured, cycles 269-288)
+  the load's cycles (the p95 and above: 15, cycles 247-283): IL 8001 OL 200, prefix hit 0.00
 utilization at the load judged
   decode        KV fill saturated (band top 0.8), slots saturated of 222, wait p saturated
   prefill       utilization pooled 0.83, worst pod 0.83 (f 1)

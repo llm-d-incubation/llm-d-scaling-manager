@@ -53,11 +53,14 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	fs.Lookup("ttft-percentile").Usage = "the TTFT percentiles the tables print, in percent, comma separated (50,90; mean for the mean); a tail past p95 on an assumed prompt spread is flagged"
 	fs.Lookup("ttft-percentile").DefValue = "50,90"
 	fs.Lookup("headroom").Usage = "the operating point as a fraction of the fleet knee, in (0, 1); default the policy's scaleUpThreshold"
+	fs.Lookup("variant").Usage = "the decode variant to judge; required when the model has several (the refusal names them)"
 	var rf reportFlags
-	fs.Var(&rf.shapes, "shape", "a request shape to answer for, repeatable: measured (the default), or IL/OL[/hit] in tokens, k for 1024 (8k/200, 1k/4k/0.3)")
+	fs.Var(&rf.shapes, "shape", "a request shape to answer for, repeatable: measured (the default), load (the shape of the cycles the load judged at was read from), "+
+		"or IL/OL[/hit] in tokens, k for 1024 (8k/200, 1k/4k/0.3)")
 	fs.Var(&rf.loads, "load", "a rate the tables price, repeatable: 5r/s, 80% of the shape's fleet knee, seen, or seen x1.5 (a growth what-if with its own verdict); default 50%, 80%, 100% and seen")
 	fs.StringVar(&rf.loadStatistic, "load-statistic", whatifapi.DefaultLoadStatistic,
-		"the statistic of the window's per-cycle arrival rate to judge at: mean, p95 or peak")
+		"the statistic of the window's per-cycle arrival rate to judge at: mean, p95, peak, or p95-modulation (the p95 less the one-minute rate's counting noise, "+
+			"which the queueing model already prices)")
 	fs.Float64Var(&rf.loadSeen, "load-seen", 0, "the load to judge at, requests per second, in place of the window's")
 	fs.Float64Var(&rf.seenX, "load-seen-x", 0, "an alias for --load 'seen xN': a column and a verdict at the load seen times N "+
 		"(1.5 asks what 50% more traffic does), beside the verdict at the load seen, which it never changes")
@@ -108,6 +111,7 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	rep.SchemaVersion = whatifapi.SchemaVersion
 	rep.Source.Recording = f.recording
 	rep.SelfCheck = f.checked
+	rep.JudgeTrust()
 	if f.output == outputJSON {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
@@ -320,6 +324,9 @@ func reportText(r *whatifapi.ReportResponse) string {
 	verdicts[0] = []string{"verdicts"}
 	for _, s := range r.Shapes {
 		verdicts = append(verdicts, []string{"  " + shapeName(s), s.Verdict.Summary})
+		if s.Verdict.Trust != "" {
+			verdicts = append(verdicts, []string{"", "self-check: " + s.Verdict.Trust + "."})
+		}
 		for _, g := range s.Growth {
 			verdicts = append(verdicts, []string{"", growthText(g)})
 		}
@@ -342,7 +349,7 @@ func loadText(l whatifapi.ReportLoad) string {
 	s := figText(l.Rate, "%.2f r/s", 1)
 	switch l.Source {
 	case "observed":
-		s += fmt.Sprintf(", the %s of the %d of %d cycles with traffic", l.Statistic, l.CyclesWithTraffic, l.Cycles)
+		s += fmt.Sprintf(", the %s of the %d of %d cycles with traffic", statWords(l.Statistic), l.CyclesWithTraffic, l.Cycles)
 	case sourceAsked:
 		s += " (--load-seen)"
 	}
@@ -352,6 +359,9 @@ func loadText(l whatifapi.ReportLoad) string {
 			p95 += " (= peak: fewer than 20 cycles)"
 		}
 		s += fmt.Sprintf("\n%-16sper cycle (1-minute rates): mean %.2f, p95 %s, peak %.2f r/s", "load seen", *l.Mean, p95, *l.Peak)
+		if l.P95Modulation != nil {
+			s += fmt.Sprintf("; p95 less counting noise %.2f", *l.P95Modulation)
+		}
 		if l.Rolling != nil {
 			s += fmt.Sprintf("; busiest %s (%d cycles): %.2f r/s", time.Duration(l.Rolling.WindowSeconds*float64(time.Second)).Round(time.Second),
 				l.Rolling.Cycles, l.Rolling.Peak)
@@ -360,15 +370,23 @@ func loadText(l whatifapi.ReportLoad) string {
 	return s
 }
 
-// summaryText is the shape-by-load matrix: each cell TTFT p90 and the TPOT
-// percentile, and its mark in words. A cell whose TPOT percentile is refused
-// prints the mean, marked m.
+// summaryText is the shape-by-load matrix: each cell the TTFT and TPOT at
+// the statistics the SLO judges (TTFT p90 and the table's TPOT percentile
+// where no target is set), and its mark in words. A cell whose TPOT
+// percentile is refused prints the mean, marked m.
 func summaryText(r *whatifapi.ReportResponse) string {
-	tpot := whatifapi.ReportStatisticName(0)
-	for _, s := range r.Shapes {
-		for _, row := range s.Table {
-			if row.TPOTPercentile != nil {
-				tpot = row.TPOTPercentile.Statistic
+	ttft, tpot := whatifapi.ReportStatisticName(cellTTFTQ), whatifapi.ReportStatisticName(0)
+	if r.SLO.TTFT != nil {
+		ttft = r.SLO.TTFT.Statistic
+	}
+	if r.SLO.TPOT != nil {
+		tpot = r.SLO.TPOT.Statistic
+	} else {
+		for _, s := range r.Shapes {
+			for _, row := range s.Table {
+				if row.TPOTPercentile != nil {
+					tpot = row.TPOTPercentile.Statistic
+				}
 			}
 		}
 	}
@@ -403,7 +421,7 @@ func summaryText(r *whatifapi.ReportResponse) string {
 		}
 		cells = append(cells, row)
 	}
-	legend := fmt.Sprintf("cell = TTFT p90 ms / TPOT %s ms @ the rate priced, r/s; - refused (the shape's table says why)", tpot)
+	legend := fmt.Sprintf("cell = TTFT %s ms / TPOT %s ms @ the rate priced, r/s; - refused (the shape's table says why)", ttft, tpot)
 	if tpot != whatifapi.ReportStatisticName(0) {
 		legend += fmt.Sprintf("; m the TPOT mean, where the %s is refused", tpot)
 	}
@@ -427,6 +445,7 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	if s.Extrapolated {
 		fmt.Fprintf(b, "  EXTRAPOLATED: %s\n", s.ExtrapolatedWhy)
 	}
+	b.WriteString(loadShapeText(s))
 	b.WriteString("utilization at the load judged\n")
 	d := s.Utilization.Decode
 	fmt.Fprintf(b, "  %-14sKV fill %s (band top %s), slots %s of %d, wait p %s\n", "decode",
@@ -438,6 +457,9 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	}
 	fmt.Fprintf(b, "  %-14s%s\n", rolePrefill, pre)
 	fmt.Fprintf(b, "  %-14s%s\n", "verdict", s.Verdict.Summary)
+	if s.Verdict.Trust != "" {
+		fmt.Fprintf(b, "  %-14s%s\n", "self-check", s.Verdict.Trust+".")
+	}
 	for _, g := range s.Growth {
 		fmt.Fprintf(b, "  %-14s%s\n", "", growthText(g))
 	}
@@ -483,7 +505,11 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 
 // growthText is a growth what-if's verdict line.
 func growthText(g whatifapi.ReportGrowth) string {
-	return fmt.Sprintf("x%s (%s): %s", num(g.X), rateWords(g.Rate), g.Verdict.Summary)
+	s := fmt.Sprintf("x%s (%s): %s", num(g.X), rateWords(g.Rate), g.Verdict.Summary)
+	if g.Verdict.Trust != "" {
+		s += " Self-check: " + g.Verdict.Trust + "."
+	}
+	return s
 }
 
 // refusedDetail is a refused figure's detail, "" otherwise.

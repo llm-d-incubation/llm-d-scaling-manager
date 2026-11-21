@@ -167,6 +167,10 @@ func (f *answerFlags) assume() (whatifapi.Assume, error) {
 	return a, nil
 }
 
+// selfCheckHeld is how the CLI and the page say a self-check whose status
+// is ok: the planner held on the recording's own steps.
+const selfCheckHeld = "held on its own steps"
+
 // selfCheckText is the self-check as the CLI prints it beside an answer:
 // the line, and on a result short of ok why, what to trust, and the issue to
 // review and file.
@@ -175,7 +179,12 @@ func selfCheckText(sc *whatifapi.SelfCheck) string {
 		return ""
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s [%s]\n", sc.Line, sc.Status)
+	status := sc.Status
+	if status == whatifapi.SelfCheckOK {
+		// ok means its own steps held, not that the figures are right.
+		status = selfCheckHeld
+	}
+	fmt.Fprintf(&b, "%s [%s]\n", sc.Line, status)
 	if sc.Status == whatifapi.SelfCheckWeak || sc.Status == whatifapi.SelfCheckInconsistent {
 		fmt.Fprintf(&b, "  why: %s\n", sc.Why)
 	}
