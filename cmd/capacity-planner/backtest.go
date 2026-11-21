@@ -265,7 +265,7 @@ func seriesAndLatencyOf(src learnreplay.Source, st *learnreplay.State, v learnre
 			PrefillGPUs: c.PrefillGPUs, DecodeGPUs: c.DecodeGPUs, PromptTokens: c.PromptTokens, OutputTokens: c.OutputTokens,
 			PrefixHitRate: c.PrefixHitRate, HasShape: c.HasShape, OtherPods: c.OtherPods,
 			PromptComputedRate: c.PromptComputedRate, PromptRequestRate: c.PromptRequestRate, PromptBuckets: c.PromptBuckets,
-			FlowControlSeries: c.FlowControlSeries}
+			FlowControlSeries: c.FlowControlSeries, PrefillNotServing: c.PrefillNotServing, DecodeNotServing: c.DecodeNotServing}
 	}
 	ls := make([]whatifapi.LatencySample, len(lat))
 	for i, l := range lat {
@@ -416,7 +416,7 @@ func factorText(x *float64) string {
 // excludedWords is a reason a step was not judged, in words.
 var excludedWords = map[string]string{whatifapi.ExcludedNoTraffic: "no traffic", whatifapi.ExcludedNoMeasurement: "no measured requests",
 	whatifapi.ExcludedScaling: "replicas changing", whatifapi.ExcludedWarmUp: "warm-up", whatifapi.ExcludedNotPriced: "not priced",
-	whatifapi.ExcludedOtherVariants: "other variants serving"}
+	whatifapi.ExcludedOtherVariants: "other variants serving", whatifapi.ExcludedBurst: "a burst near the knee in its window"}
 
 // writeBacktestText is the backtest's human output: the verdict first, what
 // was not judged, the windows and the configuration, the steps, the scores

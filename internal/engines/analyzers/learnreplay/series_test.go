@@ -75,3 +75,27 @@ func TestSampleOfRateWithoutTheRouter(t *testing.T) {
 	assert.Zero(t, idle.ArrivalRate)
 	assert.False(t, idle.HasShape)
 }
+
+// A cycle counts the replicas asked for and not serving of the named
+// variants: those that exist and are not ready (PendingReplicas). A healthy
+// fleet, every replica ready, counts none, and a decision recorded above
+// the replicas the workload has counts none either: the recording holds no
+// replica its controller never created.
+func TestSampleOfCountsTheReplicasNotServing(t *testing.T) {
+	in := seriesInput(1)
+	in.VariantStates[0].CurrentReplicas, in.VariantStates[0].PendingReplicas = 2, 1
+	in.VariantStates[1].CurrentReplicas, in.VariantStates[1].PendingReplicas = 3, 2
+	in.VariantStates[2].CurrentReplicas, in.VariantStates[2].PendingReplicas = 3, 1
+	s := sampleOf(in, time.Time{}, SeriesVariants{Prefill: "p1", Decode: "d1"})
+	assert.Equal(t, 1, s.PrefillNotServing, "one of two starting")
+	assert.Equal(t, 2, s.DecodeNotServing, "d1's alone")
+	assert.Equal(t, 2+1, sampleOf(in, time.Time{}, SeriesVariants{}).DecodeNotServing, "every decode variant")
+
+	healthy := seriesInput(1)
+	for i := range healthy.VariantStates {
+		healthy.VariantStates[i].CurrentReplicas, healthy.VariantStates[i].DesiredReplicas = 2, 5
+	}
+	h := sampleOf(healthy, time.Time{}, SeriesVariants{})
+	assert.Zero(t, h.PrefillNotServing, "every replica ready")
+	assert.Zero(t, h.DecodeNotServing, "a decision above what it has is not a replica asked of the cluster")
+}

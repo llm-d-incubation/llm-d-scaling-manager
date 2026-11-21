@@ -93,7 +93,8 @@ has them in memory; a fresh node does not. Recorded in
 [Reading a model's weights into memory](../proposals/weights-prewarm-on-schedule.md#small-model-qwen3-32b-one-gpu).
 Nor does a node where engines release the page cache (vLLM's
 `--release-weight-page-cache` for the same model, or a `DONTNEED` walk over
-the model files): there every start is the cold one.
+the model files): there every start is the cold one, and a loader flag
+recovers part of it ([loaders on local NVMe](workload-preparation.md#weights-on-the-nodes-disk)).
 
 About half of the prepared start happens before the engine touches the GPU, and
 most of the rest is CUDA-graph recording, kernel warmup and the weight load:

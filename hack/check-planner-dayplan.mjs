@@ -185,7 +185,20 @@ try {
   check("the bucket table has every bucket", (dayBucketsTable(plan).match(/<tr>/g) || []).length === plan.buckets.length + 1);
   check("the bucket table says why a bucket was not sized", dayBucketsTable(bound).includes("prefill: ReplicaBoundReached"));
   check("the tip says the bound", dayTip(bound, unmet[1]).rows.some(r => r[0] === "beyond the bound" && r[1] === "decode: ReplicaBoundReached"));
-  check("the summary says the busiest bucket's need", daySummaryText(plan)[0].startsWith("Needed at the busiest bucket"));
+  check("the summary says the need that holds every bucket", daySummaryText(plan)[0].startsWith("Needed to hold every bucket"));
+  check("and the busiest bucket's own", daySummaryText(plan)[0].includes("the busiest bucket alone"));
+  check("the hour table has the busiest bucket's fleet", dayHoursTable(plan).includes("<th>busiest bucket</th>"));
+
+  // Replicas asked for and not serving show beside had: in the tip and the
+  // hour table, and nowhere when there are none.
+  const asked = copy(plan);
+  const ab = asked.buckets.find(x => x.status === "sized");
+  ab.notServing = {prefill: 0, decode: 1};
+  asked.hours[0].notServing = {prefill: 0, decode: 1};
+  check("the tip says what was asked and not serving", dayTip(asked, ab).rows.some(r => r[0] === "asked, not serving" && r[1] === "0 prefill, 1 decode"));
+  check("the hour table says it beside had D", dayHoursTable(asked).includes(`<td>${asked.hours[0].actual.decode}(+1)</td>`));
+  check("but not beside had P, at 0", !dayHoursTable(asked).includes(`<td>${asked.hours[0].actual.prefill}(+0)</td>`));
+  check("none asked, none said", !dayHoursTable(plan).includes("(+") && !dayTip(plan, b).rows.some(r => r[0] === "asked, not serving"));
 
   // Everything a plan carries is text, never markup: a flag, a reason, a
   // refusal's words, the hour's verdict.

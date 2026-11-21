@@ -193,6 +193,9 @@ type Analyzer struct {
 	// ttftLowLoadDecodeTTFT is SwitchTTFTLowLoadDecodeTTFT (ttft_fleet.go):
 	// off from the constructor; only a replay turns it on.
 	ttftLowLoadDecodeTTFT bool
+	// ttftHopUnqueued is SwitchTTFTHopUnqueued (ttft.go): off from the
+	// constructor; only a replay turns it on.
+	ttftHopUnqueued bool
 	// ttftSizesPrefill is SwitchTTFTSizesPrefill (ttft_prefill_ask.go): off
 	// from the constructor; only a replay turns it on.
 	ttftSizesPrefill bool

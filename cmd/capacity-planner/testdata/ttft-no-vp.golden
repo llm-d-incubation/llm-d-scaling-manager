@@ -1,4 +1,4 @@
-decode          refused: NoLine (no ITL line learned by cycle 105)
+decode          refused: NoLine (no ITL line learned by cycle 105; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window)
 shape           IL 10770 OL 16 (measured, cycles 83-102), output spread D 1.000 (measured)
 engine          vLLM release not recorded
 TTFT p90        refused: NoPrefillCapacity (P1 refused V_P of variant-02: NoPrefillCapacity; pass --assume-vp for a flagged answer)

@@ -103,7 +103,13 @@ func TestSelfCheck_FindsAnInconsistency(t *testing.T) {
 func TestSelfCheck_JudgeAtTheEdges(t *testing.T) {
 	e, _ := scEntry(t, 1, 1)
 	fig := func(steps, within int, bias float64) *SelfCheckFigure {
-		return &SelfCheckFigure{Statistic: statP90, Steps: steps, Within: within, Bias: &bias, Judged: steps, Refused: map[string]int{}}
+		return &SelfCheckFigure{Statistic: statP90, Steps: steps, Within: within, Bias: &bias, Judged: steps, Refused: map[string]int{},
+			Levels: selfCheckLevelsOK, WithinBound: ptr(float64(within) / float64(steps))}
+	}
+	// with is fig changed by set.
+	with := func(f *SelfCheckFigure, set func(*SelfCheckFigure)) *SelfCheckFigure {
+		set(f)
+		return f
 	}
 	over := func(overloaded, judged int) *SelfCheckFigure {
 		return &SelfCheckFigure{Statistic: statP90, Judged: judged, Overloaded: overloaded, PastKnee: &Band{Lo: 1, Hi: 2}, Refused: map[string]int{}}
@@ -115,9 +121,23 @@ func TestSelfCheck_JudgeAtTheEdges(t *testing.T) {
 		trust      string
 	}{
 		"ok":                      {fig(12, 9, 1), fig(12, 12, 1), SelfCheckOK, "", ""},
-		"bias at 0.80 holds":      {fig(12, 12, 0.8), nil, SelfCheckOK, "", ""},
+		"bias at 0.95 holds":      {fig(12, 12, 0.95), nil, SelfCheckOK, "", ""},
 		"bias at 1.25 holds":      {fig(12, 12, 1.25), nil, SelfCheckOK, "", ""},
+		"bias under 0.95 weak":    {fig(12, 12, 0.94), nil, SelfCheckWeak, "", ""},
+		"bias at 0.80 weak":       {fig(12, 12, 0.8), nil, SelfCheckWeak, "", ""},
 		"bias under 0.80":         {fig(12, 12, 0.79), nil, SelfCheckInconsistent, "ttft-bias", "Do not trust prefill sizing and the TTFT figures from this recording."},
+		"low in 15% holds":        {with(fig(20, 20, 1), func(f *SelfCheckFigure) { f.Low = 3 }), nil, SelfCheckOK, "", ""},
+		"low in over 15%":         {with(fig(20, 20, 1), func(f *SelfCheckFigure) { f.Low = 4 }), nil, SelfCheckInconsistent, "ttft-low", "Do not trust prefill sizing"},
+		"a step at 0.67 holds":    {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.MinRatio = ptr(0.67) }), nil, SelfCheckOK, "", ""},
+		"a step under 0.67":       {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.MinRatio = ptr(0.66) }), nil, SelfCheckInconsistent, "ttft-floor", "Do not trust prefill sizing"},
+		"near the knee at 2x":     {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.NearKnee = &SelfCheckNearKnee{Steps: 3, Worst: 2} }), nil, SelfCheckOK, "", ""},
+		"near the knee past 2x":   {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.NearKnee = &SelfCheckNearKnee{Steps: 3, Worst: 2.1} }), nil, SelfCheckInconsistent, "ttft-near-knee", "Do not trust prefill sizing"},
+		"near the knee, 2 steps":  {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.NearKnee = &SelfCheckNearKnee{Steps: 2, Worst: 50} }), nil, SelfCheckOK, "", ""},
+		"knee low in 1 step":      {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.Overloaded, f.ServedPastKnee = 2, 1 }), nil, SelfCheckOK, "", ""},
+		"knee low in 2 of 10":     {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.Overloaded, f.ServedPastKnee = 10, 2 }), nil, SelfCheckInconsistent, "ttft-knee", "Do not trust prefill sizing"},
+		"knee low in 2 of 11":     {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.Overloaded, f.ServedPastKnee = 11, 2 }), nil, SelfCheckOK, "", ""},
+		"3 levels weak":           {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.Levels = 3 }), nil, SelfCheckWeak, "", ""},
+		"a low bound weak":        {with(fig(20, 14, 1), func(f *SelfCheckFigure) { f.WithinBound = ptr(0.49) }), nil, SelfCheckWeak, "", ""},
 		"bias over 1.25":          {fig(12, 12, 1.26), nil, SelfCheckInconsistent, "ttft-bias", "Do not trust prefill sizing"},
 		"within 50% holds":        {fig(12, 6, 1), nil, SelfCheckWeak, "", ""},
 		"within under 50%":        {fig(12, 5, 1), nil, SelfCheckInconsistent, "ttft-within", "Do not trust prefill sizing"},

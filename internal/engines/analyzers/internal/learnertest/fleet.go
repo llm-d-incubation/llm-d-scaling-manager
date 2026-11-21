@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"testing"
 	"time"
 )
 
@@ -52,6 +53,30 @@ const (
 	// ordering on either side of them.
 	UnderFor = 5 * time.Minute
 )
+
+// The ends of the measured range of a replica's start
+// (docs/reference/start-time.md).
+const (
+	// SnapshotStart is a start restored from a snapshot.
+	SnapshotStart = 15 * time.Second
+	// ColdStart is a start with a cold JIT cache.
+	ColdStart = 463 * time.Second
+)
+
+// MeasuredStarts returns the measured range of a replica's start, shortest
+// first: SnapshotStart, DefaultStartTime and ColdStart.
+func MeasuredStarts() []time.Duration {
+	return []time.Duration{SnapshotStart, DefaultStartTime, ColdStart}
+}
+
+// AtMeasuredStarts runs probe once per MeasuredStarts entry, each as a
+// subtest named for its start.
+func AtMeasuredStarts(t *testing.T, probe func(t *testing.T, start time.Duration)) {
+	t.Helper()
+	for _, start := range MeasuredStarts() {
+		t.Run(start.String(), func(t *testing.T) { probe(t, start) })
+	}
+}
 
 // Fleet is one closed-loop scenario.
 type Fleet struct {

@@ -643,12 +643,12 @@ coincide there, unless a row sits under the variant's floor below the band.
 | Golden | Tier at the freeze | Mean TPOT error | Unclamped | Rows | Rows clamped | Against ±10% | Knee error | Windows | Against ±15% |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `ols-sweep` | pinned-B | -3.9% | -3.9% | 87 | 7 | in | SKIPPED: 2 windows | | |
-| `ols-sweep-slo` | held | +10.5% | +10.5% | 33 | 0 | **out** | +70.1% | 7 | **out** |
-| `ols-sweep-slo-restart` | pinned-B | -8.5% | -8.5% | 54 | 3 | in | +103.4% | 5 | **out** |
+| `ols-sweep-slo` | held | +10.5% | +10.5% | 33 | 0 | **out** | +67.9% | 7 | **out** |
+| `ols-sweep-slo-restart` | pinned-B | -8.5% | -8.5% | 54 | 3 | in | +99.1% | 5 | **out** |
 | `throughput-sweep` | held | +3.5% | +3.5% | 33 | 0 | in | SKIPPED: none off a ramp | | |
 | `throughput-sweep-restart` | held | +50.1% | +32.6% | 124 | 124, all below | **out** | SKIPPED: none off a ramp | | |
-| `mu-paths` variant-01 (synthetic) | ols | -4.9% | 0.0% | 76 | 38 above | in | +76.3% | 38 | **out** |
-| `mu-paths` variant-02 (synthetic) | ols | -9.8% | 0.0% | 95 | 57 above | in | +44.4% | 19 | **out** |
+| `mu-paths` variant-01 (synthetic) | ols | -4.9% | 0.0% | 76 | 38 above | in | +43.0% | 38 | **out** |
+| `mu-paths` variant-02 (synthetic) | ols | -9.8% | 0.0% | 95 | 57 above | in | -41.5% | 19 | **out** |
 | `mu-paths` variant-03 (synthetic) | ols | 0.0% | 0.0% | 57 | 0 | in | SKIPPED: none off a ramp | | |
 
 **On a line the planner refuses** (`PinnedDefaultB`, or held from one), so the tool
@@ -664,7 +664,7 @@ are SKIPPED for that refusal, or for no saturated window off a ramp:
 | `ttft-staircase-b-off` | -18.7% | -18.7% | 210 | 23 | **out** |
 | `ttft-staircase-b-on` | -22.1% | -22.1% | 227 | 1 | **out** |
 | `ttft-staircase-c-on` | -21.2% | -21.2% | 227 | 2 | **out** |
-| `ttft-three-pods` | -9.4% | -9.4% | 237 | 44 | in |
+| `ttft-three-pods` | -9.4% | -9.4% | 237 | 40 | in |
 
 **What it says.**
 
@@ -675,7 +675,8 @@ are SKIPPED for that refusal, or for no saturated window off a ramp:
   each is priced at the band's bottom. Unclamped it still reads 32.6% slow. `e1`
   model-02 and `e1-tuned` model-02 are in bound only through
   the clamp: unclamped both read 39.1% fast. Those are lines the planner refuses.
-- **Decode knee:** four figures, all out, from 44.4% to 103.4% high. Two are
+- **Decode knee:** four figures, all out: three high, from 43.0% to 99.1%, and `mu-paths`
+  variant-02 41.5% low. Two are
   synthetic. The other two are `ols-sweep-slo` runs, recorded before `QueueMin`, so
   a "saturated window" is a queue seen at one instant, not a busy minute. Treat the
   knee as not validated: no golden saturates a line the planner answers on, off a
@@ -830,27 +831,27 @@ the run's frozen curve.
 | mean TPOT | 8000-token prompts, 200 out, Ca^2 4 | -4..-2% | p10-p90, min-max -5..-1% | 10 at 6 load levels | 0.096 to 0.203 | any |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 1 | at most +3% | one-sided | 1 |  | off |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 4 | at most +3% | one-sided | 1 |  | off |
-| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
-| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -17..+8% | p10-p90, min-max -18..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -11..+7% | p10-p90, min-max -13..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -12..+5% | p10-p90, min-max -14..+8% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +9..+85% | p10-p90, min-max +7..+141% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +6..+103% | p10-p90, min-max +3..+152% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +8..+99% | p10-p90, min-max -4..+171% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +15..+88% | p10-p90, min-max +8..+122% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +39..+128% | p10-p90, min-max +25..+164% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +40..+143% | p10-p90, min-max +31..+184% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 
 The TTFT readings are 6 load levels, each with flow control off and on (C on: 3
 levels, below its onset). The two phases share the model's figure, so the error
-grows with the knee share within a row: B's mean reads +27% at 0.40 of the knee
-and +63% to +149% at 0.90.
+grows with the knee share within a row: B's mean reads +7% at 0.40 of the knee
+and +58% to +141% at 0.90.
 
 **Negative controls.**
 
@@ -1093,6 +1094,8 @@ TTFT model's (P3) are listed in
 [its as-built section](slo-capacity-planner-ttft.md#as-built-p3).
 
 Exit codes: `0` every role answered; `3` a role refused (output still printed);
+`4` (at-replicas, and a report's `exitCode`) answered, and the self-check found
+the figures a verdict rests on inconsistent, `3` taking precedence;
 `2` usage or input error; `1` internal error. `whatif.ExitCode` applies them:
 `2` if any result is `InvalidInput`, else `3` if any is refused, else `0`.
 A command stopped by SIGINT or SIGTERM exits `130` or `143` and says so on
@@ -1977,6 +1980,13 @@ selfCheck.checks[] object
 selfCheck.checks[].detail string
 selfCheck.checks[].name string
 selfCheck.checks[].passed boolean
+selfCheck.covered object
+selfCheck.covered.fleets array
+selfCheck.covered.fleets[] object
+selfCheck.covered.fleets[].decode number
+selfCheck.covered.fleets[].prefill number
+selfCheck.covered.rateHi number
+selfCheck.covered.rateLo number
 selfCheck.folds array
 selfCheck.folds[] object
 selfCheck.folds[].fitTo string
@@ -1992,28 +2002,44 @@ selfCheck.status string
 selfCheck.tpot object
 selfCheck.tpot.bias number
 selfCheck.tpot.judged number
+selfCheck.tpot.levels number
 selfCheck.tpot.low number
+selfCheck.tpot.minRatio number
+selfCheck.tpot.nearKnee object
+selfCheck.tpot.nearKnee.steps number
+selfCheck.tpot.nearKnee.worst number
 selfCheck.tpot.overloaded number
 selfCheck.tpot.pastKnee object
 selfCheck.tpot.pastKnee.hi number
 selfCheck.tpot.pastKnee.lo number
 selfCheck.tpot.refused map
+selfCheck.tpot.servedPastKnee number
 selfCheck.tpot.statistic string
 selfCheck.tpot.steps number
 selfCheck.tpot.within number
+selfCheck.tpot.withinBound number
 selfCheck.trust string
 selfCheck.ttft object
 selfCheck.ttft.bias number
 selfCheck.ttft.judged number
+selfCheck.ttft.levels number
 selfCheck.ttft.low number
+selfCheck.ttft.minRatio number
+selfCheck.ttft.nearKnee object
+selfCheck.ttft.nearKnee.steps number
+selfCheck.ttft.nearKnee.worst number
 selfCheck.ttft.overloaded number
 selfCheck.ttft.pastKnee object
 selfCheck.ttft.pastKnee.hi number
 selfCheck.ttft.pastKnee.lo number
 selfCheck.ttft.refused map
+selfCheck.ttft.servedPastKnee number
 selfCheck.ttft.statistic string
 selfCheck.ttft.steps number
 selfCheck.ttft.within number
+selfCheck.ttft.withinBound number
+selfCheck.untrusted array
+selfCheck.untrusted[] string
 selfCheck.why string
 selfCheck.withoutStated array
 selfCheck.withoutStated[] string

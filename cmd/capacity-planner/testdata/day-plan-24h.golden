@@ -1,35 +1,35 @@
 Day plan for ns/model-02, 2026-11-01 00:00 to 2026-11-02 00:00 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
 SLO: TTFT p95 500ms, TPOT mean 4ms; headroom 0.85. TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.
 
-each hour: the need of its busiest bucket, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
-hour (UTC)        rate mean  rate p95 need P need D  had P  had D  
-2026-11-01 00:00       4.75      5.88      1      1      2      3  over (waste)
-2026-11-01 01:00       3.47      4.33      1      1      2      3  over (waste)
-2026-11-01 02:00       2.55      3.16      1      1      2      3  over (waste)
-2026-11-01 03:00       2.02      2.32      1      1      2      3  over (waste)
-2026-11-01 04:00       2.08      2.44      1      1      2      3  over (waste)
-2026-11-01 05:00       2.55      3.14      1      1      2      3  over (waste)
-2026-11-01 06:00       3.46      4.35      1      1      2      3  over (waste)
-2026-11-01 07:00       4.75      5.94      1      1      2      3  over (waste)
-2026-11-01 08:00       6.32      7.70      1      1      2      3  over (waste)
-2026-11-01 09:00       8.08      9.80      1      1      2      3  over (waste)
-2026-11-01 10:00       9.91     11.88      1      2      2      3  over (waste)
-2026-11-01 11:00      11.67     13.79      2      2      2      3  over (waste)
-2026-11-01 12:00      13.24     15.52      2      2      2      3  over (waste)
-2026-11-01 13:00      14.54     16.86      2      2      2      3  over (waste)
-2026-11-01 14:00      15.45     17.83      3      2      2      3  ok
-2026-11-01 15:00      15.92     18.28      3      2      2      3  UNDER (SLO risk)
-2026-11-01 16:00      15.92     18.27      3      2      2      3  UNDER (SLO risk)
-2026-11-01 17:00      15.45     17.82      3      2      2      3  ok
-2026-11-01 18:00      14.54     16.86      2      2      2      3  over (waste)
-2026-11-01 19:00      13.25     15.51      2      2      2      3  over (waste)
-2026-11-01 20:00      11.67     13.81      2      2      2      3  over (waste)
-2026-11-01 21:00       9.91     11.82      1      2      2      3  over (waste)
-2026-11-01 22:00       8.09      9.86      1      1      2      3  over (waste)
-2026-11-01 23:00       6.33      7.77      1      1      2      3  over (waste)
+each hour: a fleet that holds every bucket in it (priced again at each), the busiest bucket's own fleet, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
+hour (UTC)        rate mean  rate p95 need P need D busiest  had P  had D  
+2026-11-01 00:00       4.75      5.88      1      1     1+1      2      3  over (waste)
+2026-11-01 01:00       3.47      4.33      1      1     1+1      2      3  over (waste)
+2026-11-01 02:00       2.55      3.16      1      1     1+1      2      3  over (waste)
+2026-11-01 03:00       2.02      2.32      1      1     1+1      2      3  over (waste)
+2026-11-01 04:00       2.08      2.44      1      1     1+1      2      3  over (waste)
+2026-11-01 05:00       2.55      3.14      1      1     1+1      2      3  over (waste)
+2026-11-01 06:00       3.46      4.35      1      1     1+1      2      3  over (waste)
+2026-11-01 07:00       4.75      5.94      1      1     1+1      2      3  over (waste)
+2026-11-01 08:00       6.32      7.70      1      1     1+1      2      3  over (waste)
+2026-11-01 09:00       8.08      9.80      1      1     1+1      2      3  over (waste)
+2026-11-01 10:00       9.91     11.88      1      2     1+2      2      3  over (waste)
+2026-11-01 11:00      11.67     13.79      2      2     2+2      2      3  over (waste)
+2026-11-01 12:00      13.24     15.52      2      2     2+2      2      3  over (waste)
+2026-11-01 13:00      14.54     16.86      2      2     2+2      2      3  over (waste)
+2026-11-01 14:00      15.45     17.83      3      2     3+2      2      3  ok
+2026-11-01 15:00      15.92     18.28      3      2     3+2      2      3  UNDER (SLO risk)
+2026-11-01 16:00      15.92     18.27      3      2     3+2      2      3  UNDER (SLO risk)
+2026-11-01 17:00      15.45     17.82      3      2     3+2      2      3  ok
+2026-11-01 18:00      14.54     16.86      2      2     2+2      2      3  over (waste)
+2026-11-01 19:00      13.25     15.51      2      2     2+2      2      3  over (waste)
+2026-11-01 20:00      11.67     13.81      2      2     2+2      2      3  over (waste)
+2026-11-01 21:00       9.91     11.82      1      2     1+2      2      3  over (waste)
+2026-11-01 22:00       8.09      9.86      1      1     1+1      2      3  over (waste)
+2026-11-01 23:00       6.33      7.77      1      1     1+1      2      3  over (waste)
 
 buckets: 282 sized (22 under, 257 over, 3 match; 282 for the p95, 0 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 0 too little data, 6 no data
-needed: at the busiest bucket 3 prefill + 2 decode, at the quietest 1 prefill + 1 decode (the fewest replicas in all; another mix may serve too)
+needed: to hold every bucket 3 prefill + 2 decode; the busiest bucket alone 3 prefill + 2 decode, the quietest 1 prefill + 1 decode (each the fewest replicas in all; another mix may serve too)
 replica-hours over the 282 sized buckets: needed 34.50 prefill + 35.00 decode, had 47.00 prefill + 70.50 decode
 GPU-hours over the sized buckets: needed 69.50, had 117.50
 had over every bucket with data: 47.00 prefill + 70.50 decode replica-hours, 117.50 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
@@ -39,5 +39,6 @@ flags: UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeT
 note: Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.
 note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
 note: Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.
+note: An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the fewest of the buckets' own fleets that holds them all, else each role's most over them. It is not searched for the fewest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.
 note: A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.
 note: Had is the median serving pods of the priced prefill and decode variants over the bucket's cycles; the rate is the model's. A bucket in which another variant also served is flagged OtherVariantsServed. The prefix hit rate is reported, not priced.

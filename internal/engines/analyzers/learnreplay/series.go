@@ -52,6 +52,14 @@ type CycleSample struct {
 	// FlowControlSeries says the cycle read the router's flow-control queue
 	// series (domain.AnalyzerInput.FlowControlSeries).
 	FlowControlSeries bool
+	// PrefillNotServing and DecodeNotServing are the counted variants'
+	// replicas asked for and not serving at the cycle: replicas that exist
+	// and are not ready (PendingReplicas: the workload's status.replicas
+	// less its readyReplicas), starting, unschedulable, or held by an
+	// admission gate such as Kueue's. A replica its controller never
+	// created, a ResourceQuota refusing its pod, is not in the recording
+	// and not counted. For a LeaderWorkerSet a replica is a group.
+	PrefillNotServing, DecodeNotServing int
 }
 
 // SeriesVariants names the variants a series counts: the prefill and the
@@ -147,11 +155,14 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 		if !counted(vs.VariantName, domain.CanonicalRole(vs.Role)) {
 			continue
 		}
+		notServing := max(vs.PendingReplicas, 0)
 		switch domain.CanonicalRole(vs.Role) {
 		case domain.RolePrefill:
 			s.PrefillGPUs = max(s.PrefillGPUs, vs.GPUsPerReplica)
+			s.PrefillNotServing += notServing
 		case domain.RoleDecode:
 			s.DecodeGPUs = max(s.DecodeGPUs, vs.GPUsPerReplica)
+			s.DecodeNotServing += notServing
 		}
 	}
 	var weight, il, ol, hit, modelRate float64
