@@ -28,7 +28,8 @@ const BT_STATS = [{stat: "p50", cls: "c-0", dot: "dot hollow"}, {stat: "p90", cl
 const BT_CLIP = 3;
 // BT_EXCLUDED is a step's reason not to be judged, in words.
 const BT_EXCLUDED = {noTraffic: "no traffic", noMeasurement: "no measured requests", scaling: "replicas changing",
-  warmUp: "warm-up", notPriced: "not priced"};
+  warmUp: "warm-up", notPriced: "not priced", otherVariants: "other variants serving",
+  burst: "a burst near the knee in its window"};
 
 // btPoint is the step's point at stat in key ("ttft" or "tpot"), or null.
 function btPoint(step, key, stat) {

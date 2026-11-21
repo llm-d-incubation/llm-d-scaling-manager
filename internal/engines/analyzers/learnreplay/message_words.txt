@@ -2839,6 +2839,7 @@ slo-transient
 slo-ttft
 slo-ttft-decode-gate-charge
 slo-ttft-decode-term
+slo-ttft-hop-unqueued
 slo-ttft-imbalance-across-counts
 slo-ttft-joint
 slo-ttft-joint-inputs

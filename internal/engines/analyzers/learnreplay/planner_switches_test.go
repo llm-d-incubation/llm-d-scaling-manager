@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 )
 
@@ -20,6 +21,10 @@ func TestPlannerSwitches_StateAtTurnsThemOn(t *testing.T) {
 	}
 	a := saturation.NewSaturationAnalyzer(capacity.NewStore())
 	require.NoError(t, a.SetSwitchesForReplay(got[PackageSaturation]))
+	for name, on := range got[PackageSLO] {
+		assert.True(t, on, name)
+	}
+	require.NoError(t, slo.New(nil, nil).SetSwitchesForReplay(got[PackageSLO]))
 
 	// A caller's own setting wins, and its other switches are kept.
 	mine := map[string]map[string]bool{

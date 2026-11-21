@@ -1100,6 +1100,10 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 	saturation.SwitchPrefillFBusyMinutes:    nil,
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
 	saturation.SwitchITLHoldSteadySlope:     nil,
+	// llm-d-incubation/llm-d-scaling-manager#281: the router hop read off
+	// windows whose prefill pods held no queue, the planner's too (S1's off
+	// from the constructor; the planner reads it for its own windows).
+	slo.SwitchTTFTHopUnqueued: nil,
 	// llm-d-incubation/llm-d-scaling-manager#258: the derived k2's batch held
 	// where the variant's ITL line reaches the policy's TPOT objective. On
 	// from the constructor; no committed golden has a decode line it trusts
@@ -1434,6 +1438,16 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestImbalance_TooFewBusyMinutesTakeTheBusiest"},
 		{"../../../signals/prefill", "TestImbalance_BusyIsComputedTokensNotRequests"},
 		{"../saturation", "TestPrefillFBusyMinutes_LightMinutesThroughAnalyze"},
+	},
+	// The first holds it off from the constructor; the others run it on and
+	// off and assert both, in the window, through Analyze and in the
+	// planner's own windows.
+	slo.SwitchTTFTHopUnqueued: {
+		{"../slo", "TestTTFT_TheHopUnqueuedOffFromTheConstructor"},
+		{"../slo", "TestTTFT_TheHopUnqueuedSwitch"},
+		{"../../../signals/prefill", "TestHop_AQueuedPrefillWindowIsNoReading"},
+		{"../../../signals/prefill", "TestHop_ADeferredWaitIsNotAQueue"},
+		{".", "TestTerm_TheHopUnqueuedSwitch"},
 	},
 	saturation.SwitchITLHoldSteadySlope: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},

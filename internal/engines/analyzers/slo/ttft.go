@@ -115,6 +115,17 @@ const SwitchTTFTImbalanceAcrossCounts = "slo-ttft-imbalance-across-counts"
 // committed recording's cycle reaches a priced fleet.
 const SwitchTTFTLowLoadDecodeTTFT = "slo-ttft-low-load-decode-ttft"
 
+// SwitchTTFTHopUnqueued is the replay switch for the router hop R of the
+// decode term (prefill.DecodeTermCycle.HopUnqueued): on, a router window
+// counts for R only when no prefill row in it held requests waiting for
+// compute. Off, as before, a window whose prefill pods queued counts too, and
+// its R is the queue's timing, not the hop: on the Qwen3-32B staircase's
+// warm-up it put 0.31 s of hop on every 8k prompt, about 0.3 s over the
+// router's measured TTFT at low load. Off from the constructor; the capacity
+// planner's replay turns it on (learnreplay.PlannerSwitches)
+// (llm-d-incubation/llm-d-scaling-manager#281).
+const SwitchTTFTHopUnqueued = "slo-ttft-hop-unqueued"
+
 // SwitchTTFTDecodeGateCharge is the replay switch for
 // whatif.TTFTFleet.ChargeDecodeGate: on, the published rate is charged the
 // share of time the decode flow-control gate is closed below its onset, in
@@ -459,8 +470,9 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 	if len(decodes) == 1 && a.ttftDecodeTerm {
 		est := a.noteDecodeTerm(decodeKey, accelerator, engineArgs, prefill.DecodeTermCycle{
 			Now: now, Prefill: prefillRows, Decode: decodeRows, PromptTokens: modelPrompt, Router: router,
-			Settled:    &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)},
-			RouterHeld: input.SchedulerQueue != nil && input.SchedulerQueue.QueueSize > 0,
+			Settled:     &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)},
+			RouterHeld:  input.SchedulerQueue != nil && input.SchedulerQueue.QueueSize > 0,
+			HopUnqueued: a.ttftHopUnqueued,
 		})
 		t := whatif.TermFromEstimate(est)
 		term = &t
