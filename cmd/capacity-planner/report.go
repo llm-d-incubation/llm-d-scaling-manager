@@ -48,7 +48,7 @@ const assumeInputTokensWords = "(--assume-input-tokens)"
 // targets are judged at on the goldens.
 const maxPromptTailQ = 0.95
 
-// cellTTFTQ is the TTFT percentile a summary cell prints.
+// cellTTFTQ is the TTFT percentile a summary cell prints with no TTFT target.
 const cellTTFTQ = 0.9
 
 // decodeKneeNotValidated is the decode knee's standing on the goldens
@@ -1065,20 +1065,35 @@ func (r *reporter) ttftStat(sf *servedFleet, q, rate float64) whatifapi.ReportSt
 	return whatifapi.ReportStat{Statistic: whatifapi.ReportStatisticName(q), Figure: whatifapi.FigureOf(t, unitSeconds, true)}
 }
 
-// cell is a row's summary cell: TTFT p90, the TPOT percentile (the mean with
-// none asked), and the targets judged at the row's rate.
+// cell is a row's summary cell: each latency at the statistic its target is
+// judged at (TTFT p90 and the table's TPOT percentile where no target is
+// set), and the targets judged at the row's rate. A TPOT percentile that is
+// refused leaves the mean, which TPOT.Statistic names.
 func (r *reporter) cell(slo, ttft *servedFleet, row whatifapi.ReportRow) whatifapi.ReportCell {
 	c := whatifapi.ReportCell{}
-	i := slices.IndexFunc(row.TTFT, func(s whatifapi.ReportStat) bool { return s.Statistic == "p90" })
+	ttftQ, ttftFleet := cellTTFTQ, ttft
+	if r.ttft != nil {
+		ttftQ, ttftFleet = r.ttft.Percentile, slo
+	}
+	name := whatifapi.ReportStatisticName(ttftQ)
+	i := slices.IndexFunc(row.TTFT, func(s whatifapi.ReportStat) bool { return s.Statistic == name })
 	if i >= 0 {
 		c.TTFT = row.TTFT[i]
 	} else {
-		c.TTFT = r.ttftStat(ttft, cellTTFTQ, row.Rate)
+		c.TTFT = r.ttftStat(ttftFleet, ttftQ, row.Rate)
 	}
 	c.TPOT = whatifapi.ReportStat{Statistic: "mean", Figure: row.TPOTMean}
 	// The percentile where it priced; else the mean, which a refused R_q
 	// leaves answered.
-	if row.TPOTPercentile != nil && row.TPOTPercentile.Value != nil {
+	switch {
+	case r.tpot != nil && r.tpot.Percentile == 0:
+	case r.tpot != nil:
+		_, tp := slo.TPOTAt(row.Rate)
+		r.results = append(r.results, tp)
+		if f := whatifapi.FigureOf(tp, unitSeconds, true); f.Value != nil {
+			c.TPOT = whatifapi.ReportStat{Statistic: whatifapi.ReportStatisticName(r.tpot.Percentile), Figure: f}
+		}
+	case row.TPOTPercentile != nil && row.TPOTPercentile.Value != nil:
 		c.TPOT = *row.TPOTPercentile
 	}
 	s := r.sloAtRate(slo, row.Rate, false)

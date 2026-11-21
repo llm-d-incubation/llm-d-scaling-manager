@@ -2449,6 +2449,7 @@ function renderReport(r) {
     li.appendChild(textNode("b", " " + s.verdict + ": "));
     if (s.needs) li.appendChild(textNode("span", s.needs, s.unmet ? "rneeds unmet" : "rneeds"));
     li.appendChild(textNode("span", " " + s.rest, "rverdict"));
+    if (s.trust) li.appendChild(textNode("div", "Self-check: " + s.trust + ".", "rtrust"));
     // Growth sits under the verdict it grows from, never in its place.
     for (const g of s.growth) {
       const p = textNode("div", "", "rgrowthline");
@@ -2456,6 +2457,7 @@ function renderReport(r) {
       p.appendChild(textNode("b", g.verdict + ": "));
       if (g.needs) p.appendChild(textNode("span", g.needs, g.unmet ? "rneeds unmet" : "rneeds"));
       p.appendChild(textNode("span", " " + g.rest));
+      if (g.trust) p.appendChild(textNode("span", " Self-check: " + g.trust + ".", "rtrust"));
       li.appendChild(p);
     }
     verdicts.appendChild(li);

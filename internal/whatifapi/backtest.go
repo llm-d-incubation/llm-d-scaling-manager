@@ -98,6 +98,27 @@ const (
 	// priced ones also served: the model's rate and the router's latency
 	// are the whole model's, the replicas priced are not.
 	ExcludedOtherVariants = "otherVariants"
+	// ExcludedBurst is a step whose measurement window runs both near the
+	// knee and far under it (burstIn): most often the start or the end of a
+	// load near the knee, though an on-off load reads the same. Its requests
+	// mostly arrived at that load, or queued behind it, and its mean rate is
+	// no rate the fleet ran at.
+	ExcludedBurst = "burst"
+)
+
+// BurstPeakKneeShare and BurstTroughShare are what makes a step's window a
+// burst (burstIn): a cycle at BurstPeakKneeShare of the knee or more, and
+// another at BurstTroughShare of that cycle's rate or less. A steady step
+// near the knee passes, bursty arrivals included: on the Qwen3-32B
+// staircase's C phases (Ca^2 4, 3.2 to 3.5 r/s) a window's one-minute
+// rates fell to 0.38 of its busiest minute and no lower. Where a load
+// starts or stops in the window, they fell to 0.17 or less: the warm-up's
+// two steps on the burst read from 0.04 and 0 r/s to 4.3 r/s, against a
+// knee of 4.08 r/s. Stated, not fitted
+// (llm-d-incubation/llm-d-scaling-manager#278).
+const (
+	BurstPeakKneeShare = 0.8
+	BurstTroughShare   = 0.25
 )
 
 // The reasons one figure of a judged step is not scored.
@@ -110,7 +131,83 @@ const (
 	// predicted: on a P/D fleet the engines' TTFT (the prefill pods'
 	// alone), and the engines' mean inter-token latency for a mean TPOT.
 	UnscoredNotComparable = "notComparable"
+	// UnscoredUnsettled is a TTFT whose prefill queue does not settle inside
+	// the step's measurement window: its relaxation time is more than
+	// SettleShare of the window (BacktestStep.RelaxationSeconds). The wait
+	// is correlated over about one relaxation time, so the window holds
+	// fewer than 1/SettleShare independent readings of it: its TTFT is a
+	// noisy sample of the steady state the planner prices.
+	UnscoredUnsettled = "unsettled"
 )
+
+// SettleShare is the most of a step's measurement window the prefill
+// queue's relaxation time may take for the step's TTFT to be scored: a
+// queue's wait is correlated over about one relaxation time (and relaxes to
+// its steady state in a few), so one of a fifth of the window leaves five
+// or more independent readings of the steady state in it
+// (llm-d-incubation/llm-d-scaling-manager#305).
+const SettleShare = 0.2
+
+// relaxationSeconds is the relaxation time of the prefill fleet's queue,
+// pooled as the planner prices it (the router sends each prompt to the pod
+// with the least queued): t_r = 2 rho E[S] (Ca^2 + Cs^2) / (N (1 - rho)^2),
+// with E[S] a pod's service time (the pods over the fleet's prefill knee),
+// N the pods, rho the step's rate over that knee, Ca^2 the arrivals' spread
+// priced (1 for random arrivals) and Cs the prompt spread priced (a pod's
+// service time follows the prompt; the fixed latency a would narrow it).
+// Pooling is the router's best case: pods held unevenly relax slower, up to
+// N times (one pod's M/G/1 figure), so t_r may read short, and a step near
+// the knee is then scored rather than left out. That is kept on purpose: on
+// the Qwen3-32B staircase phases one pod's figure would leave 23 more steps
+// (0.77 to 0.91 of the knee) unscored, 12 of whose 92 TTFT readings read
+// more than 20% low, and a self-check that drops them no longer sees them
+// (#305). It is +Inf at or past the knee, and 0 where nothing prices it.
+func relaxationSeconds(rate, prefillKnee float64, pods int, ca2, cv float64) float64 {
+	if !(rate > 0) || !(prefillKnee > 0) || pods <= 0 {
+		return 0
+	}
+	rho := rate / prefillKnee
+	if rho >= 1 {
+		return math.Inf(1)
+	}
+	es := float64(pods) / prefillKnee
+	return 2 * rho * es * (ca2 + cv*cv) / (float64(pods) * (1 - rho) * (1 - rho))
+}
+
+// settles says a queue of relaxation time tr settles inside a measurement
+// window of window seconds: tr is at most SettleShare of it.
+func settles(tr, window float64) bool { return tr <= SettleShare*window }
+
+// backlogAt is a fluid backlog of q requests at the start of a step, t
+// seconds into it, served at mu while requests arrive at lambda.
+func backlogAt(q, lambda, mu, t float64) float64 { return max(0, q+(lambda-mu)*t) }
+
+// backlogWait is the extra wait a fluid backlog of q requests carried into a
+// step of dt seconds adds over the step's measurement window, its last w
+// seconds: the mean of the backlog over mu across the window, and the most
+// (at the window's start where it drains, its end where it grows), for an
+// upper bound. Both are 0 with no backlog.
+func backlogWait(q, lambda, mu, dt, w float64) (mean, most float64) {
+	if !(q > 0) || !(mu > 0) || !(dt > 0) {
+		return 0, 0
+	}
+	a := max(0, dt-max(w, 0))
+	qa, qb := backlogAt(q, lambda, mu, a), backlogAt(q, lambda, mu, dt)
+	most = max(qa, qb) / mu
+	if !(dt > a) {
+		return qa / mu, most
+	}
+	// The backlog is linear in t until it empties: the area under it.
+	var area float64
+	switch {
+	case qb > 0 || lambda >= mu:
+		area = (qa + qb) / 2 * (dt - a)
+	default:
+		empty := qa / (mu - lambda)
+		area = qa / 2 * min(empty, dt-a)
+	}
+	return area / (dt - a) / mu, most
+}
 
 // statP90 is the statistic a verdict leads with.
 const statP90 = "p90"
@@ -241,6 +338,19 @@ type BacktestStep struct {
 	DecodeLoad      string          `json:"decodeLoad,omitempty"`
 	TTFT            []BacktestPoint `json:"ttft"`
 	TPOT            []BacktestPoint `json:"tpot"`
+	// RelaxationSeconds is the prefill queue's relaxation time at the
+	// step's rate (relaxationSeconds), absent where the prefill knee did not
+	// price or the rate is past it. Unsettled says it is more than
+	// SettleShare of the step's measurement window: the step's TTFT is not
+	// scored (UnscoredUnsettled).
+	RelaxationSeconds *float64 `json:"relaxationSeconds,omitempty"`
+	Unsettled         bool     `json:"unsettled,omitempty"`
+	// Backlog is the requests a fluid queue carries into the step from the
+	// steps before it, where one ran past the prefill knee (Q_k+1 =
+	// max(0, Q_k + (rate - knee) x step)), and BacklogWait the mean wait it
+	// adds to each TTFT predicted: absent with none.
+	Backlog     *float64 `json:"backlog,omitempty"`
+	BacklogWait *float64 `json:"backlogWait,omitempty"`
 	// Target is the TTFT target judged, predicted and measured: met,
 	// missed or unknown.
 	Target *BacktestJudged `json:"target,omitempty"`
@@ -313,6 +423,7 @@ type BacktestExcluded struct {
 	WarmUp        int `json:"warmUp"`
 	NotPriced     int `json:"notPriced"`
 	OtherVariants int `json:"otherVariants"`
+	Burst         int `json:"burst"`
 }
 
 // BacktestScore is one statistic's score.
@@ -897,11 +1008,15 @@ func (q *backtestQuestion) predictSteps(ctx context.Context) ([]stepOf, []Backte
 	p := &predictor{pricer: q.fit.pricer, fleets: map[predictKey]Fleet{}, cv2: q.cv2, promptCV: q.promptCV,
 		headroom: q.fit.doc.Policy.Headroom, assume: q.assume}
 	out := make([]BacktestStep, 0, len(steps))
+	var fl fluid
 	for _, st := range steps {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-		out = append(out, q.stepOf(p, st, changes, first))
+		if st.anchor < 0 {
+			fl.reset()
+		}
+		out = append(out, q.stepOf(p, st, changes, first, &fl))
 	}
 	return steps, out, nil
 }
@@ -1039,10 +1154,29 @@ func measuredNote(source string, pd bool) string {
 	return w
 }
 
+// burstIn says a step's window holds a change of load near the knee: a cycle
+// whose rate is BurstPeakKneeShare of knee or more, and one at
+// BurstTroughShare of that rate or less. lo and hi are the least and the
+// largest rate read; a cycle with no rate is not read.
+func burstIn(samples []SeriesSample, knee float64) (lo, hi float64, ok bool) {
+	n := 0
+	for _, x := range samples {
+		if !x.RateKnown {
+			continue
+		}
+		if n == 0 {
+			lo, hi = x.Rate, x.Rate
+		}
+		lo, hi = min(lo, x.Rate), max(hi, x.Rate)
+		n++
+	}
+	return lo, hi, n > 1 && knee > 0 && hi >= BurstPeakKneeShare*knee && lo <= BurstTroughShare*hi
+}
+
 // stepOf predicts one step: its inputs, read over the cycles of its
 // measurement window, why it is not judged, and each statistic predicted.
 // It reads no latency: scoreStep sets the measurement beside it.
-func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, first time.Time) BacktestStep {
+func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, first time.Time, fl *fluid) BacktestStep {
 	out := BacktestStep{Start: st.start, Cycles: len(st.idx), TTFT: []BacktestPoint{}, TPOT: []BacktestPoint{}}
 	if st.anchor < 0 || len(st.window) == 0 {
 		out.Excluded, out.Detail = ExcludedNoMeasurement, "no cycle in the step"
@@ -1059,6 +1193,11 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 	end := q.test.series[st.anchor].At
 	switch {
 	case !(in.rate > 0):
+		if math.IsNaN(in.rate) {
+			fl.reset() // a rate that is no number says nothing of what drained
+		} else {
+			fl.idle(q.step.Seconds())
+		}
 		out.Excluded, out.Detail = ExcludedNoTraffic, "no requests arrived"
 		return out
 	case st.windowStart.Before(first.Add(q.settle)) || (q.settle == 0 && st.windowStart.Before(first)):
@@ -1073,12 +1212,37 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 	}
 	pred, err := p.predict(in)
 	if err != nil {
+		fl.reset()
 		if out.Excluded == "" {
 			out.Excluded, out.Detail = ExcludedNotPriced, err.Error()
 		}
 		return out
 	}
+	if pred.prefillKnee != nil {
+		if tr := relaxationSeconds(in.rate, *pred.prefillKnee, in.prefill, pred.ca2, pred.promptCV); tr > 0 && !math.IsInf(tr, 1) {
+			out.RelaxationSeconds = ptr(tr)
+			out.Unsettled = !settles(tr, st.windowSeconds)
+		}
+		fl.mu = *pred.prefillKnee
+		if w, most := fl.step(in.rate, *pred.prefillKnee, q.step.Seconds(), st.windowSeconds); w > 0 {
+			out.Backlog, out.BacklogWait = ptr(fl.carried), ptr(w)
+			for i := range pred.ttft {
+				if v := pred.ttft[i].Value; v != nil {
+					pred.ttft[i].Value = ptr(*v + w)
+				}
+				if b := pred.ttftBound[i]; b != nil {
+					pred.ttftBound[i] = ptr(*b + most)
+				}
+			}
+		}
+	} else {
+		fl.reset()
+	}
 	if pred.knee != nil {
+		if lo, hi, ok := burstIn(seriesAt(q.test.series, st.window), *pred.knee); ok && out.Excluded == "" && in.rate < *pred.knee {
+			out.Excluded, out.Detail = ExcludedBurst, fmt.Sprintf("its measurement window holds the start or the end of a load near the knee: cycles from %.2f to %.2f r/s against a knee of %.2f r/s, so its mean rate, %.2f r/s, is no rate the fleet ran at",
+				lo, hi, *pred.knee, in.rate)
+		}
 		out.KneeShare = ptr(in.rate / *pred.knee)
 		out.Load = loadBand(*out.KneeShare)
 	}
@@ -1091,6 +1255,45 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		out.TPOT = append(out.TPOT, predictedPoint(q, pred.tpot[i], pred.tpotBound[i]))
 	}
 	return out
+}
+
+// fluid is the backlog a fluid queue carries from step to step: what runs
+// past the prefill knee in one step is still queued at the next.
+type fluid struct {
+	// q is the backlog at the end of the last step, and carried the one
+	// carried into the step being priced; mu is the knee it was last
+	// served at.
+	q, carried, mu float64
+}
+
+// reset drops the backlog: a step that did not price, or had no cycle,
+// breaks the chain.
+func (f *fluid) reset() { f.q, f.carried, f.mu = 0, 0, 0 }
+
+// step carries the backlog through one step of dt seconds at rate lambda
+// and prefill knee mu, and is the mean and the most wait it adds over the
+// step's measurement window, its last w seconds (backlogWait). A rate or a
+// knee that is no number breaks the chain.
+func (f *fluid) step(lambda, mu, dt, w float64) (mean, most float64) {
+	if math.IsNaN(lambda) || math.IsNaN(mu) || math.IsNaN(dt) {
+		f.reset()
+		return 0, 0
+	}
+	f.carried = f.q
+	mean, most = backlogWait(f.q, lambda, mu, dt, w)
+	f.q = backlogAt(f.q, lambda, mu, dt)
+	return mean, most
+}
+
+// idle drains the backlog through a step with no requests, at the knee mu
+// last priced.
+func (f *fluid) idle(dt float64) {
+	if f.mu > 0 {
+		f.q = backlogAt(f.q, 0, f.mu, dt)
+	} else {
+		f.q = 0
+	}
+	f.carried = 0
 }
 
 // scoreStep sets beside a step's predictions what the fleet measured: the
@@ -1106,7 +1309,11 @@ func scoreStep(out *BacktestStep, m measured, target *ReportTarget) {
 		out.Excluded, out.Detail = ExcludedNoMeasurement, "the source measured no request in the step"
 	}
 	for i := range out.TTFT {
-		out.TTFT[i] = scoredPoint(out.TTFT[i], m.ttft[i], m.requests, m.ttftTop, m.ttftWhy[i])
+		why := m.ttftWhy[i]
+		if why == "" && out.Unsettled {
+			why = UnscoredUnsettled
+		}
+		out.TTFT[i] = scoredPoint(out.TTFT[i], m.ttft[i], m.requests, m.ttftTop, why)
 	}
 	for i := range out.TPOT {
 		out.TPOT[i] = scoredPoint(out.TPOT[i], m.tpot[i], m.tpotRequests, m.tpotTop, m.tpotWhy[i])
@@ -1186,9 +1393,12 @@ type predictor struct {
 type prediction struct {
 	ttft, tpot           []Figure
 	ttftBound, tpotBound []*float64
-	// knee is the lower knee of the fleet that priced, decodeKnee decode's;
-	// nil with none.
-	knee, decodeKnee *float64
+	// knee is the lower knee of the fleet that priced, decodeKnee decode's
+	// and prefillKnee prefill's; nil with none.
+	knee, decodeKnee, prefillKnee *float64
+	// promptCV is the prompt spread priced, and ca2 the arrivals' (1 for
+	// random arrivals).
+	promptCV, ca2 float64
 }
 
 // predict prices one step at each statistic: the TTFT as a report's table
@@ -1274,6 +1484,16 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 			}
 			if v, ok := valueOf(fl.DecodeKnee()); ok && v > 0 {
 				out.decodeKnee = ptr(v)
+			}
+			if v, ok := valueOf(fl.PrefillKnee()); ok && v > 0 {
+				out.prefillKnee = ptr(v)
+			}
+			out.promptCV, out.ca2 = whatif.AssumedPromptCV, 1
+			if cv != nil {
+				out.promptCV = *cv
+			}
+			if p.cv2 != nil {
+				out.ca2 = *p.cv2
 			}
 		}
 		out.ttft, out.ttftBound = append(out.ttft, tf), append(out.ttftBound, tb)
@@ -1526,6 +1746,8 @@ func summarize(steps []BacktestStep, target bool) BacktestSummary {
 			s.Excluded.NotPriced++
 		case ExcludedOtherVariants:
 			s.Excluded.OtherVariants++
+		case ExcludedBurst:
+			s.Excluded.Burst++
 		}
 	}
 	s.TTFT, s.TPOT = scoresOf(steps)
@@ -1828,6 +2050,10 @@ func verdictPart(name string, scores []BacktestScore, unit string) (line string,
 	if n := sc.Unscored[UnscoredAboveHistogram]; n > 0 {
 		w += fmt.Sprintf(" %d measured above the histogram's top bucket, beyond what it can tell.", n)
 	}
+	if n := sc.Unscored[UnscoredUnsettled]; n > 0 {
+		w += fmt.Sprintf(" %d ran so near the prefill knee that its queue does not settle inside the window (relaxation time over %.0f%% of it): "+
+			"the window's TTFT is a noisy sample of the steady state priced.", n, 100*SettleShare)
+	}
 	return w, quoted
 }
 
@@ -1870,7 +2096,7 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 		n    int
 		what string
 	}{{e.WarmUp, "warm-up"}, {e.Scaling, "replicas changing"}, {e.NoTraffic, "no traffic"}, {e.NoMeasurement, "no measured requests"},
-		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}} {
+		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}, {e.Burst, "a burst near the knee in its window"}} {
 		if x.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", x.n, x.what))
 		}

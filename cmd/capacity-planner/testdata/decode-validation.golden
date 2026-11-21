@@ -14,7 +14,7 @@ engine ns-01/model-02 freeze 3 of 4 variant-03 no-line; tpot SKIPPED no line at 
 engine ns-01/model-03 freeze 8 of 12 variant-04 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-03 freeze 8 of 12 variant-05 no-line; tpot SKIPPED no line at the freeze; knee SKIPPED no line at the freeze
 engine ns-01/model-03 freeze 8 of 12 variant-06 prefill; own SKIPPED P1 refused V_P: NoPrefillCapacity
-mu-paths ns-01/model-01 freeze 29 of 48 variant-01 ols; tpot -4.9% over 76 rows, in of +-10%, unclamped -0.0%, 0 below the band, 38 above it; knee -28.5% over 38 rows, OUT of +-15%
+mu-paths ns-01/model-01 freeze 29 of 48 variant-01 ols; tpot -4.9% over 76 rows, in of +-10%, unclamped -0.0%, 0 below the band, 38 above it; knee +43.0% over 38 rows, OUT of +-15%
 mu-paths ns-01/model-01 freeze 29 of 48 variant-02 ols; tpot -9.8% over 95 rows, in of +-10%, unclamped -0.0%, 0 below the band, 57 above it; knee -41.5% over 19 rows, OUT of +-15%
 mu-paths ns-01/model-01 freeze 29 of 48 variant-03 ols; tpot -0.0% over 57 rows, in of +-10%, unclamped -0.0%, 0 below the band, 0 above it; knee SKIPPED no saturated window off a ramp held out
 mu-paths ns-01/model-01 freeze 29 of 48 variant-04 pinned-B; tpot +0.0% over 57 rows, in of +-10%, unclamped +0.0%, 0 below the band, 19 above it, on a line the planner refuses; knee SKIPPED the knee refused on all 19 saturated windows: PinnedDefaultB

@@ -62,11 +62,26 @@ func TestSelfCheckReplaysTheStatedPromptCV(t *testing.T) {
 // a staircase phase whose decode line rests on the default intercept, the
 // default self-check refuses every p90 TPOT step PinnedDefaultB, and with
 // --assume-itl-b floor it scores them, flagged as stated.
+//
+// The phase's last test step (03:30) holds the end of the load at the knee
+// (0 to 43.2 r/s against a decode knee of 43.3 r/s) and is not judged
+// (ExcludedBurst, issue llm-d-incubation/llm-d-scaling-manager#278): priced
+// at its mean rate it read p90 TPOT 0.31 of measured. That leaves 5 scored
+// steps, under the 6 a verdict needs, on every staircase phase that spans
+// an hour, so the check is not run; the steps it scored, and the line's
+// lead, still show the stated B replayed.
 func TestSelfCheckReplaysTheStatedITLB(t *testing.T) {
 	withSelfCheck(t)
-	sc := selfCheckOf(t, "at-replicas", "--recording", stair("ttft-staircase-b-on"), "--assume-itl-b", "floor")
+	recording := stair("ttft-staircase-b-on")
+	plain := selfCheckOf(t, "at-replicas", "--recording", recording)
+	require.NotNil(t, plain.TPOT, plain.Line)
+	assert.Empty(t, plain.Stated)
+	assert.Zero(t, plain.TPOT.Steps, plain.Line)
+	assert.Positive(t, plain.TPOT.Refused["PinnedDefaultB"], "the default B refuses the steps: %s", plain.Line)
+
+	sc := selfCheckOf(t, "at-replicas", "--recording", recording, "--assume-itl-b", "floor")
 	assert.Equal(t, []string{"--assume-itl-b floor"}, sc.Stated)
-	assert.True(t, strings.HasPrefix(sc.Line, "Self-check, replayed with the stated --assume-itl-b floor (flagged as stated, outside the validated region)"), sc.Line)
+	assert.True(t, strings.HasPrefix(sc.Line, "Self-check with the stated --assume-itl-b floor (flagged as stated, outside the validated region) not run: too few steps were scored"), sc.Line)
 	require.NotNil(t, sc.TPOT, sc.Line)
 	assert.Zero(t, sc.TPOT.Refused["PinnedDefaultB"], "the fits priced through the stated B: %s", sc.Line)
 	assert.Positive(t, sc.TPOT.Steps, sc.Line)

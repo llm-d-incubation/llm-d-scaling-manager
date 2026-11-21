@@ -4,10 +4,10 @@ prefill engine  vLLM release not recorded
 load judged     26.90 r/s, the p95 of the 80 of 83 cycles with traffic
 load seen       per cycle (1-minute rates): mean 6.91, p95 26.90, peak 30.04 r/s; busiest 2m0s (8 cycles): 25.94 r/s
 SLO             TPOT mean 5.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TPOT mean 5.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary     50%               80%               100%            seen
-  measured  -/2.5m @15.44 ok  -/3.0m @24.70 ok  -/- @30.88 SAT  -/3.1m @26.90 ok
+summary     50%              80%              100%            seen
+  measured  -/2.5 @15.44 ok  -/3.0 @24.70 ok  -/- @30.88 SAT  -/3.1 @26.90 ok
 verdicts
   measured  UNDER-PROVISIONED (decode only): at the p95 load of 26.9 r/s, the fleet runs past its operating point of 26.2 r/s (0.85 of its 30.9 r/s knee); needs at least 2 decode (has 1).
 

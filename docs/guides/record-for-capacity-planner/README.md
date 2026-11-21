@@ -543,7 +543,7 @@ The capture adds a `flag:` line when:
 - no annotation, tag or flag names the release (`vLLM release unknown`): give
   `--vllm-version`, or allowlist the annotation.
 
-A recording made before the planner read releases says `vLLM release not recorded`.
+A recording made before v0.12.0, the first release that reads it, says `vLLM release not recorded`.
 
 A capture now keys learned state by the engine's real image, as the
 controller does (for SGLang too, though SGLang has no release to read). Learned
