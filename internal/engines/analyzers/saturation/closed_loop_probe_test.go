@@ -414,28 +414,7 @@ func TestClosedLoopProbe_ASlowReplicaInsideTheServedBoundStaysUnderTheBound(t *t
 // same way, because the first queued reading at the return writes the
 // figure back within a cycle.
 func TestClosedLoopProbe_ASteeringRouterKeepsARightMinorityFigure(t *testing.T) {
-	pods := make([]float64, 18)
-	for i := range pods {
-		pods[i] = 1
-	}
-	pc := probeCase{
-		name: "steered", pods: pods, addedMu: 1, meanMu: 1,
-		lambda: func(e time.Duration) float64 {
-			if e >= 10*time.Minute && e < 45*time.Minute {
-				return 2
-			}
-			return 12
-		},
-		weight: func(i int, _ time.Duration) float64 {
-			if i < 4 {
-				return 2
-			}
-			return 1
-		},
-		queueBlind: true,
-		horizon:    60 * time.Minute,
-	}
-	r := runProbe(t, pc)
+	r := runProbe(t, steeredCase())
 	t.Logf("need %d, final %d, peak %d, longest under need %s; fleet by cycle %v", r.need, r.final, r.peak, r.underFor, r.trace)
 	require.Empty(t, r.verdict())
 	require.Zero(t, r.underFor, "the fleet never sat under need")
