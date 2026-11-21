@@ -371,6 +371,7 @@ roles[].ttft.promptCV number
 roles[].ttft.promptCVRead number
 roles[].ttft.promptCVSource string
 roles[].ttft.promptFromCycle number
+roles[].ttft.promptHitRate number
 roles[].ttft.promptSource string
 roles[].ttft.promptToCycle number
 roles[].ttft.promptTokens number
@@ -390,8 +391,11 @@ roles[].ttft.transferSource string
 roles[].ttft.vp number
 roles[].ttft.vpLearned number
 roles[].ttft.vpOrigin string
+roles[].ttft.vpPromptHitRate number
 roles[].ttft.vpPromptTokens number
 roles[].ttft.vpSource string
+roles[].ttft.vpWholePromptTokens number
+roles[].ttft.wholePromptTokens number
 roles[].variant string
 schemaVersion number
 selfCheck object

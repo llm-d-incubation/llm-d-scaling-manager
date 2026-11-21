@@ -600,6 +600,14 @@ capacity-planner slo-to-rate     --recording run.jsonl.gz --tpot 4ms --ttft 200m
   `--assume-a` supplied `a`. It says so when an assumed term alone refuses a
   target, or moves the answer by 25%. `--assume-router-hop 8ms` supplies the
   hop between the router and the engines.
+- **`--assume-transfer-base 20ms`** states the fixed part of the KV
+  transfer per request; the rest of the measured transfer scales with the
+  tokens moved. The recording holds one mean transfer, not its split, so
+  the default is 0: all of it scales. A base above the measured transfer is
+  held at it, and with no transfer measured it is ignored. It is named on
+  the `assumed` row, not raised as a flag, and puts the figures outside the
+  validated region. `replicas-to-slo` and `slo-to-rate` only: `at-replicas`
+  refuses it.
 - **`--assume-vp` overrides,** as every `--assume-*` flag does. Give it when
   `NoPrefillCapacity` is refused, or to ask what another `V_P` would do. A
   learned figure prints beside it: `V_P 130000 ASSUMED, learned 115621`.

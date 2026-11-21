@@ -121,6 +121,7 @@ func (f *answerFlags) stated() (*whatifapi.Stated, error) {
 		{"ps-onsets", strconv.FormatBool(f.psOnsets), f.psOnsets != whatif.DefaultPSOnsets},
 		{"prefill-running-cap", strconv.Itoa(f.prefillRunningCap), f.prefillRunningCap != 0},
 		{"charge-decode-gate", strconv.FormatBool(f.chargeDecodeGate), f.chargeDecodeGate != whatif.DefaultChargeDecodeGate},
+		{"assume-transfer-base", f.assumeTransferBase.String(), f.assumeTransferBase != 0},
 	} {
 		if f.set[o.name] && o.moved {
 			st.Other = append(st.Other, "--"+o.name+"="+o.value)

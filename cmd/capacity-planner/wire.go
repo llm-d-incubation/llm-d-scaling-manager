@@ -119,11 +119,19 @@ type wireTTFT struct {
 	// VP is V_P, tokens/s, as learned or assumed (VPSource); VPOrigin is P1's
 	// source, and VPPromptTokens the prompt it was read at. VPLearned is P1's
 	// figure an --assume-vp stands in place of, and FixedLatencyLearned the
-	// one an --assume-a does.
+	// one an --assume-a does. VPWholePromptTokens and VPPromptHitRate are
+	// the whole prompt, prefix hits included, and the prefix-cache hit rate
+	// V_P was read at; WholePromptTokens and PromptHitRate the question's,
+	// beside PromptTokens. Each pair is absent where the whole prompt is
+	// unknown.
 	VP                  float64  `json:"vp,omitempty"`
 	VPSource            string   `json:"vpSource,omitempty"`
 	VPOrigin            string   `json:"vpOrigin,omitempty"`
 	VPPromptTokens      float64  `json:"vpPromptTokens,omitempty"`
+	VPWholePromptTokens float64  `json:"vpWholePromptTokens,omitempty"`
+	VPPromptHitRate     *float64 `json:"vpPromptHitRate,omitempty"`
+	WholePromptTokens   float64  `json:"wholePromptTokens,omitempty"`
+	PromptHitRate       *float64 `json:"promptHitRate,omitempty"`
 	VPLearned           *float64 `json:"vpLearned,omitempty"`
 	FixedLatencySeconds float64  `json:"fixedLatencySeconds,omitempty"`
 	FixedLatencySource  string   `json:"fixedLatencySource,omitempty"`

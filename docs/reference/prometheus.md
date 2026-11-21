@@ -1468,7 +1468,7 @@ model reads all of them `0`, including the two marked "on every answer":
 | `AdaptedBandFloor` | Capacity planner only, never on this metric: the decode latency line was read with the KV-fill band's floor lowered to the fill the fleet had, because it never filled far enough above the default floor. |
 | `AssumedITLB` | Capacity planner only, never on this metric: the decode latency line's intercept B was stated (`--assume-itl-b`, API `assume.itlB` or `assume.itlBFromFloor`) in place of the 6 ms default, and its slope refitted through it. |
 | `VPAboveSlopeBound` | `V_P` is above what the low-load fit allows: one of the two is wrong. |
-| `VPShapeMoved` | The mean prompt is more than 1.2 times away from the one `V_P` was learned at, with no curve to rescale by. |
+| `VPShapeMoved` | The mean prompt is more than 1.2 times away from the one `V_P` was learned at, with no curve to rescale by. The capacity planner also raises it, curve or not, where the prefix hits moved from those `V_P` was learned at: the hit rate by more than 0.1, or the whole prompt by more than 1.2 times with a hit rate above 0.1 on either side. The 0.1 is stated, not measured: no recording with prefix hits has been made. A cached token is not computed, but the computed ones attend over it, so `V_P` reads high at a higher hit rate. |
 | `VPScaledToPrompt` | `V_P` was rescaled to a longer prompt. It read 1.5% high on the one measured point. |
 | `TransferOmitted` | No decode pod read a KV transfer time: left out, so TTFT reads low. A pod with no NIXL connector, or an SGLang pod, has none. |
 | `TransferHeld` | The fleet is busy, so the KV transfer time is its last quiet figure, at most 5 minutes old. Past that the busy figure stands, and TTFT reads high. |

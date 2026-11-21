@@ -234,13 +234,7 @@ func runFreeze(ctx context.Context, args []string, out, warn io.Writer) error {
 		return err
 	}
 	sum := src.sum
-	// The driver's prompts share no prefix: a warm-up's hit rate is not theirs.
-	// The CLI would price it; the file says what was dropped.
-	hitRates := map[string]float64{}
-	for i := range st.Variants {
-		hitRates[st.Variants[i].Variant] = st.Variants[i].Shape.PrefixHitRate
-		st.Variants[i].Shape.PrefixHitRate = 0
-	}
+	hitRates := dropWarmUpHits(st)
 	file := frozenFile{Version: frozenVersion, RecordingSHA256: hex.EncodeToString(sum[:]), SpecSHA256: specSum,
 		Cycle: st.Cycle, Cycles: st.Cycles, TPOTRatio: []frozenRatio{}}
 	for _, p := range spec.Percentiles {
@@ -270,6 +264,27 @@ func runFreeze(ctx context.Context, args []string, out, warn io.Writer) error {
 		return exitStatus(whatif.ExitRefused)
 	}
 	return nil
+}
+
+// dropWarmUpHits zeroes the prefix-cache hit rates the recording read, and
+// returns each variant's as read. The driver's prompts share no prefix: a
+// warm-up's hit rate is not theirs. The CLI would price it; the file says
+// what was dropped. V_P's whole prompt and hit rate go too
+// (prefill.Estimate.VPWholePromptTokens, VPPromptHitRate): left beside the
+// zeroed shapes, a V_P read at a warm-up's hits would be flagged
+// VPShapeMoved against the driver's none (whatif.Prefill.prefixMoved), a
+// flag the frozen file did not carry before the hits were recorded. With
+// the whole prompt unknown, V_P is shaped and flagged as before.
+func dropWarmUpHits(st *learnreplay.State) map[string]float64 {
+	hitRates := map[string]float64{}
+	for i := range st.Variants {
+		hitRates[st.Variants[i].Variant] = st.Variants[i].Shape.PrefixHitRate
+		st.Variants[i].Shape.PrefixHitRate = 0
+	}
+	for i := range st.Prefill {
+		st.Prefill[i].Estimate.VPWholePromptTokens, st.Prefill[i].Estimate.VPPromptHitRate = 0, 0
+	}
+	return hitRates
 }
 
 // readFreezeSpec reads and checks a spec, and hashes its bytes.

@@ -42,6 +42,11 @@ type PrefillState struct {
 	// holds no computed-token histogram, as a recording made before the
 	// collector read one does not.
 	PromptWindow *whatif.PromptWindow
+	// PrefixAttention is slo.SwitchTTFTPrefixAttention: the planner prices a
+	// prefix hit's cost (whatif.Prefill.PrefixAttention, the prefill
+	// variant's hit on the prefill work, the decode variant's on the KV
+	// transfer). Off unless the replay's options turn it on.
+	PrefixAttention bool
 	// RawShare is f_raw, the busiest pod's share of the computed-token rate
 	// over the mean share, not de-biased: the largest over the latest
 	// whatif.TTFTWindowCycles cycles that read one at the cycle's pod count. A pod with
@@ -132,6 +137,9 @@ type ttftSamples struct {
 	terms     map[string]*prefill.DecodeTermWindow
 	// joint is the model's joint TTFT readings (noteJoint).
 	joint *prefill.JointWindow
+	// prefixAttention is slo.SwitchTTFTPrefixAttention
+	// (PrefillState.PrefixAttention).
+	prefixAttention bool
 }
 
 func newTTFTSamples() *ttftSamples {
@@ -432,6 +440,7 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 		ps.PromptTokens, ps.PromptFromCycle, ps.PromptToCycle, ps.PromptCycles = t.prompts[v].Prompt()
 		ps.PromptWindow = t.prompts[v].Clone()
+		ps.PrefixAttention = t.prefixAttention
 		ps.Estimate, ps.EstimateRead = estimateAt(r.sat.PrefillEstimate, in.Namespace, in.ModelID, v, st.At)
 		st.Prefill = append(st.Prefill, ps)
 	}

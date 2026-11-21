@@ -169,6 +169,9 @@ type Analyzer struct {
 	// ttftMeasuredTransfer SwitchTTFTMeasuredTransfer (ttft.go): on from the
 	// constructor; a replay turns them off (SetSwitchesForReplay).
 	ttftMeasuredSpread, ttftMeasuredTransfer bool
+	// ttftPrefixAttention is SwitchTTFTPrefixAttention (ttft.go): off from
+	// the constructor, planner-only; the analyzer holds it for the name.
+	ttftPrefixAttention bool
 	// ttftQuietTransfer is SwitchTTFTQuietTransfer (ttft.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftQuietTransfer bool

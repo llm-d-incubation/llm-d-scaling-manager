@@ -188,6 +188,8 @@
         "replicasFrom": "--prefill",
         "vp": 30000,
         "vpSource": "assumed",
+        "wholePromptTokens": 1000.3515324833388,
+        "promptHitRate": 0,
         "fixedLatencySeconds": 0.009,
         "fixedLatencySource": "assumed",
         "imbalance": 1.5,

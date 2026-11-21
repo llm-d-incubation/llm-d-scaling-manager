@@ -137,6 +137,20 @@ const SwitchTTFTDecodeGateCharge = "slo-ttft-decode-gate-charge"
 // on it can be read.
 const SwitchTTFTMeasuredSpread = "slo-ttft-measured-spread"
 
+// SwitchTTFTPrefixAttention is the replay switch for a prefix hit's cost in
+// the capacity planner (issue llm-d-incubation/llm-d-scaling-manager#311).
+// On: V_P's rescale along the curve reads the attention over the cached
+// tokens, I_eff + 2h, not I_eff alone (whatif.Prefill.PrefixAttention); the
+// prefill work is the prompt net of the prefill variant's hit, not the
+// decode variant's; and the KV transfer moves the prompt net of the decode
+// variant's hit. Off, as before. Planner-only: off from the constructor, and
+// not in learnreplay.PlannerSwitches, so it is off in the planner too until
+// a backtest turns it on. The analyzer itself reads no whole prompt and
+// prices nothing with it; the planner reads it through the replay
+// (learnreplay.PrefillState.PrefixAttention). No committed recording has a
+// prefix hit, so on or off it moves no golden.
+const SwitchTTFTPrefixAttention = "slo-ttft-prefix-attention"
+
 // SwitchTTFTMeasuredTransfer is the replay switch for the KV transfer term:
 // on, the pricing reads AvgKVTransferTime from the decode rows that carry one
 // (transferPerToken). Off, it reads none and raises whatif.TransferOmitted, as

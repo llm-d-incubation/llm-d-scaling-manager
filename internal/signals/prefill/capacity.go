@@ -75,14 +75,15 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 	est.VPBusyMinutes = bm.n
 	if bm.n >= MinBusyMinutes {
 		est.VP, est.VPSource, est.VPSamples, est.VPPromptTokens = bm.rate, SourceBusyMinutes, bm.n, bm.prompt
+		est.VPWholePromptTokens, est.VPPromptHitRate = bm.whole, bm.hit
 		if bm.multiRank {
 			est.VPLowerBound, est.VPLowerBoundReason = true, DataParallelRanks
 		}
 		return
 	}
-	if v, prompt, ok := peakUnderQueue(ks); ok {
-		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = v, SourcePeakUnderQueue, true, PeakRun
-		est.VPPromptTokens = prompt
+	if pk, ok := peakUnderQueue(ks); ok {
+		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = pk.rate, SourcePeakUnderQueue, true, PeakRun
+		est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = pk.prompt, pk.whole, pk.hit
 		return
 	}
 	if b := c.Bound; finitePositive(b.Tokens) && b.Samples >= MinBoundSamples {
@@ -94,12 +95,15 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 
 // busy is the busy minutes' reading: the median rate, how many minutes,
 // whether any came from a pod with more than one data-parallel rank, and
-// their mean prompt length (zero when one of them read none).
+// their mean prompt length (zero when one of them read none). whole and hit
+// are their mean whole prompt and prefix-cache hit rate (meanWhole).
 type busy struct {
 	rate      float64
 	n         int
 	multiRank bool
 	prompt    float64
+	whole     float64
+	hit       float64
 }
 
 // busyMedian is the busy reading over every replica's busy minutes no older
@@ -107,11 +111,13 @@ type busy struct {
 func busyMedian(ks *keyState, now time.Time) busy {
 	cutoff := now.Add(-BusyWindow)
 	var rates, prompts []float64
+	var minutes []sample
 	var out busy
 	for _, name := range ks.podNames() {
 		for _, s := range ks.pods[name].samples {
 			if s.busy && s.rateOK && s.rate > 0 && !s.at.Before(cutoff) {
 				rates, prompts = append(rates, s.rate), append(prompts, s.prompt)
+				minutes = append(minutes, s)
 				out.multiRank = out.multiRank || s.multiRank
 			}
 		}
@@ -120,7 +126,26 @@ func busyMedian(ks *keyState, now time.Time) busy {
 		return busy{}
 	}
 	out.rate, out.n, out.prompt = median(rates), len(rates), meanPrompt(prompts)
+	out.whole, out.hit = meanWhole(minutes)
 	return out
+}
+
+// meanWhole is the mean whole prompt of minutes and their mean prefix-cache
+// hit rate, both zero when a minute read no whole prompt, as meanPrompt is:
+// what V_P was read at beside its effective prompt
+// (Estimate.VPWholePromptTokens).
+func meanWhole(minutes []sample) (whole, hit float64) {
+	for _, s := range minutes {
+		if !(s.whole > 0) {
+			return 0, 0
+		}
+		whole, hit = whole+s.whole, hit+s.hit
+	}
+	if len(minutes) == 0 {
+		return 0, 0
+	}
+	n := float64(len(minutes))
+	return whole / n, hit / n
 }
 
 // meanPrompt is the mean of prompts, zero when one of them is zero (not
@@ -139,32 +164,36 @@ func meanPrompt(prompts []float64) float64 {
 
 // peakUnderQueue is the highest rate any replica sustained over PeakRun
 // queued minutes in a row: the least rate of the run, the highest run; and
-// the mean prompt length of that run's PeakRun minutes.
-func peakUnderQueue(ks *keyState) (float64, float64, bool) {
-	best, prompt, found := 0.0, 0.0, false
+// the mean prompt length of that run's PeakRun minutes, with their whole
+// prompt and hit rate (meanWhole). n is unset.
+func peakUnderQueue(ks *keyState) (busy, bool) {
+	var best busy
+	found := false
 	for _, name := range ks.podNames() {
-		run, prompts := []float64{}, []float64{}
+		run, prompts, minutes := []float64{}, []float64{}, []sample{}
 		var last time.Time
 		for _, s := range ks.pods[name].samples {
 			if !s.queued || !s.rateOK || !(s.rate > 0) {
-				run, prompts = run[:0], prompts[:0]
+				run, prompts, minutes = run[:0], prompts[:0], minutes[:0]
 				continue
 			}
 			if len(run) > 0 && s.at.Sub(last) > MaxRunGap {
-				run, prompts = run[:0], prompts[:0]
+				run, prompts, minutes = run[:0], prompts[:0], minutes[:0]
 			}
-			run, prompts = append(run, s.rate), append(prompts, s.prompt)
+			run, prompts, minutes = append(run, s.rate), append(prompts, s.prompt), append(minutes, s)
 			last = s.at
 			if len(run) < PeakRun {
 				continue
 			}
 			sustained := slices.Min(run[len(run)-PeakRun:])
-			if sustained > best {
-				best, prompt, found = sustained, meanPrompt(prompts[len(prompts)-PeakRun:]), true
+			if sustained > best.rate {
+				best = busy{rate: sustained, prompt: meanPrompt(prompts[len(prompts)-PeakRun:])}
+				best.whole, best.hit = meanWhole(minutes[len(minutes)-PeakRun:])
+				found = true
 			}
 		}
 	}
-	return best, prompt, found
+	return best, found
 }
 
 // queuedRuns is how many samples of the key's replicas held a queue with a

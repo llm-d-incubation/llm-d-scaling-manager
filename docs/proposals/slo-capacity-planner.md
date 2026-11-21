@@ -1256,6 +1256,7 @@ TTFT: the decode answers are as they were.
 | `--prefill N` | Prefill pods to price; 0 takes the serving pods at the cycle |
 | `--prefill-variant V` | The prefill variant to price, when the model has several: the CLI prices one fleet, and a usage error says so otherwise. It gets the whole rate, named as assumed |
 | `--assume-a 11ms` | `a`, the fixed latency one request pays on a prefill pod, in place of the learned one, flagged `AssumedA` and printed `a ASSUMED`, with any learned figure beside it (`a 8.00 ms ASSUMED, learned 11.04 ms`, and `fixedLatencyLearned` in the JSON). For a fleet of one prompt length, which gives P1 no fit |
+| `--assume-transfer-base 20ms` | The fixed part of the KV transfer per request; the rest of the measured transfer scales with the tokens moved. Held at the measured transfer; ignored with none. Default 0: all of it scales. Named on the `assumed` row, not raised as a flag; it puts the figures outside the validated region. `replicas-to-slo` and `slo-to-rate` only: `at-replicas` refuses it, and backtest, the day plan and the API do not take it |
 
 **Where each input comes from.**
 
@@ -1267,7 +1268,7 @@ TTFT: the decode answers are as they were.
 | Prompt | `--assume-input-tokens`, else computed tokens over requests on the prefill rows, over the last 20 cycles with traffic | The decode variant's `IL·(1 − hit)`, named. Neither is `NoTraffic` |
 | `cv` | The computed-token histogram (Q1), pooled over the prompt's cycles and pods, through the window S1 keeps too (`whatif.PromptWindow`). Held at 3 and named `clamped` past the histogram's last bound. A recording made before Q1 has none. `--assume-prompt-cv` overrides all of it | 2, flagged `AssumedPromptSpread` (S1) |
 | Arrivals | `--arrival-cv2`, on the prefill queue | Poisson, flagged `AssumedPoissonArrivals`, the S1 flag, kept in `cmd/capacity-planner` because P3 has none |
-| `T_xfer` | Decode rows' `AvgKVTransferTime` over the measured prompt | Left out, flagged `TransferOmitted` |
+| `T_xfer` | Decode rows' `AvgKVTransferTime` over the measured prompt; with `--assume-transfer-base`, that base per request and the rest over the measured prompt | Left out, flagged `TransferOmitted` |
 | Decode term | With a decode line: `D` and `R` as the recording's cycles teach them ([the decode term](slo-capacity-planner-ttft.md#as-built-the-decode-term)), in place of `T_xfer` and `ITL` | `D`: a quiet row's figure held at slope 10, flagged `DecodeStepSlopeAssumed`, or the old sum, flagged `DecodeTermOmitted`. `R`: 20 ms, or `--assume-router-hop`, flagged `RouterHopAssumed`. Each is named on the `assumed` row with why no fit stands, and in `ttft` in the JSON with the term as priced |
 | Decode side | The decode variant's line, if `whatif.KneeRate` prices it | The decode engine's `AvgTTFT`, readings above 0 only: the largest of the last 5 cycles, with that cycle's prompt, flagged `DecodeEngineMeasured`. A cycle with no reading holds an empty slot, so the figure ages out of an idle tail. Else left out, flagged `DecodeSideOmitted` and `DecodeTTFTUnmeasured` |
 | Flow control | On when the scheduler queue exists at the cycle, S1's rule (`domain.AnalyzerInput.FlowControlSeries`). A pool or a wait histogram does not count: both are filled only while recording, and wait buckets read at rate 0 within a run's first 3 to 4 minutes on runs `goldens.yaml` describes as off, cause not known (74 cycles across five committed recordings) | Off, flagged `FlowControlInferredOff`. On takes the upstream thresholds 5 and 0.8, and is named as assumed. On with no decode line is answered, flagged `DecodeOnsetUnchecked`; S1 refuses that case, a planner reads the flag. `--flow-control` is not built |
@@ -1948,6 +1949,7 @@ roles[].ttft.promptCV number
 roles[].ttft.promptCVRead number
 roles[].ttft.promptCVSource string
 roles[].ttft.promptFromCycle number
+roles[].ttft.promptHitRate number
 roles[].ttft.promptSource string
 roles[].ttft.promptToCycle number
 roles[].ttft.promptTokens number
@@ -1967,8 +1969,11 @@ roles[].ttft.transferSource string
 roles[].ttft.vp number
 roles[].ttft.vpLearned number
 roles[].ttft.vpOrigin string
+roles[].ttft.vpPromptHitRate number
 roles[].ttft.vpPromptTokens number
 roles[].ttft.vpSource string
+roles[].ttft.vpWholePromptTokens number
+roles[].ttft.wholePromptTokens number
 roles[].variant string
 schemaVersion number
 selfCheck object

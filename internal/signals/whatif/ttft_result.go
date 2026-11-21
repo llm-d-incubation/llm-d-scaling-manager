@@ -139,7 +139,9 @@ const (
 	// VPShapeMoved is a V_P read at a mean prompt more than MaxVPShapeRatio
 	// from the one asked, either way, or at one not known, with no curve to
 	// rescale it by: the V_P is held, and on a longer prompt it reads high
-	// and over-promises. No caller acts on it.
+	// and over-promises. It is raised too, curve or not, where the prefix
+	// hits moved from those V_P was read at (Prefill.prefixMoved): the
+	// cached tokens' attention is not in E[I_eff]. No caller acts on it.
 	VPShapeMoved Flag = "VPShapeMoved"
 	// FlowControlInferredOff is flow control taken as off because its queue
 	// series does not exist (a scrape gap looks the same).

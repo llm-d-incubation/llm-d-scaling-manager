@@ -76,6 +76,10 @@ type answerFlags struct {
 	prefixHit *float64
 	// assumeA is --assume-a, a TTFT flag (ttft.go).
 	assumeA time.Duration
+	// assumeTransferBase is --assume-transfer-base, a TTFT flag (ttft.go,
+	// transferPerToken): the KV transfer's fixed part per request; 0, the
+	// default, prices none, as before.
+	assumeTransferBase time.Duration
 	// flowControl is --flow-control, a TTFT flag (ttft.go): the router's flow
 	// control stated, on or off, in place of its inference from the queue series.
 	flowControl string
@@ -143,6 +147,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&f.prefill, "prefill", 0, "prefill replicas to price; 0 takes the recorded count")
 	fs.StringVar(&f.prefillVariant, "prefill-variant", "", "the prefill variant to price, when the model has several")
 	fs.DurationVar(&f.assumeA, "assume-a", 0, "a, the fixed latency one request pays on a prefill pod (11ms), in place of the learned one (flagged)")
+	fs.DurationVar(&f.assumeTransferBase, "assume-transfer-base", 0, "replicas-to-slo and slo-to-rate only: the fixed part of the KV transfer per request, e.g. 20ms; the rest of the measured transfer scales with the tokens moved. Held at the measured transfer; ignored with none. Default 0: all of it scales (named on the assumed line)")
 	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "opt-in, validated at one staircase step: price the flow-control gate past the prefill onset, its wait at the router and behind the burst it releases to one prefill pod (FlowControlWaitPriced); off, the wait is flagged AboveFlowControlOnset, a miss")
 	fs.BoolVar(&f.routerWaitInPrefill, "router-wait-in-prefill", whatif.DefaultRouterWaitInPrefill, "opt-in, measured on router v1.0.0 only, at six bursty steps: take the router's wait past the prefill onset, up to 0.9 of the prefill knee, as inside the processor-sharing prefill price, so the figure stands (FlowControlWaitPriced) and a rate answer may pass the onset; reads short on router v0.11.0")
 	fs.BoolVar(&f.psOnsets, "ps-onsets", whatif.DefaultPSOnsets, "experimental, unvalidated: place the prefill flow-control onset on the processor-sharing model, the prompts past --prefill-running-cap counted as waiting")

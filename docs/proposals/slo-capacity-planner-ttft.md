@@ -433,6 +433,8 @@ that is itself wrong (the exponential tail, Poisson arrivals, an omitted
 | `AssumedDecodeStepSlope`, `AssumedRouterHopSeconds` (no fit) | Under-promises if they stand above the fleet's true figures, which is the point. Each is flagged, and a refusal or a move of 25% that one alone decides says so. A long prompt may hop further than 20 ms |
 | `V_P` from a lower bound | Under-promises |
 | A mix of prompt lengths priced at its mean on a convex prefill curve ([a limit of P3](#prefill-capacity)) | Over-promises: an even 8k/52k mix at a `V_P` read at 30k is priced 32% under its prefill time. The rescale ([after P2](#as-built-p3-after-p2)) moves `V_P` to the mean, not the mix, and `VPShapeMoved`, comparing means, does not flag it |
+| `V_P` rescaled on computed tokens alone at a prefix hit (`slo-ttft-prefix-attention` off) | Over-promises: the cached tokens' attention is left out, about 1.7x on `V_P` at 32k with a 75% hit against fresh 8k. Flagged `VPShapeMoved` where the hit rate moved from the one `V_P` was read at. No committed run has hits, so this is not measured |
+| `V_P` rescaled at a prefix hit (`slo-ttft-prefix-attention` on) on P1's low-load curve | Over-promises if the low-load minutes had hits: the curve is fitted on `I_eff`, so `b` absorbs about `2c·h` of the cached tokens' attention and the rescale `s(I_vp)/s(I)` flattens, reading `V_P` high. The fit assumes a hit rate near 0 at low load. No committed run has hits, so this is not measured |
 | `V_P` rescaled along the curve with no fixed cost per step, `s(I_vp)/s(I)` | Under-promises for a longer prompt only if P1's low-load `b` and `c` are the busy step's per-token cost, which is not measured: on run 2 at 37k it read 1.5% above the served `V_P` (over-promises), covered by the margin only from `ρ` 0.6. No-act (`VPScaledToPrompt`) until a second point confirms it. Held (not raised) for a shorter prompt |
 | The decode engine's TTFT added at its mean to every percentile | Over-promises at the tail by `(r − 1)·D`, `r` decode's p90 over its mean, 1.1–1.8 on the P2 runs (coarse buckets): up to about 20% of the router's p90 at `r` 1.8 (37k: about 127 ms of 0.795 s, 16%; 1k: about 10 ms of 0.047 s, 21%). At each level's own measured `r` it is less: 37k `r` 1.48, about 76 ms (10%); 1k `r` 1.54, about 7 ms (14%) |
 | The decode engine's TTFT held at the rate it was measured at | Either way: `RateForTTFT` extrapolates to other rates with `D` frozen, and decode's own queue at a higher rate is not in it |
@@ -960,6 +962,40 @@ saturated.
   prompt is more than `MaxVPShapeRatio` (1.2x) from `I_vp` either way, or
   `I_vp` is unknown. This is S1's rule, moved into P3 so that every caller
   gets it. An assumed `V_P` is neither rescaled nor flagged.
+- **Prefix hits** (issue #311). `I_vp` and `E[I_eff]` are computed tokens.
+  vLLM computes `I − h` of a prompt with `h` cached tokens, but each
+  computed token attends over the `h` cached ones as well. Its mean context
+  is `h + I_eff/2`, not `I_eff/2`, so the curve's argument is `I_eff + 2h`.
+  At 32k with a 75% hit a pod computes the 8k a fresh 8k prompt does, so
+  nothing rescales or flags, but on a curve with `c·8k = 0.13·b` a token
+  costs 1.91 units, not 1.13: `V_P` reads about 1.7x high. What ships:
+  - On by default: P1 records the whole prompt and the hit rate of the
+    minutes `V_P` rests on (`Estimate.VPWholePromptTokens`,
+    `VPPromptHitRate`), and P3 raises `VPShapeMoved` where the question's
+    hit rate is more than 0.1 from it, or its whole prompt more than 1.2x
+    from it with a hit rate above 0.1 on either side (`Prefill.prefixMoved`,
+    `MaterialPrefixHitMove`, stated, not measured). With no hit rate above
+    0.1 on either side nothing new is raised. A state that recorded no
+    whole prompt prices and flags as before.
+  - Off, behind the planner-only switch `slo-ttft-prefix-attention`: the
+    rescale reads `I_eff + 2h` at `I_vp` and at the question
+    (`Prefill.PrefixAttention`, `attentionSpan`), `h = I_eff·hit/(1 − hit)`
+    from each side's measured hit rate, where either is above 0.1. It is
+    not read as the whole prompt less `I_eff`: the two are read over
+    different windows, and their drift with no cache would read as cached
+    context. The planner nets an assumed prompt by a stated hit rate,
+    else the prefill variant's, not the decode variant's; and the KV
+    transfer scales with the tokens it moves, `I·(1 − decode hit)`.
+  - `--assume-transfer-base` states a fixed part of the KV transfer per
+    request (vLLM sees the NIXL pull complete at the next decode step, 15
+    to 30 ms). The recording holds one mean transfer, not its split, so the
+    base is not measured: it defaults to 0, as before, and the measured
+    mean less it goes with the tokens moved. It is named on the `assumed`
+    row, not raised as a flag, and is on `replicas-to-slo` and
+    `slo-to-rate` only: `at-replicas` refuses it, and backtest, the day
+    plan and the API do not take it.
+
+  No committed recording has a prefix hit, so none of this is measured.
 
 ### 3. A margin on `V_P` near the knee
 

@@ -175,8 +175,11 @@ func TestTTFTJoint_WithInvertedVP(t *testing.T) {
 		PrefillWorkSamples: 40}}
 	p1 := ttftEstimate()
 	assert.Equal(t, p1, withInvertedVP(p1, learned), "P1's V_P stands")
-	refused := prefill.Estimate{VPRefused: prefill.NoPrefillCapacity, VPLowerBound: true}
+	refused := prefill.Estimate{VPRefused: prefill.NoPrefillCapacity, VPLowerBound: true,
+		VPWholePromptTokens: 16000, VPPromptHitRate: 0.5}
 	got := withInvertedVP(refused, learned)
+	assert.Zero(t, got.VPWholePromptTokens, "the joint window reads no whole prompt")
+	assert.Zero(t, got.VPPromptHitRate)
 	assert.Equal(t, 320000.0, got.VP)
 	assert.Equal(t, prefill.SourceInverted, got.VPSource)
 	assert.Empty(t, got.VPRefused)

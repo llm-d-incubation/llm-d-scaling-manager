@@ -25,7 +25,7 @@ func runAtReplicas(ctx context.Context, args []string, out, warn io.Writer) erro
 // on the API's fleet (servedState), which takes the defaults for them, and
 // states lengths with --shape.
 var atReplicasRefused = []string{"seed", "price-router-wait", "router-wait-in-prefill", "ps-onsets", "prefill-running-cap", "charge-decode-gate",
-	"assume-input-tokens", "assume-output-tokens"}
+	"assume-input-tokens", "assume-output-tokens", "assume-transfer-base"}
 
 // listFlag is a repeatable flag: each use adds its value.
 type listFlag []string

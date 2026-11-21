@@ -112,6 +112,8 @@
         "replicasFrom": "recording",
         "vp": 130000,
         "vpSource": "assumed",
+        "wholePromptTokens": 10920.73884349273,
+        "promptHitRate": 0,
         "fixedLatencySeconds": 0.011579102043789449,
         "fixedLatencySource": "learned",
         "imbalance": 1,

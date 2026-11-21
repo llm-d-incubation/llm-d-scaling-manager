@@ -114,10 +114,11 @@ priced:
 - The router's flow-control state is known. Without its queue series, state
   it with `--flow-control on|off`. A knee needs it off.
 - Every term was learned from the recording. A flag that types a term in
-  (`--assume-vp`, `--assume-a`, `--assume-router-hop`, `--batch-cap`,
-  `--assume-tpot-ratio`, the experimental pricing flags, the capture's engine
-  overrides) puts every figure outside. So does any flag on a figure that the
-  run's own figures did not carry.
+  (`--assume-vp`, `--assume-a`, `--assume-router-hop`,
+  `--assume-transfer-base`, `--batch-cap`, `--assume-tpot-ratio`, the
+  experimental pricing flags, the capture's engine overrides) puts every
+  figure outside. So does any flag on a figure that the run's own figures did
+  not carry.
 - The model is Qwen3-32B, at tensor parallelism 2 for prefill and decode, on
   H200, with 2 prefill and 2 decode Pods.
 - Prompt and output lengths are within 1.25x of a measured shape, and the
