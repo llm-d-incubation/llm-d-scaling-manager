@@ -361,9 +361,10 @@ type ReportRow struct {
 	Cell ReportCell `json:"cell"`
 }
 
-// ReportCell is one cell of the shape-by-load summary: TTFT p90 and the
-// TPOT percentile (the mean where the percentile is refused: TPOT.Statistic
-// says which), and Mark, whether the SLO targets hold at the rate (CellMet,
+// ReportCell is one cell of the shape-by-load summary: each latency at the
+// statistic its target is judged at (with no target, TTFT p90 and the
+// table's TPOT percentile; the TPOT mean where the percentile is refused:
+// TPOT.Statistic says which), and Mark, whether the SLO targets hold at the rate (CellMet,
 // CellMissed, CellOnset, CellSaturated, CellUnknown, CellNoTarget).
 type ReportCell struct {
 	TTFT ReportStat `json:"ttft"`

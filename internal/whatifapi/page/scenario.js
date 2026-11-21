@@ -605,14 +605,18 @@ function msText(f, tpot) {
 }
 
 // rowFigures is a row's two latencies at the SLO's statistics: the TTFT at
-// the TTFT target's, and the TPOT percentile where the SLO judges one, else
-// the mean.
+// the TTFT target's, and the TPOT at the TPOT target's, as the row's cell
+// carries them (a table prints p90 whatever the SLO judges); with no target,
+// TTFT p90 and the TPOT mean.
 function rowFigures(row, slo) {
   const tStat = slo && slo.ttft ? slo.ttft.statistic : "p90";
   const pStat = slo && slo.tpot ? slo.tpot.statistic : "mean";
-  const ttft = (row.ttft || []).find(s => s.statistic === tStat) || (row.ttft || [])[0] || {statistic: tStat};
+  const cell = row.cell || {};
+  let ttft = (row.ttft || []).find(s => s.statistic === tStat) || (row.ttft || [])[0] || {statistic: tStat};
+  if (cell.ttft && cell.ttft.statistic === tStat) ttft = cell.ttft;
   let tpot = Object.assign({statistic: "mean"}, row.tpotMean || {});
-  if (pStat !== "mean" && row.tpotPercentile) tpot = row.tpotPercentile;
+  if (pStat !== "mean" && row.tpotPercentile && row.tpotPercentile.statistic === pStat) tpot = row.tpotPercentile;
+  if (cell.tpot && cell.tpot.statistic === pStat) tpot = cell.tpot;
   return {ttft, tpot};
 }
 
@@ -693,7 +697,9 @@ function reportView(r) {
       const m = REPORT_MARKS[row.cell.mark] || ["unknown", "?"];
       const rate = sameRate[i] ? "" : ` @ ${roundRate(row.rate)} r/s`;
       if (isFloor(f.tpot)) floors = true;
-      const parts = [`TTFT ${msText(f.ttft, false)}`, `TPOT ${msText(f.tpot, true)}`];
+      // A TPOT target's percentile refused leaves the mean, which says so.
+      const tpotMean = slo && slo.tpot && slo.tpot.statistic !== "mean" && f.tpot.statistic === "mean" && f.tpot.value != null ? " (mean)" : "";
+      const parts = [`TTFT ${msText(f.ttft, false)}`, `TPOT ${msText(f.tpot, true)}${tpotMean}`];
       if (rate) parts.push(rate.trim());
       return {text: parts.join(" · ").replace(" · @", " @"), parts, cls: m[0], word: m[1]};
     }),

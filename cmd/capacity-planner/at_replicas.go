@@ -387,15 +387,23 @@ func loadText(l whatifapi.ReportLoad) string {
 	return s
 }
 
-// summaryText is the shape-by-load matrix: each cell TTFT p90 and the TPOT
-// percentile, and its mark in words. A cell whose TPOT percentile is refused
-// prints the mean, marked m.
+// summaryText is the shape-by-load matrix: each cell the TTFT and TPOT at
+// the statistics the SLO judges (TTFT p90 and the table's TPOT percentile
+// where no target is set), and its mark in words. A cell whose TPOT
+// percentile is refused prints the mean, marked m.
 func summaryText(r *whatifapi.ReportResponse) string {
-	tpot := whatifapi.ReportStatisticName(0)
-	for _, s := range r.Shapes {
-		for _, row := range s.Table {
-			if row.TPOTPercentile != nil {
-				tpot = row.TPOTPercentile.Statistic
+	ttft, tpot := whatifapi.ReportStatisticName(cellTTFTQ), whatifapi.ReportStatisticName(0)
+	if r.SLO.TTFT != nil {
+		ttft = r.SLO.TTFT.Statistic
+	}
+	if r.SLO.TPOT != nil {
+		tpot = r.SLO.TPOT.Statistic
+	} else {
+		for _, s := range r.Shapes {
+			for _, row := range s.Table {
+				if row.TPOTPercentile != nil {
+					tpot = row.TPOTPercentile.Statistic
+				}
 			}
 		}
 	}
@@ -430,7 +438,7 @@ func summaryText(r *whatifapi.ReportResponse) string {
 		}
 		cells = append(cells, row)
 	}
-	legend := fmt.Sprintf("cell = TTFT p90 ms / TPOT %s ms @ the rate priced, r/s; - refused (the shape's table says why)", tpot)
+	legend := fmt.Sprintf("cell = TTFT %s ms / TPOT %s ms @ the rate priced, r/s; - refused (the shape's table says why)", ttft, tpot)
 	if tpot != whatifapi.ReportStatisticName(0) {
 		legend += fmt.Sprintf("; m the TPOT mean, where the %s is refused", tpot)
 	}
