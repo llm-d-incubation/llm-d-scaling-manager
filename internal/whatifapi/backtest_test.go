@@ -214,7 +214,16 @@ func TestBacktest_ScoresAgainstTheHistogram(t *testing.T) {
 		require.NotNil(t, p.Measured, p.Statistic)
 		assert.InDelta(t, want[p.Statistic], *p.Measured, 1e-9, p.Statistic)
 		if p.Ratio != nil {
-			assert.InDelta(t, *p.Predicted.Value / *p.Measured, *p.Ratio, 1e-12)
+			// Outside a bucket too wide to place the figure, the ratio is
+			// over the bucket's nearer edge.
+			ref := *p.Measured
+			switch p.OutsideBucket {
+			case OutsideUnder:
+				ref = p.MeasuredBucket.Lo
+			case OutsideOver:
+				ref = p.MeasuredBucket.Hi
+			}
+			assert.InDelta(t, *p.Predicted.Value/ref, *p.Ratio, 1e-12, p.Statistic)
 			require.NotNil(t, p.Bound)
 			assert.InDelta(t, 1.1**p.Predicted.Value, *p.Bound, 1e-12, "the bound is the top of the span")
 		}
@@ -338,10 +347,18 @@ func TestBacktest_JudgesATTFTTarget(t *testing.T) {
 	require.NotNil(t, a)
 	assert.Equal(t, out.Summary.Judged, a.Steps)
 	assert.Equal(t, a.Steps, a.BothMet+a.BothMissed+a.MissedMisses+a.FalseAlarms+a.NotJudged)
-	// The measured p90 is 0.2 s everywhere: every judged step measured a miss.
+	// The measured p90 is in the 0.1 to 0.2 s bucket everywhere, which holds
+	// the target: no step can say which side of it the fleet was.
+	assert.Equal(t, a.Steps, a.NotJudged, "%+v", *a)
+	// Under the bucket, every judged step measured a miss.
+	target = 0.09
+	out = btRun(t, btEntry(t, r, "fit", fs, fl, btConfig("H100")), btEntry(t, r, "t", s, l, btConfig("H100")),
+		BacktestRequest{TTFT: &Objective{Statistic: "p90", Target: &target}})
+	a = out.Summary.Target
+	require.NotNil(t, a)
 	assert.Zero(t, a.BothMet)
 	assert.Zero(t, a.FalseAlarms)
-	assert.Positive(t, a.MissedMisses, "the stub predicts under 0.15 s at a low rate")
+	assert.Positive(t, a.MissedMisses+a.BothMissed, "%+v", *a)
 }
 
 // A source with no prefill variant is refused: a backtest prices a P/D

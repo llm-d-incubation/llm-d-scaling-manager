@@ -300,7 +300,44 @@ type ReportDecodeUse struct {
 	SlotsOccupied   Figure `json:"slotsOccupied"`
 	Slots           int64  `json:"slots"`
 	WaitProbability Figure `json:"waitProbability"`
+	// KVPull is the KV pull on the decode pods, where the TTFT is priced as
+	// processor sharing on a P/D fleet with a decode line and a transfer;
+	// nil where it is not, and where the fleet itself is refused. It stands
+	// where the TTFT is refused, the pull saturating among the reasons, and
+	// at a prompt spread past processor sharing's where first come's larger
+	// price is taken, which prices no pull stage: then with no wait
+	// (Unpriced says which). The KV fill and the slots leave it out.
+	KVPull *ReportKVPull `json:"kvPull,omitempty"`
 }
+
+// ReportKVPull is the KV pull's load on the decode pods at the load judged.
+type ReportKVPull struct {
+	// Utilization is the pull stage's utilization on one decode pod; at 1 or
+	// above the pull saturates the decode pods, and the TTFT is refused.
+	Utilization float64 `json:"utilization"`
+	// Wait is the pull's mean stretch, in seconds: the time a pull shares
+	// its pod beyond its own work. Absent where Unpriced is set.
+	Wait *float64 `json:"wait,omitempty"`
+	// Unpriced is why Wait is absent: KVPullTTFTRefused, the mean TTFT is
+	// refused at the load; KVPullFirstCome, it is priced first come at a
+	// prompt spread past processor sharing's, which prices no pull stage.
+	// Empty where Wait is set.
+	Unpriced string `json:"unpriced,omitempty"`
+	// SetsTTFT says the pull is the larger mean wait in TTFT: on its own
+	// larger than decode admission's and than the prefill side's, so the
+	// larger mean wait in TTFT sits on the decode pods. False where Wait is
+	// absent.
+	SetsTTFT bool `json:"setsTTFT"`
+}
+
+// The reasons a ReportKVPull carries no wait (ReportKVPull.Unpriced).
+const (
+	// KVPullTTFTRefused is a mean TTFT refused at the load judged.
+	KVPullTTFTRefused = "ttftRefused"
+	// KVPullFirstCome is a mean TTFT priced first come, at a prompt spread
+	// past processor sharing's.
+	KVPullFirstCome = "firstCome"
+)
 
 // ReportPrefillUse is prefill's utilization: the load over the prefill knee
 // on the busiest pod, and over the pods pooled.

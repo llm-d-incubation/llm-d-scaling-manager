@@ -942,6 +942,29 @@ func (r *reporter) use(u *whatifapi.ReportUse, base *servedFleet, ev fleetEval) 
 	case whatif.Unanswerable:
 		u.Decode.WaitProbability = whatifapi.FigureOf(a, "", false)
 	}
+	// The KV pull's utilization stands where the TTFT is refused, the pull
+	// saturating among the reasons; its wait is the mean TTFT's part, with
+	// no span (a mean whatever the percentile judged), and absent where that
+	// TTFT is refused, or priced first come at a prompt spread past
+	// processor sharing's (whatif.SpreadBeyondProcessorSharing), which prices
+	// no pull stage: its wait reads 0 there, which is not a measurement.
+	if base.pf.refused == nil {
+		if rho := whatif.KVPullUtilization(base.pf.fleet, r.load); rho > 0 {
+			kv := &whatifapi.ReportKVPull{Utilization: rho}
+			mean := base.pf.priced(func(fl whatif.TTFTFleet) whatif.Result { return whatif.TTFTAt(fl, r.load, 0) })
+			t, ok := mean.(whatif.TTFT)
+			switch {
+			case !ok:
+				kv.Unpriced = whatifapi.KVPullTTFTRefused
+			case !(t.Parts.KVPullUtilization > 0):
+				kv.Unpriced = whatifapi.KVPullFirstCome
+			default:
+				w := t.Parts.KVPullWait
+				kv.Wait, kv.SetsTTFT = &w, pullSetsTTFT(t.Parts)
+			}
+			u.Decode.KVPull = kv
+		}
+	}
 	pk, ok := ev.prefillKnee.(whatif.Answer)
 	if !ok {
 		f := whatifapi.FigureOf(ev.prefillKnee, "", false)
@@ -1450,19 +1473,43 @@ func (r *reporter) underWords(e fleetEval) (cause, role, why string) {
 }
 
 // ttftRole is the role that sets a missed TTFT at the load, and why: the
-// prefill queue or decode admission, whichever mean wait is the larger; the
-// knee's role when the TTFT is refused for saturation.
+// prefill queue or the decode side, whichever mean wait is the larger, the
+// decode side named by its larger part, admission or the KV pull; the knee's
+// role when the TTFT is refused for saturation.
 func ttftRole(t whatif.Result, e fleetEval) (role, why string) {
 	v, ok := t.(whatif.TTFT)
 	if !ok {
 		return e.binds, e.binds + " sets the knee, and TTFT saturates there"
 	}
 	p := v.Parts
-	prefillWait, decodeWait := p.EngineWait+p.RouterWait+p.BurstWait, p.DecodeWait+p.KVPullWait
-	if decodeWait > prefillWait {
+	prefillWait, decodeWait := ttftWaits(p)
+	switch {
+	case pullSetsTTFT(p):
+		return roleDecodeWord, fmt.Sprintf("the KV pull on the decode pods, a %s mean wait (decode admission %s, the prefill side %s), is the larger wait in TTFT",
+			secondsWords(p.KVPullWait), secondsWords(p.DecodeWait), secondsWords(prefillWait))
+	case decodeWait > prefillWait && p.KVPullWait > 0:
+		return roleDecodeWord, fmt.Sprintf("the decode side, a %s mean wait (admission %s, the KV pull %s), is the larger wait in TTFT",
+			secondsWords(decodeWait), secondsWords(p.DecodeWait), secondsWords(p.KVPullWait))
+	case decodeWait > prefillWait:
 		return roleDecodeWord, fmt.Sprintf("decode admission, a %s mean wait, is the larger wait in TTFT", secondsWords(decodeWait))
 	}
 	return rolePrefill, fmt.Sprintf("the prefill queue, a %s mean wait, is the larger wait in TTFT", secondsWords(prefillWait))
+}
+
+// ttftWaits are TTFT's mean waits on the prefill side (the engine, the
+// router's gate and its burst) and on the decode side (admission and the KV
+// pull).
+func ttftWaits(p whatif.TTFTParts) (prefill, decode float64) {
+	return p.EngineWait + p.RouterWait + p.BurstWait, p.DecodeWait + p.KVPullWait
+}
+
+// pullSetsTTFT says the KV pull is the larger wait in TTFT: on its own
+// larger than the prefill side's wait and than decode admission's. The
+// larger mean wait in TTFT then sits on the decode pods, while decode's KV
+// fill and slots read near idle.
+func pullSetsTTFT(p whatif.TTFTParts) bool {
+	prefill, _ := ttftWaits(p)
+	return p.KVPullWait > prefill && p.KVPullWait > p.DecodeWait
 }
 
 // missWords is one missed target in words.

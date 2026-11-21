@@ -592,6 +592,15 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
     utilization: {decode: {}, prefill: {}}, table: [Object.assign(row("10r/s", 10, {value: 0.5, flags: ["BelowFittedBand"]}, {value: 0.007}, "met"))]}]}).rows[0].cells[0].parts[0] === "TTFT 500 ms");
   check("decode use reads in words", ctx.decodeUse({kvFill: {value: 0.168}, bandTop: 0.8, slotsOccupied: {value: 48.2}, slots: 228, waitProbability: {value: 0.004}}) ===
     "decode KV 17% full (of 80% usable), 48 of 228 batch slots busy, 0% of requests wait for a slot", ctx.decodeUse({kvFill: {value: 0.168}, bandTop: 0.8}));
+  check("a KV pull that sets TTFT is named", ctx.decodeUse({kvFill: {value: 0.006}, bandTop: 0.8, kvPull: {utilization: 0.62, wait: 0.05, setsTTFT: true}}) ===
+    "decode KV 1% full (of 80% usable); KV pull 62% busy per decode pod, the larger mean wait in TTFT (it sits on the decode pods)",
+    ctx.decodeUse({kvFill: {value: 0.006}, bandTop: 0.8, kvPull: {utilization: 0.62, wait: 0.05, setsTTFT: true}}));
+  check("a KV pull that does not set TTFT is not named as its wait", ctx.decodeUse({kvFill: {value: 0.006}, bandTop: 0.8, kvPull: {utilization: 0.2, wait: 0.001, setsTTFT: false}}) ===
+    "decode KV 1% full (of 80% usable); KV pull 20% busy per decode pod",
+    ctx.decodeUse({kvFill: {value: 0.006}, bandTop: 0.8, kvPull: {utilization: 0.2, wait: 0.001, setsTTFT: false}}));
+  check("a saturating KV pull stands beside a refused KV fill", ctx.decodeUse({kvFill: {refused: {reason: "Saturated"}}, kvPull: {utilization: 1.3, setsTTFT: false}}).endsWith(
+    "; KV pull 130% busy per decode pod, saturated"),
+    ctx.decodeUse({kvFill: {refused: {reason: "Saturated"}}, kvPull: {utilization: 1.3, setsTTFT: false}}));
   check("prefill use reads in words", ctx.prefillUse({pooled: {value: 0.6312}, worstPod: {value: 0.71}}) === "prefill 63% busy pooled, 71% on the busiest pod");
   check("a verdict word is set apart from its sentence", v.verdicts[1].verdict === "OVER-PROVISIONED" && v.verdicts[1].rest.startsWith("if all 47.4 r/s were 1k/1k requests, one prefill"));
   check("a refusal code in a reason reads in words", v.details[0].lines.includes("The numbers: TTFT p95 router-queued misses 2000.0 ms"),
@@ -656,7 +665,7 @@ if (failures.length) {
 }
 // EXPECTED_CASES is how many cases this file runs: a case that silently
 // stops running (an early return, a renamed function) fails the check.
-const EXPECTED_CASES = 318;
+const EXPECTED_CASES = 321;
 if (passed !== EXPECTED_CASES) {
   console.error(`check-planner-scenarios: ${passed} cases ran; expected ${EXPECTED_CASES}`);
   process.exit(1);

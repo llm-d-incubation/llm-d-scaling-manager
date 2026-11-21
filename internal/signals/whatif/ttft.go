@@ -402,6 +402,10 @@ func (d DecodeTTFT) at(i float64) float64 {
 	return d.Seconds * max(1, i/d.PromptTokens)
 }
 
+// At is the decode term for a prompt of i tokens, as the TTFT prices it:
+// 0 when unmeasured.
+func (d DecodeTTFT) At(i float64) float64 { return d.at(i) }
+
 // TTFTTarget is a TTFT service level, end to end.
 type TTFTTarget struct {
 	// Seconds is the target.
@@ -1211,7 +1215,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 			return m, nil
 		}
 		mixes[key{}] = withGate(m, false)
-		out.Parts.EngineWait, out.Parts.KVPullWait = parts.prefill, parts.pull
+		out.Parts.EngineWait, out.Parts.KVPullWait, out.Parts.KVPullUtilization = parts.prefill, parts.pull, parts.pullRho
 	} else {
 		theta := pf.waitScale(rho)
 		var tail float64

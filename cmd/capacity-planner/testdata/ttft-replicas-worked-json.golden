@@ -282,6 +282,7 @@
               "decodeShare": 0.031774930977097736,
               "engineWait": 0.05047520035773935,
               "kvPullWait": 0,
+              "kvPullUtilization": 0,
               "ownPrefill": 0.044368837498301734,
               "decodeWait": 0.01591097479879894,
               "firstStep": 0.0036607509947803553,

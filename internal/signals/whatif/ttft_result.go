@@ -311,6 +311,11 @@ type TTFTParts struct {
 	// TTFTFleet.ProcessorSharing prices it, with a decode line. The pull's
 	// own work is in OwnPrefill.
 	KVPullWait float64
+	// KVPullUtilization is the KV pull stage's utilization on one decode
+	// pod: the rate over the decode pods times the prompt's pull time,
+	// E[I] * kappa/BW. 0 where KVPullWait is not priced. The decode KV fill
+	// leaves it out: a pod can pull near its limit at a fill near 0.
+	KVPullUtilization float64
 	// OwnPrefill is a + E[I_eff]/V_P, plus the part of decode's term that
 	// goes with the prompt: T_xfer on the old sum, the per-token parts of D
 	// and R with a DecodeTerm. It follows the prompt's quantile.

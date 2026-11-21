@@ -36,23 +36,36 @@ another recording, pick **another recording** and choose it.
 The first lines are the answer. For example:
 
 ```text
-Over the 1 h 52 min the planner did not see:
-p90 TTFT: within 20% of measured in 11 of the 15 five-minute steps scored (a figure, and enough measured requests);
-it leans high (median ratio 1.09). For 7 more it gave no figure, calling the fleet overloaded; the fleet measured
-p90 358 ms to 374 ms there.
-p90 TPOT: within 20% of measured in 2 of the 15 five-minute steps scored (a figure, and enough measured requests);
-its errors are wide; it leans high (median ratio 1.24); it read 5 more than 20% low. For 7 more it gave no figure, ...
+Over the 1 h 13 min the planner did not see:
+mean TTFT: within 20% of measured in 0 of the 14 five-minute steps scored (a figure, and enough measured requests);
+its errors are wide; it leans high (median ratio 1.73); it read 2 more than 20% low. For 1 more it gave no figure,
+calling the fleet overloaded; the fleet measured mean 11.6 s there. p90 TTFT: within 20% in 0 of 9, median ratio
+1.88, 2 read more than 20% low.
+mean TPOT: within 20% of measured in 15 of the 15 five-minute steps scored (a figure, and enough measured requests);
+no overall lean (median ratio 0.98). p90 TPOT not scored in 10: the measured p90 fell in a histogram bucket wider
+than 20% of its lower edge, too wide to place it, with the prediction inside it.
 None of these figures falls within the conditions our own accuracy benchmarks cover
 (docs/guides/capacity-planner/accuracy.md): this check is the evidence for this fleet.
-Judged 22 of 23 five-minute steps; not judged: 1 warm-up.
+Judged 15 of 16 five-minute steps; not judged: 1 warm-up.
 ```
 
 How to read it:
 
-- **Within 20% in 11 of the 15 steps scored**: the count that matters. A
+- **Within 20% in 15 of the 15 steps scored**: the count that matters. A
   step is scored when the planner gave a figure and the fleet measured
-  enough requests to read the statistic (100 for a p90). The other steps,
-  and why they were not scored, follow in the same line.
+  enough requests to read the statistic (50 for the mean, 100 for a p90).
+  The other steps, and why they were not scored, follow in the same line.
+- **The mean leads**: the line quotes the mean, the histogram's sum over
+  its count, which no bucket edge sets. The p90 follows it. A measured p90
+  is interpolated inside the bucket that holds it, so it can sit anywhere
+  in that bucket whatever the traffic did; it is placed only where the
+  bucket is at most 1.2 times its lower edge, the 20% the verdict judges
+  by. A router's buckets are often wider (TPOT 5 to 10 ms around a mean of
+  7.5 ms). There the step shows the p90 with a `~`, and the bucket decides:
+  a prediction more than 20% under or over the bucket's nearer edge is a
+  certain miss, scored against that edge (which understates the miss) and
+  never within; a prediction nearer than that, or inside it, could be
+  within and is counted `unresolvable`, not as a miss.
 - **Median ratio**: the planner's figure over the measured one, at the
   middle step. Above 1 it leans high at the middle; below 1 it leans low. A
   median near 1 can still hide steps it read low, so check that count too.
@@ -67,10 +80,13 @@ How to read it:
 - **Not judged**: steps whose measurement reaches into the first minutes of
   the test or over a change of replicas, and steps with no traffic.
 
-Below that are each step and then the scores: the mean, p50, p90 and p95 of
-TTFT and TPOT, then the same split by load. The page draws the same steps over
-time: predicted lines, measured dots, steps it called overloaded marked in
-red at the top, and steps not judged in grey.
+Below that are each step (the mean and the p90 of each) and then the
+scores: the mean, p50, p90 and p95 of TTFT and TPOT, then the same split by
+load. The page draws the same steps over
+time: the predicted mean and p90 as lines, the measured mean and p90 as
+dots, a measured p90 in a bucket too wide to place it as a bar over that
+bucket, steps it called overloaded marked in red at the top, and steps not
+judged in grey.
 
 The prediction uses each step's request rate, prompt and output lengths, the
 spread of prompt lengths, and the replicas each role ran. Unless you give
@@ -92,8 +108,8 @@ what the fleet measured. The result comes first, in one line:
 
 ```text
 Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it,
-p90 TTFT within 20% in 0 of 9 steps (median ratio 1.90); p90 TPOT within 20% in 10 of 10 steps (median ratio 0.94). [inconsistent]
-  Do not trust prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures (loosely) held.
+mean TTFT within 20% in 0 of 13 steps (median ratio 1.69); mean TPOT within 20% in 14 of 14 steps (median ratio 0.98). [inconsistent]
+  Do not trust prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures held.
 ```
 
 An answer given stated inputs is checked with them. With
@@ -195,7 +211,8 @@ On the page: **Blind: predict now, compare later**, under the check.
 
 Size from the planner when, below the load it thinks the fleet can carry:
 
-- the p90 TTFT is within 20% in most of the steps it gave a figure for;
+- the mean TTFT and TPOT are within 20% in most of the steps it gave a
+  figure for, and the p90s too where the histogram could place them;
 - the median ratio is between about 0.95 and 1.2 (leaning a little high
   costs replicas, leaning low costs the SLO);
 - it read few steps more than 20% low;
@@ -233,7 +250,7 @@ Size from the planner when, below the load it thinks the fleet can carry:
 | `--step` | `5m` | A step, from `1m` to `1h`. A step shorter than the router's five-minute window shares requests with its neighbours. |
 | `--settle` | `2m` | How long after a change of replicas, and after the test starts, a measurement is not judged. |
 | `--arrival-cv2` | random | How bursty arrivals are, when you know it: 1 is random. |
-| `--ttft-target` | | Judge each step against a target too: `500ms@p90`. The summary counts the steps predicted to meet it that measured a miss. |
+| `--ttft-target` | | Judge each step against a target too: `500ms@p90`. The summary counts the steps predicted to meet it that measured a miss. Where the measured percentile fell in a bucket too wide to place it, the bucket judges: met at or over its upper edge, missed at or under its lower, and not judged on the measured side for a target inside it. |
 | `--measured` | `auto` | `router`, `engine`, or `auto` (the router's where recorded). |
 | `--assume-vp`, `--assume-a` | | A prefill pod's prompt tokens per second, and its fixed latency, where the part it learned from held none. Flagged. |
 | `--assume-prompt-cv` | each step's | The prompts' spread, 0 to 3, in place of the one each step reads from the histogram, which is coarse on long prompts. Flagged. |

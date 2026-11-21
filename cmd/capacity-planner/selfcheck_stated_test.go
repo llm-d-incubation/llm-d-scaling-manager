@@ -38,24 +38,36 @@ func selfCheckOf(t *testing.T, args ...string) statedCheck {
 }
 
 // The self-check replays the recording with the prompt spread the answer
-// states: on the q32 warm-up (prompts sent at cv 0.06, no computed-prompt
-// histogram, so the default cv 2) --assume-prompt-cv 0.06 moves the
-// self-check's TTFT ratio with the answer's figures, and its line names
-// the input. Before issue llm-d-incubation/llm-d-scaling-manager#277 the line
-// was the same with and without it.
+// states, and its line names the input. Before issue
+// llm-d-incubation/llm-d-scaling-manager#277 the line was the same with and
+// without it.
+//
+// The self-check scores the mean (#291). On the q32 warm-up each step reads
+// its own prompt cv, 0.3 to 0.45, from the prefill pods' histogram (the
+// answer's default cv 2 is not the steps'). At a cv past
+// whatif.MaxPSPromptCV the larger of processor sharing's and first come's
+// mean is priced; first come's lies above processor sharing's only past
+// cv 1, and processor sharing's mean does not depend on the spread. So
+// --assume-prompt-cv 0.06 leaves the mean bias where it was (both read
+// 1.6890; it moves the percentiles), and the stated cv is shown to reach
+// the replay's pricing by a cv past 1: --assume-prompt-cv 3 prices first
+// come's larger mean on every step, and the bias rises.
 func TestSelfCheckReplaysTheStatedPromptCV(t *testing.T) {
 	withSelfCheck(t)
 	plain := selfCheckOf(t, selfCheckQ32...)
-	cv := selfCheckOf(t, append(selfCheckQ32, "--assume-prompt-cv", "0.06")...)
+	narrow := selfCheckOf(t, append(selfCheckQ32, "--assume-prompt-cv", "0.06")...)
+	wide := selfCheckOf(t, append(selfCheckQ32, "--assume-prompt-cv", "3")...)
 	assert.Empty(t, plain.Stated)
 	assert.True(t, strings.HasPrefix(plain.Line, "Self-check: tested on the last "), plain.Line)
-	assert.Equal(t, []string{"--assume-prompt-cv 0.06"}, cv.Stated)
-	assert.True(t, strings.HasPrefix(cv.Line, "Self-check, replayed with the stated --assume-prompt-cv 0.06 (flagged as stated): tested on the last "), cv.Line)
-	require.NotNil(t, plain.TTFT)
-	require.NotNil(t, cv.TTFT)
-	require.NotNil(t, plain.TTFT.Bias)
-	require.NotNil(t, cv.TTFT.Bias)
-	assert.Less(t, *cv.TTFT.Bias, *plain.TTFT.Bias, "a narrower spread prices a lower TTFT, at the fits as in the answer")
+	assert.Equal(t, []string{"--assume-prompt-cv 0.06"}, narrow.Stated)
+	assert.True(t, strings.HasPrefix(narrow.Line, "Self-check, replayed with the stated --assume-prompt-cv 0.06 (flagged as stated): tested on the last "), narrow.Line)
+	assert.Equal(t, []string{"--assume-prompt-cv 3"}, wide.Stated)
+	for _, sc := range []statedCheck{plain, narrow, wide} {
+		require.NotNil(t, sc.TTFT, sc.Line)
+		require.NotNil(t, sc.TTFT.Bias, sc.Line)
+	}
+	assert.InDelta(t, *plain.TTFT.Bias, *narrow.TTFT.Bias, 1e-9, "below cv 1 the priced mean is processor sharing's, which the spread does not move")
+	assert.Greater(t, *wide.TTFT.Bias, *plain.TTFT.Bias, "the stated cv 3 reaches the replay's pricing: first come's mean, above processor sharing's")
 }
 
 // The self-check replays the recording with the ITL B the answer states: on

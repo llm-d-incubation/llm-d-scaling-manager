@@ -169,6 +169,7 @@ func TestPS_TheMeanIsTheStretchesAndTheWork(t *testing.T) {
 	pull := p.PromptTokens * p.TransferSecondsPerToken
 	rd := rate / 2 * pull
 	nearRel(t, "pull stretch", r.Parts.KVPullWait, pull*rd/(1-rd), 1e-12)
+	nearRel(t, "pull utilization", r.Parts.KVPullUtilization, rd, 1e-12)
 	sum := r.Parts.EngineWait + r.Parts.KVPullWait + r.Parts.OwnPrefill + r.Parts.DecodeWait + r.Parts.DecodeEngine + r.Parts.RouterHop
 	nearRel(t, "mean", r.Seconds, sum, 1e-12)
 }
@@ -462,4 +463,43 @@ func nearRel(t *testing.T, what string, got, want, tol float64) {
 func isRefusal(r Result, reason Reason) bool {
 	u, ok := r.(Unanswerable)
 	return ok && u.Reason == reason
+}
+
+// KVPullUtilization is the TTFT's own pull utilization where the TTFT prices
+// the pull, stands at or past 1 where the TTFT refuses a saturated pull, and
+// is 0 where no pull stage is priced: first come, no decode line, or no
+// transfer.
+func TestPS_KVPullUtilizationIsTheTTFTs(t *testing.T) {
+	fl := psFleet(0.0577, 1)
+	for _, rate := range []float64{1, 10, 28.3} {
+		nearRel(t, "pull utilization", KVPullUtilization(fl, rate), psTTFT(t, fl, rate, 0).Parts.KVPullUtilization, 1e-12)
+	}
+	sat := psFleet(0.0577, 1)
+	sat.Decode.Replicas = 1
+	sat.Prefill.TransferSecondsPerToken = 2e-5
+	if !isRefusal(TTFTAt(sat, 7, 0), Saturated) {
+		t.Fatalf("want the saturated pull refused: %+v", TTFTAt(sat, 7, 0))
+	}
+	if got := KVPullUtilization(sat, 7); got < 1 {
+		t.Errorf("a saturated pull reads %g, want at least 1", got)
+	}
+	// Past MaxPSPromptCV first come's larger mean is priced, with no pull
+	// stage: the part reads 0 and the pull's load stands.
+	wide := psFleet(2, 1)
+	wideTTFT := psTTFT(t, wide, 10, 0)
+	if !slices.Contains(wideTTFT.Flags, SpreadBeyondProcessorSharing) || wideTTFT.Parts.KVPullUtilization != 0 {
+		t.Errorf("cv 2: want first come priced, no pull part: flags %v, part %g", wideTTFT.Flags, wideTTFT.Parts.KVPullUtilization)
+	}
+	nearRel(t, "cv 2 pull utilization", KVPullUtilization(wide, 10), KVPullUtilization(psFleet(0.0577, 1), 10), 1e-12)
+	fc := psFleet(0.0577, 1)
+	fc.ProcessorSharing = false
+	noDecode := psFleet(0.0577, 1)
+	noDecode.Decode = nil
+	noXfer := psFleet(0.0577, 1)
+	noXfer.Prefill.TransferSecondsPerToken = 0
+	for name, f := range map[string]TTFTFleet{"first come": fc, "no decode line": noDecode, "no transfer": noXfer} {
+		if got := KVPullUtilization(f, 10); got != 0 {
+			t.Errorf("%s: %g, want 0", name, got)
+		}
+	}
 }

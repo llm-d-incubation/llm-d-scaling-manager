@@ -120,6 +120,68 @@ closed form (Little's law, residence `OL·ITL(k)`):
 
 valid while the denominator is positive and `n` is under the cap.
 
+**Residence from the KV pull, behind a switch (#301).** A P/D decode replica
+holds a request's KV from the start of its pull, not from its first token, so
+its residence is `H + (OL − 1)·ITL(k)`, `H` the decode engine's TTFT at the
+prompt (`whatif.Decode.HeldBefore`), which ends at the first output token, so
+that step is in it; the fill is
+`k = λ_rep·(H + (OL − 1)·B) / (C/KVreq − λ_rep·(OL − 1)·A)`, with the same
+residence in the admission chain and the knee. A TTFT read with requests
+waiting on decode capacity is a queue, and a waiting request holds no KV: it is
+not used, nor is an unread one or one from a window whose decode backlog is
+unread, and the figures are flagged `ResidenceUnread`. An engine that does not
+export `num_requests_waiting_by_reason{reason="capacity"}` (vLLM releases
+before it, other engines) never says why its requests wait, so its backlog is
+always unread and the switch prices no residence there: the figures stay at the
+closed form, the low (optimistic) side, flagged. `H` is read at the
+recorded load and held at every rate, and it times the batch slots too, where a
+request pulling its KV holds cache but not yet a running slot: a knee the slots
+bind is priced low. With `H = 0` every figure is the closed form
+above, exactly. At 8k prompts and 26 output tokens `H` is about a third of the
+residence; at 1000/1000 under 1%. Planner-only replay switch
+`decode-residence-pull`, off. Where `H` is at least one step `ITL(k)` it only
+raises the fill, so no TPOT reads lower with it (the knee and the rate for a
+target do drop); alone it moves the 0.6B staircase's mean TPOT further over (r1 B,
+1.36 to 1.56 of measured), where the line already reads high. Beside
+`itl-hold-steady-slope` and `itl-line-at-floor` it lifts the bursty phases they
+read low (r2 C at Ca² 4, mean TPOT 0.79 to 0.85, steps read low 18 to 3 of 30):
+it should go on with them (nothing enforces it).
+
+**The fill a request sees under clustered arrivals, behind a switch (#291 (b)).**
+Little's law gives the time-average fill; a request is counted where requests
+arrive, and clustered arrivals put more of them beside it. For a stationary
+stream with interarrival `Ca²` the arrivals expected beside a typical one, beyond
+the rate's share, number `Ca² − 1` (the counts' variance over a long window is
+`Ca²` times their mean); a decode replica of `N_d` taking a share at random holds
+`e = (Ca² − 1)/N_d` of them, all taken as overlapping the request's residence
+(hundreds of steps against clusters of a few interarrival times; where the
+residence is short this reads high). The request's steps run at `ITL(k + e·KVreq/C)`,
+so the fill is the fixed point
+`k = λ_rep·(H + S·B + S·A·ε) / (C/KVreq − λ_rep·S·A)`, `ε = e·KVreq/C`, `S` the
+steps, and the mean TPOT is `ITL(k + ε)`, never past `k_full`. The line was fitted
+at the engines' own arrivals (Poisson on every recording that states none), so
+only the excess over Poisson is priced: `Ca² ≤ 1` prices none. The knee is
+unchanged (a full batch is no fuller). It reads the `Ca²` stated with
+`--arrival-cv2`, flagged `AssumedArrivalCV2` on the decode figures. Planner-only
+replay switch `decode-burst-fill`. The per-cycle rates of a held step are not
+used: their spread is the counts' noise (`cv² ≈ Ca²/(60λ)`), well under the
+clustering inside a cycle.
+
+The pull also loads the decode pods while their KV fill reads near idle: with
+processor sharing on (the CLI's default) the pull is a stage on each decode pod,
+`E[I]·κ/BW` of work at `λ/N_d`. The report's decode utilization carries it as a
+`KV pull` row (`utilization.decode.kvPull`: the stage's utilization per pod and its
+mean wait), on a P/D fleet with a decode line and a transfer, and says when it is
+the larger wait in TTFT, on its own larger than decode admission's and than the
+prefill side's. The row stands where the TTFT is refused, with its utilization
+and no wait: at 1 or above the pull saturates the decode pods, the refusal's
+reason; and at a prompt spread past processor sharing's, where first come's larger
+price is taken and no pull stage is priced, with its utilization and no wait
+(`unpriced` says which). Where the pull is the larger mean wait, that wait sits on
+the decode pods, not the prefill pods: on the 0.6B warm-up at 9 prefill, decode 2, 3
+and 4 gave p95 TTFT 322, 218 and 198 ms at a KV fill under 0.01. A missed TTFT names
+the pull, not decode admission, in the verdict's reason.
+
 Corrections: on the decode side `KVreq` is the measured resident KV per running request, or the whole context `IL + D·OL/2` with no reading (a prefix hit saves decode KV only where running requests share the blocks). The analyzers price `KVreq = ILeff + D·OL/2` with the output spread
 `D = E[O²]/E[O]²` (ev-shindin/llm-scaling-manager#276), read from the output-length histogram, in the saturation
 analyzer, the slo analyzer (switch `slo-kv-per-request-output-dispersion`), the
@@ -216,6 +278,18 @@ p99.9 each read the same bucket's edge, 21.79 ms, and the window's bucket is 6.7
 times the mean. No figure there answers the percentile asked. A refusal of the
 engine's own, such as `TPOTQuantileUnbounded`, is returned as it is.
 
+A coarse `R_q` is refused as well, `TPOTBucketTooWide`, on a variant whose decode
+step is host-bound: a line with a measured intercept (an ols fit, a pinned or held
+`B` that is not the default; not the least ITL above the band, not a borrowed line)
+whose `B`, and its floor read below the band, are under 5 ms. On the 0.6B staircase
+such a line priced p90 TPOT at the mean while the fleet measured a p90 1.3 times and
+a p95 1.6 times its mean: the tail is host jitter (scheduling, sampling,
+detokenizing), not the fill the line models, and the coarse bucket's grid would set
+the percentile (#291). The refusal is per variant, so a variant with no line or a
+slow step beside it still prices; it replaces only a figure, never a refusal the
+library gave, so an overloaded fleet still reads `Saturated`; and it carries the
+read's flags, `EngineTPOTHistogram` included where the engine's histogram was read.
+
 The collector reads the engine's buckets and not its `_sum`, so the window's mean is
 each row's `AvgITL`, weighted by its requests, the assumption the mean TPOT target
 already makes. An answer from it is flagged `EngineTPOTHistogram`, and the row says
@@ -224,6 +298,38 @@ already makes. An answer from it is flagged `EngineTPOTHistogram`, and the row s
 the case is held on built windows (`TestEngineTPOT_TheOrder`). A refusal priced on
 `R_q` keeps what it rests on, `EngineTPOTHistogram`, `CoarseTPOTBucket` or
 `AssumedTPOTRatio`, as an answer does.
+
+**R_q by censored likelihood, behind a switch (#279).** Read at the `q`
+bucket's upper edge and then at an order-statistic margin, the planner's p90/p50
+read 1.55 on the Qwen3-32B shape-A phase against a measured 1.27 to 1.31 (#279,
+at v0.12.2; 1.57 in this branch's replay).
+`whatif.TPOTRatioCensored` fits every window a lognormal at the window's own
+mean (`_sum/_count`) with one log-spread `σ` shared by all, each bucket count the
+mass between two edges, and reads `R_q` as that lognormal's `q`-quantile over its
+mean, `exp(σ·z_q − σ²/2)`, with no margin and never above the edge reading;
+`byFill` is learned the same way. A window whose every request sits in one
+bucket does not identify `σ` (its likelihood rises as `σ` falls): fitted alone,
+the windows' median read a ratio of 1.01 on the Qwen3-32B shape-A phase, p90
+TPOT 22 ms against a measured 38. Pooled, the windows that spill into the next
+bucket set `σ`, where the second-fullest bucket holds real mass (3 requests and
+2% of the window: a sliver past an edge would set it for every window pooled);
+with none, or a fit at the floor of the `σ` range, the edge reading stands. By
+fill, each bucket is fitted on its own windows, never above that bucket's own
+edge reading, and one whose windows do not identify `σ` takes the global `R_q`
+capped there. Flags and refusals are the edge reading's; a fitted read is not
+replaced by a coarse engine histogram's edge reading where the router's buckets
+are coarse, since the fit is what reads inside them, but a fine engine reading
+stands over it, as without the switch: it is a measurement where the fit is a
+model of one, and the switch then never refuses a host-bound variant's
+percentile that it priced off. Requests past a window's last
+finite edge are a cell of their own. Planner-only replay switch `tpot-ratio-censored`, off: on the
+Qwen3-32B shape-A phase it reads p90 over p50 at about 1.22 where the edge read 1.57
+(against a measured 1.27 to 1.31),
+and the router's 10, 20 and 40 ms buckets hold the measured p50 and p90 in the
+same bucket in nearly every step, so the backtest cannot say which is right
+(both unresolvable); on the shorter-output phases it moves the p90 from about
+the interpolated measured figure (19 ms) to 14 to 15 ms. Nothing there shows it
+reads at or over the truth, so it stays off.
 
 **Without a histogram**, a percentile TPOT is refused (`NoTPOTHistogram`).
 `--assume-tpot-ratio R` gives a flagged answer instead. Recommendation: refuse
@@ -1067,7 +1173,7 @@ Every answer is an `Answer{Value, Band, Basis, Flags}` or an
 | `TokenGapPercentile` | A percentile over token gaps (ITL); per-request TPOT percentiles are supported |
 | `NoTPOTHistogram` | A per-request TPOT percentile with no router or engine TPOT histogram holding an observation (the router's needs `usage` on responses) and no `--assume-tpot-ratio` |
 | `TPOTQuantileUnbounded` | The TPOT `q` quantile falls in the histogram's `+Inf` bucket |
-| `TPOTBucketTooWide` | A TPOT percentile the engine's histogram was asked for, the router's holding no observation, with a `q` bucket wider than the window's mean (`whatif.MaxEngineBucketWidth`): the bucket's edge, whatever `q` was asked. It names `--assume-tpot-ratio`, and keeps `EngineTPOTHistogram` and `CoarseTPOTBucket` |
+| `TPOTBucketTooWide` | A TPOT percentile priced on a host-bound decode variant (its measured intercept and its floor under 5 ms, as a sub-1B model's) whose `R_q` was read off coarse buckets: its tail is host jitter the line does not model. It is decided per variant, never replaces a refusal the library gave (`Saturated` stands), and carries the read's flags. Or a TPOT percentile the engine's histogram was asked for, the router's holding no observation, with a `q` bucket wider than the window's mean (`whatif.MaxEngineBucketWidth`): the bucket's edge, whatever `q` was asked. It names `--assume-tpot-ratio`, and keeps `EngineTPOTHistogram` and `CoarseTPOTBucket` |
 | `TargetBelowFloor` | The target is below what any number of replicas reaches |
 | `FlowControlUnknown` | Flow control on and the detector's thresholds unknown |
 | `AboveDecodeOnset` | A TTFT asked at or above the decode gate's onset with flow control on, where the gate is not work conserving and TTFT is not priced |
@@ -1251,7 +1357,7 @@ TTFT: the decode answers are as they were.
 | `--ttft-percentile 90` | `replicas-to-slo`: the percentile. Default: the policy's `slo.ttft`, else 90. On `slo-to-rate`, beside a plain `--ttft` |
 | `--assume-vp 30000` | `V_P`, prompt tokens per second, in place of the learned one, as every `--assume-*` flag overrides the recording. Neither rescaled nor margined |
 | `--assume-prompt-cv 1` | The prompt's `cv`, 0 to 3, in place of the measured one or the default 2, flagged `AssumedPromptSpread`, with any measured figure beside it (`promptCVRead` in the JSON). At 0 the JSON's `promptCV` is absent and `promptCVSource` says `assumed` |
-| `--arrival-cv2 4` | `Ca²` at the prefill queue, above 0, in place of Poisson's 1, flagged `AssumedArrivalCV2`. 0 is refused: P3 reads it as Poisson. Decode's admission chain has no `Ca²`, so on a decode line it stays Poisson, and `AssumedPoissonArrivals` stays. The closing note then quotes no P2 row: those were read at Poisson. Assumed, and not validated: the one bursty bucket says nothing of the model at any other `Ca²` ([the staircase](slo-capacity-planner-ttft.md#ground-truth-and-the-staircase)) |
+| `--arrival-cv2 4` | `Ca²` at the prefill queue, above 0, in place of Poisson's 1, flagged `AssumedArrivalCV2`. 0 is refused: P3 reads it as Poisson. Decode's admission chain has no `Ca²`, so on a decode line it stays Poisson, and `AssumedPoissonArrivals` stays; with the replay switch `decode-burst-fill` the decode's TPOT is read at the fill a request sees beside the clustered arrivals, flagged `AssumedArrivalCV2`. The closing note then quotes no P2 row: those were read at Poisson. Assumed, and not validated: the one bursty bucket says nothing of the model at any other `Ca²` ([the staircase](slo-capacity-planner-ttft.md#ground-truth-and-the-staircase)) |
 | `--assume-router-hop 8ms` | The hop between the router and the engines, in place of the learned or default one, flagged `RouterHopAssumed` |
 | `--prefill N` | Prefill pods to price; 0 takes the serving pods at the cycle |
 | `--prefill-variant V` | The prefill variant to price, when the model has several: the CLI prices one fleet, and a usage error says so otherwise. It gets the whole rate, named as assumed |
@@ -1392,7 +1498,9 @@ spread, with no flag asking, so `schemaVersion` is `2`. The TTFT priced as
 processor sharing ([the TTFT page](slo-capacity-planner-ttft.md#as-built-processor-sharing))
 changed what `parts.engineWait` means (the prefill pods' stretch, not the busiest
 pod's first-come wait), added `parts.kvPullWait`, and left `parts.waitScale` and
-`parts.waitOffset` at 0, so `schemaVersion` is `3`.
+`parts.waitOffset` at 0, so `schemaVersion` is `3`. Naming the KV pull in decode
+utilization added `parts.kvPullUtilization` beside `parts.kvPullWait`; the key is
+new and additive, so `schemaVersion` stays `3`.
 
 **Replay.** `learnreplay.State` gains `Prefill`, `FlowControlSeries` and each
 variant's `DecodeTTFT` (`state_ttft.go`). They are read from the cycles' rows and
@@ -1874,6 +1982,7 @@ roles[].results.ttft.answer.parts.decodeWaitProbability number
 roles[].results.ttft.answer.parts.engineWait number
 roles[].results.ttft.answer.parts.firstStep number
 roles[].results.ttft.answer.parts.independent number
+roles[].results.ttft.answer.parts.kvPullUtilization number
 roles[].results.ttft.answer.parts.kvPullWait number
 roles[].results.ttft.answer.parts.onsets object
 roles[].results.ttft.answer.parts.onsets.decode number

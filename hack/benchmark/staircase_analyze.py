@@ -771,7 +771,12 @@ def report(run, frozen_file, spec, redo_file, out, repeats=None, only_gate=False
         # The planner's own percentile at the operating fill (R_q by fill), where
         # freeze wrote it; a frozen file from before it, the mean times R_q.
         priced = {p["percentile"]: p["seconds"] for p in b.get("percentileTPOT") or []}
+        # A percentile freeze refused (a host-bound decode on coarse buckets)
+        # has no figure to score, and no stand-in either.
+        refused = {p["percentile"] for p in b.get("percentileTPOT") or [] if p.get("refused")}
         for q in (90, 95):
+            if q in refused:
+                continue
             if priced.get(q):
                 readings.append(("p%d" % q, "router_tpot_p%d" % q, "client_tpot_p%d" % q, priced[q]))
             elif ratio_q.get(q):

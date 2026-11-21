@@ -835,6 +835,7 @@ cluster-autoscaler
 cluster-gpu-inventory
 cluster-scoped
 cluster-wide
+clustering
 code
 cohort
 cohorts
@@ -961,10 +962,12 @@ declares
 declined
 decode
 decode-at-mu
+decode-burst-fill
 decode-knee
 decode-landed-queue-needs-a-bound
 decode-only
 decode-queue-unknown
+decode-residence-pull
 decode-style
 decodeBase
 decodeBaseNet
@@ -3122,6 +3125,7 @@ total_kv_tokens_override
 tp
 tp_size
 tpot
+tpot-ratio-censored
 tpot.percentile
 tpot.target
 tpotExcluded

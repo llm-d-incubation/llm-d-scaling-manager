@@ -405,13 +405,16 @@ type wireTTFTAnswer struct {
 }
 
 // wireTTFTParts is the figures beside the union bound, and its parts' means,
-// in seconds.
+// in seconds; kvPullUtilization is the KV pull stage's utilization on one
+// decode pod (whatif.TTFTParts.KVPullUtilization), 0 where kvPullWait is not
+// priced.
 type wireTTFTParts struct {
 	Independent           float64 `json:"independent"`
 	Pooled                float64 `json:"pooled"`
 	DecodeShare           float64 `json:"decodeShare"`
 	EngineWait            float64 `json:"engineWait"`
 	KVPullWait            float64 `json:"kvPullWait"`
+	KVPullUtilization     float64 `json:"kvPullUtilization"`
 	OwnPrefill            float64 `json:"ownPrefill"`
 	DecodeWait            float64 `json:"decodeWait"`
 	FirstStep             float64 `json:"firstStep"`
@@ -520,7 +523,8 @@ func toWireTTFT(r whatif.Result) *wireTTFTResult {
 			Floor: v.Floor, KneeRate: v.PrefillKnee, BoundBy: []string{}, Tier: v.Tier,
 		}, Parts: wireTTFTParts{
 			Independent: v.Independent, Pooled: v.Pooled, DecodeShare: v.DecodeShare,
-			EngineWait: v.Parts.EngineWait, KVPullWait: v.Parts.KVPullWait, OwnPrefill: v.Parts.OwnPrefill, DecodeWait: v.Parts.DecodeWait,
+			EngineWait: v.Parts.EngineWait, KVPullWait: v.Parts.KVPullWait,
+			KVPullUtilization: v.Parts.KVPullUtilization, OwnPrefill: v.Parts.OwnPrefill, DecodeWait: v.Parts.DecodeWait,
 			FirstStep: v.Parts.FirstStep, DecodeEngine: v.Parts.DecodeEngine, RouterHop: v.Parts.RouterHop,
 			RouterWait: v.Parts.RouterWait, BurstWait: v.Parts.BurstWait,
 			PrefillUtilization: v.PrefillUtilization, VPMarginApplied: v.VPMarginApplied,

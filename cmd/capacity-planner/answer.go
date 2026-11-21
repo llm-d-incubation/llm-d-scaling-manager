@@ -519,6 +519,14 @@ func noRoleHint(variants []pricedVariant) string {
 		"(capture --role-of, or a role label such as llm-d.ai/role)", len(variants))
 }
 
+// residenceUnread is a P/D decode figure priced, on
+// saturation.SwitchDecodeResidencePull, without the KV pull in its residence:
+// the decode engine read no finite TTFT, read it with requests waiting on
+// decode capacity, whose wait holds no KV, or read it in a window whose
+// decode backlog is unread (always, on an engine without
+// num_requests_waiting_by_reason).
+const residenceUnread whatif.Flag = "ResidenceUnread"
+
 // decodeVariants is the variants a question prices: every variant that is not
 // prefill (decode, and aggregated, whose line prices decode too), or the one
 // --variant names.
@@ -568,6 +576,31 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 			// it. A B from the floor puts the line through the floor itself.
 			BelowBand: whatif.BelowBand{Read: !pv.itlB.Applied || pv.itlB.Source == itlBFromFloor, LeastITL: vs.BelowBandITL},
 			AssumedB:  pv.itlB.Applied,
+		}
+		if st.DecodeResidencePull && domain.CanonicalRole(vs.Role) == domain.RoleDecode && slices.ContainsFunc(st.Variants, func(v learnreplay.VariantState) bool {
+			return domain.CanonicalRole(v.Role) == domain.RolePrefill
+		}) {
+			// A P/D decode holds the KV from the pull: the decode engine's
+			// TTFT at the prompt priced (saturation.SwitchDecodeResidencePull).
+			// One read with requests waiting on decode capacity is a queue,
+			// and a waiting request holds no KV; a window whose decode rows
+			// did not say why they waited (BacklogUnread) may be one. Neither
+			// is priced, nor is an unread or non-finite TTFT, and the
+			// figures say so (residenceUnread). An aggregated variant
+			// prefills its own prompt and holds no pull.
+			if et := vs.DecodeTTFT.EngineTTFT; et.Waiting == 0 && !vs.DecodeTTFT.BacklogUnread &&
+				whatif.Finite(et.At(pv.shape.ILeff)) && et.At(pv.shape.ILeff) > 0 {
+				pv.decode.HeldBefore = et.At(pv.shape.ILeff)
+			} else {
+				pv.flags = append(pv.flags, residenceUnread)
+			}
+		}
+		if st.DecodeBurstFill && f.set["arrival-cv2"] && f.arrivalCV2 > 1 {
+			// Clustered arrivals put more sequences beside a request than
+			// the time average (saturation.SwitchDecodeBurstFill): its
+			// TPOT is read at that fill, from the Ca^2 stated, and says so.
+			pv.decode.ArrivalCV2 = f.arrivalCV2
+			pv.flags = append(pv.flags, assumedArrivalCV2)
 		}
 		if pv.assumed() {
 			pv.flags = append(pv.flags, whatif.AssumedShape)
@@ -701,14 +734,96 @@ func (f *answerFlags) headroomFor(p *config.ScalingPolicy) float64 {
 // the engine's is the answer (whatif.EngineTPOTRatio): it says more than that
 // no histogram exists. Any other refusal of the router's stands: it says that
 // data is wrong. A refusal comes back as the Result the percentile answers
-// with.
+// with. A coarse R_q is refused per variant where that variant's decode step
+// is host-bound (onHostBound).
 func (f *answerFlags) tpotRatioFor(st *learnreplay.State, q float64) (whatif.TPOTRatio, []whatif.Flag, *whatif.Unanswerable) {
 	if f.set["assume-tpot-ratio"] {
 		return whatif.TPOTRatio{Value: f.tpotRatio, Assumed: true}, nil, nil
 	}
+	return f.tpotRatioRead(st, q)
+}
+
+// hostBoundITL is the decode step time under which a TPOT tail is the
+// host's jitter (scheduling, sampling, detokenizing), not the fill: on a
+// sub-1B model the step is host-bound and the line's intercept and its
+// floor read 1.5 to 2.5 ms.
+const hostBoundITL = 0.005
+
+// hostBoundRefusal refuses a TPOT percentile priced on vs where its R_q was
+// read off coarse buckets (whatif.CoarseTPOTBucket) and the variant's decode
+// step is host-bound: its line's intercept B measured (whatif.MeasuredIntercept,
+// not the least ITL above the band) and, with its floor below the band where
+// one was read, under hostBoundITL. The bucket grid then sets R_q, and the
+// tail it stands for is host jitter the line does not model: on the 0.6B
+// staircase the planner priced p90 TPOT at the mean while the fleet measured
+// a p90 1.3x and a p95 1.6x its mean (#291). Nil where it prices: an
+// assumed or refused R_q, fine buckets, or a line with no measured
+// intercept says nothing about the host. pv's line where --assume-itl-b
+// stated its intercept is the operator's, not a reading: onHostBound skips
+// it.
+func hostBoundRefusal(vs learnreplay.VariantState, r resolvedRatio) *whatif.Unanswerable {
+	if r.refused != nil || r.ratio.Assumed || !slices.Contains(r.flags, whatif.CoarseTPOTBucket) {
+		return nil
+	}
+	if vs.Tier == whatif.TierAboveBand || !whatif.MeasuredIntercept(vs.Tier, vs.Line) || !(vs.Line.B > 0) {
+		return nil
+	}
+	b := max(vs.Line.B, vs.BelowBandITL)
+	if b >= hostBoundITL {
+		return nil
+	}
+	hist := "router's"
+	if slices.Contains(r.flags, whatif.EngineTPOTHistogram) {
+		hist = "engine's"
+	}
+	return &whatif.Unanswerable{Reason: whatif.TPOTBucketTooWide,
+		Detail: fmt.Sprintf("the decode step is host-bound (the line's intercept and floor at most %.2f ms, under %.0f ms) and the %s TPOT histogram's "+
+			"q bucket is coarse: its tail is host jitter the line does not model, and the bucket grid would set the percentile; "+
+			"pass --assume-tpot-ratio for a flagged answer, or ask for the mean", b*1000, hostBoundITL*1000, hist)}
+}
+
+// onHostBound is res, a TPOT percentile priced on pv at R_q, refused where
+// pv's decode step is host-bound (hostBoundRefusal). Only a figure is
+// replaced: a refusal the library gave (Saturated, AboveDecodeOnset and the
+// rest) says more about the fleet than the histogram does, and stands. The
+// refusal carries no flags of its own; onRatio adds the read's.
+func onHostBound(res whatif.Result, pv pricedVariant, r resolvedRatio) whatif.Result {
+	if _, ok := res.(whatif.Answer); !ok || pv.itlB.Applied {
+		return res
+	}
+	if u := hostBoundRefusal(pv.state, r); u != nil {
+		return *u
+	}
+	return res
+}
+
+// tpotRatioRead is R_q as the histograms read it (tpotRatioFor). Where the
+// censored fit reads the router's buckets (saturation.SwitchTPOTRatioCensored),
+// it reads inside a coarse bucket rather than at its edge, so a coarse
+// engine's edge reading does not replace it: the switch is the remedy for
+// the coarse grid. A fine engine reading is a measurement where the fit is a
+// model of one, and stands as without the switch, so the switch never
+// refuses (hostBoundRefusal) what it priced off. Where the fit does not
+// read, the router's edge reading falls back to the engine's as without the
+// switch.
+func (f *answerFlags) tpotRatioRead(st *learnreplay.State, q float64) (whatif.TPOTRatio, []whatif.Flag, *whatif.Unanswerable) {
+	f.engineTPOT = false
 	r, flags, refused := whatif.TPOTRatio{}, []whatif.Flag(nil), &whatif.Unanswerable{Reason: whatif.NoTPOTHistogram,
 		Detail: "the recording carries no TPOT histogram; pass --assume-tpot-ratio for a flagged answer"}
-	if len(st.TPOTWindows) > 0 {
+	switch {
+	case len(st.TPOTWindows) > 0 && st.TPOTRatioCensored:
+		var fitted bool
+		r, flags, refused, fitted = whatif.TPOTRatioCensoredFit(st.TPOTWindows, q)
+		if fitted {
+			if slices.Contains(flags, whatif.CoarseTPOTBucket) && len(st.EngineTPOTWindows) > 0 {
+				if er, eflags, erefused := whatif.EngineTPOTRatio(st.EngineTPOTWindows, q); erefused == nil && !slices.Contains(eflags, whatif.CoarseTPOTBucket) {
+					f.engineTPOT = true
+					return er, eflags, nil
+				}
+			}
+			return r, flags, refused
+		}
+	case len(st.TPOTWindows) > 0:
 		r, flags, refused = whatif.TPOTRatioFromWindows(st.TPOTWindows, q)
 	}
 	coarse := refused == nil && slices.Contains(flags, whatif.CoarseTPOTBucket)

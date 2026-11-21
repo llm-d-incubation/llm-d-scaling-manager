@@ -61,6 +61,7 @@ const FLAG_WORDS = {
   AFromEngineTiming: ["a, the fixed latency, was fitted from the engine's own prefill timing on a fleet too busy for low-load minutes, not from quiet minutes.", "a low-load window that fits a"],
   AssumedITLB: ["The decode ITL line's intercept B, its latency per token with the cache empty, is the value you typed or the one the floor below the band gives, not a measured one; the slope was refitted through it.", "a recording whose decode line measured its own B (a full fit)"],
   AdaptedBandFloor: ["The decode ITL line was read over a KV-fill band whose floor the replay lowered to the fleet's fill, below the policy's floor.", "readings at the policy's fill floor or above"],
+  ResidenceUnread: ["The decode residence leaves out the KV pull: the decode engine read no TTFT, read it with requests waiting for decode capacity, or did not say why its requests waited (an engine without num_requests_waiting_by_reason), so the decode reads a lower fill than it holds.", "a decode engine TTFT read with no decode backlog, from an engine that reports why requests wait"],
   PromptSpreadAbovePeak: ["The prompt cv is past the peak for this percentile: a larger cv can price a shorter floor and a higher rate.", "a measured prompt spread"],
   PromptSpreadClamped: ["The measured prompt spread was clamped at its stop.", "a prompt histogram with wider bounds"],
   RoutingBound: ["One prefill pod takes most of the work: more pods would mostly sit idle behind the router.", "fix the routing, not the replica count"],

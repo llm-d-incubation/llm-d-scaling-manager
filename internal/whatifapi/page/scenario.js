@@ -766,10 +766,21 @@ function pct(x) {
 
 // decodeUse is decode's utilization at the load, in words.
 function decodeUse(d) {
-  if (!d || !d.kvFill || d.kvFill.value == null) return "decode " + refusalText(d && d.kvFill);
+  const pull = kvPullUse(d && d.kvPull);
+  if (!d || !d.kvFill || d.kvFill.value == null) return "decode " + refusalText(d && d.kvFill) + pull;
   const wait = d.waitProbability && d.waitProbability.value != null ? `, ${pct(d.waitProbability.value)} of requests wait for a slot` : "";
   const slots = d.slotsOccupied && d.slotsOccupied.value != null ? `, ${Math.round(d.slotsOccupied.value)} of ${d.slots} batch slots busy` : "";
-  return `decode KV ${pct(d.kvFill.value)} full (of ${pct(d.bandTop)} usable)${slots}${wait}`;
+  return `decode KV ${pct(d.kvFill.value)} full (of ${pct(d.bandTop)} usable)${slots}${wait}${pull}`;
+}
+
+// kvPullUse is the KV pull's load on the decode pods, in words, "" with none.
+// It stands where decode's KV fill is refused: a pull at or past 100% is the
+// reason a TTFT is.
+function kvPullUse(k) {
+  if (!k) return "";
+  if (k.utilization >= 1) return `; KV pull ${pct(k.utilization)} busy per decode pod, saturated`;
+  return `; KV pull ${pct(k.utilization)} busy per decode pod` +
+    (k.setsTTFT ? ", the larger mean wait in TTFT (it sits on the decode pods)" : "");
 }
 
 // prefillUse is prefill's utilization at the load, in words.
