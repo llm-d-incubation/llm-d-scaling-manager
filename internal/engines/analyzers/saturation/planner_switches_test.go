@@ -19,13 +19,14 @@ import (
 // The capacity planner's switches, through Analyze: off from the
 // constructor, so the controller never runs them (TestPlannerSwitches_OffFromTheConstructor).
 
-// TestPlannerSwitches_OffFromTheConstructor holds the seven planner-only
+// TestPlannerSwitches_OffFromTheConstructor holds the eight planner-only
 // switches off in a new analyzer: the controller's behaviour is P1's.
 func TestPlannerSwitches_OffFromTheConstructor(t *testing.T) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	fields := a.switchFields()
 	for _, name := range []string{SwitchPrefillALowLoadPerRank, SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
-		SwitchPrefillFBusyMinutes, SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor} {
+		SwitchPrefillFBusyMinutes, SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor,
+		SwitchITLBatchTerm} {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s is planner-only: off from the constructor", name)
 	}

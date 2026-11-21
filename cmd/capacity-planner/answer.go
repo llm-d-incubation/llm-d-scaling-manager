@@ -569,6 +569,10 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 			BelowBand: whatif.BelowBand{Read: !pv.itlB.Applied || pv.itlB.Source == itlBFromFloor, LeastITL: vs.BelowBandITL},
 			AssumedB:  pv.itlB.Applied,
 		}
+		if t := batchTerm(vs, pv.itlB.Applied); !t.IsZero() {
+			pv.decode.Batch = t
+			pv.flags = append(pv.flags, itlBatchTerm)
+		}
 		if pv.assumed() {
 			pv.flags = append(pv.flags, whatif.AssumedShape)
 		}
@@ -610,6 +614,24 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 		return nil, usagef("--variant %q: no decode variant of that name at this cycle", f.variant)
 	}
 	return out, nil
+}
+
+// itlBatchTerm is a decode priced with the ITL term past the roofline the
+// replay fitted (saturation.SwitchITLBatchTerm, whatif.Decode.Batch): the ITL
+// at every priced fill is the line's plus that term at the batch it holds.
+const itlBatchTerm whatif.Flag = "ITLBatchTerm"
+
+// batchTerm is the batch term past the roofline a decode variant is priced
+// with: the one the replay fitted (saturation.SwitchITLBatchTerm), on the
+// line it was fitted against, and none on another. A stated intercept
+// (statedB) refits the line, and a line lifted to its floor
+// (saturation.SwitchITLLineAtFloor) is not the one whose residuals the term
+// was read on.
+func batchTerm(vs learnreplay.VariantState, statedB bool) whatif.BatchTerm {
+	if statedB || vs.LineLift > 0 {
+		return whatif.BatchTerm{}
+	}
+	return vs.BatchFit.Term
 }
 
 // resampling is the bands' bootstrap: the page's, from --seed.
@@ -677,6 +699,12 @@ func (pv pricedVariant) band(r whatif.Result, value func(whatif.Decode) whatif.R
 	return whatif.BandAnswer(a, pv.lines, func(line itl.Model) (float64, bool) {
 		d := pv.decode
 		d.Line = line
+		if !d.Batch.UsableWith(line) {
+			// A resample too low for the term fitted on the point line is
+			// read on the line alone, not dropped: a dropped low-B resample
+			// would narrow the band on its optimistic side.
+			d.Batch = whatif.BatchTerm{}
+		}
 		got, ok := value(d).(whatif.Answer)
 		return got.Value, ok
 	})

@@ -760,6 +760,56 @@ An aggregated line is shared under its own key: `itlLineKeyForRole` appends
 configuration keeps one line for decode pods and another for aggregated pods,
 and neither lends to the other. The window key is per variant already.
 
+### The batch term past the roofline (issue #309)
+
+A decode step reads the weights (a constant), every resident KV token
+(linear in the fill) and, once the batch's tokens per engine rank pass the
+roofline, spends GEMM time that grows with them. The line prices the first
+two; at one KV per request the batch moves with the fill and the slope
+absorbs the third, but a shape with less KV per request runs more sequences
+at the same fill, and the line reads its ITL low.
+
+`saturation.SwitchITLBatchTerm` (`itl-batch-term`) is planner-only, off,
+replay-only (no CLI flag or API field sets it) and not in
+`learnreplay.PlannerSwitches`. No analyzer reads it. On, the planner's replay
+keeps each decode variant's rows in the band with their running sequences
+per engine rank (`learnreplay` `batchSamples`) and fits
+`a*max(0, n - n_roof)` on the residuals of the variant's own line
+(`whatif.FitBatchTerm`: a hinge at each candidate roof from the rows' 10th to
+90th percentile, least squares, the residuals' own offset dropped). The
+gates refuse a term on fewer than 60 rows or 20 on a side of the roof, one
+that removes under 10% of the residuals' error, spreads under 16 tokens past
+the roof, adds under 2% of the ITL there, or would make the rate fall with
+the batch. The planner then prices `whatif.Decode.Batch` on top of the line
+(`Decode.itlAt`): the knee, the fill at a rate and at a TPOT target (bisected,
+no closed form), and the TTFT decode terms; figures carry `ITLBatchTerm`. A
+stated intercept, a line lifted to its floor (`SwitchITLLineAtFloor`) and a
+speculating vLLM variant are not priced with it: the residuals were not read
+against those lines. The rows' batch is per engine rank as each row read its
+ranks, and the term is priced over the same ranks.
+
+On the Qwen3-32B recordings the term is real but one shape cannot identify
+it. The warm-up alone fits 0.003 ms per sequence and removes 0.4% of the
+error; the 1k-prompt A-off phase alone 0.006 ms past 124 (3.2%). Together the
+warm-up's fill line reads the A-off rows 7-9% low past 150 sequences, and a
+joint fit gives `n_roof` 120 per rank and 0.034 ms per sequence, removing 59%
+of the error. The engine's mean ITL rises smoothly from 14 to 31 ms over 46
+to 256 running sequences there; the step from 15 to 29 ms the router's TPOT
+shows is its histogram's 25 ms bucket edge, not the engine. Since a fleet's
+recording rarely holds two shapes, the switch stays off.
+`whatif.CheckLine` still prices its rows on the line alone, and a bootstrap
+resample whose `B` is too low for the term fitted on the point line is read
+on the line alone (`BatchTerm.UsableWith`). A refused fit's reason
+(`BatchFit.Why`) is not shown in any output. The slope is read on the
+batch with its fill-linear part removed, since the line's slope already
+holds that part, and the gain gate is on the model as priced, the line
+plus the term with no offset, against the line alone. On rows whose own
+line already took part of the term into its slope, the slope comes back
+right (a synthetic two-shape fit reads 0.034 ms at roof 120 where the raw
+hinge read 0.015 ms at roof 48 and passed the old gate), but priced on that
+line the term removes little of its error and the gate refuses it: pricing it
+would need the line refitted with the term, which this does not do.
+
 ### ITL per accepted token (speculative decoding)
 
 vLLM observes `inter_token_latency` once per request per engine step, however

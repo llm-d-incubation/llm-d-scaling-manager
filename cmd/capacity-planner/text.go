@@ -133,6 +133,8 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 			parts = append(parts, fmt.Sprintf("%s (%s, %s)", f, ms(pv.itlB.Seconds), pv.itlB.Source))
 		case adaptedBandFloor:
 			parts = append(parts, fmt.Sprintf("%s (%.2f, the policy's %.2f)", f, pv.bandFloor, pv.bandPolicyFloor))
+		case itlBatchTerm:
+			parts = append(parts, fmt.Sprintf("%s (%.4f ms a batch token past %.0f per rank)", f, pv.decode.Batch.Slope*1e3, pv.decode.Batch.Roof))
 		case whatif.LineNearGate:
 			parts = append(parts, fmt.Sprintf("%s (%d/%d)", f, pv.lines.TierChanges(), pv.lines.Drawn))
 		default:

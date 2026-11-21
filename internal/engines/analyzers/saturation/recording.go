@@ -130,7 +130,7 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchPrefillAQuadratic, SwitchPrefillALowLoadPerRank,
 // SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
 // SwitchPrefillFBusyMinutes, SwitchITLAdaptiveBandFloor,
-// SwitchITLHoldSteadySlope, SwitchITLLineAtFloor,
+// SwitchITLHoldSteadySlope, SwitchITLLineAtFloor, SwitchITLBatchTerm,
 // SwitchK2DecodeBudgetAtComputedPrompt, SwitchDecodeLandedNeedsABound,
 // SwitchK2BatchAtITLTarget,
 // SwitchITLBaselineFromFloor, SwitchITLOneSidedAtCap,
@@ -271,6 +271,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// held, not refitted on every reading (itl.Admission.HoldsSteadySlope).
 		// Off from the constructor.
 		SwitchITLHoldSteadySlope: &a.itlHoldSteadySlope,
+		// Issue llm-d-incubation/llm-d-scaling-manager#309: the planner's
+		// ITL batch term past the roofline (itl_batch_term.go). Off from the
+		// constructor; no analyzer reads it.
+		SwitchITLBatchTerm: &a.itlBatchTerm,
 		// The planner's decode line lifted to the floor read below the band
 		// (itl_line_at_floor.go). Off from the constructor; the analyzer
 		// does not read it.

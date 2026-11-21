@@ -1272,14 +1272,14 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		}
 		lowest := d.lowestFill()
 		k = max(k, lowest)
-		first, floorStep = d.Line.ITLAt(k), d.Line.ITLAt(lowest)
+		first, floorStep = d.itlAt(k), d.itlAt(lowest)
 		oldFirst, oldFloorStep = first, floorStep
 		if t := pl.term; t != nil {
 			// The term reads the line at the actual fill: D is several steps,
 			// so the clamp's reading, harmless on one step, would be the
 			// figure's largest error at light load. No rate has a fill under
 			// 0, which is the floor's.
-			engine, hop := t.at(d.Line.ITLAt(fill), first)
+			engine, hop := t.at(d.itlAt(fill), first)
 			out.Parts.RouterHop = hop
 			if t.omitted {
 				out.Parts.FirstStep = engine
@@ -1287,7 +1287,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 				out.Parts.DecodeEngine = engine
 			}
 			first = engine + hop
-			engine, hop = t.at(d.Line.ITLAt(0), floorStep)
+			engine, hop = t.at(d.itlAt(0), floorStep)
 			floorStep = engine + hop
 		}
 		out.Flags = addFlags(out.Flags, adm.Flags...)
