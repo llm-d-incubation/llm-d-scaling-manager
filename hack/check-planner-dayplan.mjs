@@ -185,7 +185,9 @@ try {
   check("the bucket table has every bucket", (dayBucketsTable(plan).match(/<tr>/g) || []).length === plan.buckets.length + 1);
   check("the bucket table says why a bucket was not sized", dayBucketsTable(bound).includes("prefill: ReplicaBoundReached"));
   check("the tip says the bound", dayTip(bound, unmet[1]).rows.some(r => r[0] === "beyond the bound" && r[1] === "decode: ReplicaBoundReached"));
-  check("the summary says the busiest bucket's need", daySummaryText(plan)[0].startsWith("Needed at the busiest bucket"));
+  check("the summary says the need that holds every bucket", daySummaryText(plan)[0].startsWith("Needed to hold every bucket"));
+  check("and the busiest bucket's own", daySummaryText(plan)[0].includes("the busiest bucket alone"));
+  check("the hour table has the busiest bucket's fleet", dayHoursTable(plan).includes("<th>busiest bucket</th>"));
 
   // Everything a plan carries is text, never markup: a flag, a reason, a
   // refusal's words, the hour's verdict.

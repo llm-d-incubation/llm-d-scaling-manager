@@ -137,7 +137,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchPrefillBoundHeldConfidence, SwitchThroughputFloorRaisesVariants,
 // SwitchQueuePricedAsDrain, SwitchFloorTrustReadsCompletions,
 // SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound,
-// SwitchLowerBoundCapsRouterShare and SwitchDecodeOwesRouterBacklog; a name
+// SwitchLowerBoundCapsRouterShare, SwitchDecodeOwesRouterBacklog,
+// SwitchMuAtStepBudget and SwitchPlannerCapAtStepBudget; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -226,8 +227,8 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		SwitchKVPerRequestHitsResident: &a.kvHitsResident,
 
 		// llm-d-incubation/llm-d-scaling-manager#188: a resident reading
-		// above the whole context is priced as read. Off from the
-		// constructor.
+		// above the whole context is priced as read. On from the
+		// constructor since v0.12.3.
 		SwitchKVPerRequestAboveContext: &a.kvAboveContext,
 
 		// ev-shindin/llm-scaling-manager#438: a data-parallel variant at zero replicas is priced at
@@ -325,6 +326,11 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// charged the router's backlog prefill can hand on
 		// (decode_router_backlog.go). Off from the constructor.
 		SwitchDecodeOwesRouterBacklog: &a.decodeOwesRouterBacklog,
+		// llm-d-incubation/llm-d-scaling-manager#302: the derived mu, and
+		// the planner's batch cap, held to the batch the step budget runs
+		// (step_budget_cap.go). Both off from the constructor.
+		SwitchMuAtStepBudget:         &a.muAtStepBudget,
+		SwitchPlannerCapAtStepBudget: &a.plannerCapAtStepBudget,
 	}
 }
 

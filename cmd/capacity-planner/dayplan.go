@@ -84,11 +84,16 @@ func runDayPlan(ctx context.Context, args []string, out, warn io.Writer) error {
 	// The analyzers the replay runs log through controller-runtime, which
 	// the CLI never shows.
 	ctrllog.SetLogger(logr.Discard())
-	res, err := resolveDay(ctx, &f, warn)
+	// The flags are checked before the replay, which can take minutes: what
+	// the question asks wrongly is refused at once.
+	req, err := f.request()
 	if err != nil {
 		return err
 	}
-	req, err := f.request()
+	if err := whatifapi.CheckDayPlan(req); err != nil {
+		return usageError{err}
+	}
+	res, err := resolveDay(ctx, &f, warn)
 	if err != nil {
 		return err
 	}
@@ -272,7 +277,11 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 	fmt.Fprintf(&b, "Day plan for %s/%s, %s to %s UTC, buckets of %s, each sized for the %s of its cycle rates (%s; the mean where a bucket holds fewer than %d cycles)\n",
 		in.Namespace, in.Model, p.From.Format("2006-01-02 15:04"), p.To.Format("2006-01-02 15:04"),
 		time.Duration(p.Step*float64(time.Second)), p.SizeFor, p.SizeForSource, whatifapi.MinPercentileCycles)
-	fmt.Fprintf(&b, "SLO: TTFT %s %s", p.TTFT.Statistic, fmtSeconds(p.TTFT.Target))
+	if p.TTFT != nil {
+		fmt.Fprintf(&b, "SLO: TTFT %s %s", p.TTFT.Statistic, fmtSeconds(p.TTFT.Target))
+	} else {
+		b.WriteString("SLO: no TTFT target (prefill not sized)")
+	}
 	if p.TPOT != nil {
 		fmt.Fprintf(&b, ", TPOT %s %s", p.TPOT.Statistic, fmtSeconds(p.TPOT.Target))
 	}
@@ -283,9 +292,10 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 			what, r.Reason, r.Buckets, r.Detail, r.Hint, r.Effect)
 	}
 	b.WriteString("\n")
-	b.WriteString("each hour: the need of its busiest bucket, the fewest pods it had, and the fleet it had judged whole at each bucket's rate\n")
-	const layout = "%-17s %9s %9s %6s %6s %6s %6s  %s\n"
-	fmt.Fprintf(&b, layout, "hour (UTC)", "rate mean", "rate p95", "need P", "need D", "had P", "had D", "")
+	b.WriteString("each hour: a fleet that holds every bucket in it (priced again at each), the busiest bucket's own fleet, the fewest pods it had, " +
+		"and the fleet it had judged whole at each bucket's rate\n")
+	const layout = "%-17s %9s %9s %6s %6s %7s %6s %6s  %s\n"
+	fmt.Fprintf(&b, layout, "hour (UTC)", "rate mean", "rate p95", "need P", "need D", "busiest", "had P", "had D", "")
 	for _, h := range p.Hours {
 		mean, p95 := "-", "-"
 		if h.Rate != nil {
@@ -293,13 +303,11 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 		}
 		np, nd, ap, ad := "-", "-", "-", "-"
 		if h.Needed != nil {
-			nd = strconv.Itoa(h.Needed.Decode)
-			if h.Needed.AtLeast {
-				nd = ">=" + nd
-			}
-			if h.Needed.Prefill != nil {
-				np = strconv.Itoa(*h.Needed.Prefill)
-			}
+			np, nd = neededCells(h.Needed)
+		}
+		busiest := "-"
+		if n := h.Busiest; n != nil {
+			busiest = busiestCell(n)
 		}
 		if h.Actual != nil {
 			ap, ad = strconv.Itoa(h.Actual.Prefill), strconv.Itoa(h.Actual.Decode)
@@ -309,7 +317,10 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 		if h.Unmet > 0 {
 			verdict += fmt.Sprintf(", %d bucket(s) beyond %d replicas", h.Unmet, max(p.MaxReplicas.Prefill, p.MaxReplicas.Decode))
 		}
-		fmt.Fprintf(&b, layout, h.Start.Format("2006-01-02 15:04"), mean, p95, np, nd, ap, ad, verdict)
+		if h.NotConfirmed {
+			verdict += ", need NOT CONFIRMED (falls short at a bucket)"
+		}
+		fmt.Fprintf(&b, layout, h.Start.Format("2006-01-02 15:04"), mean, p95, np, nd, busiest, ap, ad, verdict)
 	}
 	s := p.Summary
 	c := s.Counts
@@ -323,8 +334,13 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 		return fmt.Sprintf("%.2f prefill + %.2f decode", *r.Prefill, r.Decode)
 	}
 	if s.PeakNeeded != nil {
-		fmt.Fprintf(&b, "needed: at the busiest bucket %s, at the quietest %s (the fewest replicas in all; another mix may serve too)\n",
-			neededText(s.PeakNeeded), neededText(s.MinNeeded))
+		peak := neededText(s.PeakNeeded)
+		if s.PeakNotConfirmed {
+			peak += " (NOT CONFIRMED: falls short at a bucket)"
+		}
+		fmt.Fprintf(&b, "needed: to hold every bucket %s; the busiest bucket alone %s, the quietest %s "+
+			"(each the fewest replicas in all; another mix may serve too)\n",
+			peak, neededText(s.BusiestNeeded), neededText(s.MinNeeded))
 		fmt.Fprintf(&b, "replica-hours over the %d sized buckets: needed %s, had %s\n",
 			c.Sized, hours(s.NeededReplicaHours), hours(s.HadReplicaHours))
 		if s.NeededGPUHours != nil {
@@ -358,10 +374,38 @@ func writeDayPlanText(out io.Writer, in whatifapi.InputsResponse, p *whatifapi.D
 // neededText is a needed fleet in words: decode sized alone is a lower
 // bound.
 func neededText(n *whatifapi.DayNeeded) string {
-	if n.Prefill == nil {
+	switch {
+	case n.Prefill == nil:
 		return fmt.Sprintf("at least %d decode (prefill not priced)", n.Decode)
+	case n.AtLeast:
+		return fmt.Sprintf("at least %d prefill + %d decode (prefill not priced in some buckets)", *n.Prefill, n.Decode)
 	}
 	return fmt.Sprintf("%d prefill + %d decode", *n.Prefill, n.Decode)
+}
+
+// neededCells is a need's prefill and decode cells: "-" for prefill not
+// priced, and decode marked ">=" where it is a lower bound.
+func neededCells(n *whatifapi.DayNeeded) (prefill, decode string) {
+	prefill, decode = "-", strconv.Itoa(n.Decode)
+	if n.AtLeast {
+		decode = ">=" + decode
+	}
+	if n.Prefill != nil {
+		prefill = strconv.Itoa(*n.Prefill)
+		if n.AtLeast {
+			prefill = ">=" + prefill
+		}
+	}
+	return prefill, decode
+}
+
+// busiestCell is the busiest bucket's fleet in one cell: "4+2", or "D>=3"
+// where it sized decode alone.
+func busiestCell(n *whatifapi.DayNeeded) string {
+	if n.Prefill == nil {
+		return "D>=" + strconv.Itoa(n.Decode)
+	}
+	return strconv.Itoa(*n.Prefill) + "+" + strconv.Itoa(n.Decode)
 }
 
 // valueOrZero is *p, or 0 when p is nil.

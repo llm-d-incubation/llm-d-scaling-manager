@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "whatifSchema": "schema-v3",
-  "dayPlanId": "sha256:3fecb2a2d164877ed7e048b48c55cf1a8f6f76aef1ccf82d53c2099a4b4d3c03",
+  "dayPlanId": "sha256:0c77f38728f585a29e63522b40aa96680417dfa39cdc5a11c57dc813598af531",
   "inputsId": "sha256:273982439b94fabac4555dd8d9408e900f40c912f397d57bfa091731dd41ca2e",
   "banner": "TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.",
   "from": "2026-11-06T02:15:00Z",
@@ -1057,6 +1057,10 @@
         "decode": 3,
         "atLeast": true
       },
+      "busiest": {
+        "decode": 3,
+        "atLeast": true
+      },
       "actual": {
         "prefill": 2,
         "decode": 2
@@ -1076,6 +1080,10 @@
         "decode": 3,
         "atLeast": true
       },
+      "busiest": {
+        "decode": 3,
+        "atLeast": true
+      },
       "actual": {
         "prefill": 2,
         "decode": 2
@@ -1087,6 +1095,10 @@
   ],
   "summary": {
     "peakNeeded": {
+      "decode": 3,
+      "atLeast": true
+    },
+    "busiestNeeded": {
       "decode": 3,
       "atLeast": true
     },
@@ -1135,6 +1147,7 @@
     "Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.",
     "Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).",
     "Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.",
+    "An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the fewest of the buckets' own fleets that holds them all, else each role's most over them. It is not searched for the fewest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.",
     "A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.",
     "Had is the median serving pods of the priced prefill and decode variants over the bucket's cycles; the rate is the model's. A bucket in which another variant also served is flagged OtherVariantsServed. The prefix hit rate is reported, not priced.",
     "Where prefill is not priced, decode is sized on its own limit alone: a lower bound (at least). The fleet's limit, which decode admission can hold down, is not priced."

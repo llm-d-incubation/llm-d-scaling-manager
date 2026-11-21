@@ -367,6 +367,48 @@ func TestAtReplicas_GrowthIsAWhatIf(t *testing.T) {
 	assert.Equal(t, g, byLoad.Shapes[0].Growth[0])
 }
 
+// A cell prints each latency at the statistic its target is judged at, not
+// p90 whatever the SLO says (#299): with TTFT judged at p95 and TPOT at p99
+// while the tables print p50/p90 and p90, every cell is at p95 and p99, to
+// the bit what a table asked for those statistics prints, and the legend
+// names them; a TPOT target on the mean puts the mean in the cell.
+func TestAtReplicas_CellAtTheSLOStatistics(t *testing.T) {
+	q := stairQuery(2, 3, 20)
+	q.TTFTPercentiles = []float64{0.5, 0.9}
+	q.TTFT = &whatifapi.ReportTarget{Seconds: 2, Percentile: 0.95}
+	q.TPOT = &whatifapi.ReportTarget{Seconds: 0.030, Percentile: 0.99}
+	rep := stairReport(t, q)
+	at := stairQuery(2, 3, 20)
+	at.TTFTPercentiles, at.TPOTPercentile = []float64{0.95}, 0.99
+	at.TTFT, at.TPOT = q.TTFT, q.TPOT
+	want := stairReport(t, at)
+	rows, wantRows := rep.Shapes[0].Table, want.Shapes[0].Table
+	require.Len(t, wantRows, len(rows))
+	valued := 0
+	for i, row := range rows {
+		c := row.Cell
+		assert.Equal(t, "p95", c.TTFT.Statistic, row.Label)
+		assert.Equal(t, wantRows[i].TTFT[0].Figure, c.TTFT.Figure, row.Label)
+		if c.TPOT.Statistic == whatifapi.ReportStatisticName(0) {
+			assert.Nil(t, wantRows[i].TPOTPercentile.Value, "%s: the mean stands in only where the p99 is refused", row.Label)
+			continue
+		}
+		assert.Equal(t, "p99", c.TPOT.Statistic, row.Label)
+		assert.Equal(t, wantRows[i].TPOTPercentile.Figure, c.TPOT.Figure, row.Label)
+		if c.TTFT.Value != nil && c.TPOT.Value != nil {
+			valued++
+		}
+	}
+	assert.Positive(t, valued, "a cell with both figures")
+	assert.Contains(t, summaryText(rep), "cell = TTFT p95 ms / TPOT p99 ms")
+
+	q.TPOT = &whatifapi.ReportTarget{Seconds: 0.030}
+	for _, row := range stairReport(t, q).Shapes[0].Table {
+		assert.Equal(t, whatifapi.ReportStatisticName(0), row.Cell.TPOT.Statistic, row.Label)
+		assert.Equal(t, row.TPOTMean, row.Cell.TPOT.Figure, row.Label)
+	}
+}
+
 // at-replicas prices on the paths the other questions take: on the same
 // recording and flags, its knees are replicas-to-slo's, its TTFT at a stated
 // load is replicas-to-slo's at that rate, and its highest rate at the SLO is

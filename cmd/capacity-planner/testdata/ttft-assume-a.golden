@@ -1,4 +1,4 @@
-decode          refused: NoLine (no ITL line learned by cycle 193)
+decode          refused: NoLine (no ITL line learned by cycle 193; the line needs a window in which decode's KV-cache use spans 0.30 or more: answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window)
 shape           IL 36661 OL 16 (measured, cycles 171-190), output spread D 1.000 (measured)
 engine          vLLM release not recorded
 prefill knee    3.46 r/s    [2.94 .. 3.98]   N_p 1 x V_P 134775 x (1 - 0.05 margin) / (f 1 x 36966 tokens); OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25); a ASSUMED

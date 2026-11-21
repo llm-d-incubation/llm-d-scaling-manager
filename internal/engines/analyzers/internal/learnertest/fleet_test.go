@@ -27,6 +27,31 @@ func stepFleet() Fleet {
 		Horizon: 30 * time.Minute}
 }
 
+// A replica ordered on the first cycle is first shown Ready StartTime after
+// that cycle's end, rounded up to a cycle, at each of MeasuredStarts: 30 s,
+// 1m45s and 8m0s into the run.
+func TestFleet_AnOrderedReplicaIsReadyAfterTheStartTime(t *testing.T) {
+	AtMeasuredStarts(t, func(t *testing.T, start time.Duration) {
+		f := Fleet{Pods: []float64{1}, AddedMu: 1, Lambda: func(time.Duration) float64 { return 0.5 },
+			Need: Ceil, Horizon: 15 * time.Minute, StartTime: start}
+		readyAt := time.Duration(-1)
+		f.Run(func(_ time.Time, elapsed time.Duration, _ float64, ready []Replica) int {
+			if len(ready) == 2 && readyAt < 0 {
+				readyAt = elapsed
+			}
+			return 2
+		})
+		// The order lands at the cycle's end plus the start, rounded up to a cycle.
+		want := (Cycle + start).Truncate(Cycle)
+		if want < Cycle+start {
+			want += Cycle
+		}
+		if readyAt != want {
+			t.Errorf("start %s: the ordered replica first Ready at %s, want %s", start, readyAt, want)
+		}
+	})
+}
+
 // A truthful step -- it orders need from what the replicas serve and queue
 // -- settles at need, and an analyzer that never orders a replica more, or
 // orders twice need, is caught. The simulator's own negative controls.

@@ -361,9 +361,10 @@ type ReportRow struct {
 	Cell ReportCell `json:"cell"`
 }
 
-// ReportCell is one cell of the shape-by-load summary: TTFT p90 and the
-// TPOT percentile (the mean where the percentile is refused: TPOT.Statistic
-// says which), and Mark, whether the SLO targets hold at the rate (CellMet,
+// ReportCell is one cell of the shape-by-load summary: each latency at the
+// statistic its target is judged at (with no target, TTFT p90 and the
+// table's TPOT percentile; the TPOT mean where the percentile is refused:
+// TPOT.Statistic says which), and Mark, whether the SLO targets hold at the rate (CellMet,
 // CellMissed, CellOnset, CellSaturated, CellUnknown, CellNoTarget).
 type ReportCell struct {
 	TTFT ReportStat `json:"ttft"`
@@ -400,6 +401,12 @@ type ReportVerdict struct {
 	Shrink []string      `json:"shrink"`
 	Grow   []string      `json:"grow"`
 	Checks []ReportCheck `json:"checks"`
+	// Trust is what the source's self-check says of this verdict, empty
+	// where it has nothing to say: not trusted, when it found the figures
+	// the verdict rests on inconsistent with the recording (the report then
+	// exits ExitUntrusted); or not covered, when the verdict's rate, fleet
+	// or shape is not one it tested (JudgeTrust).
+	Trust string `json:"trust,omitempty"`
 }
 
 // ReportNeeded is the smallest fleet that holds every target at the load
@@ -507,6 +514,7 @@ func (s *Server) report(ctx context.Context, req ReportRequest) (*ReportResponse
 	out.SchemaVersion = SchemaVersion
 	// The source's self-check was read before this report stated anything.
 	out.SelfCheck = e.doc.SelfCheck.RanWithout(&Stated{Assume: q.Assume, ArrivalCV2: q.ArrivalCV2})
+	out.JudgeTrust()
 	return out, nil
 }
 

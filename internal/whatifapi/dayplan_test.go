@@ -135,9 +135,6 @@ func TestDayPlanJudgesTheFleetItHadWhole(t *testing.T) {
 	assert.Equal(t, DayVerdictUnder, none.Buckets[0].Verdict)
 }
 
-// ptrInt is a pointer to n.
-func ptrInt(n int) *int { return &n }
-
 // A source that cannot price prefill sizes decode alone, as a lower bound
 // (AtLeast), names the refusal once, gives no GPU-hours of a need, and
 // judges decode alone.
@@ -296,6 +293,8 @@ func TestDayQuestionRefusals(t *testing.T) {
 		Policy: PolicyInfo{Headroom: 0.85, TTFT: &PolicyObjective{Statistic: "p90", Seconds: 1}}}
 	series := cycles(time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC), 15*time.Second, 100, 1)
 	e := &inputsEntry{id: "x", doc: doc, series: series}
+	withTPOT := doc
+	withTPOT.Policy.TPOT = &PolicyObjective{Statistic: "mean", Seconds: 0.03}
 	// 12.5 hours at a 15 s step is 3000 steps, and two more buckets: over
 	// the cap; at 16 s, under it.
 	t0 := series[0].At
@@ -314,6 +313,8 @@ func TestDayQuestionRefusals(t *testing.T) {
 		"too many":    {long, DayPlanRequest{Step: "15s"}, "3000 a day plan sizes"},
 		"just enough": {long, DayPlanRequest{Step: "16s"}, ""},
 		"a bad floor": {e, DayPlanRequest{MinRequests: ptr(-1)}, "minRequests"},
+		// A TPOT statistic with its target left to a policy that sets one.
+		"tpot to the policy": {&inputsEntry{id: "z", doc: withTPOT, series: series}, DayPlanRequest{SLO: &SLORequest{TPOT: &Objective{Statistic: "mean"}}}, ""},
 	} {
 		_, err := dayQuestionOf(c.e, c.req)
 		if c.want == "" {

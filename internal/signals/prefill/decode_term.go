@@ -213,6 +213,16 @@ type DecodeTermCycle struct {
 	// RouterHeld says the router held requests this cycle: a router window
 	// over it holds a flow-control wait, which is not the hop.
 	RouterHeld bool
+	// HopUnqueued admits a router window to R only when no cycle of it had a
+	// prefill row with requests waiting (prefillQueued). Off, the queue is
+	// no gate, as before. A queued prefill pod's mean TTFT is its queue: the
+	// window's R is then the router's five-minute mean less the engines'
+	// one-minute means, two figures of many seconds read while both climb,
+	// and not the hop. On the Qwen3-32B staircase's warm-up the 15 windows
+	// of a burst at the prefill knee read R from 0.03 to 0.56 s, against 4 ms
+	// at low load, and the line through them put 0.31 s on every 8k prompt
+	// (slo.SwitchTTFTHopUnqueued).
+	HopUnqueued bool
 }
 
 // decodeSample is one pod-minute of a decode row.
@@ -226,7 +236,9 @@ type engineCycle struct {
 	at                    time.Time
 	prefill, decode, rate float64
 	prompt                float64
-	held                  bool
+	// held is the router holding requests; queued a prefill row with
+	// requests waiting (prefillQueued).
+	held, queued bool
 }
 
 // hopSample is one router window's R.
@@ -401,7 +413,8 @@ func (w *DecodeTermWindow) observeRouter(c DecodeTermCycle) {
 	p, pRate, pOK := engineMean(c.Prefill)
 	d, _, dOK := engineMean(c.Decode)
 	if pOK && dOK {
-		w.engines = append(w.engines, engineCycle{at: c.Now, prefill: p, decode: d, rate: pRate, prompt: c.PromptTokens, held: c.RouterHeld})
+		w.engines = append(w.engines, engineCycle{at: c.Now, prefill: p, decode: d, rate: pRate, prompt: c.PromptTokens,
+			held: c.RouterHeld, queued: prefillQueued(c.Prefill)})
 	}
 	r := c.Router
 	if r == nil || !(r.WindowSeconds > 0) || !finitePositive(r.TTFTSumRate) || !finitePositive(r.TTFTCountRate) {
@@ -418,7 +431,7 @@ func (w *DecodeTermWindow) observeRouter(c DecodeTermCycle) {
 	if !w.lastHop.IsZero() && c.Now.Sub(w.lastHop) < SampleSpacing {
 		return
 	}
-	hop, prompt, ok := hopOver(w.engines, r.TTFTSumRate/r.TTFTCountRate, span)
+	hop, prompt, ok := hopOver(w.engines, r.TTFTSumRate/r.TTFTCountRate, span, c.HopUnqueued)
 	if !ok {
 		return
 	}
@@ -434,8 +447,10 @@ func (w *DecodeTermWindow) observeRouter(c DecodeTermCycle) {
 // window is steady: cycles enough, spanning it, the prompt held to
 // MaxPromptDrift, the rate to MaxHopRateRatio, and no cycle with the router
 // holding requests: the router's mean starts before flow control, so such a
-// window would count the queue in R, and the model prices it apart.
-func hopOver(cycles []engineCycle, router float64, span time.Duration) (hop, prompt float64, ok bool) {
+// window would count the queue in R, and the model prices it apart. With
+// unqueued (DecodeTermCycle.HopUnqueued), no cycle with a prefill row
+// holding requests waiting either.
+func hopOver(cycles []engineCycle, router float64, span time.Duration, unqueued bool) (hop, prompt float64, ok bool) {
 	if len(cycles) < MinHopCycles {
 		return 0, 0, false
 	}
@@ -446,7 +461,7 @@ func hopOver(cycles []engineCycle, router float64, span time.Duration) (hop, pro
 	loRate, hiRate, loPrompt, hiPrompt := first.rate, first.rate, first.prompt, first.prompt
 	var p, d, weight, tokens float64
 	for _, e := range cycles {
-		if e.held {
+		if e.held || unqueued && e.queued {
 			return 0, 0, false
 		}
 		loRate, hiRate = min(loRate, e.rate), max(hiRate, e.rate)
@@ -461,6 +476,26 @@ func hopOver(cycles []engineCycle, router float64, span time.Duration) (hop, pro
 	}
 	hop = router - p/weight - d/weight
 	return hop, tokens / weight, isFinite(hop)
+}
+
+// prefillQueued says a serving prefill row holds requests waiting for compute:
+// its capacity queue where the row reads one (the deferred part is not a
+// queue, as Cycle.QueueByCapacity reads it), else its whole waiting count. An
+// unread waiting count reads as none, as queuedForCapacity reads it.
+func prefillQueued(rows []domain.ReplicaMetrics) bool {
+	for _, rm := range rows {
+		if !Serving(rm) {
+			continue
+		}
+		waiting := rm.QueueLength
+		if rm.CapacityQueueKnown {
+			waiting = rm.CapacityQueueLength
+		}
+		if waiting > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // wholePrompt is the serving rows' mean one-minute prompt, weighted by request

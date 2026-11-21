@@ -5,13 +5,13 @@ REFUSED prefill's TTFT (NoPrefillCapacity), in 16 buckets: P1 refused V_P of var
   what to do: The source learned no prefill rate V_P (it saw no prefill pod busy enough). Assume one: --assume-vp, or on the page Assume a term, V_P.
   what the plan did: Prefill is not sized: decode is sized alone, on its knee times headroom.
 
-each hour: the need of its busiest bucket, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
-hour (UTC)        rate mean  rate p95 need P need D  had P  had D  
-2026-11-06 02:00      25.81     34.52      -    >=3      2      2  UNDER (SLO risk)
-2026-11-06 03:00      37.64     42.50      -    >=3      2      2  UNDER (SLO risk)
+each hour: a fleet that holds every bucket in it (priced again at each), the busiest bucket's own fleet, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
+hour (UTC)        rate mean  rate p95 need P need D busiest  had P  had D  
+2026-11-06 02:00      25.81     34.52      -    >=3    D>=3      2      2  UNDER (SLO risk)
+2026-11-06 03:00      37.64     42.50      -    >=3    D>=3      2      2  UNDER (SLO risk)
 
 buckets: 16 sized (10 under, 2 over, 4 match; 13 for the p95, 3 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 0 too little data, 0 no data
-needed: at the busiest bucket at least 3 decode (prefill not priced), at the quietest at least 1 decode (prefill not priced) (the fewest replicas in all; another mix may serve too)
+needed: to hold every bucket at least 3 decode (prefill not priced); the busiest bucket alone at least 3 decode (prefill not priced), the quietest at least 1 decode (prefill not priced) (each the fewest replicas in all; another mix may serve too)
 replica-hours over the 16 sized buckets: needed 3.33 decode (prefill not priced in 16 of the 16), had 2.67 decode (prefill not priced in 16 of the 16)
 had over every bucket with data: 2.67 prefill + 2.67 decode replica-hours, 5.33 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
 hours under (SLO risk): 02:00, 03:00
@@ -20,6 +20,7 @@ flags: RateFromDecodeRows, FewCyclesForP95, PrefillNotPriced, AssumedShape, Extr
 note: Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.
 note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
 note: Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.
+note: An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the fewest of the buckets' own fleets that holds them all, else each role's most over them. It is not searched for the fewest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.
 note: A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.
 note: Had is the median serving pods of the priced prefill and decode variants over the bucket's cycles; the rate is the model's. A bucket in which another variant also served is flagged OtherVariantsServed. The prefix hit rate is reported, not priced.
 note: Where prefill is not priced, decode is sized on its own limit alone: a lower bound (at least). The fleet's limit, which decode admission can hold down, is not priced.

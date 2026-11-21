@@ -1,13 +1,13 @@
 Day plan for ns-01/model-02, 2026-11-06 02:15 to 2026-11-06 03:35 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
 SLO: TTFT p90 2000ms, TPOT mean 30ms; headroom 0.85. TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.
 
-each hour: the need of its busiest bucket, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
-hour (UTC)        rate mean  rate p95 need P need D  had P  had D  
-2026-11-06 02:00      25.81     34.52      2      3      2      2  UNDER (SLO risk)
-2026-11-06 03:00      37.64     42.50      3      3      2      2  UNDER (SLO risk)
+each hour: a fleet that holds every bucket in it (priced again at each), the busiest bucket's own fleet, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
+hour (UTC)        rate mean  rate p95 need P need D busiest  had P  had D  
+2026-11-06 02:00      25.81     34.52      2      3     2+3      2      2  UNDER (SLO risk)
+2026-11-06 03:00      37.64     42.50      3      3     3+3      2      2  UNDER (SLO risk)
 
 buckets: 16 sized (10 under, 2 over, 4 match; 13 for the p95, 3 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 0 too little data, 0 no data
-needed: at the busiest bucket 3 prefill + 3 decode, at the quietest 1 prefill + 1 decode (the fewest replicas in all; another mix may serve too)
+needed: to hold every bucket 3 prefill + 3 decode; the busiest bucket alone 3 prefill + 3 decode, the quietest 1 prefill + 1 decode (each the fewest replicas in all; another mix may serve too)
 replica-hours over the 16 sized buckets: needed 2.92 prefill + 3.33 decode, had 2.67 prefill + 2.67 decode
 GPU-hours over the sized buckets: needed 6.25, had 5.33
 had over every bucket with data: 2.67 prefill + 2.67 decode replica-hours, 5.33 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
@@ -17,5 +17,6 @@ flags: RateFromDecodeRows, FewCyclesForP95, UnvalidatedTTFT, AssumedVP, AssumedP
 note: Steady state: each bucket is sized as if its rate held, with no scale-up lag. A fleet that follows the plan must start replicas one start time before the rate arrives.
 note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
 note: Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.
+note: An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the fewest of the buckets' own fleets that holds them all, else each role's most over them. It is not searched for the fewest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.
 note: A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.
 note: Had is the median serving pods of the priced prefill and decode variants over the bucket's cycles; the rate is the model's. A bucket in which another variant also served is flagged OtherVariantsServed. The prefix hit rate is reported, not priced.

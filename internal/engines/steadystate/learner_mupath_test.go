@@ -93,7 +93,13 @@ func newMuScript(start time.Time) *recScript {
 	}
 	s.variants = []recVariant{
 		{model: "acme/yv", name: "yv-a", role: domain.RoleDecode, gpus: 1, rows: func(cycle int, at time.Time) []domain.ReplicaMetrics {
-			const measured = 6.0
+			// Under the derived mu: recRow's rows hold 2,500 KV tokens a
+			// request against a context of 1,050, which
+			// llm-d-incubation/llm-d-scaling-manager#188's switch prices as
+			// read, so the derived figure is 4.57, not the 10.9 it read held
+			// at the context. At 6 the measurement sat above it and never
+			// yielded.
+			const measured = 3.0
 			served := 0.5 * measured
 			if cycle >= muServedPhase {
 				served = 2.5 * measured
