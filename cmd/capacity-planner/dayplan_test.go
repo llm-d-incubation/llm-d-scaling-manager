@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -449,6 +450,99 @@ func TestDayPlanVerdictIsTheFleetItHad(t *testing.T) {
 		assert.Equal(t, short, x.Verdict == whatifapi.DayVerdictUnder, "%s: had %g r/s at %g r/s, verdict %s",
 			x.Start.Format("15:04"), *x.HadLimit.Value, *x.SizedRate, x.Verdict)
 	}
+}
+
+// A day plan judges its buckets' trust as at-replicas judges its verdict's
+// (#298): on the b-on staircase with V_P and a assumed, every bucket sized
+// and exit 0, a self-check that found the TTFT figures inconsistent marks
+// each bucket that priced prefill not trusted, beside the hour's verdict
+// and in a line under the buckets, and the plan exits 4 (ExitUntrusted),
+// the plan still printed; one that found nothing inconsistent but did not
+// test a bucket's rate says not covered, and exits 0. A refusal's 3
+// outranks the 4.
+func TestDayPlanJudgesTrust(t *testing.T) {
+	args := slices.Concat([]string{"day-plan", "--recording", stair("ttft-staircase-b-on")}, dayStairAssumed)
+	plain, code := runCmd(t, args...)
+	require.Equal(t, 0, code, plain)
+	require.NotContains(t, plain, "self-check")
+	sc := &whatifapi.SelfCheck{Status: whatifapi.SelfCheckInconsistent, Untrusted: []string{"ttft"},
+		Covered: &whatifapi.SelfCheckCoverage{RateLo: 0.01, RateHi: 1000, Fleets: []whatifapi.FleetCounts{{Prefill: 2, Decode: 2}}}}
+	withCheck := func(t *testing.T, sc *whatifapi.SelfCheck) {
+		t.Helper()
+		cached := planDay
+		planDay = func(ctx context.Context, res *whatifapi.Resolved, req whatifapi.DayPlanRequest, schema string) (*whatifapi.DayPlanResponse, error) {
+			p, err := cached(ctx, res, req, schema)
+			if err != nil {
+				return nil, err
+			}
+			b, err := json.Marshal(p)
+			if err != nil {
+				return nil, err
+			}
+			var own whatifapi.DayPlanResponse
+			if err := json.Unmarshal(b, &own); err != nil {
+				return nil, err
+			}
+			c := *sc
+			own.SelfCheck = &c
+			own.JudgeTrust()
+			return &own, nil
+		}
+		t.Cleanup(func() { planDay = cached })
+	}
+
+	t.Run("not trusted", func(t *testing.T) {
+		withCheck(t, sc)
+		out, code := runCmd(t, args...)
+		assert.Equal(t, whatifapi.ExitUntrusted, code, out)
+		p, code := dayJSON(t, args[1:]...)
+		assert.Equal(t, whatifapi.ExitUntrusted, code)
+		require.Positive(t, p.Summary.Counts.Sized)
+		assert.Equal(t, p.Summary.Counts.Sized, p.Summary.Counts.Untrusted, "every bucket priced prefill")
+		for _, b := range p.Buckets {
+			if b.Verdict != "" {
+				assert.True(t, strings.HasPrefix(b.Trust, whatifapi.TrustNot+": the self-check found this recording's TTFT figures"), "%s: %q", b.Start, b.Trust)
+			}
+		}
+		for _, h := range p.Hours {
+			if h.Verdict != "" {
+				assert.Equal(t, whatifapi.TrustNot, h.Trust, h.Start)
+				assert.Regexp(t, h.Start.Format("2006-01-02 15:04")+` .*; not trusted\n`, out)
+			}
+		}
+		assert.Contains(t, out, fmt.Sprintf("self-check: %d bucket(s) not trusted: their verdicts rest on the TTFT figures, "+
+			"which the self-check found inconsistent with this recording.\n", p.Summary.Counts.Sized))
+	})
+	t.Run("not covered", func(t *testing.T) {
+		// Every fleet the plan had is one the check tested: the rate alone
+		// is not covered.
+		had, _ := dayJSON(t, args[1:]...)
+		fleets := []whatifapi.FleetCounts{}
+		for _, b := range had.Buckets {
+			if b.Actual != nil && !slices.Contains(fleets, *b.Actual) {
+				fleets = append(fleets, *b.Actual)
+			}
+		}
+		narrow := *sc
+		narrow.Status, narrow.Untrusted = whatifapi.SelfCheckWeak, nil
+		narrow.Covered = &whatifapi.SelfCheckCoverage{RateLo: 1000, RateHi: 2000, Fleets: fleets}
+		withCheck(t, &narrow)
+		out, code := runCmd(t, args...)
+		assert.Equal(t, 0, code, out)
+		p, _ := dayJSON(t, args[1:]...)
+		assert.Equal(t, p.Summary.Counts.Sized, p.Summary.Counts.NotCovered, "every sized bucket is below 1000 r/s")
+		assert.Contains(t, out, "; not covered by the self-check\n")
+		assert.Contains(t, out, fmt.Sprintf("self-check: %d bucket(s) not covered: it tested 1000.00 to 2000.00 r/s at ", p.Summary.Counts.Sized))
+		assert.NotContains(t, out, "not trusted")
+	})
+	t.Run("a refusal outranks", func(t *testing.T) {
+		tpot := *sc
+		tpot.Untrusted = []string{"tpot"}
+		withCheck(t, &tpot)
+		out, code := runCmd(t, "day-plan", "--recording", stair("ttft-staircase-b-on"))
+		assert.Equal(t, 3, code, out)
+		assert.Contains(t, out, "not trusted: their verdicts rest on the TPOT figures,", "decode sized alone rests on the TPOT figures")
+	})
 }
 
 // ptrInt is a pointer to n.

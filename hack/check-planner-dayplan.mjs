@@ -187,6 +187,26 @@ try {
   check("the tip says the bound", dayTip(bound, unmet[1]).rows.some(r => r[0] === "beyond the bound" && r[1] === "decode: ReplicaBoundReached"));
   check("the summary says the busiest bucket's need", daySummaryText(plan)[0].startsWith("Needed at the busiest bucket"));
 
+  // What the self-check says of a bucket's verdict is beside it: in the
+  // tip, both tables and the summary; nothing where it says nothing.
+  const judged = copy(plan);
+  const jb = judged.buckets.find(x => x.status === "sized");
+  const jh = judged.hours.find(h => h.start.slice(0, 13) === jb.start.slice(0, 13));
+  jb.trust = "not trusted: the self-check found this recording's TTFT and TPOT figures inconsistent with it, and this verdict rests on them";
+  jh.trust = "not trusted";
+  judged.summary.counts.untrusted = 1;
+  judged.summary.counts.notCovered = 2;
+  check("the tip says the self-check's trust", dayTip(judged, jb).rows.some(r => r[0] === "self-check" && r[1] === jb.trust));
+  check("the bucket table says not trusted, its opening words", dayBucketsTable(judged).includes("; not trusted</td>"));
+  jb.trust = "not covered by the self-check: it tested the recorded traffic, not this shape";
+  check("the bucket table says not covered", dayBucketsTable(judged).includes("; not covered by the self-check</td>"));
+  jb.trust = "not trusted: the self-check found this recording's TTFT and TPOT figures inconsistent with it, and this verdict rests on them";
+  check("the hour table says not trusted", dayHoursTable(judged).includes("; not trusted</td>"));
+  check("the summary counts the buckets not trusted", daySummaryText(judged).some(l => l.startsWith("Self-check: 1 bucket(s) not trusted")));
+  check("the summary counts the buckets not covered", daySummaryText(judged).some(l => l.startsWith("Self-check: 2 bucket(s) not covered")));
+  check("no trust, no word of it", !dayBucketsTable(plan).includes("trusted") && !dayHoursTable(plan).includes("trusted") &&
+    !dayBucketsTable(plan).includes("covered") && !daySummaryText(plan).some(l => l.startsWith("Self-check")));
+
   // Everything a plan carries is text, never markup: a flag, a reason, a
   // refusal's words, the hour's verdict.
   const evil = copy(half);

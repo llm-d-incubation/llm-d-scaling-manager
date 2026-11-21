@@ -76,7 +76,9 @@
 // (serve.go, internal/whatifapi; docs/developer-guide/capacity-planner-serve.md).
 //
 // Exit codes: 0 done, and every role answered; 3 a role refused (the
-// output is still printed); 2 a usage or input error (a bad flag, an
+// output is still printed); 4 at-replicas answered, and its self-check
+// found the figures a verdict rests on inconsistent (whatifapi.ExitUntrusted;
+// 3 takes precedence); 2 a usage or input error (a bad flag, an
 // unreadable or malformed capture or recording, overlapping --role-of
 // selectors, a window too large without --force); 1 anything else (a failed
 // Prometheus query, a Generate or a replay that fails inside the analyzers);

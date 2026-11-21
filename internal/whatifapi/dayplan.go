@@ -262,7 +262,14 @@ type DayBucket struct {
 	// bucket's cycles; absent with no cycles.
 	Actual  *FleetCounts `json:"actual,omitempty"`
 	Verdict string       `json:"verdict,omitempty"`
-	Flags   []string     `json:"flags,omitempty"`
+	// Trust is what the source's self-check says of Verdict, as a
+	// report's verdict's: "not trusted: ..." when the verdict rests on
+	// figures it found inconsistent (the day plan then exits
+	// ExitUntrusted), "not covered by the self-check: ..." when the
+	// sized rate on the fleet the bucket had is not one it tested; empty
+	// otherwise (JudgeTrust).
+	Trust string   `json:"trust,omitempty"`
+	Flags []string `json:"flags,omitempty"`
 }
 
 // DayHour is one hour of buckets, for a table: its rate over every cycle,
@@ -278,6 +285,9 @@ type DayHour struct {
 	// Sized and Unmet are how many of its buckets were sized and unmet.
 	Sized int `json:"sized"`
 	Unmet int `json:"unmet"`
+	// Trust is its worst bucket's Trust, its opening words only: TrustNot,
+	// or TrustNotCovered; empty when every bucket's is.
+	Trust string `json:"trust,omitempty"`
 }
 
 // DaySummary is the plan in a few figures. The needed and the had
@@ -331,6 +341,10 @@ type DayCounts struct {
 	SizedForMax   int `json:"sizedForMax"`
 	// PrefillNotPriced is how many sized buckets have no prefill figure.
 	PrefillNotPriced int `json:"prefillNotPriced"`
+	// Untrusted and NotCovered are how many buckets' verdicts the
+	// self-check does not trust, and does not cover (DayBucket.Trust).
+	Untrusted  int `json:"untrusted,omitempty"`
+	NotCovered int `json:"notCovered,omitempty"`
 }
 
 // handleDayPlan is POST /v1/dayplan.
@@ -381,6 +395,7 @@ func (s *Server) dayPlan(ctx context.Context, req DayPlanRequest) ([]byte, error
 		out.SchemaVersion, out.WhatifSchema, out.DayPlanID, out.InputsID, out.Banner = SchemaVersion, s.whatifSchema, id, e.id, banner
 		// The source's self-check was read before this plan stated anything.
 		out.SelfCheck = e.doc.SelfCheck.RanWithout(q.stated(false))
+		out.JudgeTrust()
 		body, err := marshal(out)
 		if err != nil {
 			return nil, err
@@ -407,6 +422,7 @@ func DayPlan(ctx context.Context, res *Resolved, req DayPlanRequest, whatifSchem
 	}
 	if res.Folds != nil {
 		out.SelfCheck = SelfCheckOf(ctx, res, SelfCheckInfo{PlannerVersion: res.PlannerVersion, Stated: q.stated(true)})
+		out.JudgeTrust()
 	}
 	out.SchemaVersion, out.WhatifSchema, out.DayPlanID, out.InputsID, out.Banner = SchemaVersion, whatifSchema,
 		contentID("dayplan", q.key()), e.id, banner
@@ -968,7 +984,7 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 			db.Flags = append(db.Flags, FlagWindowShape)
 		}
 		if stated {
-			db.Shape.Source = "stated"
+			db.Shape.Source = dayShapeStated
 			if k.PromptTokens > 0 {
 				db.Shape.PromptTokens = ptr(k.PromptTokens)
 			}

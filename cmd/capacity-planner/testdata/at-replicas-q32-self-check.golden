@@ -1,8 +1,8 @@
-Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it, p90 TTFT within 20% in 0 of 9 steps (median ratio 1.90); p90 TPOT within 20% in 10 of 10 steps (median ratio 0.94). [inconsistent]
-  why: the planner and this recording disagree: p90 TTFT: median ratio 1.90, within 20% in 0% of 9 steps
+Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it, p90 TTFT within 20% in 0 of 9 steps at 5 load levels (median ratio 1.90); p90 TPOT within 20% in 10 of 10 steps at 6 load levels (median ratio 0.94). It tested 0.24 to 4.13 r/s at 2 prefill + 2 decode: an answer at another rate or fleet is not covered by it. [inconsistent]
+  why: the planner and this recording disagree: p90 TTFT: median ratio 1.90, want 0.80 to 1.25; within 20% in 0% of the steps, want 50% or more; read more than 20% low in 2 of 9 steps (22%), want 15% or fewer; the lowest step read 0.13 of measured, want 0.67 or more
   Do not trust prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures (loosely) held.
   to report it, review and file this issue (nothing is sent until you do; it holds no name and no recording):
-  https://github.com/llm-d-incubation/llm-d-scaling-manager/issues/new?diagnostics=planner%3A+vtest%0Aself-check%3A+inconsistent%0Afailed%3A+ttft-bias%3A+median+ratio+1.90%2C+want+0.80+to+1.25%0Afailed%3A+ttft-within%3A+within+20%25+in+0%25+of+the+steps%2C+want+50%25+or+more%0Attft+p90%3A+steps+9%2C+within20+0%2C+median+ratio+1.90%2C+read+low+2%2C+judged+14%2C+overloaded+1%0Atpot+p90%3A+steps+10%2C+within20+10%2C+median+ratio+0.94%2C+read+low+0%2C+judged+14%2C+overloaded+0%0Ashape%3A+prompt+4096-8192+tokens%2C+output+16-32+tokens%0Afleet%3A+prefill+2%2C+decode+2%3B+flow+control+off%2C+inferred%0Aengine%3A+prefill+vllm+release+not+recorded%2C+decode+vllm+release+not+recorded%3B+router%3A+not+recorded%0Afolds%3A+2%2C+span+1+h+13+min%0A&template=planner-self-check.yml&title=planner+self-check%3A+inconsistent
+  https://github.com/llm-d-incubation/llm-d-scaling-manager/issues/new?diagnostics=planner%3A+vtest%0Aself-check%3A+inconsistent%0Afailed%3A+ttft-bias%3A+median+ratio+1.90%2C+want+0.80+to+1.25%0Afailed%3A+ttft-within%3A+within+20%25+in+0%25+of+the+steps%2C+want+50%25+or+more%0Afailed%3A+ttft-low%3A+read+more+than+20%25+low+in+2+of+9+steps+%2822%25%29%2C+want+15%25+or+fewer%0Afailed%3A+ttft-floor%3A+the+lowest+step+read+0.13+of+measured%2C+want+0.67+or+more%0Attft+p90%3A+steps+9%2C+within20+0%2C+median+ratio+1.90%2C+read+low+2%2C+judged+14%2C+overloaded+1%2C+levels+5%2C+served+past+knee+0%0Atpot+p90%3A+steps+10%2C+within20+10%2C+median+ratio+0.94%2C+read+low+0%2C+judged+14%2C+overloaded+0%2C+levels+6%2C+served+past+knee+0%0Ashape%3A+prompt+4096-8192+tokens%2C+output+16-32+tokens%0Afleet%3A+prefill+2%2C+decode+2%3B+flow+control+off%2C+inferred%0Aengine%3A+prefill+vllm+release+not+recorded%2C+decode+vllm+release+not+recorded%3B+router%3A+not+recorded%0Afolds%3A+2%2C+span+1+h+13+min%0A&template=planner-self-check.yml&title=planner+self-check%3A+inconsistent
 ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-11-14 07:09-09:35Z, cycle 580 of 580
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
@@ -15,12 +15,14 @@ summary     50%                   80%                    100%              seen
   measured  5538/18.4 @2.02 MISS  14531/18.4 @3.23 MISS  -/18.4 @4.04 SAT  -/19.1 @12.48 SAT
 verdicts
   measured  UNDER-PROVISIONED: at the p95 load of 12.5 r/s, 3.1x the fleet knee of 4.0 r/s, the fleet saturates; no fleet up to 32 replicas of each role holds.
+            self-check: not trusted: the self-check found this recording's TTFT figures inconsistent with it, and this verdict rests on them.
 
 shape measured: IL 8016 OL 26, prefix hit 0.00 (measured, cycles 560-579)
 utilization at the load judged
   decode        KV fill 0.019 (band top 0.8), slots 4 of 152, wait p 0.000
   prefill       utilization pooled 3.09, worst pod 3.09 (f 1)
   verdict       UNDER-PROVISIONED: at the p95 load of 12.5 r/s, 3.1x the fleet knee of 4.0 r/s, the fleet saturates; no fleet up to 32 replicas of each role holds.
+  self-check    not trusted: the self-check found this recording's TTFT figures inconsistent with it, and this verdict rests on them.
 capacity            req/s     out tok/s   bound by
   prefill knee      4.04      103         prefill compute: N_p 2 x V_P x (1 - 0.05 margin) / (f 1.000 x 8007 tokens)
   decode knee       134.15    3428        decode band top at fill 0.798

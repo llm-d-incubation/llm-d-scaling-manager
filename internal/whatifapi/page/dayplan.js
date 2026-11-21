@@ -321,6 +321,7 @@ function dayTip(plan, b) {
   if (b.actual) row("had", `${b.actual.prefill} prefill, ${b.actual.decode} decode`);
   if (b.hadLimit && b.hadLimit.value != null) row("had fleet serves", dayFmt(b.hadLimit.value) + " r/s");
   if (b.verdict) row("verdict", DAY_VERDICT[b.verdict] || b.verdict);
+  if (b.trust) row("self-check", b.trust);
   if (b.unmet) row("beyond the bound", `${b.unmetRole || "fleet"}: ${b.unmet.reason}`);
   if (b.shape && b.shape.promptTokens != null) row("prompt, output", `${b.shape.promptTokens.toFixed(0)}, ${b.shape.outputTokens != null ? b.shape.outputTokens.toFixed(0) : "-"} tokens (${b.shape.source})`);
   if (b.flags && b.flags.length) row("flags", b.flags.map(f => f === "Extrapolated" ? "EXTRAPOLATED" : f).join(", "));
@@ -347,7 +348,7 @@ function dayHoursTable(plan) {
   for (const h of plan.hours) {
     s += `<tr><td>${esc(h.start.slice(0, 16).replace("T", " "))}</td><td>${h.rate ? dayFmt(h.rate.mean) : "-"}</td><td>${h.rate ? dayFmt(h.rate.p95) : "-"}</td>` +
       `<td>${n(h.needed && h.needed.prefill)}</td><td>${n(h.needed && h.needed.decode)}</td><td>${n(h.actual && h.actual.prefill)}</td><td>${n(h.actual && h.actual.decode)}</td>` +
-      `<td>${n(h.unmet)}</td><td>${esc(h.verdict ? DAY_VERDICT[h.verdict] : "not sized")}</td></tr>`;
+      `<td>${n(h.unmet)}</td><td>${esc((h.verdict ? DAY_VERDICT[h.verdict] : "not sized") + (h.trust ? "; " + h.trust : ""))}</td></tr>`;
   }
   return s + "</table>";
 }
@@ -364,7 +365,7 @@ function dayBucketsTable(plan) {
       `<td>${b.rate ? dayFmt(b.rate.mean) : "-"}</td><td>${b.rate ? dayFmt(b.rate.p95) : "-"}</td>` +
       `<td>${b.sizedRate != null ? dayFmt(b.sizedRate) + " (" + esc(b.sizedFor) + ")" : "-"}</td>` +
       `<td>${n(b.needed && b.needed.prefill)}</td><td>${n(b.needed && b.needed.decode)}</td><td>${n(b.actual && b.actual.prefill)}</td><td>${n(b.actual && b.actual.decode)}</td>` +
-      `<td>${esc(b.verdict ? DAY_VERDICT[b.verdict] || b.verdict : "")}</td><td>${esc(why)}</td><td>${esc((b.flags || []).join(", "))}</td></tr>`;
+      `<td>${esc((b.verdict ? DAY_VERDICT[b.verdict] || b.verdict : "") + (b.trust ? "; " + b.trust.split(":")[0] : ""))}</td><td>${esc(why)}</td><td>${esc((b.flags || []).join(", "))}</td></tr>`;
   }
   return s + "</table>";
 }
@@ -386,5 +387,7 @@ function daySummaryText(plan) {
   if (s.hadGpuHoursAll != null) out.push(`The fleet ran ${s.hadGpuHoursAll.toFixed(1)} GPU-hours over every bucket with data.`);
   out.push(`${c.sized} buckets sized (${c.sizedForP95} for their p95, ${c.sizedForMean} for their mean, ${c.sizedForMax} for their max), ` +
     `${c.unmet} beyond the bound, ${c.refused} refused, ${c.tooLittleData} with too little data, ${c.noData} with no data.`);
+  if (c.untrusted) out.push(`Self-check: ${c.untrusted} bucket(s) not trusted: their verdicts rest on figures the self-check found inconsistent with this recording (see each bucket).`);
+  if (c.notCovered) out.push(`Self-check: ${c.notCovered} bucket(s) not covered: it did not test the rate, fleet or shape each was priced at.`);
   return out;
 }

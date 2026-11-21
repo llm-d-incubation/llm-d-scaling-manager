@@ -278,6 +278,7 @@ td.none { color: var(--muted); font-style: italic; }
 .rmore { display: inline-block; margin-left: 8px; }
 #rmatrix { display: block; overflow-x: auto; max-width: 100%; }
 .rgrowthline { margin: 2px 0 2px 24px; font-size: 13px; }
+.rtrust { margin: 2px 0 2px 24px; font-size: 13px; font-style: italic; }
 .rwhatif { color: var(--text-secondary); font-style: italic; }
 .rscope { margin-left: 6px; font-size: 12px; }
 #rload { margin: 4px 0; }
