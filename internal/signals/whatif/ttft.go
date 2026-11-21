@@ -1121,7 +1121,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 	pk := pl.pf.knee()
 	out := TTFT{PrefillKnee: pk, Onsets: pl.onsets, Flags: append([]Flag(nil), pl.flags...)}
 	if rate >= pk {
-		u := refuse(Saturated, fmt.Sprintf("%g r/s at or above the prefill knee %g r/s", rate, pk))
+		u := refuse(Saturated, fmt.Sprintf("%.4g r/s at or above the prefill knee %.4g r/s", rate, pk))
 		return priced{u: &u}
 	}
 	// gated is the flow-control gate priced as a stage (ttft_gate.go): with
@@ -1131,7 +1131,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 	var gated bool
 	if pl.fc.State == FlowControlOn {
 		if pl.d != nil && rate >= pl.onsets.Decode {
-			u := refuse(AboveDecodeOnset, fmt.Sprintf("%g r/s at or above the decode gate's onset %g r/s", rate, pl.onsets.Decode))
+			u := refuse(AboveDecodeOnset, fmt.Sprintf("%.4g r/s at or above the decode gate's onset %.4g r/s", rate, pl.onsets.Decode))
 			return priced{u: &u}
 		}
 		if rate >= pl.onsets.Prefill {
@@ -1217,7 +1217,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		var tail float64
 		wait, tail = pf.engineWait(rho)
 		if rho > 0 && (!Finite(tail) || !(tail > 0)) {
-			u := refuse(Saturated, fmt.Sprintf("no finite wait tail at %g r/s (decay rate %g)", rate, tail))
+			u := refuse(Saturated, fmt.Sprintf("no finite wait tail at %.4g r/s (decay rate %.3g)", rate, tail))
 			return priced{u: &u}
 		}
 		out.WaitScale = 1 / tail
@@ -1263,7 +1263,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		}
 		k, ok := d.fillAtReplicaRate(rate / float64(d.Replicas))
 		if !ok {
-			u := refuse(Saturated, fmt.Sprintf("no decode fill carries %g r/s", rate))
+			u := refuse(Saturated, fmt.Sprintf("no decode fill carries %.4g r/s", rate))
 			return priced{u: &u}
 		}
 		fill := k
@@ -1353,7 +1353,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		}
 		floored(&mean, &oldMean, a+pl.pf.own().mean+floorStep, oldMeanFloor)
 		if !Finite(mean) {
-			u := refuse(Saturated, fmt.Sprintf("no finite mean TTFT at %g r/s", rate))
+			u := refuse(Saturated, fmt.Sprintf("no finite mean TTFT at %.4g r/s", rate))
 			return priced{u: &u}
 		}
 		out.Seconds, out.Independent = mean, mean
@@ -1369,11 +1369,11 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 	v, beta := split(b1, dec, q)
 	if !Finite(v) {
 		// Only within rounding of a knee, where the wait's scale overflows.
-		u := refuse(Saturated, fmt.Sprintf("no finite TTFT at %g r/s", rate))
+		u := refuse(Saturated, fmt.Sprintf("no finite TTFT at %.4g r/s", rate))
 		return priced{u: &u}
 	}
 	if !Finite(a + v + first) {
-		u := refuse(InvalidInput, fmt.Sprintf("no finite TTFT at %g r/s: a %g s, decode %g s", rate, a, first))
+		u := refuse(InvalidInput, fmt.Sprintf("no finite TTFT at %.4g r/s: a %g s, decode %g s", rate, a, first))
 		return priced{u: &u}
 	}
 	out.Seconds, out.DecodeShare = a+v+first, beta

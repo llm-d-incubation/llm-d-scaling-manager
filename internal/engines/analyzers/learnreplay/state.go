@@ -13,6 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
@@ -101,6 +102,14 @@ type State struct {
 	// it (QueryModelArrivalRate): 0 where it read none, which a failed query
 	// and an idle cycle both read as.
 	ArrivalRates []float64
+	// RoleStartSeconds is, for each role with a measured variant, how long a
+	// new replica of its slowest measured variant took to become Ready, as
+	// the saturation analyzer reported it at the cycle
+	// (domain.AnalyzerResult.RoleStartSeconds); nil where it reported none.
+	// RoleStartSeeded names each role whose start is a ScaledObject's
+	// replicaStartSeconds seed, no replica of it measured.
+	RoleStartSeconds map[string]float64
+	RoleStartSeeded  map[string]bool
 }
 
 // VariantState is one variant's learned state at the cycle: everything the
@@ -153,7 +162,8 @@ type VariantState struct {
 	CapacityTokens float64
 	// BatchCap is the cap per engine rank the analyzer prices the variant
 	// at, BatchCapSource where it came from (flags, declared, learned,
-	// default; "" with none), and Ranks the engine ranks per replica.
+	// default, or step-budget with saturation.SwitchPlannerCapAtStepBudget
+	// on; "" with none), and Ranks the engine ranks per replica.
 	BatchCap       int64
 	BatchCapSource string
 	Ranks          int
@@ -179,6 +189,10 @@ type VariantState struct {
 	// with traffic up to the one asked: what the recording saw, and what a
 	// stated shape is extrapolated past.
 	ShapeRange ShapeRange
+	// ShapeSeries is the variant's shape at every cycle with traffic up to
+	// the one asked, oldest first: what a load read at some cycles is priced
+	// at the shape of (the planner's load shape).
+	ShapeSeries []CycleShape
 	// ReadingsFrom and ReadingsTo are the first and the last cycle of the
 	// LineReadings, 0 with none.
 	ReadingsFrom, ReadingsTo int
@@ -248,6 +262,10 @@ type shapeSample struct {
 //     median of the busiest minutes, not of every minute.
 //   - saturation.SwitchITLAdaptiveBandFloor: the ITL band's floor lowered to
 //     the fill a low-fill fleet has.
+//   - slo.SwitchTTFTHopUnqueued: the router hop of the decode term read off
+//     windows whose prefill pods held no queue. The planner reads its own
+//     decode term windows (state_ttft.go), so it reads the switch from here
+//     even where the recording has no slo analyzer to set it on.
 //
 // saturation.SwitchITLHoldSteadySlope is planner-only too but not listed:
 // the line it holds is right at a given fill, and the planner then reads
@@ -261,6 +279,11 @@ type shapeSample struct {
 // but its p90 TTFT on the B-off and B-on phases still reads 15% to 23% under
 // and its p90 TPOT up to 22% under there (32% on the first warm-up's
 // B-onset, 39% on the bursty C phases), so both stay off.
+//
+// saturation.SwitchPlannerCapAtStepBudget is planner-only and not listed
+// either: no recording holds an engine whose step budget runs fewer
+// sequences than its cap (MTP, wide EP), so there is no backtest to turn it
+// on with (issue llm-d-incubation/llm-d-scaling-manager#302).
 func PlannerSwitches() map[string]map[string]bool {
 	return map[string]map[string]bool{PackageSaturation: {
 		saturation.SwitchPrefillALowLoadPerRank: true,
@@ -268,6 +291,8 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillQueueByCapacity: true,
 		saturation.SwitchPrefillFBusyMinutes:    true,
 		saturation.SwitchITLAdaptiveBandFloor:   true,
+	}, PackageSLO: {
+		slo.SwitchTTFTHopUnqueued: true,
 	}}
 }
 
@@ -352,6 +377,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	opts.Mode = Normal
 	opts.Switches = withPlannerSwitches(opts.Switches)
 	opts.discardRecording = true
+	opts.sloOptional = true
 	var (
 		st       *State
 		stateErr error
@@ -361,11 +387,12 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		engine   []whatif.TPOTWindow
 		shapes   = map[string][]shapeSample{}
 		resident = map[string][]residentSample{}
-		ttft     = newTTFTSamples()
+		ttft     = newTTFTSamples(opts.Switches[PackageSLO][slo.SwitchTTFTHopUnqueued])
 		lines    = newLineSamples()
 		cycleAt  = map[time.Time]int{}
 		arrivals []float64
 		ranges   = map[string]ShapeRange{}
+		series   = map[string][]CycleShape{}
 	)
 	// Read once: the switches are set before the replay starts.
 	lineAtFloor := opts.Switches[PackageSaturation][saturation.SwitchITLLineAtFloor]
@@ -403,6 +430,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		}
 		noteShapes(shapes, in.ReplicaMetrics, n)
 		noteRanges(ranges, shapes, n)
+		noteSeries(series, shapes, n)
 		noteResident(resident, in, n)
 		ttft.note(in, n, ev.Now)
 		args := func(variant string) string {
@@ -423,11 +451,17 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 			for i := range s.Variants {
 				v := &s.Variants[i]
 				v.ShapeRange = ranges[v.Variant]
+				v.ShapeSeries = slices.Clone(series[v.Variant])
 				if domain.CanonicalRole(v.Role) != domain.RolePrefill {
 					v.Resident = residentOf(resident[v.Variant], v.Shape)
 				}
 			}
 			r.fillTTFT(s, in, ttft)
+			// The replay applied the cycle's Analyze before asking: its
+			// result is the cycle's.
+			if res, ok := r.Result(domain.SaturationAnalyzerName, in.Namespace, in.ModelID); ok {
+				s.RoleStartSeconds, s.RoleStartSeeded = maps.Clone(res.RoleStartSeconds), maps.Clone(res.RoleStartSeeded)
+			}
 			if n == cycle {
 				st = s
 				return true
@@ -820,6 +854,28 @@ func (vs *VariantState) refit() {
 	}
 	if got := itl.RefitAboveBand(vs.Readings.Above, vs.Readings.AboveSteady, vs.MinSettled); got.Tier != "" && sameLine(got.Model, vs.Line) {
 		vs.Tier, vs.LineReadings, vs.Refitted = whatif.TierAboveBand, got.Read, true
+	}
+}
+
+// CycleShape is one cycle's shape of a variant: its mean lengths and prefix
+// hit rate, and its rows' summed request rate, 0 where none read one. Cycle
+// counts from 1, as State.Cycle does: State.ArrivalRates[Cycle-1] is the
+// model's arrival rate at it.
+type CycleShape struct {
+	Cycle                                    int
+	InputTokens, OutputTokens, PrefixHitRate float64
+	RequestRate                              float64
+}
+
+// noteSeries adds each variant's sample of cycle n, if it has one, to its
+// series.
+func noteSeries(series map[string][]CycleShape, shapes map[string][]shapeSample, n int) {
+	for v, s := range shapes {
+		if len(s) == 0 || s[len(s)-1].cycle != n {
+			continue
+		}
+		x := s[len(s)-1]
+		series[v] = append(series[v], CycleShape{Cycle: n, InputTokens: x.il, OutputTokens: x.ol, PrefixHitRate: x.hit, RequestRate: x.req})
 	}
 }
 

@@ -123,14 +123,21 @@ type floorTable struct {
 // b-off's mu reads 21.8 where it read 21.1, and three-pods pins the floor
 // on 102 cycles where it pinned 145, asking for one replica more on 31
 // cycles where it asked on 36 (482 replica-cycles where 487).
+//
+// llm-d-incubation/llm-d-scaling-manager#188's switch on from the
+// constructor prices a resident reading above the context as read, in both
+// runs: e1 asks for 5 replica-cycles more with the floor off (1454 where
+// 1449), and the floor moves 15 cycles down where it moved 18; e1-tuned 1
+// where 2. The median mu moves by under 1% on e1-tuned and three-pods and
+// by under 0.2% on the staircases; no staircase replica count moves.
 var floorReplicaTables = []floorTable{
-	{"e1", 762, 552, 18, 18, 0, 1449, 1431, 5.277, 5.270},
-	{"e1-tuned", 748, 545, 2, 2, 0, 1388, 1386, 4.779, 4.808},
+	{"e1", 762, 552, 15, 15, 0, 1454, 1439, 5.277, 5.270},
+	{"e1-tuned", 748, 545, 1, 1, 0, 1388, 1387, 4.755, 4.783},
 	{"ttft-staircase-a-off", 128, 0, 0, 0, 0, 125, 125, 0, 0},
 	{"ttft-staircase-b-off", 289, 130, 0, 0, 0, 283, 283, 31.239, 21.785},
-	{"ttft-staircase-b-on", 289, 167, 0, 0, 0, 284, 284, 32.655, 22.481},
-	{"ttft-staircase-c-on", 292, 147, 0, 0, 0, 286, 286, 28.938, 22.161},
-	{"ttft-three-pods", 203, 102, 31, 0, 31, 451, 482, 4.715, 4.147},
+	{"ttft-staircase-b-on", 289, 167, 0, 0, 0, 284, 284, 32.646, 22.473},
+	{"ttft-staircase-c-on", 292, 147, 0, 0, 0, 286, 286, 28.938, 22.135},
+	{"ttft-three-pods", 203, 102, 31, 0, 31, 451, 482, 4.676, 4.146},
 }
 
 // median is the median of xs, 0 with none.

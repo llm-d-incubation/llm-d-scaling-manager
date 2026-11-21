@@ -100,6 +100,13 @@ type RoleInfo struct {
 	Variant  string      `json:"variant"`
 	Replicas int         `json:"replicas"`
 	Engine   *EngineInfo `json:"engine,omitempty"`
+	// StartSeconds is how long a new replica of the role took to become
+	// Ready, as the source's saturation analyzer learned it (its slowest
+	// measured variant of the role); absent where it learned none.
+	// StartSeeded says it is the ScaledObject's replicaStartSeconds seed, no
+	// replica of the role measured.
+	StartSeconds *float64 `json:"startSeconds,omitempty"`
+	StartSeeded  bool     `json:"startSeeded,omitempty"`
 }
 
 // EngineInfo is the engine a variant runs: which one, for vLLM the release

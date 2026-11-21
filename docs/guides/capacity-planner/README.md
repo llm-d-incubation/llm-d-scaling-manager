@@ -514,20 +514,56 @@ It replays the recording once and answers, for each shape and load:
 
 - **Load judged.** The p95 of the arrival rate the window read, one reading
   per cycle with traffic. The report prints the mean, p95 and peak, and the
-  busiest 2 minutes (a rolling mean). `--load-statistic mean|p95|peak` picks
+  busiest 2 minutes (a rolling mean). `--load-statistic mean|p95|peak|p95-modulation` picks
   the one judged; `--load-seen` states a load instead. The mean hides a busy
   part: on the staircase sample it is 31.6 r/s, the p95 41.7 and the peak
   43.2.
+- **Counting noise.** Each reading is a 1-minute rate, so even a steady
+  Poisson stream reads above its rate at the p95 (about 21% at 1 r/s, 6% at
+  12 r/s), and the queueing model already prices that noise. The report
+  prints the p95 less it, `p95 less counting noise`; `--load-statistic
+  p95-modulation` judges at it. A steady load is then judged near its mean,
+  a load that swings near its p95.
+- **The load's shape.** Under each shape the report prints the shape of the
+  cycles the load was read from (for the p95, every cycle at or above it).
+  When the mix moved in the window, the measured shape (the last cycles')
+  is not that traffic: a measured shape more than 20% off it in prompt or
+  output length is flagged `ShapeLoadMismatch`, and `--shape load` prices
+  the load at its own cycles' shape. On the guide's sample the p95, 29.7
+  r/s, ran at 1000/500 tokens while the measured shape is 4569/1855: the
+  measured shape needs 14 prefill + 23 decode, `--shape load` 4 + 2, what
+  `day-plan` sizes the same rate at.
+- **Not the default.** `--shape load` and `p95-modulation` (here and in
+  `day-plan --size-for`) are opt-in. A model change becomes the default only
+  where the recordings show it moves no figure to read under what was
+  measured. `--shape load` fails that: on the decode-only sample
+  (`throughput-sweep`) it prices TPOT at the p95 load, 26.9 r/s, at 2.79 ms
+  against 3.14 ms at the measured shape, and the decode engines measured
+  3.34 to 3.65 ms in those very cycles. It does read closer on the Qwen3-32B
+  warm-up (TTFT p90 941 ms at the load's 1k prompts, where the measured
+  shape saturates; the run measured 287 ms at that rate). Before it can be
+  the default, decode's TPOT at the load's own shape must stop reading
+  under there. `p95-modulation` moved the judged load by at most 0.06 r/s
+  (0.2%) on every recording we hold, and no verdict or need. In `day-plan`
+  it sizes for up to 23% less at a bucket and moved one bucket's need on
+  three of seven recordings, by one replica (two Qwen3-32B warm-ups, sized
+  for 0.38 against 0.48 r/s and 4.21 against 4.70 r/s, and the guide's
+  sample, 1.68 against 2.00 r/s). Every recording we hold is
+  a staircase or a sweep, whose loads swing; the case it is for, a steady
+  low rate on a slow model, needs a recording of its own, with its latency,
+  to show the fleet sized at the modulated load still holds the SLO.
 - **Growth.** `--load "seen x1.5"` (also `seen×1.5`, `seen*1.5`) asks what
   50% more traffic does: a column of its own and a short `x1.5 (...)` line
   under the verdict. It never changes the verdict at the load seen.
   `--load-seen-x 1.5` is an alias that adds the same column.
-- **Summary.** One row per shape (`--shape`, repeatable: `measured`, or
-  `IL/OL[/hit]` in tokens, `k` for 1024), one column per load (`--load`,
+- **Summary.** One row per shape (`--shape`, repeatable: `measured`,
+  `load`, or `IL/OL[/hit]` in tokens, `k` for 1024), one column per load (`--load`,
   repeatable: `80%` of that shape's fleet knee, `5r/s`, `seen`, or
   `seen x1.5`). A cell
-  such as `617/5.0 @18.49 ok` is TTFT p90 617 ms and TPOT p90 5.0 ms at
-  18.49 r/s, and the SLO's own statistics are met there. The mark is `ok`
+  such as `617/3.2 @18.49 ok` is the TTFT and TPOT at the statistics the
+  SLO judges (here TTFT p90 617 ms and TPOT mean 3.2 ms; with no target,
+  TTFT p90 and the `--tpot-percentile`) at 18.49 r/s, and both targets are
+  met there. The mark is `ok`
   met, `MISS` missed, `MISS*` missed because the rate is past the prefill
   flow-control onset (the router queues) though the figure is within, `SAT`
   saturated, `?` not judged. A TPOT ending in `m` is the mean, where the
@@ -571,26 +607,30 @@ It replays the recording once and answers, for each shape and load:
 
 The targets are the policy's unless `--ttft` and `--tpot` set them. Exit 0
 means the report answered, whatever the verdict, saturated fleets included;
-exit 3 means a shape's verdict is NOT JUDGED. Scripts read the verdict from
+exit 3 means a shape's verdict is NOT JUDGED; exit 4 means the report
+answered and the self-check found the figures a verdict rests on
+inconsistent with the recording (the verdict says `self-check: not
+trusted`; [the self-check](check.md#the-self-check-beside-every-answer)).
+Scripts read the verdict from
 `-o json`
 (`shapes[].verdict.verdict`), which prints the same report as
 [`POST /v1/report`](api.md#the-report).
 
-With v0.12.1, the sample above prints (the start of it):
+With v0.12.3, the sample above prints (the start of it):
 
 ```text
 ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-11-06 02:18-03:30Z, cycle 289 of 289
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
 load judged     41.70 r/s, the p95 of the 282 of 289 cycles with traffic
-load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; busiest 2m0s (8 cycles): 42.13 r/s
+load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; p95 less counting noise 41.66; busiest 2m0s (8 cycles): 42.13 r/s
 SLO             TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary                     50%                80%                  5r/s              seen            seen x1.2
-  measured                  617/5.0 @18.49 ok  1944/10.8 @29.59 ok  388/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  1k/1k EXTRAPOLATED        133/4.9 @17.78 ok  152/9.0 @28.45 ok    125/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
-  16k/200/0.3 EXTRAPOLATED  667/5.0 @9.08 ok   1015/10.8 @14.53 ok  567/4.9 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+summary                     50%                80%                 5r/s              seen            seen x1.2
+  measured                  617/3.2 @18.49 ok  1944/6.8 @29.59 ok  388/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  1k/1k EXTRAPOLATED        133/3.1 @17.78 ok  152/5.6 @28.45 ok   125/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
+  16k/200/0.3 EXTRAPOLATED  667/3.2 @9.08 ok   1015/6.8 @14.53 ok  567/3.1 @5.00 ok  -/- @41.70 SAT  -/- @50.04 SAT
 verdicts
   measured                  UNDER-PROVISIONED: at the p95 load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2) (prefill f 1.5 assumed at 3 pods).
                             x1.2 (50.0 r/s): UNDER-PROVISIONED: 1.4x the fleet knee (37.0 r/s); needs 4 prefill + 4 decode (has 2 + 2) (prefill f 1.5 assumed at 4 pods).
@@ -637,13 +677,13 @@ REFUSED prefill's TTFT (TargetBelowFloor), in 4 buckets: target 0.5 s at or belo
   what to do: The TTFT target is under the TTFT at zero load: no replica count meets it. Raise the TTFT target above the floor in the detail.
   what the plan did: Prefill is not sized: decode is sized alone, on its TPOT target and its knee times headroom.
 
-each hour: the need of its busiest bucket, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
-hour (UTC)        rate mean  rate p95 need P need D  had P  had D
-2026-11-01 21:00       0.73      1.00      1      1      1      1  ok
-2026-11-01 22:00       6.88     29.68      4      2      1      1  UNDER (SLO risk)
+each hour: a fleet that holds every bucket in it (priced again at each), the busiest bucket's own fleet, the fewest pods it had, and the fleet it had judged whole at each bucket's rate
+hour (UTC)        rate mean  rate p95 need P need D busiest  had P  had D
+2026-11-01 21:00       0.73      1.00      1      1     1+1      1      1  ok
+2026-11-01 22:00       6.88     29.68    >=5    >=4     4+2      1      1  UNDER (SLO risk)
 
 buckets: 11 sized (9 under, 0 over, 2 match; 11 for the p95, 0 for the mean, 0 for the max), 0 beyond the bound, 0 refused, 2 too little data, 0 no data
-needed: at the busiest bucket 4 prefill + 2 decode, at the quietest 1 prefill + 1 decode (the fewest replicas in all; another mix may serve too)
+needed: to hold every bucket at least 5 prefill + 4 decode (prefill not priced in some buckets); the busiest bucket alone 4 prefill + 2 decode, the quietest 1 prefill + 1 decode (each the fewest replicas in all; another mix may serve too)
 replica-hours over the 11 sized buckets: needed 1.75 decode (prefill not priced in 4 of the 11), had 0.92 decode (prefill not priced in 4 of the 11)
 had over every bucket with data: 1.08 prefill + 1.08 decode replica-hours, 2.17 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
 hours under (SLO risk): 22:00
@@ -658,17 +698,47 @@ alone. A higher `--ttft` sizes them.
 - **Needed.** The fewest replicas that serve the bucket's rate under the SLO
   and headroom: the fewest in all, ties going to fewer decode replicas, as
   **What fleet does this traffic need?** finds them. Another mix may serve the
-  rate too. An hour's need is its busiest bucket's.
+  rate too.
+- **An hour's need.** A fleet that holds every bucket of the hour, priced
+  again at each bucket's rate and shape: the fewest of the buckets' own
+  fleets that holds them all, else each role's most over them
+  (`NOT CONFIRMED` where it falls short at one). It is not the busiest
+  bucket's: above, 22:15 runs 29.8 r/s of 500-token outputs and needs 4
+  prefill and 2 decode, but 22:05 runs 9.5 r/s of 2500-token outputs and
+  needs 4 decode, and 22:40 runs 15.9 r/s of 1400-token prompts and needs 5
+  prefill. Four buckets sized decode alone, so the need is a lower bound
+  (`>=`). The `busiest` column is the busiest bucket's own fleet. The
+  summary's need holds every bucket of the window the same way.
 - **Sized for.** Each bucket is sized for the p95 of its cycles' rates when it
   holds 20 cycles or more (5 minutes at a 15 s cycle), else for their mean,
   which is less conservative, flagged `FewCyclesForP95`. `--size-for
-  mean|p95|max` sets it; the table and each bucket say which was used.
+  mean|p95|p95-modulation|max` sets it; the table and each bucket say which
+  was used. `p95-modulation` is the p95 less the counting noise of a
+  1-minute rate, as in `at-replicas`: a bucket of a steady stream is sized
+  near its mean. It is not the default; see "Not the default" under `at-replicas` above.
   `--bucket 15m` sets the bucket.
+- **Scale-up lead.** A replica must be Ready when its bucket starts, so it
+  starts one start time before. The plan takes each role's start time from
+  the recording (the start learner's slowest measured variant of the role;
+  `fleet.<role>.startSeconds` in the inputs), or `--lead 90s` (both roles),
+  `--lead prefill=3m,decode=90s`. With a lead, the `held` column is the
+  fleet held in the hour: each role's most need over a bucket and every
+  bucket that starts within the role's lead after it ends. The summary
+  adds the held replica-hours: each scale-up's replicas counted from one
+  lead before their bucket. On the sample (start times 67 and 68 s) the
+  21:00 hour needs 1 + 1 but holds 1 + 2, for the 22:00 rise; the held
+  decode replica-hours are 1.86 against 1.75 needed. The verdicts still
+  judge the need. With no start time learned and none asked, nothing is
+  held ahead, and a note says so.
 - **Shape.** Each bucket is priced at its own observed prompt and output
   length. A bucket whose cycles read none is priced at the source's shape and
   flagged `WindowShape`. `--assume-input-tokens` and `--assume-output-tokens`
   price every bucket at one stated length, flagged `EXTRAPOLATED` when it lies
   outside what the buckets observed.
+- **No TTFT target.** With no `--ttft` and none in the policy, prefill is
+  not sized, and decode is sized alone on its TPOT target and its knee times
+  headroom, as `at-replicas` judges decode alone; a note says so. The flags
+  are checked before the recording is replayed.
 - **What the source cannot price.** A prefill rate V_P or a fixed latency a
   it did not learn, a TTFT target under the TTFT at zero load, or a decode line
   it did not fit refuses every rate alike. The plan says so at the top, with

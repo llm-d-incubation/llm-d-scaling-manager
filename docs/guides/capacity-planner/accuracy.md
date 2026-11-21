@@ -8,11 +8,11 @@ accurate: read the range.** A validated figure can be twice the real value.
 
 Each figure carries one of two labels.
 
-- **`validated: error +18..+108% (p10-p90, min-max +15..+156%, n=12 at 6 load levels; q32 staircase)`.**
+- **`validated: error +6..+103% (p10-p90, min-max +3..+152%, n=12 at 6 load levels; q32 staircase)`.**
   Your fleet and traffic sit inside what a measured run covered. On that
-  run the planner's figure read 18% to 108% over what the client measured
-  for 8 in 10 of its 12 readings (6 load levels, each read twice), and 15%
-  to 156% over at the extremes.
+  run the planner's figure read 6% to 103% over what the client measured
+  for 8 in 10 of its 12 readings (6 load levels, each read twice), and 3%
+  to 152% over at the extremes.
 - **`OUTSIDE VALIDATED REGION (prompt spread not measured (cv 2 assumed), ...)`.**
   No run checked a figure like this one. The bracket names the first thing
   that differs. The figure may still be right; nobody has measured it.
@@ -69,29 +69,33 @@ This table is generated from the rows the planner ships:
 | mean TPOT | 8000-token prompts, 200 out, Ca^2 4 | -4..-2% | p10-p90, min-max -5..-1% | 10 at 6 load levels | 0.096 to 0.203 | any |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 1 | at most +3% | one-sided | 1 |  | off |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 4 | at most +3% | one-sided | 1 |  | off |
-| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
-| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -17..+8% | p10-p90, min-max -18..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -11..+7% | p10-p90, min-max -13..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -12..+5% | p10-p90, min-max -14..+8% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +9..+85% | p10-p90, min-max +7..+141% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +6..+103% | p10-p90, min-max +3..+152% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +8..+99% | p10-p90, min-max -4..+171% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +15..+88% | p10-p90, min-max +8..+122% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +39..+128% | p10-p90, min-max +25..+164% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +40..+143% | p10-p90, min-max +31..+184% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 
 What this says:
 
-- **Short prompts:** the planner is close. TTFT reads up to about 18% slow,
-  mean TPOT up to 18% slow.
+- **Short prompts:** the planner is close. TTFT reads from about 18% fast
+  (the mean, at the lightest step) to 9% slow, and mean TPOT up to 18% slow.
+  A figure that reads fast promises a TTFT the fleet will not deliver. At
+  light load (0.4 of the knee) the p90 read 13% fast and the mean 18% fast:
+  add that much before you compare a short-prompt TTFT with your SLO.
 - **Mean TPOT on long prompts:** within a few percent, from 5% fast to 1% slow.
-- **Long prompts:** TTFT reads 15% to 190% slow, more so near the knee.
+- **Long prompts:** TTFT reads from 4% fast to 184% slow. It is mostly slow,
+  and more so near the knee.
   Sizing for TTFT therefore errs on the side of more Pods than needed.
 - **Knees, flow control off:** every phase held at the knee the planner
   names. The run stopped there, and its hold rule cannot see a fleet short
@@ -101,8 +105,9 @@ What this says:
   knee: 5% to 25% under it in this run. The knee is outside with flow control
   on; read the onset's label instead. For bursty traffic the router started
   holding requests 4% to 7% before the onset the planner names.
-- **Rates:** the fleet held every rate the planner named at its target. The
-  run's steps did not go far enough to say how much more.
+- **Rates:** the fleet held every rate the planner named at its target. For
+  short prompts the true rate lies between the planner's and 6% above it. For
+  long prompts the run's steps did not go far enough to say how much more.
 
 A figure counts as inside only if every input that priced it is one the run
 priced:

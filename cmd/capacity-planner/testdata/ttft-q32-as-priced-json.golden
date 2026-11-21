@@ -209,8 +209,8 @@
         "decodeSide": "line",
         "decodeBaseSeconds": -0.08874498911329295,
         "decodePerTokenSeconds": 0.000012311228655172654,
-        "routerHopBaseSeconds": -0.02158598458382821,
-        "routerHopPerTokenSeconds": 0.00002559333408175386,
+        "routerHopBaseSeconds": 0.004043864258375197,
+        "routerHopHeldPromptTokens": 999.0621148232241,
         "decodeTermSource": "measured",
         "routerHopSource": "measured",
         "decodePerStep": 8.627566545897512,
@@ -257,12 +257,12 @@
         },
         "ttft": {
           "answer": {
-            "value": 7.599109523510692,
+            "value": 7.412238059788536,
             "unit": "s",
             "basis": {
               "fill": 0,
               "kneeRate": 4.0476095398671275,
-              "floor": 0.8405156392690134,
+              "floor": 0.6552880485274917,
               "uncapped": 0,
               "boundBy": [],
               "tier": "held"
@@ -282,12 +282,12 @@
               "HeldLine"
             ],
             "parts": {
-              "independent": 7.599109523510692,
-              "pooled": 7.599109523510692,
+              "independent": 7.412238059788536,
+              "pooled": 7.412238059788536,
               "decodeShare": 7.567059772573089e-41,
               "engineWait": 2.800006577142657,
               "kvPullWait": 0.0009052648279237142,
-              "ownPrefill": 0.8063670010530012,
+              "ownPrefill": 0.6340016123922341,
               "decodeWait": 1.1201927286682039e-41,
               "firstStep": 0,
               "decodeEngine": 0.017714939431497434,
@@ -301,7 +301,7 @@
               "decodeKnee": 16.95075000755562
             },
             "sensitivity": {
-              "lo": 3.830185105522033,
+              "lo": 3.6489973448821535,
               "hi": 1870592203661731.8,
               "refused": "Saturated"
             },

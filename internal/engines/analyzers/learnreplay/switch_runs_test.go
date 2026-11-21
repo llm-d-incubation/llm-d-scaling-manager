@@ -232,7 +232,9 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// variant-01's 09:06 sample is its reader alone, 6.60, where the bare
 	// tolerance weighed it to 12.12 on one reading, since the band sets on
 	// a 5 min mean; the priced mu falls 11.537 to 10.884 (-5.7 %) on the
-	// four cycles of 09:11, the cost side. Both outputs are named by
+	// four cycles of 09:11, the cost side (measured on the mu-paths
+	// recording before llm-d-incubation/llm-d-scaling-manager#188 took it
+	// again with yv-a at 3). Both outputs are named by
 	// SwitchMuWeighsFleet, so all off is still their base. Its unit tests
 	// hold it (heldBy).
 	saturation.SwitchMuWeighingBand: nil,
@@ -961,7 +963,81 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 		"ttft-saturated/variant-capacities.csv", "ttft-saturated/warm-pool-pressure.csv",
 	},
 	saturation.SwitchDecodeLandedNeedsABound: nil,
+
+	// llm-d-incubation/llm-d-scaling-manager#188, on from the constructor
+	// since v0.12.3 (an earlier seam, off, until then): a resident reading
+	// above the whole context is priced as read, a shape with no hit takes a
+	// reading too, and a P/D decode's requests holding KV without running
+	// are counted with the running ones. It moves 40 outputs of 12 fixtures,
+	// all through the derived mu (variant-capacities' ServiceRate). From all
+	// on it moves 12 more, decode's composite-variants and warm-pool-pressure,
+	// which SwitchThroughputFloorRaisesVariants names (kvAboveContextFloorMoves):
+	//
+	//   - acceptance, engine and mu-paths (in-process): mu falls to 0.41-0.62
+	//     of off on 12-37 rows; the learned G moves on two rows of acceptance
+	//     and engine, and mu-paths' learned state moves with its mu. Their
+	//     demand does not move. mu-paths was taken again with yv-a measured
+	//     at 3, not 6 (learner_mupath_test.go): its rows hold 2,500 KV
+	//     tokens a request against a context of 1,050, so with the switch on
+	//     its derived mu is 4.57, not 10.9, and at 6 the measurement sat
+	//     above it and never ran the served yield.
+	//   - e1 and e1-tuned: mu 0.89-1.00 of off, decode's demand up to 1.09x
+	//     on 67-70 cycles. No RequiredCapacity moves.
+	//   - ols-sweep, ols-sweep-slo-restart and throughput-sweep-restart (the
+	//     simulator's decode of 1024 blocks): at a prompt-length step, new
+	//     prompts of about 6,000 tokens run while the completed requests'
+	//     mean still reads about 1,000, so the running requests read 5,000-7,000
+	//     tokens each, 4-5 times the shape's context, and mu falls to as low as
+	//     0.24-0.28 of off. RequiredCapacity goes from 0 to above it on 2, 3
+	//     and 3 cycles, and on 10 more of throughput-sweep-restart it rises
+	//     1.1-1.9x: decode asks up to 2, 3 and 3 replicas more, on 2, 3 and 5
+	//     cycles.
+	//   - ttft-staircase-b-off, -b-on, -c-on and ttft-three-pods: mu 0.83-1.00
+	//     of off on 4-33 rows, decode's demand within 0.999-1.04x (one
+	//     held-demand row of ttft-three-pods 1.64x). RequiredCapacity moves on
+	//     4 rows of b-off (up to 1.08x) and 2 of c-on (0.999x); no decode
+	//     replica ask moves.
+	saturation.SwitchKVPerRequestAboveContext: slices.Clone(kvAboveContextMoves),
 })
+
+// kvAboveContextMoves is what llm-d-incubation/llm-d-scaling-manager#188's
+// switch moves alone from all off (its replaySwitches row), and
+// kvAboveContextFloorMoves what it moves past that from all on, where
+// SwitchThroughputFloorRaisesVariants lifts the variants of the decode role
+// it raises: outputs that switch's own row names already.
+var kvAboveContextMoves = []string{
+	"acceptance/learned-state.csv", "acceptance/variant-capacities.csv",
+	"e1-tuned/results.csv", "e1-tuned/variant-capacities.csv", "e1/results.csv",
+	"e1/variant-capacities.csv", "engine/learned-state.csv",
+	"engine/variant-capacities.csv", "mu-paths/learned-state.csv",
+	"mu-paths/variant-capacities.csv", "ols-sweep-slo-restart/composite-results.csv",
+	"ols-sweep-slo-restart/composite-roles.csv",
+	"ols-sweep-slo-restart/composite-variants.csv", "ols-sweep-slo-restart/results.csv",
+	"ols-sweep-slo-restart/variant-capacities.csv",
+	"ols-sweep-slo-restart/warm-pool-pressure.csv", "ols-sweep/composite-results.csv",
+	"ols-sweep/composite-roles.csv", "ols-sweep/results.csv",
+	"ols-sweep/variant-capacities.csv", "throughput-sweep-restart/composite-results.csv",
+	"throughput-sweep-restart/composite-roles.csv", "throughput-sweep-restart/results.csv",
+	"throughput-sweep-restart/variant-capacities.csv",
+	"ttft-staircase-b-off/composite-results.csv",
+	"ttft-staircase-b-off/composite-roles.csv", "ttft-staircase-b-off/results.csv",
+	"ttft-staircase-b-off/variant-capacities.csv",
+	"ttft-staircase-b-on/composite-results.csv", "ttft-staircase-b-on/composite-roles.csv",
+	"ttft-staircase-b-on/results.csv", "ttft-staircase-b-on/variant-capacities.csv",
+	"ttft-staircase-c-on/composite-results.csv", "ttft-staircase-c-on/composite-roles.csv",
+	"ttft-staircase-c-on/results.csv", "ttft-staircase-c-on/variant-capacities.csv",
+	"ttft-three-pods/composite-results.csv", "ttft-three-pods/composite-roles.csv",
+	"ttft-three-pods/results.csv", "ttft-three-pods/variant-capacities.csv",
+}
+
+var kvAboveContextFloorMoves = []string{
+	"ols-sweep/composite-variants.csv", "ols-sweep/warm-pool-pressure.csv",
+	"throughput-sweep-restart/composite-variants.csv", "throughput-sweep-restart/warm-pool-pressure.csv",
+	"ttft-staircase-b-off/composite-variants.csv", "ttft-staircase-b-off/warm-pool-pressure.csv",
+	"ttft-staircase-b-on/composite-variants.csv", "ttft-staircase-b-on/warm-pool-pressure.csv",
+	"ttft-staircase-c-on/composite-variants.csv", "ttft-staircase-c-on/warm-pool-pressure.csv",
+	"ttft-three-pods/composite-variants.csv", "ttft-three-pods/warm-pool-pressure.csv",
+}
 
 // learner4b2Seams is learner PR 4b-2's switches, earlier seams now (merged
 // into earlierSeams): the throughput line on the engine's settle tracker,
@@ -1088,7 +1164,7 @@ func switchPackage(name string) string {
 // in the PR, or cleanup PR, that deletes it with zero golden diff. Learner
 // PR 4a's rows are learner4aSeams, 4b-1's learner4b1Seams and 4b-2's
 // learner4b2Seams, merged in.
-var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMoves, withMoves(startSeedSeamMoves, withSeams(learner4b2Seams, withSeams(learner4b1Seams, withSeams(learner4aSeams, map[string][]string{
+var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMoves, withMoves(staircaseSeamMoves, withMoves(startSeedSeamMoves, withSeams(learner4b2Seams, withSeams(learner4b1Seams, withSeams(learner4aSeams, map[string][]string{
 	// The capacity planner's switches (learnreplay.PlannerSwitches): off from
 	// the constructor, so every golden replay, the controller's, runs them
 	// off, and off alone from all on moves nothing. Only StateAt turns them
@@ -1101,22 +1177,29 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
 	saturation.SwitchITLHoldSteadySlope:     nil,
 	saturation.SwitchITLLineAtFloor:         nil,
+	// llm-d-incubation/llm-d-scaling-manager#281: the router hop read off
+	// windows whose prefill pods held no queue, the planner's too (S1's off
+	// from the constructor; the planner reads it for its own windows).
+	slo.SwitchTTFTHopUnqueued: nil,
 	// llm-d-incubation/llm-d-scaling-manager#258: the derived k2's batch held
 	// where the variant's ITL line reaches the policy's TPOT objective. On
 	// from the constructor; no committed golden has a decode line it trusts
 	// at a target it binds, so off alone from all on moves nothing. Its unit
 	// tests hold it (heldBy).
 	saturation.SwitchK2BatchAtITLTarget: nil,
-	// llm-d-incubation/llm-d-scaling-manager#188 prices a resident reading
-	// above the whole context as read: off from the constructor, so every
-	// golden replay runs it off, and off alone from all on moves nothing. Its
-	// unit tests hold it (heldBy).
-	saturation.SwitchKVPerRequestAboveContext: nil,
 	// llm-d-incubation/llm-d-scaling-manager#51 charges a P/D decode the
 	// router's queue prefill can hand on: off from the constructor, so every
 	// golden replay runs it off, and off alone from all on moves nothing.
 	// Its unit tests hold it (heldBy).
 	saturation.SwitchDecodeOwesRouterBacklog: nil,
+	// llm-d-incubation/llm-d-scaling-manager#302 holds the derived mu, and
+	// the planner's batch cap, to the batch the step budget runs: both off
+	// from the constructor, so every golden replay runs them off, and off
+	// alone from all on moves nothing. On, they move nothing either: no
+	// committed recording runs a budget under its cap times 1 + k. Their unit
+	// tests hold them (heldBy).
+	saturation.SwitchMuAtStepBudget:         nil,
+	saturation.SwitchPlannerCapAtStepBudget: nil,
 	// llm-d-incubation/llm-d-scaling-manager#169 item 1: the ITL line's B
 	// pinned through the floor below the band while unlearned. Off from the
 	// constructor, so every golden replay runs it off, and off alone from
@@ -1253,7 +1336,40 @@ var earlierSeams = withMoves(queueDrainSeamMoves, withMoves(floorVariantsSeamMov
 		"acceptance/learned-state.csv", "acceptance/lines.csv", "acceptance/variant-capacities.csv",
 		"engine/learned-state.csv", "engine/lines.csv", "engine/variant-capacities.csv",
 	},
-})))))))
+}))))))))
+
+// kvAboveContextSeamMoves is what each earlier seam, off alone from all on,
+// moves since llm-d-incubation/llm-d-scaling-manager#188: its
+// SwitchKVPerRequestAboveContext on in all on, and the mu-paths recording
+// taken again.
+//
+//   - SwitchKVPerRequestHitsResident: the reading #188 prices is this
+//     switch's, so off it turns #188 off too, and moves what #188 moves
+//     (kvAboveContextMoves, kvAboveContextFloorMoves) past its own row.
+//   - SwitchITLAggregatedShapeTerm: g is priced from the KV a request holds,
+//     which #188 no longer holds at the context, so off it moves the
+//     aggregated variants' mu in acceptance and engine too.
+//   - The three throughput seams: on the mu-paths recording taken again for
+//     #188 (yv-a measured at 3), off alone they move the throughput
+//     analyzer's rows of mu-paths.
+var kvAboveContextSeamMoves = map[string][]string{
+	saturation.SwitchKVPerRequestHitsResident:    kvAboveContextPastHitsResident(),
+	saturation.SwitchITLAggregatedShapeTerm:      {"acceptance/variant-capacities.csv", "engine/variant-capacities.csv"},
+	throughput.SwitchITLKeepsWindowOnGPSMismatch: {"mu-paths/results.csv"},
+	throughput.SwitchITLReadsSettle:              {"mu-paths/variant-capacities.csv"},
+	throughput.SwitchITLWaitsAfterRestart:        {"mu-paths/variant-capacities.csv"},
+}
+
+// kvAboveContextPastHitsResident is what #188's switch moves that
+// SwitchKVPerRequestHitsResident's own row does not name.
+func kvAboveContextPastHitsResident() []string {
+	own := []string{
+		"acceptance/learned-state.csv", "e1-tuned/results.csv", "e1-tuned/variant-capacities.csv",
+		"e1/results.csv", "e1/variant-capacities.csv", "engine/learned-state.csv",
+	}
+	return slices.DeleteFunc(slices.Concat(kvAboveContextMoves, kvAboveContextFloorMoves),
+		func(o string) bool { return slices.Contains(own, o) })
+}
 
 // queueDrainSeamMoves is what each earlier seam, off alone from all on,
 // moves since ev-shindin/llm-scaling-manager#520's SwitchQueuePricedAsDrain is on in all on: off,
@@ -1401,7 +1517,10 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestKVAboveContext_RequestsPullingTheirKVHoldIt"},
 		{"../saturation", "TestKVAboveContext_AFewLongPromptsAreNoReading"},
 		{"../saturation", "TestKVAboveContext_ALaggingRunningCountIsNoReading"},
-		{"../saturation", "TestKVAboveContext_OffFromTheConstructor"},
+		{"../saturation", "TestKVAboveContext_OnFromTheConstructor"},
+		{"../saturation", "TestKVHitsResident_TheReadingIsBoundedByTheHitRate"},
+		{"../saturation", "TestKVHitsResident_NoHitsPricesAsBefore"},
+		{"../saturation", "TestKVHitsResident_AShapeChangeKeepsTheReadingInTheNewBounds"},
 	},
 	// llm-d-incubation/llm-d-scaling-manager#51: the property case runs
 	// the switch on and off and asserts both; the rate is held on its own.
@@ -1409,6 +1528,18 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestDecodeRouterBacklog_DecodeBoundPDIsChargedTheQueue"},
 		{"../saturation", "TestDecodeRouterBacklog_PrefillBoundIsUnchanged"},
 		{"../saturation", "TestDecodeRouterBacklog_OffFromTheConstructor"},
+	},
+	// llm-d-incubation/llm-d-scaling-manager#302: the first holds both off
+	// from the constructor; the others run the switch on and off.
+	saturation.SwitchMuAtStepBudget: {
+		{"../saturation", "TestStepBudgetCap_OffFromTheConstructor"},
+		{"../saturation", "TestStepBudgetCap_DerivedMuAtSpeculativeTokens"},
+		{"../saturation", "TestStepBudgetCap_DenseEngineUnmoved"},
+	},
+	saturation.SwitchPlannerCapAtStepBudget: {
+		{"../saturation", "TestStepBudgetCap_OffFromTheConstructor"},
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../saturation", "TestStepBudgetCap_PlannerCapAtTheBudgetsBatch"},
 	},
 	// The capacity planner's switches: each runs the switch on and off and
 	// asserts both, and the first holds all six off from the constructor.
@@ -1435,6 +1566,16 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestImbalance_TooFewBusyMinutesTakeTheBusiest"},
 		{"../../../signals/prefill", "TestImbalance_BusyIsComputedTokensNotRequests"},
 		{"../saturation", "TestPrefillFBusyMinutes_LightMinutesThroughAnalyze"},
+	},
+	// The first holds it off from the constructor; the others run it on and
+	// off and assert both, in the window, through Analyze and in the
+	// planner's own windows.
+	slo.SwitchTTFTHopUnqueued: {
+		{"../slo", "TestTTFT_TheHopUnqueuedOffFromTheConstructor"},
+		{"../slo", "TestTTFT_TheHopUnqueuedSwitch"},
+		{"../../../signals/prefill", "TestHop_AQueuedPrefillWindowIsNoReading"},
+		{"../../../signals/prefill", "TestHop_ADeferredWaitIsNotAQueue"},
+		{".", "TestTerm_TheHopUnqueuedSwitch"},
 	},
 	saturation.SwitchITLHoldSteadySlope: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
@@ -2037,6 +2178,12 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"ttft-open-loop-short/store-records.csv": "8a16f127a4de2ab2c877c39fae242c2e1bd25c2c71b6b5702cb449c40a88eed0",
 	"ttft-saturated/store-records.csv":       "79ba58cb43e4653b9c2f02ec09ca29f27319921f69ff3be79d83984748f82e54",
 
+	// mu-paths' variant-capacities and learned-state below are the all-off
+	// replay of the recording taken again for
+	// llm-d-incubation/llm-d-scaling-manager#188 (kvAboveContextMoves).
+	// Its results digest is that replay's too, though no row here names
+	// that output.
+
 	"acceptance/results.csv":            "7aef7e7391f761fe984f89720d61b0583048b330989c449098dce8ec2d285981",
 	"acceptance/variant-capacities.csv": "47ad82ad3c017924b6cc5398d9578ddd28ab95fdc547adcec6decb69abcc91b3",
 	"engine/composite-holds.csv":        "ce02c822639f90959858c2ddc1e4681dc5b65d281a13d033520cfaa9945d3e0c",
@@ -2044,8 +2191,8 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	"engine/composite-variants.csv":     "9cb3149dc328096552a9b5aa640ffb2195e92f562e73266d5d89e92fd9e09828",
 	"engine/results.csv":                "fdef165cd21f47deb81d73870af4953c05d9c303180975e713e39e4a138845e9",
 	"engine/variant-capacities.csv":     "bded174c24f569874299866fb541e7f4ac4cc72294adbaf8e626f1e9ea06712f",
-	"mu-paths/results.csv":              "83fca27f185344e2784706b0b6ae2e3ea8fe0ae70ecabe332862f04f4f4e951c",
-	"mu-paths/variant-capacities.csv":   "dd5b3186f6fe513520ba6e0309d88520e668d60f84003326f57bd7dee0ca0275",
+	"mu-paths/results.csv":              "91a410e98c0de050c229df70a3339988b1ac208353a7f710ec1dd4bb4d13c586",
+	"mu-paths/variant-capacities.csv":   "623812ec147882b8685d97c4791f0fefd49e17262de04c313c47d39f2d5c99bf",
 
 	// Issue ev-shindin/llm-scaling-manager#467's saturation switch, as main holds them at 602054e98.
 	"e1/lines.csv":                    "d2691a9743301a74e2fdff1b301d2e7f5349edf987604ecadc52a8bddc44fd58",
@@ -2059,7 +2206,7 @@ var switchBase = withDigests(staircaseBase, map[string]string{
 	// 602054e98, 5b merged. e1-tuned/results.csv is ev-shindin/llm-scaling-manager#467's row above, the same digest.
 	"acceptance/learned-state.csv":                "da4251071addee288ecbe495759e2af257fa54b3511bbb93c5eddf4517ecc7a9",
 	"engine/learned-state.csv":                    "d823bbfe7f483ebca87d84224c0ae3faa5daef6546f14ffd5648937dc885dacf",
-	"mu-paths/learned-state.csv":                  "97ca32de070b4879ac59a3171a6a9387d91e08cc42c7a267e82f2576e35fa621",
+	"mu-paths/learned-state.csv":                  "7466e203dd78463c4cfad68d9ead9be90b441a5803a8731c04d52fbc05cac4e6",
 	"ols-sweep/composite-results.csv":             "d8a462aaa27a4c08077f8974172dd140d11a5ed2d675b932c632659d752db432",
 	"ols-sweep/results.csv":                       "06edf09352f73434d7a519884cccd872f8a68152d83b7b926b78c937052482a5",
 	"ols-sweep-slo/composite-results.csv":         "e7fbf20c0e73f463cb6c772129a2b97ed5664dc77103abef83a9b550ba660ce1",

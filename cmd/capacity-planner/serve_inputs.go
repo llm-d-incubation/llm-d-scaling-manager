@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
@@ -42,11 +43,26 @@ func inputsDoc(f *answerFlags, st *learnreplay.State, pv *pricedVariant, ps *lea
 		Assumed: append([]string{}, pf.in.Assumed...)}
 	if ps != nil {
 		doc.Fleet.Prefill = &whatifapi.RoleInfo{Variant: ps.Variant, Replicas: ps.Pods, Engine: engineInfo(variantParams(st, ps.Variant))}
+		doc.Fleet.Prefill.StartSeconds, doc.Fleet.Prefill.StartSeeded = roleStart(st, domain.RolePrefill)
 	}
+	doc.Fleet.Decode.StartSeconds, doc.Fleet.Decode.StartSeeded = roleStart(st, domain.RoleDecode)
 	doc.Observed = observedOf(pv, pf)
 	doc.Policy = policyOf(f, st, pf)
 	doc.Terms = termsOf(f, st, pv, pf)
 	return doc
+}
+
+// roleStart is the start time the replay's saturation analyzer learned for
+// role (learnreplay.State.RoleStartSeconds), the aggregated role's where it
+// learned none for role, and whether it is a seed; nil where it learned
+// neither.
+func roleStart(st *learnreplay.State, role string) (*float64, bool) {
+	for _, r := range []string{role, domain.RoleBoth} {
+		if s, ok := st.RoleStartSeconds[r]; ok && s > 0 {
+			return &s, st.RoleStartSeeded[r]
+		}
+	}
+	return nil, false
 }
 
 // figure is an answered figure in unit.

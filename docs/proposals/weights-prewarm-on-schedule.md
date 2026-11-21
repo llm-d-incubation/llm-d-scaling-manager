@@ -425,7 +425,7 @@ everything).
 | **A pod holding the weights in RAM** (`mlock`) | Unevictable memory equal to the model, per node per model, forever. |
 | **Peer weight transfer** | Complementary: a replica filled from a serving peer over NCCL reads no files ([§4e](warm-pool-weight-transfer.md#4e-it-works-on-a-plain-scale-up-too-with-no-pool-at-all), measured byte-identical). Needs a same-layout peer and engine changes. |
 | **Snapshot of a loaded engine** | Measured: restores in ~15 s, TP=1 only today. Where it applies it removes much more than the read. |
-| **vLLM's own `--safetensors-load-strategy prefetch`** | Reads whole files into page cache, but inside the load, after the head start; on node-local NVMe the [reference](../reference/workload-preparation.md#weights-on-the-nodes-disk) says it buys nothing. |
+| **vLLM's own `--safetensors-load-strategy prefetch`** | Reads whole files into page cache, but inside the load, after the head start. On node-local NVMe with a cold page cache it cuts the load by a quarter to a third (41.5 s against 61.4 s on a 223 GiB MoE; [reference](../reference/workload-preparation.md#weights-on-the-nodes-disk)). A read beforehand did more on Qwen3-32B: it halved the cold load on v0.32 (19.9 to 10.0 s, [§1](#small-model-qwen3-32b-one-gpu)), where prefetch cut it by a quarter on v0.34 (17.6 to 13.1 s). `--load-format instanttensor` reads around the page cache, so a prewarm likely buys it nothing (not measured). |
 | **Warm pool** | Removes the whole start, at the cost of an idle engine. |
 
 ## 10. Measurement plan before building past alpha

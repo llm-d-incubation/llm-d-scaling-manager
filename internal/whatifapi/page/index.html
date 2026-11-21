@@ -261,7 +261,7 @@
         <select id="daystep"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option></select></div>
       <div class="field"><label for="daysize">Size each bucket for its</label>
         <select id="daysize"><option value="">p95 rate (the mean, less conservative, where a bucket holds fewer than 20 cycles)</option>
-          <option value="mean">mean rate</option><option value="p95">p95 rate</option><option value="max">highest rate</option></select></div>
+          <option value="mean">mean rate</option><option value="p95">p95 rate</option><option value="p95-modulation">p95 rate less counting noise</option><option value="max">highest rate</option></select></div>
       <button type="button" id="dayrun" disabled>Plan the day</button>
     </div>
     <div id="dayout" hidden>
@@ -346,6 +346,7 @@
           <option value="p95" selected>p95 (its busy spells)</option>
           <option value="mean">mean</option>
           <option value="peak">peak</option>
+          <option value="p95-modulation">p95 less counting noise</option>
         </select>
         <p class="hint" id="rloadstathint">The p95 of the per-cycle load: the fleet must carry its busy spells, not only the average.</p>
       </fieldset>
