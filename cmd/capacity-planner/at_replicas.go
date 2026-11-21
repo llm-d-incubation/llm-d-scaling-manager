@@ -53,6 +53,7 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	fs.Lookup("ttft-percentile").Usage = "the TTFT percentiles the tables print, in percent, comma separated (50,90; mean for the mean); a tail past p95 on an assumed prompt spread is flagged"
 	fs.Lookup("ttft-percentile").DefValue = "50,90"
 	fs.Lookup("headroom").Usage = "the operating point as a fraction of the fleet knee, in (0, 1); default the policy's scaleUpThreshold"
+	fs.Lookup("variant").Usage = "the decode variant to judge; required when the model has several (the refusal names them)"
 	var rf reportFlags
 	fs.Var(&rf.shapes, "shape", "a request shape to answer for, repeatable: measured (the default), or IL/OL[/hit] in tokens, k for 1024 (8k/200, 1k/4k/0.3)")
 	fs.Var(&rf.loads, "load", "a rate the tables price, repeatable: 5r/s, 80% of the shape's fleet knee, seen, or seen x1.5 (a growth what-if with its own verdict); default 50%, 80%, 100% and seen")

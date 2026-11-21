@@ -396,8 +396,11 @@ type pricedVariant struct {
 	// the analyzer's.
 	perRank int64
 	cycle   int
-	decode  whatif.Decode
-	shape   shape.Shape
+	// cycles is how many cycles the recording holds: a cycle before the
+	// last has later ones to answer at.
+	cycles int
+	decode whatif.Decode
+	shape  shape.Shape
 	// check is the line against the recording's rows, the zero value with no
 	// line.
 	check whatif.LineCheck
@@ -533,7 +536,7 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 		if f.variant != "" && vs.Variant != f.variant {
 			continue
 		}
-		pv := pricedVariant{state: vs, cycle: st.Cycle, model: st.ModelID, stated: f.statedOutside(),
+		pv := pricedVariant{state: vs, cycle: st.Cycle, cycles: st.Cycles, model: st.ModelID, stated: f.statedOutside(),
 			api: f.hintSource() == hintAPIRecording || f.hintSource() == hintAPIPrometheus}
 		f.assumeIntercept(&pv)
 		vs = pv.state
@@ -646,7 +649,7 @@ func (pv pricedVariant) qualify(r whatif.Result) whatif.Result {
 	a, ok := r.(whatif.Answer)
 	if !ok {
 		if u, ok := r.(whatif.Unanswerable); ok && u.Reason == whatif.NoLine && pv.state.Line.IsZero() {
-			u.Detail = fmt.Sprintf("no ITL line learned by cycle %d", pv.cycle)
+			u.Detail = fmt.Sprintf("no ITL line learned by cycle %d", pv.cycle) + pv.noLineHint()
 			return u
 		}
 		if u, ok := r.(whatif.Unanswerable); ok && u.Reason == whatif.PinnedDefaultB {

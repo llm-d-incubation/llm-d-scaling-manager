@@ -2959,7 +2959,7 @@
           "predicted": {
             "refused": {
               "reason": "Saturated",
-              "detail": "4.13 r/s at or above the prefill knee 4.08248649330977 r/s"
+              "detail": "4.13 r/s at or above the prefill knee 4.082 r/s"
             }
           },
           "measured": 11.556810666080093,
@@ -2971,7 +2971,7 @@
           "predicted": {
             "refused": {
               "reason": "Saturated",
-              "detail": "4.13 r/s at or above the prefill knee 4.08248649330977 r/s"
+              "detail": "4.13 r/s at or above the prefill knee 4.082 r/s"
             }
           },
           "measured": 12.167577413479053,
@@ -2983,7 +2983,7 @@
           "predicted": {
             "refused": {
               "reason": "Saturated",
-              "detail": "4.13 r/s at or above the prefill knee 4.08248649330977 r/s"
+              "detail": "4.13 r/s at or above the prefill knee 4.082 r/s"
             }
           },
           "measured": 17.923875432525953,
@@ -2995,7 +2995,7 @@
           "predicted": {
             "refused": {
               "reason": "Saturated",
-              "detail": "4.13 r/s at or above the prefill knee 4.08248649330977 r/s"
+              "detail": "4.13 r/s at or above the prefill knee 4.082 r/s"
             }
           },
           "measured": 18.961937716262973,

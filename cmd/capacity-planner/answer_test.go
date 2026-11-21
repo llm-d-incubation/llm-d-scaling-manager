@@ -315,7 +315,7 @@ func TestExitCodes(t *testing.T) {
 		{"usage: a --tpot-percentile of 0", q2("--tpot-percentile", "0", "--assume-tpot-ratio", "1.3"), 2, ""},
 		{"usage: a --tpot at p0", q1("--tpot", "4ms@p0", "--assume-tpot-ratio", "1.3"), 2, ""},
 		{"refused: no line learned by the cycle", []string{"replicas-to-slo", "--recording", olsSweep, "--cycle", "1"}, 3,
-			"NoLine (no ITL line learned by cycle 1)"},
+			"NoLine (no ITL line learned by cycle 1; "},
 		// The library's InvalidInput: printed as a refusal, exit 2.
 		{"invalid: a percentile outside (0, 100)", q2("--tpot-percentile", "150", "--assume-tpot-ratio", "1.3"), 2, "InvalidInput"},
 		{"invalid: an assumed ratio below 1", q2("--tpot-percentile", "90", "--assume-tpot-ratio", "0.5"), 2, "InvalidInput"},
