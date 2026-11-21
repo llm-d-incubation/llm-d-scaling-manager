@@ -194,6 +194,7 @@ backtest.summary.byLoad[].ttft[].statistic string
 backtest.summary.byLoad[].ttft[].unscored object
 backtest.summary.byLoad[].ttft[].unscored.* number
 backtest.summary.excluded object
+backtest.summary.excluded.burst number
 backtest.summary.excluded.noMeasurement number
 backtest.summary.excluded.noTraffic number
 backtest.summary.excluded.notPriced number

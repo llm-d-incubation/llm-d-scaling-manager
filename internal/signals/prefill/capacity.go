@@ -30,6 +30,16 @@ import (
 //     no queue is the offered load, not capacity, and is not used.
 //  3. The back-pressure bound (Cycle.Bound). A lower bound.
 //
+// With Cycle.VPFloorServed a lower bound (2, 3, or busy minutes of a
+// data-parallel pod) is raised to the served peak, the highest rate any
+// replica sustained over PeakRun minutes queued or not (floorAtServed): a
+// lower bound too, read over Retention as the peak under a queue is. It
+// keeps the mean prompt of its run as VPPromptTokens, so the what-if model
+// rescales it on the curve to a longer prompt asked, or without a curve flags
+// one far from it VPShapeMoved, as it does the peak under a queue. Taking
+// the max over unqueued minutes too adds windows, so its noise is that of
+// source 2 over more runs: still within a one-minute rate's spread.
+//
 // Otherwise NoPrefillCapacity. SGLang always refuses: it publishes no
 // computed-token series.
 //
@@ -77,19 +87,47 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 		est.VP, est.VPSource, est.VPSamples, est.VPPromptTokens = bm.rate, SourceBusyMinutes, bm.n, bm.prompt
 		if bm.multiRank {
 			est.VPLowerBound, est.VPLowerBoundReason = true, DataParallelRanks
+			est.floorAtServed(ks, c.VPFloorServed)
 		}
 		return
 	}
 	if v, prompt, ok := peakUnderQueue(ks); ok {
 		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = v, SourcePeakUnderQueue, true, PeakRun
 		est.VPPromptTokens = prompt
+		est.floorAtServed(ks, c.VPFloorServed)
 		return
 	}
 	if b := c.Bound; finitePositive(b.Tokens) && b.Samples >= MinBoundSamples {
 		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = b.Tokens, SourceBackPressureBound, true, b.Samples
+		est.floorAtServed(ks, c.VPFloorServed)
 		return
 	}
 	est.VPRefused = NoPrefillCapacity
+}
+
+// floorAtServed raises a lower-bound V_P to the served peak (servedPeak)
+// where that is higher, with on (Cycle.VPFloorServed), and records the peak
+// in VPServedPeak either way. A pod computes no faster than V_P whether or
+// not it queued, so the highest rate it sustained is a lower bound as good
+// as the peak under a queue, with the same noise. On a fleet whose pods
+// never queue for capacity, the peak under a queue comes from a few queued
+// minutes at a light load, and the knee priced from it sits far under the
+// load the pods were seen to serve (issue
+// llm-d-incubation/llm-d-scaling-manager#280). The source is kept and stays
+// a lower bound; VPFlooredAtServed says the figure is the served peak's.
+// Only a lower bound is floored: busy minutes of a single-rank pod are V_P
+// itself, and no source at all stays refused, as a peak with no queue
+// cannot tell capacity from the offered load.
+func (est *Estimate) floorAtServed(ks *keyState, on bool) {
+	v, prompt, ok := servedPeak(ks)
+	if !ok {
+		return
+	}
+	est.VPServedPeak = v
+	if !on || !(v > est.VP) {
+		return
+	}
+	est.VP, est.VPPromptTokens, est.VPSamples, est.VPFlooredAtServed = v, prompt, PeakRun, true
 }
 
 // busy is the busy minutes' reading: the median rate, how many minutes,
@@ -141,12 +179,26 @@ func meanPrompt(prompts []float64) float64 {
 // queued minutes in a row: the least rate of the run, the highest run; and
 // the mean prompt length of that run's PeakRun minutes.
 func peakUnderQueue(ks *keyState) (float64, float64, bool) {
+	return peakRun(ks, true)
+}
+
+// servedPeak is peakUnderQueue over every minute with a rate, queued or
+// not: the highest rate any replica was seen to compute, sustained over
+// PeakRun minutes in a row.
+func servedPeak(ks *keyState) (float64, float64, bool) {
+	return peakRun(ks, false)
+}
+
+// peakRun is the highest rate any replica sustained over PeakRun minutes in
+// a row, each queued when queued is set, and the mean prompt length of that
+// run's minutes.
+func peakRun(ks *keyState, queued bool) (float64, float64, bool) {
 	best, prompt, found := 0.0, 0.0, false
 	for _, name := range ks.podNames() {
 		run, prompts := []float64{}, []float64{}
 		var last time.Time
 		for _, s := range ks.pods[name].samples {
-			if !s.queued || !s.rateOK || !(s.rate > 0) {
+			if (queued && !s.queued) || !s.rateOK || !(s.rate > 0) {
 				run, prompts = run[:0], prompts[:0]
 				continue
 			}

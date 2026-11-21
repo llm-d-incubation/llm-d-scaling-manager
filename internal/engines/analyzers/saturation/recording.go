@@ -129,7 +129,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
 // SwitchPrefillAQuadratic, SwitchPrefillALowLoadPerRank,
 // SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
-// SwitchPrefillFBusyMinutes, SwitchITLAdaptiveBandFloor,
+// SwitchPrefillFBusyMinutes, SwitchPrefillVPFloorServed,
+// SwitchITLAdaptiveBandFloor,
 // SwitchITLHoldSteadySlope,
 // SwitchK2DecodeBudgetAtComputedPrompt, SwitchDecodeLandedNeedsABound,
 // SwitchK2BatchAtITLTarget,
@@ -264,6 +265,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// The planner's f: the median of the busiest minutes
 		// (prefill.Cycle.FBusyMinutes). Off from the constructor.
 		SwitchPrefillFBusyMinutes: &a.prefillFBusyMinutes,
+		// The planner's floor under a lower-bound V_P: the highest rate a
+		// pod was seen to compute (prefill.Cycle.VPFloorServed). Off from
+		// the constructor.
+		SwitchPrefillVPFloorServed: &a.prefillVPFloorServed,
 		// The planner's ITL band floor on a low-fill fleet
 		// (itl_band_floor.go). Off from the constructor.
 		SwitchITLAdaptiveBandFloor: &a.itlAdaptiveFloor,

@@ -946,6 +946,10 @@ func ttftReasonCases(t *testing.T) map[Reason]Result {
 			fl.Decode = nil
 			fl.DecodeTTFT = DecodeTTFT{Seconds: 16.6, PromptTokens: 8000, Waiting: 283}
 		}), 1, 0.9),
+		PastLowerBoundKnee: ttftAt(t, with(func(fl *TTFTFleet) {
+			fl.Prefill.VP, fl.Prefill.Replicas, fl.Prefill.Imbalance = 4000, 2, 1.25
+			fl.Prefill.VPLowerBound, fl.Prefill.VPAssumed, fl.LowerBoundKneeUnpriced = true, false, true
+		}), 8, 0.9),
 	}
 }
 

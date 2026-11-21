@@ -358,6 +358,7 @@ PROMETHEUS_TLS_INSECURE_SKIP_VERIFY
 PROMETHEUS_TOKEN_PATH
 PROPSEED
 Passive
+PastLowerBoundKnee
 Pending
 Physical
 PinnedDefaultB
@@ -1386,6 +1387,7 @@ hicache_size
 hierarchical
 high
 highSeconds
+higher
 highest
 highestGroup
 hint
@@ -2312,6 +2314,7 @@ prefill-queue-by-capacity
 prefill-required
 prefill-spare
 prefill-throughput-bound-reading
+prefill-vp-floor-served
 prefillBoundHeld
 prefillBounds
 prefillDemandAfter
@@ -2839,6 +2842,7 @@ slo-transient
 slo-ttft
 slo-ttft-decode-gate-charge
 slo-ttft-decode-term
+slo-ttft-hop-unqueued
 slo-ttft-imbalance-across-counts
 slo-ttft-joint
 slo-ttft-joint-inputs
@@ -3264,11 +3268,13 @@ vllm:spec_decode_num_accepted_tokens_total
 volume
 vp
 vpAboveSlopeBound
+vpFlooredAtServed
 vpLowerBound
 vpLowerBoundReason
 vpPromptTokens
 vpRefused
 vpSamples
+vpServedPeak
 vpSource
 wait
 waitBeforeReverseMove

@@ -202,6 +202,10 @@ type Cycle struct {
 	// minutes only (busiestMinutes), not from every minute
 	// (saturation.SwitchPrefillFBusyMinutes).
 	FBusyMinutes bool
+	// VPFloorServed raises a lower-bound V_P to the highest computed-token
+	// rate a pod was seen to sustain, queued or not (Estimate.floorAtServed;
+	// saturation.SwitchPrefillVPFloorServed).
+	VPFloorServed bool
 	// Now is the cycle's time.
 	Now time.Time
 }
@@ -229,6 +233,15 @@ type Estimate struct {
 	VPLowerBoundReason BoundReason
 	VPRefused          Refusal
 	VPSamples          int
+	// VPServedPeak is the highest computed-token rate any pod sustained over
+	// PeakRun minutes, queued or not, read beside a lower-bound V_P; zero
+	// otherwise.
+	VPServedPeak float64
+	// VPFlooredAtServed says V_P is VPServedPeak, raised to it from a lower
+	// source (Cycle.VPFloorServed): VPSamples is then PeakRun and
+	// VPPromptTokens the peak's, while VPSource and VPLowerBoundReason still
+	// name the source that made V_P a lower bound.
+	VPFlooredAtServed bool
 	// VPQueuedMinutes, VPLongestQueuedRun and VPBusyMinutes say why V_P was
 	// refused or where it stands: the samples kept that held a queue on
 	// some sample, the longest run of them (a peak needs PeakRun), and the

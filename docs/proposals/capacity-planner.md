@@ -185,7 +185,7 @@ The rule: **no number on screen without what it rests on.**
   - `SpreadBeyondProcessorSharing`: the prompt cv is above 0.25, so the TTFT
     is the larger of the processor-sharing and first-come prices.
 - **Refusals are gaps, never zeros.** A curve point the engine refuses is
-  absent, with the reason on hover (`Saturated`, `AboveDecodeOnset`,
+  absent, with the reason on hover (`Saturated`, `PastLowerBoundKnee`, `AboveDecodeOnset`,
   `TargetBelowFloor`). A refused limit prints the reason in place of a number.
   This is the API's job as much as the page's: a refusal is a different JSON
   shape from an answer, as `whatif.Result` is sealed in Go.

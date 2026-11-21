@@ -187,6 +187,25 @@ alone: `S_work = I_eff/V_P`, `ρ = λ·E[I_eff]/V_P`.
 4. Otherwise `NoPrefillCapacity`. SGLang always lands here (no computed-token
    series).
 
+**The planner's floor under a lower bound** (planner-only switch
+`prefill-vp-floor-served`, `prefill.Cycle.VPFloorServed`; issue #280). A pod
+never computes faster than `V_P`, queued or not, so the highest rate it
+sustained over 3 minutes is a lower bound too, with the same noise as the
+peak under a queue. Where `V_P` is a lower bound (sources 2 and 3, and busy
+minutes of a data-parallel pod), the planner raises it to that served peak
+when the peak is higher, and keeps its source and its `VPLowerBound` flag. On
+a fleet whose pods queue for capacity only at light load, the peak under a
+queue is a light minute's and the knee priced from it sits far under the load
+the fleet served. Busy minutes of a single-rank pod are `V_P` itself and are
+not floored, and with no source the answer stays `NoPrefillCapacity`: a peak
+with no queue cannot tell capacity from the offered load. The planner also
+prices no TTFT at or past a knee priced from a lower bound: such a rate is
+refused `PastLowerBoundKnee`, not `Saturated` (past decode's knee it is
+`Saturated`, past the decode gate's onset under flow control
+`AboveDecodeOnset`), and backtest and the self-check count the step as not
+priced, not overloaded. The controller's
+SLO analyzer is unchanged.
+
 The **low-load slope** of service time against prompt length is an upper bound,
 not a source. A lone prompt runs as `T(I) = s0 + c·I`, and a busy pod's steps of
 `B` tokens run at `B/(s0 + c·B) < 1/c`, so `1/slope ≥ V_P`: on `ols-sweep` about
@@ -431,7 +450,7 @@ that is itself wrong (the exponential tail, Poisson arrivals, an omitted
 | `D` and `R` added at the mean to every percentile, but for their per-token parts | Over-promises at the tail. On the staircase run, bucket A's p90 and p95 read 9% and 13% under on average with the mean 8% over |
 | `D` read past the prompts or step times it was fitted on | Either way, and not flagged: the plane is a line in each. `MaxDecodeQueue` keeps the behind-on-pulls minutes out of the fit, so `D` does not reach them, and they read far above it |
 | `AssumedDecodeStepSlope`, `AssumedRouterHopSeconds` (no fit) | Under-promises if they stand above the fleet's true figures, which is the point. Each is flagged, and a refusal or a move of 25% that one alone decides says so. A long prompt may hop further than 20 ms |
-| `V_P` from a lower bound | Under-promises |
+| `V_P` from a lower bound | Under-promises. The planner floors it at the rate the pods were seen to compute and gives no figure past a knee priced from it (`PastLowerBoundKnee`) |
 | A mix of prompt lengths priced at its mean on a convex prefill curve ([a limit of P3](#prefill-capacity)) | Over-promises: an even 8k/52k mix at a `V_P` read at 30k is priced 32% under its prefill time. The rescale ([after P2](#as-built-p3-after-p2)) moves `V_P` to the mean, not the mix, and `VPShapeMoved`, comparing means, does not flag it |
 | `V_P` rescaled along the curve with no fixed cost per step, `s(I_vp)/s(I)` | Under-promises for a longer prompt only if P1's low-load `b` and `c` are the busy step's per-token cost, which is not measured: on run 2 at 37k it read 1.5% above the served `V_P` (over-promises), covered by the margin only from `ρ` 0.6. No-act (`VPScaledToPrompt`) until a second point confirms it. Held (not raised) for a shorter prompt |
 | The decode engine's TTFT added at its mean to every percentile | Over-promises at the tail by `(r − 1)·D`, `r` decode's p90 over its mean, 1.1–1.8 on the P2 runs (coarse buckets): up to about 20% of the router's p90 at `r` 1.8 (37k: about 127 ms of 0.795 s, 16%; 1k: about 10 ms of 0.047 s, 21%). At each level's own measured `r` it is less: 37k `r` 1.48, about 76 ms (10%); 1k `r` 1.54, about 7 ms (14%) |
@@ -1091,6 +1110,9 @@ priced.
 - **What a router window needs.** Steady rate and prompt, and no cycle with the
   router holding requests: the router's mean starts before flow control, and a
   held window would count the queue in R. A line needs every median above 0.
+  The planner also needs no cycle whose prefill pods held requests waiting for
+  compute (`slo-ttft-hop-unqueued`). With flow control off, that queue sits in
+  the engines and passes the other gates, and its R is the queue's timing.
 - **What admits a minute.** A row with a read mean of both, at least 0.05 r/s,
   its prompt steady to 15%, no speculation, its slot queue read and empty (an
   unknown queue is not an empty one, so SGLang, which publishes none, takes the
@@ -2054,13 +2076,24 @@ issue proposed (above).
 - The router hop's per-token part is already learned (`prefill.HopFit`,
   `Base + PerToken*I`; 1.41 µs a token on the second staircase's warm-up, 11.3
   ms at 8000 tokens). On the Qwen3-32B staircase the warm-up learned 25.6 µs a
-  token (54 windows; 4 ms at 1000 tokens, 183 ms at 8000). The phases' 606
+  token (54 windows). The line gives 4 ms at 1000 tokens and 183 ms at 8000. It
+  was priced as 26 ms and 205 ms, because its negative intercept is clamped to 0. The phases' 606
   windows, replayed, fit 6.6 ms + 2.7 µs a token (95% bootstrap: 5.7 to 8.6 ms,
   0.8 to 3.6 µs), 9 ms at 1000 tokens and 28 ms at 8000. The 1000-token
   windows are tight (quartiles 8 to 12 ms); the 8000-token ones are not
   (quartiles -42 to +109 ms), because R is a difference of means of a few
   seconds read about 36 s apart. So the warm-up's slope read high, which
-  prices more, not less. The fit needs no change.
+  prices more, not less. It cost the planner its low-load TTFT, though
+  (llm-d-incubation/llm-d-scaling-manager#281). The warm-up's 8k windows all
+  fall in a burst at the prefill knee, with the prefill pods holding 6 to 38
+  requests in their capacity queue and a mean TTFT of 4 to 17 s. Over its first
+  half they read R at 0.03 to 0.56 s and put 0.31 s of hop on every 8k prompt.
+  Measured at low load, the router's mean less the two engines' was about 0.
+  Backtested on its own second half, its p90 TTFT read a median 1.90x high
+  over 9 steps. At 0.27 r/s it priced a mean of 1.02 s, where the router
+  measured 0.56 s. The planner's replay therefore reads R only from windows whose
+  prefill pods held no queue (`slo-ttft-hop-unqueued`, off in S1). On the
+  warm-up, R is then held at its 1k windows' 4 ms.
 
 ## As built: the router stage
 

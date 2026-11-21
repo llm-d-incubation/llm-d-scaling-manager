@@ -44,13 +44,18 @@ const (
 	// the calm figure, and the next cycles read it higher. The planner names
 	// the latest calm cycle to answer at.
 	DecodeTTFTUnderLoad Reason = "DecodeTTFTUnderLoad"
+	// PastLowerBoundKnee is a TTFT asked at a rate at or above a prefill knee
+	// priced from a V_P that is only a lower bound, with
+	// TTFTFleet.LowerBoundKneeUnpriced. The true knee is at or above it, so
+	// the rate is not priced, and is not called saturated.
+	PastLowerBoundKnee Reason = "PastLowerBoundKnee"
 )
 
 // ttftReasons are the reasons this file adds, in the order Reasons() lists
 // them.
 func ttftReasons() []Reason {
 	return []Reason{NoPrefillCapacity, NoFixedLatency, NoImbalance, NoPrefillReplicas,
-		FlowControlUnknown, AboveDecodeOnset, DecodeTTFTUnderLoad}
+		FlowControlUnknown, AboveDecodeOnset, DecodeTTFTUnderLoad, PastLowerBoundKnee}
 }
 
 // The flags the TTFT model raises.

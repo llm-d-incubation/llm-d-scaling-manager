@@ -105,6 +105,19 @@ const SwitchPrefillQueueByCapacity = "prefill-queue-by-capacity"
 // SwitchPrefillALowLoadPerRank is.
 const SwitchPrefillFBusyMinutes = "prefill-f-busy-minutes"
 
+// SwitchPrefillVPFloorServed is the replay switch for the floor under a
+// lower-bound V_P (prefill.Cycle.VPFloorServed). On, a V_P that is a lower
+// bound (the peak under a queue, the back-pressure bound, busy minutes of a
+// data-parallel pod) is raised to the highest computed-token rate a pod was
+// seen to sustain, queued or not: a pod never computes faster than V_P, so
+// that rate is a lower bound too. On a fleet whose pods never queue for
+// capacity, the peak under a queue comes from a few light queued minutes,
+// and the knee priced from it sat far under the load the fleet served
+// (issue llm-d-incubation/llm-d-scaling-manager#280). Off, the source's own
+// figure, as before this switch. Planner-only, as
+// SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillVPFloorServed = "prefill-vp-floor-served"
+
 // prefillKVFull is the pods of rows whose KV cache is full (kvFull at
 // kvCacheThreshold), nil when none is. A full prefill pod can hold a queue
 // it cannot schedule, so its minute is not a busy one.
@@ -310,7 +323,8 @@ func (c *cycle) observePrefill() {
 			QueueMin: queueMin, KVFull: kvFullPods, DownstreamSaturated: c.decodeSaturated,
 			Bound: bounds[variant], Settle: view, ALineOnly: !a.prefillAQuadratic,
 			ALowLoadPerRank: a.prefillALowLoadPerRank, AFromTiming: a.prefillAEngineTiming,
-			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes, Now: now,
+			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes,
+			VPFloorServed: a.prefillVPFloorServed, Now: now,
 		})
 		a.stashPrefillEstimate(c.input.Namespace, c.input.ModelID, variant, est, now)
 		c.logger.V(perReplicaLogLevel).Info("prefill-capacity-observed",
@@ -319,6 +333,7 @@ func (c *cycle) observePrefill() {
 			"vp", est.VP, "vpSource", string(est.VPSource), "vpLowerBound", est.VPLowerBound,
 			"vpLowerBoundReason", string(est.VPLowerBoundReason),
 			"vpRefused", string(est.VPRefused), "vpSamples", est.VPSamples,
+			"vpServedPeak", est.VPServedPeak, "vpFlooredAtServed", est.VPFlooredAtServed,
 			"slopeBound", est.SlopeBound, "vpAboveSlopeBound", est.VPAboveSlopeBound,
 			"a", est.A, "aIntercept", est.AIntercept, "aOverhead", est.AOverhead,
 			"aOverheadKnown", est.AOverheadKnown, "aRefused", string(est.ARefused), "aSamples", est.ASamples,

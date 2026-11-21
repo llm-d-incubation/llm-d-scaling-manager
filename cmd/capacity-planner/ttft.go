@@ -426,6 +426,9 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	}
 	pf.fleet.Prefill = p
 	pf.fleet.ProcessorSharing = processorSharing
+	// A rate past a knee priced from a lower-bound V_P is not priced, not
+	// saturated (issue llm-d-incubation/llm-d-scaling-manager#280).
+	pf.fleet.LowerBoundKneeUnpriced = true
 	// Opt-in, off by default, as in the SLO analyzer
 	// (whatif.DefaultPriceRouterWait).
 	// whatif gates it on processor sharing itself
