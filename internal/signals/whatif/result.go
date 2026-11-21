@@ -56,7 +56,10 @@ const (
 	TPOTQuantileUnbounded Reason = "TPOTQuantileUnbounded"
 	// TPOTBucketTooWide is a per-request TPOT percentile the engine's histogram
 	// was asked for, the router's holding no observation, with a q bucket past
-	// MaxEngineBucketWidth: the bucket's edge, whatever q was asked.
+	// MaxEngineBucketWidth: the bucket's edge, whatever q was asked. The CLI
+	// gives it too for a percentile priced on a host-bound decode variant
+	// (intercept and floor under 5 ms) whose R_q was read off coarse buckets:
+	// the tail is host jitter the line does not model.
 	TPOTBucketTooWide Reason = "TPOTBucketTooWide"
 	// TargetBelowFloor is a target below what any number of replicas
 	// reaches: the line's ITL at the bottom of the band, times R_q, already

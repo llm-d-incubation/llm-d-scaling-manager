@@ -234,6 +234,8 @@ svg .btclip { fill: var(--text-secondary); font-size: 10px; }
 svg .dot { stroke: none; }
 svg .dot.hollow, .legend .dot.hollow { fill-opacity: 0; stroke-width: 1.5; }
 svg .dot.hollow.c-0, .legend .dot.hollow.c-0 { stroke: var(--series-1); }
+svg .btbucket, .legend .btbucket { fill: var(--series-1); fill-opacity: 0.45; stroke: none; }
+svg .btbucket.c-1, .legend .btbucket.c-1 { fill: var(--series-2); }
 svg .btsat, .legend .btsat { fill: var(--critical); fill-opacity: 0.55; stroke: none; }
 @media (prefers-color-scheme: dark) {
   svg .btband, .legend .btband { fill-opacity: 0.28; }

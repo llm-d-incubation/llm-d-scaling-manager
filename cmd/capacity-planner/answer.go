@@ -701,11 +701,71 @@ func (f *answerFlags) headroomFor(p *config.ScalingPolicy) float64 {
 // the engine's is the answer (whatif.EngineTPOTRatio): it says more than that
 // no histogram exists. Any other refusal of the router's stands: it says that
 // data is wrong. A refusal comes back as the Result the percentile answers
-// with.
+// with. A coarse R_q is refused per variant where that variant's decode step
+// is host-bound (onHostBound).
 func (f *answerFlags) tpotRatioFor(st *learnreplay.State, q float64) (whatif.TPOTRatio, []whatif.Flag, *whatif.Unanswerable) {
 	if f.set["assume-tpot-ratio"] {
 		return whatif.TPOTRatio{Value: f.tpotRatio, Assumed: true}, nil, nil
 	}
+	return f.tpotRatioRead(st, q)
+}
+
+// hostBoundITL is the decode step time under which a TPOT tail is the
+// host's jitter (scheduling, sampling, detokenizing), not the fill: on a
+// sub-1B model the step is host-bound and the line's intercept and its
+// floor read 1.5 to 2.5 ms.
+const hostBoundITL = 0.005
+
+// hostBoundRefusal refuses a TPOT percentile priced on vs where its R_q was
+// read off coarse buckets (whatif.CoarseTPOTBucket) and the variant's decode
+// step is host-bound: its line's intercept B measured (whatif.MeasuredIntercept,
+// not the least ITL above the band) and, with its floor below the band where
+// one was read, under hostBoundITL. The bucket grid then sets R_q, and the
+// tail it stands for is host jitter the line does not model: on the 0.6B
+// staircase the planner priced p90 TPOT at the mean while the fleet measured
+// a p90 1.3x and a p95 1.6x its mean (#291). Nil where it prices: an
+// assumed or refused R_q, fine buckets, or a line with no measured
+// intercept says nothing about the host. pv's line where --assume-itl-b
+// stated its intercept is the operator's, not a reading: onHostBound skips
+// it.
+func hostBoundRefusal(vs learnreplay.VariantState, r resolvedRatio) *whatif.Unanswerable {
+	if r.refused != nil || r.ratio.Assumed || !slices.Contains(r.flags, whatif.CoarseTPOTBucket) {
+		return nil
+	}
+	if vs.Tier == whatif.TierAboveBand || !whatif.MeasuredIntercept(vs.Tier, vs.Line) || !(vs.Line.B > 0) {
+		return nil
+	}
+	b := max(vs.Line.B, vs.BelowBandITL)
+	if b >= hostBoundITL {
+		return nil
+	}
+	hist := "router's"
+	if slices.Contains(r.flags, whatif.EngineTPOTHistogram) {
+		hist = "engine's"
+	}
+	return &whatif.Unanswerable{Reason: whatif.TPOTBucketTooWide,
+		Detail: fmt.Sprintf("the decode step is host-bound (the line's intercept and floor at most %.2f ms, under %.0f ms) and the %s TPOT histogram's "+
+			"q bucket is coarse: its tail is host jitter the line does not model, and the bucket grid would set the percentile; "+
+			"pass --assume-tpot-ratio for a flagged answer, or ask for the mean", b*1000, hostBoundITL*1000, hist)}
+}
+
+// onHostBound is res, a TPOT percentile priced on pv at R_q, refused where
+// pv's decode step is host-bound (hostBoundRefusal). Only a figure is
+// replaced: a refusal the library gave (Saturated, AboveDecodeOnset and the
+// rest) says more about the fleet than the histogram does, and stands. The
+// refusal carries no flags of its own; onRatio adds the read's.
+func onHostBound(res whatif.Result, pv pricedVariant, r resolvedRatio) whatif.Result {
+	if _, ok := res.(whatif.Answer); !ok || pv.itlB.Applied {
+		return res
+	}
+	if u := hostBoundRefusal(pv.state, r); u != nil {
+		return *u
+	}
+	return res
+}
+
+// tpotRatioRead is R_q as the histograms read it (tpotRatioFor).
+func (f *answerFlags) tpotRatioRead(st *learnreplay.State, q float64) (whatif.TPOTRatio, []whatif.Flag, *whatif.Unanswerable) {
 	r, flags, refused := whatif.TPOTRatio{}, []whatif.Flag(nil), &whatif.Unanswerable{Reason: whatif.NoTPOTHistogram,
 		Detail: "the recording carries no TPOT histogram; pass --assume-tpot-ratio for a flagged answer"}
 	if len(st.TPOTWindows) > 0 {

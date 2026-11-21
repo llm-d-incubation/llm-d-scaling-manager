@@ -84,8 +84,9 @@ type SelfCheck struct {
 	Line  string `json:"line"`
 	Why   string `json:"why,omitempty"`
 	Trust string `json:"trust,omitempty"`
-	// TTFT and TPOT are the p90 figures scored over every fold's judged
-	// steps; absent where not scored.
+	// TTFT and TPOT are the figures scored over every fold's judged steps,
+	// each at its primary statistic (the mean, else p90, else p50:
+	// primaryStats); absent where not scored.
 	TTFT *SelfCheckFigure `json:"ttft,omitempty"`
 	TPOT *SelfCheckFigure `json:"tpot,omitempty"`
 	// Folds is each cut: what was fitted, what was predicted.
@@ -468,13 +469,19 @@ func selfCheckEntry(ctx context.Context, e *inputsEntry, folds []FoldFit, info S
 	return sc
 }
 
-// selfCheckFigure is the p90 score among scores, over judged steps.
+// selfCheckFigure is the primary score among scores (primaryStats: the
+// mean, which no histogram bucket sets, else a percentile), over judged
+// steps; the p90's where none was scored, for its refusals.
 func selfCheckFigure(scores []BacktestScore, judged int) *SelfCheckFigure {
-	i := slices.IndexFunc(scores, func(x BacktestScore) bool { return x.Statistic == statP90 })
-	if i < 0 {
-		return nil
+	p := primaryScore(scores)
+	if p == nil {
+		i := slices.IndexFunc(scores, func(x BacktestScore) bool { return x.Statistic == statP90 })
+		if i < 0 {
+			return nil
+		}
+		p = &scores[i]
 	}
-	s := scores[i]
+	s := *p
 	f := &SelfCheckFigure{Statistic: s.Statistic, Steps: s.All.Steps, Bias: s.All.Bias, Low: s.All.Low, Judged: judged,
 		Overloaded: s.Refused[string(whatif.Saturated)], PastKnee: s.PastKnee, Refused: map[string]int{}}
 	if s.All.Within != nil {
@@ -503,8 +510,8 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		}
 		if f.Judged > 0 && f.PastKnee != nil && float64(f.Overloaded) >= selfCheckSaturated*float64(f.Judged) {
 			rule := SelfCheckRule{Name: strings.ToLower(x.name) + "-overloaded", Passed: false,
-				Detail: fmt.Sprintf("the planner called the fleet overloaded in %d of %d judged steps, where the fleet served with a p90 %s of %s to %s",
-					f.Overloaded, f.Judged, x.name, secondsWords(f.PastKnee.Lo), secondsWords(f.PastKnee.Hi))}
+				Detail: fmt.Sprintf("the planner called the fleet overloaded in %d of %d judged steps, where the fleet served with a %s %s of %s to %s",
+					f.Overloaded, f.Judged, f.Statistic, x.name, secondsWords(f.PastKnee.Lo), secondsWords(f.PastKnee.Hi))}
 			sc.Checks = append(sc.Checks, rule)
 			bad = append(bad, rule.Detail)
 			trustNot = append(trustNot, x.what)
@@ -514,12 +521,12 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		}
 		if f.Steps < selfCheckMinSteps || f.Bias == nil {
 			sc.Checks = append(sc.Checks, SelfCheckRule{Name: strings.ToLower(x.name) + "-scored", Passed: false,
-				Detail: fmt.Sprintf("p90 %s scored in %d steps, fewer than %d: not judged", x.name, f.Steps, selfCheckMinSteps)})
+				Detail: fmt.Sprintf("%s %s scored in %d steps, fewer than %d: not judged", f.Statistic, x.name, f.Steps, selfCheckMinSteps)})
 			continue
 		}
 		judged = append(judged, x.name)
 		within := float64(f.Within) / float64(f.Steps)
-		parts = append(parts, fmt.Sprintf("p90 %s within 20%% in %d of %d steps (median ratio %.2f)", x.name, f.Within, f.Steps, *f.Bias))
+		parts = append(parts, fmt.Sprintf("%s %s within 20%% in %d of %d steps (median ratio %.2f)", f.Statistic, x.name, f.Within, f.Steps, *f.Bias))
 		biasOK := *f.Bias >= selfCheckBiasLo && *f.Bias <= selfCheckBiasHi
 		sc.Checks = append(sc.Checks,
 			SelfCheckRule{Name: strings.ToLower(x.name) + "-bias", Passed: biasOK,
@@ -528,10 +535,10 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 				Detail: fmt.Sprintf("within 20%% in %.0f%% of the steps, want %.0f%% or more", within*100, selfCheckWithinLo*100)})
 		switch {
 		case !biasOK || within < selfCheckWithinLo:
-			bad = append(bad, fmt.Sprintf("p90 %s: median ratio %.2f, within 20%% in %.0f%% of %d steps", x.name, *f.Bias, within*100, f.Steps))
+			bad = append(bad, fmt.Sprintf("%s %s: median ratio %.2f, within 20%% in %.0f%% of %d steps", f.Statistic, x.name, *f.Bias, within*100, f.Steps))
 			trustNot = append(trustNot, x.what)
 		case within < selfCheckWithinOK || f.Steps < selfCheckStepsOK:
-			weak = append(weak, fmt.Sprintf("p90 %s within 20%% in %.0f%% of %d steps", x.name, within*100, f.Steps))
+			weak = append(weak, fmt.Sprintf("%s %s within 20%% in %.0f%% of %d steps", f.Statistic, x.name, within*100, f.Steps))
 			trustOK = append(trustOK, x.what+" (loosely)")
 		default:
 			trustOK = append(trustOK, x.what)
@@ -617,7 +624,7 @@ func selfCheckIssueURL(sc *SelfCheck, e *inputsEntry, info SelfCheckInfo) string
 		if x.f.Bias != nil {
 			bias = fmt.Sprintf("%.2f", *x.f.Bias)
 		}
-		fmt.Fprintf(&b, "%s p90: steps %d, within20 %d, median ratio %s, read low %d, judged %d, overloaded %d", x.name, x.f.Steps, x.f.Within,
+		fmt.Fprintf(&b, "%s %s: steps %d, within20 %d, median ratio %s, read low %d, judged %d, overloaded %d", x.name, x.f.Statistic, x.f.Steps, x.f.Within,
 			bias, x.f.Low, x.f.Judged, x.f.Overloaded)
 		for _, r := range slices.Sorted(maps.Keys(x.f.Refused)) {
 			fmt.Fprintf(&b, ", refused %s %d", r, x.f.Refused[r])

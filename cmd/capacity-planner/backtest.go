@@ -381,8 +381,11 @@ func pointText(ps []whatifapi.BacktestPoint, stat string) string {
 			mark = "*"
 		}
 		meas := btMs(p.Measured)
-		if p.AboveHistogram || p.Unscored == whatifapi.UnscoredAboveHistogram {
+		switch {
+		case p.AboveHistogram || p.Unscored == whatifapi.UnscoredAboveHistogram:
 			meas = ">top"
+		case p.MeasuredBucket != nil:
+			meas += "~"
 		}
 		return pred + "/" + meas + mark
 	}
@@ -450,9 +453,10 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 	if t := bt.TTFT; t != nil && t.Target != nil {
 		fmt.Fprintf(&b, "TTFT target: %s %s\n", t.Statistic, fmtSeconds(*t.Target))
 	}
-	b.WriteString("\neach step: predicted/measured (* inside the conditions our accuracy benchmarks cover)\n")
+	b.WriteString("\neach step: predicted/measured (* inside the conditions our accuracy benchmarks cover; " +
+		"~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it)\n")
 	const layout = "%-16s %7s %5s  %-19s %-19s %-17s %-17s %s\n"
-	fmt.Fprintf(&b, layout, "step (UTC)", "rate", "P+D", "TTFT p50", "TTFT p90", "TPOT p50", "TPOT p90", "")
+	fmt.Fprintf(&b, layout, "step (UTC)", "rate", "P+D", "TTFT mean", "TTFT p90", "TPOT mean", "TPOT p90", "")
 	for _, s := range bt.Steps {
 		status := "judged"
 		if s.Excluded != "" {
@@ -465,7 +469,7 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 			status += fmt.Sprintf(" (target: predicted %s, measured %s)", s.Target.Predicted, s.Target.Measured)
 		}
 		fmt.Fprintf(&b, layout, at(s.Start), fmt.Sprintf("%.2f", s.Rate), fmt.Sprintf("%d+%d", s.Prefill, s.Decode),
-			pointText(s.TTFT, "p50"), pointText(s.TTFT, "p90"), pointText(s.TPOT, "p50"), pointText(s.TPOT, "p90"), status)
+			pointText(s.TTFT, backtestMean), pointText(s.TTFT, backtestP90), pointText(s.TPOT, backtestMean), pointText(s.TPOT, backtestP90), status)
 	}
 	b.WriteString("\nscore over the steps with a figure\n")
 	const sl = "%-10s %6s %7s %7s %8s %10s %13s %12s %s\n"

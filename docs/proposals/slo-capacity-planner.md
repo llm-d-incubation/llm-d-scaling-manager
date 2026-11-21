@@ -216,6 +216,18 @@ p99.9 each read the same bucket's edge, 21.79 ms, and the window's bucket is 6.7
 times the mean. No figure there answers the percentile asked. A refusal of the
 engine's own, such as `TPOTQuantileUnbounded`, is returned as it is.
 
+A coarse `R_q` is refused as well, `TPOTBucketTooWide`, on a variant whose decode
+step is host-bound: a line with a measured intercept (an ols fit, a pinned or held
+`B` that is not the default; not the least ITL above the band, not a borrowed line)
+whose `B`, and its floor read below the band, are under 5 ms. On the 0.6B staircase
+such a line priced p90 TPOT at the mean while the fleet measured a p90 1.3 times and
+a p95 1.6 times its mean: the tail is host jitter (scheduling, sampling,
+detokenizing), not the fill the line models, and the coarse bucket's grid would set
+the percentile (#291). The refusal is per variant, so a variant with no line or a
+slow step beside it still prices; it replaces only a figure, never a refusal the
+library gave, so an overloaded fleet still reads `Saturated`; and it carries the
+read's flags, `EngineTPOTHistogram` included where the engine's histogram was read.
+
 The collector reads the engine's buckets and not its `_sum`, so the window's mean is
 each row's `AvgITL`, weighted by its requests, the assumption the mean TPOT target
 already makes. An answer from it is flagged `EngineTPOTHistogram`, and the row says
@@ -1067,7 +1079,7 @@ Every answer is an `Answer{Value, Band, Basis, Flags}` or an
 | `TokenGapPercentile` | A percentile over token gaps (ITL); per-request TPOT percentiles are supported |
 | `NoTPOTHistogram` | A per-request TPOT percentile with no router or engine TPOT histogram holding an observation (the router's needs `usage` on responses) and no `--assume-tpot-ratio` |
 | `TPOTQuantileUnbounded` | The TPOT `q` quantile falls in the histogram's `+Inf` bucket |
-| `TPOTBucketTooWide` | A TPOT percentile the engine's histogram was asked for, the router's holding no observation, with a `q` bucket wider than the window's mean (`whatif.MaxEngineBucketWidth`): the bucket's edge, whatever `q` was asked. It names `--assume-tpot-ratio`, and keeps `EngineTPOTHistogram` and `CoarseTPOTBucket` |
+| `TPOTBucketTooWide` | A TPOT percentile priced on a host-bound decode variant (its measured intercept and its floor under 5 ms, as a sub-1B model's) whose `R_q` was read off coarse buckets: its tail is host jitter the line does not model. It is decided per variant, never replaces a refusal the library gave (`Saturated` stands), and carries the read's flags. Or a TPOT percentile the engine's histogram was asked for, the router's holding no observation, with a `q` bucket wider than the window's mean (`whatif.MaxEngineBucketWidth`): the bucket's edge, whatever `q` was asked. It names `--assume-tpot-ratio`, and keeps `EngineTPOTHistogram` and `CoarseTPOTBucket` |
 | `TargetBelowFloor` | The target is below what any number of replicas reaches |
 | `FlowControlUnknown` | Flow control on and the detector's thresholds unknown |
 | `AboveDecodeOnset` | A TTFT asked at or above the decode gate's onset with flow control on, where the gate is not work conserving and TTFT is not priced |

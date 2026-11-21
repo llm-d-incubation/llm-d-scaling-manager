@@ -6,9 +6,11 @@
 // axis helpers) and before planner.js, which puts the markup on the page.
 //
 // Two panels share one time axis: TTFT, then TPOT, each in seconds. Per
-// panel, the predicted p50 and p90 are step lines, the band from the p90 to
-// its upper bound is a wash of the p90's hue, and the measured p50 and p90
-// are dots (p50 hollow, p90 filled). A step not judged is greyed and says
+// panel, the predicted mean and p90 are step lines, the band from the p90 to
+// its upper bound is a wash of the p90's hue, and the measured mean and p90
+// are dots (mean hollow, p90 filled). A measured p90 in a histogram bucket
+// too wide to place it is drawn as that bucket, a bar from its lower to its
+// upper edge: the truth is somewhere in it, and a dot would read the grid. A step not judged is greyed and says
 // why on hover; a step the planner gave no figure for, calling the fleet
 // overloaded, is marked along the panel's top. The y axes are logarithmic,
 // so that a burst of seconds does not flatten the quiet steps' tens of
@@ -22,7 +24,7 @@ const BT_PANELS = [
   {key: "tpot", title: "TPOT, seconds", h: 150},
 ];
 // BT_STATS are the statistics drawn, each with its class.
-const BT_STATS = [{stat: "p50", cls: "c-0", dot: "dot hollow"}, {stat: "p90", cls: "c-1", dot: "dot"}];
+const BT_STATS = [{stat: "mean", cls: "c-0", dot: "dot hollow"}, {stat: "p90", cls: "c-1", dot: "dot"}];
 // BT_CLIP is how far above the highest measured figure a panel's axis
 // reaches before predictions are clipped.
 const BT_CLIP = 3;
@@ -59,7 +61,10 @@ function btPanelRange(bt, key) {
     for (const {stat} of BT_STATS) {
       const p = btPoint(s, key, stat);
       if (!p) continue;
-      if (p.measured != null && isFinite(p.measured) && p.measured > 0) {
+      if (p.measuredBucket) {
+        meas = Math.max(meas, p.measuredBucket.hi);
+        if (p.measuredBucket.lo > 0) least = Math.min(least, p.measuredBucket.lo);
+      } else if (p.measured != null && isFinite(p.measured) && p.measured > 0) {
         meas = Math.max(meas, p.measured);
         least = Math.min(least, p.measured);
       }
@@ -137,8 +142,11 @@ function btSVG(bt) {
       g += `<polygon class="btband" data-series="${p.key}-p90-bound" points="${dayStepBand(run, step, X, Y)}"/>`;
     }
     for (const k of bt.steps) {
-      const q = btPoint(k, p.key, "p90");
-      if (k.excluded || !q || !q.predicted.refused || q.predicted.refused.reason !== "Saturated") continue;
+      const sat = BT_STATS.some(({stat}) => {
+        const q = btPoint(k, p.key, stat);
+        return q && q.predicted.refused && q.predicted.refused.reason === "Saturated";
+      });
+      if (k.excluded || !sat) continue;
       const t = dayTime(k.start);
       g += `<rect class="btsat" data-saturated="${p.key}" x="${X(t).toFixed(1)}" y="${p.top}" ` +
         `width="${(X(t + step) - X(t)).toFixed(1)}" height="6"><title>no figure: the planner calls the fleet overloaded here</title></rect>`;
@@ -151,8 +159,16 @@ function btSVG(bt) {
       let dots = "";
       for (const k of bt.steps) {
         const q = btPoint(k, p.key, stat);
+        const cx = X(dayTime(k.start) + step / 2).toFixed(1);
+        if (q && q.measuredBucket) {
+          const b = q.measuredBucket;
+          dots += `<rect class="btbucket ${cls}" data-bucket="${p.key}-${stat}" x="${(cx - 2).toFixed(1)}" y="${Y(b.hi).toFixed(1)}" ` +
+            `width="4" height="${Math.max(Y(b.lo) - Y(b.hi), 1).toFixed(1)}"><title>measured ${esc(stat)} somewhere in ` +
+            `${esc(btFmt(b.lo))} to ${esc(btFmt(b.hi))}: the histogram bucket is too wide to place it</title></rect>`;
+          continue;
+        }
         if (!q || q.measured == null || !isFinite(q.measured)) continue;
-        dots += `<circle class="${dot} ${cls}" cx="${X(dayTime(k.start) + step / 2).toFixed(1)}" cy="${Y(q.measured).toFixed(1)}" r="3"/>`;
+        dots += `<circle class="${dot} ${cls}" cx="${cx}" cy="${Y(q.measured).toFixed(1)}" r="3"/>`;
       }
       g += `<g data-series="${p.key}-${stat}-measured">${dots}</g>`;
       for (const k of bt.steps) {
@@ -243,9 +259,15 @@ function selfCheckHTML(sc) {
 }
 
 // btMeasured is a point's measured figure in words: above the top bucket
-// where the histogram could not say.
+// where the histogram could not say, and the bucket where it is too wide to
+// place the figure, with which side of it the prediction fell.
 function btMeasured(p) {
   if (p.aboveHistogram || p.unscored === "aboveHistogram") return "above the top bucket";
+  if (p.measuredBucket) {
+    const b = p.measuredBucket;
+    const side = p.outsideBucket === "under" ? ", predicted under it" : p.outsideBucket === "over" ? ", predicted over it" : "";
+    return `~${btFmt(b.lo)} to ${btFmt(b.hi)} (bucket too wide to place it${side})`;
+  }
   return btFmt(p.measured);
 }
 
@@ -254,8 +276,9 @@ function btLegend() {
   const sw = cls => `<svg viewBox="0 0 18 10" aria-hidden="true"><line class="line ${cls}" x1="1" x2="17" y1="5" y2="5"/></svg>`;
   const dot = cls => `<svg viewBox="0 0 18 10" aria-hidden="true"><circle class="${cls}" cx="9" cy="5" r="3"/></svg>`;
   const box = cls => `<svg viewBox="0 0 18 10" aria-hidden="true"><rect class="${cls}" x="1" y="1" width="16" height="8"/></svg>`;
-  return `<span>${sw("c-0")}p50 predicted</span><span>${dot("dot hollow c-0")}p50 measured</span>` +
+  return `<span>${sw("c-0")}mean predicted</span><span>${dot("dot hollow c-0")}mean measured</span>` +
     `<span>${sw("c-1")}p90 predicted</span><span>${dot("dot c-1")}p90 measured</span>` +
+    `<span>${box("btbucket c-1")}p90 measured somewhere in a bucket too wide to place it</span>` +
     `<span>${box("btband")}the planner's own range for p90</span><span>${box("btgrey")}not judged</span>` +
     `<span>${box("btsat")}no figure: the planner calls the fleet overloaded</span><span>&#9650; predicted above the axis</span>`;
 }
@@ -315,11 +338,11 @@ function btStepTable(bt) {
     const pred = p.predicted.value != null ? btFmt(p.predicted.value) : p.predicted.refused ? "no figure" : "-";
     return `${pred} / ${btMeasured(p)}`;
   };
-  let h = `<table class="t"><thead><tr><th>step (UTC)</th><th>rate</th><th>prefill + decode</th><th>TTFT p50</th><th>TTFT p90</th>` +
-    `<th>TPOT p50</th><th>TPOT p90</th><th>judged</th></tr></thead><tbody>`;
+  let h = `<table class="t"><thead><tr><th>step (UTC)</th><th>rate</th><th>prefill + decode</th><th>TTFT mean</th><th>TTFT p90</th>` +
+    `<th>TPOT mean</th><th>TPOT p90</th><th>judged</th></tr></thead><tbody>`;
   for (const s of bt.steps) {
     h += `<tr><td>${esc(s.start.slice(11, 16))}</td><td>${esc(s.rate.toFixed(2))}</td><td>${s.prefill} + ${s.decode}</td>` +
-      `<td>${esc(cell(s, "ttft", "p50"))}</td><td>${esc(cell(s, "ttft", "p90"))}</td><td>${esc(cell(s, "tpot", "p50"))}</td>` +
+      `<td>${esc(cell(s, "ttft", "mean"))}</td><td>${esc(cell(s, "ttft", "p90"))}</td><td>${esc(cell(s, "tpot", "mean"))}</td>` +
       `<td>${esc(cell(s, "tpot", "p90"))}</td><td>${s.excluded ? "no: " + esc(BT_EXCLUDED[s.excluded] || s.excluded) : "yes"}</td></tr>`;
   }
   return h + "</tbody></table>";

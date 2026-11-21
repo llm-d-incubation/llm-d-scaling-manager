@@ -355,16 +355,28 @@ type frozenPercentileTPOT struct {
 	Seconds    float64       `json:"seconds"`
 	Fill       float64       `json:"fill"`
 	Flags      []whatif.Flag `json:"flags,omitempty"`
+	// Refused is why the percentile is not priced where the warm-up's
+	// histogram cannot place it on this decode variant (hostBoundRefusal),
+	// Seconds 0: the analyzer then scores no stand-in for it either.
+	Refused string `json:"refused,omitempty"`
 }
 
 // percentileTPOTs is decode's TPOT at each percentile at rate, priced on R_q
-// as the warm-up learned it, at the fill the rate runs at.
-func percentileTPOTs(st *learnreplay.State, d whatif.Decode, rate float64, percentiles []float64) []frozenPercentileTPOT {
+// as the warm-up learned it, at the fill the rate runs at. vs is the decode
+// variant priced, nil with none: a percentile on a host-bound one is refused
+// as the CLI refuses it (hostBoundRefusal).
+func percentileTPOTs(st *learnreplay.State, vs *learnreplay.VariantState, d whatif.Decode, rate float64, percentiles []float64) []frozenPercentileTPOT {
 	out := make([]frozenPercentileTPOT, 0, len(percentiles))
 	for _, p := range percentiles {
 		r, flags, u := whatif.TPOTRatioFromWindows(st.TPOTWindows, p/100)
 		if u != nil {
 			continue
+		}
+		if vs != nil {
+			if hb := hostBoundRefusal(*vs, resolvedRatio{ratio: r, flags: flags}); hb != nil {
+				out = append(out, frozenPercentileTPOT{Percentile: p, Flags: flags, Refused: refusalText(*hb)})
+				continue
+			}
 		}
 		q := whatif.ReplicasQuery{Rate: rate, PercentileTarget: &whatif.TPOTTarget{Percentile: p / 100, Ratio: r}}
 		if a, ok := whatif.SLOAtReplicas(d, q).PercentileTPOT.(whatif.Answer); ok {
@@ -432,7 +444,11 @@ func (f *freezeFlags) priceBucket(st *learnreplay.State, spec *freezeSpec, b fre
 		if m, ok := whatif.SLOAtReplicas(*off.Decode, whatif.ReplicasQuery{Rate: out.OperatingRate}).MeanTPOT.(whatif.Answer); ok {
 			out.MeanTPOT = m.Value
 		}
-		out.PercentileTPOT = percentileTPOTs(st, *off.Decode, out.OperatingRate, spec.Percentiles)
+		var vs *learnreplay.VariantState
+		if pf.pv != nil && !pf.pv.itlB.Applied {
+			vs = &pf.pv.state
+		}
+		out.PercentileTPOT = percentileTPOTs(st, vs, *off.Decode, out.OperatingRate, spec.Percentiles)
 	}
 	for _, p := range spec.Percentiles {
 		t, why := pricedTarget(off, on, out.OperatingRate, p, spec.TargetFloorMargin, held[b.Name])

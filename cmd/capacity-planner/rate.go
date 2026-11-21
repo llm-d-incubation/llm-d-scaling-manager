@@ -162,6 +162,7 @@ func rateQuery(target whatif.TPOTTarget, headroom float64, r resolvedRatio) what
 func decodeRate(pv pricedVariant, query whatif.RateQuery, r resolvedRatio) whatif.Result {
 	res := withRatioRefusal(whatif.RateForTPOT(pv.decode, query), r.refused)
 	res = pv.band(res, func(d whatif.Decode) whatif.Result { return whatif.RateForTPOT(d, query) })
+	res = onHostBound(res, pv, r)
 	return pv.qualify(onRatio(res, r.ratio, r.flags))
 }
 

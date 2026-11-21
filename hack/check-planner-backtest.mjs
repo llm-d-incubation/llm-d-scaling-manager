@@ -48,7 +48,7 @@ try {
   check("two panels", panels.length === 2, panels.length);
   check("the panels share one x domain", new Set(panels.map(p => p["data-x0"] + "/" + p["data-x1"])).size === 1);
   const series = new Set([...attrs(g.markup, "path"), ...attrs(g.markup, "g")].map(a => a["data-series"]).filter(Boolean));
-  for (const s of ["ttft-p50-predicted", "ttft-p90-predicted", "ttft-p50-measured", "ttft-p90-measured", "tpot-p50-measured", "tpot-p90-measured"]) {
+  for (const s of ["ttft-mean-predicted", "ttft-p90-predicted", "ttft-mean-measured", "ttft-p90-measured", "tpot-mean-measured", "tpot-p90-measured"]) {
     check("series " + s + " is drawn", series.has(s));
   }
   const excluded = answer.steps.filter(s => s.excluded);
@@ -57,6 +57,13 @@ try {
   check("a greyed step names its reason", greys.every(a => a["data-excluded"]));
   const dots = (g.markup.match(/<circle class="dot/g) || []).length;
   check("measured figures are drawn as dots", dots > answer.steps.length, dots);
+  // A measured percentile in a bucket too wide to place it is drawn as the
+  // bucket, a bar, never as a dot at the figure the grid set.
+  const inBucket = answer.steps.reduce((n, s) => n + ["ttft", "tpot"].reduce((m, k) =>
+    m + (s[k] || []).filter(p => p.measuredBucket && (p.statistic === "mean" || p.statistic === "p90")).length, 0), 0);
+  const bars = attrs(g.markup, "rect").filter(a => a["data-bucket"]).length;
+  check("the golden has measured percentiles in a coarse bucket", inBucket > 0, inBucket);
+  check("each is drawn as its bucket", bars === inBucket, `${bars} vs ${inBucket}`);
 
   // A prediction far above everything measured is clipped and marked.
   const big = copy(answer);
