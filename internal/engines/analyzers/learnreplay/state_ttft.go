@@ -42,6 +42,9 @@ type PrefillState struct {
 	// holds no computed-token histogram, as a recording made before the
 	// collector read one does not.
 	PromptWindow *whatif.PromptWindow
+	// PromptSupport is slo.SwitchTTFTPromptSupport: the longest prompt the
+	// window's histogram allows (whatif.PromptSpread.MaxRatio) is priced.
+	PromptSupport bool
 	// RawShare is f_raw, the busiest pod's share of the computed-token rate
 	// over the mean share, not de-biased: the largest over the latest
 	// whatif.TTFTWindowCycles cycles that read one at the cycle's pod count. A pod with
@@ -123,19 +126,26 @@ func (w *shareWindow) read() (largest, least float64, full bool) {
 
 // ttftSamples is the windows of the rows a TTFT question reads, by variant.
 type ttftSamples struct {
-	prompts    map[string]*whatif.PromptWindow
-	shares     map[string]*shareWindow
-	engineTTFT map[string][]whatif.DecodeTTFT
+	// promptSupport is slo.SwitchTTFTPromptSupport (PrefillState.PromptSupport).
+	promptSupport bool
+	prompts       map[string]*whatif.PromptWindow
+	shares        map[string]*shareWindow
+	engineTTFT    map[string][]whatif.DecodeTTFT
 	// backlogs is each decode variant's latest backlog (backlogTrack.note).
 	backlogs  map[string]*backlogTrack
 	transfers map[string]*prefill.TransferWindow
 	terms     map[string]*prefill.DecodeTermWindow
 	// joint is the model's joint TTFT readings (noteJoint).
 	joint *prefill.JointWindow
+	// hopUnqueued is slo.SwitchTTFTHopUnqueued, for the decode term's
+	// router windows (noteTerm).
+	hopUnqueued bool
 }
 
-func newTTFTSamples() *ttftSamples {
-	return &ttftSamples{prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
+// newTTFTSamples returns empty windows; hopUnqueued is
+// slo.SwitchTTFTHopUnqueued.
+func newTTFTSamples(hopUnqueued bool) *ttftSamples {
+	return &ttftSamples{hopUnqueued: hopUnqueued, prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
 		engineTTFT: map[string][]whatif.DecodeTTFT{}, backlogs: map[string]*backlogTrack{},
 		transfers: map[string]*prefill.TransferWindow{},
 		terms:     map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow()}
@@ -387,7 +397,8 @@ func (t *ttftSamples) noteTerm(in domain.AnalyzerInput, now time.Time, args func
 		x.Observe(now, rowsOfVariant(in.ReplicaMetrics, v))
 		w.Observe(prefill.DecodeTermCycle{Now: now, Prefill: pre, Decode: rowsOfVariant(in.ReplicaMetrics, v),
 			PromptTokens: prompt, Router: in.RouterLatency,
-			RouterHeld: in.SchedulerQueue != nil && in.SchedulerQueue.QueueSize > 0})
+			RouterHeld:  in.SchedulerQueue != nil && in.SchedulerQueue.QueueSize > 0,
+			HopUnqueued: t.hopUnqueued})
 	}
 }
 
@@ -432,6 +443,7 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 		ps.PromptTokens, ps.PromptFromCycle, ps.PromptToCycle, ps.PromptCycles = t.prompts[v].Prompt()
 		ps.PromptWindow = t.prompts[v].Clone()
+		ps.PromptSupport = t.promptSupport
 		ps.Estimate, ps.EstimateRead = estimateAt(r.sat.PrefillEstimate, in.Namespace, in.ModelID, v, st.At)
 		st.Prefill = append(st.Prefill, ps)
 	}

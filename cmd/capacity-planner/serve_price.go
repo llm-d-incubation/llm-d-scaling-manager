@@ -422,6 +422,7 @@ func (s *servedState) fleetAt(k whatifapi.Knobs) (*servedFleet, error) {
 	}
 	if a.PromptCV != nil {
 		f.assumePromptCV = *a.PromptCV
+		f.statedPromptMaxRatio = k.PromptMaxRatio
 		set("assume-prompt-cv")
 	}
 	if a.RouterHop != nil {

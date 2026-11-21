@@ -98,6 +98,27 @@ const (
 	// priced ones also served: the model's rate and the router's latency
 	// are the whole model's, the replicas priced are not.
 	ExcludedOtherVariants = "otherVariants"
+	// ExcludedBurst is a step whose measurement window runs both near the
+	// knee and far under it (burstIn): most often the start or the end of a
+	// load near the knee, though an on-off load reads the same. Its requests
+	// mostly arrived at that load, or queued behind it, and its mean rate is
+	// no rate the fleet ran at.
+	ExcludedBurst = "burst"
+)
+
+// BurstPeakKneeShare and BurstTroughShare are what makes a step's window a
+// burst (burstIn): a cycle at BurstPeakKneeShare of the knee or more, and
+// another at BurstTroughShare of that cycle's rate or less. A steady step
+// near the knee passes, bursty arrivals included: on the Qwen3-32B
+// staircase's C phases (Ca^2 4, 3.2 to 3.5 r/s) a window's one-minute
+// rates fell to 0.38 of its busiest minute and no lower. Where a load
+// starts or stops in the window, they fell to 0.17 or less: the warm-up's
+// two steps on the burst read from 0.04 and 0 r/s to 4.3 r/s, against a
+// knee of 4.08 r/s. Stated, not fitted
+// (llm-d-incubation/llm-d-scaling-manager#278).
+const (
+	BurstPeakKneeShare = 0.8
+	BurstTroughShare   = 0.25
 )
 
 // The reasons one figure of a judged step is not scored.
@@ -313,6 +334,7 @@ type BacktestExcluded struct {
 	WarmUp        int `json:"warmUp"`
 	NotPriced     int `json:"notPriced"`
 	OtherVariants int `json:"otherVariants"`
+	Burst         int `json:"burst"`
 }
 
 // BacktestScore is one statistic's score.
@@ -557,19 +579,21 @@ func refitRequest(e *inputsEntry, cycle int, cutoff time.Time) (InputsRequest, e
 
 // backtestQuestion is a backtest's request checked against its sides.
 type backtestQuestion struct {
-	fit, test   *inputsEntry
-	cutoff      time.Time
-	split       string
-	step        time.Duration
-	settle      time.Duration
-	measured    string
-	target      *ReportTarget
-	cv2         *float64
-	promptCV    *float64
-	config      BacktestConfig
-	assumed     []string
-	testIndices []int
-	assume      Assume
+	fit, test *inputsEntry
+	cutoff    time.Time
+	split     string
+	step      time.Duration
+	settle    time.Duration
+	measured  string
+	target    *ReportTarget
+	cv2       *float64
+	promptCV  *float64
+	// promptMaxRatio is promptCV's bound (stepInputs.promptMaxRatio).
+	promptMaxRatio float64
+	config         BacktestConfig
+	assumed        []string
+	testIndices    []int
+	assume         Assume
 	// targetAsked is the target as the answer names it.
 	targetAsked *Objective
 	// source is the latency scored against; measureWindow, when above 0,
@@ -683,7 +707,7 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	// The test's prompt spread is an input, its lengths, never its latency:
 	// pooled over the test's cycles, for a step whose own reads none.
 	if whole := stepInputsOf(seriesAt(test.series, q.testIndices)); whole.promptCV != nil {
-		q.promptCV = whole.promptCV
+		q.promptCV, q.promptMaxRatio = whole.promptCV, whole.promptMaxRatio
 	}
 	if a := req.Assume; a != nil {
 		// Checked as a plan's, at a TPOT percentile (a backtest prices its
@@ -894,7 +918,7 @@ func (q *backtestQuestion) layout() ([]stepOf, []time.Time, time.Time) {
 // predictSteps prices every step of the test from its inputs alone.
 func (q *backtestQuestion) predictSteps(ctx context.Context) ([]stepOf, []BacktestStep, error) {
 	steps, changes, first := q.layout()
-	p := &predictor{pricer: q.fit.pricer, fleets: map[predictKey]Fleet{}, cv2: q.cv2, promptCV: q.promptCV,
+	p := &predictor{pricer: q.fit.pricer, fleets: map[predictKey]Fleet{}, cv2: q.cv2, promptCV: q.promptCV, promptMaxRatio: q.promptMaxRatio,
 		headroom: q.fit.doc.Policy.Headroom, assume: q.assume}
 	out := make([]BacktestStep, 0, len(steps))
 	for _, st := range steps {
@@ -1039,6 +1063,25 @@ func measuredNote(source string, pd bool) string {
 	return w
 }
 
+// burstIn says a step's window holds a change of load near the knee: a cycle
+// whose rate is BurstPeakKneeShare of knee or more, and one at
+// BurstTroughShare of that rate or less. lo and hi are the least and the
+// largest rate read; a cycle with no rate is not read.
+func burstIn(samples []SeriesSample, knee float64) (lo, hi float64, ok bool) {
+	n := 0
+	for _, x := range samples {
+		if !x.RateKnown {
+			continue
+		}
+		if n == 0 {
+			lo, hi = x.Rate, x.Rate
+		}
+		lo, hi = min(lo, x.Rate), max(hi, x.Rate)
+		n++
+	}
+	return lo, hi, n > 1 && knee > 0 && hi >= BurstPeakKneeShare*knee && lo <= BurstTroughShare*hi
+}
+
 // stepOf predicts one step: its inputs, read over the cycles of its
 // measurement window, why it is not judged, and each statistic predicted.
 // It reads no latency: scoreStep sets the measurement beside it.
@@ -1079,6 +1122,10 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		return out
 	}
 	if pred.knee != nil {
+		if lo, hi, ok := burstIn(seriesAt(q.test.series, st.window), *pred.knee); ok && out.Excluded == "" && in.rate < *pred.knee {
+			out.Excluded, out.Detail = ExcludedBurst, fmt.Sprintf("its measurement window holds the start or the end of a load near the knee: cycles from %.2f to %.2f r/s against a knee of %.2f r/s, so its mean rate, %.2f r/s, is no rate the fleet ran at",
+				lo, hi, *pred.knee, in.rate)
+		}
 		out.KneeShare = ptr(in.rate / *pred.knee)
 		out.Load = loadBand(*out.KneeShare)
 	}
@@ -1125,6 +1172,10 @@ type stepInputs struct {
 	// promptCV is the step's own prompt spread, read from its prefill
 	// pods' computed-token histograms; nil where they read none.
 	promptCV *float64
+	// promptMaxRatio is the longest prompt over the mean the same
+	// histograms bound (whatif.PromptSpread.MaxRatio), raised to
+	// promptCVGrid; 0 with none.
+	promptMaxRatio float64
 	// otherPods says variants other than the priced ones served in it.
 	otherPods bool
 }
@@ -1152,6 +1203,7 @@ func stepInputsOf(samples []SeriesSample) stepInputs {
 	if requests > 0 {
 		if sp := whatif.ReadPromptSpread(pooled, computed/requests); !sp.Assumed {
 			in.promptCV = ptr(math.Round(sp.CV/promptCVGrid) / (1 / promptCVGrid))
+			in.promptMaxRatio = maxRatioOnGrid(sp.MaxRatio)
 		}
 	}
 	return in
@@ -1161,11 +1213,23 @@ func stepInputsOf(samples []SeriesSample) stepInputs {
 // steps of nearly one spread share a fleet.
 const promptCVGrid = 0.05
 
+// maxRatioOnGrid is a prompt bound raised to promptCVGrid, so that steps of
+// nearly one bound share a fleet: raised, as a higher bound prices more of
+// the gamma's tail, never less than the histogram allows. 0 stays 0.
+func maxRatioOnGrid(r float64) float64 {
+	if !(r > 0) {
+		return 0
+	}
+	// The tolerance keeps a bound already on the grid (1.25) on it.
+	return math.Ceil(r/promptCVGrid-1e-9) / (1 / promptCVGrid)
+}
+
 // predictKey is one fleet a backtest prices.
 type predictKey struct {
 	np, nd         int
 	prompt, output float64
 	promptCV       float64
+	promptMaxRatio float64
 	q              float64
 }
 
@@ -1176,6 +1240,8 @@ type predictor struct {
 	fleets   map[predictKey]Fleet
 	cv2      *float64
 	promptCV *float64
+	// promptMaxRatio is promptCV's bound, for a step whose own reads none.
+	promptMaxRatio float64
 	// headroom is the fit's: it moves no TTFT or TPOT priced at a rate.
 	headroom float64
 	// assume is the request's typed terms.
@@ -1204,13 +1270,15 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 		if in.hasShape {
 			k.prompt, k.output = shapeKnob(in.prompt), shapeKnob(in.output)
 		}
+		// A spread read from a histogram carries the bound that histogram
+		// sets on the prompt; a typed one (assume.promptCV) carries none.
 		cv := p.assume.PromptCV
 		if cv == nil {
 			switch {
 			case in.promptCV != nil:
-				cv = ptr(max(*in.promptCV, promptCVGrid))
+				cv, k.promptMaxRatio = ptr(max(*in.promptCV, promptCVGrid)), in.promptMaxRatio
 			case p.promptCV != nil:
-				cv = p.promptCV
+				cv, k.promptMaxRatio = p.promptCV, p.promptMaxRatio
 			}
 		}
 		// The key is the spread priced: none (-1, the fit's) or its value.
@@ -1223,6 +1291,7 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 				ArrivalCV2: p.cv2, Headroom: p.headroom}
 			kn.Assume = p.assume
 			kn.Assume.PromptCV = cv
+			kn.PromptMaxRatio = k.promptMaxRatio
 			var err error
 			if fl, err = p.pricer.Fleet(kn); err != nil {
 				return out, err
@@ -1526,6 +1595,8 @@ func summarize(steps []BacktestStep, target bool) BacktestSummary {
 			s.Excluded.NotPriced++
 		case ExcludedOtherVariants:
 			s.Excluded.OtherVariants++
+		case ExcludedBurst:
+			s.Excluded.Burst++
 		}
 	}
 	s.TTFT, s.TPOT = scoresOf(steps)
@@ -1870,7 +1941,7 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 		n    int
 		what string
 	}{{e.WarmUp, "warm-up"}, {e.Scaling, "replicas changing"}, {e.NoTraffic, "no traffic"}, {e.NoMeasurement, "no measured requests"},
-		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}} {
+		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}, {e.Burst, "a burst near the knee in its window"}} {
 		if x.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", x.n, x.what))
 		}

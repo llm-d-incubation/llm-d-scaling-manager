@@ -13,6 +13,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
@@ -248,6 +249,10 @@ type shapeSample struct {
 //     median of the busiest minutes, not of every minute.
 //   - saturation.SwitchITLAdaptiveBandFloor: the ITL band's floor lowered to
 //     the fill a low-fill fleet has.
+//   - slo.SwitchTTFTHopUnqueued: the router hop of the decode term read off
+//     windows whose prefill pods held no queue. The planner reads its own
+//     decode term windows (state_ttft.go), so it reads the switch from here
+//     even where the recording has no slo analyzer to set it on.
 //
 // saturation.SwitchITLHoldSteadySlope is planner-only too but not listed:
 // the line it holds is right at a given fill, and the planner then reads
@@ -261,6 +266,23 @@ type shapeSample struct {
 // but its p90 TTFT on the B-off and B-on phases still reads 15% to 23% under
 // and its p90 TPOT up to 22% under there (32% on the first warm-up's
 // B-onset, 39% on the bursty C phases), so both stay off.
+//
+// slo.SwitchTTFTPromptSupport is planner-only too but not listed (issue
+// llm-d-incubation/llm-d-scaling-manager#304): it holds the prompt at the
+// longest its computed-token histogram allows, and a bound at
+// whatif.MaxPSPromptSupport or under prices processor sharing alone. Both
+// lower the TTFT: on the Qwen3-32B and
+// 0.6B staircase backtests, each step priced at its own histogram's cv and
+// bound, 34 TTFT figures that read at or above measured read under it, the
+// lowest at 0.89 of measured. Most are p90 and p95 on the 8000-token phases,
+// where the bound (1.25) clears processor sharing; some are on the
+// 1000-token phases, whose prompts straddle the 1000 bucket bound, so the
+// bound is 2 times the mean and clears nothing, and only the held gamma
+// moves them. Part of that is the hold itself: the gamma is fitted at the
+// measured mean and then held, so the held prompt's mean reads 3% to 4%
+// under the measured one at these spreads (a mean-preserving hold is the
+// next step). The rest is the cv a bucket's width reads holding up a TTFT
+// the rest of the model reads low. It stays off until both are settled.
 func PlannerSwitches() map[string]map[string]bool {
 	return map[string]map[string]bool{PackageSaturation: {
 		saturation.SwitchPrefillALowLoadPerRank: true,
@@ -268,6 +290,8 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillQueueByCapacity: true,
 		saturation.SwitchPrefillFBusyMinutes:    true,
 		saturation.SwitchITLAdaptiveBandFloor:   true,
+	}, PackageSLO: {
+		slo.SwitchTTFTHopUnqueued: true,
 	}}
 }
 
@@ -352,6 +376,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	opts.Mode = Normal
 	opts.Switches = withPlannerSwitches(opts.Switches)
 	opts.discardRecording = true
+	opts.sloOptional = true
 	var (
 		st       *State
 		stateErr error
@@ -361,12 +386,13 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		engine   []whatif.TPOTWindow
 		shapes   = map[string][]shapeSample{}
 		resident = map[string][]residentSample{}
-		ttft     = newTTFTSamples()
+		ttft     = newTTFTSamples(opts.Switches[PackageSLO][slo.SwitchTTFTHopUnqueued])
 		lines    = newLineSamples()
 		cycleAt  = map[time.Time]int{}
 		arrivals []float64
 		ranges   = map[string]ShapeRange{}
 	)
+	ttft.promptSupport = opts.Switches[PackageSLO][slo.SwitchTTFTPromptSupport]
 	// Read once: the switches are set before the replay starts.
 	lineAtFloor := opts.Switches[PackageSaturation][saturation.SwitchITLLineAtFloor]
 	opts.stop = func(r *replayer, ev learnrec.RawEvent) bool {

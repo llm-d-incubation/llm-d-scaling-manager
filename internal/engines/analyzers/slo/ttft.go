@@ -115,6 +115,17 @@ const SwitchTTFTImbalanceAcrossCounts = "slo-ttft-imbalance-across-counts"
 // committed recording's cycle reaches a priced fleet.
 const SwitchTTFTLowLoadDecodeTTFT = "slo-ttft-low-load-decode-ttft"
 
+// SwitchTTFTHopUnqueued is the replay switch for the router hop R of the
+// decode term (prefill.DecodeTermCycle.HopUnqueued): on, a router window
+// counts for R only when no prefill row in it held requests waiting for
+// compute. Off, as before, a window whose prefill pods queued counts too, and
+// its R is the queue's timing, not the hop: on the Qwen3-32B staircase's
+// warm-up it put 0.31 s of hop on every 8k prompt, about 0.3 s over the
+// router's measured TTFT at low load. Off from the constructor; the capacity
+// planner's replay turns it on (learnreplay.PlannerSwitches)
+// (llm-d-incubation/llm-d-scaling-manager#281).
+const SwitchTTFTHopUnqueued = "slo-ttft-hop-unqueued"
+
 // SwitchTTFTDecodeGateCharge is the replay switch for
 // whatif.TTFTFleet.ChargeDecodeGate: on, the published rate is charged the
 // share of time the decode flow-control gate is closed below its onset, in
@@ -136,6 +147,21 @@ const SwitchTTFTDecodeGateCharge = "slo-ttft-decode-gate-charge"
 // the histogram. A recording made since replays both ways, so what Q1 moved
 // on it can be read.
 const SwitchTTFTMeasuredSpread = "slo-ttft-measured-spread"
+
+// SwitchTTFTPromptSupport is the replay switch for the prompt's support: on,
+// the longest prompt the computed-token histogram allows
+// (whatif.PromptSpread.MaxRatio) is priced (whatif.Prefill.PromptMaxRatio):
+// the prompt is a gamma held at that bound, not one that runs past it, and a
+// bound at whatif.MaxPSPromptSupport or under prices processor sharing alone
+// whatever the cv read. The cv a histogram reads is the widest its buckets
+// allow: every 8000-token prompt in a (5000, 10000] bucket read 0.31, flagged
+// every 8k answer SpreadBeyondProcessorSharing although processor sharing
+// held there, and its gamma put 19.8% of the prompts above 10000 (issue
+// llm-d-incubation/llm-d-scaling-manager#304). Off, the gamma runs on and the
+// cv alone decides, as before. Planner-only: off from the constructor, and
+// not turned on in the planner's replay either (learnreplay.PlannerSwitches
+// says why).
+const SwitchTTFTPromptSupport = "slo-ttft-prompt-support"
 
 // SwitchTTFTMeasuredTransfer is the replay switch for the KV transfer term:
 // on, the pricing reads AvgKVTransferTime from the decode rows that carry one
@@ -459,8 +485,9 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 	if len(decodes) == 1 && a.ttftDecodeTerm {
 		est := a.noteDecodeTerm(decodeKey, accelerator, engineArgs, prefill.DecodeTermCycle{
 			Now: now, Prefill: prefillRows, Decode: decodeRows, PromptTokens: modelPrompt, Router: router,
-			Settled:    &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)},
-			RouterHeld: input.SchedulerQueue != nil && input.SchedulerQueue.QueueSize > 0,
+			Settled:     &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)},
+			RouterHeld:  input.SchedulerQueue != nil && input.SchedulerQueue.QueueSize > 0,
+			HopUnqueued: a.ttftHopUnqueued,
 		})
 		t := whatif.TermFromEstimate(est)
 		term = &t
@@ -553,7 +580,11 @@ func (a *Analyzer) promptSpread(key string, rows []domain.ReplicaMetrics, now ti
 	if !a.ttftMeasuredSpread {
 		return whatif.ReadPromptSpread(nil, 0)
 	}
-	return w.window.Spread()
+	s := w.window.Spread()
+	if !a.ttftPromptSupport {
+		s.MaxRatio = 0
+	}
+	return s
 }
 
 // transferPerToken is the transfer the pricing reads: 0 with

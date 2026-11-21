@@ -80,9 +80,9 @@ func TestReadPromptSpread(t *testing.T) {
 	// Mass past the last bound has no upper bound.
 	clamped := rowsSpread(withBuckets([]domain.LengthBucket{bucket(1000, 9), bucket(inf, 10)}), 800)
 	assert.Equal(t, PromptSpread{CV: 3, Clamped: true}, clamped)
-	// A cv above 3.
+	// A cv above 3: the longest prompt is still bounded, 100000 over 1000.
 	over := rowsSpread(withBuckets([]domain.LengthBucket{bucket(100, 99), bucket(100000, 100), bucket(inf, 100)}), 1000)
-	assert.Equal(t, PromptSpread{CV: 3, Clamped: true}, over)
+	assert.Equal(t, PromptSpread{CV: 3, MaxRatio: 100, Clamped: true}, over)
 
 	// Constant 3000-token prompts read 0.47 in the 2000-5000 bucket: 2/3 of
 	// them at 2000 and 1/3 at 5000 also have that mean, and that spread.
@@ -211,7 +211,7 @@ func TestReadPromptSpread_AMeanTheBucketsCannotHold(t *testing.T) {
 	assert.False(t, ReadPromptSpread(wide, 1090).Assumed, "a mean on the bound is a reading")
 
 	// The bound itself is a reading: constant prompts on a bucket's bound.
-	assert.Equal(t, PromptSpread{CV: 0}, ReadPromptSpread(map[float64]float64{1000: 3, inf: 3}, 1000))
+	assert.Equal(t, PromptSpread{CV: 0, MaxRatio: 1}, ReadPromptSpread(map[float64]float64{1000: 3, inf: 3}, 1000))
 	assert.Equal(t, assumed, ReadPromptSpread(map[float64]float64{1000: 3, inf: 3}, 1000.1))
 	// A low mean reads high, the safe side, and stays a reading.
 	assert.False(t, ReadPromptSpread(map[float64]float64{1000: 3, inf: 3}, 10).Assumed)

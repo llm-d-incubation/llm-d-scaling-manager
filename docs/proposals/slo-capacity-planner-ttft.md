@@ -1091,6 +1091,9 @@ priced.
 - **What a router window needs.** Steady rate and prompt, and no cycle with the
   router holding requests: the router's mean starts before flow control, and a
   held window would count the queue in R. A line needs every median above 0.
+  The planner also needs no cycle whose prefill pods held requests waiting for
+  compute (`slo-ttft-hop-unqueued`). With flow control off, that queue sits in
+  the engines and passes the other gates, and its R is the queue's timing.
 - **What admits a minute.** A row with a read mean of both, at least 0.05 r/s,
   its prompt steady to 15%, no speculation, its slot queue read and empty (an
   unknown queue is not an empty one, so SGLang, which publishes none, takes the
@@ -1719,6 +1722,53 @@ sharing's and the first-come queue's, flagged `SpreadBeyondProcessorSharing`,
 until a run at a wide spread validates processor sharing there. S1's assumed
 cv 2 is always past it.
 
+**The prompt's support.** The cv a histogram reads is the widest its buckets
+allow: 8000-token prompts in a (5000, 10000] bucket read cv 0.31 against a
+true 0.06, so every 8k answer was flagged although processor sharing held on
+those steps, and the gamma of cv 0.31 put 19.8% of the prompts above 10000
+tokens, where the bucket proves there are none (p90 own time about 13% high
+on Qwen3-32B 8k). With the switch `slo-ttft-prompt-support` on (planner-only,
+off by default), the planner reads the longest prompt the histogram allows, the highest bucket bound that
+holds requests, over the mean (`whatif.PromptSpread.MaxRatio`), and prices it
+(`Prefill.PromptMaxRatio`):
+
+- the prompt is its gamma censored at that bound: the mass past it sits on it,
+  so no own time is longer than a prompt the histogram proves exists. The
+  gamma is stretched first (`holdScale`), so the held prompt's mean is still
+  the measured mean: censoring alone would read it 4.3% short at cv 0.31
+  held at 1.25, 3.4% at cv 0.61 held at 2;
+- processor sharing is priced alone, whatever the cv, while the bound is at
+  most 1.6 times the mean (`whatif.MaxPSPromptSupport`, under the 1.67 at
+  which the gamma at cv 0.25 has its 99th percentile): no prompt is long
+  enough for chunked prefill to serve it first come. The 8k steps sit at 1.25.
+
+With no bound (mass past the last bucket, or no histogram) the gamma runs on
+and the cv decides, as before. The queue's `Cs²` stays the cv read, the
+widest the buckets allow.
+
+**Off by default, in the planner too.** A backtest prices each step at its
+own histogram's cv and bound (`whatifapi.Knobs.PromptMaxRatio`). On the
+Qwen3-32B and 0.6B staircase backtests (the split, and the phases fitted on
+their warm-ups), turning the switch on moves 15 TTFT figures that read at or
+above measured to under it, the lowest at 0.92 of measured. 13 of the 15 are
+p90 and p95 where the bound clears processor sharing (8000-token phases, and
+one 2.7k step of the split): processor sharing priced alone reads the tail
+up to 8% under what the pods served. The
+1000-token phases read cv 0.6 and stay `SpreadBeyondProcessorSharing`: their
+prompts sit around 1000 tokens, either side of the 1000 bucket bound, so the
+highest bucket holding requests is (1000, 2000] and the bound is 2 times the
+mean, past 1.6. The buckets cannot tell those prompts from a spread that
+reaches 2000, so nothing clears them; only the held gamma moves them, by a
+few percent, and 2 of their p95 figures go under (0.976, 0.987): the tail
+past twice the mean that the hold removes was holding them up. A hold that
+only censored, and so read the mean short, moved 34 figures under, the
+lowest at 0.89. Two causes are still standing, and the switch stays off
+until they are told apart: the cv the buckets' width reads holding up a TTFT
+tail the rest of the model reads low, or the wait side, which still prices
+the unheld cv (Kingman's `Cs²`, the Lundberg root, the PS stages' `Cs²`)
+although the held prompt varies less (cv 0.23 held at 1.25 against the 0.31
+read).
+
 **Checked against a simulation** of the same tandem stages
 (`TestPS_AgainstATandemSimulation`, 180,000 requests a point, `V_P` unmargined):
 
@@ -2054,13 +2104,24 @@ issue proposed (above).
 - The router hop's per-token part is already learned (`prefill.HopFit`,
   `Base + PerToken*I`; 1.41 µs a token on the second staircase's warm-up, 11.3
   ms at 8000 tokens). On the Qwen3-32B staircase the warm-up learned 25.6 µs a
-  token (54 windows; 4 ms at 1000 tokens, 183 ms at 8000). The phases' 606
+  token (54 windows). The line gives 4 ms at 1000 tokens and 183 ms at 8000. It
+  was priced as 26 ms and 205 ms, because its negative intercept is clamped to 0. The phases' 606
   windows, replayed, fit 6.6 ms + 2.7 µs a token (95% bootstrap: 5.7 to 8.6 ms,
   0.8 to 3.6 µs), 9 ms at 1000 tokens and 28 ms at 8000. The 1000-token
   windows are tight (quartiles 8 to 12 ms); the 8000-token ones are not
   (quartiles -42 to +109 ms), because R is a difference of means of a few
   seconds read about 36 s apart. So the warm-up's slope read high, which
-  prices more, not less. The fit needs no change.
+  prices more, not less. It cost the planner its low-load TTFT, though
+  (llm-d-incubation/llm-d-scaling-manager#281). The warm-up's 8k windows all
+  fall in a burst at the prefill knee, with the prefill pods holding 6 to 38
+  requests in their capacity queue and a mean TTFT of 4 to 17 s. Over its first
+  half they read R at 0.03 to 0.56 s and put 0.31 s of hop on every 8k prompt.
+  Measured at low load, the router's mean less the two engines' was about 0.
+  Backtested on its own second half, its p90 TTFT read a median 1.90x high
+  over 9 steps. At 0.27 r/s it priced a mean of 1.02 s, where the router
+  measured 0.56 s. The planner's replay therefore reads R only from windows whose
+  prefill pods held no queue (`slo-ttft-hop-unqueued`, off in S1). On the
+  warm-up, R is then held at its 1k windows' 4 ms.
 
 ## As built: the router stage
 

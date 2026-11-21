@@ -177,7 +177,7 @@ func ttftFleet(in ttftInputs, pods int) (whatif.TTFTFleet, []whatif.Flag) {
 		p.Imbalance = 1
 	}
 	p.PromptTokens = in.prompt
-	p.PromptCV, p.PromptCVAssumed = in.spread.CV, in.spread.Assumed
+	p.PromptCV, p.PromptCVAssumed, p.PromptMaxRatio = in.spread.CV, in.spread.Assumed, in.spread.MaxRatio
 	p.TransferSecondsPerToken = in.transfer
 	fl := whatif.TTFTFleet{Prefill: p, Decode: in.decode, FlowControl: in.flow, ProcessorSharing: in.processorSharing,
 		PriceRouterWait: in.routerWait, PSOnsets: in.psOnsets, ChargeDecodeGate: in.decodeGateCharge}

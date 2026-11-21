@@ -1784,6 +1784,7 @@ logVerbosity
 logged
 long
 longer
+longest
 longestQueuedRun
 loop
 lose
@@ -2840,6 +2841,7 @@ slo-transient
 slo-ttft
 slo-ttft-decode-gate-charge
 slo-ttft-decode-term
+slo-ttft-hop-unqueued
 slo-ttft-imbalance-across-counts
 slo-ttft-joint
 slo-ttft-joint-inputs
@@ -2848,6 +2850,7 @@ slo-ttft-measured-spread
 slo-ttft-measured-transfer
 slo-ttft-price
 slo-ttft-processor-sharing
+slo-ttft-prompt-support
 slo-ttft-ps-onsets
 slo-ttft-quiet-transfer
 slo-ttft-router-wait

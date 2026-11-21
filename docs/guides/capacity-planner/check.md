@@ -65,7 +65,14 @@ How to read it:
   where our own accuracy runs measured the planner. For a real fleet this is
   often none, and then this check, not the benchmark, is your evidence.
 - **Not judged**: steps whose measurement reaches into the first minutes of
-  the test or over a change of replicas, and steps with no traffic.
+  the test or over a change of replicas, and steps with no traffic. Also
+  steps whose measurement window runs both near the knee (a minute at 0.8
+  of it or more) and far under it (a minute at a quarter of that or less):
+  "a burst near the knee in its window". Their requests arrived at, or
+  queued behind, a load the step's mean rate hides, so no steady-state
+  figure at that mean is comparable. Neither TTFT nor TPOT is scored there.
+  A load past the knee shorter than the measurement window is therefore
+  never scored; the summary counts such steps.
 
 Below that are each step and then the scores: the mean, p50, p90 and p95 of
 TTFT and TPOT, then the same split by load. The page draws the same steps over
@@ -92,7 +99,7 @@ what the fleet measured. The result comes first, in one line:
 
 ```text
 Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it,
-p90 TTFT within 20% in 0 of 9 steps (median ratio 1.90); p90 TPOT within 20% in 10 of 10 steps (median ratio 0.94). [inconsistent]
+p90 TTFT within 20% in 2 of 7 steps (median ratio 1.34); p90 TPOT within 20% in 8 of 8 steps (median ratio 0.94). [inconsistent]
   Do not trust prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures (loosely) held.
 ```
 

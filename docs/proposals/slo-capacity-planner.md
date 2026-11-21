@@ -830,27 +830,27 @@ the run's frozen curve.
 | mean TPOT | 8000-token prompts, 200 out, Ca^2 4 | -4..-2% | p10-p90, min-max -5..-1% | 10 at 6 load levels | 0.096 to 0.203 | any |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 1 | at most +3% | one-sided | 1 |  | off |
 | prefill-knee | 8000-token prompts, 200 out, Ca^2 4 | at most +3% | one-sided | 1 |  | off |
-| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
-| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
+| rate-at-ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -6..+0% | bracket | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | at most -6% | one-sided | 1 | 0.825 to 0.875 | off, on |
 | rate-at-ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | at most +0% | one-sided | 2 | 0.740 to 0.875 | off, on |
 | rate-at-ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | at most +2% | one-sided | 2 | 0.740 to 0.875 | off, on |
-| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -4..+18% | p10-p90, min-max -5..+18% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | +0..+14% | p10-p90, min-max -2..+16% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -3..+12% | p10-p90, min-max -4..+14% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +29..+95% | p10-p90, min-max +27..+149% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +18..+108% | p10-p90, min-max +15..+156% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +18..+102% | p10-p90, min-max +5..+174% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
-| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +30..+93% | p10-p90, min-max +22..+127% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +45..+131% | p10-p90, min-max +33..+167% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
-| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +44..+145% | p10-p90, min-max +37..+186% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft mean | 1000-token prompts, 1000 out, Ca^2 1 | -17..+8% | p10-p90, min-max -18..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 1000-token prompts, 1000 out, Ca^2 1 | -11..+7% | p10-p90, min-max -13..+9% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 1000-token prompts, 1000 out, Ca^2 1 | -12..+5% | p10-p90, min-max -14..+8% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 1 | +9..+85% | p10-p90, min-max +7..+141% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 1 | +6..+103% | p10-p90, min-max +3..+152% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 1 | +8..+99% | p10-p90, min-max -4..+171% | 12 at 6 load levels | 0.400 to 0.900 | off, on |
+| ttft mean | 8000-token prompts, 200 out, Ca^2 4 | +15..+88% | p10-p90, min-max +8..+122% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p90 | 8000-token prompts, 200 out, Ca^2 4 | +39..+128% | p10-p90, min-max +25..+164% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
+| ttft p95 | 8000-token prompts, 200 out, Ca^2 4 | +40..+143% | p10-p90, min-max +31..+184% | 9 at 6 load levels | 0.400 to 0.850 | off, on |
 <!-- envelope-table: end -->
 
 The TTFT readings are 6 load levels, each with flow control off and on (C on: 3
 levels, below its onset). The two phases share the model's figure, so the error
-grows with the knee share within a row: B's mean reads +27% at 0.40 of the knee
-and +63% to +149% at 0.90.
+grows with the knee share within a row: B's mean reads +7% at 0.40 of the knee
+and +58% to +141% at 0.90.
 
 **Negative controls.**
 

@@ -174,8 +174,9 @@ const (
 	DecodeOnsetUnchecked Flag = "DecodeOnsetUnchecked"
 	// SpreadBeyondProcessorSharing is a TTFT priced with
 	// TTFTFleet.ProcessorSharing at a prompt spread past MaxPSPromptCV, wider
-	// than any run has validated processor sharing at: the figure is the
-	// larger of processor sharing's and the first-come queue's.
+	// than any run has validated processor sharing at, that no bound on the
+	// longest prompt clears (Prefill.BeyondProcessorSharing): the figure is
+	// the larger of processor sharing's and the first-come queue's.
 	SpreadBeyondProcessorSharing Flag = "SpreadBeyondProcessorSharing"
 )
 

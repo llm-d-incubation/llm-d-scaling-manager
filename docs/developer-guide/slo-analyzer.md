@@ -30,8 +30,23 @@ The TTFT pricing's switches, each a `TTFTFleet` field and a replay switch:
   the KV pull are processor-sharing stages (`prefillPlan.psStages`), and
   `D`'s per-token part is net of the pull (`netOfPull`). Past a prompt cv of
   `MaxPSPromptCV` (0.25) a price is the larger of that and first come
-  (`ttftPlan.price`, flagged `SpreadBeyondProcessorSharing`). Off, a
-  first-come wait on the busiest pod (`prefillPlan.engineWait`).
+  (`ttftPlan.price`, flagged `SpreadBeyondProcessorSharing`), unless the
+  longest prompt is at most `MaxPSPromptSupport` (1.6) times the mean with
+  `slo-ttft-prompt-support` on
+  (`Prefill.BeyondProcessorSharing`). Off, a first-come wait on the busiest
+  pod (`prefillPlan.engineWait`).
+- `PromptSupport` (`slo-ttft-prompt-support`, planner-only, off from the
+  constructor): the spread carries the longest prompt its histogram allows
+  over the mean (`PromptSpread.MaxRatio`, the highest bucket bound holding
+  requests), priced as `Prefill.PromptMaxRatio`: the prompt's gamma is
+  stretched so its held mean stays the measured mean (`holdScale`) and
+  censored there (`ownTime.capped` on first come, `ePoly.expect`'s hold on
+  processor sharing), and the bound, not the cv, decides processor sharing.
+  Off, `MaxRatio` is zeroed in `promptSpread` and the gamma runs on. The
+  planner's replay does not turn it on either (`learnreplay.PlannerSwitches`):
+  on, its backtests read TTFT under measured where they read at or above it.
+  A backtest step carries its own histogram's bound beside its cv
+  (`whatifapi.Knobs.PromptMaxRatio`).
 - `PriceRouterWait` (`slo-ttft-router-wait`, opt-in, off, the CLI's
   `--price-router-wait` default): above the prefill onset, up to
   `MaxRouterWaitKneeShare` of the knee, prices the flow-control gate as a
@@ -88,6 +103,17 @@ Known gaps (the first blocks flipping the default):
   follow-up.
 
 It is replay-only too.
+
+`slo-ttft-hop-unqueued` (off) sets which router windows teach the decode
+term's hop R (`prefill.DecodeTermCycle.HopUnqueued`). On, a window counts
+only when none of its cycles had a serving prefill row with requests waiting for
+compute: the capacity part of the waiting count where the pod publishes it,
+else the whole count. Off, as before, a queued window counts too. Its R is
+then the queue's timing: two means of many seconds, read over different
+windows while both climb. The capacity planner's replay turns it on
+(`learnreplay.PlannerSwitches`) and reads it for its own decode term windows.
+That holds on a recording with no slo analyzer too
+(llm-d-incubation/llm-d-scaling-manager#281).
 
 `slo-ttft-low-load-decode-ttft` (off) sets the decode engine's measured TTFT,
 which prices the decode side when no decode line does

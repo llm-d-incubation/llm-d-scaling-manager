@@ -6,71 +6,71 @@
 bucket A: knee 15.625 r/s (prefill 32.388, decode 15.625; run 15.625), prefill onset 29.663 r/s, mean TPOT at the operating rate 24.80 ms (run 24.80 ms)
 bucket B: knee 4.048 r/s (prefill 4.048, decode 16.951; run 4.048), prefill onset 3.707 r/s, mean TPOT at the operating rate 12.34 ms (run 16.80 ms)
 bucket C: knee 4.048 r/s (prefill 4.048, decode 16.951; run 4.048), prefill onset 3.098 r/s, mean TPOT at the operating rate 12.34 ms (run 16.80 ms)
-step A off 1: 6.250 r/s, 0.40 of the knee: mean 153.7 / 161.3 ms -4.7%; p90 196.3 / 201.2 ms -2.4%; p95 216.4 / 225.2 ms -3.9%; mean TPOT 14.33 / 14.18 ms +1.1%; used
-step A off 2: 9.375 r/s, 0.60 of the knee: mean 191.3 / 180.1 ms +6.2%; p90 249.7 / 230.9 ms +8.1%; p95 273.3 / 264.2 ms +3.5%; mean TPOT 17.64 / 15.99 ms +10.3%; used
-step A off 3: 11.718 r/s, 0.75 of the knee: mean 231.7 / 205.8 ms +12.6%; p90 302.7 / 277.4 ms +9.1%; p95 330.4 / 307.1 ms +7.6%; mean TPOT 21.34 / 18.87 ms +13.0%; used
-step A off 4: 12.500 r/s, 0.80 of the knee: mean 248.7 / 215.3 ms +15.5%; p90 324.4 / 287.4 ms +12.9%; p95 353.7 / 323.0 ms +9.5%; mean TPOT 22.94 / 20.01 ms +14.6%; used
-step A off 5: 13.281 r/s, 0.85 of the knee: mean 268.3 / 226.7 ms +18.3%; p90 348.8 / 300.1 ms +16.2%; p95 380.0 / 332.0 ms +14.5%; mean TPOT 24.80 / 21.74 ms +14.1%; used
-step A off 6: 14.062 r/s, 0.90 of the knee: mean 295.9 / 257.0 ms +15.1%; p90 378.6 / 342.0 ms +10.7%; p95 413.5 / 377.9 ms +9.4%; mean TPOT 26.98 / 25.84 ms +4.4%; used
-step A off 7: 14.843 r/s, 0.95 of the knee: mean 610.7 / 276.5 ms +120.9%; p90 979.9 / 364.7 ms +168.7%; p95 2779.9 / 398.7 ms +597.2%; mean TPOT 29.60 / 28.72 ms +3.0%; void: noise
+step A off 1: 6.250 r/s, 0.40 of the knee: mean 132.2 (the run froze 153.7019) / 161.3 ms -18.1%; p90 174.2 (the run froze 196.3090) / 201.2 ms -13.4%; p95 194.5 (the run froze 216.4027) / 225.2 ms -13.6%; mean TPOT 14.33 / 14.18 ms +1.1%; used
+step A off 2: 9.375 r/s, 0.60 of the knee: mean 169.8 (the run froze 191.3388) / 180.1 ms -5.7%; p90 227.5 (the run froze 249.7066) / 230.9 ms -1.5%; p95 251.6 (the run froze 273.3202) / 264.2 ms -4.8%; mean TPOT 17.64 / 15.99 ms +10.3%; used
+step A off 3: 11.718 r/s, 0.75 of the knee: mean 210.1 (the run froze 231.6873) / 205.8 ms +2.1%; p90 280.5 (the run froze 302.6845) / 277.4 ms +1.1%; p95 308.9 (the run froze 330.4060) / 307.1 ms +0.6%; mean TPOT 21.34 / 18.87 ms +13.0%; used
+step A off 4: 12.500 r/s, 0.80 of the knee: mean 227.2 (the run froze 248.7326) / 215.3 ms +5.5%; p90 302.1 (the run froze 324.3446) / 287.4 ms +5.1%; p95 332.3 (the run froze 353.7340) / 323.0 ms +2.9%; mean TPOT 22.94 / 20.01 ms +14.6%; used
+step A off 5: 13.281 r/s, 0.85 of the knee: mean 246.7 (the run froze 268.2860) / 226.7 ms +8.8%; p90 326.6 (the run froze 348.7750) / 300.1 ms +8.8%; p95 358.7 (the run froze 380.0132) / 332.0 ms +8.0%; mean TPOT 24.80 / 21.74 ms +14.1%; used
+step A off 6: 14.062 r/s, 0.90 of the knee: mean 274.3 (the run froze 295.8868) / 257.0 ms +6.7%; p90 356.4 (the run froze 378.6191) / 342.0 ms +4.2%; p95 392.4 (the run froze 413.5274) / 377.9 ms +3.8%; mean TPOT 26.98 / 25.84 ms +4.4%; used
+step A off 7: 14.843 r/s, 0.95 of the knee: mean 589.2 (the run froze 611.1862) / 276.5 ms +113.1%; p90 966.4 (the run froze 982.9351) / 364.7 ms +165.0%; p95 2768.2 (the run froze 2783.6745) / 398.7 ms +594.3%; mean TPOT 29.60 / 28.72 ms +3.0%; void: noise
 step A off 8: 15.625 r/s, 1.00 of the knee: mean refused (Saturated: 15.625 r/s at or above the knee 15.624547841347066 r/s); p90 refused (Saturated: 15.625 r/s at or above the knee 15.624547841347066 r/s); p95 refused (Saturated: 15.625 r/s at or above the knee 15.624547841347066 r/s); void: noise
-step A on 1: 6.250 r/s, 0.40 of the knee: mean 153.7 / 161.1 ms -4.6%; p90 196.3 / 198.3 ms -1.0%; p95 216.4 / 223.2 ms -3.0%; mean TPOT 14.33 / 14.08 ms +1.8%; used
-step A on 2: 9.375 r/s, 0.60 of the knee: mean 191.3 / 181.3 ms +5.5%; p90 249.7 / 235.9 ms +5.9%; p95 273.3 / 267.4 ms +2.2%; mean TPOT 17.64 / 16.15 ms +9.3%; used
-step A on 3: 11.718 r/s, 0.75 of the knee: mean 231.7 / 203.4 ms +13.9%; p90 302.7 / 275.4 ms +9.9%; p95 330.4 / 304.9 ms +8.4%; mean TPOT 21.34 / 18.54 ms +15.1%; used
-step A on 4: 12.500 r/s, 0.80 of the knee: mean 248.7 / 211.3 ms +17.7%; p90 324.4 / 284.4 ms +14.0%; p95 353.7 / 316.0 ms +11.9%; mean TPOT 22.94 / 19.39 ms +18.3%; used
-step A on 5: 13.281 r/s, 0.85 of the knee: mean 268.3 / 227.9 ms +17.7%; p90 348.8 / 306.1 ms +13.9%; p95 380.0 / 341.8 ms +11.2%; mean TPOT 24.80 / 21.64 ms +14.6%; used
-step A on 6: 14.062 r/s, 0.90 of the knee: mean 295.9 / 258.1 ms +14.6%; p90 378.6 / 341.3 ms +10.9%; p95 413.5 / 377.5 ms +9.5%; mean TPOT 26.98 / 26.18 ms +3.1%; used
-step A on 7: 14.843 r/s, 0.95 of the knee: mean 610.7 / 305.1 ms +100.2%; p90 979.9 / 373.4 ms +162.4%; p95 2779.9 / 418.9 ms +563.6%; mean TPOT 29.60 / 29.09 ms +1.8%; void: noise
+step A on 1: 6.250 r/s, 0.40 of the knee: mean 132.2 (the run froze 153.7019) / 161.1 ms -18.0%; p90 174.2 (the run froze 196.3090) / 198.3 ms -12.2%; p95 194.5 (the run froze 216.4027) / 223.2 ms -12.9%; mean TPOT 14.33 / 14.08 ms +1.8%; used
+step A on 2: 9.375 r/s, 0.60 of the knee: mean 169.8 (the run froze 191.3388) / 181.3 ms -6.3%; p90 227.5 (the run froze 249.7066) / 235.9 ms -3.6%; p95 251.6 (the run froze 273.3202) / 267.4 ms -5.9%; mean TPOT 17.64 / 16.15 ms +9.3%; used
+step A on 3: 11.718 r/s, 0.75 of the knee: mean 210.1 (the run froze 231.6873) / 203.4 ms +3.3%; p90 280.5 (the run froze 302.6845) / 275.4 ms +1.8%; p95 308.9 (the run froze 330.4060) / 304.9 ms +1.3%; mean TPOT 21.34 / 18.54 ms +15.1%; used
+step A on 4: 12.500 r/s, 0.80 of the knee: mean 227.2 (the run froze 248.7326) / 211.3 ms +7.5%; p90 302.1 (the run froze 324.3446) / 284.4 ms +6.2%; p95 332.3 (the run froze 353.7340) / 316.0 ms +5.2%; mean TPOT 22.94 / 19.39 ms +18.3%; used
+step A on 5: 13.281 r/s, 0.85 of the knee: mean 246.7 (the run froze 268.2860) / 227.9 ms +8.3%; p90 326.6 (the run froze 348.7750) / 306.1 ms +6.7%; p95 358.7 (the run froze 380.0132) / 341.8 ms +4.9%; mean TPOT 24.80 / 21.64 ms +14.6%; used
+step A on 6: 14.062 r/s, 0.90 of the knee: mean 274.3 (the run froze 295.8868) / 258.1 ms +6.3%; p90 356.4 (the run froze 378.6191) / 341.3 ms +4.4%; p95 392.4 (the run froze 413.5274) / 377.5 ms +3.9%; mean TPOT 26.98 / 26.18 ms +3.1%; used
+step A on 7: 14.843 r/s, 0.95 of the knee: mean 589.2 (the run froze 611.1862) / 305.1 ms +93.1%; p90 966.4 (the run froze 982.9351) / 373.4 ms +158.8%; p95 2768.2 (the run froze 2783.6745) / 418.9 ms +560.8%; mean TPOT 29.60 / 29.09 ms +1.8%; void: noise
 step A on 8: 15.625 r/s, 1.00 of the knee: mean refused (AboveDecodeOnset: 15.625 r/s at or above the decode gate's onset 15.015745336684898 r/s); p90 refused (AboveDecodeOnset: 15.625 r/s at or above the decode gate's onset 15.015745336684898 r/s); p95 refused (AboveDecodeOnset: 15.625 r/s at or above the decode gate's onset 15.015745336684898 r/s); void: noise
-step B off 1: 1.619 r/s, 0.40 of the knee: mean 1078.1 / 843.0 ms +27.9%; p90 1705.6 / 1465.3 ms +16.4%; p95 1949.2 / 1669.5 ms +16.8%; mean TPOT 11.25 / 11.52 ms -2.4%; used
-step B off 2: 2.429 r/s, 0.60 of the knee: mean 1514.0 / 1070.6 ms +41.4%; p90 2711.5 / 1957.0 ms +38.6%; p95 3199.4 / 2444.7 ms +30.9%; mean TPOT 11.71 / 11.83 ms -1.0%; used
-step B off 3: 3.036 r/s, 0.75 of the knee: mean 2305.6 / 1388.3 ms +66.1%; p90 4543.3 / 2705.9 ms +67.9%; p95 5534.2 / 3173.0 ms +74.4%; mean TPOT 12.08 / 12.05 ms +0.2%; used
-step B off 4: 3.238 r/s, 0.80 of the knee: mean 2800.0 / 1518.5 ms +84.4%; p90 5689.3 / 2871.5 ms +98.1%; p95 7009.4 / 3600.4 ms +94.7%; mean TPOT 12.21 / 12.14 ms +0.6%; used
-step B off 5: 3.440 r/s, 0.85 of the knee: mean 3622.5 / 1848.9 ms +95.9%; p90 7593.2 / 3632.8 ms +109.0%; p95 9470.3 / 4669.4 ms +102.8%; mean TPOT 12.34 / 12.30 ms +0.3%; used
-step B off 6: 3.643 r/s, 0.90 of the knee: mean 5275.1 / 3230.8 ms +63.3%; p90 11413.9 / 6502.7 ms +75.5%; p95 14425.2 / 7996.0 ms +80.4%; mean TPOT 12.47 / 12.62 ms -1.2%; used
-step B off 7: 3.845 r/s, 0.95 of the knee: mean 10204.5 / 3064.7 ms +233.0%; p90 22794.1 / 5848.6 ms +289.7%; p95 29220.9 / 6836.7 ms +327.4%; mean TPOT 12.61 / 12.56 ms +0.4%; void: noise
+step B off 1: 1.619 r/s, 0.40 of the knee: mean 905.7 (the run froze 1078.0649) / 843.0 ms +7.4%; p90 1527.9 (the run froze 1705.6259) / 1465.3 ms +4.3%; p95 1778.0 (the run froze 1949.2001) / 1669.5 ms +6.5%; mean TPOT 11.25 / 11.52 ms -2.4%; used
+step B off 2: 2.429 r/s, 0.60 of the knee: mean 1341.6 (the run froze 1513.5264) / 1070.6 ms +25.3%; p90 2532.8 (the run froze 2710.4348) / 1957.0 ms +29.4%; p95 3035.7 (the run froze 3198.1095) / 2444.7 ms +24.2%; mean TPOT 11.71 / 11.83 ms -1.0%; used
+step B off 3: 3.036 r/s, 0.75 of the knee: mean 2133.2 (the run froze 2304.9820) / 1388.3 ms +53.7%; p90 4361.3 (the run froze 4541.9754) / 2705.9 ms +61.2%; p95 5376.9 (the run froze 5532.4542) / 3173.0 ms +69.5%; mean TPOT 12.08 / 12.05 ms +0.2%; used
+step B off 4: 3.238 r/s, 0.80 of the knee: mean 2627.6 (the run froze 2800.2695) / 1518.5 ms +73.0%; p90 5505.2 (the run froze 5689.9001) / 2871.5 ms +91.7%; p95 6854.1 (the run froze 7010.2289) / 3600.4 ms +90.4%; mean TPOT 12.21 / 12.14 ms +0.6%; used
+step B off 5: 3.440 r/s, 0.85 of the knee: mean 3450.1 (the run froze 3624.9938) / 1848.9 ms +86.6%; p90 7406.4 (the run froze 7599.1095) / 3632.8 ms +103.9%; p95 9316.6 (the run froze 9477.9503) / 4669.4 ms +99.5%; mean TPOT 12.34 / 12.30 ms +0.3%; used
+step B off 6: 3.643 r/s, 0.90 of the knee: mean 5102.8 (the run froze 5273.2746) / 3230.8 ms +57.9%; p90 11223.2 (the run froze 11409.5938) / 6502.7 ms +72.6%; p95 14272.6 (the run froze 14419.6813) / 7996.0 ms +78.5%; mean TPOT 12.47 / 12.62 ms -1.2%; used
+step B off 7: 3.845 r/s, 0.95 of the knee: mean 10032.2 (the run froze 10215.7066) / 3064.7 ms +227.3%; p90 22598.4 (the run froze 22819.8459) / 5848.6 ms +286.4%; p95 29068.8 (the run froze 29254.4476) / 6836.7 ms +325.2%; mean TPOT 12.61 / 12.56 ms +0.4%; void: noise
 step B off 8: 4.048 r/s, 1.00 of the knee: mean refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); p90 refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); p95 refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); mean TPOT 12.75 / 13.01 ms -2.0%; void: noise
-step B on 1: 1.619 r/s, 0.40 of the knee: mean 1078.1 / 849.3 ms +26.9%; p90 1705.6 / 1478.7 ms +15.3%; p95 1949.2 / 1848.9 ms +5.4%; mean TPOT 11.25 / 11.55 ms -2.7%; used
-step B on 2: 2.429 r/s, 0.60 of the knee: mean 1514.0 / 1079.7 ms +40.2%; p90 2711.5 / 2024.1 ms +34.0%; p95 3199.4 / 2313.0 ms +38.3%; mean TPOT 11.71 / 11.84 ms -1.1%; used
-step B on 3: 3.036 r/s, 0.75 of the knee: mean 2305.6 / 1355.8 ms +70.0%; p90 4543.3 / 2530.8 ms +79.5%; p95 5534.2 / 3013.7 ms +83.6%; mean TPOT 12.08 / 12.04 ms +0.3%; used
-step B on 4: 3.238 r/s, 0.80 of the knee: mean 2800.0 / 1572.6 ms +78.1%; p90 5689.3 / 3174.7 ms +79.2%; p95 7009.4 / 4173.1 ms +68.0%; mean TPOT 12.21 / 12.13 ms +0.6%; used
-step B on 5: 3.440 r/s, 0.85 of the knee: mean 3622.5 / 2064.4 ms +75.5%; p90 7593.2 / 4336.0 ms +75.1%; p95 9470.3 / 5481.9 ms +72.8%; mean TPOT 12.34 / 12.32 ms +0.2%; used
-step B on 6: 3.643 r/s, 0.90 of the knee: mean 5275.1 / 2121.4 ms +148.7%; p90 11413.9 / 4456.5 ms +156.1%; p95 14425.2 / 5267.9 ms +173.8%; mean TPOT 12.47 / 12.39 ms +0.7%; used
-step B on 7: 3.845 r/s, 0.95 of the knee: mean 10204.5 / 15747.3 ms -35.2%; p90 22794.1 ms / unmeasured; p95 29220.9 ms / unmeasured; mean TPOT 12.61 / 12.79 ms -1.4%; void: noise+failed
-step C off 1: 1.619 r/s, 0.40 of the knee: mean 1508.8 / 1142.9 ms +32.0%; p90 3077.4 / 2032.2 ms +51.4%; p95 3798.4 / 2444.1 ms +55.4%; mean TPOT 11.25 / 11.71 ms -4.0%; used
-step C off 2: 2.429 r/s, 0.60 of the knee: mean 2565.0 / 1650.8 ms +55.4%; p90 5565.9 / 3069.4 ms +81.3%; p95 6972.1 / 3868.6 ms +80.2%; mean TPOT 11.71 / 11.96 ms -2.2%; used
-step C off 3: 3.036 r/s, 0.75 of the knee: mean 4523.8 / 3200.7 ms +41.3%; p90 10105.8 / 6810.4 ms +48.4%; p95 12844.8 / 8668.1 ms +48.2%; mean TPOT 12.08 / 12.43 ms -2.8%; used
-step C off 4: 3.238 r/s, 0.80 of the knee: mean 5755.7 / 3140.6 ms +83.3%; p90 12952.5 / 6130.7 ms +111.3%; p95 16541.1 / 7656.3 ms +116.0%; mean TPOT 12.21 / 12.45 ms -2.0%; used
-step C off 5: 3.339 r/s, 0.82 of the knee: mean 6634.9 / 3598.6 ms +84.4%; p90 14982.6 / 6762.3 ms +121.6%; p95 19179.4 / 8178.4 ms +134.5%; mean TPOT 12.27 / 12.53 ms -2.0%; used
-step C off 6: 3.440 r/s, 0.85 of the knee: mean 7806.1 / 3442.2 ms +126.8%; p90 17686.2 / 6622.1 ms +167.1%; p95 22694.7 / 7934.9 ms +186.0%; mean TPOT 12.34 / 12.51 ms -1.3%; used
-step C off 7: 3.542 r/s, 0.88 of the knee: mean 9463.5 / 5194.7 ms +82.2%; p90 21511.2 / 10017.7 ms +114.7%; p95 27670.0 / 12402.9 ms +123.1%; mean TPOT 12.41 / 12.68 ms -2.1%; void: noise
-step C off 8: 3.643 r/s, 0.90 of the knee: mean 11927.8 / 5539.4 ms +115.3%; p90 27196.9 / 11386.2 ms +138.9%; p95 35068.2 / 13575.8 ms +158.3%; mean TPOT 12.47 / 12.71 ms -1.8%; void: noise
-step C off 9: 3.744 r/s, 0.92 of the knee: mean 16031.2 / 6066.9 ms +164.2%; p90 36662.9 / 11829.6 ms +209.9%; p95 47388.3 / 14630.5 ms +223.9%; mean TPOT 12.54 / 12.85 ms -2.4%; void: noise
-step C off 10: 3.845 r/s, 0.95 of the knee: mean 24225.0 / 6284.8 ms +285.5%; p90 55562.9 / 13559.4 ms +309.8%; p95 71991.0 / 17679.8 ms +307.2%; mean TPOT 12.61 / 12.80 ms -1.5%; void: noise
+step B on 1: 1.619 r/s, 0.40 of the knee: mean 905.7 (the run froze 1078.0649) / 849.3 ms +6.6%; p90 1527.9 (the run froze 1705.6259) / 1478.7 ms +3.3%; p95 1778.0 (the run froze 1949.2001) / 1848.9 ms -3.8%; mean TPOT 11.25 / 11.55 ms -2.7%; used
+step B on 2: 2.429 r/s, 0.60 of the knee: mean 1341.6 (the run froze 1513.5264) / 1079.7 ms +24.3%; p90 2532.8 (the run froze 2710.4348) / 2024.1 ms +25.1%; p95 3035.7 (the run froze 3198.1095) / 2313.0 ms +31.2%; mean TPOT 11.71 / 11.84 ms -1.1%; used
+step B on 3: 3.036 r/s, 0.75 of the knee: mean 2133.2 (the run froze 2304.9820) / 1355.8 ms +57.3%; p90 4361.3 (the run froze 4541.9754) / 2530.8 ms +72.3%; p95 5376.9 (the run froze 5532.4542) / 3013.7 ms +78.4%; mean TPOT 12.08 / 12.04 ms +0.3%; used
+step B on 4: 3.238 r/s, 0.80 of the knee: mean 2627.6 (the run froze 2800.2695) / 1572.6 ms +67.1%; p90 5505.2 (the run froze 5689.9001) / 3174.7 ms +73.4%; p95 6854.1 (the run froze 7010.2289) / 4173.1 ms +64.2%; mean TPOT 12.21 / 12.13 ms +0.6%; used
+step B on 5: 3.440 r/s, 0.85 of the knee: mean 3450.1 (the run froze 3624.9938) / 2064.4 ms +67.1%; p90 7406.4 (the run froze 7599.1095) / 4336.0 ms +70.8%; p95 9316.6 (the run froze 9477.9503) / 5481.9 ms +70.0%; mean TPOT 12.34 / 12.32 ms +0.2%; used
+step B on 6: 3.643 r/s, 0.90 of the knee: mean 5102.8 (the run froze 5273.2746) / 2121.4 ms +140.5%; p90 11223.2 (the run froze 11409.5938) / 4456.5 ms +151.8%; p95 14272.6 (the run froze 14419.6813) / 5267.9 ms +170.9%; mean TPOT 12.47 / 12.39 ms +0.7%; used
+step B on 7: 3.845 r/s, 0.95 of the knee: mean 10032.2 (the run froze 10215.7066) / 15747.3 ms -36.3%; p90 22598.4 (the run froze 22819.8459) ms / unmeasured; p95 29068.8 (the run froze 29254.4476) ms / unmeasured; mean TPOT 12.61 / 12.79 ms -1.4%; void: noise+failed
+step C off 1: 1.619 r/s, 0.40 of the knee: mean 1336.4 (the run froze 1508.8135) / 1142.9 ms +16.9%; p90 2889.0 (the run froze 3077.4791) / 2032.2 ms +42.2%; p95 3626.9 (the run froze 3798.4504) / 2444.1 ms +48.4%; mean TPOT 11.25 / 11.71 ms -4.0%; used
+step C off 2: 2.429 r/s, 0.60 of the knee: mean 2392.6 (the run froze 2563.8999) / 1650.8 ms +44.9%; p90 5375.3 (the run froze 5563.2981) / 3069.4 ms +75.1%; p95 6809.2 (the run froze 6968.7250) / 3868.6 ms +76.0%; mean TPOT 11.71 / 11.96 ms -2.2%; used
+step C off 3: 3.036 r/s, 0.75 of the knee: mean 4351.4 (the run froze 4522.3270) / 3200.7 ms +35.9%; p90 9911.9 (the run froze 10102.5199) / 6810.4 ms +45.5%; p95 12687.3 (the run froze 12840.5572) / 8668.1 ms +46.4%; mean TPOT 12.08 / 12.43 ms -2.8%; used
+step C off 4: 3.238 r/s, 0.80 of the knee: mean 5583.4 (the run froze 5756.4155) / 3140.6 ms +77.8%; p90 12757.3 (the run froze 12954.0675) / 6130.7 ms +108.1%; p95 16384.9 (the run froze 16543.1239) / 7656.3 ms +114.0%; mean TPOT 12.21 / 12.45 ms -2.0%; used
+step C off 5: 3.339 r/s, 0.82 of the knee: mean 6462.5 (the run froze 6637.6484) / 3598.6 ms +79.6%; p90 14786.6 (the run froze 14988.9899) / 6762.3 ms +118.7%; p95 19023.8 (the run froze 19187.6985) / 8178.4 ms +132.6%; mean TPOT 12.27 / 12.53 ms -2.0%; used
+step C off 6: 3.440 r/s, 0.85 of the knee: mean 7633.7 (the run froze 7812.4204) / 3442.2 ms +121.8%; p90 17489.4 (the run froze 17700.8238) / 6622.1 ms +164.1%; p95 22539.6 (the run froze 22713.7143) / 7934.9 ms +184.1%; mean TPOT 12.34 / 12.51 ms -1.3%; used
+step C off 7: 3.542 r/s, 0.88 of the knee: mean 9291.2 (the run froze 9456.8512) / 5194.7 ms +78.9%; p90 21313.6 (the run froze 21495.7734) / 10017.7 ms +112.8%; p95 27515.5 (the run froze 27650.0277) / 12402.9 ms +121.8%; mean TPOT 12.41 / 12.68 ms -2.1%; void: noise
+step C off 8: 3.643 r/s, 0.90 of the knee: mean 11755.4 (the run froze 11923.1802) / 5539.4 ms +112.2%; p90 26998.4 (the run froze 27186.2355) / 11386.2 ms +137.1%; p95 34914.1 (the run froze 35054.3408) / 13575.8 ms +157.2%; mean TPOT 12.47 / 12.71 ms -1.8%; void: noise
+step C off 9: 3.744 r/s, 0.92 of the knee: mean 15858.8 (the run froze 16033.2992) / 6066.9 ms +161.4%; p90 36463.6 (the run froze 36667.7897) / 11829.6 ms +208.2%; p95 47234.7 (the run froze 47394.6127) / 14630.5 ms +222.9%; mean TPOT 12.54 / 12.85 ms -2.4%; void: noise
+step C off 10: 3.845 r/s, 0.95 of the knee: mean 24052.6 (the run froze 24252.8837) / 6284.8 ms +282.7%; p90 55362.6 (the run froze 55627.1601) / 13559.4 ms +308.3%; p95 71837.7 (the run froze 72074.7055) / 17679.8 ms +306.3%; mean TPOT 12.61 / 12.80 ms -1.5%; void: noise
 step C off 11: 4.048 r/s, 1.00 of the knee: mean refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); p90 refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); p95 refused (Saturated: 4.048 r/s at or above the prefill knee 4.0476095398671275 r/s); mean TPOT 12.75 / 13.01 ms -2.0%; void: noise
-step C on 1: 1.619 r/s, 0.40 of the knee: mean 1508.8 / 1232.9 ms +22.4%; p90 3077.4 / 2307.7 ms +33.4%; p95 3798.4 / 2768.0 ms +37.2%; mean TPOT 11.25 / 11.79 ms -4.6%; used
-step C on 2: 2.429 r/s, 0.60 of the knee: mean 2565.0 / 1834.7 ms +39.8%; p90 5565.9 / 3719.2 ms +49.7%; p95 6972.1 / 4805.0 ms +45.1%; mean TPOT 11.71 / 12.11 ms -3.3%; used
-step C on 3: 3.036 r/s, 0.75 of the knee: mean 4523.8 / 3008.3 ms +50.4%; p90 10105.8 / 6131.1 ms +64.8%; p95 12844.8 / 7396.5 ms +73.7%; mean TPOT 12.08 / 12.43 ms -2.8%; used
-step C on 4: 3.238 r/s, 0.80 of the knee: mean 5755.7 / 7228.4 ms -20.4%; p90 12952.5 / 15397.8 ms -15.9%; p95 16541.1 / 28839.6 ms -42.6%; mean TPOT 12.21 / 12.70 ms -3.9%; past the onset
-step C on 5: 3.339 r/s, 0.82 of the knee: mean 6634.9 / 11743.4 ms -43.5%; p90 14982.6 / 42302.6 ms -64.6%; p95 19179.4 / 49545.1 ms -61.3%; mean TPOT 12.27 / 12.68 ms -3.2%; void: failed
+step C on 1: 1.619 r/s, 0.40 of the knee: mean 1336.4 (the run froze 1508.8135) / 1232.9 ms +8.4%; p90 2889.0 (the run froze 3077.4791) / 2307.7 ms +25.2%; p95 3626.9 (the run froze 3798.4504) / 2768.0 ms +31.0%; mean TPOT 11.25 / 11.79 ms -4.6%; used
+step C on 2: 2.429 r/s, 0.60 of the knee: mean 2392.6 (the run froze 2563.8999) / 1834.7 ms +30.4%; p90 5375.3 (the run froze 5563.2981) / 3719.2 ms +44.5%; p95 6809.2 (the run froze 6968.7250) / 4805.0 ms +41.7%; mean TPOT 11.71 / 12.11 ms -3.3%; used
+step C on 3: 3.036 r/s, 0.75 of the knee: mean 4351.4 (the run froze 4522.3270) / 3008.3 ms +44.6%; p90 9911.9 (the run froze 10102.5199) / 6131.1 ms +61.7%; p95 12687.3 (the run froze 12840.5572) / 7396.5 ms +71.5%; mean TPOT 12.08 / 12.43 ms -2.8%; used
+step C on 4: 3.238 r/s, 0.80 of the knee: mean 5583.4 (the run froze 5756.4155) / 7228.4 ms -22.8%; p90 12757.3 (the run froze 12954.0675) / 15397.8 ms -17.1%; p95 16384.9 (the run froze 16543.1239) / 28839.6 ms -43.2%; mean TPOT 12.21 / 12.70 ms -3.9%; past the onset
+step C on 5: 3.339 r/s, 0.82 of the knee: mean 6462.5 (the run froze 6637.6484) / 11743.4 ms -45.0%; p90 14786.6 (the run froze 14988.9899) / 42302.6 ms -65.0%; p95 19023.8 (the run froze 19187.6985) / 49545.1 ms -61.6%; mean TPOT 12.27 / 12.68 ms -3.2%; void: failed
 knee A off: predicted 15.625 r/s, held to 15.625, every step held: not exceeded within the steps run, error at most +3.1%
 onset A on: predicted 29.663 r/s, held to 15.625, every step held: the ladder stopped under it
 knee B off: predicted 4.048 r/s, held to 4.048, every step held: not exceeded within the steps run, error at most +3.1%
 onset B on: predicted 3.707 r/s, held to 3.643, first not held 3.845: error -3.6% to +1.8%
 knee C off: predicted 4.048 r/s, held to 4.048, every step held: not exceeded within the steps run, error at most +3.1%
 onset C on: predicted 3.098 r/s, held to 3.238, first not held 3.339: error -7.2% to -4.3%
-rate A off p90 348.8 ms: predicted 13.281 r/s, 0.850 of the knee, measured at least 14.062: error at most -5.6%
-rate A off p95 380.0 ms: predicted 13.281 r/s, 0.850 of the knee, measured at least 14.062: error at most -5.6%
-rate A on p90 348.8 ms: predicted 13.281 r/s, 0.850 of the knee, measured at least 14.062: error at most -5.6%
-rate A on p95 380.0 ms: predicted 13.281 r/s, 0.850 of the knee, measured at least 14.062: error at most -5.6%
-rate B off p90 7599.1 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
-rate B off p95 9478.0 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
-rate B on p90 7599.1 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
-rate B on p95 9478.0 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
-rate C off p90 17700.8 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.440: error at most +0.0%
-rate C off p95 22713.7 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.440: error at most +0.0%
-rate C on p90 17700.8 ms: predicted 3.098 r/s, 0.765 of the knee, measured at least 3.238: error at most -4.3%
-rate C on p95 22713.7 ms: predicted 3.098 r/s, 0.765 of the knee, measured 3.036 to 3.238: error -4.3% to +2.0%
+rate A off p90 326.6 ms: predicted 13.281 r/s, 0.850 of the knee, measured 13.281 to 14.062: error -5.6% to +0.0%
+rate A off p95 358.7 ms: predicted 13.281 r/s, 0.850 of the knee, measured 13.281 to 14.062: error -5.6% to +0.0%
+rate A on p90 326.6 ms: predicted 13.281 r/s, 0.850 of the knee, measured 13.281 to 14.062: error -5.6% to +0.0%
+rate A on p95 358.7 ms: predicted 13.281 r/s, 0.850 of the knee, measured 13.281 to 14.062: error -5.6% to +0.0%
+rate B off p90 7412.2 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
+rate B off p95 9324.2 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
+rate B on p90 7412.2 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
+rate B on p95 9324.2 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.643: error at most -5.6%
+rate C off p90 17504.0 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.440: error at most +0.0%
+rate C off p95 22558.6 ms: predicted 3.440 r/s, 0.850 of the knee, measured at least 3.440: error at most +0.0%
+rate C on p90 17504.0 ms: predicted 3.098 r/s, 0.765 of the knee, measured at least 3.238: error at most -4.3%
+rate C on p95 22558.6 ms: predicted 3.098 r/s, 0.765 of the knee, measured 3.036 to 3.238: error -4.3% to +2.0%
 envelope decode-knee, 1000-token prompts, 1000 out, Ca^2 1, flow control off: validated: one-sided, error at most +3% (n=1, not crossed within the steps run; q32 staircase)
 envelope flow-control-onset, 8000-token prompts, 200 out, Ca^2 1, flow control on: validated: error -4..+2% (n=1, single reading, between two ladder steps; q32 staircase)
 envelope flow-control-onset, 8000-token prompts, 200 out, Ca^2 4, flow control on: validated: error -7..-4% (n=1, single reading, between two ladder steps; q32 staircase)
@@ -79,18 +79,18 @@ envelope mean-tpot mean, 8000-token prompts, 200 out, Ca^2 1, flow control off a
 envelope mean-tpot mean, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.096 to 0.203 of the knee: validated: error -4..-2% (p10-p90, min-max -5..-1%, n=10 at 6 load levels; q32 staircase)
 envelope prefill-knee, 8000-token prompts, 200 out, Ca^2 1, flow control off: validated: one-sided, error at most +3% (n=1, not crossed within the steps run; q32 staircase)
 envelope prefill-knee, 8000-token prompts, 200 out, Ca^2 4, flow control off: validated: one-sided, error at most +3% (n=1, not crossed within the steps run; q32 staircase)
-envelope rate-at-ttft p90, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: one-sided, error at most -6% (n=1, not crossed within the steps run; q32 staircase)
-envelope rate-at-ttft p95, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: one-sided, error at most -6% (n=1, not crossed within the steps run; q32 staircase)
+envelope rate-at-ttft p90, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: error -6..+0% (n=1, single reading, between two ladder steps; q32 staircase)
+envelope rate-at-ttft p95, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: error -6..+0% (n=1, single reading, between two ladder steps; q32 staircase)
 envelope rate-at-ttft p90, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: one-sided, error at most -6% (n=1, not crossed within the steps run; q32 staircase)
 envelope rate-at-ttft p95, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.825 to 0.875 of the knee: validated: one-sided, error at most -6% (n=1, not crossed within the steps run; q32 staircase)
 envelope rate-at-ttft p90, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.740 to 0.875 of the knee: validated: one-sided, error at most +0% (n=2, not crossed within the steps run; q32 staircase)
 envelope rate-at-ttft p95, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.740 to 0.875 of the knee: validated: one-sided, error at most +2% (n=2, not crossed within the steps run; q32 staircase)
-envelope ttft mean, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error -4..+18% (p10-p90, min-max -5..+18%, n=12 at 6 load levels; q32 staircase)
-envelope ttft p90, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +0..+14% (p10-p90, min-max -2..+16%, n=12 at 6 load levels; q32 staircase)
-envelope ttft p95, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error -3..+12% (p10-p90, min-max -4..+14%, n=12 at 6 load levels; q32 staircase)
-envelope ttft mean, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +29..+95% (p10-p90, min-max +27..+149%, n=12 at 6 load levels; q32 staircase)
-envelope ttft p90, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +18..+108% (p10-p90, min-max +15..+156%, n=12 at 6 load levels; q32 staircase)
-envelope ttft p95, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +18..+102% (p10-p90, min-max +5..+174%, n=12 at 6 load levels; q32 staircase)
-envelope ttft mean, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +30..+93% (p10-p90, min-max +22..+127%, n=9 at 6 load levels; q32 staircase)
-envelope ttft p90, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +45..+131% (p10-p90, min-max +33..+167%, n=9 at 6 load levels; q32 staircase)
-envelope ttft p95, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +44..+145% (p10-p90, min-max +37..+186%, n=9 at 6 load levels; q32 staircase)
+envelope ttft mean, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error -17..+8% (p10-p90, min-max -18..+9%, n=12 at 6 load levels; q32 staircase)
+envelope ttft p90, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error -11..+7% (p10-p90, min-max -13..+9%, n=12 at 6 load levels; q32 staircase)
+envelope ttft p95, 1000-token prompts, 1000 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error -12..+5% (p10-p90, min-max -14..+8%, n=12 at 6 load levels; q32 staircase)
+envelope ttft mean, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +9..+85% (p10-p90, min-max +7..+141%, n=12 at 6 load levels; q32 staircase)
+envelope ttft p90, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +6..+103% (p10-p90, min-max +3..+152%, n=12 at 6 load levels; q32 staircase)
+envelope ttft p95, 8000-token prompts, 200 out, Ca^2 1, flow control off and on, 0.400 to 0.900 of the knee: validated: error +8..+99% (p10-p90, min-max -4..+171%, n=12 at 6 load levels; q32 staircase)
+envelope ttft mean, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +15..+88% (p10-p90, min-max +8..+122%, n=9 at 6 load levels; q32 staircase)
+envelope ttft p90, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +39..+128% (p10-p90, min-max +25..+164%, n=9 at 6 load levels; q32 staircase)
+envelope ttft p95, 8000-token prompts, 200 out, Ca^2 4, flow control off and on, 0.400 to 0.850 of the knee: validated: error +40..+143% (p10-p90, min-max +31..+184%, n=9 at 6 load levels; q32 staircase)

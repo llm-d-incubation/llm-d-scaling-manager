@@ -25,13 +25,13 @@ func psFleet(cv, ca2 float64) TTFTFleet {
 // the prompt is its mean.
 func TestPS_ExpectationOverThePromptIsTheGammas(t *testing.T) {
 	for _, cv := range []float64{0, 0.0577, 1, 3} {
-		nearRel(t, "E[u]", ePoly{{c: 1, n: 1}}.expect(cv), 1, 1e-12)
-		nearRel(t, "E[u^2]", ePoly{{c: 1, n: 2}}.expect(cv), 1+cv*cv, 1e-12)
+		nearRel(t, "E[u]", ePoly{{c: 1, n: 1}}.expect(cv, 0), 1, 1e-12)
+		nearRel(t, "E[u^2]", ePoly{{c: 1, n: 2}}.expect(cv, 0), 1+cv*cv, 1e-12)
 		want := math.Exp(-0.7)
 		if cv > 0 {
 			want = math.Pow(1+0.7*cv*cv, -1/(cv*cv))
 		}
-		nearRel(t, "E[exp(-0.7 u)]", ePoly{{c: 1, a: 0.7}}.expect(cv), want, 1e-12)
+		nearRel(t, "E[exp(-0.7 u)]", ePoly{{c: 1, a: 0.7}}.expect(cv, 0), want, 1e-12)
 	}
 }
 
@@ -47,7 +47,7 @@ func TestPS_OneStageIsTheKnownSojourn(t *testing.T) {
 		st := newPSStage(rho/es, es, 1, 1)
 		for _, u := range []float64{0.3, 1, 4} {
 			x := u * es
-			nearRel(t, "mean extra", st.extra().expect(0)*u, x*rho/(1-rho), 1e-12)
+			nearRel(t, "mean extra", st.extra().expect(0, 0)*u, x*rho/(1-rho), 1e-12)
 			mu := 1 / es
 			d := 1 - rho
 			mm1 := 2*rho*x/(mu*d*d*d) - 2*rho*(1-math.Exp(-d*mu*x))/(mu*mu*d*d*d*d)

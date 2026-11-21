@@ -41,6 +41,11 @@ const (
 // Prefill.PromptCV.
 type PromptSpread struct {
 	CV float64
+	// MaxRatio is the highest bucket bound that holds requests over the mean:
+	// no effective prompt in the window is longer (Prefill.PromptMaxRatio).
+	// Zero where the histogram bounds none: Assumed, or Clamped by mass past
+	// its last bound.
+	MaxRatio float64
 	// Assumed is no histogram read: CV is AssumedPromptCV. Clamped is a
 	// reading past what the histogram can say: CV is PromptCVStop.
 	Assumed, Clamped bool
@@ -208,6 +213,13 @@ const promptMeanTolerance = 1e-9
 // Mass past the last finite bound has no upper bound, so cv is the top and
 // Clamped, as is a cv above it. With no histogram, no request in it, or no mean
 // it is AssumedPromptCV, Assumed.
+//
+// MaxRatio is the upper bound of the highest bucket holding requests, over
+// the mean: the buckets prove no prompt is longer, though a gamma of the cv
+// read puts mass there (the (5000, 10000] bucket at a mean of 8000 and cv
+// 0.31 puts 19.8% of it above 10000). A cv above the top keeps it: the bound
+// holds whatever the spread inside it. A mean below the lower edges reads
+// every request at its upper bound, and the ratio over it is the same bound.
 func ReadPromptSpread(pooled map[float64]float64, mean float64) PromptSpread {
 	assumed := PromptSpread{CV: AssumedPromptCV, Assumed: true}
 	total, ok := pooled[math.Inf(1)]
@@ -240,11 +252,20 @@ func ReadPromptSpread(pooled map[float64]float64, mean float64) PromptSpread {
 	if !ok {
 		return assumed
 	}
-	cv := math.Sqrt(max(second/below/(mean*mean)-1, 0))
-	if !Finite(cv) || cv > PromptCVStop {
-		return PromptSpread{CV: PromptCVStop, Clamped: true}
+	top := 0.0
+	for _, b := range buckets {
+		if b.n > 0 {
+			top = b.hi
+		}
 	}
-	return PromptSpread{CV: cv}
+	cv := math.Sqrt(max(second/below/(mean*mean)-1, 0))
+	// At least 1: the mean may sit a rounding past the top bound
+	// (promptSecondMoment's tolerance), and no bound is under the mean.
+	ratio := max(top/mean, 1)
+	if !Finite(cv) || cv > PromptCVStop {
+		return PromptSpread{CV: PromptCVStop, MaxRatio: ratio, Clamped: true}
+	}
+	return PromptSpread{CV: cv, MaxRatio: ratio}
 }
 
 // promptBucket is one histogram bucket, (lo, hi], and the requests in it.

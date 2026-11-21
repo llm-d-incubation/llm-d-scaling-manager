@@ -78,7 +78,14 @@ type Knobs struct {
 	// TTFTPercentile and TPOTPercentile are q in (0, 1); 0 is the mean.
 	TTFTPercentile, TPOTPercentile float64
 	Assume                         Assume
-	ArrivalCV2                     *float64
+	// PromptMaxRatio is the longest prompt over the mean that the histogram
+	// Assume.PromptCV was read from bounds (whatif.PromptSpread.MaxRatio),
+	// priced beside it: a backtest states each step's own spread, and the
+	// bound is the same histogram's. 0 is none; it is ignored without
+	// Assume.PromptCV, and where the replay did not turn on
+	// slo.SwitchTTFTPromptSupport.
+	PromptMaxRatio float64
+	ArrivalCV2     *float64
 	// Headroom is the operating point's fraction of the lower knee.
 	Headroom float64
 }

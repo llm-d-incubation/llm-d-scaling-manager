@@ -60,6 +60,17 @@ type Prefill struct {
 	// caller assumed (AssumedPromptSpread).
 	PromptCV        float64
 	PromptCVAssumed bool
+	// PromptMaxRatio is the longest effective prompt over the mean, as the
+	// computed-prompt histogram bounds it (PromptSpread.MaxRatio): a figure
+	// of the traffic, as PromptCV is, so it holds at any prompt asked. Set,
+	// the prompt is priced as its gamma held at that bound (censored there)
+	// and processor sharing holds at any cv while it is at most
+	// MaxPSPromptSupport. 0 is no bound: the gamma runs on and the spread
+	// alone decides (MaxPSPromptCV). The slo analyzer sets it with
+	// slo.SwitchTTFTPromptSupport, the planner where its replay turns that
+	// switch on (off by default, and not in learnreplay.PlannerSwitches;
+	// issue llm-d-incubation/llm-d-scaling-manager#304).
+	PromptMaxRatio float64
 	// ArrivalCV2 is Ca^2, the arrivals' squared coefficient of variation:
 	// Kingman's 1 + Cs^2 becomes Ca^2 + Cs^2 in the mean wait, and the wait's
 	// tail stretches by their ratio (engineWait). 0 means Poisson, 1.
@@ -154,6 +165,19 @@ const minPromptCV = 1e-4
 // flagged SpreadBeyondProcessorSharing, until a run at a wide spread
 // validates processor sharing there.
 const MaxPSPromptCV = 0.25
+
+// MaxPSPromptSupport is the longest prompt over the mean
+// (Prefill.PromptMaxRatio) at which processor sharing is priced alone,
+// whatever the cv read. The cv a histogram reads is the widest its buckets
+// allow (ReadPromptSpread): every 8000-token prompt in a (5000, 10000] bucket
+// read 0.31 against a true 0.06, past MaxPSPromptCV, although processor
+// sharing held on those steps. What MaxPSPromptCV guards is a prompt long
+// enough for chunked prefill to serve it closer to first come, and a support
+// bound says there is none: 1.6 is under the 99th percentile of the gamma at
+// MaxPSPromptCV (1.67 times the mean), so no prompt it admits is longer than
+// one in a hundred of a spread the cv rule already prices under processor
+// sharing alone. The 8000-token steps sit at 1.25.
+const MaxPSPromptSupport = 1.6
 
 // DefaultPriceRouterWait is TTFTFleet.PriceRouterWait's default, for the CLI
 // (--price-router-wait), the planner API (assume.routerWait gateStage) and the SLO analyzer
@@ -533,6 +557,9 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		// The spread is assumed or read from a histogram; a value outside
 		// [0, 10] is the caller's mistake, not the traffic's.
 		u = refuse(InvalidInput, fmt.Sprintf("prompt cv %g, want 0 <= cv <= %d", p.PromptCV, maxPromptCV))
+	case p.PromptMaxRatio != 0 && !(Finite(p.PromptMaxRatio) && p.PromptMaxRatio >= 1):
+		// No prompt is longer than the bound, so the mean is not either.
+		u = refuse(InvalidInput, fmt.Sprintf("longest prompt %g times the mean, want 0 (none) or at least 1", p.PromptMaxRatio))
 	case !Finite(p.ArrivalCV2) || p.ArrivalCV2 < 0:
 		u = refuse(InvalidInput, fmt.Sprintf("Ca^2 %g, want a finite value of at least 0 (0 is Poisson)", p.ArrivalCV2))
 	case !Finite(p.TransferSecondsPerToken) || p.TransferSecondsPerToken < 0:
@@ -596,9 +623,21 @@ func (pl prefillPlan) waitScale(rho float64) float64 {
 	return pl.work * (pl.ca2 + pl.cs2) / (2 * (1 - rho))
 }
 
-// own is the request's own latency less a: I * (1/V_P + kappa/BW).
+// own is the request's own latency less a: I * (1/V_P + kappa/BW), held at
+// the longest prompt with a bound (Prefill.PromptMaxRatio).
 func (pl prefillPlan) own() ownTime {
-	return newOwnTime(pl.p.PromptTokens*pl.ownRate, pl.cv)
+	mean := pl.p.PromptTokens * pl.ownRate
+	return newOwnTime(mean, pl.cv).capped(pl.p.PromptMaxRatio * mean)
+}
+
+// BeyondProcessorSharing says processor sharing is not priced alone on p's
+// prompt (SpreadBeyondProcessorSharing): a spread past MaxPSPromptCV that no
+// support bound at MaxPSPromptSupport or under clears.
+func (p Prefill) BeyondProcessorSharing() bool {
+	if r := p.PromptMaxRatio; r > 0 && r <= MaxPSPromptSupport {
+		return false
+	}
+	return p.PromptCV > MaxPSPromptCV
 }
 
 // engineWait is the worst pod's wait tail at utilization rho, and its decay
@@ -738,8 +777,9 @@ type ttftPlan struct {
 	flags  []Flag
 	// ps is TTFTFleet.ProcessorSharing.
 	ps bool
-	// psCapped is ps at a prompt spread past MaxPSPromptCV: each price is
-	// the larger of processor sharing's and first come's.
+	// psCapped is ps at a prompt spread past MaxPSPromptCV, with no support
+	// bound clearing it (Prefill.BeyondProcessorSharing): each price is the larger of
+	// processor sharing's and first come's.
 	psCapped bool
 	// routerWait is TTFTFleet.PriceRouterWait or RouterWaitInPrefill where it
 	// takes: processor sharing alone, at a prompt spread up to MaxPSPromptCV.
@@ -765,7 +805,7 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 		}
 	}
 	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing,
-		psCapped: fl.ProcessorSharing && pf.cv > MaxPSPromptCV}
+		psCapped: fl.ProcessorSharing && fl.Prefill.BeyondProcessorSharing()}
 	pl.routerWait = (fl.PriceRouterWait || fl.RouterWaitInPrefill) && pl.ps && !pl.psCapped
 	pl.gateStage = pl.routerWait && fl.PriceRouterWait
 	pl.psOnsets = fl.PSOnsets && pl.ps

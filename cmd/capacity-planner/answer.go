@@ -68,9 +68,13 @@ type answerFlags struct {
 	// refuses per-bucket answers.
 	ttft, ttftPercentile, prefillVariant, inputBucket string
 	assumeVP, assumePromptCV, arrivalCV2              float64
-	assumeRouterHop                                   time.Duration
-	prefill                                           int
-	set                                               map[string]bool
+	// statedPromptMaxRatio is the bound of the histogram a stated cv was
+	// read from (whatifapi.Knobs.PromptMaxRatio): a backtest's step. No
+	// flag sets it; 0 is none.
+	statedPromptMaxRatio float64
+	assumeRouterHop      time.Duration
+	prefill              int
+	set                  map[string]bool
 	// prefixHit is a stated prefix-cache hit rate, nil the measured one (a
 	// report shape, at-replicas --shape).
 	prefixHit *float64

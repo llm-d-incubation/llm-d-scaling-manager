@@ -102,9 +102,10 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchTTFTMeasuredSpread, SwitchTTFTMeasuredTransfer,
 // SwitchTTFTProcessorSharing, SwitchTTFTRouterWait, SwitchTTFTPSOnsets,
 // SwitchTTFTDecodeGateCharge, SwitchTTFTImbalanceAcrossCounts,
-// SwitchTTFTLowLoadDecodeTTFT, SwitchTTFTJointInputs and
-// SwitchKVPerRequestOutputDispersion; a name it does not know is an error,
-// and sets nothing. Never called on a production path; a test holds that.
+// SwitchTTFTLowLoadDecodeTTFT, SwitchTTFTHopUnqueued, SwitchTTFTJointInputs,
+// SwitchTTFTPromptSupport and SwitchKVPerRequestOutputDispersion; a name it
+// does not know is an error, and sets nothing. Never called on a production
+// path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
 	rest := maps.Clone(switches)
 	fields := a.switchFields()
@@ -163,6 +164,7 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// (ttft.go).
 		SwitchTTFTPrice:            &a.ttftPrice,
 		SwitchTTFTMeasuredSpread:   &a.ttftMeasuredSpread,
+		SwitchTTFTPromptSupport:    &a.ttftPromptSupport,
 		SwitchTTFTMeasuredTransfer: &a.ttftMeasuredTransfer,
 		SwitchTTFTQuietTransfer:    &a.ttftQuietTransfer,
 		// The decode term of a TTFT on a decode line (ttft.go).
@@ -184,6 +186,9 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// The decode engine's TTFT read off its calm cycles, off by default
 		// (ttft_fleet.go, llm-d-incubation/llm-d-scaling-manager#169).
 		SwitchTTFTLowLoadDecodeTTFT: &a.ttftLowLoadDecodeTTFT,
+		// The router hop read off windows whose prefill pods held no queue,
+		// off by default (ttft.go, llm-d-incubation/llm-d-scaling-manager#281).
+		SwitchTTFTHopUnqueued: &a.ttftHopUnqueued,
 		// A prefill variant sized on TTFT, the joint a₀ where P1 refused a,
 		// off by default (ttft_prefill_ask.go,
 		// llm-d-incubation/llm-d-scaling-manager#131).

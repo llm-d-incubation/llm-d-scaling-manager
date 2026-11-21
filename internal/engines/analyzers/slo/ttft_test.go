@@ -651,7 +651,9 @@ func TestTTFT_TheSpreadIsTheWindowsNotTheCycles(t *testing.T) {
 		at := r.now.Add(time.Duration(i) * time.Minute)
 		cli.Note(rows, i, at)
 		got := r.a.promptSpread("k", rows, at)
-		assert.Equal(t, cli.Spread(), got, "S1 and the CLI, cycle %d", i)
+		want := cli.Spread()
+		want.MaxRatio = 0 // SwitchTTFTPromptSupport, off from the constructor
+		assert.Equal(t, want, got, "S1 and the CLI, cycle %d", i)
 	}
 	alone := whatif.ReadPromptSpread(whatif.PoolComputedBuckets(nil, minute(0)), 1800)
 	// 1800 in (1000, 2000]: at most 20% at 1000 and 80% at 2000.

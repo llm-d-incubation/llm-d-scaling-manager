@@ -338,7 +338,7 @@ func compareEntry(ctx context.Context, p *Prediction, e *inputsEntry, req Compar
 	}
 	slices.SortStableFunc(q.testIndices, func(a, b int) int { return e.series[a].At.Compare(e.series[b].At) })
 	if whole := stepInputsOf(seriesAt(e.series, q.testIndices)); whole.promptCV != nil {
-		q.promptCV = whole.promptCV
+		q.promptCV, q.promptMaxRatio = whole.promptCV, whole.promptMaxRatio
 	}
 	q.fit = &inputsEntry{pricer: noPricer{}}
 	var inputs []BacktestStep
