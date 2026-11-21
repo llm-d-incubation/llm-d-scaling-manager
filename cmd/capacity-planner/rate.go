@@ -50,6 +50,7 @@ func sloToRate(ctx context.Context, args []string, out, warn io.Writer) error {
 		if target, err = parseTPOT(*tpot); err != nil {
 			return err
 		}
+		warnTPOTPercentile(warn, *tpot)
 	}
 	if f.set["assume-tpot-ratio"] && target.Percentile == 0 {
 		return usagef("--assume-tpot-ratio needs a percentile TPOT target (--tpot 4ms@p90)")

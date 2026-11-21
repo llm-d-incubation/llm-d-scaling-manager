@@ -92,6 +92,7 @@ func runDayPlan(ctx context.Context, args []string, out, warn io.Writer) error {
 	if err != nil {
 		return err
 	}
+	warnTPOTPercentile(warn, f.tpot)
 	plan, err := planDay(ctx, res, req, "schema-v"+strconv.Itoa(schemaVersion))
 	if err != nil {
 		if whatifapi.IsInputError(err) {

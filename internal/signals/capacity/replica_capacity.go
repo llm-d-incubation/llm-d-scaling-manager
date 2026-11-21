@@ -34,7 +34,18 @@ type ReplicaCapacity struct {
 	// k2 (a P1-obs-* label: unsettled, downstream, unadmitted, rollout,
 	// invalid), empty when there was none to refuse. Diagnostics: the
 	// saturation analyzer's replica-capacity-summary log line.
-	K2NotRecorded     string
+	K2NotRecorded string
+	// PackingBound is the bound that held a decode replica's k2 where the
+	// policy sets a TPOT objective (the saturation analyzer's
+	// k2-batch-held-at-itl-target): "itl" when the TPOT target lowered it,
+	// "none" when it did not, and empty where no bound is weighed (the
+	// switch off, no TPOT objective, or not a decode replica).
+	// PackingReason says why, and K2Unbounded is the k2 before the bound,
+	// set only with PackingBound. Diagnostics: published per variant as
+	// llmsm_decode_packing_bound and llmsm_decode_packing_k2_tokens.
+	PackingBound      string
+	PackingReason     string
+	K2Unbounded       int64
 	EffectiveCapacity int64 // min(k1, k2)
 	// ReplicaDemand is the replica's resident KV tokens — TokensInUse on the main
 	// path, kvCacheUsage * effectiveCapacity on the fallback path — plus the

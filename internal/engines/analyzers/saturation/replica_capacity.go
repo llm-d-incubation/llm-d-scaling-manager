@@ -587,6 +587,9 @@ func (a *SaturationAnalyzer) computeReplicaCapacity(
 		K2WriteAge:                  k2Age,
 		K2WriteAgeKnown:             k2AgeKnown,
 		K2NotRecorded:               d.refused,
+		K2Unbounded:                 d.unbounded,
+		PackingBound:                d.packingBound,
+		PackingReason:               d.packingReason,
 		EffectiveCapacity:           effectiveCapacity,
 		ReplicaDemand:               replicaDemand,
 		FromWarmPool:                rm.FromWarmPool,
@@ -795,7 +798,16 @@ func (a *SaturationAnalyzer) computeK2(
 	recordable, _ = itlBoundedK2(recordable, batchCap.itl, kvCeiling)
 	logITLBound(logger, modelID, namespace, variantName, src, engineParams, batchCap, avgInput, avgOutput,
 		outputDispersion, ranks, kvCeiling, unbounded, k2, held)
-	return k2Decision{k2: k2, src: src, recordable: recordable, borrowed: borrowed, refused: refused}
+	d := k2Decision{k2: k2, src: src, recordable: recordable, borrowed: borrowed, refused: refused}
+	d.packingBound, d.packingReason, d.packingKnown = decodePackingOf(batchCap.itl, held)
+	if d.packingKnown && !held && batchCap.itl.applies() && kvCeiling <= 0 {
+		// In force, but with no KV read there is nothing to hold k2 at.
+		d.packingReason = itlBoundNoKV
+	}
+	if d.packingKnown {
+		d.unbounded = unbounded
+	}
+	return d
 }
 
 // k2Decision is what computeK2 decided for one replica: the k2 it is priced on
@@ -811,6 +823,13 @@ type k2Decision struct {
 	// refused is the P1-obs-* label of a saturated reading k2Chain did not
 	// record this cycle, empty when there was none.
 	refused string
+	// packingKnown says the TPOT objective's bound on decode packing
+	// (SwitchK2BatchAtITLTarget) was weighed for this replica; packingBound
+	// and packingReason are what it made of k2 (decodePackingOf), and
+	// unbounded the chain's k2 before it.
+	packingKnown                bool
+	packingBound, packingReason string
+	unbounded                   int64
 }
 
 // unadmittedPrice returns the k2 a row is priced on this cycle, its source,

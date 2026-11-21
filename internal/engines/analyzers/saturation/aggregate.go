@@ -38,6 +38,9 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 	modelFactor float64,
 	logger logr.Logger,
 ) []domain.VariantCapacity {
+	// What a TPOT objective made of each decode variant's k2, for the
+	// engine to publish (TakeDecodePacking).
+	packing := map[string]domain.DecodePacking{}
 	// Group replicas by variant
 	byVariant := make(map[string][]capacity.ReplicaCapacity)
 	for _, rc := range replicaCapacities {
@@ -240,6 +243,9 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 		var hasK2Age bool
 		if row := medianK2Row(pricedRows); row != nil {
 			k2Source = row.K2Priority.String()
+			if p := decodePackingRow(row); p != nil {
+				packing[vs.VariantName] = *p
+			}
 			k2Age, hasK2Age = row.K2WriteAge, row.K2WriteAgeKnown
 			if k2DoesNotBind(row) {
 				k2Source, k2Age, hasK2Age = k2SourceK1Bound, 0, false
@@ -291,6 +297,7 @@ func (a *SaturationAnalyzer) aggregateByVariant(
 				"note", "bridge demand is counted, bridge capacity is not supply")
 		}
 	}
+	a.noteDecodePacking(namespace, modelID, packing)
 
 	return result
 }
@@ -380,4 +387,15 @@ func k2BorrowOf(namespace string, rows []capacity.ReplicaCapacity) []domain.Lear
 		}
 	}
 	return out
+}
+
+// decodePackingRow is the TPOT objective's bound on decode packing as row
+// carries it (capacity.ReplicaCapacity.PackingBound), the row the variant's
+// per-replica capacity was taken from, or nil where no bound was weighed.
+func decodePackingRow(row *capacity.ReplicaCapacity) *domain.DecodePacking {
+	if row.PackingBound == "" {
+		return nil
+	}
+	return &domain.DecodePacking{Bound: row.PackingBound, Reason: row.PackingReason,
+		K2Unbounded: row.K2Unbounded, K2: row.ComputeBoundCapacity}
 }

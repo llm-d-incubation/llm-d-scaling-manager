@@ -63,8 +63,8 @@ const SwitchK2BatchAtITLTarget = "k2-batch-held-at-itl-target"
 // Which bound held k2 (k2BatchBound on the k2-itl-bound line): the ITL
 // target, or none, the chain's figure standing.
 const (
-	k2BoundNone = "none"
-	k2BoundITL  = "itl"
+	k2BoundNone = domain.DecodePackingBoundNone
+	k2BoundITL  = domain.DecodePackingBoundITL
 )
 
 // Where the ITL target k2 is held at came from (itlBatchBound.source).
@@ -87,6 +87,16 @@ const (
 	itlBoundBadBand   = "bad-band"
 	itlBoundNotDecode = "not-decode"
 )
+
+// itlBoundNotBinding is why a bound that applies held nothing: the chain's
+// k2 was already at or under the KV the bound allows. It is published with
+// bound none (decodePackingOf), and is not an inert bound: the bound is in
+// force, and would hold k2 if the chain's figure rose past it.
+const itlBoundNotBinding = domain.DecodePackingNotBinding
+
+// itlBoundNoKV is why a bound that applies held nothing because the replica
+// reported no KV capacity to hold k2 at: inert, not k2-under-bound.
+const itlBoundNoKV = "no-kv-capacity"
 
 // Where the fill the line reaches the target at was held to the ITL band
 // (itlBatchBound.clamp): the line was not fitted past it.
@@ -229,6 +239,34 @@ func itlBoundedK2(k2 int64, b itlBatchBound, kvTokens int64) (int64, bool) {
 	return k2, false
 }
 
+// decodePackingOf is what the bound made of a decode replica's k2, as its
+// capacity row carries it (capacity.ReplicaCapacity.PackingBound and
+// PackingReason): the bound that held k2 (k2BoundITL or k2BoundNone) and
+// why. ok is false wherever the k2-itl-bound line is not logged either --
+// the switch off, no TPOT objective, a prefill or aggregated replica -- so
+// nothing is published for a variant the bound can never apply to.
+//
+// The reason is the target's source (itlTargetSLO) where the bound held k2,
+// itlBoundNotBinding where it applies and the chain's k2 was already under
+// it, and otherwise why there is no bound (itlBatchBound.why). Every value is
+// one of those constants, so a label carrying it is bounded.
+func decodePackingOf(b itlBatchBound, held bool) (bound, reason string, ok bool) {
+	if !b.on || b.why == itlBoundNoTarget || b.why == itlBoundNotDecode {
+		return "", "", false
+	}
+	switch {
+	case held:
+		return k2BoundITL, b.source, true
+	case b.applies():
+		return k2BoundNone, itlBoundNotBinding, true
+	case b.why != "":
+		return k2BoundNone, b.why, true
+	}
+	// A bound with no reason that does not apply: a fill out of (0, 1]
+	// itlBoundFor never returns. Named, not left empty.
+	return k2BoundNone, itlBoundBadBand, true
+}
+
 // logITLBound logs, with SwitchK2BatchAtITLTarget on and a TPOT objective,
 // what the bound made of a decode replica's k2: the chain's figure (k2Unbounded, from priority) and the
 // one priced, which bound held it (k2BatchBound), the target, the fill and
@@ -277,4 +315,40 @@ func steadyBatchAt(params *capacity.EngineParams, batchCap int64, avgInput, avgO
 		return float64(batchCap)
 	}
 	return steadyBatch(float64(params.EffectiveMaxBatchedTokens), float64(batchCap), avgInput, avgOutput, budget)
+}
+
+// DecodePackingInertReasons is every reason a TPOT target can bound nothing
+// for a decode variant: domain.DecodePacking.Reason with bound none, other
+// than domain.DecodePackingNotBinding. The engine's Warning says what each
+// means (DecodePackingBoundInert).
+func DecodePackingInertReasons() []string {
+	return []string{itlBoundNoLine, itlBoundBorrowed, itlBoundOneSided, itlBoundAboveBand, itlBoundDefaultB,
+		itlBoundPerStep, itlBoundUnreach, itlBoundBadBand, itlBoundNoKV}
+}
+
+// noteDecodePacking keeps what a TPOT objective made of each decode
+// variant's k2 on this analysis of the model, replacing the last, for the
+// engine to take (TakeDecodePacking). An empty map is kept too: it says the
+// model was analyzed and no variant is bound.
+func (a *SaturationAnalyzer) noteDecodePacking(namespace, modelID string, packing map[string]domain.DecodePacking) {
+	a.packingMu.Lock()
+	defer a.packingMu.Unlock()
+	if a.packing == nil {
+		a.packing = map[string]map[string]domain.DecodePacking{}
+	}
+	a.packing[namespace+"/"+modelID] = packing
+}
+
+// TakeDecodePacking returns what a TPOT objective made of each decode
+// variant's k2 on the model's last analysis, keyed by variant, and forgets
+// it. ok is false when the model was not analyzed since the last take, so
+// the caller keeps what it published rather than reading the model's
+// variants as unbound.
+func (a *SaturationAnalyzer) TakeDecodePacking(namespace, modelID string) (map[string]domain.DecodePacking, bool) {
+	a.packingMu.Lock()
+	defer a.packingMu.Unlock()
+	key := namespace + "/" + modelID
+	p, ok := a.packing[key]
+	delete(a.packing, key)
+	return p, ok
 }

@@ -129,7 +129,105 @@ changed, and there is no compatibility path. Reinstall.
 3. Install from this tree and re-create what you need. Learned state, tuned
    policy, labels on namespaces and ScaledObject addresses are not carried over.
 
-### Upgrading from v0.12.1
+### Upgrading from v0.12.2
+
+[Upgrade](#upgrade) as for any release. Nothing to change first.
+
+#### A TPOT target that bounds nothing is now visible
+
+v0.12.2 started bounding decode packing at a `slo.tpot` target
+([below](#decode-replicas-are-packed-fuller-and-a-tpot-target-bounds-it)),
+but said whether it applied only in a `--v=3` log line. Now, per decode
+variant of a model whose policy sets `slo.tpot` and lists `slo`:
+
+- `llmsm_decode_packing_bound{bound, reason}` says whether the target held
+  the variant's k2 (`bound="itl"`) or not, and why not;
+- `llmsm_decode_packing_k2_tokens{k2="unbounded|bounded"}` gives k2 before
+  and after the bound;
+- a `DecodePackingBoundInert` Warning event is recorded on the ScaledObject
+  once the target has bounded nothing for 15 minutes, once per episode (and
+  once more after a controller restart, if it is still inert).
+
+Nothing sizes differently. Find the variants a target does not bound:
+
+```promql
+llmsm_decode_packing_bound{bound="none", reason!="k2-under-bound"}
+```
+
+What each reason means: [the metrics](prometheus.md#llmsm_decode_packing_bound).
+
+### Upgrading from v0.12.1 to v0.12.2
+
+[Upgrade](#upgrade) as for any release, then work through each part below
+that applies to you.
+
+#### Re-apply the alerts
+
+v0.12.2 adds the `LLMSMReplicasNotArriving` alert (a variant whose replicas
+never arrive). If you install the alerts, they are not updated unless you
+re-apply them:
+
+- a `make deploy-scaling-manager` install: re-run it with
+  `DEPLOY_ALERTING_RULES=true`, as every upgrade must
+  ([Installing the alerts](prometheus.md#installing-the-alerts));
+- alerts applied by hand: apply the rule from the release again,
+  `kubectl apply -n "$NS" -f config/components/prometheus-alerts/prometheusrule.yaml`
+  from a checkout of the release.
+
+Check that it loaded: `kubectl get prometheusrule -n "$NS" controller-manager-alerts -o yaml | grep LLMSMReplicasNotArriving`.
+
+#### Re-run workload-patch for the drain grace period
+
+`make workload-patch` now sizes `terminationGracePeriodSeconds` from the
+preStop sleep plus the engine's `--shutdown-timeout` plus 15 s. Before, it set
+120 s whatever the engine waited, so an engine with a long
+`--shutdown-timeout` was killed while it still drained. For each model
+server:
+
+1. Run `make workload-patch NAMESPACE=<ns>`.
+2. A workload that already has a preStop hook is only reported, never
+   rewritten. That includes every workload an earlier `workload-patch`
+   patched, since that patch added the hook. Raise its
+   `terminationGracePeriodSeconds` by hand, in your chart values, to the
+   figure the report gives.
+3. A workload without a preStop hook gets the longer grace period in the
+   patch file the command writes. Apply it as you applied the first one,
+   with your next planned rollout: it restarts every replica.
+
+What it reads: [Sizing the grace period](workload-preparation.md#sizing-the-grace-period).
+
+#### Decode replicas are packed fuller, and a TPOT target bounds it
+
+On a P/D model, v0.12.2 no longer reads decode capacity 10-18x low when
+`--max-num-batched-tokens` is small and prompts are long. Expect **fewer
+decode replicas** where the fleet had headroom, and a higher per-token
+latency: on a live check, TPOT p90 went from 12 ms to 15-16 ms at one decode
+replica fewer. No setting turns this off. A k2 learned before the upgrade
+keeps pricing until it ages out, so the change can arrive hours after the
+upgrade.
+
+To bound it, any of:
+
+1. **Set a TPOT target.** Set `slo.tpot` and list the `slo` analyzer
+   ([how a TPOT target bounds decode packing](scaling-policy.md#how-a-tpot-target-bounds-decode-packing)).
+   Saturation then holds each decode replica at the KV fill where its own
+   ITL line reaches the target. It applies only on a line the variant
+   measured: on many P/D decode variants it does not apply yet, because the
+   line rests on the default intercept. `slo.tpot` is a mean over requests;
+   a percentile target cannot be written there
+   ([what each component measures](latency-definitions.md)). On v0.12.2 the
+   only way to see whether it applied is the `k2-itl-bound` line at
+   `--v=3`; from the next release, `llmsm_decode_packing_bound`.
+2. **Lower the decode's `--max-num-seqs`.** It caps the batch whatever the
+   target.
+3. **Hold replicas** with `minReplicaCount` on the decode ScaledObject.
+
+Before and after the upgrade, compare decode replicas and TPOT:
+
+```promql
+max by (exported_namespace, variant_name) (llmsm_desired_replicas)
+max by (exported_namespace, model_name) (llmsm_slo_observed_seconds{objective="tpot"})
+```
 
 #### Engine caches another component owns
 

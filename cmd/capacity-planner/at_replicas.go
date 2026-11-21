@@ -184,6 +184,7 @@ func (f *answerFlags) reportQuery(rf reportFlags) (whatifapi.ReportQuery, error)
 		if q.TPOT, err = parseTarget("--tpot", rf.tpot); err != nil {
 			return q, err
 		}
+		warnTPOTPercentile(f.warn, rf.tpot)
 	}
 	q.TTFTPercentiles = []float64{0.5, 0.9}
 	if f.ttftPercentile != "" {

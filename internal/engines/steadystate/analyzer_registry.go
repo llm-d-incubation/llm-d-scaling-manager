@@ -232,6 +232,9 @@ type saturationCapabilities struct {
 	// recorded takes the learner recorder and states the horizons the
 	// recording starts with (learner_recording.go).
 	recorded saturationRecorded
+	// packing hands over what a TPOT objective made of each decode
+	// variant's k2 (reportDecodePacking).
+	packing decodePackingTaker
 }
 
 // saturationCapabilitiesOf resolves a's capabilities. The one place the
@@ -244,7 +247,14 @@ func saturationCapabilitiesOf(a domain.Analyzer) saturationCapabilities {
 	c.noter, _ = a.(presenceNoter)
 	c.learned, _ = a.(learnedStater)
 	c.recorded, _ = a.(saturationRecorded)
+	c.packing, _ = a.(decodePackingTaker)
 	return c
+}
+
+// decodePackingTaker is the part of the saturation analyzer the decode
+// packing series and event need (reportDecodePacking).
+type decodePackingTaker interface {
+	TakeDecodePacking(namespace, modelID string) (map[string]domain.DecodePacking, bool)
 }
 
 // acceleratorStabiliser is the part of the saturation analyzer the
@@ -304,6 +314,7 @@ var (
 	_ learnedStater         = (*saturation.SaturationAnalyzer)(nil)
 	_ saturationRecorded    = (*saturation.SaturationAnalyzer)(nil)
 	_ learnerReporter       = (*saturation.SaturationAnalyzer)(nil)
+	_ decodePackingTaker    = (*saturation.SaturationAnalyzer)(nil)
 	_ learnerReporter       = (*slo.Analyzer)(nil)
 	_ learnerReporter       = (*throughput.ThroughputAnalyzer)(nil)
 	_ presenceNoter         = (*throughput.ThroughputAnalyzer)(nil)

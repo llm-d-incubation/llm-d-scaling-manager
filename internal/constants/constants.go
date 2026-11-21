@@ -199,6 +199,10 @@ const (
 	// K8SEventReplicasArrived is a Normal event after a
 	// K8SEventReplicasNotArriving: the variant has what it asked for again.
 	K8SEventReplicasArrived = "ReplicasArrived"
+	// K8SEventDecodePackingBoundInert is a Warning on a decode variant's
+	// ScaledObject: its policy sets slo.tpot, and the target has bounded
+	// nothing for 15 minutes. Recorded once per episode.
+	K8SEventDecodePackingBoundInert = "DecodePackingBoundInert"
 	// K8SEventConfigEntryRejected is a Warning on a scaling-policy ConfigMap
 	// one of whose entries was rejected.
 	K8SEventConfigEntryRejected = "ConfigEntryRejected"

@@ -159,6 +159,7 @@ window, the API, the metrics it reads and troubleshooting are all there.
 - **[The GPU limiter](reference/gpu-limiter.md)** and **[the quota limiter](reference/quota-limiter.md)** — bounding the scaling manager by real accelerators, and by declared caps
 - **[Security model](reference/security-model.md)** — identities, every permission by install scope, what it writes, the ports it opens, and what fails open
 - **[Metrics and health](reference/metrics.md)** · **[Prometheus integration](reference/prometheus.md)**
+- **[TTFT, TPOT and ITL](reference/latency-definitions.md)** — what the client, the router, the engine, the scaling policy and the capacity planner each mean by them, over which window and at which statistic
 - **Capacity planner** — [the HTTP API](guides/capacity-planner/api.md) · [the metrics it needs](guides/capacity-planner/metrics.md) · [troubleshooting](guides/capacity-planner/troubleshooting.md) · [how accurate each figure is](guides/capacity-planner/accuracy.md). These pages live with [its guide](guides/capacity-planner/), to keep the planner's pages together
 - **[Router configuration](reference/router-configuration.md)** — the two router settings that decide what the scaling manager sees: flow control bounds the queue it reads as demand, and the scheduling profiles decide whether the replicas it orders get used
 - **[SGLang backend](reference/sglang-backend.md)** — auto-detected per variant; nothing to configure

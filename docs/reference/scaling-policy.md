@@ -2164,7 +2164,9 @@ got over a whole run, score their own per-request records.
 - **TPOT is a mean** and takes no percentile; setting one is a validation error.
   It is the mean over requests of the router's per-request TPOT, so a target
   like "p90 TPOT under 50 ms" cannot be expressed: a mean of 40 ms can hide a
-  tail well above 50.
+  tail well above 50. Size a percentile target with the capacity planner and
+  write the mean it reads here
+  ([what each component measures](latency-definitions.md)).
 - **TTFT is a percentile**, a whole number from 50 to 99, default 90. A
   fraction (`0.95`) or a decimal (`99.9`) is refused. Attainment is exact when
   the target is one of the router's bucket bounds and interpolated between them
@@ -2246,11 +2248,18 @@ of replicas meets, bounds nothing (`target-unreachable`).
 - **Decode only.** Prefill and aggregated variants are not bound.
 - **The mean, not the busiest replica.** The line is fitted on the mean fill,
   so a replica above the mean runs above the target.
-- **Where to read it.** At `--v=3`, each decode replica of a model with a
-  `tpot` target logs a `k2-itl-bound` line. `k2BatchBound` is `itl` when the target held it and
-  `none` when it did not. `k2Unbounded` and `k2` are the figure before and
-  after. `nSteady` and `nITL` are requests per engine rank under the batch
-  flags and under the target, and `itlTargetFill` is the fill.
+- **Where to read it.** Per decode variant, `llmsm_decode_packing_bound`
+  says whether the target held it (`bound="itl"`) or not (`bound="none"`,
+  with the `reason`), and `llmsm_decode_packing_k2_tokens` gives the figure
+  before and after
+  ([the metrics](prometheus.md#decode-packing-under-a-tpot-target)). A
+  variant whose target has bounded nothing for 15 minutes gets one
+  `DecodePackingBoundInert` Warning event. Per replica, at `--v=3`, each
+  decode replica of a model with a `tpot` target logs a `k2-itl-bound` line.
+  `k2BatchBound` is `itl` when the target held it and `none` when it did
+  not. `k2Unbounded` and `k2` are the figure before and after. `nSteady` and
+  `nITL` are requests per engine rank under the batch flags and under the
+  target, and `itlTargetFill` is the fill.
 - **No target, no bound.** Without a `tpot` target, or with `slo` unlisted,
   nothing changes.
 

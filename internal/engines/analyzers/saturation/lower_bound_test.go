@@ -91,6 +91,7 @@ func TestASpentBoundReArmsOnlyOnALowerFigure(t *testing.T) {
 func TestEveryAnalyzerMapIsRegistered(t *testing.T) {
 	notLearned := map[string]string{
 		"restoreOutcomes": "counts not yet published, by restore outcome; nothing a forget or flush may take back",
+		"packing":         "the last analysis's decode packing per model, handed to the engine and taken every cycle (TakeDecodePacking); nothing learned",
 	}
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	a.mu.Lock()

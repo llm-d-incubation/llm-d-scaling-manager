@@ -427,3 +427,45 @@ type VariantCapacity struct {
 	// service rate. Diagnostic only: nothing downstream sizes from it.
 	ServiceRate *ServiceRateSignal
 }
+
+// Values of DecodePacking.Bound.
+const (
+	// DecodePackingBoundITL is a k2 the TPOT target lowered.
+	DecodePackingBoundITL = "itl"
+	// DecodePackingBoundNone is a k2 the TPOT target did not lower.
+	DecodePackingBoundNone = "none"
+)
+
+// DecodePackingNotBinding is DecodePacking.Reason for a bound in force that
+// held nothing: the k2 was already under it. Every other reason with Bound
+// none says why the bound did not apply, so the TPOT target bounds nothing
+// (Inert).
+const DecodePackingNotBinding = "k2-under-bound"
+
+// DecodePacking is the TPOT objective's bound on how far a decode variant is
+// packed (the saturation analyzer's k2-batch-held-at-itl-target), read from
+// the replica its per-replica capacity was taken from. The engine publishes
+// it as llmsm_decode_packing_bound and llmsm_decode_packing_k2_tokens. It is
+// not part of VariantCapacity: a learner recording writes every field of
+// that, and its goldens hold them. Diagnostic only: the bound itself is
+// already in PerReplicaCapacity.
+type DecodePacking struct {
+	// Bound is DecodePackingBoundITL or DecodePackingBoundNone.
+	Bound string
+	// Reason is the target's source (slo-tpot) with Bound itl, and with
+	// Bound none DecodePackingNotBinding or why the bound did not apply
+	// (no-line, borrowed-line, one-sided-line, above-band-line,
+	// default-intercept, per-step-line, target-unreachable, bad-band,
+	// no-kv-capacity).
+	Reason string
+	// K2Unbounded is the k2 before the bound, and K2 the one priced, in KV
+	// tokens.
+	K2Unbounded, K2 int64
+}
+
+// Inert reports whether a TPOT target is set and bounds nothing: the bound
+// did not apply, for Reason. A bound that applies and held nothing is not
+// inert.
+func (d *DecodePacking) Inert() bool {
+	return d != nil && d.Bound == DecodePackingBoundNone && d.Reason != DecodePackingNotBinding
+}

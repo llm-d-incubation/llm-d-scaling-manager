@@ -239,6 +239,10 @@ type Engine struct {
 	// test builds by hand, which reads the wall clock.
 	clock *cycleclock.Clock
 
+	// decodePacking is what reportDecodePacking keeps per model, keyed
+	// utils.GetNamespacedKey(namespace, modelID).
+	decodePacking map[string]*decodePackingModel
+
 	// lastGoodAnalysis records, per model (keyed by utils.GetNamespacedKey(namespace,
 	// modelID)) and analyzer name, the AnalyzedAt of the most recent informative
 	// (non-error, capacity-bearing) result. Used to gate the scale-down veto: an

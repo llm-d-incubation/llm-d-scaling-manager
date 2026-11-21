@@ -1083,6 +1083,9 @@ func InitMetrics(registry prometheus.Registerer) error {
 	if err := registerReplicasNotArrivingMetrics(registry); err != nil {
 		return err
 	}
+	if err := registerDecodePackingMetrics(registry); err != nil {
+		return err
+	}
 
 	return nil
 }
