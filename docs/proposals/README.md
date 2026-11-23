@@ -256,6 +256,12 @@ last; it is the unit change that makes the other two land.
   An HTTP API served by `capacity-planner serve`, a small web page on it that opens on a
   Prometheus window, and Grafana for monitoring only; why v1 prices the
   critical class alone and the current mix as one TTFT line.
+- **[Capacity planner: extend a recording with simulation](capacity-planner-simulation.md)**
+  — proposed. Where a fleet never went (a knee it never reached, load it never
+  saw, another configuration), use an open simulator (AISim or BLIS) as a
+  second source: calibrated on the fleet's own recording first, measured terms
+  always winning, every simulated figure flagged. Phase 0 scores both
+  simulators on our recordings before any planner code.
 - **[Record for the capacity planner from the controller](controller-recording.md)**
   — proposed. Makes the learner recorder an operator option: a live
   `plannerRecording` settings key over an always-mounted `emptyDir` (a PVC at
