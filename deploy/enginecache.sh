@@ -683,6 +683,35 @@ $(seed_mount_yaml)
 EOF
 }
 
+# release_stale_claimref lets a new claim bind to a volume an earlier claim of
+# the same namespace and name left behind. The volume is Retain, so deleting
+# the namespace (a benchmark teardown) leaves it Released with claimRef.uid
+# still naming the deleted claim; apply does not drop that uid, and the new
+# claim never binds. Clearing the uid and resourceVersion -- the claimRef keeps
+# its namespace and name -- lets it bind, with the node caches still warm. A
+# volume Bound, or reserved for another namespace or claim, is left alone.
+release_stale_claimref() {
+    local pv state err
+    pv="$(pv_for)"
+    err="$(mktemp)"
+    if ! state="$(kubectl get pv "$pv" --ignore-not-found -o jsonpath='{.status.phase}/{.spec.claimRef.namespace}/{.spec.claimRef.name}/{.spec.claimRef.uid}' 2>"$err")"; then
+        log_warning "could not read volume ${pv} ($(head -1 "$err")); if a claim of ${NAMESPACE} bound to it before, the new claim may not bind"
+        rm -f "$err"
+        return 0
+    fi
+    rm -f "$err"
+    [ -n "$state" ] || return 0
+    local phase ref_ns ref_name uid
+    IFS=/ read -r phase ref_ns ref_name uid <<<"$state"
+    if [ "$ref_ns" != "$NAMESPACE" ] || [ "$ref_name" != "$CLAIM" ]; then
+        log_warning "volume ${pv} is reserved for ${ref_ns:-no namespace}/${ref_name:-no claim}, not ${NAMESPACE}/${CLAIM}; leaving it alone"
+        return 0
+    fi
+    [ "$phase" = Released ] && [ -n "$uid" ] || return 0
+    kubectl patch pv "$pv" --type merge -p '{"spec":{"claimRef":{"uid":null,"resourceVersion":null}}}' >/dev/null
+    log_info "volume ${pv} was Released by an earlier claim ${NAMESPACE}/${CLAIM} (uid ${uid}); cleared that uid so the new claim binds to it"
+}
+
 cmd_apply() {
     [ -n "$NAMESPACE" ] || log_error "apply needs -n NAMESPACE"
     [ -n "$NODE_PATH" ] || log_error "apply needs --path DIR (a directory on the node)"
@@ -726,6 +755,7 @@ cmd_apply() {
     fi
     # an existing claim keeps its size (deploy/lib/nodedir.sh says why)
     nodedir_claim_capacity "$NAMESPACE" "$CLAIM" "$CAPACITY_GIVEN" "enginecache.sh delete -n ${NAMESPACE}"
+    release_stale_claimref
     render | kubectl apply -f - >/dev/null
     log_info "preparing ${NODE_PATH}/${SUBDIR} on $(accelerator_selector_text "$NODE_SELECTOR"); claim ${CLAIM}${SEED_CLAIM:+, seeded from ${SEED_CLAIM}${SEED_SUBPATH:+:$SEED_SUBPATH}} -- mount it read-write and point VLLM_CACHE_ROOT, FLASHINFER_WORKSPACE_BASE, TRITON_CACHE_DIR and PYTHONPYCACHEPREFIX (pycache/<image key>) under it"
     if kubectl api-resources --api-group=security.openshift.io 2>/dev/null | grep -q securitycontextconstraints; then

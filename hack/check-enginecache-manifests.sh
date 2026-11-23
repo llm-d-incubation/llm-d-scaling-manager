@@ -1005,8 +1005,17 @@ case "\$1 \$2" in
                          absent) case "\$ARGV" in *" --ignore-not-found "*) ;; *) echo "Error from server (NotFound): persistentvolumes $PVNAME not found" >&2; exit 1 ;; esac ;;
                          forbidden) echo "Error from server (Forbidden): persistentvolumes $PVNAME is forbidden: stub" >&2; exit 1 ;;
                        esac ;;
+                   # STUB_PV_CLAIM: phase/namespace/claim/uid of the volume
+                   # apply is about to write; empty is no volume yet
+                   *"jsonpath={.status.phase}/{.spec.claimRef.namespace}/{.spec.claimRef.name}/{.spec.claimRef.uid}"*)
+                       case "\$ARGV" in *" $PVNAME "*) ;; *) echo "stub kubectl: pv read for a volume apply does not write:\$ARGV" >&2; exit 2 ;; esac
+                       case "\$ARGV" in *" --ignore-not-found "*) ;; *) echo "stub kubectl: the volume read lacks --ignore-not-found:\$ARGV" >&2; exit 2 ;; esac
+                       printf '%s' "\${STUB_PV_CLAIM-}" ;;
                    *) want -l "$LBL"; want -o json; cat "$T/pvs.json" ;;
                  esac ;;
+  "patch pv")    refuse -n
+                 case "\$ARGV" in *" $PVNAME "*) ;; *) echo "stub kubectl: patch of a volume apply does not write:\$ARGV" >&2; exit 2 ;; esac
+                 echo patched ;;
   "delete pv")   refuse -n; echo deleted ;;
   *) echo "stub kubectl: unexpected \$*" >&2; exit 2 ;;
 esac
@@ -1093,6 +1102,29 @@ if STUB_PVC_CLASS=shared-vast PATH="$STUB_PATH" bash deploy/enginecache.sh apply
 STUB_PVC_CLASS=node-local-engine-cache PATH="$STUB_PATH" bash deploy/enginecache.sh apply -n check-ns --path /mnt/local/weights/check-ns --image "$IMG" > "$T/apply.out" 2>&1 || true
 grep -q '^apply -f' "$T/calls" && grep -q 'preparing /mnt/local/weights/check-ns/engine-cache on' "$T/apply.out" && grep -q '^  node-ready ' "$T/apply.out" && ok "apply: applies, says what it prepared where, and reports per node" || fail "apply: $(head -3 "$T/apply.out" | tr '\n' ';')"
 grep -q 'OpenShift:' "$T/apply.out" && fail "apply: the OpenShift notice printed on a cluster without SCCs" || ok "apply: no OpenShift notice on a cluster without SecurityContextConstraints"
+grep -q '^patch pv' "$T/calls" && fail "apply: a volume that is not there was patched" || ok "apply: no volume yet, nothing patched"
+# A re-run in a namespace name used before: the teardown deleted the claim
+# with the namespace, the Retain volume stayed Released with the old claim's
+# uid, and the new claim cannot bind until that uid is gone (#360).
+CLEAR='{"spec":{"claimRef":{"uid":null,"resourceVersion":null}}}'
+: > "$T/calls"
+STUB_PV_CLAIM="Released/check-ns/engine-cache/0b1c-old-claim" STUB_PVC_CLASS=node-local-engine-cache PATH="$STUB_PATH" bash deploy/enginecache.sh apply -n check-ns --path /mnt/local/weights/check-ns --image "$IMG" > "$T/released.out" 2>&1 || true
+patched="$(grep -n '^patch pv' "$T/calls" | head -1 | cut -d: -f1)"; applied_at="$(grep -n '^apply -f' "$T/calls" | head -1 | cut -d: -f1)"
+if grep -qxF "patch pv ${PVNAME} --type merge -p ${CLEAR}" "$T/calls" && [ -n "$applied_at" ] && [ "${patched:-0}" -gt 0 ] && [ "$patched" -lt "$applied_at" ] \
+    && grep -q "cleared that uid so the new claim binds" "$T/released.out" && grep -q 'claim engine-cache: Bound' "$T/released.out"; then
+    ok "apply: a volume Released by an earlier claim of this namespace and name has its stale uid cleared before the claim is applied, and the claim binds"
+else fail "apply over a Released volume: patch=$(grep '^patch' "$T/calls" | tr '\n' ';') apply-line=${applied_at:-none}; $(grep -E 'Released|cleared|claim engine-cache' "$T/released.out" | tr '\n' ';')"; fi
+for state in "Bound/check-ns/engine-cache/5e6f-live-claim:bound to this claim" "Available/check-ns/engine-cache/:free, no uid"; do
+    : > "$T/calls"
+    STUB_PV_CLAIM="${state%%:*}" STUB_PVC_CLASS=node-local-engine-cache PATH="$STUB_PATH" bash deploy/enginecache.sh apply -n check-ns --path /mnt/local/weights/check-ns --image "$IMG" > "$T/kept.out" 2>&1 || true
+    ! grep -q '^patch pv' "$T/calls" && grep -q '^apply -f' "$T/calls" && ok "apply: a volume ${state#*:} is applied without a patch" || fail "apply: volume ${state#*:} was patched: $(grep '^patch' "$T/calls")"
+done
+for state in "Released/other-ns/engine-cache/7a8b-uid:other-ns/engine-cache" "Released/check-ns/weights-x/9c0d-uid:check-ns/weights-x" "Bound/other-ns/engine-cache/1e2f-uid:other-ns/engine-cache"; do
+    : > "$T/calls"
+    STUB_PV_CLAIM="${state%%:*}" STUB_PVC_CLASS=node-local-engine-cache PATH="$STUB_PATH" bash deploy/enginecache.sh apply -n check-ns --path /mnt/local/weights/check-ns --image "$IMG" > "$T/other.out" 2>&1 || true
+    ! grep -q '^patch pv' "$T/calls" && grep -q "volume ${PVNAME} is reserved for ${state#*:}, not check-ns/engine-cache; leaving it alone" "$T/other.out" \
+        && ok "apply: a volume reserved for ${state#*:} (${state%%/*}) is not patched, and apply says so" || fail "apply: volume for ${state#*:}: patch=$(grep '^patch' "$T/calls"); $(grep -c 'leaving it alone' "$T/other.out") notice(s)"
+done
 # A re-apply keeps an existing claim's size: the claim is bound to a static
 # volume, and only a dynamically provisioned claim can be resized.
 claim_size() { yq -r 'select(.kind == "PersistentVolumeClaim") | .spec.resources.requests.storage' "$1" 2>/dev/null; }
