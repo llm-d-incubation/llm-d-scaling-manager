@@ -131,9 +131,10 @@ Read the review first; the implementation design says what was built.
 - **[Install with kubectl and kustomize, without docker](kubernetes-native-install.md)**
   — proposed. One signed manifest applied by the cluster admin
   (`kubectl apply --server-side -f`), as KEDA, Kueue, LeaderWorkerSet and
-  cert-manager install. One `ScalingManagerConfig` object holds the config
-  and the live switches. A namespace label opts each namespace in. The
-  preflight runs inside the controller as conditions, and the controller
+  cert-manager install. The existing settings ConfigMap holds the config and
+  the live switches; a namespace label, gated by an admin-owned selector,
+  opts each namespace in. The preflight runs inside the controller and
+  reports in the status ConfigMap, and the controller
   publishes a ScaledObject plan for review. Costs cluster-wide reads, the
   same as today's cluster-wide install. A per-namespace kustomize path with
   Jobs stays as the least-privilege alternative. `smt` keeps working on the
