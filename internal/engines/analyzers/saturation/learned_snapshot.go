@@ -1605,7 +1605,8 @@ func (a *SaturationAnalyzer) restoredBaselineAt(s LearnedState, key string, now 
 // its configuration could not be matched), its stored baseline is put aside
 // too, under the arguments the document recorded, so a rollback to them gets
 // it back: only a full fit rewrites a baseline, which a balanced fleet rarely
-// spans. Callers hold a.mu.
+// spans. That baseline keeps the stamp the document carried for it; a stash
+// the document carried has none. Callers hold a.mu.
 func (a *SaturationAnalyzer) installITLStashLocked(p *pendingVariant, installed bool) {
 	for k, b := range p.state.ITLBaselineStash {
 		if _, live := a.itlBaselineStash[k]; !live && finitePositive(b) {
@@ -1619,6 +1620,9 @@ func (a *SaturationAnalyzer) installITLStashLocked(p *pendingVariant, installed 
 		sk := stashKey(k, p.expectArgs)
 		if _, live := a.itlBaselineStash[sk]; !live && finitePositive(b) {
 			a.itlBaselineStash[sk] = b
+			if at := a.restoredBaselineAt(p.state, k, a.now()); !at.IsZero() {
+				a.itlBaselineStashAt[sk] = at
+			}
 		}
 	}
 }

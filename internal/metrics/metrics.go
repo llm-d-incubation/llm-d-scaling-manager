@@ -2519,8 +2519,10 @@ var (
 // RecordLearnerReports applies each report to its variant's
 // llmsm_learned_state_last_admitted_timestamp_seconds series. A report with a
 // PricingKey sets the series from that key, so a change of key needs nothing
-// more. One without leaves it alone, unless it says the key last published
-// was forgotten: then the series goes. A learner that has stopped pricing a
+// more; one with only a RestoredKey (evidence a snapshot brought back that
+// prices no line yet) sets it from that key. One with neither leaves it
+// alone, unless it says the key last published was forgotten: then the
+// series goes. A learner that has stopped pricing a
 // variant keeps showing how old its evidence is, and only a forgotten key is
 // no longer evidence. No report at all, on a cycle whose Analyze failed, also
 // leaves it alone: that is what keeps time() minus it honest through a stall.
@@ -2533,17 +2535,21 @@ func (m *MetricsEmitter) RecordLearnerReports(reports []learn.Report, targetOf f
 	}
 	for _, r := range reports {
 		id := learnerSeriesID{namespace: r.Namespace, modelID: r.ModelID, variant: r.Variant, learner: r.Learner}
+		key := r.PricingKey
+		if key == "" {
+			key = r.RestoredKey
+		}
 		learnerPublishedMu.Lock()
 		prev, had := learnerPublished[id]
 		switch {
-		case r.PricingKey != "":
+		case key != "":
 			target := prev.target
 			if targetOf != nil {
 				if t := targetOf(r.Namespace, r.Variant); t.Name != "" {
 					target = t
 				}
 			}
-			learnerPublished[id] = learnerSeries{role: r.Role, key: r.PricingKey, target: target}
+			learnerPublished[id] = learnerSeries{role: r.Role, key: key, target: target}
 		case had && slices.Contains(learn.Keys(r.Forgotten), prev.key):
 			delete(learnerPublished, id)
 		default:
@@ -2551,10 +2557,10 @@ func (m *MetricsEmitter) RecordLearnerReports(reports []learn.Report, targetOf f
 			continue
 		}
 		learnerPublishedMu.Unlock()
-		if r.PricingKey != "" {
+		if key != "" {
 			learnedStateLastAdmitted.With(id.labels(r.Role)).Set(unixSeconds(r.LastAdmitted))
 		}
-		if had && (r.PricingKey == "" || prev.role != r.Role) {
+		if had && (key == "" || prev.role != r.Role) {
 			learnedStateLastAdmitted.Delete(id.labels(prev.role))
 		}
 	}

@@ -110,15 +110,24 @@ func (a *SaturationAnalyzer) itlUnderArgs(key, args string) {
 	// The tracker's lock is taken under a.mu here, as EvictStaleHistory takes
 	// it: the tracker never calls back into the analyzer.
 	if b, ok := a.itlTracker.Baseline(key); ok {
-		a.itlBaselineStash[stashKey(key, tag)] = b
+		sk := stashKey(key, tag)
+		a.itlBaselineStash[sk] = b
+		if at := a.itlTracker.BaselineAdmittedAt(key); !at.IsZero() {
+			a.itlBaselineStashAt[sk] = at
+		} else {
+			delete(a.itlBaselineStashAt, sk)
+		}
 	}
 	a.itlTracker.Sweep(a.now(), func(k string) bool { return k == key })
 	// An aggregated variant's shape state was the dropped window's and
 	// slope's (itl_aggregated_shape.go).
 	delete(a.itlAggregated, key)
-	if b, ok := a.itlBaselineStash[stashKey(key, args)]; ok {
-		delete(a.itlBaselineStash, stashKey(key, args))
-		a.itlTracker.SetBaseline(key, b)
+	sk := stashKey(key, args)
+	if b, ok := a.itlBaselineStash[sk]; ok {
+		at := a.itlBaselineStashAt[sk]
+		delete(a.itlBaselineStash, sk)
+		delete(a.itlBaselineStashAt, sk)
+		a.itlTracker.SetBaselineAt(key, b, at)
 	}
 }
 

@@ -592,6 +592,13 @@ controller's client with no backoff, at most once per variant per
 `learnerTargetCheckInterval` (1 min), and `learnerSeriesMissingMax` (24 h) ends
 the wait whatever the reads say.
 
+A report with no `PricingKey` but a `RestoredKey` publishes from that key: an
+ITL intercept a snapshot brought back, with a known stamp, prices no line until
+readings arrive, and its age shows from the restart's first cycle. A baseline
+put aside in `itlBaselineStash` keeps its stamp in `itlBaselineStashAt`, so a
+rollback takes it back with its age; the snapshot does not carry that map, and
+a stash it brings back is of unknown age.
+
 `RollingAverage.Restored` is true from `RestoreRollingAverage` until the
 window's first write, and `itl.Tracker.Restored` from `RestoreBaseline` or
 `RestoreSlope` until the window keeps a reading. The mark lives with the
