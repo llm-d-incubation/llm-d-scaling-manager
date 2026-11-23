@@ -75,7 +75,7 @@ The same guides install everything else with kustomize.
 | --- | --- | --- |
 | an autoscaler controller | a kustomize overlay in the guides repository over a **remote git-ref base** in the controller's repository (`github.com/llm-d/llm-d-workload-variant-autoscaler/config/overlays/namespace-scoped/kubernetes?ref=release-0.9`), with `namespace:`, a Deployment patch and an `images:` pin | [wva/controller/platform/k8s/kustomization.yaml](https://github.com/llm-d/llm-d/blob/main/guides/workload-autoscaling/wva/controller/platform/k8s/kustomization.yaml) |
 | ScaledObjects | checked-in overlays, each with a full `scaledobject.yaml` (KEDA's Prometheus trigger), applied with `kubectl kustomize <overlay> \| envsubst ... \| kubectl apply -f -` | [keda-epp README](https://github.com/llm-d/llm-d/blob/main/guides/workload-autoscaling/keda-epp/README.md) |
-| model-server monitoring | a kustomize component with a decode PodMonitor, `recipes/modelserver/components/monitoring` (`decode-podmonitor.yaml`) | [the component](https://github.com/llm-d/llm-d/tree/main/guides/recipes/modelserver/components/monitoring) |
+| model-server monitoring | kustomize components with PodMonitors: `recipes/modelserver/components/monitoring` (decode, `decode-podmonitor.yaml`), `monitoring-pd` (P/D) and `monitoring-epd` | [the component](https://github.com/llm-d/llm-d/tree/main/guides/recipes/modelserver/components/monitoring) |
 | guide CI | a kustomize dry-run job covers every overlay of a tier-2 guide | [GUIDES-POLICY.md](https://github.com/llm-d/llm-d/blob/main/guides/GUIDES-POLICY.md) |
 
 So llm-d is Helm for the router and kustomize for the rest, with a remote
@@ -350,7 +350,7 @@ kubectl apply -k sm-owner/settings/                                     # owner:
 kubectl create -k scaling-manager-$V/scaler-tls -n $CTRL                # owner, once: the empty scaler TLS Secrets
 kubectl create -k scaling-manager-$V/switches -n $CTRL                  # owner, once: passive, no sharing
 kubectl apply -k sm-steps/preflight/                                    # admin: preflight run 1
-kubectl logs -f -n $CTRL job/scaling-manager-preflight-${V//./-}-$CTRL
+kubectl logs -f -n $CTRL job/scaling-manager-preflight-${V//./-}-$CTRL  # podmonitor.port, metrics.model FAIL: expected on run 1
 kubectl apply -k sm-admin/                                              # admin
 kubectl apply -k sm-owner/                                              # owner: the controller
 kubectl apply -k sm-steps/keda-auth/controller/                         # admin: the keda-auth Job's reads in $CTRL
@@ -478,6 +478,8 @@ spec:
 
 ```bash
 kubectl create namespace $CTRL                                          # admin
+kubectl create rolebinding scaling-manager-owner -n $CTRL \
+  --clusterrole=admin --user=<the owner>                                # admin: the stock admin ClusterRole, in $CTRL only
 # then the steps of one namespace, unchanged: they use $CTRL
 ```
 
@@ -657,8 +659,10 @@ Settings that are read at start (`prometheusURL`, `scaleToZero`,
 kubectl rollout restart deployment/scaling-manager-controller-manager -n $CTRL
 ```
 
-**Under GitOps.** Keep `sm-admin/` and `sm-owner/` in the sync and
-`sm-steps/` out. To upgrade:
+**Under GitOps.** Keep `sm-admin/` and `sm-owner/` in the sync. Keep
+`sm-steps/`, `scaler-tls/` and `switches/` out: syncing `scaler-tls/` would
+empty the certificates the controller wrote, and syncing `switches/` would
+reset the live switches. To upgrade:
 
 1. Run the new release's `sm-steps/preflight` by hand.
 2. Merge the path bump.
@@ -766,7 +770,10 @@ no other namespace. Its rights:
 
 - `list` on `rolebindings` in each listed model namespace, to find another
   controller's RoleBinding there;
-- `list` on `clusterrolebindings`, to find a cluster-wide install's;
+- `list` on `clusterrolebindings`, to find a cluster-wide install's. This
+  shows the cluster's RBAC layout to the owner of `$CTRL`, who can run pods
+  as the preflight's ServiceAccount, for as long as `sm-steps/preflight`
+  exists. It is read-only and temporary;
 - never Deployments. A Deployment's env holds that tenant's settings, and
   the owner of `$CTRL` can run pods as the preflight's ServiceAccount.
 
@@ -1033,7 +1040,7 @@ An install made with `make deploy-scaling-manager` is not adopted, as for
 
 | phase | what | effort |
 | --- | --- | --- |
-| 1 | `config/install` (replacing `config/overlays`), the components, `scaler-tls/` and `switches/`, `release-manifests.sh` from it, the parity check, the tarball | 2 weeks |
+| 1 | `config/install` (replacing `config/overlays`), the components, `scaler-tls/` and `switches/`, `release-manifests.sh` from it, the parity check, the tarball. `epp-monitoring` has fixed names, so two unscraped EPPs in one model namespace would collide: name its objects per EPP | 2 weeks |
 | 2 | `/manager keda-auth apply`, the marker's `ready` key and the live CA re-read, `kedaConnection`, the plan writer, the unwired-HPA report, the versioned Jobs; the new preflight checks; `smt` calls them; the kind e2e; the guide from a `guide.yaml` | 4 weeks |
 | 3 | the plugin (`init`, `run`, `plan check`, `rewire`), krew manifest, release binaries | 2 weeks |
 | 4 | the README leads with the kubectl path; `smt` stays documented beside it | 2 days |
