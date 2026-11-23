@@ -1598,6 +1598,7 @@ itlBand.minObservableK
 itlBand.minObservableK/maxObservableK
 itlBandFloors
 itlBaselineStash
+itlBaselineStashAt
 itlBaselines
 itlBeta
 itlBoundWhy
