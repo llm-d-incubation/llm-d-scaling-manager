@@ -129,15 +129,16 @@ Read the review first; the implementation design says what was built.
   into the tools image. Settles scope, upgrade, air-gapped use, privileges,
   re-runs, preflight results, dry-run and the CI gate.
 - **[Install with kubectl and kustomize, without docker](kubernetes-native-install.md)**
-  — proposed. How llm-d installs its pieces (the router with Helm charts
-  from an OCI registry; an autoscaler controller and ScaledObjects with
-  kustomize), what each `smt` step does in Kubernetes terms, and why it needs
-  docker. Recommends kustomize bases and components shipped as a signed
-  release tarball, Jobs for the preflight and the KEDA certificate (run in
-  KEDA's namespace), a controller-published ScaledObject plan, live switches
-  in the scaling policy, and a `kubectl` plugin that writes the files. `smt`
-  keeps working on the same release files. Helm is an alternative that needs
-  the maintainers to lift the no-chart rule.
+  — proposed. One signed manifest applied by the cluster admin
+  (`kubectl apply --server-side -f`), as KEDA, Kueue, LeaderWorkerSet and
+  cert-manager install. One `ScalingManagerConfig` object holds the config
+  and the live switches. A namespace label opts each namespace in. The
+  preflight runs inside the controller as conditions, and the controller
+  publishes a ScaledObject plan for review. Costs cluster-wide reads, the
+  same as today's cluster-wide install. A per-namespace kustomize path with
+  Jobs stays as the least-privilege alternative. `smt` keeps working on the
+  same release files. Helm is an alternative that needs the maintainers to
+  lift the no-chart rule.
 
 ## Engine and analyzers
 
