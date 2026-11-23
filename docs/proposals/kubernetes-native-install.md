@@ -367,6 +367,11 @@ cluster-scope shared budget. So it is enforced in two places:
   namespace KEDA sends ([security model](../reference/security-model.md)).
   Each refused namespace is listed in the `NamespacesManaged` condition.
 
+Left unset, `namespaceSelector` admits every namespace that carries the
+label. That default enforces nothing beyond the label itself, and the
+`Ready` condition warns about it under `quota.scope: cluster`. Set the
+selector whenever a cluster-scope budget is shared.
+
 Optionally, the release ships a ValidatingAdmissionPolicy,
 `scaling-manager-label-guard.yaml`, that lets only named groups set the
 label.
@@ -608,6 +613,11 @@ kubectl get clusterrole,clusterrolebinding,clustertriggerauthentication -l "$I"
 `kubectl delete -f` deletes the namespace `scaling-manager-system`, as
 KEDA's and Kueue's do theirs. It holds only the scaling manager, the scaler
 CA included.
+
+Step 2 removes the label from every labelled namespace, which assumes one
+main-path install per cluster. With more than one, remove it only from the
+namespaces this install's selector admits, which `kubectl describe` lists
+under `Managed Namespaces`.
 
 ### Customising with kustomize
 
