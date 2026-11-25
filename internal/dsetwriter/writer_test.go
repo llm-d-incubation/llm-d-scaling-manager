@@ -53,7 +53,7 @@ func set(annotations map[string]any, prefillMode string, decode int64) *unstruct
 }
 
 func optIn(mode string) map[string]any {
-	return map[string]any{OptInAnnotation: mode, ModelIDAnnotation: "org/GLM", MaxReplicasAnnotation: "8"}
+	return map[string]any{OptInAnnotation: mode, ModelIDAnnotation: "org/GLM", constants.MaxReplicasAnnotation: "8"}
 }
 
 func TestPlanHonoursAllZeroOrAllNonZero(t *testing.T) {

@@ -2,6 +2,7 @@ package crd
 
 import (
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
@@ -67,10 +68,44 @@ func detectCRDInstalled(disc serverGroupsAndResourcesIface, groupVersion, kind s
 	return false, nil
 }
 
-// CheckKEDACRD reports whether the KEDA ScaledObject CRD is installed.
-// TODO: checked once at startup; handle KEDA installed after controller starts.
-func CheckKEDACRD(restConfig *rest.Config, logger logr.Logger) bool {
-	return CheckCRDInstalled(restConfig, "keda.sh/v1alpha1", "ScaledObject", logger)
+// kedaGroupVersion and kedaKind name the KEDA ScaledObject kind.
+const (
+	kedaGroupVersion = "keda.sh/v1alpha1"
+	kedaKind         = "ScaledObject"
+)
+
+// groupVersionResourcesIface is the discovery surface KEDAAbsent needs.
+type groupVersionResourcesIface interface {
+	ServerResourcesForGroupVersion(groupVersion string) (*metav1.APIResourceList, error)
+}
+
+// KEDAAbsent reports whether KEDA's ScaledObject kind is known to be absent:
+// true only when the API server answered that keda.sh/v1alpha1 is not served,
+// or serves no ScaledObject. Any other error -- Forbidden, a timeout -- returns
+// false with the error: what cannot be read is not absent, and a controller
+// that read it as absent would force every model passive.
+func KEDAAbsent(restConfig *rest.Config) (bool, error) {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return false, err
+	}
+	return kedaAbsent(discoveryClient)
+}
+
+func kedaAbsent(disc groupVersionResourcesIface) (bool, error) {
+	list, err := disc.ServerResourcesForGroupVersion(kedaGroupVersion)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, r := range list.APIResources {
+		if r.Kind == kedaKind {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // CheckLeaderWorkerSetCRD reports whether the LeaderWorkerSet CRD is installed.

@@ -214,10 +214,10 @@ func TestPassBounds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			anns := map[string]any{OptInAnnotation: "true", ModelIDAnnotation: "org/GLM"}
 			if tc.min != "-" {
-				anns[MinReplicasAnnotation] = tc.min
+				anns[constants.MinReplicasAnnotation] = tc.min
 			}
 			if tc.max != "-" {
-				anns[MaxReplicasAnnotation] = tc.max
+				anns[constants.MaxReplicasAnnotation] = tc.max
 			}
 			store := decision.NewStore()
 			store.Set(ns, "glm-decode", tc.decided)
@@ -255,7 +255,7 @@ func TestPlanWakesFromAllZero(t *testing.T) {
 
 func TestPassRecordsWhatItWritesAndRegisters(t *testing.T) {
 	anns := optIn("true")
-	anns[ScalingPolicyAnnotation] = "premium"
+	anns[constants.ScalingPolicyAnnotation] = "premium"
 	s := set(anns, "", 3)
 	s.SetLabels(map[string]string{"app": "glm"})
 	store := decision.NewStore()

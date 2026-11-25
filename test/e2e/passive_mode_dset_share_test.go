@@ -152,10 +152,10 @@ var _ = Describe("Passive mode: utilization share on a DisaggregatedSet P/D mode
 		}, gpus, guide)).To(Succeed())
 		// Created, so the create owns replicas: "force" lets the writer take them.
 		Expect(fixtures.CreateModelServiceDSet(ctx, crClient, ns, setS, modelS, cfg.UseSimulator, 2, map[string]string{
-			dsetwriter.OptInAnnotation:       "force",
-			dsetwriter.ModelIDAnnotation:     modelS,
-			dsetwriter.MinReplicasAnnotation: "1",
-			dsetwriter.MaxReplicasAnnotation: "3",
+			dsetwriter.OptInAnnotation:      "force",
+			dsetwriter.ModelIDAnnotation:    modelS,
+			constants.MinReplicasAnnotation: "1",
+			constants.MaxReplicasAnnotation: "3",
 		}, []fixtures.DSetRole{
 			{Name: domain.RolePrefill, Size: 1, Replicas: 1},
 			{Name: domain.RoleDecode, Size: 2, Replicas: 2},

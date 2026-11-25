@@ -66,11 +66,19 @@ func ModeOf(passive bool, t registry.Target) Mode {
 type Resolver struct {
 	Config   *config.Config
 	Registry *registry.Registry
+	// KEDAAbsent forces every model passive, source config.PassiveSourceNoKEDA:
+	// KEDA's ScaledObject kind was not installed when the controller started,
+	// so nothing can act on a decision. It wins over every layer, a per-model
+	// passive: false included.
+	KEDAAbsent bool
 }
 
 // Model reports whether a model is passive and the layer that decided it
 // (config.ResolvePassive), over the tiers its live variants name.
 func (r *Resolver) Model(namespace, modelID string) (bool, string) {
+	if r != nil && r.KEDAAbsent {
+		return true, config.PassiveSourceNoKEDA
+	}
 	if r == nil || r.Config == nil {
 		return false, config.PassiveSourceFlag
 	}

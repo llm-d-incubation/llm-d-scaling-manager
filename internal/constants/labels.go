@@ -75,6 +75,16 @@ const (
 	// This provides explicit control to exclude namespaces from the scaling manager management.
 	NamespaceExcludeAnnotationKey = "scaling-manager.llmd.ai/exclude"
 
+	// MinReplicasAnnotation, MaxReplicasAnnotation and ScalingPolicyAnnotation
+	// give the bounds and the scaling-policy tier of a workload registered
+	// without a ScaledObject: a DisaggregatedSet the role writer scales, or,
+	// when KEDA is not installed, a Deployment the suggested plan finds. They
+	// take the place of a ScaledObject's minReplicaCount, maxReplicaCount and
+	// its trigger's scalingPolicy. registry.AnnotationBounds reads the first two.
+	MinReplicasAnnotation   = "scaling-manager.llmd.ai/min-replicas"
+	MaxReplicasAnnotation   = "scaling-manager.llmd.ai/max-replicas"
+	ScalingPolicyAnnotation = "scaling-manager.llmd.ai/scaling-policy"
+
 	// PodDeletionCostAnnotation is the pod annotation the ReplicaSet controller
 	// reads when choosing a scale-down victim: it removes the cheapest first.
 	// The warm pool and the utilization-share optimizer both steer with it.

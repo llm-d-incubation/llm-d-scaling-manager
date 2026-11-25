@@ -566,20 +566,24 @@ func main() {
 		setupLog.Info("LeaderWorkerSet CRD not found - support disabled (Deployment-only mode)")
 	}
 
-	// KEDA is not optional: The scaling manager discovers the workloads it manages by being called
-	// about them over the external-scaler contract, and KEDA is what makes those
-	// calls. Without it nothing ever registers, so the scaling manager runs and manages nothing —
-	// which is quiet enough to be worth saying loudly here.
+	// KEDA is what actuates: the scaling manager discovers the workloads it
+	// manages by being called about them over the external-scaler contract.
+	// There is no ScaledObject watch, index or cached read to gate (see
+	// docs/plans/engine/keda-driven-discovery.md); without KEDA the passive
+	// resolver forces every model passive.
 	//
-	// The CRD check is a diagnostic only. Nothing branches on it: there is no
-	// ScaledObject watch, index or cached read left to gate (see
-	// docs/plans/engine/keda-driven-discovery.md).
-	if crd.CheckKEDACRD(restConfig, setupLog) {
+	// kedaAbsent is decided once, here. It is true only when discovery
+	// answered that the ScaledObject kind is not served: a discovery error is
+	// not absence, and keeps the KEDA path.
+	kedaAbsent, kedaErr := crd.KEDAAbsent(restConfig)
+	switch {
+	case kedaErr != nil:
+		setupLog.Error(kedaErr, "Cannot tell whether KEDA is installed; assuming it is")
+	case kedaAbsent:
+		setupLog.Info("WARNING: KEDA ScaledObject CRD not found. Every model is passive (source noKEDA): " +
+			"nothing can act on a decision until KEDA is installed and the controller restarted.")
+	default:
 		setupLog.Info("KEDA ScaledObject CRD detected - The scaling manager will be discovered by KEDA calling its external scaler")
-	} else {
-		setupLog.Info("WARNING: KEDA ScaledObject CRD not found. The scaling manager discovers workloads only when KEDA " +
-			"calls its external scaler, so nothing will be discovered or scaled until KEDA is installed " +
-			"and a ScaledObject names this scaler in a trigger.")
 	}
 
 	tlsOpts := []func(*tls.Config){
@@ -963,7 +967,7 @@ func main() {
 
 	// One answer to "is this model passive?" for the external scaler, both
 	// engines and the warm pool, so they cannot disagree about a model.
-	passiveResolver := &passive.Resolver{Config: cfg, Registry: registry.Default}
+	passiveResolver := &passive.Resolver{Config: cfg, Registry: registry.Default, KEDAAbsent: kedaAbsent}
 
 	// The two engine loops below start together. The saturation engine reads
 	// the persisted in-flight holds back before its first cycle; until it has,

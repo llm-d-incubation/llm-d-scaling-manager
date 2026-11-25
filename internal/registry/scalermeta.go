@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 )
 
 // Trigger metadata keys. These are the whole per-variant configuration surface:
@@ -21,11 +23,16 @@ const (
 	ModelIDKey = "modelID"
 
 	// SourceKey marks an entry registered by something other than a KEDA
-	// call, with SourceRoleWriter its one value: a DisaggregatedSet role the
-	// role writer (internal/dsetwriter) registers and actuates itself. Such
-	// an entry has no ScaledObject, so the enricher leaves it alone.
+	// call. Such an entry has no ScaledObject, so the enricher leaves it
+	// alone. Its values:
+	//   - SourceRoleWriter: a DisaggregatedSet role the role writer
+	//     (internal/dsetwriter) registers and actuates itself;
+	//   - SourceScalePlan: a Deployment the suggested plan (internal/scaleplan)
+	//     finds and registers when KEDA is not installed, so a passive
+	//     controller has something to observe. Nothing actuates it.
 	SourceKey        = "scalingManagerSource"
 	SourceRoleWriter = "disaggregatedset-role-writer"
+	SourceScalePlan  = "scaleplan"
 
 	// VariantCostKey is the per-replica cost used by cost-aware optimization.
 	// Optional; a non-negative decimal string.
@@ -504,4 +511,39 @@ func ParsePoolMeta(metadata map[string]string) (PoolMeta, error) {
 		out.GPUMemoryUtilization = v
 	}
 	return out, nil
+}
+
+// AnnotationBounds reads the bounds of a workload registered without a
+// ScaledObject from its constants.MinReplicasAnnotation and
+// constants.MaxReplicasAnnotation: defMin and defMax when absent, and an error
+// naming the annotation when a value is not a count that can be used -- not
+// an integer, a negative minimum, a maximum below 1, or a minimum above the
+// maximum.
+func AnnotationBounds(annotations map[string]string, defMin, defMax int32) (lo, hi int32, err error) {
+	lo, err = annotationCount(annotations, constants.MinReplicasAnnotation, defMin, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	hi, err = annotationCount(annotations, constants.MaxReplicasAnnotation, defMax, 1)
+	if err != nil {
+		return 0, 0, err
+	}
+	if lo > hi {
+		return 0, 0, fmt.Errorf("%s %d is above %s %d", constants.MinReplicasAnnotation, lo, constants.MaxReplicasAnnotation, hi)
+	}
+	return lo, hi, nil
+}
+
+// annotationCount reads annotation key as a count of at least floor: def when
+// absent, an error when present and not such a count.
+func annotationCount(annotations map[string]string, key string, def, floor int32) (int32, error) {
+	v, ok := annotations[key]
+	if !ok {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil || n < int64(floor) {
+		return 0, fmt.Errorf("%s is %q, not an integer of %d or more", key, v, floor)
+	}
+	return int32(n), nil
 }

@@ -49,6 +49,10 @@ const (
 	// replaces the controller's own `default` entry's passive and the
 	// LLMSM_PASSIVE flag.
 	PassiveSourceSettings = "settings"
+	// PassiveSourceNoKEDA is KEDA's absence: with no ScaledObject kind
+	// installed nothing can act on a decision, so every model is passive
+	// whatever any layer above says (passive.Resolver.KEDAAbsent).
+	PassiveSourceNoKEDA = "noKEDA"
 )
 
 // ResolvePassive reports whether a model is passive -- observed, never scaled

@@ -194,7 +194,7 @@ func TestWriterOnAnAPIServer(t *testing.T) {
 		p := &passive.Resolver{Config: cfg, Registry: reg}
 		// A model of its own: the sets of the subtests above serve org/GLM
 		// under no tier, and a model is passive when any variant resolves so.
-		gold := map[string]string{ModelIDAnnotation: "org/flag", ScalingPolicyAnnotation: "gold"}
+		gold := map[string]string{ModelIDAnnotation: "org/flag", constants.ScalingPolicyAnnotation: "gold"}
 
 		writesNothing(t, p, reg, name, gold)
 

@@ -137,10 +137,11 @@ func (e *Enricher) Refresh(ctx context.Context) {
 
 	var read, failed, gone int
 	for _, entry := range live {
-		if entry.Fresh(now, e.MaxAge) || entry.Metadata[SourceKey] == SourceRoleWriter {
-			// A role-writer entry has no ScaledObject to read: its target is
-			// set by the writer on every pass, and "not found" here would
-			// forget a workload that is very much there.
+		if entry.Fresh(now, e.MaxAge) || entry.Metadata[SourceKey] != "" {
+			// An entry registered by the role writer or the suggested plan
+			// has no ScaledObject to read: its target is set by its source
+			// on every pass, and "not found" here would forget a workload
+			// that is very much there.
 			continue
 		}
 		select {

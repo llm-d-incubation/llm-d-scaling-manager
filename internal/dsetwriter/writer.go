@@ -39,7 +39,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 	"sync"
 	"time"
 
@@ -69,16 +68,13 @@ const (
 	// ModelIDAnnotation is the model the set serves, as the engine reports it
 	// (--served-model-name). Required.
 	ModelIDAnnotation = "scaling-manager.llmd.ai/model-id"
-	// MinReplicasAnnotation is the fewest groups of every Static role while
-	// the model runs: an integer of 0 or more, default 1. A model parks at
-	// zero whatever it says.
-	MinReplicasAnnotation = "scaling-manager.llmd.ai/min-replicas"
-	// MaxReplicasAnnotation is the most groups of every Static role: an
-	// integer of 1 or more and at least the minimum, default 10.
-	MaxReplicasAnnotation = "scaling-manager.llmd.ai/max-replicas"
-	// ScalingPolicyAnnotation names the scaling policy tier, as the trigger's
-	// scalingPolicy does. Optional.
-	ScalingPolicyAnnotation = "scaling-manager.llmd.ai/scaling-policy"
+	// The bounds and the tier of every Static role are
+	// constants.MinReplicasAnnotation (the fewest groups while the model runs:
+	// an integer of 0 or more, default 1; a model parks at zero whatever it
+	// says), constants.MaxReplicasAnnotation (the most groups: an integer of 1
+	// or more and at least the minimum, default 10) and
+	// constants.ScalingPolicyAnnotation (the tier, as the trigger's
+	// scalingPolicy names it; optional).
 )
 
 // FieldManager is the server-side apply field manager the writer applies as.
@@ -423,18 +419,7 @@ func EntryName(set, role string) string { return TargetName(set, role) + "-llmsm
 // can use -- not an integer, a negative minimum, a maximum below 1, or a
 // minimum above the maximum.
 func Bounds(set *unstructured.Unstructured) (lo, hi int32, err error) {
-	lo, err = annotationInt(set, MinReplicasAnnotation, defaultMin, 0)
-	if err != nil {
-		return 0, 0, err
-	}
-	hi, err = annotationInt(set, MaxReplicasAnnotation, defaultMax, 1)
-	if err != nil {
-		return 0, 0, err
-	}
-	if lo > hi {
-		return 0, 0, fmt.Errorf("%s %d is above %s %d", MinReplicasAnnotation, lo, MaxReplicasAnnotation, hi)
-	}
-	return lo, hi, nil
+	return registry.AnnotationBounds(set.GetAnnotations(), defaultMin, defaultMax)
 }
 
 func (w *Writer) reconcile(ctx context.Context, set *unstructured.Unstructured, seen map[roleKey]bool) {
@@ -680,7 +665,7 @@ func (w *Writer) register(set *unstructured.Unstructured, role, model string, lo
 		registry.ModelIDKey: model,
 		registry.SourceKey:  registry.SourceRoleWriter,
 	}
-	if p := set.GetAnnotations()[ScalingPolicyAnnotation]; p != "" {
+	if p := set.GetAnnotations()[constants.ScalingPolicyAnnotation]; p != "" {
 		md[registry.ScalingPolicyKey] = p
 	}
 	ns, name := set.GetNamespace(), EntryName(set.GetName(), role)
@@ -744,18 +729,4 @@ func (w *Writer) event(set *unstructured.Unstructured, kind, reason, msg string)
 	if w.Recorder != nil {
 		w.Recorder.Event(set, kind, reason, msg)
 	}
-}
-
-// annotationInt reads annotation key of set as a count of at least floor:
-// def when absent, an error when present and not such a count.
-func annotationInt(set *unstructured.Unstructured, key string, def, floor int32) (int32, error) {
-	v, ok := set.GetAnnotations()[key]
-	if !ok {
-		return def, nil
-	}
-	n, err := strconv.ParseInt(v, 10, 32)
-	if err != nil || n < int64(floor) {
-		return 0, fmt.Errorf("%s is %q, not an integer of %d or more", key, v, floor)
-	}
-	return int32(n), nil
 }
