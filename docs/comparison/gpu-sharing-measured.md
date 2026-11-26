@@ -4,7 +4,8 @@
 > One arm of each kind ran to the end and passed the run's checks: arm A
 > (llm-d's recipes) first, then arm B (the scaling manager). The verdict rule,
 > fixed before the run, needs the full A-B-B-A order and both pairs agreeing.
-> A full A-B-B-A re-run is in progress.
+> A full A-B-B-A re-run, on the router llm-d documents for arm A's signal, is
+> in progress.
 
 [Sharing a GPU budget between models](gpu-sharing.md) explains, from the
 documents, how llm-d's recipes and the scaling manager share GPUs. This page is
@@ -26,8 +27,9 @@ showed, and where arm A is not exactly what llm-d documents.
   - Arm A's router is not the one llm-d documents for its default autoscaling
     signal (see [Where arm A differs](#where-arm-a-differs-from-llm-ds-recipes)).
     That slowed A's scale-up by an amount this run cannot separate out.
-- **Next.** The full A-B-B-A re-run. It keeps this pair's router, so the
-  router question stays open (see [Open questions](#open-questions)).
+- **Next.** The full A-B-B-A re-run. Both arms now use llm-d's
+  optimized-baseline router without flow control, as the `inflight` path is
+  documented (see [Open questions](#open-questions)).
 
 ## The question
 
@@ -64,8 +66,10 @@ The same in both arms:
   on the node's local disk. They stand in for two different models of the same
   size, so the result says nothing about a small model next to a large one.
 - **Router:** llm-d router v1.0.0 endpoint picker, InferencePool chart v1.5.0,
-  the same plugin config in both arms (below). Gateway: agentgateway v1.2.1,
-  one of the gateways the KEDA guide names.
+  the same plugin config in both arms. In the first pair that config had flow
+  control on (below). In the re-run it is llm-d v1.0.0's
+  [optimized-baseline config][ob-router], byte for byte, with no flow control.
+  Gateway: agentgateway v1.2.1, one of the gateways the KEDA guide names.
 - **KEDA v2.18.1 and Kueue v0.20.2**, as already installed on the shared
   cluster.
 - **Budget:** 6 GPUs, a floor of 3 per model. Up to 8 replicas each, so the
@@ -82,9 +86,12 @@ being compared, not a setting tuned for this run.
 We checked every value of arm A against llm-d's files at v1.0.0 (the
 in-flight ScaledObject is the same on `main`). The differences:
 
-1. **The router had flow control on.** llm-d documents the `inflight` signal
-   as needing no flow control, on the optimized-baseline router config (a
-   prefix-cache affinity filter and a token-load scorer). Both arms here ran
+1. **In the first pair, the router had flow control on.** The re-run removes
+   this difference: arm A, and arm B with it, run the optimized-baseline
+   router config. This is how the first pair differed. llm-d documents the
+   `inflight` signal as needing no flow control, on the optimized-baseline
+   router config (a prefix-cache affinity filter and a token-load scorer). Both
+   arms of the first pair ran
    the router config of llm-d's KEDA flow-control overlay
    ([router.values.yaml][keda-router]): the `flowControl` gate and the queue,
    KV-cache, prefix-cache and no-hit-LRU scorers, with the
@@ -244,14 +251,15 @@ repository.
 
 ## Open questions
 
-What an llm-d maintainer would fairly ask us to change. None of these is
-settled; the re-run in progress has the same setup as this pair.
+What an llm-d maintainer would fairly ask us to change. The re-run in progress
+takes up the first; the others are still open.
 
-1. **The router for arm A.** Either run A on the optimized-baseline router
-   without flow control, as the `inflight` path is documented, or keep flow
-   control and use the `queue` signal, which the guide pairs with it. Arm B
-   can run on either router; with flow control off it loses only scale from
-   zero, which this run does not use.
+1. **The router for arm A.** Taken up in the re-run: A runs on the
+   optimized-baseline router without flow control, as the `inflight` path is
+   documented. B runs on the same router. With flow control off, B loses only
+   scale from zero, which this run does not use, so the autoscaler stays the
+   only difference between the arms. The other way, flow control with the
+   `queue` signal that the guide pairs with it, is not tested.
 2. **The scale-up window.** 300 s is the guide's value, chosen to damp
    overshoot while new replicas load. A run with a shorter window would show
    how much of the P1 gap is the window.
@@ -272,8 +280,12 @@ settled; the re-run in progress has the same setup as this pair.
   between KEDA's connection to the scaling manager and the controller
   restarting. The fix waits, and checks that the HPAs use the scaling
   manager's metric, before B starts.
-- **The re-run** is the full A-B-B-A with that fix and nothing else changed.
-  It takes about 6.5 hours and at most 38 GPU-hours.
+- **Run 4 gave no result.** Its load generator never started. Its pod needs a
+  CPU-only node, and those were full, so no request was sent. The run now checks
+  for room before it takes any GPU.
+- **The re-run** is the full A-B-B-A with these fixes and with llm-d's
+  documented router for both arms. It takes about 6.5 hours and at most 38
+  GPU-hours.
 
 ## Links
 
