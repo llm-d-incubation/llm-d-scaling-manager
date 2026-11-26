@@ -17,6 +17,10 @@ merged after it). The competitor sections keep the dates they give.
   a model whose load fell to one whose load rose: what llm-d offers today
   (its experimental Kueue guide: floors, borrowing and preemption) and what
   the utilization-share optimizer adds, and when the two work together.
+- **[Sharing a GPU budget: the measured comparison](gpu-sharing-measured.md)**
+  — the same question on 6 GPUs: llm-d's KEDA and Kueue recipes against the
+  utilization-share optimizer. One valid pair so far, a pointer and not the
+  verdict; a full re-run is in progress.
 - **[NVIDIA Dynamo, Mooncake and SGLang](autoscaling-nvidia-mooncake-sglang-vs-scaling-manager.md)**
   — the detailed comparison. Dynamo's Planner is the only true peer autoscaler
   of the three, and the only one with forecasting; Mooncake is a load-shedding
@@ -26,13 +30,15 @@ merged after it). The competitor sections keep the dates they give.
   — the same ground against the hosted platforms, compressed: which signals each
   one scales on, and how many of them you are allowed to use at once.
 
-The Dynamo, Mooncake and SGLang pages benchmark nothing. The only measured
-head-to-head is against KEDA thresholds: one July 2026 study of five scenarios,
+The Dynamo, Mooncake and SGLang pages benchmark nothing. The only complete
+measured head-to-head is against KEDA thresholds: one July 2026 study of five scenarios,
 one run each, on an older controller
 and recipe; [KEDA alone](keda-alone.md#measured-against-keda-alone) says what
 still holds. Since then the warm pool, the P/D path and quota sharing between
 models have been measured on their own, not against KEDA; the
 [table](keda-alone.md#what-was-measured-and-what-failed) lists each run, with
-the one that failed.
+the one that failed. A head-to-head on a shared GPU budget, against llm-d's
+KEDA and Kueue recipes, has one valid pair so far
+([the measured comparison](gpu-sharing-measured.md)).
 
 These pages compare mechanisms, not projects.
