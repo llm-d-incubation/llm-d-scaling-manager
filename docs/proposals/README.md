@@ -256,6 +256,12 @@ last; it is the unit change that makes the other two land.
   An HTTP API served by `capacity-planner serve`, a small web page on it that opens on a
   Prometheus window, and Grafana for monitoring only; why v1 prices the
   critical class alone and the current mix as one TTFT line.
+- **[One fitted model for the controller and the capacity planner](one-fit-controller-and-planner.md)**
+  — proposed. Today the two fit separately and can disagree. Here the
+  controller writes its live fit to a learned-state ConfigMap per namespace,
+  measured at about 2.7 KB a variant, and the planner reprices from it, with
+  the fit id and age on both panel tabs. A restarted controller fits from the
+  Prometheus history through the planner's own capture path. Depends on #448.
 - **[Predicted latency and capacity in the controller](predicted-latency-in-controller.md)**
   — proposed, skeleton built. The capacity planner's latency and capacity
   figures carried into the analyzers that own each quantity, from shared
