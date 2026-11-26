@@ -27,9 +27,81 @@ showed, and where arm A is not exactly what llm-d documents.
   - Arm A's router is not the one llm-d documents for its default autoscaling
     signal (see [Where arm A differs](#where-arm-a-differs-from-llm-ds-recipes)).
     That slowed A's scale-up by an amount this run cannot separate out.
+  - In both runs, llm-d's in-flight signal went below zero after Kueue
+    preempted a model server pod, and the model's autoscaler then asked for
+    its maximum whatever the load (see the
+    [finding](#finding-the-in-flight-signal-goes-below-zero-after-a-preemption)).
 - **Next.** The full A-B-B-A re-run. Both arms now use llm-d's
   optimized-baseline router without flow control, as the `inflight` path is
   documented (see [Open questions](#open-questions)).
+
+## Finding: the in-flight signal goes below zero after a preemption
+
+Arm A scales each model on llm-d's `inflight` signal (llm-d v1.0.0 with its
+router v1.0.0, as they are today). The router exports
+`llm_d_epp_inflight_requests` per model server pod, and the ScaledObject sums
+it. We measured two things:
+
+- When Kueue preempts a pod that has requests in flight, that pod's series
+  goes below zero.
+- The series is still exported after the pod is gone, so it keeps the
+  model's sum too low.
+
+What happens next is set by KEDA. Its Prometheus scaler reads a negative sum
+as the largest int64 value, `9223372036854775807m`. The model's autoscaler
+(HPA) then asks for its maximum of 8 replicas, whatever the load, for as long
+as the sum stays below zero.
+
+**In the re-run, arm 1 (A):**
+
+- At 10:49:26Z Kueue preempted X pod `fpvvk` to give Y its floor. That pod's
+  series read +2,521 at 10:47:59Z and −2,183 by 10:59:29Z, and stayed there.
+- X's sum was below zero from 32.2 to 46.8 minutes into the arm: 14.5
+  minutes, from P2 (the swap) into P3. Its lowest value was −1,880.
+- Throughout, X's HPA asked for 8 replicas and KEDA reported
+  `9223372036854775807m`.
+- After P3's load raised the count, the sum stayed 2,183 too low. It went
+  below zero again once the load drained.
+
+| Pinned period | X's load | Replicas X's load needs | GPU-hours X held | GPU-hours X's load needed | Pod-minutes at Kueue's gate |
+| --- | --- | --- | --- | --- | --- |
+| P2, 7.8 min | 2 req/s | 1 | 0.38 | 0.13 | 37.7 |
+| P3, 6.8 min | 14 req/s | 4 | 0.33 | 0.45 | 32.7 |
+| All, 14.5 min | | | 0.70 | 0.58 | 70.4 |
+
+In P2, X held about three times the GPUs its load needed, and Y was the busy
+model. In P3, X held less than it needed, because the 6-GPU budget was full.
+
+The pinned HPA also held pods at Kueue's gate, and those count as gated
+pod-minutes. Y's floor pod read −6,992 later in the run, after the two B arms;
+we have not found that cause.
+
+**In the first pair's arm A (run 3, the pair this page reports),** the router
+had flow control on, which caps a pod's in-flight count at about 37, so the
+negatives were small: −2 to −37.
+
+- Each one appeared within 20 s of that pod being preempted or deleted:
+  X `dpsnh` and `trrqt` (preempted) and X `xrbg5` (deleted), all at 23:04Z,
+  and Y `5pfhh` (preempted) at 23:19Z.
+- Y's sum stayed below zero for the last 8.6 minutes, in P4 (quiet).
+- In that time Y's HPA asked for 5, then 8, replicas and held 0.43 GPU-hours
+  against the 0.14 its load needed, with 28.3 pod-minutes at the gate.
+- X's sum was below zero for 3.0 minutes in all, in short spells.
+
+The first pair's numbers in this page are as measured, and they include these
+periods. In particular, A's quiet-phase GPU-hours (1.32) include Y's 0.43.
+
+**What it means for the comparison.**
+
+- The scaling manager (B) does not read this gauge: its autoscalers scale on
+  the scaling manager's own metric.
+- Each A arm is reported twice: as measured, and with its pinned periods
+  marked. The run's report generator finds these periods from the captured
+  series. Nothing is removed, and the decision rule is unchanged.
+- The routers are not restarted between arms, so the re-run's arm 4 (A) would
+  have started with both models' sums already below zero. Instead, both
+  routers were restarted in arm 4's quiet period, so arm 4 starts from the
+  same state as arm 1. The restart was decided before arm 4 ran.
 
 ## The question
 
