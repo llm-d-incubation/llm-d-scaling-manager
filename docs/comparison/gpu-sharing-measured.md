@@ -4,8 +4,9 @@
 > One arm of each kind ran to the end and passed the run's checks: arm A
 > (llm-d's recipes) first, then arm B (the scaling manager). The verdict rule,
 > fixed before the run, needs the full A-B-B-A order and both pairs agreeing.
-> A full A-B-B-A re-run, on the router llm-d documents for arm A's signal, is
-> in progress.
+> The re-run on the router llm-d documents for arm A's signal finished
+> incomplete: its arm 3 (B) sent no load. Two more A-B-B-A runs are queued (see
+> [How we got here](#how-we-got-here)).
 
 [Sharing a GPU budget between models](gpu-sharing.md) explains, from the
 documents, how llm-d's recipes and the scaling manager share GPUs. This page is
@@ -27,18 +28,20 @@ showed, and where arm A is not exactly what llm-d documents.
   - Arm A's router is not the one llm-d documents for its default autoscaling
     signal (see [Where arm A differs](#where-arm-a-differs-from-llm-ds-recipes)).
     That slowed A's scale-up by an amount this run cannot separate out.
-  - In both runs, llm-d's in-flight signal went below zero after Kueue
-    preempted a model server pod, and the model's autoscaler then asked for
-    its maximum whatever the load (see the
-    [finding](#finding-the-in-flight-signal-goes-below-zero-after-a-preemption)).
-- **Next.** The full A-B-B-A re-run. Both arms now use llm-d's
-  optimized-baseline router without flow control, as the `inflight` path is
-  documented (see [Open questions](#open-questions)).
+  - We hit an upstream bug: llm-d's in-flight signal goes below zero after
+    Kueue preempts a model server pod, and the model's autoscaler then asks
+    for its maximum whatever the load (see the
+    [finding](#finding-an-upstream-bug-in-the-in-flight-signal)).
+- **Next.** Two more full A-B-B-A runs are queued: one with flow control on in
+  both arms and arm A on llm-d's `queue` signal, and one more on the stock
+  router with the fixes the re-run showed it needs.
 
-## Finding: the in-flight signal goes below zero after a preemption
+## Finding: an upstream bug in the in-flight signal
 
-Arm A scales each model on llm-d's `inflight` signal (llm-d v1.0.0 with its
-router v1.0.0, as they are today). The router exports
+This is a bug in upstream llm-d that we hit while running arm A. It is not
+something the comparison set up, and it is not fixed by any setting we know
+of. Arm A scales each model on llm-d's `inflight` signal (llm-d v1.0.0 with
+its router v1.0.0, as they are today). The router exports
 `llm_d_epp_inflight_requests` per model server pod, and the ScaledObject sums
 it. We measured two things:
 
@@ -98,10 +101,42 @@ periods. In particular, A's quiet-phase GPU-hours (1.32) include Y's 0.43.
 - Each A arm is reported twice: as measured, and with its pinned periods
   marked. The run's report generator finds these periods from the captured
   series. Nothing is removed, and the decision rule is unchanged.
-- The routers are not restarted between arms, so the re-run's arm 4 (A) would
-  have started with both models' sums already below zero. Instead, both
-  routers were restarted in arm 4's quiet period, so arm 4 starts from the
-  same state as arm 1. The restart was decided before arm 4 ran.
+- The routers are not restarted between arms, so the re-run's arm 4 (A)
+  would have started with both models' sums already below zero: X at −2,185
+  and Y at −8,418. Both HPAs would have asked for 8 replicas from the first
+  second. The restart was needed. Both routers were restarted in arm 4's quiet
+  period, and the restart was decided before arm 4 ran. After it, no series
+  was below zero, and arm 4 started from the same state as arm 1.
+- **In the re-run's arm 4 (A), after the restart:** Kueue preempted two X pods
+  at 15:00Z. Their series went to −2 and −1 within about 45 s. X's sum stayed
+  at or above zero, so no HPA was pinned. The bug was there again, but small,
+  because the load on those pods was small.
+- The next stock-router run restarts both routers before every A arm, as part
+  of its pre-registered protocol.
+
+**How to reproduce it.**
+
+1. In one namespace, deploy llm-d v1.0.0's optimized-baseline for two models,
+   with the router's stock plugin config. Give each model the keda-epp
+   `inflight` ScaledObject (`AverageValue` 16, at most 8 replicas). Add the
+   `kueue-rebalancing` queues: one ClusterQueue per model in a shared cohort,
+   each floor below the model's peak, `reclaimWithinCohort: Any`.
+2. Drive model X far above what one replica can serve, so that it borrows the
+   other model's quota and holds many requests in flight. We used 18 req/s of
+   1,000-token prompts with 250-token answers against Qwen3-32B on one H200
+   GPU per replica.
+3. Raise model Y's load so that Kueue preempts an X pod to give Y back its
+   floor.
+4. Watch the preempted pod's series,
+   `llm_d_epp_inflight_requests{endpoint_name="<pod>-rank-0"}`, and the
+   model's sum. Within about 20 s the series goes below zero, and it stays
+   there. While the sum is negative,
+   `kubectl get hpa <name> -o jsonpath='{.status.currentMetrics}'` shows
+   `9223372036854775807m`.
+5. A `kubectl rollout restart` of the model's router (EPP) Deployment clears
+   it. In a ScaledObject you control, `clamp_min(sum(...), 0)` keeps the
+   autoscaler from reading the negative sum. It does not fix the count, which
+   stays too low by the amount below zero.
 
 ## The question
 
@@ -355,9 +390,22 @@ takes up the first; the others are still open.
 - **Run 4 gave no result.** Its load generator never started. Its pod needs a
   CPU-only node, and those were full, so no request was sent. The run now checks
   for room before it takes any GPU.
-- **The re-run** is the full A-B-B-A with these fixes and with llm-d's
-  documented router for both arms. It takes about 6.5 hours and at most 38
-  GPU-hours.
+- **Run 5, the re-run on llm-d's documented router, is incomplete.** It ran the
+  full A-B-B-A with these fixes, and both arms used llm-d's optimized-baseline
+  router without flow control.
+  - Arms 1 (A), 2 (B) and 4 (A) ran.
+  - Arm 3 (B) sent no load. Its first request waited behind 9,582 requests
+    that arm 2 had abandoned on a Y model server. Without flow control, the
+    router does not queue or shed them, and the model server keeps working on
+    them. They drained about 26 minutes after arm 2 ended.
+  - By the rule, a run with a failed arm gives no verdict.
+  - It is also the run that showed the
+    [upstream bug](#finding-an-upstream-bug-in-the-in-flight-signal).
+- **Next, queued.** Two more full A-B-B-A runs, one after the other:
+  - one with flow control on in both arms and arm A on llm-d's `queue` signal,
+    the path llm-d pairs with flow control;
+  - one more on the stock router. Before every arm it waits until no model
+    server holds a request, and it restarts both routers before every A arm.
 
 ## Links
 
