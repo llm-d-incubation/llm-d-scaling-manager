@@ -14,7 +14,7 @@ require (
 	golang.org/x/tools v0.52.0
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
-	sigs.k8s.io/controller-runtime v0.25.2
+	sigs.k8s.io/controller-runtime v0.25.3
 	sigs.k8s.io/gateway-api-inference-extension v1.2.1
 	sigs.k8s.io/lws v0.8.0
 )
