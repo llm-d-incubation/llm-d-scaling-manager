@@ -155,3 +155,11 @@ What does not work, or is not shown yet:
   `lendingLimit: 0` (offered in the guide's Tuning section) stops them. The
   optimizer itself starts no borrowing beyond the budget.
 - **Measurement.** A cluster-wide quota has not been measured yet.
+
+## Measured
+
+A live run on 6 GPUs compares llm-d's KEDA and Kueue recipes with the
+utilization-share optimizer, two models of the same size, one budget. So far
+it has one valid pair, a pointer and not the verdict; a full re-run is in
+progress. [The measured comparison](gpu-sharing-measured.md) gives the
+numbers, and says where that run's llm-d arm differs from llm-d's own recipes.
