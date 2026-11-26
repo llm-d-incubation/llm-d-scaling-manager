@@ -474,6 +474,71 @@ as the engine metrics in Prometheus, and get the same scoping: per namespace,
 never across. The writer identity in the document (a Pod hostname) is already
 there today.
 
+## Converging the planner's models into the controller
+
+One fit is only one fit if both sides run the same models. Each model
+improvement made in the planner is carried into the controller (tracker
+#169). It is not kept as a planner-only branch of the code.
+
+**1. Every planner switch gets a controller switch, passive first.**
+
+- The fix lives in the shared packages (`internal/signals/prefill`,
+  `internal/signals/whatif`) and is turned on in the analyzer that owns the
+  quantity.
+- It starts **passive**: the controller computes the figure and publishes it
+  under the learner label, with `origin` as above. It is compared against
+  live measurements (the router's TTFT and TPOT, the planner's backtest
+  tolerance), and nothing sizes from it.
+- It goes **active** only after the acceptance below. Until then it is a
+  shadow figure.
+- A switch that is on in the planner and passive in the controller is
+  recorded in the snapshot's `switches`. The planner then prices the
+  controller source with the controller's setting, and says which switch
+  differs.
+
+**2. The controller scales on the point estimate.**
+
+- The controller sizes on the fit's **point estimate**, with its existing
+  scale-up and scale-down thresholds.
+- A **lower bound** is used only as a cold-start fallback, until the live
+  fit is identified. Examples are V_P known only as a lower bound
+  (`VPLowerBound`) and the served-work knee floor (#494).
+- Warm start shortens that window: a backfilled fit identifies in minutes
+  rather than after the 12 h spread calibration.
+- The planner reports the bound and the point estimate side by side, so an
+  operator can see how much of a figure rests on a bound.
+
+**3. To go active, a GPU run.** The run compares the same model and load
+with the switch off and on:
+
+- replica counts over time per role;
+- SLO attainment (TTFT and TPOT, at the objective's percentile);
+- GPU-hours.
+
+A switch goes active only where it does not lower SLO attainment. Its cost in
+GPU-hours is stated in the PR that turns it on. Unit parity tests (planner and
+controller on one recording) are necessary, but they are not enough.
+
+**4. The planner-only items today.** Checked on `main` at `0f57f31e` and the
+open PR heads.
+
+| Item | State | Controller side today |
+| --- | --- | --- |
+| Hit at count, reuse-gap rule (#469; issue #384) | merged | `saturation.SwitchPrefillHitAtCount` is registered, but only by name: "the saturation analyzer reads nothing with it". It acts only in `learnreplay` when the planner turns it on, and it is not in `learnreplay.PlannerSwitches`. |
+| Prefix duplication from the router's affinity loss (#472) | open | no switch of its own. It rides `prefill-hit-at-count` and is planner-only. |
+| f from pooled minutes (#491) | open | adds `saturation.SwitchPrefillFPooledMinutes`, documented as planner-only |
+| f against load per pod (#493) | open | adds `saturation.SwitchPrefillFLoadCurve` and `--prefill-f-load-curve`. Planner-only, not in `PlannerSwitches`. |
+| Served-work floor only at a steady backlog (#494) | open | no switch. It changes `learnreplay.ServedWorkWindow` (2 to 5 min) and adds a flag, both on the planner's path only. |
+| Router remainder drawn from the API servers (#492) | open | a planner flag (`rankMixtureRemainderServerFlag`) only. The controller's v2 window has no render or API-server series. |
+| TPOT joint router+engine bracket (#470) | open | changes scoring only, plus `--experimental-tpot=v2-mix`. There is no controller switch, and `DecodeCycle.EngineTPOT` is not on `main`. |
+| `--experimental-ttft=v2nl-line`, `--rank-mixture-kv-hold`, `--rank-mixture-remainder-spread` | built | the fields exist in the shared `whatif.RankMixtureSwitches`, but the controller's v2 learners fit with `Stratified` alone (#448). Porting each means a slo switch that sets the field. |
+| The other prefill switches documented "Planner-only" (`prefill-vp-window-best`, `-vp-at-served-work`, `-vp-occupancy-plateau`, `-vp-prompt-coverage`, `-vp-lone-rate`, `-vp-service-line`, and `-a-low-load-per-rank` and its siblings in `PlannerSwitches`) | built | registered names in `saturation/prefill_observe.go`, read by `learnreplay` for the planner, off in the controller |
+
+None of these has a controller behaviour today. The order to port them
+follows #169. A switch that changes the fit's shape (`NLLine` and its modes,
+the f curve) also changes the snapshot entry, so its port bumps the `fits`
+version.
+
 ## What must happen first
 
 | Gap | State | Effect here |
