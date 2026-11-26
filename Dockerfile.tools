@@ -28,7 +28,7 @@ FROM scratch AS release
 # their bundles: the tarball is this image's own scripts, for machines without a
 # container runtime, and the planner ships as its own image. SHA256SUMS still
 # lists them; install checks it with --ignore-missing.
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9 AS release-files
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:08d4c70f1baf6537a0728656cf7942d561e74a35916509d205b6519861266352 AS release-files
 COPY --from=release / /in/
 RUN set -eu; mkdir -p /out; \
     for f in /in/*; do \
@@ -38,7 +38,7 @@ RUN set -eu; mkdir -p /out; \
     done; \
     chmod 0644 /out/* 2>/dev/null || true
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:baafce2d34783a28b4a472779f304e97e00f9d35c99553bc53b068b14344d9a9
+FROM registry.access.redhat.com/ubi9/ubi-minimal@sha256:08d4c70f1baf6537a0728656cf7942d561e74a35916509d205b6519861266352
 
 ARG TARGETARCH
 # The yq the deploy-script checks run under in CI (ci-pr-checks.yaml), so
