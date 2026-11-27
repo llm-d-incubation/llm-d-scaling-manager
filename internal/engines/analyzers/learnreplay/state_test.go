@@ -442,7 +442,15 @@ func TestStateAt_TheBandBracketsTheControllersLineOnAScopedPrior(t *testing.T) {
 	t.Logf("controller %.5f s at k %.2f; band with the admission [%.5f, %.5f], without [%.5f, %.5f]",
 		ctrl, k, band.Band.Lo, band.Band.Hi, plain.Band.Lo, plain.Band.Hi)
 	require.True(t, band.Band.Lo <= ctrl+1e-12 && ctrl <= band.Band.Hi+1e-12, "the band does not bracket the controller's line")
-	require.Less(t, plain.Band.Hi, ctrl, "negative control: without the admission the band reached the controller's line")
+	// The negative control reads the resamples: the band holds its point,
+	// the controller's figure, whatever they price.
+	over := 0
+	for _, s := range off.Lines {
+		if got, _ := val(s.Line); got >= ctrl {
+			over++
+		}
+	}
+	require.Less(t, float64(over), 0.1*float64(len(off.Lines)), "negative control: without the admission the resamples reached the controller's line")
 }
 
 // A full fit kept under the set values by the tier latch (issue ev-shindin/llm-scaling-manager#495) is

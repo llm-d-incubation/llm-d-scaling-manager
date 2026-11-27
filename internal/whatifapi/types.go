@@ -355,16 +355,16 @@ type Term struct {
 // bootstrap band over the ITL line's readings (the 10th to the 90th
 // percentile); Sensitivity the span over V_P and f either way.
 type Figure struct {
-	Value           *float64 `json:"value,omitempty"`
-	Unit            string   `json:"unit,omitempty"`
-	Band            *Band    `json:"band,omitempty"`
-	Sensitivity     *Span    `json:"sensitivity,omitempty"`
-	Floor           *float64 `json:"floor,omitempty"`
-	Uncapped        *float64 `json:"uncapped,omitempty"`
-	PrefillOnlyRate *float64 `json:"prefillOnlyRate,omitempty"`
-	BoundBy         []string `json:"boundBy,omitempty"`
-	Flags           []string `json:"flags,omitempty"`
-	Refused         *Refusal `json:"refused,omitempty"`
+	Value           *float64    `json:"value,omitempty"`
+	Unit            string      `json:"unit,omitempty"`
+	Band            *FigureBand `json:"band,omitempty"`
+	Sensitivity     *Span       `json:"sensitivity,omitempty"`
+	Floor           *float64    `json:"floor,omitempty"`
+	Uncapped        *float64    `json:"uncapped,omitempty"`
+	PrefillOnlyRate *float64    `json:"prefillOnlyRate,omitempty"`
+	BoundBy         []string    `json:"boundBy,omitempty"`
+	Flags           []string    `json:"flags,omitempty"`
+	Refused         *Refusal    `json:"refused,omitempty"`
 	// Validation is the envelope's verdict on the figure, on the figures a
 	// plan reads (the points A and B, the knees and the limits), not on a
 	// curve's points.
@@ -402,6 +402,14 @@ type BatchBeyondFit struct {
 type Band struct {
 	Lo float64 `json:"lo"`
 	Hi float64 `json:"hi"`
+}
+
+// FigureBand is a figure's bootstrap band, Lo to Hi, with Blocks, its
+// effective sample size: the distinct blocks of cycles it was drawn from.
+type FigureBand struct {
+	Lo     float64 `json:"lo"`
+	Hi     float64 `json:"hi"`
+	Blocks int     `json:"blocks,omitempty"`
 }
 
 // Span is a figure's span over V_P and f. A corner the model refused leaves

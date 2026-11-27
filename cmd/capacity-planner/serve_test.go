@@ -114,7 +114,7 @@ func wantOf(r *wireResult) whatifapi.Figure {
 	f := whatifapi.Figure{Value: fp(a.Value), BoundBy: a.Basis.BoundBy, Flags: a.Flags, Sensitivity: spanWant(a.Sensitivity, a.Unit == unitSeconds),
 		Validation: a.Validation}
 	if a.Band != nil {
-		f.Band = &whatifapi.Band{Lo: a.Band.Lo, Hi: a.Band.Hi}
+		f.Band = &whatifapi.FigureBand{Lo: a.Band.Lo, Hi: a.Band.Hi, Blocks: a.Band.Blocks}
 	}
 	if a.Basis.Uncapped > 0 {
 		f.Uncapped = fp(a.Basis.Uncapped)

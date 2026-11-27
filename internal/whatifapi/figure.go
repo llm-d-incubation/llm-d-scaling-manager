@@ -21,7 +21,7 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 	case whatif.Answer:
 		f := Figure{Value: ptr(v.Value), Unit: unit, Sensitivity: spanOf(v.Sensitivity, worseIsHigh), Flags: FlagNames(v.Flags)}
 		if v.Band != nil {
-			f.Band = &Band{Lo: v.Band.Lo, Hi: v.Band.Hi}
+			f.Band = &FigureBand{Lo: v.Band.Lo, Hi: v.Band.Hi, Blocks: v.Band.Blocks}
 		}
 		for _, b := range v.Basis.BoundBy {
 			f.BoundBy = append(f.BoundBy, string(b))

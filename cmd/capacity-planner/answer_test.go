@@ -513,7 +513,7 @@ func TestJSONSchemaIsDocumented(t *testing.T) {
 // The band's seed is the flag's: the same seed gives the same bands, and
 // another seed other bands.
 func TestSeedSetsTheBands(t *testing.T) {
-	band := func(seed string) wireInterval {
+	band := func(seed string) wireBand {
 		out, _ := runCmd(t, slices.Concat([]string{"replicas-to-slo", "--recording", olsSweep, "-o", "json", "--seed", seed}, workedShape)...)
 		return *decodeOutput(t, out).Roles[0].Results.MeanTPOT.Answer.Band
 	}

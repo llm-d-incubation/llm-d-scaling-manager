@@ -109,8 +109,8 @@ func TestBootstrapRerunsTheReadinessGate(t *testing.T) {
 		t.Fatalf("fitted %d of %d", len(got.Lines), got.Drawn)
 	}
 	for _, s := range got.Lines {
-		if s.Tier != TierPinnedB || !s.TierChanged || s.Line.B != worked.B {
-			t.Fatalf("resample %+v: want a pinned-B fit at the baseline, a change of tier", s)
+		if s.Tier != TierPinnedB || !s.TierChanged {
+			t.Fatalf("resample %+v: want a pinned-B fit, a change of tier", s)
 		}
 	}
 	a := BandAnswer(Answer{Value: 1}, got, func(m itl.Model) (float64, bool) { return m.ITLAt(0.5), true })

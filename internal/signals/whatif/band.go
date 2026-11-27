@@ -68,6 +68,14 @@ type Refit struct {
 	// was lifted (LiftToFloor), so the band is around the line the planner
 	// prices. The zero value lifts nothing.
 	Floor LineFloor
+	// BelowBandITL is the floor read below the band, 0 with none: every
+	// reading there is A k + B, so it bounds a drawn intercept from above,
+	// never under Baseline (interceptDraw).
+	BelowBandITL float64
+	// HoldB pins every resample's pinned fit at Baseline, as before issue
+	// llm-d-incubation/llm-d-scaling-manager#307: set for an intercept the
+	// operator stated, which is an assumption and not a reading.
+	HoldB bool
 }
 
 // Resample is one bootstrap line: the line fitted from one resample, the
@@ -86,6 +94,12 @@ type LineResamples struct {
 	// Drawn is how many resamples were drawn, those that fitted no line
 	// included: the denominator of the tier-change share.
 	Drawn int
+	// Blocks is the bootstrap's effective sample size: the distinct blocks
+	// of Block cycles the windows hold, each stratum's cycles over Block
+	// rounded up. A window of 20 readings from 4 replicas is 5 cycles, 2
+	// blocks: the resamples are mostly the same few blocks again, and the
+	// band is widened for it (bandWidening).
+	Blocks int
 }
 
 // TierChanges is how many of the drawn resamples landed at another tier
@@ -124,6 +138,14 @@ func (rs LineResamples) TierChanges() int {
 // windows in time order (pinnedReadings), reads them in that order and two
 // draws of one cycle stay two cycles.
 //
+// A resample the tracker fits pinned is fitted through its own intercept,
+// not Baseline (interceptDraw; issue llm-d-incubation/llm-d-scaling-manager#307):
+// the pinned B is an estimate too, and its error reaches a fill k as
+// (B_true - B)(1 - k/kbar), 1.83 times the error in B at k 0.85 from a mean
+// fill of 0.3. Held at Baseline, it added nothing to the band. The drawn
+// intercepts have median Baseline, so they widen the band about the line
+// and do not move it.
+//
 // Each resample is fitted as the tracker would fit it (Refit), and the tier
 // it lands at is compared with the line's in both directions: ols to
 // pinned-B and pinned-B to ols are both changes, and so is a resample on
@@ -149,13 +171,20 @@ func BootstrapLines(readings itl.KeyReadings, fit Refit, r Resampling) LineResam
 	if rs == nil {
 		return LineResamples{}
 	}
-	rng := rand.New(rand.NewPCG(r.Seed, r.Seed^0x9e3779b97f4a7c15))
-	out := LineResamples{Drawn: r.Resamples, Lines: make([]Resample, 0, r.Resamples)}
+	newRNG := func() *rand.Rand { return rand.New(rand.NewPCG(r.Seed, r.Seed^0x9e3779b97f4a7c15)) }
+	ic := newInterceptDraw(all, fit)
+	if ic != nil {
+		// A first pass over the same draws finds the centre of the
+		// resamples' intercepts, so the drawn B has median Baseline.
+		ic.centre(rs, newRNG(), r.Resamples)
+	}
+	rng := newRNG()
+	out := LineResamples{Drawn: r.Resamples, Lines: make([]Resample, 0, r.Resamples), Blocks: rs.blocks()}
 	for range r.Resamples {
 		// The buffers are reused: refit keeps only the line and its tier,
 		// never the readings itl.Refit read (Refitted.Read).
 		sAll, sSteady := rs.draw(rng)
-		if s, ok := refit(sAll, sSteady, fit); ok {
+		if s, ok := refit(sAll, sSteady, fit, ic); ok {
 			out.Lines = append(out.Lines, s)
 		}
 	}
@@ -196,6 +225,18 @@ func newResampler(all, steady []itl.Observation, block int) *resampler {
 	rs.all = make([]itl.Observation, 0, len(all)+block*4)
 	rs.steady = make([]itl.Observation, 0, len(steady)+block*4)
 	return rs
+}
+
+// blocks is the distinct blocks the strata hold (LineResamples.Blocks).
+func (rs *resampler) blocks() int {
+	per := func(n int) int {
+		if n == 0 {
+			return 0
+		}
+		b := min(rs.block, n)
+		return (n + b - 1) / b
+	}
+	return per(len(rs.steadyCycles)) + per(len(rs.otherCycles))
 }
 
 // draw is one resample: its main and its steady window, in the buffers the
@@ -259,8 +300,9 @@ func drawStratum(picked, stratum []cycle, want, block int, rng *rand.Rand,
 }
 
 // refit fits one resample by the tracker's choice of fit, ok false when it
-// fits no line.
-func refit(all, steady []itl.Observation, fit Refit) (Resample, bool) {
+// fits no line. A pinned fit is fitted again through the resample's own
+// intercept where ic draws one.
+func refit(all, steady []itl.Observation, fit Refit, ic *interceptDraw) (Resample, bool) {
 	var got itl.Refitted
 	tier := ""
 	if fit.Tier == TierAboveBand {
@@ -273,6 +315,14 @@ func refit(all, steady []itl.Observation, fit Refit) (Resample, bool) {
 		tier = got.Tier
 		if got.Hold {
 			got.Model, tier = itl.Model{A: fit.Line.A, B: fit.Baseline}, TierHeld
+		} else if tier == TierPinnedB && ic != nil {
+			// The tier is chosen before B is drawn, so drawing it changes
+			// no tier: a B no slope fits through keeps Baseline.
+			if b, ok := ic.at(all); ok {
+				if again := itl.Refit(all, steady, b, fit.MinSettled, fit.OneSided); again.Tier == TierPinnedB && !again.Hold {
+					got = again
+				}
+			}
 		}
 	}
 	if tier == "" {
@@ -280,6 +330,115 @@ func refit(all, steady []itl.Observation, fit Refit) (Resample, bool) {
 	}
 	got.Model, _ = LiftToFloor(tier, got.Model, fit.Floor)
 	return Resample{Line: got.Model, Tier: tier, TierChanged: tier != fit.Tier}, true
+}
+
+// minDrawnB is the least intercept a resample is fitted through: the least
+// B --assume-itl-b takes. B is a time per token above zero.
+const minDrawnB = 1e-6
+
+// interceptDraw draws a pinned fit's intercept per resample (issue
+// llm-d-incubation/llm-d-scaling-manager#307): B_r = Baseline + (Bhat_r -
+// centre), where Bhat_r is the full least-squares intercept of a resample's
+// main-window readings and centre the median of the Bhat_r over the
+// resamples. The block bootstrap of the intercept's estimator, its spread
+// what the readings can say about B, autocorrelation carried by the blocks
+// as it is for A, centred so that the drawn B has median Baseline.
+//
+// A drawn B is held to [lo, ceiling]: lo the least of minDrawnB and
+// Baseline, ceiling the floor read below the band (a reading at a fill
+// above 0 is A k + B, so at least B) and never under Baseline. Bounds that
+// bracket Baseline keep it the median however hard they bite, so the band
+// they shape widens on one side and never moves off its point. The least
+// single reading is no bound: as the least of many noisy readings it sits
+// under the line by their noise, under Baseline, and held there every draw
+// would fall below the line it bands.
+type interceptDraw struct {
+	baseline, lo, ceiling float64
+	centreB               float64
+}
+
+// newInterceptDraw is the draw for a line's main-window readings, nil where
+// B is not drawn: an above-band line, one priced one-sided at a prior (its B
+// is the prior by design), a stated B (HoldB), a Baseline that is no time,
+// or readings with no spread in k to read an intercept from. Its centre is
+// set by centre before at is used.
+func newInterceptDraw(all []itl.Observation, fit Refit) *interceptDraw {
+	if fit.Tier == TierAboveBand || fit.OneSided.OneSidedAboveKSat || fit.HoldB {
+		return nil
+	}
+	if !(fit.Baseline > 0) || math.IsInf(fit.Baseline, 0) {
+		return nil
+	}
+	b, ok := olsIntercept(all)
+	if !ok {
+		return nil
+	}
+	ceiling := math.Inf(1)
+	if fit.BelowBandITL > 0 {
+		ceiling = max(fit.BelowBandITL, fit.Baseline)
+	}
+	return &interceptDraw{baseline: fit.Baseline, lo: min(minDrawnB, fit.Baseline), ceiling: ceiling, centreB: b}
+}
+
+// centre sets the draw's centre to the median intercept of n resamples
+// drawn from rng, the same draws the bootstrap then fits. With none read,
+// it stays the main window's own.
+func (ic *interceptDraw) centre(rs *resampler, rng *rand.Rand, n int) {
+	bs := make([]float64, 0, n)
+	for range n {
+		all, _ := rs.draw(rng)
+		if b, ok := olsIntercept(all); ok {
+			bs = append(bs, b)
+		}
+	}
+	if len(bs) > 0 {
+		ic.centreB = median(bs)
+	}
+}
+
+// at is the intercept a resample's pinned fit runs through, ok false where
+// the resample's readings read no intercept (no spread in k): it keeps
+// Baseline.
+func (ic *interceptDraw) at(all []itl.Observation) (float64, bool) {
+	b, ok := olsIntercept(all)
+	if !ok {
+		return 0, false
+	}
+	return min(max(ic.baseline+(b-ic.centreB), ic.lo), ic.ceiling), true
+}
+
+// usableReading is a reading a fit can take: finite positive k and ITL.
+func usableReading(o itl.Observation) bool {
+	return o.K > 0 && o.ITLSec > 0 && !math.IsInf(o.K, 0) && !math.IsInf(o.ITLSec, 0)
+}
+
+// olsIntercept is the least-squares intercept of ITL on k over the usable
+// readings, unconstrained (it may be at or under zero), ok false with fewer
+// than two or no spread in k.
+func olsIntercept(obs []itl.Observation) (float64, bool) {
+	var n, sk, sy float64
+	for _, o := range obs {
+		if usableReading(o) {
+			n++
+			sk += o.K
+			sy += o.ITLSec
+		}
+	}
+	if n < 2 {
+		return 0, false
+	}
+	kbar, ybar := sk/n, sy/n
+	var sxx, sxy float64
+	for _, o := range obs {
+		if usableReading(o) {
+			sxx += (o.K - kbar) * (o.K - kbar)
+			sxy += (o.K - kbar) * (o.ITLSec - ybar)
+		}
+	}
+	if !(sxx > 1e-12*n) {
+		return 0, false
+	}
+	return ybar - sxy/sxx*kbar, true
 }
 
 // cycle is one cycle's readings: those of the main window and those of the
@@ -321,7 +480,9 @@ func cyclesOf(all, steady []itl.Observation) []cycle {
 // value reruns the question on a resampled line and returns the figure it
 // prices, ok false when that line refuses it. The band is the 10th to the
 // 90th percentile of the figures (nearest rank), so it need not be
-// symmetric about a.Value. With no figure to band, a comes back unchanged.
+// symmetric about a.Value, stretched to hold a.Value where it falls outside,
+// then widened about a.Value for few blocks (bandWidening). With no figure
+// to band, a comes back unchanged.
 //
 // More than a tenth of the drawn resamples changing tier flags the answer,
 // one of two ways. TierUnstable when the change moves this figure: the
@@ -346,7 +507,21 @@ func BandAnswer(a Answer, rs LineResamples, value func(itl.Model) (float64, bool
 	}
 	slices.Sort(vals)
 	at := func(p float64) float64 { return vals[max(0, int(math.Ceil(p*float64(len(vals))))-1)] }
-	a.Band = &Interval{Lo: at(bandLo), Hi: at(bandHi)}
+	lo, hi := at(bandLo), at(bandHi)
+	c := min(max(a.Value, lo), hi)
+	if Finite(a.Value) {
+		// The band holds its point: a band beside the figure it bands
+		// would say the figure is not what it is.
+		lo, hi, c = min(lo, a.Value), max(hi, a.Value), a.Value
+	}
+	if f := bandWidening(rs.Blocks); f > 1 {
+		// Each edge moved away from the answer by f.
+		lo, hi = c-f*(c-lo), c+f*(hi-c)
+		if vals[0] >= 0 {
+			lo = max(lo, 0)
+		}
+	}
+	a.Band = &Interval{Lo: lo, Hi: hi, Blocks: rs.Blocks}
 	if !(float64(rs.TierChanges()) > tierChangeShare*float64(rs.Drawn)) {
 		return a
 	}
@@ -358,6 +533,37 @@ func BandAnswer(a Answer, rs LineResamples, value func(itl.Model) (float64, bool
 		a.Flags = append(slices.Clone(a.Flags), flag)
 	}
 	return a
+}
+
+// FewBlocks is the effective sample size under which a band is named with
+// its blocks: about five independent blocks are what a percentile of a
+// block bootstrap needs before its edges mean what they say.
+const FewBlocks = 5
+
+// bandZ is the standard normal's 90th percentile, the band's upper edge.
+const bandZ = 1.2815515655446004
+
+// bandT is Student's t at 0.90 for 1 to 30 degrees of freedom.
+var bandT = [...]float64{3.078, 1.886, 1.638, 1.533, 1.476, 1.440, 1.415, 1.397, 1.383, 1.372,
+	1.363, 1.356, 1.350, 1.345, 1.341, 1.337, 1.333, 1.330, 1.328, 1.325,
+	1.323, 1.321, 1.319, 1.318, 1.316, 1.315, 1.314, 1.313, 1.311, 1.310}
+
+// bandWidening is the factor a band of g distinct blocks is widened by: a
+// bootstrap of g independent units reads their spread low by sqrt((g-1)/g),
+// and its percentiles are normal ones where the spread of g units is
+// Student's with g-1 degrees of freedom. 3.40 at 2 blocks, 1.80 at 3, 1.48
+// at 4, 1.34 at 5, 1.14 at 10, toward 1. Under 2 there is nothing to scale:
+// 1.
+func bandWidening(g int) float64 {
+	if g < 2 {
+		return 1
+	}
+	df := g - 1
+	t := bandZ * (1 + (1+bandZ*bandZ)/(4*float64(df)))
+	if df <= len(bandT) {
+		t = bandT[df-1]
+	}
+	return math.Sqrt(float64(g)/float64(df)) * t / bandZ
 }
 
 // median is the median of xs, which it sorts.

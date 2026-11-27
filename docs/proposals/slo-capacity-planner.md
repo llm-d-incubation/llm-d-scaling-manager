@@ -674,7 +674,15 @@ Every answer carries a **basis**: the tier of each term, its readings, range and
 age. **Bands**: a block bootstrap, blocks of 4 cycles (15 s cycles over 1-minute
 rates overlap by three quarters), admission and tier rerun per resample, 200
 resamples, a fixed printed seed; "tier unstable" when more than 10% of resamples
-change tier. `V_P` from a peak and `f` are extreme statistics, so they get a
+change tier. A resample fitted pinned-B runs through its own intercept, the
+pinned B moved by its resample's least-squares intercept less the median of
+the resamples' (so the drawn B has median the pinned B), held under the floor
+read below the band but never under the pinned B (issue
+llm-d-incubation/llm-d-scaling-manager#307); a stated B is held. A band always
+holds its own figure. Each band carries its effective sample size, `blocks` (the
+distinct blocks of cycles drawn from), and is widened for it by
+sqrt(G/(G-1)) t(0.90, G-1)/z(0.90): 3.4 at 2 blocks, 1.34 at 5, toward 1; the
+text names the blocks under 5. `V_P` from a peak and `f` are extreme statistics, so they get a
 [±15% sensitivity sweep](#ttft-as-built) instead. **Extrapolation**: a fill or prompt length
 outside the window's range is flagged with the distance; outside the band the
 tool clamps, as `whatif.PricingK` and `whatif.PriceTPOT` do. **The line check** runs on every
@@ -1854,6 +1862,7 @@ roles[].results object
 roles[].results.knee object
 roles[].results.knee.answer object
 roles[].results.knee.answer.band object
+roles[].results.knee.answer.band.blocks number
 roles[].results.knee.answer.band.hi number
 roles[].results.knee.answer.band.lo number
 roles[].results.knee.answer.basis object
@@ -1898,6 +1907,7 @@ roles[].results.knee.refused.reason string
 roles[].results.meanTPOT object
 roles[].results.meanTPOT.answer object
 roles[].results.meanTPOT.answer.band object
+roles[].results.meanTPOT.answer.band.blocks number
 roles[].results.meanTPOT.answer.band.hi number
 roles[].results.meanTPOT.answer.band.lo number
 roles[].results.meanTPOT.answer.basis object
@@ -1942,6 +1952,7 @@ roles[].results.meanTPOT.refused.reason string
 roles[].results.operatingRate object
 roles[].results.operatingRate.answer object
 roles[].results.operatingRate.answer.band object
+roles[].results.operatingRate.answer.band.blocks number
 roles[].results.operatingRate.answer.band.hi number
 roles[].results.operatingRate.answer.band.lo number
 roles[].results.operatingRate.answer.basis object
@@ -1986,6 +1997,7 @@ roles[].results.operatingRate.refused.reason string
 roles[].results.percentileTPOT object
 roles[].results.percentileTPOT.answer object
 roles[].results.percentileTPOT.answer.band object
+roles[].results.percentileTPOT.answer.band.blocks number
 roles[].results.percentileTPOT.answer.band.hi number
 roles[].results.percentileTPOT.answer.band.lo number
 roles[].results.percentileTPOT.answer.basis object
@@ -2030,6 +2042,7 @@ roles[].results.percentileTPOT.refused.reason string
 roles[].results.rate object
 roles[].results.rate.answer object
 roles[].results.rate.answer.band object
+roles[].results.rate.answer.band.blocks number
 roles[].results.rate.answer.band.hi number
 roles[].results.rate.answer.band.lo number
 roles[].results.rate.answer.basis object

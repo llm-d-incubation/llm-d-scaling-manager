@@ -384,11 +384,11 @@ type wireResult struct {
 
 // wireAnswer is whatif.Answer on the wire.
 type wireAnswer struct {
-	Value float64       `json:"value"`
-	Unit  string        `json:"unit"`
-	Band  *wireInterval `json:"band,omitempty"`
-	Basis wireBasis     `json:"basis"`
-	Flags []string      `json:"flags"`
+	Value float64   `json:"value"`
+	Unit  string    `json:"unit"`
+	Band  *wireBand `json:"band,omitempty"`
+	Basis wireBasis `json:"basis"`
+	Flags []string  `json:"flags"`
 	// Sensitivity is the figure's span at V_P and f either way, absent on a
 	// figure that does not rest on them.
 	Sensitivity *wireSensitivity `json:"sensitivity,omitempty"`
@@ -526,6 +526,14 @@ type wireInterval struct {
 	Hi float64 `json:"hi"`
 }
 
+// wireBand is a result's bootstrap band, Lo to Hi, with Blocks, its
+// effective sample size (whatif.Interval).
+type wireBand struct {
+	Lo     float64 `json:"lo"`
+	Hi     float64 `json:"hi"`
+	Blocks int     `json:"blocks,omitempty"`
+}
+
 // The units a result's value is in.
 const (
 	unitRate    = "r/s"
@@ -541,7 +549,7 @@ func toWire(r whatif.Result, unit string) *wireResult {
 			BoundBy: []string{}, Tier: v.Basis.Tier,
 		}}
 		if v.Band != nil {
-			a.Band = &wireInterval{Lo: v.Band.Lo, Hi: v.Band.Hi}
+			a.Band = &wireBand{Lo: v.Band.Lo, Hi: v.Band.Hi, Blocks: v.Band.Blocks}
 		}
 		for _, b := range v.Basis.BoundBy {
 			a.Basis.BoundBy = append(a.Basis.BoundBy, string(b))
