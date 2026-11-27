@@ -436,3 +436,55 @@ func TestHeldSlope_PinsTheBItWasFittedThrough(t *testing.T) {
 		t.Errorf("with a learned B, %g, want the learned 0.02", got)
 	}
 }
+
+// byCountReadings is n pairs of readings below the band, one at itlA on a
+// replica running seqA sequences and one at itlB on one running seqB.
+func byCountReadings(n int, itlA, itlB, seqA, seqB float64) ([]Observation, []float64) {
+	obs := make([]Observation, 0, 2*n)
+	seqs := make([]float64, 0, 2*n)
+	for range n {
+		obs = append(obs, Observation{K: 0.05, ITLSec: itlA}, Observation{K: 0.05, ITLSec: itlB})
+		seqs = append(seqs, seqA, seqB)
+	}
+	return obs, seqs
+}
+
+// The floor is kept by the sequences it was read at (issue
+// llm-d-incubation/llm-d-scaling-manager#286): readings at 4 sequences of
+// 10 ms and at 40 of 20 ms are two groups, each with its floor, and the line
+// through them is the floor by count; the fewest sequences read is 4. A count
+// not read on one reading leaves the floor standing for every count, a single
+// group is no line, and too few readings is no floor.
+func TestBelowBandByCount(t *testing.T) {
+	obs, seqs := byCountReadings(22, 0.010, 0.020, 4, 40)
+	least, byCount := BelowBandByCount(obs, seqs)
+	if least != 4 {
+		t.Errorf("least %g, want 4", least)
+	}
+	wantA := 0.010 / 36
+	if math.Abs(byCount.A-wantA) > 1e-12 || math.Abs(byCount.B-(0.010-4*wantA)) > 1e-12 {
+		t.Errorf("by count %+v, want the line through (4, 10 ms) and (40, 20 ms)", byCount)
+	}
+
+	seqs[20] = 0
+	if least, byCount := BelowBandByCount(obs, seqs); least != 0 || !byCount.IsZero() {
+		t.Errorf("a count not read: %g %+v, want none", least, byCount)
+	}
+	seqs[20] = math.Inf(1)
+	if least, byCount := BelowBandByCount(obs, seqs); least != 0 || !byCount.IsZero() {
+		t.Errorf("an infinite count: %g %+v, want none", least, byCount)
+	}
+	if least, byCount := BelowBandByCount(obs, seqs[:len(seqs)-1]); least != 0 || !byCount.IsZero() {
+		t.Errorf("a count short: %g %+v, want none", least, byCount)
+	}
+
+	obs, seqs = byCountReadings(22, 0.010, 0.011, 5, 6)
+	if least, byCount := BelowBandByCount(obs, seqs); least != 5 || !byCount.IsZero() {
+		t.Errorf("one group: %g %+v, want 5 and no line", least, byCount)
+	}
+
+	obs, seqs = byCountReadings(BelowBandMinReadings/2-1, 0.010, 0.020, 4, 40)
+	if least, byCount := BelowBandByCount(obs, seqs); least != 0 || !byCount.IsZero() {
+		t.Errorf("no floor: %g %+v, want none", least, byCount)
+	}
+}
