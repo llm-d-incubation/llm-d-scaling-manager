@@ -174,26 +174,35 @@ func (pv pricedVariant) engineNotes() []engineNote {
 // attentionFamily is what makes pv's model hybrid-attention or MLA, each ""
 // where it is not: the attention kind its model config states (issue #501),
 // and, with no config read, the family its name falls in, as before the
-// config was read. A config that states full attention clears both, whatever
-// the name says.
+// config was read.
+//
+// A config never clears a hybrid the name says: a hybrid the reader does not
+// know reads as full attention, and clearing the flag on that would put a
+// hybrid's figures inside the envelope on the reader's miss. The name's family
+// is kept, and the detail says the config reads otherwise. A config does
+// clear an MLA family's name (an MLA family's dense distillation is common),
+// and names MLA or a window or hybrid layers wherever it reads one.
 func (pv pricedVariant) attentionFamily() (hybrid, mla string) {
 	p := pv.state.Params
-	if p.ModelConfig.Read() {
-		switch p.AttentionKind() {
-		case capacity.AttentionSlidingWindow, capacity.AttentionHybrid:
-			return p.ModelConfig.AttentionText(), ""
-		case capacity.AttentionMLA:
-			return "", p.ModelConfig.AttentionText()
-		}
-		return "", ""
-	}
 	model := strings.ToLower(p.ModelPath)
 	if model == "" {
 		model = strings.ToLower(pv.model)
 	}
-	hybrid = familyOf(model, hybridModels)
-	if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
-		mla = fam
+	byName := familyOf(model, hybridModels)
+	if !p.ModelConfig.Read() {
+		if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
+			mla = fam
+		}
+		return byName, mla
+	}
+	switch p.AttentionKind() {
+	case capacity.AttentionSlidingWindow, capacity.AttentionHybrid:
+		return p.ModelConfig.AttentionText(), ""
+	case capacity.AttentionMLA:
+		mla = p.ModelConfig.AttentionText()
+	}
+	if byName != "" {
+		hybrid = fmt.Sprintf("%s by its name, though the model config reads %s", byName, p.ModelConfig.AttentionText())
 	}
 	return hybrid, mla
 }

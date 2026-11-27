@@ -43,7 +43,14 @@ func TestEngineNotes_TheModelConfigWinsOverTheName(t *testing.T) {
 		detail string
 	}{
 		{"a full-attention config under an MLA family's name", "deepseek-ai/DeepSeek-V3", "dense-full.json", nil, ""},
-		{"a full-attention config under a hybrid family's name", "openai/gpt-oss-120b", "dense-full.json", nil, ""},
+		// A config never clears a hybrid the name says: the note stays, and
+		// says the config reads otherwise.
+		{"a full-attention config under a hybrid family's name", "openai/gpt-oss-120b", "dense-full.json",
+			[]whatif.Flag{hybridAttention}, "gpt-oss by its name, though the model config reads full attention " +
+				"(8 KV heads of 64): KV per request and ITL are not those of full attention"},
+		// A hybrid the reader now knows, under a plain name.
+		{"a Jamba-style config under a plain name", "org/model", "hybrid-attn-layer-period.json", []whatif.Flag{hybridAttention},
+			"hybrid attention: KV per request and ITL are not those of full attention"},
 		{"an MLA config under a plain name", "org/model", "mla-moe.json", []whatif.Flag{mlaAttention},
 			"mla attention (kv_lora_rank 512): the KV binds"},
 		{"a windowed config under a plain name", "org/model", "sliding-layer-types-moe.json", []whatif.Flag{hybridAttention},
@@ -65,6 +72,21 @@ func TestEngineNotes_TheModelConfigWinsOverTheName(t *testing.T) {
 		require.Equal(t, c.want, got, c.name)
 		pv.notes = pv.engineNotes()
 		assert.Equal(t, c.detail, pv.engineNoteText(c.want[0]), c.name)
+	}
+}
+
+// The flags a config raises are what the envelope judges, and no row allows
+// either: a figure inside a row reads outside once it carries one. That is
+// how --model-config moves a verdict and never a value.
+func TestModelConfig_TheFlagsItRaisesMoveTheVerdict(t *testing.T) {
+	in := whatif.Figure{Kind: whatif.FigureTTFT, Percentile: 0.9, Class: q32ClassB(), KneeShare: 0.8}
+	require.True(t, whatif.DefaultEnvelope().Judge(in).Validated(), "precondition: bucket B's class is inside")
+	for _, fl := range []whatif.Flag{mlaAttention, hybridAttention} {
+		f := in
+		f.Flags = []whatif.Flag{fl}
+		v := whatif.DefaultEnvelope().Judge(f)
+		assert.False(t, v.Validated(), fl)
+		assert.Contains(t, v.String(), string(fl), fl)
 	}
 }
 

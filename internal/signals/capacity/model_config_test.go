@@ -67,6 +67,35 @@ func TestModelConfig_ClassesFromFixtures(t *testing.T) {
 		{file: "hybrid-linear.json", attention: AttentionHybrid, heads: 16, kvHeads: 2, experts: 512, perToken: 10},
 		// A multimodal config is read from its text_config.
 		{file: "multimodal-text-config.json", attention: AttentionSlidingWindow, heads: 16, kvHeads: 8, window: 1024},
+
+		// The public configs below are as published (auto_map and
+		// _name_or_path dropped). Each hybrid states its non-attention
+		// layers by a key of its own.
+		// attn_layer_period 8, mamba_* keys, num_experts 16 (a Jamba).
+		{file: "hybrid-attn-layer-period.json", attention: AttentionHybrid, heads: 32, kvHeads: 8, experts: 16, perToken: 2},
+		// Attention and SSM in parallel on every layer: mamba_* and ssm_* keys (a Falcon-H1).
+		{file: "hybrid-parallel-ssm.json", attention: AttentionHybrid, heads: 8, kvHeads: 2},
+		// No attention at all: state_size, ssm_cfg, model_type mamba (a Mamba).
+		{file: "state-space.json", attention: AttentionHybrid},
+		// attn_type_list with 0 for a linear-attention layer (a MiniMax-Text-01).
+		{file: "hybrid-attn-type-list.json", attention: AttentionHybrid, heads: 64, kvHeads: 8, experts: 32, perToken: 2},
+		// linear_attn_config beside a kv_lora_rank: hybrid, not MLA (a Kimi-Linear);
+		// num_experts_per_token is its spelling.
+		{file: "hybrid-linear-latent.json", attention: AttentionHybrid, heads: 32, kvHeads: 32, loraRank: 512, experts: 256, perToken: 8},
+		// layer_types naming mamba layers (a Granite 4.0-H).
+		{file: "hybrid-layer-types-mamba.json", attention: AttentionHybrid, heads: 32, kvHeads: 8, experts: 72, perToken: 10},
+		// hybrid_override_pattern with M (a Nemotron-H).
+		{file: "hybrid-override-pattern.json", attention: AttentionHybrid, heads: 40, kvHeads: 8},
+		// The language model nested in llm_config (an InternVL); the vision
+		// tower's keys are not read.
+		{file: "nested-llm-config.json", attention: AttentionFull, heads: 28, kvHeads: 4},
+		// thinker_config holding a text_config (an omni model).
+		{file: "nested-thinker-text-config.json", attention: AttentionFull, heads: 28, kvHeads: 4},
+		// Mixtral: sliding_window null, num_local_experts 8.
+		{file: "moe-no-window.json", attention: AttentionFull, heads: 32, kvHeads: 8, experts: 8, perToken: 2},
+		// Derived from the Qwen2.5 config: use_sliding_window true and
+		// max_window_layers 21: layers 21 to 27 are windowed, 7 of 28.
+		{file: "window-from-layer.json", attention: AttentionSlidingWindow, heads: 28, kvHeads: 4, window: 4096, windowed: 7},
 	}
 	for _, tc := range cases {
 		m := readFixture(t, tc.file)
@@ -82,6 +111,59 @@ func TestModelConfig_ClassesFromFixtures(t *testing.T) {
 	}
 	assert.Equal(t, 64, readFixture(t, "mla-moe.json").QKRopeHeadDim)
 	assert.Equal(t, 128, readFixture(t, "dense-full.json").HeadDim)
+}
+
+// A config whose language model sits where this reader does not look names
+// what it read through, or the nested configs it left unread, in its error.
+func TestModelConfig_NestedConfigsAreNamedInTheError(t *testing.T) {
+	m, err := ReadModelConfigFile(filepath.Join(modelConfigDir, "nested-language-config-partial.json"))
+	require.NoError(t, err)
+	assert.False(t, m.Read())
+	assert.Contains(t, m.Error, "read through language_config")
+
+	m = ParseModelConfig([]byte(`{"model_type": "x", "speech_config": {"num_hidden_layers": 4}, "auto_map": {}}`), "f")
+	assert.Equal(t, "neither num_hidden_layers nor num_attention_heads; nested configs not read: speech_config", m.Error)
+
+	// A window on every layer from max_window_layers 0, and none where it
+	// is the layer count.
+	all := ParseModelConfig([]byte(`{"num_hidden_layers": 4, "num_attention_heads": 4, "sliding_window": 64,
+		"use_sliding_window": true, "max_window_layers": 0}`), "f")
+	assert.Equal(t, AttentionSlidingWindow, all.Attention)
+	assert.Equal(t, 4, all.SlidingWindowLayers)
+	none := ParseModelConfig([]byte(`{"num_hidden_layers": 4, "num_attention_heads": 4, "sliding_window": 64,
+		"use_sliding_window": true, "max_window_layers": 4}`), "f")
+	assert.Equal(t, AttentionFull, none.Attention)
+}
+
+// The controller logs what the annotation read as once per change, not every
+// cycle: the store keeps the last reading per variant.
+func TestModelConfig_TheControllerLogsEachChangeOnce(t *testing.T) {
+	s := NewStore()
+	seen := func() (string, bool) {
+		v, ok := s.modelConfigSeen.Load(storeKey("ns", "m", "v"))
+		if !ok {
+			return "", false
+		}
+		return v.(string), true
+	}
+	s.logModelConfig("ns", "m", "v", ModelConfig{})
+	_, ok := seen()
+	assert.False(t, ok, "a variant that never carried the annotation is not tracked")
+
+	bad := ParseModelConfig([]byte("{"), ModelConfigFromAnnotation)
+	s.logModelConfig("ns", "m", "v", bad)
+	got, ok := seen()
+	require.True(t, ok)
+	assert.Equal(t, "unreadable: not a JSON object", got)
+
+	good := readFixture(t, "mla-moe.json")
+	s.logModelConfig("ns", "m", "v", good)
+	got, _ = seen()
+	assert.Equal(t, good.String(), got)
+
+	s.logModelConfig("ns", "m", "v", ModelConfig{})
+	got, _ = seen()
+	assert.Equal(t, "unknown", got, "a removed annotation is a change too")
 }
 
 // A directory is read as a checkpoint: its config.json.

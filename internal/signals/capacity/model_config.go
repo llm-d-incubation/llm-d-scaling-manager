@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/annotations"
@@ -273,22 +274,16 @@ func ParseModelConfig(data []byte, source string) ModelConfig {
 		m.Error = "not a JSON object"
 		return m
 	}
-	// A multimodal model's language model is described in text_config; the
-	// keys there win over the top level's.
-	c := top
-	if text, ok := top["text_config"].(map[string]any); ok {
-		c = make(map[string]any, len(top)+len(text))
-		for k, v := range top {
-			c[k] = v
-		}
-		for k, v := range text {
-			c[k] = v
-		}
-	}
+	c, through := languageModelConfig(top)
 	layers, hasLayers := intKey(c, "num_hidden_layers")
 	heads, hasHeads := intKey(c, "num_attention_heads")
 	if !hasLayers && !hasHeads {
 		m.Error = "neither num_hidden_layers nor num_attention_heads"
+		if len(through) > 0 {
+			m.Error += " (read through " + strings.Join(through, ", ") + ")"
+		} else if objs := nestedObjects(top); len(objs) > 0 {
+			m.Error += "; nested configs not read: " + strings.Join(objs, ", ")
+		}
 		return m
 	}
 	m.NumLayers, m.NumAttentionHeads = int(layers), int(heads)
@@ -307,52 +302,174 @@ func ParseModelConfig(data []byte, source string) ModelConfig {
 			break
 		}
 	}
-	if k, ok := intKey(c, "num_experts_per_tok"); ok {
-		m.ExpertsPerToken = int(k)
+	// num_experts_per_token is Kimi-Linear's spelling.
+	for _, key := range []string{"num_experts_per_tok", "num_experts_per_token"} {
+		if k, ok := intKey(c, key); ok {
+			m.ExpertsPerToken = int(k)
+			break
+		}
 	}
 	m.Attention = attentionOf(c, &m)
 	return m
 }
 
+// languageModelKeys are where a multimodal config nests its language model:
+// text_config (most), llm_config (InternVL), language_config (DeepSeek-VL2),
+// and thinker_config (an omni model's thinker, itself holding a
+// text_config). The first found is read, and then its own nesting.
+var languageModelKeys = []string{"text_config", "llm_config", "language_config", "thinker_config"}
+
+// languageModelConfig is the config the language model is described by: top
+// with each nested language-model config's keys over it, innermost winning,
+// and the keys it was read through, outermost first.
+func languageModelConfig(top map[string]any) (map[string]any, []string) {
+	c := top
+	var through []string
+	for range languageModelKeys {
+		var next map[string]any
+		key := ""
+		for _, k := range languageModelKeys {
+			if obj, ok := c[k].(map[string]any); ok {
+				next, key = obj, k
+				break
+			}
+		}
+		if next == nil {
+			break
+		}
+		merged := make(map[string]any, len(c)+len(next))
+		for k, v := range c {
+			if !slices.Contains(languageModelKeys, k) {
+				merged[k] = v
+			}
+		}
+		for k, v := range next {
+			merged[k] = v
+		}
+		c, through = merged, append(through, key)
+	}
+	return c, through
+}
+
+// nestedObjects is the keys of top whose values are objects, sorted: what an
+// error names when no attention fields were found at the top level.
+func nestedObjects(top map[string]any) []string {
+	var out []string
+	for k, v := range top {
+		if _, ok := v.(map[string]any); ok && k != "auto_map" && k != "quantization_config" {
+			out = append(out, k)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// hybridModelTypes are model_type values whose layers are not all attention:
+// state-space, linear-attention and parallel attention-plus-SSM families. A
+// model_type is data the config states, not the model's name; it backs up the
+// keys hasHybridLayers reads, for a family whose other keys it does not know.
+var hybridModelTypes = []string{"mamba", "mamba2", "falcon_mamba", "falcon_h1", "jamba", "bamba", "zamba", "zamba2",
+	"nemotron_h", "granitemoehybrid", "plamo2", "lfm2", "qwen3_next", "minimax", "minimax_text_01", "minimax_m1",
+	"kimi_linear", "rwkv", "rwkv7", "recurrent_gemma"}
+
+// hasHybridLayers reports whether c states layers that hold no KV a token, or
+// a recurrent state beside it, by any key a public hybrid config uses:
+//   - layer_types naming a layer that is not attention (linear_attention,
+//     mamba: Qwen3-Next, Granite 4.0-H), or layers_block_type naming one;
+//   - hybrid_override_pattern with an M (Nemotron-H);
+//   - attn_layer_period above 1 (Jamba: attention every period-th layer);
+//   - attn_type_list naming a 0, a linear-attention layer (MiniMax);
+//   - linear_attn_config, set (Kimi-Linear);
+//   - a mamba_ or ssm_ key, state_size or ssm_cfg (Mamba, Falcon-H1);
+//   - a model_type of hybridModelTypes.
+func hasHybridLayers(c map[string]any) bool {
+	for _, t := range stringList(c["layer_types"]) {
+		switch t {
+		case "full_attention", "attention", "sliding_attention", "chunked_attention":
+		default:
+			return true
+		}
+	}
+	for _, t := range stringList(c["layers_block_type"]) {
+		if t != "attention" {
+			return true
+		}
+	}
+	if p, ok := c["hybrid_override_pattern"].(string); ok && strings.Contains(p, "M") {
+		return true
+	}
+	if n, ok := intKey(c, "attn_layer_period"); ok && n > 1 {
+		return true
+	}
+	if list, ok := c["attn_type_list"].([]any); ok {
+		for _, e := range list {
+			if f, ok := e.(float64); ok && f == 0 {
+				return true
+			}
+		}
+	}
+	if v, ok := c["linear_attn_config"]; ok && v != nil {
+		return true
+	}
+	for k, v := range c {
+		if v != nil && (strings.HasPrefix(k, "mamba_") || strings.HasPrefix(k, "ssm_") || k == "state_size" || k == "ssm_cfg") {
+			return true
+		}
+	}
+	mt, _ := c["model_type"].(string)
+	return slices.Contains(hybridModelTypes, mt)
+}
+
 // attentionOf is the attention kind c states, filling the window and the
-// latent rank in m. MLA is read first: a latent KV is what the cache holds
-// whatever else a layer does. A layer that holds no KV comes next, then a
-// window, and a config that states none of them is full attention.
+// latent rank in m. Layers that hold no KV a token are read first: a hybrid
+// may carry a latent KV on its attention layers too (Kimi-Linear has a
+// kv_lora_rank), and what its cache holds is then not MLA's alone. MLA comes
+// next, then a window, and a config that states none of them is full
+// attention.
+//
+// A window is read as vLLM reads it. With layer_types, the layers it names
+// sliding_attention are windowed. Without, a sliding_window applies to every
+// layer: vLLM sets the cache's window for the whole model, so Mistral-7B v0.1
+// is served with a 4096-token window on all 32 layers. Not where
+// use_sliding_window is false (Qwen2, whose window is named and unused); and
+// where it is true with a max_window_layers, the layers from that index up are
+// windowed, as transformers' Qwen2 config builds its layer_types. vLLM's
+// --disable-sliding-window is not read from the engine's flags: an engine
+// started with it is still reported windowed.
 func attentionOf(c map[string]any, m *ModelConfig) AttentionKind {
 	if r, ok := intKey(c, "kv_lora_rank"); ok && r > 0 {
 		m.KVLoraRank = int(r)
 		if d, ok := intKey(c, "qk_rope_head_dim"); ok {
 			m.QKRopeHeadDim = int(d)
 		}
+	}
+	if hasHybridLayers(c) {
+		return AttentionHybrid
+	}
+	if m.KVLoraRank > 0 {
 		return AttentionMLA
 	}
 	types := stringList(c["layer_types"])
 	sliding := 0
 	for _, t := range types {
-		switch t {
-		case "full_attention", "attention":
-		case "sliding_attention", "chunked_attention":
+		if t == "sliding_attention" || t == "chunked_attention" {
 			sliding++
-		default:
-			// linear_attention, mamba and the like: no KV a token.
-			return AttentionHybrid
 		}
-	}
-	for _, t := range stringList(c["layers_block_type"]) {
-		if t != "attention" {
-			return AttentionHybrid
-		}
-	}
-	if p, ok := c["hybrid_override_pattern"].(string); ok && strings.Contains(p, "M") {
-		return AttentionHybrid
 	}
 	window, hasWindow := intKey(c, "sliding_window")
-	if use, ok := c["use_sliding_window"].(bool); ok && !use {
-		// Qwen2-style configs name a window they do not use.
+	use, useStated := c["use_sliding_window"].(bool)
+	if useStated && !use {
 		hasWindow = false
 	}
 	if !hasWindow || window <= 0 {
 		window, hasWindow = intKey(c, "attention_chunk_size")
+	}
+	if len(types) == 0 && use && hasWindow && window > 0 && m.NumLayers > 0 {
+		if from, ok := intKey(c, "max_window_layers"); ok {
+			if sliding = max(m.NumLayers-int(from), 0); sliding == 0 {
+				return AttentionFull
+			}
+		}
 	}
 	switch {
 	case len(types) > 0 && sliding == 0:
