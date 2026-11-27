@@ -183,7 +183,7 @@ func (t ttftQuestion) label() string {
 
 // routerWaitGivesWay turns *inPrefill off when --price-router-wait is set and
 // --router-wait-in-prefill is not: the latter is on by default
-// (whatif.DefaultRouterWaitInPrefill), and asking for router v0.11.0's gate
+// (plannerRouterWaitInPrefill), and asking for router v0.11.0's gate
 // stage is asking for the other router's model, not for both. Set together,
 // the two stay on and are refused ("set one"). answer and backtest call it
 // once their flags are parsed.

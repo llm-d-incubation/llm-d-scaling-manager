@@ -121,7 +121,7 @@ func (f *answerFlags) stated() (*whatifapi.Stated, error) {
 		st.Assume.FlowControl = f.flowControl
 	}
 	switch {
-	case f.priceRouterWait == whatif.DefaultPriceRouterWait && f.routerWaitInPrefill == whatif.DefaultRouterWaitInPrefill:
+	case f.priceRouterWait == whatif.DefaultPriceRouterWait && f.routerWaitInPrefill == plannerRouterWaitInPrefill:
 	case f.priceRouterWait:
 		st.Assume.RouterWait = whatifapi.RouterWaitGateStage
 	case f.routerWaitInPrefill:
@@ -147,7 +147,7 @@ func (f *answerFlags) stated() (*whatifapi.Stated, error) {
 	}
 	// The fits do price with --imbalance-across-counts and --load-aware-router
 	// (foldFits): replayed, and outside the validated region.
-	if f.set["imbalance-across-counts"] && f.imbalanceAcrossCounts != whatif.DefaultPlannerImbalanceAcrossCounts {
+	if f.set["imbalance-across-counts"] && f.imbalanceAcrossCounts != plannerImbalanceAcrossCounts {
 		st.Replayed, st.Outside = append(st.Replayed, "--imbalance-across-counts="+strconv.FormatBool(f.imbalanceAcrossCounts)), true
 	}
 	if f.set["load-aware-router"] && f.loadAwareRouter != whatif.DefaultPlannerLoadAwareRouter {

@@ -70,6 +70,8 @@ const DefaultImbalanceAcrossCounts = false
 // DefaultPlannerImbalanceAcrossCounts is the capacity planner's default of
 // reading f across pod counts (--imbalance-across-counts, and its server):
 // on, where the SLO analyzer's (DefaultImbalanceAcrossCounts) is off. The
+// planner lists slo.SwitchTTFTImbalanceAcrossCounts at this value in
+// learnreplay.PlannerSwitches, and reads its flag's default from there. The
 // planner prices counts the recording never ran at, which is where the floor
 // misprices (issue llm-d-incubation/llm-d-scaling-manager#300): with f 1.00
 // learned at two pods, three at max(ImbalanceFloor, f) = 1.5 have the same

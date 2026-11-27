@@ -124,7 +124,7 @@ func TestEnvelope_ImbalanceAcrossCountsAtTheDefault(t *testing.T) {
 	for _, c := range []struct {
 		on   bool
 		want []string
-	}{{whatif.DefaultPlannerImbalanceAcrossCounts, nil}, {!whatif.DefaultPlannerImbalanceAcrossCounts, []string{"--imbalance-across-counts"}}} {
+	}{{plannerImbalanceAcrossCounts, nil}, {!plannerImbalanceAcrossCounts, []string{"--imbalance-across-counts"}}} {
 		f := answerFlags{imbalanceAcrossCounts: c.on, set: map[string]bool{"imbalance-across-counts": true}}
 		assert.Equal(t, c.want, f.statedOutside(), "on %v", c.on)
 	}

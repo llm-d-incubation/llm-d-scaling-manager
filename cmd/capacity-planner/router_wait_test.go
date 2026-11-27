@@ -103,7 +103,8 @@ func TestTTFT_RouterWaitInPrefillFlag(t *testing.T) {
 // The default is pinned: --router-wait-in-prefill is on (issue #287, the
 // router v1.0.0 staircase), and --price-router-wait stays off.
 func TestTTFT_RouterWaitInPrefillIsTheDefault(t *testing.T) {
-	assert.True(t, whatif.DefaultRouterWaitInPrefill, "on by default since #287")
+	assert.True(t, plannerRouterWaitInPrefill, "on by default since #287")
+	assert.Equal(t, whatif.DefaultRouterWaitInPrefill, plannerRouterWaitInPrefill, "read from learnreplay.PlannerSwitches at the value whatif states")
 	assert.False(t, whatif.DefaultPriceRouterWait, "the gate stage stays opt-in")
 	var bf backtestFlags
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)

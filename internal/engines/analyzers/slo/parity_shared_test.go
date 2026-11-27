@@ -80,3 +80,22 @@ func TestParity_TheHitAtCountAndTheFLoadCurveApplyHereAndAreUnused(t *testing.T)
 	assert.False(t, ok, "no curve fitted, as in the controller")
 	assert.Zero(t, q.ImbalanceCurveFloor)
 }
+
+// The planner's two TTFT defaults that are this package's switches
+// (learnreplay.PlannerSwitches: SwitchTTFTRouterWaitInPrefill at
+// whatif.DefaultRouterWaitInPrefill, SwitchTTFTImbalanceAcrossCounts at
+// whatif.DefaultPlannerImbalanceAcrossCounts) are on for the planner and off
+// from the constructor, and a replay sets each by name.
+func TestParity_ThePlannerTTFTDefaultsAreOffFromTheConstructor(t *testing.T) {
+	require.True(t, whatif.DefaultRouterWaitInPrefill, "precondition: on for the planner")
+	require.True(t, whatif.DefaultPlannerImbalanceAcrossCounts, "precondition: on for the planner")
+	a := New(nil, nil)
+	fields := a.switchFields()
+	for _, name := range []string{SwitchTTFTRouterWaitInPrefill, SwitchTTFTImbalanceAcrossCounts} {
+		require.Contains(t, fields, name)
+		assert.False(t, *fields[name], "%s: off from the constructor", name)
+	}
+	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchTTFTRouterWaitInPrefill: true, SwitchTTFTImbalanceAcrossCounts: true}))
+	assert.True(t, a.ttftRouterWaitInPrefill)
+	assert.True(t, a.ttftImbalanceAcrossCounts)
+}

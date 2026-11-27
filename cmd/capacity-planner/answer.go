@@ -17,6 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
@@ -35,6 +36,20 @@ const (
 const (
 	outputText = "text"
 	outputJSON = "json"
+)
+
+// The planner's TTFT defaults that the SLO analyzer reads as replay switches,
+// read from learnreplay.PlannerSwitches so that one list says what is on for
+// the planner. Each flag overrides its own default for the figure it prices.
+var (
+	// plannerRouterWaitInPrefill is --router-wait-in-prefill's default:
+	// slo.SwitchTTFTRouterWaitInPrefill in PlannerSwitches
+	// (whatif.DefaultRouterWaitInPrefill).
+	plannerRouterWaitInPrefill = learnreplay.PlannerSwitches()[learnreplay.PackageSLO][slo.SwitchTTFTRouterWaitInPrefill]
+	// plannerImbalanceAcrossCounts is --imbalance-across-counts' default:
+	// slo.SwitchTTFTImbalanceAcrossCounts in PlannerSwitches
+	// (whatif.DefaultPlannerImbalanceAcrossCounts).
+	plannerImbalanceAcrossCounts = learnreplay.PlannerSwitches()[learnreplay.PackageSLO][slo.SwitchTTFTImbalanceAcrossCounts]
 )
 
 // answerFlags are the flags both questions take: where to read the fleet,
@@ -121,7 +136,7 @@ type answerFlags struct {
 	// off by default.
 	priceRouterWait bool
 	// routerWaitInPrefill is --router-wait-in-prefill, a TTFT flag (ttft.go):
-	// on by default (whatif.DefaultRouterWaitInPrefill), measured on router
+	// on by default (plannerRouterWaitInPrefill), measured on router
 	// v1.0.0 only; --price-router-wait turns it off unless it is set too
 	// (routerWaitGivesWay).
 	routerWaitInPrefill bool
@@ -134,7 +149,7 @@ type answerFlags struct {
 	// (tpotRatioFor).
 	engineTPOT bool
 	// imbalanceAcrossCounts is --imbalance-across-counts, a TTFT flag
-	// (ttft.go): on by default (whatif.DefaultPlannerImbalanceAcrossCounts),
+	// (ttft.go): on by default (plannerImbalanceAcrossCounts),
 	// where the SLO analyzer's is off.
 	imbalanceAcrossCounts bool
 	// loadAwareRouter is --load-aware-router, a TTFT flag (ttft.go): f
@@ -236,7 +251,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&f.assumeA, "assume-a", 0, "a, the fixed latency one request pays on a prefill pod (11ms), in place of the learned one (flagged)")
 	fs.DurationVar(&f.assumeTransferBase, "assume-transfer-base", 0, "replicas-to-slo and slo-to-rate only: the fixed part of the KV transfer per request, e.g. 20ms; the rest of the measured transfer scales with the tokens moved. Held at the measured transfer; ignored with none. Default 0: all of it scales (named on the assumed line)")
 	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "opt-in, validated at one staircase step: price the flow-control gate past the prefill onset, its wait at the router and behind the burst it releases to one prefill pod (FlowControlWaitPriced), for router v0.11.0; set, it turns the default --router-wait-in-prefill off")
-	fs.BoolVar(&f.routerWaitInPrefill, "router-wait-in-prefill", whatif.DefaultRouterWaitInPrefill, "on by default, measured on router v1.0.0 only: take the router's wait past the prefill onset, up to 0.9 of the prefill knee, as inside the processor-sharing prefill price, so the figure stands (FlowControlWaitPriced) and a rate answer may pass the onset; on router v0.11.0 it reads short where the gate collapses, so set =false there (off, the wait is flagged AboveFlowControlOnset, a miss); --price-router-wait turns it off")
+	fs.BoolVar(&f.routerWaitInPrefill, "router-wait-in-prefill", plannerRouterWaitInPrefill, "on by default, measured on router v1.0.0 only: take the router's wait past the prefill onset, up to 0.9 of the prefill knee, as inside the processor-sharing prefill price, so the figure stands (FlowControlWaitPriced) and a rate answer may pass the onset; on router v0.11.0 it reads short where the gate collapses, so set =false there (off, the wait is flagged AboveFlowControlOnset, a miss); --price-router-wait turns it off")
 	fs.BoolVar(&f.psOnsets, "ps-onsets", whatif.DefaultPSOnsets, "experimental, unvalidated: place the prefill flow-control onset on the processor-sharing model, the prompts past --prefill-running-cap counted as waiting")
 	fs.IntVar(&f.prefillRunningCap, "prefill-running-cap", 0, "with --ps-onsets, the most prompts a prefill pod computes at once (about max_num_batched_tokens over the prompt); 0 (unknown, the default) takes the lower of processor sharing at 1 and first come")
 	fs.BoolVar(&f.chargeDecodeGate, "charge-decode-gate", whatif.DefaultChargeDecodeGate, "experimental, unvalidated, slo-to-rate only: charge the time the decode flow-control gate is closed below its onset to the rate answer")
@@ -256,7 +271,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.experimentalTPOT, experimentalTPOTFlag, "", "at-replicas only: =v2 prices the measured shape's (--shape measured) TPOT p90 and p95 with an "+
 		"experimental per-request TPOT distribution fitted on the --recording, around the planner's own mean; every percentile it prices "+
 		"is flagged TPOTDistribution and reads OUTSIDE VALIDATED REGION")
-	fs.BoolVar(&f.imbalanceAcrossCounts, "imbalance-across-counts", whatif.DefaultPlannerImbalanceAcrossCounts, fmt.Sprintf("at a prefill count P1 has not learned, price f off a curve fitted to the counts it learned; with none learned, and with =false, max(%g, f) (flagged AssumedImbalance either way)", whatif.ImbalanceFloor))
+	fs.BoolVar(&f.imbalanceAcrossCounts, "imbalance-across-counts", plannerImbalanceAcrossCounts, fmt.Sprintf("at a prefill count P1 has not learned, price f off a curve fitted to the counts it learned; with none learned, and with =false, max(%g, f) (flagged AssumedImbalance either way)", whatif.ImbalanceFloor))
 	f.window.registerWindow(fs)
 	fs.Lookup("prometheus").Usage = "answer from a window of this Prometheus (base URL), captured and generated in memory, in place of --recording"
 	fs.Lookup("from").Usage = "with --prometheus, the window's start: RFC 3339 or Unix seconds, to the millisecond (required)"

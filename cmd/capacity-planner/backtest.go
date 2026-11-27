@@ -104,7 +104,7 @@ func (f *backtestFlags) registerAssume(fs *flag.FlagSet) {
 	fs.StringVar(&f.assumeITLB, "assume-itl-b", "", "the decode line's intercept B (12ms), or floor for B from the floor read below the band, "+
 		"where the fit measured none (PinnedDefaultB); the slope is refitted through it (flagged AssumedITLB)")
 	fs.StringVar(&f.flowControl, "flow-control", "", "the router's flow control, on or off, in place of its inference from the fit's queue series (flagged as stated)")
-	fs.BoolVar(&f.routerWaitInPrefill, "router-wait-in-prefill", whatif.DefaultRouterWaitInPrefill, "as slo-to-rate's, on by default: take the router's wait past the prefill onset as inside the prefill price (router v1.0.0); =false for router v0.11.0")
+	fs.BoolVar(&f.routerWaitInPrefill, "router-wait-in-prefill", plannerRouterWaitInPrefill, "as slo-to-rate's, on by default: take the router's wait past the prefill onset as inside the prefill price (router v1.0.0); =false for router v0.11.0")
 	fs.BoolVar(&f.priceRouterWait, "price-router-wait", whatif.DefaultPriceRouterWait, "as slo-to-rate's: price the flow-control gate past the prefill onset as a stage (router v0.11.0); set, it turns the default --router-wait-in-prefill off")
 	fs.BoolVar(&f.loadAwareRouter, "load-aware-router", whatif.DefaultPlannerLoadAwareRouter, "as slo-to-rate's: state that the router "+
 		"balances prefill by load (llm-d's EPP queue scorer), so f is held to the load it was learned at, then falls to 1 at the pooled prefill knee; off by default")
@@ -362,7 +362,7 @@ func (f *backtestFlags) assume() (whatifapi.Assume, error) {
 	switch {
 	case f.routerWaitInPrefill && f.priceRouterWait:
 		return a, usagef("--price-router-wait and --router-wait-in-prefill price the same wait two ways (router v0.11.0's gate, v1.0.0's): set one")
-	case f.priceRouterWait == whatif.DefaultPriceRouterWait && f.routerWaitInPrefill == whatif.DefaultRouterWaitInPrefill:
+	case f.priceRouterWait == whatif.DefaultPriceRouterWait && f.routerWaitInPrefill == plannerRouterWaitInPrefill:
 	case f.priceRouterWait:
 		a.RouterWait = whatifapi.RouterWaitGateStage
 	case f.routerWaitInPrefill:
