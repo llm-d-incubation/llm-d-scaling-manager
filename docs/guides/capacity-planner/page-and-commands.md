@@ -395,7 +395,8 @@ example, from a recording on 2 prefill pods:
 validated).** Where the prefill pods never queued, the planner has only a
 lower bound on their speed. This flag reads it from each pod's prefill time
 against the tokens it computed a request instead: a fixed time a request
-plus a time a token. It is off by default because on the public recordings
+plus a time a token. Where the pods did queue, the queue's speed stands. It
+is off by default because on the public recordings
 it read some TTFT figures under what was measured. Set, every figure reads
 OUTSIDE VALIDATED REGION. The same commands take it, and `POST /v1/inputs`
 takes `prefillVPServiceLine` ([API](api.md)).

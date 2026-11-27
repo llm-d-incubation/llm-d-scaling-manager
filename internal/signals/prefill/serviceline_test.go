@@ -166,16 +166,85 @@ func TestServiceLine_BusyMinutesWin(t *testing.T) {
 	assert.InDelta(t, 2500/(0.25+2500.0/20000), est.VPLine, 1e-6, "recorded beside it")
 }
 
-// A lower bound under the line is replaced by it; one above it stands, as
-// the true V_P is at or above the bound.
-func TestServiceLine_ALowerBoundStandsOnlyAboveTheLine(t *testing.T) {
+// lineWithTail is the never-queued minutes of spread on ranks engines, the
+// switch on, then the tail cycles after them, each a minute apart.
+func lineWithTail(ranks int, tail ...Cycle) []Cycle {
+	cycles := lineCycles(true, spread(40, 0.25, 20000, ranks)...)
+	for i, c := range tail {
+		c.Now, c.VPServiceLine = t0.Add(minute*time.Duration(40+i)), true
+		cycles = append(cycles, c)
+	}
+	return cycles
+}
+
+// A peak under a queue stands, under the line or above it: the queue read
+// the pod at capacity, the line only extrapolates its unqueued minutes to it
+// (issue llm-d-incubation/llm-d-scaling-manager#449). The line is recorded,
+// not taken, and splits nothing.
+func TestServiceLine_APeakUnderAQueueStands(t *testing.T) {
 	line := 2500 / (0.25 + 2500.0/20000)
 	at := func(peak float64) Estimate {
-		cycles := lineCycles(true, spread(40, 0.25, 20000, 1)...)
-		for i := range PeakRun {
-			c := cycle(t0.Add(minute*time.Duration(40+i)), queued("p-0", peak, 2))
-			c.VPServiceLine = true
-			cycles = append(cycles, c)
+		tail := make([]Cycle, PeakRun)
+		for i := range tail {
+			tail[i] = cycle(time.Time{}, queued("p-0", peak, 2))
+		}
+		return run(NewObserver(), lineWithTail(1, tail...)...)
+	}
+	for _, peak := range []float64{line / 2, line * 2} {
+		est := at(peak)
+		assert.Equal(t, SourcePeakUnderQueue, est.VPSource, "peak %v: %+v", peak, est)
+		assert.True(t, est.VPLowerBound, "peak %v", peak)
+		assert.InDelta(t, peak, est.VP, 1e-6, "peak %v", peak)
+		assert.InDelta(t, line, est.VPLine, 1e-6, "peak %v: recorded beside it", peak)
+		assert.Zero(t, est.VPRequestSeconds, "peak %v: a line recorded but not taken splits nothing", peak)
+	}
+}
+
+// Busy minutes over data-parallel ranks are a lower bound (DataParallelRanks)
+// read under a queue: they stand under the line.
+func TestServiceLine_BusyMinutesOverRanksStand(t *testing.T) {
+	line := 4 * 2500 / (0.25 + 2500.0/20000)
+	tail := make([]Cycle, MinBusyMinutes)
+	for i := range tail {
+		rm := queued("p-0", line/3, 3)
+		rm.EngineRanks = 4
+		tail[i] = cycle(time.Time{}, rm)
+		tail[i].QueueMin = map[string]float64{"p-0": 2}
+	}
+	est := run(NewObserver(), lineWithTail(4, tail...)...)
+	require.Equal(t, SourceBusyMinutes, est.VPSource, "%+v", est)
+	assert.True(t, est.VPLowerBound)
+	assert.Equal(t, DataParallelRanks, est.VPLowerBoundReason)
+	assert.InDelta(t, line/3, est.VP, 1e-6)
+	assert.InDelta(t, line, est.VPLine, 1e-6, "recorded beside it")
+}
+
+// The back-pressure bound is read from the router's queue: it stands under
+// the line.
+func TestServiceLine_TheBackPressureBoundStands(t *testing.T) {
+	line := 2500 / (0.25 + 2500.0/20000)
+	cycles := lineCycles(true, spread(40, 0.25, 20000, 1)...)
+	cycles[len(cycles)-1].Bound = Bound{Tokens: line / 2, Samples: MinBoundSamples}
+	est := run(NewObserver(), cycles...)
+	require.Equal(t, SourceBackPressureBound, est.VPSource, "%+v", est)
+	assert.True(t, est.VPLowerBound)
+	assert.InDelta(t, line/2, est.VP, 1e-6)
+	assert.InDelta(t, line, est.VPLine, 1e-6)
+}
+
+// The served peak of a fleet that never queued (NeverQueued) is replaced by
+// the line under it; one above it stands, as the true V_P is at or above
+// the peak.
+func TestServiceLine_AServedPeakStandsOnlyAboveTheLine(t *testing.T) {
+	line := 2500 / (0.25 + 2500.0/20000)
+	at := func(peak float64) Estimate {
+		tail := make([]Cycle, PeakRun)
+		for i := range tail {
+			tail[i] = cycle(time.Time{}, queued("p-0", peak, 0))
+		}
+		cycles := lineWithTail(1, tail...)
+		for i := range cycles {
+			cycles[i].VPServedUnqueued = true
 		}
 		return run(NewObserver(), cycles...)
 	}
@@ -183,19 +252,19 @@ func TestServiceLine_ALowerBoundStandsOnlyAboveTheLine(t *testing.T) {
 	assert.Equal(t, SourceServiceLine, under.VPSource, "%+v", under)
 	assert.InDelta(t, line, under.VP, 1e-6)
 	assert.False(t, under.VPLowerBound)
+	assert.Empty(t, under.VPLowerBoundReason)
 
 	above := at(line * 2)
-	assert.Equal(t, SourcePeakUnderQueue, above.VPSource, "%+v", above)
-	assert.True(t, above.VPLowerBound)
+	assert.Equal(t, SourceServedPeak, above.VPSource, "%+v", above)
+	assert.Equal(t, NeverQueued, above.VPLowerBoundReason)
 	assert.InDelta(t, line*2, above.VP, 1e-6)
 	assert.InDelta(t, line, above.VPLine, 1e-6)
-	assert.Zero(t, above.VPRequestSeconds, "a line recorded but not taken splits nothing")
+	assert.Zero(t, above.VPRequestSeconds)
 }
 
-// A lower bound the window kept from a peak Retention aged out carries the
-// minute it was read (VPLearnedAt); the line that replaces it is read now,
-// and carries none.
-func TestServiceLine_ReplacesAWindowPeakWithItsAge(t *testing.T) {
+// A peak the window kept from a run Retention aged out (VPWindowBest) was
+// read under a queue: it stands, with the minute it was read (VPLearnedAt).
+func TestServiceLine_AWindowPeakStandsWithItsAge(t *testing.T) {
 	line := 2500 / (0.25 + 2500.0/20000)
 	cycles := make([]Cycle, 0, PeakRun+int(Retention/minute)+40)
 	for i := range PeakRun {
@@ -207,6 +276,8 @@ func TestServiceLine_ReplacesAWindowPeakWithItsAge(t *testing.T) {
 		cycles[i].VPWindowBest, cycles[i].VPServiceLine = true, true
 	}
 	est := run(NewObserver(), cycles...)
-	require.Equal(t, SourceServiceLine, est.VPSource, "%+v", est)
-	assert.True(t, est.VPLearnedAt.IsZero(), "the line is read now: %v", est.VPLearnedAt)
+	require.Equal(t, SourcePeakUnderQueue, est.VPSource, "%+v", est)
+	assert.InDelta(t, line/2, est.VP, 1e-6)
+	assert.False(t, est.VPLearnedAt.IsZero(), "the window's peak keeps its age")
+	assert.InDelta(t, line, est.VPLine, 1e-6)
 }
