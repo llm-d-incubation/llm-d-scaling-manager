@@ -94,7 +94,7 @@ func TestModelConfig_TheFlagsItRaisesMoveTheVerdict(t *testing.T) {
 // where none was, so a recording without one prints the row it did.
 func TestEngine_TheModelClassesAreNamed(t *testing.T) {
 	p := denseVariant().state.Params
-	e := engineInfo(p)
+	e := engineInfo(&learnreplay.VariantState{Params: p})
 	assert.Equal(t, "unknown", e.Attention)
 	assert.Equal(t, "unknown", e.MoE)
 	assert.Empty(t, e.Model)
@@ -104,7 +104,7 @@ func TestEngine_TheModelClassesAreNamed(t *testing.T) {
 	q := *p
 	q.ModelConfig = fixtureConfig(t, "moe-full.json")
 	q.TensorParallelSize = 4
-	e = engineInfo(&q)
+	e = engineInfo(&learnreplay.VariantState{Params: &q})
 	assert.Equal(t, "full", e.Attention)
 	assert.Equal(t, "moe-tensor-parallel", e.MoE)
 	assert.Equal(t, filepath.Join(modelConfigs, "moe-full.json"), e.ModelConfigSource)
@@ -112,12 +112,12 @@ func TestEngine_TheModelClassesAreNamed(t *testing.T) {
 		filepath.Join(modelConfigs, "moe-full.json")+"), for reference, not priced yet", engineInfoText(e))
 
 	q.ExpertParallel, q.DataParallelSize = true, 8
-	assert.Equal(t, "moe-expert-parallel", engineInfo(&q).MoE)
+	assert.Equal(t, "moe-expert-parallel", engineInfo(&learnreplay.VariantState{Params: &q}).MoE)
 
 	// No config, but the expert-parallel flag: MoE, as the flag said before.
 	r := *p
 	r.ExpertParallel, r.DataParallelSize = true, 4
-	e = engineInfo(&r)
+	e = engineInfo(&learnreplay.VariantState{Params: &r})
 	assert.Equal(t, "unknown", e.Attention)
 	assert.Equal(t, "moe-expert-parallel", e.MoE)
 	assert.Contains(t, engineInfoText(e), "model unknown attention, moe-expert-parallel, DP 4 (from --enable-expert-parallel; no model config)")

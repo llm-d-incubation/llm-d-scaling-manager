@@ -176,7 +176,7 @@ func engineInfo(v *learnreplay.VariantState) *whatifapi.EngineInfo {
 		StepBudget: w.StepBudget, StepBudgetSource: w.StepBudgetSource,
 		GPUMemoryUtilization: w.GPUMemoryUtilization, GPUMemoryUtilizationSource: w.GPUMemoryUtilizationSource,
 		BlockSize: w.BlockSize, BlockSizeSource: w.BlockSizeSource,
-		Attention: w.Attention, MoE: w.MoE, ModelConfigSource: w.ModelConfigSource, Model: modelText(p), StepBudgetBinding: w.StepBudgetBinding}
+		Attention: w.Attention, MoE: w.MoE, ModelConfigSource: w.ModelConfigSource, Model: modelText(v.Params), StepBudgetBinding: w.StepBudgetBinding}
 }
 
 // modelText is what the model config says of the model p serves, as the
