@@ -444,12 +444,17 @@ func TestStateAt_TheBandBracketsTheControllersLineOnAScopedPrior(t *testing.T) {
 	require.True(t, band.Band.Lo <= ctrl+1e-12 && ctrl <= band.Band.Hi+1e-12, "the band does not bracket the controller's line")
 	// The negative control reads the resamples: the band holds its point,
 	// the controller's figure, whatever they price.
-	over := 0
-	for _, s := range off.Lines {
-		if got, _ := val(s.Line); got >= ctrl {
-			over++
+	overAt := func(rs whatif.LineResamples) int {
+		n := 0
+		for _, s := range rs.Lines {
+			if got, _ := val(s.Line); got >= ctrl {
+				n++
+			}
 		}
+		return n
 	}
+	over := overAt(off)
+	t.Logf("resamples at or over the controller's line: %d of %d without the admission, %d of %d with it", over, len(off.Lines), overAt(on), len(on.Lines))
 	require.Less(t, float64(over), 0.1*float64(len(off.Lines)), "negative control: without the admission the resamples reached the controller's line")
 }
 

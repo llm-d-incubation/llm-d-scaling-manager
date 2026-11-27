@@ -63,12 +63,17 @@ func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 	// fit through the default B alone, under the truth. Read from the
 	// resamples: offBand holds the controller's figure, its point, whatever
 	// they price.
-	over := 0
-	for _, s := range off.Lines {
-		if v, _ := value(s.Line); v >= truth.ITLAt(kPrice) {
-			over++
+	overAt := func(rs LineResamples) int {
+		n := 0
+		for _, s := range rs.Lines {
+			if v, _ := value(s.Line); v >= truth.ITLAt(kPrice) {
+				n++
+			}
 		}
+		return n
 	}
+	over := overAt(off)
+	t.Logf("resamples at or over the truth: %d of %d without the admission, %d of %d with it", over, len(off.Lines), overAt(on), len(on.Lines))
 	if !(float64(over) < (1-bandHi)*float64(len(off.Lines))) {
 		t.Errorf("negative control: without the admission %d of %d resamples price at or over the truth %.5f, want under a tenth",
 			over, len(off.Lines), truth.ITLAt(kPrice))

@@ -112,6 +112,10 @@ func TestBootstrapRerunsTheReadinessGate(t *testing.T) {
 		if s.Tier != TierPinnedB || !s.TierChanged {
 			t.Fatalf("resample %+v: want a pinned-B fit, a change of tier", s)
 		}
+		// No floor was read, so the drawn B is bounded below only.
+		if !(s.Line.B >= min(minDrawnB, worked.B)) || math.IsInf(s.Line.B, 0) {
+			t.Fatalf("resample B %.9f outside [%.9f, +Inf)", s.Line.B, min(minDrawnB, worked.B))
+		}
 	}
 	a := BandAnswer(Answer{Value: 1}, got, func(m itl.Model) (float64, bool) { return m.ITLAt(0.5), true })
 	if !a.HasFlag(TierUnstable) {

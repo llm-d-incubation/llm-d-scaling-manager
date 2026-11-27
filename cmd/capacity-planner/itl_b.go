@@ -207,7 +207,7 @@ func (pv pricedVariant) itlBWords() string {
 		return ""
 	case a.Source == itlBFromFloor:
 		return fmt.Sprintf("ITL B %s, from the floor read below the band (%s at fill %.2f), in place of the %s default; "+
-			"the slope refitted through it on the same readings; the bands draw B around it from the readings",
+			"the slope refitted through it on the same readings; the bands draw B from the readings, held under the floor, so mostly below it",
 			ms(a.Seconds), ms(a.FloorSeconds), a.FloorFill, ms(itl.DefaultBaselineSec))
 	}
 	return fmt.Sprintf("ITL B %s, stated, in place of the %s default; the slope refitted through it on the same readings; "+

@@ -154,6 +154,25 @@ func TestBandAnswerWidensFewBlocks(t *testing.T) {
 	}
 }
 
+// A point that is no number gets the resamples' own band, unwidened: no
+// edge is moved from it, so none becomes NaN or Inf.
+func TestBandAnswerOfANonFinitePointIsUnwidened(t *testing.T) {
+	lines := make([]Resample, 0, 10)
+	for i := range 10 {
+		lines = append(lines, Resample{Line: itl.Model{A: 1, B: float64(i)}, Tier: TierPinnedB})
+	}
+	value := func(m itl.Model) (float64, bool) { return 10 + m.B, true }
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		got := BandAnswer(Answer{Value: v}, LineResamples{Lines: lines, Drawn: 10, Blocks: 2}, value)
+		if got.Band == nil {
+			t.Fatalf("point %v: no band", v)
+		}
+		if got.Band.Lo != 10 || got.Band.Hi != 18 || got.Band.Blocks != 2 {
+			t.Errorf("point %v: band %+v, want the 10th to 90th percentile [10, 18] unwidened, 2 blocks", v, *got.Band)
+		}
+	}
+}
+
 // calibrationReadings is cycles of two replicas' readings on line, k drawn
 // uniformly over [lo, hi], with multiplicative normal noise.
 func calibrationReadings(rng *rand.Rand, line itl.Model, cycles int, lo, hi, noise float64) []itl.Observation {

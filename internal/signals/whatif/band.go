@@ -508,17 +508,20 @@ func BandAnswer(a Answer, rs LineResamples, value func(itl.Model) (float64, bool
 	slices.Sort(vals)
 	at := func(p float64) float64 { return vals[max(0, int(math.Ceil(p*float64(len(vals))))-1)] }
 	lo, hi := at(bandLo), at(bandHi)
-	c := min(max(a.Value, lo), hi)
 	if Finite(a.Value) {
 		// The band holds its point: a band beside the figure it bands
 		// would say the figure is not what it is.
-		lo, hi, c = min(lo, a.Value), max(hi, a.Value), a.Value
-	}
-	if f := bandWidening(rs.Blocks); f > 1 {
-		// Each edge moved away from the answer by f.
-		lo, hi = c-f*(c-lo), c+f*(hi-c)
-		if vals[0] >= 0 {
-			lo = max(lo, 0)
+		c := a.Value
+		lo, hi = min(lo, c), max(hi, c)
+		if f := bandWidening(rs.Blocks); f > 1 {
+			// Each edge moved away from the point by f, linearly: the
+			// top is not held to any physical cap the figure has (a
+			// fill past 1, say), only the bottom to 0 where every
+			// resample is at or above it.
+			lo, hi = c-f*(c-lo), c+f*(hi-c)
+			if vals[0] >= 0 {
+				lo = max(lo, 0)
+			}
 		}
 	}
 	a.Band = &Interval{Lo: lo, Hi: hi, Blocks: rs.Blocks}
