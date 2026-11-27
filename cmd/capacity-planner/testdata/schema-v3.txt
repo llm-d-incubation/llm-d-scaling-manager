@@ -101,6 +101,7 @@ roles[].results object
 roles[].results.knee object
 roles[].results.knee.answer object
 roles[].results.knee.answer.band object
+roles[].results.knee.answer.band.blocks number
 roles[].results.knee.answer.band.hi number
 roles[].results.knee.answer.band.lo number
 roles[].results.knee.answer.basis object
@@ -145,6 +146,7 @@ roles[].results.knee.refused.reason string
 roles[].results.meanTPOT object
 roles[].results.meanTPOT.answer object
 roles[].results.meanTPOT.answer.band object
+roles[].results.meanTPOT.answer.band.blocks number
 roles[].results.meanTPOT.answer.band.hi number
 roles[].results.meanTPOT.answer.band.lo number
 roles[].results.meanTPOT.answer.basis object
@@ -189,6 +191,7 @@ roles[].results.meanTPOT.refused.reason string
 roles[].results.operatingRate object
 roles[].results.operatingRate.answer object
 roles[].results.operatingRate.answer.band object
+roles[].results.operatingRate.answer.band.blocks number
 roles[].results.operatingRate.answer.band.hi number
 roles[].results.operatingRate.answer.band.lo number
 roles[].results.operatingRate.answer.basis object
@@ -233,6 +236,7 @@ roles[].results.operatingRate.refused.reason string
 roles[].results.percentileTPOT object
 roles[].results.percentileTPOT.answer object
 roles[].results.percentileTPOT.answer.band object
+roles[].results.percentileTPOT.answer.band.blocks number
 roles[].results.percentileTPOT.answer.band.hi number
 roles[].results.percentileTPOT.answer.band.lo number
 roles[].results.percentileTPOT.answer.basis object
@@ -277,6 +281,7 @@ roles[].results.percentileTPOT.refused.reason string
 roles[].results.rate object
 roles[].results.rate.answer object
 roles[].results.rate.answer.band object
+roles[].results.rate.answer.band.blocks number
 roles[].results.rate.answer.band.hi number
 roles[].results.rate.answer.band.lo number
 roles[].results.rate.answer.basis object
