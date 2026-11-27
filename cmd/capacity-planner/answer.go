@@ -210,6 +210,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.cycle, "cycle", "last", "the model's cycle to answer at: a number from 1, or last")
 	fs.StringVar(&f.model, "model", "", "the model to answer for; empty takes the recording's only model")
 	fs.StringVar(&f.window.namespace, "namespace", "", "the model's namespace; empty matches any (with --prometheus, the namespace to capture: required)")
+	fs.StringVar(&f.window.modelConfig, modelConfigFlag, "", modelConfigUsage)
 	fs.StringVar(&f.variant, "variant", "", "price this decode variant only; empty prices every decode variant")
 	fs.IntVar(&f.decode, "decode", 0, "decode replicas to price; 0 takes the recorded count")
 	fs.Int64Var(&f.batchCap, "batch-cap", 0, "batch cap per engine rank; 0 takes the one the analyzer priced at "+
@@ -447,6 +448,14 @@ func (f *answerFlags) stateOf(ctx context.Context, name string, src *recordingSo
 		return nil, usagef("%s: %v", name, err)
 	case err != nil:
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if !f.prometheus() {
+		// A --prometheus window carries the config in its capture already.
+		m, err := f.answerModelConfig()
+		if err != nil {
+			return nil, err
+		}
+		applyModelConfig(st, m, f.warn)
 	}
 	return st, nil
 }

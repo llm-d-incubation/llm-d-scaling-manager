@@ -46,6 +46,11 @@ var (
 		"seed", "o", "output", "ttft", "ttft-percentile", "tpot", "tpot-percentile",
 		"prometheus", "bearer-token-file", "ca-file", "insecure-skip-verify", "timeout", "kube-state-metrics", "role-of",
 		"from", "to", "step", "force", "no-self-check",
+		// It names what the model is, which the engine row reports; it moves
+		// no figure. Where it names another attention kind than the model's
+		// name did, the figure's engine flag (HybridAttention, MLAAttention)
+		// follows it, and that flag is what the envelope reads.
+		modelConfigFlag,
 		// Set, it states nothing until it applies: assumeIntercept then adds
 		// --assume-itl-b to the variant's stated inputs, which puts its figures outside.
 		"assume-itl-b",

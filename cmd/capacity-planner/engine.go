@@ -42,6 +42,14 @@ type wireEngine struct {
 	GPUMemoryUtilizationSource string  `json:"gpuMemoryUtilizationSource"`
 	BlockSize                  int64   `json:"blockSize"`
 	BlockSizeSource            string  `json:"blockSizeSource"`
+	// Attention is the model's attention kind (full, sliding-window, mla,
+	// hybrid) and MoE its MoE class (dense, moe-tensor-parallel,
+	// moe-expert-parallel), "unknown" where no model config was read and,
+	// for MoE, no expert-parallel flag says it. ModelConfigSource is where
+	// the config was read, absent with none. Reported, not priced.
+	Attention         string `json:"attention"`
+	MoE               string `json:"moe"`
+	ModelConfigSource string `json:"modelConfigSource,omitempty"`
 }
 
 // engineOf is the wire's account of the engine p describes; nil with none.
@@ -62,7 +70,8 @@ func engineOf(p *capacity.EngineParams) *wireEngine {
 		VLLMVersion: p.VLLMVersion.String(), VLLMVersionFrom: p.VLLMVersionFrom,
 		StepBudget: p.EffectiveMaxBatchedTokens, StepBudgetSource: source(p.MaxNumBatchedTokens > 0),
 		GPUMemoryUtilization: p.GpuMemoryUtilization, GPUMemoryUtilizationSource: source(p.GpuMemoryUtilizationSet),
-		BlockSize: p.BlockSize, BlockSizeSource: source(p.BlockSizeSet)}
+		BlockSize: p.BlockSize, BlockSizeSource: source(p.BlockSizeSet),
+		Attention: p.AttentionKind().String(), MoE: p.MoEClass().String(), ModelConfigSource: p.ModelConfig.Source}
 }
 
 // variantParams is the engine parameters the state holds for the named
@@ -104,7 +113,28 @@ func engineInfo(p *capacity.EngineParams) *whatifapi.EngineInfo {
 		VLLMVersion: w.VLLMVersion, VLLMVersionFrom: w.VLLMVersionFrom,
 		StepBudget: w.StepBudget, StepBudgetSource: w.StepBudgetSource,
 		GPUMemoryUtilization: w.GPUMemoryUtilization, GPUMemoryUtilizationSource: w.GPUMemoryUtilizationSource,
-		BlockSize: w.BlockSize, BlockSizeSource: w.BlockSizeSource}
+		BlockSize: w.BlockSize, BlockSizeSource: w.BlockSizeSource,
+		Attention: w.Attention, MoE: w.MoE, ModelConfigSource: w.ModelConfigSource, Model: modelText(p)}
+}
+
+// modelText is what the model config says of the model p serves, as the
+// engine row prints it: "model mla attention (kv_lora_rank 512),
+// moe-expert-parallel, DP 8 (model config annotation)". Empty where neither
+// class is known, so a recording without a config prints the row it did.
+func modelText(p *capacity.EngineParams) string {
+	attention, moe := p.AttentionKind(), p.MoEClass()
+	if attention == capacity.AttentionUnknown && moe == capacity.MoEUnknown {
+		return ""
+	}
+	text := "model " + attention.String() + " attention"
+	if attention != capacity.AttentionUnknown {
+		text = "model " + p.ModelConfig.AttentionText()
+	}
+	text += ", " + p.MoEText()
+	if src := p.ModelConfig.Source; src != "" {
+		return fmt.Sprintf("%s (model config %s)", text, src)
+	}
+	return text + " (from --enable-expert-parallel; no model config)"
 }
 
 // notRecorded reports whether p is a vLLM engine's from a recording made
@@ -147,10 +177,14 @@ func engineRowText(p *capacity.EngineParams) string {
 // engineInfoText is engineRowText from the API's account of an engine, as
 // the at-replicas report prints it.
 func engineInfoText(e *whatifapi.EngineInfo) string {
-	if e.StepBudgetSource == engineNotRecorded {
-		return e.Summary
+	model := ""
+	if e.Model != "" {
+		model = "; " + e.Model + ", " + notPricedYetWording
 	}
-	return fmt.Sprintf("%s; step budget %d (%s), %s; %s: GPU memory %s (%s), block size %d (%s)", e.Summary,
+	if e.StepBudgetSource == engineNotRecorded {
+		return e.Summary + model
+	}
+	return fmt.Sprintf("%s; step budget %d (%s), %s; %s: GPU memory %s (%s), block size %d (%s)%s", e.Summary,
 		e.StepBudget, e.StepBudgetSource, stepBudgetPricedWording, notPricedYetWording, num(e.GPUMemoryUtilization),
-		e.GPUMemoryUtilizationSource, e.BlockSize, e.BlockSizeSource)
+		e.GPUMemoryUtilizationSource, e.BlockSize, e.BlockSizeSource, model)
 }

@@ -144,15 +144,12 @@ func (pv pricedVariant) engineNotes() []engineNote {
 			add(pastCUDAGraphCeiling, "graphs to %d sequences a rank, priced at up to %d", ceiling, batch)
 		}
 	}
-	model := strings.ToLower(p.ModelPath)
-	if model == "" {
-		model = strings.ToLower(pv.model)
+	hybrid, mla := pv.attentionFamily()
+	if hybrid != "" {
+		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", hybrid)
 	}
-	if fam := familyOf(model, hybridModels); fam != "" {
-		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", fam)
-	}
-	if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
-		add(mlaAttention, "%s: %s", fam, pv.mlaBinds())
+	if mla != "" {
+		add(mlaAttention, "%s: %s", mla, pv.mlaBinds())
 	}
 	if c := p.KVConnector; c != "" && !strings.Contains(strings.ToLower(c), "nixl") {
 		add(kvConnectorUnmodeled, "%s", c)
@@ -172,6 +169,33 @@ func (pv pricedVariant) engineNotes() []engineNote {
 			pv.perRank, pv.state.Accelerator, def)
 	}
 	return out
+}
+
+// attentionFamily is what makes pv's model hybrid-attention or MLA, each ""
+// where it is not: the attention kind its model config states (issue #501),
+// and, with no config read, the family its name falls in, as before the
+// config was read. A config that states full attention clears both, whatever
+// the name says.
+func (pv pricedVariant) attentionFamily() (hybrid, mla string) {
+	p := pv.state.Params
+	if p.ModelConfig.Read() {
+		switch p.AttentionKind() {
+		case capacity.AttentionSlidingWindow, capacity.AttentionHybrid:
+			return p.ModelConfig.AttentionText(), ""
+		case capacity.AttentionMLA:
+			return "", p.ModelConfig.AttentionText()
+		}
+		return "", ""
+	}
+	model := strings.ToLower(p.ModelPath)
+	if model == "" {
+		model = strings.ToLower(pv.model)
+	}
+	hybrid = familyOf(model, hybridModels)
+	if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
+		mla = fam
+	}
+	return hybrid, mla
 }
 
 // familyOf is the first of families model's name contains, "" with none.
