@@ -405,11 +405,15 @@ type SelfCheckFigure struct {
 	NearKneeUnsettled int `json:"nearKneeUnsettled,omitempty"`
 	// Refused is the other refusals, by reason.
 	Refused map[string]int `json:"refused"`
-	// UpperBound is the steps whose figure was an upper bound, priced from
-	// a V_P that is only a lower bound, that the fleet measured at or under
-	// (UnscoredUpperBound): consistent with it, and not scored, so no rule
-	// reads them (#369).
+	// UpperBound is never set: a figure priced from a lower bound of V_P is
+	// not an upper bound (#515). The key stays in the pinned schema, absent.
 	UpperBound int `json:"upperBound,omitempty"`
+	// VPLowerBound is the steps whose figure was priced from a V_P that is
+	// only a lower bound, scored apart (BacktestScore.VPLowerBound) so no
+	// rule reads them, and VPLowerBoundUnder those of them that read under
+	// the measured figure.
+	VPLowerBound      int `json:"vpLowerBound,omitempty"`
+	VPLowerBoundUnder int `json:"vpLowerBoundUnder,omitempty"`
 	// p90Steps and p90Low are the p90's scored steps and those read more
 	// than BacktestTolerance low, where the figure is judged at its mean
 	// (the p90-low rule, figureRules).
@@ -424,14 +428,13 @@ type SelfCheckFigure struct {
 	p90Bucket       string
 }
 
-// upperBoundWords is what a figure's words add of its steps that were
-// upper bounds the fleet measured under (SelfCheckFigure.UpperBound), ""
-// with none.
-func (f *SelfCheckFigure) upperBoundWords() string {
-	if f.UpperBound == 0 {
+// apartWords is what a figure's words add of its steps scored apart
+// (SelfCheckFigure.VPLowerBound), "" with none.
+func (f *SelfCheckFigure) apartWords() string {
+	if f.VPLowerBound == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d more priced from a lower bound of V_P were upper bounds the fleet measured at or under: not scored)", f.UpperBound)
+	return fmt.Sprintf(" (%d more priced from a lower bound of V_P, scored apart: %d read under the measured figure)", f.VPLowerBound, f.VPLowerBoundUnder)
 }
 
 // SelfCheckFold is one fold: the fit up to FitTo, the test from TestFrom to
@@ -601,7 +604,10 @@ func selfCheckFigure(scores []BacktestScore, judged int) *SelfCheckFigure {
 	}
 	s := *p
 	f := &SelfCheckFigure{Statistic: s.Statistic, Steps: s.All.Steps, Bias: s.All.Bias, Low: s.All.Low, Judged: judged,
-		Overloaded: s.Refused[string(whatif.Saturated)], PastKnee: s.PastKnee, Refused: map[string]int{}, UpperBound: s.Unscored[UnscoredUpperBound]}
+		Overloaded: s.Refused[string(whatif.Saturated)], PastKnee: s.PastKnee, Refused: map[string]int{}}
+	if a := s.VPLowerBound; a != nil {
+		f.VPLowerBound, f.VPLowerBoundUnder = a.Steps, a.Under
+	}
 	if p90 >= 0 && s.Statistic == statisticMean {
 		f.p90Steps, f.p90Low = scores[p90].All.Steps, scores[p90].All.Low
 		f.P90SameBucket, f.P90Unresolvable = scores[p90].SameBucket, scores[p90].Unscored[UnscoredUnresolvable]
@@ -667,13 +673,13 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		}
 		if f.Steps < selfCheckMinSteps || f.Bias == nil {
 			sc.Checks = append(sc.Checks, SelfCheckRule{Name: strings.ToLower(x.name) + "-scored", Passed: false,
-				Detail: fmt.Sprintf("%s %s scored in %d steps, fewer than %d%s: not judged", f.Statistic, x.name, f.Steps, selfCheckMinSteps, f.upperBoundWords())})
+				Detail: fmt.Sprintf("%s %s scored in %d steps, fewer than %d%s: not judged", f.Statistic, x.name, f.Steps, selfCheckMinSteps, f.apartWords())})
 			continue
 		}
 		judged = append(judged, x.name)
 		within := float64(f.Within) / float64(f.Steps)
 		parts = append(parts, fmt.Sprintf("%s %s within 20%% in %d of %d steps at %d load levels (median ratio %.2f)%s", f.Statistic, x.name, f.Within, f.Steps,
-			f.Levels, *f.Bias, f.upperBoundWords()))
+			f.Levels, *f.Bias, f.apartWords()))
 		if f.p90Bucket != "" {
 			// For information beside the mean: the p90 the histogram could not
 			// place, how often the prediction fell in the very bucket measured.
@@ -707,8 +713,9 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 			for _, r := range slices.Sorted(maps.Keys(x.f.Refused)) {
 				why = append(why, fmt.Sprintf("%s refused %s in %d steps", x.name, r, x.f.Refused[r]))
 			}
-			if n := x.f.UpperBound; n > 0 {
-				why = append(why, fmt.Sprintf("%s an upper bound the fleet measured at or under in %d steps (V_P a lower bound)", x.name, n))
+			if n := x.f.VPLowerBound; n > 0 {
+				why = append(why, fmt.Sprintf("%s priced from a lower bound of V_P in %d steps, scored apart (%d read under the measured figure)",
+					x.name, n, x.f.VPLowerBoundUnder))
 			}
 		}
 		if len(why) > 0 {

@@ -121,7 +121,8 @@ func TestAtReplicas_ConcurrencyFlag(t *testing.T) {
 // A knee priced from a lower bound of V_P is not known to be where requests
 // queue without bound: its concurrency reads "not known", not unbounded, and
 // a concurrency asked is never called saturating there (#280). One it holds
-// is a rate of at least its figure, its time in system an upper bound.
+// is priced at a rate, and neither the rate nor the time in system is
+// called a bound (#515).
 func TestAtReplicas_ConcurrencyAtLowerBoundKnee(t *testing.T) {
 	rec := lowerBoundRecording(t)
 	rep := concReport(t, "at-replicas", "--recording", rec, "--load-seen", "8", "--load", "50%", "--load", "1000000c")
@@ -136,7 +137,7 @@ func TestAtReplicas_ConcurrencyAtLowerBoundKnee(t *testing.T) {
 	}
 	// The time in system priced from the lower bound grows without bound at
 	// the lower-bound knee, so a huge concurrency is reached just under it:
-	// a rate of at least that, never one called saturating. Were it not
+	// a rate under the knee, never one called saturating. Were it not
 	// reached, the load would be left untranslated, never priced at the knee.
 	if len(s.Untranslated) == 1 {
 		assert.Contains(t, s.Untranslated[0].Reason, "lower bound of V_P")
@@ -144,21 +145,21 @@ func TestAtReplicas_ConcurrencyAtLowerBoundKnee(t *testing.T) {
 		big := rowOf(t, s, "1000000c")
 		require.NotNil(t, big.FromConcurrency)
 		assert.False(t, big.FromConcurrency.AtKnee)
-		assert.True(t, big.FromConcurrency.LowerBound)
+		assert.False(t, big.FromConcurrency.LowerBound)
 		assert.Less(t, big.Rate, *s.Capacity.FleetKnee.Value)
 	}
 
 	half := rowOf(t, s, "50%")
 	require.NotNil(t, half.Concurrency.Fleet.Value)
-	require.True(t, half.Concurrency.Fleet.UpperBound)
+	require.False(t, half.Concurrency.Fleet.UpperBound)
 	asked := strconv.FormatFloat(*half.Concurrency.Fleet.Value, 'f', -1, 64) + "c"
 	rep = concReport(t, "at-replicas", "--recording", rec, "--load-seen", "8", "--load", asked)
 	back := rowOf(t, rep.Shapes[0], asked)
 	require.NotNil(t, back.FromConcurrency)
 	assert.False(t, back.FromConcurrency.AtKnee)
-	assert.True(t, back.FromConcurrency.LowerBound)
+	assert.False(t, back.FromConcurrency.LowerBound)
 
 	text, _ := runCmd(t, "at-replicas", "--recording", rec, "--load-seen", "8", "--load", asked)
 	assert.Contains(t, text, "not known")
-	assert.Contains(t, text, asked+": at least")
+	assert.NotContains(t, text, asked+": at least")
 }

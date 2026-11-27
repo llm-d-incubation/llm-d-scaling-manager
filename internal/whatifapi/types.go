@@ -369,11 +369,13 @@ type Figure struct {
 	// plan reads (the points A and B, the knees and the limits), not on a
 	// curve's points.
 	Validation *Validation `json:"validation,omitempty"`
-	// UpperBound says the figure, a latency, is priced from a prefill speed
-	// (V_P) known only as a lower bound (flag VPLowerBound): a faster prefill
-	// only lowers it, so the true figure is at most Value. A target it meets
-	// is met; one it misses is not known to be missed (issue
-	// llm-d-incubation/llm-d-scaling-manager#369).
+	// UpperBound is never set. It said a TTFT priced from a V_P known only
+	// as a lower bound was an upper bound (#369), but only the figure's V_P
+	// terms are bounded by that: the others are point estimates, or not
+	// priced, and the figure read under the measured TTFT in backtests
+	// (issue llm-d-incubation/llm-d-scaling-manager#515). Such a figure is a
+	// point figure flagged VPLowerBound (TTFTFromLowerBoundVP). The key stays
+	// in the pinned schema, absent.
 	UpperBound bool `json:"upperBound,omitempty"`
 	// Extrapolated says the figure, priced by the experimental TTFT or
 	// TPOT model, is at a rate above the highest load the source's fit

@@ -576,10 +576,10 @@ function reportRequest(o) {
 // REPORT_MARKS are a summary cell's marks: its class, and the word that says
 // it without colour. A rate past a prefill knee priced from a lower bound of
 // V_P is not judged, never saturated: the true knee may be higher. A TTFT
-// over its target priced from that lower bound is at most its figure, so its
-// miss is not known either.
+// over its target priced from that lower bound is not judged either: its V_P
+// terms can read it high, so its miss is not known. It is no bound (#515).
 const REPORT_MARKS = {met: ["met", "ok"], missed: ["missed", "MISS"], "missed at onset": ["missed", "MISS at onset"], saturated: ["saturated", "SAT"],
-  "past a lower-bound knee": ["unknown", "past prefill's lower-bound limit"], "at most, over target": ["unknown", "at most, over target: not known"],
+  "past a lower-bound knee": ["unknown", "past prefill's lower-bound limit"], "over target, V_P a lower bound": ["unknown", "over target from a lower bound of V_P: not known"],
   unknown: ["unknown", "?"], "no target": ["notarget", "no SLO"]};
 
 // REFUSAL_WORDS are the refusals a report shows most, in words.
@@ -654,11 +654,10 @@ function roundRate(r) {
 }
 
 // msText is a latency figure in words: "637 ms", or its refusal, short. A
-// TPOT (tpot true) read at the decode line's floor is marked as at most that,
-// and so is a TTFT priced from a lower bound of V_P (upperBound).
+// TPOT (tpot true) read at the decode line's floor is marked as at most that.
 function msText(f, tpot) {
   // A figure read at the band's bottom is the line's floor: the latency is at most it.
-  if (f && f.value != null) return ((tpot && isFloor(f)) || f.upperBound ? "≤" : "") + roundMs(f.value) + " ms";
+  if (f && f.value != null) return (tpot && isFloor(f) ? "≤" : "") + roundMs(f.value) + " ms";
   const reason = f && f.refused ? f.refused.reason : "";
   return reason === "Saturated" ? "saturated" : reason === "AboveDecodeOnset" ? "router-queued" : "-";
 }
@@ -696,8 +695,6 @@ function concurrencyNote(chosen, limit) {
       parts.push(`This fleet holds fewer than ${n} requests at any rate it prices: the rate is ${r} r/s, short of the limit, where its time in the system is first refused.`);
     } else if (from.atKnee) {
       parts.push(`${n} requests open saturate this fleet: it holds fewer below its limit, so the rate is the limit's ${r} r/s; more concurrency adds queueing, not throughput.`);
-    } else if (from.lowerBound) {
-      parts.push(`${n} requests in the system on average is at least ${r} r/s on this fleet: the time in the system is priced from a lower bound of the prefill speed.`);
     } else {
       parts.push(`${n} requests in the system on average is ${r} r/s on this fleet.`);
     }
@@ -1470,7 +1467,7 @@ function growthNeed(size, error) {
   // A size whose limit is only a lower bound may need fewer prefill: the
   // true limit is higher. One past the highest load measured is extrapolated.
   // A V_P the user stated (AssumedVP) is priced as given, as the server's
-  // TTFTUpperBound reads it.
+  // TTFTFromLowerBoundVP reads it.
   if ((lim.flags || []).includes("VPLowerBound") && !(lim.flags || []).includes("AssumedVP")) notes.push("prefill's limit is a lower bound, so fewer prefill may do");
   if (lim.extrapolated) notes.push("extrapolated past the tested range");
   return s + (notes.length ? `, ${notes.join("; ")}` : "");

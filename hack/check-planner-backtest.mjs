@@ -157,17 +157,20 @@ try {
   }
   check("a refused prediction is named in the tooltip", /overloaded/.test(btTipHTML(refused, refused.steps[3])));
 
-  // A TTFT priced from a lower bound of V_P is at most its figure, and one
-  // the fleet measured under is consistent with it, not scored (#369).
-  const upper = copy(answer);
-  const ub = upper.steps[3].ttft[0];
-  ub.predicted.upperBound = true;
-  ub.unscored = "upperBound";
-  const ubTip = btTipHTML(upper, upper.steps[3]);
-  check("an upper-bound prediction reads at most in the tooltip", ubTip.includes("predicted at most ") &&
-    ubTip.includes("an upper bound the fleet measured under: consistent, not scored"), ubTip);
-  check("an upper-bound prediction reads at most in the step table", btStepTable(upper).includes("\u2264 "));
-  check("a plain prediction does not", !btStepTable(answer).includes("at most "));
+  // A TTFT priced from a lower bound of V_P is neither a point nor a bound
+  // (#515): it reads as its figure, scored apart, never at most.
+  const apart = copy(answer);
+  const ap = apart.steps[3].ttft[0];
+  ap.predicted.flags = ["VPLowerBound"];
+  ap.unscored = "vpLowerBound";
+  const apTip = btTipHTML(apart, apart.steps[3]);
+  check("a prediction from a lower bound of V_P is scored apart in the tooltip", !apTip.includes("at most") &&
+    apTip.includes("priced from a lower bound of V_P: neither a point nor a bound, scored apart"), apTip);
+  check("it is no point: never within, low or high", btPointClass(ap) === "apart", btPointClass(ap));
+  check("the step table never reads at most", !btStepTable(apart).includes("\u2264 ") && !btStepTable(answer).includes("at most "));
+  const apList = btUnscoredList({summary: {ttft: [{statistic: "mean", unscored: {vpLowerBound: 5}, vpLowerBound: {steps: 5, atOrOver: 3, under: 2, bias: 1.3}}], tpot: []}});
+  check("the figures read under are counted, not hidden", apList.length === 1 && apList[0].includes("Of the 5 priced from a lower bound of V_P, 2 read under the measured figure (median ratio 1.30)"),
+    JSON.stringify(apList));
 
   // The step table shows mean, p90 and p95 of both figures.
   const head = btStepTable(answer);

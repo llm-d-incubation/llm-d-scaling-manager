@@ -1,5 +1,5 @@
 Over the 1 h 13 min the planner did not see:
-The planner's TTFT was not scored in any step. In 12 steps its TTFT was priced from a lower bound of V_P, so the true TTFT is at most the figure (an upper bound), and the fleet measured at or under it: consistent, and not scored for accuracy (upperBound). 1 more were refused (see the steps).
+The planner's TTFT was not scored as a point in any step. In 12 steps its mean TTFT was priced from a lower bound of V_P, which is neither a point figure nor a bound, and is scored apart (vpLowerBound): it read under the measured TTFT in 3 of them, median ratio 1.20. 1 more were refused (see the steps).
 mean TPOT: within 20% of measured in 15 of the 15 five-minute steps scored (a figure, and enough measured requests); no overall lean (median ratio 0.98). p90 TPOT not scored in 10: the measured p90 fell in a histogram bucket wider than 20% of its lower edge, too wide to place it, with the prediction inside it or within 20% of its edge; in the measured histogram bucket itself in 10, 10 ms to 20 ms (2.0x wide): consistent at the bucket's resolution, not within 20%. To measure it, give the histogram finer edges: the router's metrics.requestTPOTBuckets in the EndpointPickerConfig (an llm-d-router build after v1.0.0), or vLLM's --custom-histogram-buckets (v0.32.0 and later). Edges about 15% apart place p90 and p95 within 20%.
 None of these figures falls within the conditions our own accuracy benchmarks cover (docs/guides/capacity-planner/accuracy.md): this check is the evidence for this fleet.
 Judged 15 of 16 five-minute steps; not judged: 1 warm-up.
@@ -10,36 +10,41 @@ configuration: identical where both recordings record it; not compared: the rout
 measured: the router's histograms (server side, the same scrape as the inputs): TTFT from the request's arrival at the router, its queue included; TPOT per streamed request. Each step is priced at the inputs of the same window its histogram covers
 assumed: random (Poisson) arrivals: the recording does not measure how bursty arrivals are; state it with --arrival-cv2 (arrivalCV2) when known
 
-each step: predicted/measured (* inside the conditions our accuracy benchmarks cover; ~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it; <= an upper bound, priced from a lower bound of V_P: scored only where the fleet measured more than 20% over it)
+each step: predicted/measured (* inside the conditions our accuracy benchmarks cover; ~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it; v priced from a lower bound of V_P, neither a point nor a bound: scored apart)
 step (UTC)          rate   P+D  TTFT mean           TTFT p90            TPOT mean         TPOT p90          
-2026-11-14 08:20    1.06   2+2  <=210ms/160ms       <=359ms/196ms~      11ms/11ms         18ms/19ms~        not judged: warm-up
-2026-11-14 08:25    1.10   2+2  <=210ms/156ms       <=370ms/194ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:30    0.57   2+2  <=262ms/289ms       <=401ms/389ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:35    0.58   2+2  <=372ms/292ms       <=539ms/389ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:40    0.52   2+2  <=370ms/286ms       <=535ms/389ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:45    0.43   2+2  <=440ms/446ms       <=694ms/596ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:50    0.42   2+2  <=531ms/457ms       <=780ms/598ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 08:55    0.35   2+2  <=525ms/431ms       <=768ms/579ms~      11ms/11ms         18ms/19ms~        judged
-2026-11-14 09:00    0.30   2+2  <=601ms/603ms       <=844ms/-           11ms/11ms         18ms/-            judged
-2026-11-14 09:05    0.29   2+2  <=693ms/563ms       <=980ms/-           11ms/11ms         18ms/-            judged
-2026-11-14 09:10    0.27   2+2  <=690ms/562ms       <=973ms/-           11ms/11ms         18ms/-            judged
-2026-11-14 09:15    3.09   2+2  <=2.2s/-            <=4.7s/-            11ms/12ms         18ms/13ms~        judged
+2026-11-14 08:20    1.06   2+2  210ms/160msv        359ms/196ms~v       11ms/11ms         18ms/19ms~        not judged: warm-up
+2026-11-14 08:25    1.10   2+2  210ms/156msv        370ms/194ms~v       11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:30    0.57   2+2  262ms/289msv        401ms/389ms~        11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:35    0.58   2+2  372ms/292msv        539ms/389ms~v       11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:40    0.52   2+2  370ms/286msv        535ms/389ms~v       11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:45    0.43   2+2  440ms/446msv        694ms/596ms~        11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:50    0.42   2+2  531ms/457msv        780ms/598ms~v       11ms/11ms         18ms/19ms~        judged
+2026-11-14 08:55    0.35   2+2  525ms/431msv        768ms/579ms~v       11ms/11ms         18ms/19ms~        judged
+2026-11-14 09:00    0.30   2+2  601ms/603msv        844ms/-             11ms/11ms         18ms/-            judged
+2026-11-14 09:05    0.29   2+2  693ms/563msv        980ms/-             11ms/11ms         18ms/-            judged
+2026-11-14 09:10    0.27   2+2  690ms/562msv        973ms/-             11ms/11ms         18ms/-            judged
+2026-11-14 09:15    3.09   2+2  2.2s/-              4.7s/-              11ms/12ms         18ms/13ms~        judged
 2026-11-14 09:20    4.13   2+2  no figure/11.6s     no figure/17.9s~    11ms/12ms         18ms/13ms~        judged
-2026-11-14 09:25    2.02   2+2  <=1.1s/-            <=2.0s/-            11ms/12ms         18ms/19ms~        judged
-2026-11-14 09:30    0.26   2+2  <=689ms/586ms       <=970ms/-           11ms/11ms         18ms/-            judged
-2026-11-14 09:35    0.24   2+2  <=687ms/589ms       <=966ms/-           11ms/11ms         18ms/-            judged
+2026-11-14 09:25    2.02   2+2  1.1s/-              2.0s/-              11ms/12ms         18ms/19ms~        judged
+2026-11-14 09:30    0.26   2+2  689ms/586msv        970ms/-             11ms/11ms         18ms/-            judged
+2026-11-14 09:35    0.24   2+2  687ms/589msv        966ms/-             11ms/11ms         18ms/-            judged
 
 score over the steps with a figure
             steps  median  within     read    typical     worst-10%  under upper 
                     ratio     20% >20% low       miss          miss        bound 
-TTFT mean       0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 12 upperBound
+TTFT mean       0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 12 vpLowerBound
 TTFT p50        0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 12 unresolvable (8 in the measured bucket)
-TTFT p90        0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 5 fewRequests, 2 unresolvable, 5 upperBound
-TTFT p95        0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 11 fewRequests, 1 upperBound
+TTFT p90        0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 5 fewRequests, 2 unresolvable, 5 vpLowerBound
+TTFT p95        0       -       -        0          -             -            - 1 refused PastLowerBoundKnee, 2 burst, 11 fewRequests, 1 vpLowerBound
 TPOT mean      15    0.98    100%        0      1.02x         1.11x            - 
 TPOT p50        0       -       -        0          -             -            - 15 unresolvable (15 in the measured bucket)
 TPOT p90        0       -       -        0          -             -            - 5 fewRequests, 10 unresolvable (10 in the measured bucket)
 TPOT p95        0       -       -        0          -             -            - 11 fewRequests, 4 unresolvable (4 in the measured bucket)
+
+scored apart, priced from a lower bound of V_P (neither a point nor a bound): steps, measured at or under the figure, measured over it, median ratio
+TTFT mean   12    9    3   1.20
+TTFT p90     5    5    0   1.34
+TTFT p95     1    1    0   2.20
 
 by load (the step's rate over the load the planner thinks the fleet can carry): steps, median ratio, within 20%
 below 0.8 of the knee     TTFT (14 steps): mean 0 - - p90 0 - -  TPOT (15 steps): mean 15 0.98 100% p90 0 - -

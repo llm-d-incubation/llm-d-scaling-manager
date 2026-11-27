@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi/apitest"
 )
@@ -141,9 +140,6 @@ func wantTTFT(r *wireTTFTResult) whatifapi.Figure {
 	if a.Basis.Floor > 0 {
 		f.Floor = fp(a.Basis.Floor)
 	}
-	// The API marks a TTFT priced from a lower bound of V_P an upper bound
-	// (#369); the CLI's answer says so by its flags alone.
-	f.UpperBound = slices.Contains(a.Flags, string(whatif.VPLowerBound)) && !slices.Contains(a.Flags, string(whatif.AssumedVP))
 	return f
 }
 

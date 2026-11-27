@@ -356,11 +356,11 @@ function btStepAt(bt, t) {
   return null;
 }
 
-// btPred is a point's prediction in words: "at most" before a TTFT priced
-// from a lower bound of V_P (predicted.upperBound), whose ratio is scored
-// only where the fleet measured more than 20% over it (unscored upperBound).
+// btPred is a point's prediction in words. A TTFT priced from a lower bound
+// of V_P (unscored vpLowerBound) is neither a point nor a bound (#515): it
+// reads as its figure, and is scored apart.
 function btPred(p) {
-  return (p.predicted.upperBound ? "at most " : "") + btFmt(p.predicted.value);
+  return btFmt(p.predicted.value);
 }
 
 // btTipHTML is the tooltip of one step: its inputs, why it was not judged,
@@ -373,7 +373,7 @@ function btTipHTML(bt, s) {
     for (const p of s[key] || []) {
       const pred = p.predicted.value != null ? btPred(p) : p.predicted.refused && p.predicted.refused.reason === "Saturated" ?
         "no figure (overloaded)" : "no figure (" + (p.predicted.refused ? p.predicted.refused.reason : "-") + ")";
-      const held = p.unscored === "upperBound" ? " (an upper bound the fleet measured under: consistent, not scored)" : "";
+      const held = p.unscored === "vpLowerBound" ? " (priced from a lower bound of V_P: neither a point nor a bound, scored apart)" : "";
       h += `<br>${key.toUpperCase()} ${esc(p.statistic)}: predicted ${esc(pred)}, measured ${esc(btMeasured(p))}${esc(held)}` +
         `${esc(btInBucket(s, key, p.statistic))}${esc(btV2Mark(p))}`;
     }
@@ -452,14 +452,17 @@ function btBatchChip(s) {
 const BT_UNSCORED = {fewRequests: "too few measured requests", aboveHistogram: "measured above the histogram's top bucket",
   refused: "no figure", notMeasured: "not measured", notComparable: "measured as another figure than the one predicted",
   unsettled: "the load had not settled", burst: "a burst near the knee", unresolvable: "the measured bucket is too wide to place it",
-  upperBound: "an upper bound the fleet measured under"};
+  vpLowerBound: "priced from a lower bound of V_P, neither a point nor a bound: scored apart"};
 
 // btPointClass is how a point's measured figure stands against its
 // prediction: "within" 20%, "low" (predicted more than 20% under, or
 // measured above the histogram), "high" (more than 20% over), "unresolved"
-// (in a bucket too wide to place it); null where nothing was measured.
+// (in a bucket too wide to place it), "apart" (priced from a lower bound of
+// V_P, unscored vpLowerBound: no point, so never within, low or high); null
+// where nothing was measured.
 function btPointClass(p) {
   if (!p) return null;
+  if (p.unscored === "vpLowerBound") return "apart";
   if (p.aboveHistogram) return "low";
   if (p.measuredBucket && (p.unscored || p.ratio == null)) return "unresolved";
   if (p.ratio == null) return null;
@@ -497,9 +500,9 @@ function btCell(s, key, stat) {
     return {text: `${btPred(p)} vs ${btFmt(p.measuredBucket.lo)}-${btFmt(p.measuredBucket.hi)} \u2248${d}`, cls, title};
   }
   if (p.measured == null) return {text: btPred(p) + " vs -" + d, cls, title};
-  const mark = cls === "within" ? "✓" : cls === "unresolved" ? "≈" : "✗";
+  const mark = cls === "within" ? "✓" : cls === "unresolved" ? "≈" : cls === "apart" ? "v" : "✗";
   const off = p.ratio != null ? ` ${Math.round(Math.abs(p.ratio - 1) * 100)}%` : "";
-  return {text: `${p.predicted.upperBound ? "≤ " : ""}${btPair(p.predicted.value, p.measured)} ${mark}${off}${d}`, cls, title};
+  return {text: `${btPair(p.predicted.value, p.measured)} ${mark}${off}${d}`, cls, title};
 }
 
 // btFailing reports whether a judged step has a scored statistic outside 20%.
@@ -586,7 +589,11 @@ function btUnscoredList(bt) {
   for (const key of ["ttft", "tpot"]) {
     for (const sc of (bt.summary && bt.summary[key]) || []) {
       const parts = Object.entries(sc.unscored || {}).filter(([, n]) => n > 0).map(([why, n]) => `${n} ${BT_UNSCORED[why] || why}`);
-      if (parts.length) out.push(`${key.toUpperCase()} ${sc.statistic}: not scored in ${parts.join(", ")}.`);
+      let line = parts.length ? `${key.toUpperCase()} ${sc.statistic}: not scored in ${parts.join(", ")}.` : "";
+      // Scored apart: how many read under what was measured, never hidden.
+      const a = sc.vpLowerBound;
+      if (a) line += ` Of the ${a.steps} priced from a lower bound of V_P, ${a.under} read under the measured figure (median ratio ${a.bias != null ? a.bias.toFixed(2) : "-"}).`;
+      if (line) out.push(line);
     }
   }
   return out;
