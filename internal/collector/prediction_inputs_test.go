@@ -44,11 +44,11 @@ func TestPredictionQueries_AreRecordOnlyOrTTFTReaders(t *testing.T) {
 }
 
 // The budget: what --slo-v2-inputs adds to a namespace's logical replica
-// queries a cycle. Five beside the scaling queries, four beside a TTFT
+// queries a cycle. Six beside the scaling queries, five beside a TTFT
 // target's (it issues the computed-token histogram already), none beside a
 // recording's, and each listed once.
 func TestPredictionQueries_TheBudget(t *testing.T) {
-	require.Len(t, predictionReadReplicaQueries, 5)
+	require.Len(t, predictionReadReplicaQueries, 6)
 	count := func(recording, ttft, predict bool) int {
 		spec, agnostic := replicaQueryListsFor(recording, ttft, predict)
 		seen := map[string]bool{}

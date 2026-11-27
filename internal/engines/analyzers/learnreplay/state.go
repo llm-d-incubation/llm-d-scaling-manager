@@ -213,6 +213,12 @@ type VariantState struct {
 	// release's defaults resolve to where the arguments set none. Nil where
 	// the store holds none.
 	Params *capacity.EngineParams
+	// StepTokens is the variant's tokens-per-iteration histogram, pooled over
+	// its rows of every cycle up to the one asked
+	// (capacity.StepTokens.Add of domain.ReplicaMetrics.IterationTokensBuckets):
+	// whether its step budget binds (StepBudgetBinding). Empty (no Samples)
+	// where no row carried the series.
+	StepTokens capacity.StepTokens
 	// Shape is the traffic the variant served (shapeOf).
 	Shape MeasuredShape
 	// Resident is the KV a running request held, measured over the same
@@ -688,6 +694,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		times    []time.Time
 		ranges   = map[string]ShapeRange{}
 		series   = map[string][]CycleShape{}
+		steps    = map[string]*capacity.StepTokens{}
 	)
 	ttft.promptSupport = opts.Switches[PackageSLO][slo.SwitchTTFTPromptSupport]
 	ttft.hopWindowMeans = opts.Switches[PackageSLO][slo.SwitchTTFTHopWindowMeans]
@@ -755,6 +762,11 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		noteShapes(shapes, in.ReplicaMetrics, n)
 		noteRanges(ranges, shapes, n)
 		noteSeries(series, shapes, n)
+		since := stepTokensWindow
+		if len(times) > 1 {
+			since = times[len(times)-1].Sub(times[len(times)-2])
+		}
+		noteStepTokens(steps, in.ReplicaMetrics, since)
 		noteResident(resident, in, n)
 		ttft.note(in, n, ev.Now)
 		args := func(variant string) string {
@@ -785,6 +797,9 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				v := &s.Variants[i]
 				v.ShapeRange = ranges[v.Variant]
 				v.ShapeSeries = slices.Clone(series[v.Variant])
+				if s := steps[v.Variant]; s != nil {
+					v.StepTokens = s.Clone()
+				}
 				if domain.CanonicalRole(v.Role) != domain.RolePrefill {
 					v.Resident = residentOf(resident[v.Variant], v.Shape)
 				}

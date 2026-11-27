@@ -511,7 +511,7 @@ func runConfigOf(st *learnreplay.State, decodeVariant, prefillVariant string) wh
 		if p == nil {
 			return
 		}
-		if w := engineOf(p); w != nil {
+		if w := engineOf(&v); w != nil {
 			add(name+" vLLM release", w.VLLMVersion)
 		}
 		unresolved := map[string]bool{}
