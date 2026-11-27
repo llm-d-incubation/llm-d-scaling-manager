@@ -128,6 +128,20 @@ Read the review first; the implementation design says what was built.
   owner) replace the README's ~20-command block, with the release files baked
   into the tools image. Settles scope, upgrade, air-gapped use, privileges,
   re-runs, preflight results, dry-run and the CI gate.
+- **[Install with kubectl and kustomize, without docker](kubernetes-native-install.md)**
+  — phase 1 built (#409, v0.13.0); the rest partly built or open. Signed
+  files applied as downloaded by two `kubectl`-only scripts, as KEDA, Kueue,
+  LeaderWorkerSet and cert-manager install; the
+  [kubectl install guide](../guides/kubectl-install/) has the commands. The
+  existing `watchNamespaces` setting, read live, picks the managed
+  namespaces (the first draft's label and selector were dropped in review).
+  The controller runs its preflight, fills its own TLS and KEDA's copy in
+  KEDA's namespace only, reports each namespace's readiness, and publishes a
+  ScaledObject plan for review. Costs cluster-wide reads, the same as the
+  cluster-wide `smt` install. Lists what each later phase still needs, with
+  the code it was checked against. A per-namespace kustomize path with Jobs
+  stays as the least-privilege alternative, not built. Helm needs the
+  maintainers to lift the no-chart rule.
 
 ## Engine and analyzers
 
