@@ -25,7 +25,7 @@ func TestPinnedBandHoldsAndCentresItsPoint(t *testing.T) {
 	if !(least < pinned) {
 		t.Fatalf("least reading %.6f not under the pinned B %.6f; the case tests nothing", least, pinned)
 	}
-	lines := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line, Baseline: pinned}, DefaultResampling())
+	lines := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line, Baseline: pinned, DrawB: true}, DefaultResampling())
 	if len(lines.Lines) == 0 {
 		t.Fatal("no resample fitted")
 	}

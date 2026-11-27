@@ -566,6 +566,10 @@ type SaturationAnalyzer struct {
 	// planner-only; the analyzer accepts it for the planner's replay
 	// (learnreplay.StatesFrom reads it) and reads it nowhere.
 	itlLineAtFloor bool
+	// itlBandIntercept is SwitchITLBandIntercept: off from the
+	// constructor, planner-only; the analyzer accepts it for the planner's
+	// replay (learnreplay.StatesFrom reads it) and reads it nowhere.
+	itlBandIntercept bool
 	// tpotRatioCensored is SwitchTPOTRatioCensored: off from the
 	// constructor, and never read here (the planner reads R_q).
 	tpotRatioCensored bool

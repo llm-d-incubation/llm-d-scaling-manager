@@ -26,7 +26,7 @@ func TestPlannerSwitches_OffFromTheConstructor(t *testing.T) {
 	fields := a.switchFields()
 	for _, name := range []string{SwitchPrefillALowLoadPerRank, SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
 		SwitchPrefillFBusyMinutes, SwitchPrefillFPooledMinutes, SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
-		SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor,
+		SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor, SwitchITLBandIntercept,
 		SwitchTPOTRatioCensored, SwitchDecodeResidencePull, SwitchDecodeBurstFill, SwitchBacktestStepOutputDispersion,
 		SwitchPlannerCapAtStepBudget, SwitchPrefillVPFloorServed, SwitchPrefillVPServedUnqueued, SwitchPrefillVPWindowBest, SwitchPrefillVPAtServedWork, SwitchMoEBusiestRank,
 		SwitchITLBatchTerm, SwitchPrefillVPOccupancyPlateau, SwitchPrefillVPPromptCoverage, SwitchPrefillVPLoneRate, SwitchPrefillVPServiceLine, SwitchPrefillHitAtCount,

@@ -3,6 +3,7 @@ package whatif
 import (
 	"math"
 	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // minDrawnB, with median the pinned B.
 func TestPinnedResamplesDrawB(t *testing.T) {
 	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
-	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B}, DefaultResampling())
+	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, DrawB: true}, DefaultResampling())
 	bs := map[float64]bool{}
 	all := make([]float64, 0, len(got.Lines))
 	for _, s := range got.Lines {
@@ -35,10 +36,40 @@ func TestPinnedResamplesDrawB(t *testing.T) {
 	}
 }
 
+// With the draw off (Refit.DrawB unset, saturation.SwitchITLBandIntercept
+// off) the band is the one before issue
+// llm-d-incubation/llm-d-scaling-manager#307: every pinned resample keeps
+// the baseline, no blocks are counted, and the band is the 10th to the
+// 90th percentile of the figures, neither stretched to its point nor
+// widened.
+func TestBandInterceptOffIsTheBandBefore(t *testing.T) {
+	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
+	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, BelowBandITL: worked.B * 0.8}, DefaultResampling())
+	if got.Blocks != 0 {
+		t.Errorf("blocks %d with the draw off, want 0", got.Blocks)
+	}
+	vals := make([]float64, 0, len(got.Lines))
+	for _, s := range got.Lines {
+		if s.Line.B != worked.B {
+			t.Fatalf("resample B %.9f with the draw off, want the baseline %.9f", s.Line.B, worked.B)
+		}
+		vals = append(vals, s.Line.ITLAt(0.85))
+	}
+	slices.Sort(vals)
+	at := func(p float64) float64 { return vals[max(0, int(math.Ceil(p*float64(len(vals))))-1)] }
+	// A point far above every resample: the band before stays where the
+	// resamples put it.
+	point := 2 * vals[len(vals)-1]
+	a := BandAnswer(Answer{Value: point}, got, func(m itl.Model) (float64, bool) { return m.ITLAt(0.85), true })
+	if a.Band == nil || a.Band.Lo != at(bandLo) || a.Band.Hi != at(bandHi) || a.Band.Blocks != 0 {
+		t.Errorf("band %+v, want the percentiles [%v, %v] untouched", a.Band, at(bandLo), at(bandHi))
+	}
+}
+
 // A stated B is an assumption: its resamples keep it.
 func TestStatedBIsHeld(t *testing.T) {
 	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
-	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, HoldB: true}, DefaultResampling())
+	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, HoldB: true, DrawB: true}, DefaultResampling())
 	for _, s := range got.Lines {
 		if s.Line.B != worked.B {
 			t.Fatalf("resample B %.6f, want the stated %.6f", s.Line.B, worked.B)
@@ -50,7 +81,7 @@ func TestStatedBIsHeld(t *testing.T) {
 func TestDrawnBUnderTheFloor(t *testing.T) {
 	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
 	floor := worked.B * 1.05
-	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, BelowBandITL: floor}, DefaultResampling())
+	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, BelowBandITL: floor, DrawB: true}, DefaultResampling())
 	at := 0
 	for _, s := range got.Lines {
 		if s.Line.B > floor {
@@ -71,7 +102,7 @@ func TestDrawnBUnderTheFloor(t *testing.T) {
 func TestFloorUnderThePinnedBKeepsTheDrawCentred(t *testing.T) {
 	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
 	floor := worked.B * 0.8
-	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, BelowBandITL: floor}, DefaultResampling())
+	got := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: worked, Baseline: worked.B, BelowBandITL: floor, DrawB: true}, DefaultResampling())
 	all := make([]float64, 0, len(got.Lines))
 	under := 0
 	for _, s := range got.Lines {
@@ -106,7 +137,7 @@ func splitAt(xs []float64, x float64) (under, over int) {
 
 func TestBootstrapCountsBlocks(t *testing.T) {
 	for _, c := range []struct{ cycles, want int }{{5, 2}, {8, 2}, {9, 3}, {40, 10}, {3, 1}} {
-		got := BootstrapLines(readingsOn(worked, c.cycles, 0.2, 0.7, 0.05), Refit{Tier: TierOLS, Line: worked, Baseline: worked.B}, DefaultResampling())
+		got := BootstrapLines(readingsOn(worked, c.cycles, 0.2, 0.7, 0.05), Refit{Tier: TierOLS, Line: worked, Baseline: worked.B, DrawB: true}, DefaultResampling())
 		if got.Blocks != c.want {
 			t.Errorf("%d cycles: %d blocks, want %d", c.cycles, got.Blocks, c.want)
 		}
@@ -209,7 +240,7 @@ func TestDrawnBCoversTheTruthNearerNominal(t *testing.T) {
 		}
 		rs := itl.KeyReadings{All: obs, Steady: obs}
 		for _, hold := range []bool{true, false} {
-			lines := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line, Baseline: learned, HoldB: hold}, DefaultResampling())
+			lines := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line, Baseline: learned, HoldB: hold, DrawB: true}, DefaultResampling())
 			a := BandAnswer(Answer{Value: line.ITLAt(kSat)}, lines, func(m itl.Model) (float64, bool) { return m.ITLAt(kSat), true })
 			if a.Band == nil {
 				t.Fatalf("seed %d: no band", seed)

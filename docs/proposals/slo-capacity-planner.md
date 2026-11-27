@@ -679,7 +679,9 @@ pinned B moved by its resample's least-squares intercept less the median of
 the resamples' (so the drawn B has median the pinned B), held under the floor
 read below the band but never under the pinned B (issue
 llm-d-incubation/llm-d-scaling-manager#307); a stated B is held. A band always
-holds its own figure. Each band carries its effective sample size, `blocks` (the
+holds its own figure. This is the replay switch `itl-band-intercept`
+(saturation.SwitchITLBandIntercept), on for the planner and off from the
+controller's constructor; the controller prices no band today. Each band carries its effective sample size, `blocks` (the
 distinct blocks of cycles drawn from), and is widened for it by
 sqrt(G/(G-1)) t(0.90, G-1)/z(0.90): 3.4 at 2 blocks, 1.34 at 5, toward 1; the
 text names the blocks under 5. `V_P` from a peak and `f` are extreme statistics, so they get a

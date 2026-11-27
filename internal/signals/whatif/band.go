@@ -72,6 +72,12 @@ type Refit struct {
 	// reading there is A k + B, so it bounds a drawn intercept from above,
 	// never under Baseline (interceptDraw).
 	BelowBandITL float64
+	// DrawB draws each pinned resample's intercept and has the bands hold
+	// their figure, widened for few blocks (issue
+	// llm-d-incubation/llm-d-scaling-manager#307;
+	// saturation.SwitchITLBandIntercept). The zero value is the band as
+	// before: B held at Baseline, Blocks 0, no widening.
+	DrawB bool
 	// HoldB pins every resample's pinned fit at Baseline, as before issue
 	// llm-d-incubation/llm-d-scaling-manager#307: set for an intercept the
 	// operator stated, which is an assumption and not a reading.
@@ -98,7 +104,9 @@ type LineResamples struct {
 	// of Block cycles the windows hold, each stratum's cycles over Block
 	// rounded up. A window of 20 readings from 4 replicas is 5 cycles, 2
 	// blocks: the resamples are mostly the same few blocks again, and the
-	// band is widened for it (bandWidening).
+	// band is widened for it (bandWidening). 0 where Refit.DrawB is off:
+	// the band is then as before issue
+	// llm-d-incubation/llm-d-scaling-manager#307.
 	Blocks int
 }
 
@@ -179,7 +187,10 @@ func BootstrapLines(readings itl.KeyReadings, fit Refit, r Resampling) LineResam
 		ic.centre(rs, newRNG(), r.Resamples)
 	}
 	rng := newRNG()
-	out := LineResamples{Drawn: r.Resamples, Lines: make([]Resample, 0, r.Resamples), Blocks: rs.blocks()}
+	out := LineResamples{Drawn: r.Resamples, Lines: make([]Resample, 0, r.Resamples)}
+	if fit.DrawB {
+		out.Blocks = rs.blocks()
+	}
 	for range r.Resamples {
 		// The buffers are reused: refit keeps only the line and its tier,
 		// never the readings itl.Refit read (Refitted.Read).
@@ -363,7 +374,7 @@ type interceptDraw struct {
 // or readings with no spread in k to read an intercept from. Its centre is
 // set by centre before at is used.
 func newInterceptDraw(all []itl.Observation, fit Refit) *interceptDraw {
-	if fit.Tier == TierAboveBand || fit.OneSided.OneSidedAboveKSat || fit.HoldB {
+	if !fit.DrawB || fit.Tier == TierAboveBand || fit.OneSided.OneSidedAboveKSat || fit.HoldB {
 		return nil
 	}
 	if !(fit.Baseline > 0) || math.IsInf(fit.Baseline, 0) {
@@ -480,9 +491,10 @@ func cyclesOf(all, steady []itl.Observation) []cycle {
 // value reruns the question on a resampled line and returns the figure it
 // prices, ok false when that line refuses it. The band is the 10th to the
 // 90th percentile of the figures (nearest rank), so it need not be
-// symmetric about a.Value, stretched to hold a.Value where it falls outside,
-// then widened about a.Value for few blocks (bandWidening). With no figure
-// to band, a comes back unchanged.
+// symmetric about a.Value. Where rs counted its blocks (Refit.DrawB), the
+// band is stretched to hold a finite a.Value where it falls outside, then
+// widened about it for few blocks (bandWidening). With no figure to band, a
+// comes back unchanged.
 //
 // More than a tenth of the drawn resamples changing tier flags the answer,
 // one of two ways. TierUnstable when the change moves this figure: the
@@ -508,7 +520,7 @@ func BandAnswer(a Answer, rs LineResamples, value func(itl.Model) (float64, bool
 	slices.Sort(vals)
 	at := func(p float64) float64 { return vals[max(0, int(math.Ceil(p*float64(len(vals))))-1)] }
 	lo, hi := at(bandLo), at(bandHi)
-	if Finite(a.Value) {
+	if rs.Blocks > 0 && Finite(a.Value) {
 		// The band holds its point: a band beside the figure it bands
 		// would say the figure is not what it is.
 		c := a.Value

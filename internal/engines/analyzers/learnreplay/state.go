@@ -290,6 +290,9 @@ type VariantState struct {
 	// LineAtFloor is set, whether or not the line itself was.
 	LineAtFloor bool
 	LineLift    float64
+	// BandIntercept says the bands carry the pinned line's intercept error
+	// (saturation.SwitchITLBandIntercept, whatif.Refit.DrawB).
+	BandIntercept bool
 }
 
 // MeasuredShape is the shape a variant served over the cycles it had
@@ -334,6 +337,9 @@ type shapeSample struct {
 //     counted by its capacity part only, so deferred waits are not a queue.
 //   - saturation.SwitchPrefillFBusyMinutes: f, the prefill imbalance, the
 //     median of the busiest minutes, not of every minute.
+//   - saturation.SwitchITLBandIntercept: a bootstrap band carries the
+//     pinned ITL line's intercept error, holds its figure and is widened
+//     for few blocks of cycles; no point figure moves, only bands.
 //   - saturation.SwitchPrefillFPooledMinutes: f from consecutive minutes
 //     pooled to prefill.MinRequestsPerPodMinute requests a pod, where a
 //     minute alone carries fewer (a fleet of long prompts), in place of no
@@ -585,6 +591,7 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillVPServedUnqueued:      true,
 		saturation.SwitchPlannerCapAtStepBudget:       true,
 		saturation.SwitchBacktestStepOutputDispersion: true,
+		saturation.SwitchITLBandIntercept:             true,
 		saturation.SwitchITLBaselineFromFloor:         false,
 		saturation.SwitchITLFloorBaselineHeld:         false,
 	}, PackageSLO: {
@@ -700,6 +707,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	ttft.hopWindowMeans = opts.Switches[PackageSLO][slo.SwitchTTFTHopWindowMeans]
 	// Read once: the switches are set before the replay starts.
 	lineAtFloor := opts.Switches[PackageSaturation][saturation.SwitchITLLineAtFloor]
+	bandIntercept := opts.Switches[PackageSaturation][saturation.SwitchITLBandIntercept]
 	censored := opts.Switches[PackageSaturation][saturation.SwitchTPOTRatioCensored]
 	residence := opts.Switches[PackageSaturation][saturation.SwitchDecodeResidencePull]
 	burst := opts.Switches[PackageSaturation][saturation.SwitchDecodeBurstFill]
@@ -855,6 +863,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		st.Variants[i].BelowBandLeastSequences, st.Variants[i].BelowBandByCount = lines.belowBandLeastSequences(st.Variants[i].Variant)
 		st.Variants[i].BusiestRankRatio = lines.busiestRatio(st.Variants[i].Variant)
 		st.Variants[i].liftToFloor(lineAtFloor && st.disaggregated())
+		st.Variants[i].BandIntercept = bandIntercept
 	}
 	var out map[int]*State
 	if len(snaps) > 0 {
@@ -878,6 +887,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 			s.Variants[i].BelowBandLeastSequences, s.Variants[i].BelowBandByCount = b.least, b.byCount
 			s.Variants[i].BusiestRankRatio = sn.ratios[s.Variants[i].Variant]
 			s.Variants[i].liftToFloor(lineAtFloor && s.disaggregated())
+			s.Variants[i].BandIntercept = bandIntercept
 		}
 		out[c] = s
 	}
