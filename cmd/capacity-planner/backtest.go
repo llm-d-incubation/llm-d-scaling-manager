@@ -61,6 +61,9 @@ type backtestFlags struct {
 	// fLoadCurve is --prefill-f-load-curve, as answerFlags'
 	// (f_load_curve.go): both sides are read with the switch on.
 	fLoadCurve bool
+	// decodeLoopGain is --decode-loop-gain, as answerFlags'
+	// (decode_loop_gain.go).
+	decodeLoopGain bool
 	// experimentalTTFT is --experimental-ttft, as answerFlags'
 	// (experimental_ttft.go): both sides are read with its switches on.
 	// rankMixtureTTFT is --experimental-ttft=v2 (experimental_ttft_v2.go),
@@ -112,6 +115,7 @@ func (f *backtestFlags) registerAssume(fs *flag.FlagSet) {
 	fs.BoolVar(&f.hitAtCount, hitAtCountFlag, false, hitAtCountUsage)
 	fs.BoolVar(&f.vpServiceLine, vpServiceLineFlag, false, vpServiceLineUsage)
 	fs.BoolVar(&f.fLoadCurve, fLoadCurveFlag, false, fLoadCurveUsage)
+	fs.BoolVar(&f.decodeLoopGain, decodeLoopGainFlag, false, decodeLoopGainUsage)
 	fs.Var(experimentalTTFTValue{switches: &f.experimentalTTFT, v2: &f.rankMixtureTTFT, nlLine: &f.rankMixtureNLLine}, experimentalTTFTFlag,
 		experimentalTTFTV2Usage+"; "+experimentalTTFTNLLineUsage)
 	fs.Var(optionalBool{&f.rankMixtureStratified, whatif.DefaultRankMixtureStratified}, rankMixtureStratifiedFlag, rankMixtureStratifiedUsage)
@@ -414,7 +418,7 @@ func resolveCycles(ctx context.Context, f *backtestFlags, path string, cycle int
 	src := &servedSources{warn: warn, recordings: filepath.Dir(path)}
 	in := whatifapi.InputsRequest{Model: f.model, PrefillVariant: f.prefillVariant, DecodeVariant: f.decodeVariant,
 		PrefillVPPlateau: f.vpPlateau, PrefillHitAtCount: f.hitAtCount, PrefillVPServiceLine: f.vpServiceLine, PrefillFLoadCurve: f.fLoadCurve, ExperimentalTTFT: f.experimentalTTFT,
-		Source: &whatifapi.SourceRequest{Kind: whatifapi.SourceRecording, Name: filepath.Base(path), Cycle: cycle, Cycles: cycles}}
+		DecodeLoopGain: f.decodeLoopGain, Source: &whatifapi.SourceRequest{Kind: whatifapi.SourceRecording, Name: filepath.Base(path), Cycle: cycle, Cycles: cycles}}
 	res, err := src.Resolve(ctx, in)
 	if err != nil && whatifapi.IsInputError(err) {
 		return nil, usageError{err}

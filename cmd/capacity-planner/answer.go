@@ -169,6 +169,10 @@ type answerFlags struct {
 	// saturation.SwitchPrefillFLoadCurve on (replayOptions), and f is priced
 	// against the load (f_load_curve.go); off by default.
 	fLoadCurve bool
+	// decodeLoopGain is --decode-loop-gain: every decode TPOT carries its
+	// loop gain, and one that amplifies its line's slope is flagged
+	// (decode_loop_gain.go); off by default.
+	decodeLoopGain bool
 	// experimentalTTFT is --experimental-ttft: the replay turns the TTFT
 	// model's off-by-default switches on (replayOptions); off by default.
 	experimentalTTFT bool
@@ -261,6 +265,7 @@ func (f *answerFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.hitAtCount, hitAtCountFlag, false, hitAtCountUsage)
 	fs.BoolVar(&f.vpServiceLine, vpServiceLineFlag, false, vpServiceLineUsage)
 	fs.BoolVar(&f.fLoadCurve, fLoadCurveFlag, false, fLoadCurveUsage)
+	fs.BoolVar(&f.decodeLoopGain, decodeLoopGainFlag, false, decodeLoopGainUsage)
 	fs.Var(experimentalTTFTValue{switches: &f.experimentalTTFT, v2: &f.rankMixtureTTFT, nlLine: &f.rankMixtureNLLine}, experimentalTTFTFlag,
 		experimentalTTFTUsage+". On at-replicas, =v2 instead prices the tables' TTFT with the experimental rank-mixture model, fitted on "+
 			"the --recording, and "+experimentalTTFTNLLineUsage)
@@ -621,6 +626,9 @@ type pricedVariant struct {
 	// says the question came through the API, whose words a hint uses.
 	itlB interceptAssumption
 	api  bool
+	// loopGain is --decode-loop-gain: each TPOT priced at a rate carries its
+	// loop gain (withLoopGain).
+	loopGain bool
 }
 
 // Where the decode KV per request came from (pricedVariant.residentKV), as
@@ -846,6 +854,7 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 				pv.flags = append(pv.flags, lineMismatch)
 			}
 		}
+		pv.loopGain = f.decodeLoopGain
 		pv.notes = pv.engineNotes()
 		for _, n := range pv.notes {
 			pv.flags = append(pv.flags, n.flag)

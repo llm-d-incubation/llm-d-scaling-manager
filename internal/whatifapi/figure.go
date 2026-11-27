@@ -43,6 +43,9 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 		if b := v.Basis.Batch; b != nil {
 			f.BatchBeyondFit = &BatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
 		}
+		if g := v.Basis.LoopGain; g != nil {
+			f.LoopGain = LoopGainOf(*g)
+		}
 		return f
 	case whatif.TTFT:
 		f := Figure{Value: ptr(v.Seconds), Unit: unitSeconds, Sensitivity: spanOf(v.Sensitivity, true), Flags: FlagNames(v.Flags)}
@@ -54,6 +57,11 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 		return Figure{Refused: refusalOf(v)}
 	}
 	return Figure{}
+}
+
+// LoopGainOf is g on the wire.
+func LoopGainOf(g whatif.LoopGain) *LoopGain {
+	return &LoopGain{Gain: g.Gain, KneeGain: g.KneeGain, Move: g.Move, Saturates: g.Saturates}
 }
 
 // TTFTFromLowerBoundVP says a TTFT carrying flags is priced from a V_P that

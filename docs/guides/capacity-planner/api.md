@@ -86,6 +86,14 @@ per pod at each prefill count whose fit is identified (the CLI's
 recordings only: every figure's `validation` reads OUTSIDE VALIDATED REGION,
 and the answer carries `prefillFLoadCurve: true` and its own `inputsId`.
 
+`decodeLoopGain: true` adds `loopGain` to every decode TPOT figure (the
+CLI's `--decode-loop-gain`): the loop gain at the figure's rate (`gain`), at
+the knee (`kneeGain`), and the TPOT a 5% steeper ITL slope prices over the
+figure (`move`, or `saturates`). A figure that slope moves 1.25x or more, or
+saturates, is flagged `DecodeLoopGain` and reads OUTSIDE VALIDATED REGION. No
+figure's value changes. It is off by default, and the answer carries
+`decodeLoopGain: true` and its own `inputsId`.
+
 `experimentalTTFT: true` prices TTFT with the experimental TTFT model (the
 CLI's `--experimental-ttft`): the seven TTFT switches that are off by
 default, on for this source. It is for demonstration and not validated:

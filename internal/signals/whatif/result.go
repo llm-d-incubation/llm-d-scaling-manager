@@ -273,6 +273,9 @@ type Basis struct {
 	// line's fit rows held, where it is past them (the planner's
 	// BatchBeyondFit flag); nil where it is not, or either is unknown.
 	Batch *BatchBeyondFit
+	// LoopGain is a decode TPOT's loop gain at its rate (LoopGainAt), where
+	// the caller read it (the planner's --decode-loop-gain); nil otherwise.
+	LoopGain *LoopGain
 }
 
 // BatchBeyondFit is a decode answer's batch past its line's fit, in

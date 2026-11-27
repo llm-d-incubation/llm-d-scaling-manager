@@ -411,6 +411,18 @@ and the answer says so. Set, every figure reads OUTSIDE VALIDATED REGION. The
 same commands take it, and `POST /v1/inputs` takes `prefillFLoadCurve`
 ([API](api.md)).
 
+**How much a TPOT depends on the ITL slope (`--decode-loop-gain`).** A
+decode TPOT at a rate is read at the KV fill that rate holds, and that fill
+holds the TPOT's own ITL: more ITL, longer requests, more fill, more ITL. The
+loop gain g is the share of the ITL this feedback sets. A slope error of e
+moves the TPOT by about e x g/(1 - g), so near g = 1 a small slope error is a
+large TPOT error. An engine with a small ITL intercept (a small model on a
+fast GPU) reaches a high g well under its knee. With this flag every decode
+TPOT shows its g, and one that a 5% steeper slope moves 1.25x or more (g of
+0.8 or more without a KV pull), or saturates, is flagged `DecodeLoopGain`
+and reads OUTSIDE VALIDATED REGION. No figure changes. The same commands take
+it, and `POST /v1/inputs` takes `decodeLoopGain` ([API](api.md)).
+
 **An experimental TTFT model (`--experimental-ttft`, for demonstration).**
 The TTFT model has seven switches that are off by default, because none of
 them has passed the release's validation. `--experimental-ttft` turns all

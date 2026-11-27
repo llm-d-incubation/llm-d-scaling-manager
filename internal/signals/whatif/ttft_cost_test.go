@@ -47,8 +47,12 @@ func describe(r Result) string {
 		// Batch is the planner's BatchBeyondFit and moves no figure; the
 		// pins predate it, so it is left out of them.
 		basis.Batch = nil
-		return strings.Replace(fmt.Sprintf("answer %v flags %v band %s basis %+v ttft %s sensitivity %s",
-			v.Value, v.Flags, followed(v.Band), basis, followed(v.Basis.TTFT), followed(v.Sensitivity)), " Batch:<nil>", "", 1)
+		// LoopGain is the planner's --decode-loop-gain reading and moves no
+		// figure; the pins predate it too.
+		basis.LoopGain = nil
+		out := fmt.Sprintf("answer %v flags %v band %s basis %+v ttft %s sensitivity %s",
+			v.Value, v.Flags, followed(v.Band), basis, followed(v.Basis.TTFT), followed(v.Sensitivity))
+		return strings.Replace(strings.Replace(out, " Batch:<nil>", "", 1), " LoopGain:<nil>", "", 1)
 	case TTFT:
 		s := v.Sensitivity
 		v.Sensitivity = nil

@@ -490,6 +490,9 @@ type wireBasis struct {
 	// BatchBeyondFit is the batch the answer's fill runs past the most the
 	// decode line's fit rows held, where it is (flag BatchBeyondFit).
 	BatchBeyondFit *wireBatchBeyondFit `json:"batchBeyondFit,omitempty"`
+	// LoopGain is a decode TPOT's loop gain at its rate, with
+	// --decode-loop-gain (flag DecodeLoopGain where it is high).
+	LoopGain *whatifapi.LoopGain `json:"loopGain,omitempty"`
 }
 
 // wireBatchBeyondFit is whatif.BatchBeyondFit on the wire, in sequences an
@@ -551,6 +554,9 @@ func toWire(r whatif.Result, unit string) *wireResult {
 		}
 		if b := v.Basis.Batch; b != nil {
 			a.Basis.BatchBeyondFit = &wireBatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
+		}
+		if g := v.Basis.LoopGain; g != nil {
+			a.Basis.LoopGain = whatifapi.LoopGainOf(*g)
 		}
 		for _, f := range v.Flags {
 			a.Flags = append(a.Flags, string(f))

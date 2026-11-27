@@ -195,6 +195,9 @@ func replicasAt(pv pricedVariant, fleet *pricedFleet, ttft *ttftQuestion, query 
 		priced = append(priced, o.results()...)
 	}
 	slo := whatif.SLOAtReplicas(pv.decode, query)
+	// The rate the TPOTs are priced at, before an operating point's TTFT
+	// rewrites the answer (onRate).
+	rate, _ := valueOf(slo.Rate)
 	if slo.PercentileTPOT != nil {
 		slo.PercentileTPOT = withRatioRefusal(slo.PercentileTPOT, r.refused)
 	}
@@ -208,14 +211,14 @@ func replicasAt(pv pricedVariant, fleet *pricedFleet, ttft *ttftQuestion, query 
 		slo.Rate = pv.band(slo.Rate, on(func(s whatif.DecodeSLO) whatif.Result { return s.Rate }))
 	}
 	slo.Rate = pv.qualify(slo.Rate)
-	slo.MeanTPOT = pv.qualify(pv.band(slo.MeanTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.MeanTPOT })))
+	slo.MeanTPOT = pv.withLoopGain(pv.qualify(pv.band(slo.MeanTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.MeanTPOT }))), rate)
 	if at != nil {
 		slo.Rate, slo.MeanTPOT = at.onRate(at.onDecode(slo.Rate)), at.onDecode(slo.MeanTPOT)
 	}
 	if slo.PercentileTPOT != nil {
 		p := pv.band(slo.PercentileTPOT, on(func(s whatif.DecodeSLO) whatif.Result { return s.PercentileTPOT }))
 		p = onHostBound(p, pv, r)
-		slo.PercentileTPOT = pv.qualify(onRatio(p, r.ratio, pv.tpotFlags(r, true)))
+		slo.PercentileTPOT = pv.withLoopGain(pv.qualify(onRatio(p, r.ratio, pv.tpotFlags(r, true))), rate)
 		if at != nil {
 			slo.PercentileTPOT = at.onDecode(slo.PercentileTPOT)
 		}
