@@ -169,6 +169,10 @@ type Engine struct {
 	// admitInFlight needs once the decisions are final. Set by decideV2.
 	cycleFitted  bool
 	cyclePlanned map[string]bool
+	// cycleGaps is what this cycle's decision step knew of each variant's
+	// suggestion (replica_gap.go): set by decideV2, read when the decisions
+	// are applied, nil in a cycle that decided nothing.
+	cycleGaps *replicaGapPlan
 	// cycleVariants is every variant this cycle enumerated, keyed
 	// namespace/name, decided or skipped (optimizeV2): a restored in-flight
 	// hold of a variant it skipped is kept (admitInFlight).
@@ -232,6 +236,14 @@ type Engine struct {
 	// learnRecStarted is whether this process has opened a recording: one
 	// per controller start (startLearnerRecording).
 	learnRecStarted bool
+
+	// sloModelInputs is the models the slo analyzer's v2 model series were
+	// published for (slo_model_inputs.go), by utils.GetNamespacedKey, so the
+	// prune can delete them.
+	sloModelInputs map[string][2]string
+	// sloModelInputsSeen is the models whose v2 model series were published
+	// since the last prune (retainModelInputs).
+	sloModelInputsSeen map[string]bool
 
 	// clock is the cycle clock: pinned once per optimize cycle (optimizeV2),
 	// it is what the analyzers and the capacity store stamp and age their
@@ -350,6 +362,14 @@ type Engine struct {
 	// and hands the analyzer its view; an Engine built as a literal builds
 	// it on first use.
 	settle *settle.Tracker
+	// rolesFromSignals is SwitchRolesFromSignals (role_signals.go): off from
+	// the constructor, so an unlabelled variant reads both as before; a
+	// replay or a test turns it on (SetSwitchesForReplay).
+	rolesFromSignals bool
+	// roles is each unlabelled variant's last role its engine signals
+	// decided, and each labelled one's last disagreement, while
+	// rolesFromSignals is on (role_signals.go). Built on first use.
+	roles *roleMemory
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -479,6 +499,7 @@ func newEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		capacityStore:           capacityStore,
 		clock:                   cycleClock,
 		settle:                  settleTracker,
+		roles:                   newRoleMemory(),
 		lastGoodAnalysis:        make(map[string]map[string]time.Time),
 		lastAnalyzerSeries:      make(map[string]analyzerSeries),
 		lastBlockedModels:       make(map[string]blockedModelRef),
@@ -930,6 +951,7 @@ func (e *Engine) optimize(ctx context.Context) (retErr error) {
 		e.beginSLOCycle()
 		logger.Info("No active Variants found, skipping optimization")
 		metrics.PublishUtilizationShare(nil) // no group to report: the share gauges go too
+		metrics.PublishReplicaGaps(nil, nil) // nothing decided: no suggestion either
 		// This cycle analyzes nothing, so no analyzer series gets refreshed and
 		// the per-model prune below is never reached. Absence is meaningful for
 		// those series: left alone they would hold their last busy-cycle values
@@ -1657,6 +1679,7 @@ func (e *Engine) optimizeV2(
 			e.cycleVariants[utils.GetNamespacedKey(modelVAs[i].Namespace, modelVAs[i].Name)] = true
 		}
 	}
+	e.cycleGaps = nil // set by decideV2; a cycle that returns before it decided nothing
 	e.pruneLastGoodAnalysis(activeKeys)
 	e.pruneAnalyzerSeries(activeKeys)
 	e.pruneBlockedModels(activeKeys)
@@ -1751,6 +1774,7 @@ func (e *Engine) optimizeV2(
 			reportSignalReason(namespace, modelID, nil)
 			continue
 		}
+		e.observeModelInputs(ctx, data, &scalingPolicyConfig)
 
 		req, err := e.collectV2ModelRequest(ctx, modelID, namespace,
 			data.replicaMetrics, scalingPolicyConfig, data.variantStates, data.variantMetadata,
@@ -2366,6 +2390,11 @@ func (e *Engine) assembleModelData(
 	for _, m := range variantMetadata {
 		variantStates = append(variantStates, m.ToReplicaState())
 	}
+	// With SwitchRolesFromSignals on, an unlabelled variant's role from its
+	// pods' engine signals, before anything downstream reads a role
+	// (resolveRoles). Off, the states and metadata are discovery's.
+	variantStates, variantMetadata = e.resolveRoles(ctx, namespace, modelID, replicaMetrics,
+		variantStates, variantMetadata, scaleTargets, variants)
 	e.applyStartSeeds(ctx, namespace, variantStates)
 	return &modelData{
 		modelID:         modelID,
@@ -2422,6 +2451,10 @@ func (e *Engine) applySaturationDecisions(
 	// only a utilization-share decision names one.
 	resolved := make([]string, 0, len(vaMap))
 	defer func() { e.Status.SetResolvedAccelerators(resolved) }()
+	// Each decided variant's suggestion against what it is provided, published
+	// once every decision is applied: a variant with no decision has none.
+	gaps := &replicaGapRecorder{plan: e.cycleGaps, v2Ask: e.modelPrefillAsk}
+	defer gaps.publish()
 
 	// Iterate over ALL active VAs to ensure we update status and trigger reconciliation for everyone
 	for vaName, va := range vaMap {
@@ -2483,10 +2516,12 @@ func (e *Engine) applySaturationDecisions(
 		var acceleratorName string
 		var reason string
 
+		var gap metrics.ReplicaGap
 		if hasDecision {
 			targetReplicas = decision.TargetReplicas
 			acceleratorName = decision.AcceleratorName
 			reason = decision.Reason()
+			gap = gaps.record(&decision, targetReplicas)
 		} else {
 			// No change/decision: Keep current target or default to current replicas
 			// We effectively explicitly "decide" to keep things as they are if no decision was made
@@ -2673,7 +2708,7 @@ func (e *Engine) applySaturationDecisions(
 				// Emit Kubernetes event for observability
 				e.recordScalingEvent(&updateVa, decision.Action, decision.TargetReplicas, decision.Reason())
 				if decision.WasLimited {
-					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, constrainedMessage(&decision))
+					e.recordEvent(va, corev1.EventTypeWarning, constants.K8SEventResourceConstrained, constrainedEventMessage(&decision, gap))
 				}
 
 				logger.V(logging.VERBOSE).Info("Successfully emitted metrics",

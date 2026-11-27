@@ -1,8 +1,10 @@
 package whatifapi
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -40,6 +42,10 @@ type SeriesSample struct {
 	OutputTokens            float64
 	PrefixHitRate           float64
 	HasShape                bool
+	// OutputTokensSquared is the decode rows' bound on E[O^2], weighted as
+	// OutputTokens is (learnreplay.CycleSample); 0 unless every row read
+	// one. A backtest step's output spread is read from it.
+	OutputTokensSquared float64
 	// OtherPods is the serving pods of prefill and decode variants other
 	// than the priced ones.
 	OtherPods int
@@ -64,6 +70,11 @@ type SeriesSample struct {
 	// PrefillNotServing and DecodeNotServing are the priced variants'
 	// replicas asked for and not serving (learnreplay.CycleSample).
 	PrefillNotServing, DecodeNotServing int
+	// DecodeKVBusiest and DecodeKVMean are the priced decode pods' KV fill,
+	// the busiest pod's and their mean, over DecodeKVPods pods
+	// (learnreplay.CycleSample): what DecodeKVSpreadOf reads.
+	DecodeKVBusiest, DecodeKVMean float64
+	DecodeKVPods                  int
 }
 
 // The day plan's defaults and bounds.
@@ -134,7 +145,8 @@ const (
 // The flags a day plan adds to a bucket, beside the planner's own.
 const (
 	// FlagWindowShape is a bucket priced at the inputs' shape: its cycles
-	// read no lengths of their own.
+	// read no lengths of their own, or the plan prices with the
+	// experimental models, which are fitted at that shape.
 	FlagWindowShape = "WindowShape"
 	// FlagExtrapolated is a bucket priced at a stated shape outside the
 	// lengths the window's buckets observed.
@@ -162,6 +174,11 @@ const (
 	// variant other than the priced ones served: the rate is the model's,
 	// and part of it went to pods Actual does not count.
 	FlagOtherVariantsServed = "OtherVariantsServed"
+	// FlagMeasuredTTFTOverTarget is a bucket the model would call over
+	// (a replica to spare) whose TTFT, as the router measured it in the
+	// bucket, was over its target: it is given no verdict, since a fleet
+	// that missed its TTFT target has nothing to spare (DayBucket.MeasuredTTFT).
+	FlagMeasuredTTFTOverTarget = "MeasuredTTFTOverTarget"
 )
 
 // DayPlanRequest is POST /v1/dayplan. Every field but InputsID defaults as a
@@ -178,7 +195,7 @@ type DayPlanRequest struct {
 	Step string `json:"step,omitempty"`
 	// SizeFor is the rate of a bucket the fleet is sized for: "mean", "p95",
 	// "p95-modulation" (the p95 less counting noise) or "max" of its cycles'
-	// rates; default p95. A bucket of fewer than MinPercentileCycles cycles
+	// rates; default p95-modulation (#295). A bucket of fewer than MinPercentileCycles cycles
 	// asked for its p95 or its p95 less counting noise is sized for its mean.
 	SizeFor string `json:"sizeFor,omitempty"`
 	// Lead is each role's scale-up lead time asked, seconds: how long before
@@ -189,6 +206,14 @@ type DayPlanRequest struct {
 	// MinRequests is the fewest requests a bucket must hold to be sized;
 	// default 30.
 	MinRequests *float64 `json:"minRequests,omitempty"`
+	// ExperimentalModels prices the plan with the experimental TTFT and TPOT
+	// models its inputs were resolved with (InputsRequest.TTFTModel and
+	// TPOTModel, or a server started with --experimental-ttft=v2 or
+	// --experimental-tpot=v2), as a plan and a size on those inputs are
+	// priced: a bucket's limit, its need and the fleet it had. Off, the plan
+	// is the planner's own, whatever the inputs carry. Inputs resolved with
+	// no experimental model are refused.
+	ExperimentalModels bool `json:"experimentalModels,omitempty"`
 }
 
 // DayLead is each role's scale-up lead time, seconds; a role left out takes
@@ -254,6 +279,13 @@ type DayPlanResponse struct {
 	Summary DaySummary   `json:"summary"`
 	// Searched is how many fleets the day plan priced.
 	Searched int `json:"searched"`
+	// TTFTModel and TPOTModel are the experimental models the plan was
+	// asked to price with (DayPlanRequest.ExperimentalModels), as the
+	// inputs fitted them, an abstention included; absent where the plan is
+	// the planner's own. A bucket a model priced carries its flag
+	// (RankMixtureTTFT, TPOTDistribution) on its limit.
+	TTFTModel *TTFTModelInfo `json:"ttftModel,omitempty"`
+	TPOTModel *TPOTModelInfo `json:"tpotModel,omitempty"`
 	// Notes are what the plan does not price, in words.
 	Notes []string `json:"notes"`
 	// Gaps is how much of the source's span its cycles cover; absent with
@@ -292,6 +324,10 @@ type DayShape struct {
 	OutputTokens  *float64 `json:"outputTokens,omitempty"`
 	PrefixHitRate *float64 `json:"prefixHitRate,omitempty"`
 	Source        string   `json:"source"`
+	// Model is the shape the experimental models read for the bucket, over
+	// a window around it, where the plan is asked for them and a model
+	// prices a target it asks (dayplan_shape.go); absent otherwise.
+	Model *DayModelShape `json:"model,omitempty"`
 }
 
 // neededWhat names what a size's needed fleet is the fewest of: GPUs where
@@ -377,6 +413,15 @@ type DayBucket struct {
 	// absent when both are 0.
 	NotServing *FleetCounts `json:"notServing,omitempty"`
 	Verdict    string       `json:"verdict,omitempty"`
+	// Scope is ScopeDecodeOnly where the verdict judges decode alone: the
+	// source did not price prefill, so "over" says decode has a replica to
+	// spare, never that the fleet does. Empty on a whole fleet's verdict.
+	Scope string `json:"scope,omitempty"`
+	// MeasuredTTFT is the TTFT the router measured in the bucket at the TTFT
+	// target's statistic, seconds, read as a backtest step reads it (the
+	// bucket's last cycle, whose window covers it); absent with no router
+	// histogram, too few requests to read the statistic, or no TTFT target.
+	MeasuredTTFT *float64 `json:"measuredTTFT,omitempty"`
 	// Trust is what the source's self-check says of Verdict, as a
 	// report's verdict's: "not trusted: ..." when the verdict rests on
 	// figures it found inconsistent (the day plan then exits
@@ -416,6 +461,10 @@ type DayHour struct {
 	// when none was.
 	NotServing *FleetCounts `json:"notServing,omitempty"`
 	Verdict    string       `json:"verdict,omitempty"`
+	// Scope is ScopeDecodeOnly where a bucket the verdict counts judged
+	// decode alone (DayBucket.Scope); an hour under is decode's alone only
+	// where no bucket of the whole fleet in it was under.
+	Scope string `json:"scope,omitempty"`
 	// Sized and Unmet are how many of its buckets were sized and unmet.
 	Sized int `json:"sized"`
 	Unmet int `json:"unmet"`
@@ -461,12 +510,16 @@ type DaySummary struct {
 	HadGPUHours    *float64     `json:"hadGpuHours,omitempty"`
 	HadGPUHoursAll *float64     `json:"hadGpuHoursAll,omitempty"`
 	// UnderHours are the hours with a bucket under or unmet (SLO risk),
-	// OverHours those whose every sized bucket was over (waste), and
-	// RefusedHours those whose every bucket with data was refused.
-	UnderHours   []time.Time `json:"underHours"`
-	OverHours    []time.Time `json:"overHours"`
-	RefusedHours []time.Time `json:"refusedHours"`
-	Counts       DayCounts   `json:"counts"`
+	// OverHours those whose every sized bucket was over, the whole fleet
+	// judged (waste), DecodeOverHours those over with decode judged alone
+	// (DayHour.Scope): decode has a replica to spare, and prefill was not
+	// sized, so they are no fleet's waste. RefusedHours are those whose
+	// every bucket with data was refused.
+	UnderHours      []time.Time `json:"underHours"`
+	OverHours       []time.Time `json:"overHours"`
+	DecodeOverHours []time.Time `json:"decodeOverHours"`
+	RefusedHours    []time.Time `json:"refusedHours"`
+	Counts          DayCounts   `json:"counts"`
 }
 
 // RoleHours is replica-hours per role; Prefill is absent where prefill was
@@ -495,6 +548,12 @@ type DayCounts struct {
 	SizedForP95Modulation int `json:"sizedForP95Modulation,omitempty"`
 	// PrefillNotPriced is how many sized buckets have no prefill figure.
 	PrefillNotPriced int `json:"prefillNotPriced"`
+	// MeasuredTTFT is how many buckets read a measured TTFT
+	// (DayBucket.MeasuredTTFT), and MeasuredTTFTOver how many of those were
+	// over the TTFT target: the SLO missed as measured, whatever the plan
+	// priced.
+	MeasuredTTFT     int `json:"measuredTTFT"`
+	MeasuredTTFTOver int `json:"measuredTTFTOver"`
 	// Untrusted and NotCovered are how many buckets' verdicts the
 	// self-check does not trust, and does not cover (DayBucket.Trust).
 	Untrusted  int `json:"untrusted,omitempty"`
@@ -504,7 +563,7 @@ type DayCounts struct {
 // handleDayPlan is POST /v1/dayplan.
 func (s *Server) handleDayPlan(w http.ResponseWriter, r *http.Request) {
 	var req DayPlanRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	body, err := s.dayPlan(r.Context(), req)
@@ -564,7 +623,18 @@ func (s *Server) dayPlan(ctx context.Context, req DayPlanRequest) ([]byte, error
 func DayPlan(ctx context.Context, res *Resolved, req DayPlanRequest, whatifSchema string) (*DayPlanResponse, error) {
 	doc := res.Inputs
 	doc.InputsID = contentID("inputs", res.Content)
-	e := &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series}
+	e := &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency}
+	if req.ExperimentalModels {
+		// The models are fitted on the source as POST /v1/inputs fits them:
+		// each one the source was resolved for (Resolved.Mixture, Decode),
+		// and read each bucket's own shape from the same series.
+		o := res.TTFTModel
+		if o.Model == "" {
+			o = TTFTModelOptions{Model: string(whatif.QueueRankMixture), Stratified: whatif.DefaultRankMixtureStratified}
+		}
+		withModels(e, res, o)
+		e.mixture, e.decode, e.engine = res.Mixture, res.Decode, res.Engine
+	}
 	req.InputsID = e.id
 	q, err := dayQuestionOf(e, req)
 	if err != nil {
@@ -583,8 +653,90 @@ func DayPlan(ctx context.Context, res *Resolved, req DayPlanRequest, whatifSchem
 	return out, nil
 }
 
+// modelNotes names the experimental models out was asked to price with,
+// in out (TTFTModel, TPOTModel) and in words: how many sized buckets each
+// priced, by the flag it puts on a bucket's limit, and why the rest are the
+// planner's own. sized is the sized buckets' groups, by index. Nil where
+// none was asked.
+func (q *dayQuestion) modelNotes(out *DayPlanResponse, sized map[int]sizedBucket) []string {
+	m := q.models
+	if m == nil {
+		return nil
+	}
+	note := func(label, model string, flag whatif.Flag, abstained string, whyNot func(*dayGroup) string) string {
+		if abstained != "" {
+			return fmt.Sprintf("%s (%s) asked: it abstained on this source (%s), so the planner's own prices every bucket.", label, model, abstained)
+		}
+		// Why each sized bucket the model did not price is the planner's.
+		n, missed := 0, map[string]int{}
+		for i, s := range sized {
+			if b := out.Buckets[i]; b.Limit != nil && slices.Contains(b.Limit.Flags, string(flag)) {
+				n++
+				continue
+			}
+			missed[cmp.Or(whyNot(s.g), "it priced the fleet, but not the limit the bucket was sized on")]++
+		}
+		rest := ""
+		if len(missed) > 0 {
+			var why []string
+			for _, w := range slices.Sorted(maps.Keys(missed)) {
+				why = append(why, fmt.Sprintf("%s (%d)", w, missed[w]))
+			}
+			rest = " The rest are the planner's own: " + strings.Join(why, "; ") + "."
+		}
+		return fmt.Sprintf("%s (%s) priced %d of the %d sized buckets, flagged %s: where it prices TTFT or TPOT the planner refuses, the role is "+
+			"sized on it.%s It prices the source's own traffic, so a bucket sized at a stated shape or term is the planner's own. Not validated: every figure it sets reads OUTSIDE VALIDATED REGION.",
+			label, model, n, len(sized), flag, rest)
+	}
+	var notes []string
+	if m.ttft != nil {
+		info := m.ttft.info
+		out.TTFTModel = &info
+		notes = append(notes, note(info.Label, info.Model, whatif.RankMixtureTTFT, info.Abstained, func(g *dayGroup) string {
+			if q.noTTFT {
+				return "the plan prices no TTFT target"
+			}
+			return g.z.models.ttft.notPricedAt(probeKnobs(g))
+		}))
+	}
+	if m.tpot != nil {
+		info := m.tpot.info
+		out.TPOTModel = &info
+		notes = append(notes, note(TPOTModelLabel, info.Model, whatif.TPOTDistribution, info.Abstained, func(g *dayGroup) string {
+			if g.z.sc.TPOT == nil {
+				return "the plan prices no TPOT target"
+			}
+			return g.z.models.tpot.notPricedAt(probeKnobs(g))
+		}))
+	}
+	return notes
+}
+
+// probeKnobs is g's knobs at one replica a role, as the plan probes each
+// shape (group): what a model's notPricedAt reads for the group's buckets.
+func probeKnobs(g *dayGroup) Knobs {
+	k := g.z.k
+	k.Prefill, k.Decode = 1, 1
+	return k
+}
+
+// withModels fits on e the experimental models res was resolved for: the
+// TTFT model where it carries each cycle's rank mixture, the TPOT model
+// where it carries each cycle's decode, each as POST /v1/inputs fits it.
+func withModels(e *inputsEntry, res *Resolved, o TTFTModelOptions) {
+	if res.Mixture != nil {
+		e.ttftModel = fitMainMixture(&inputsEntry{doc: e.doc, series: res.Series, latency: res.Latency, mixture: res.Mixture, engine: res.Engine}, o.switches())
+	}
+	if res.Decode != nil {
+		e.tpotModel = fitMainTPOT(&inputsEntry{doc: e.doc, series: res.Series, latency: res.Latency, decode: res.Decode, engine: res.Engine}, res.TPOTModel, res.TPOTMinFitSteps)
+	}
+}
+
 // dayQuestion is a day plan's request checked against its inputs.
 type dayQuestion struct {
+	// models is the experimental models the plan prices with, nil for the
+	// planner's own (DayPlanRequest.ExperimentalModels).
+	models      *experimentalModels
 	e           *inputsEntry
 	sc          Scenario
 	k           Knobs
@@ -602,7 +754,7 @@ type dayQuestion struct {
 
 // key is what names the day plan's answer.
 func (q *dayQuestion) key() any {
-	return struct {
+	plain := struct {
 		Scenario    Scenario
 		Step        time.Duration
 		SizeFor     string
@@ -611,6 +763,15 @@ func (q *dayQuestion) key() any {
 		NoTTFT      bool
 		Lead        DayLeads
 	}{q.sc, q.step, q.sizeFor, q.minRequests, q.bound, q.noTTFT, q.lead}
+	if q.models == nil {
+		return plain
+	}
+	// A plan priced with the experimental models is another plan; the
+	// planner's own keeps the id it had.
+	return struct {
+		Plain  any
+		Models bool
+	}{plain, true}
 }
 
 // stated is what the plan states in place of what its source gave, named
@@ -643,7 +804,7 @@ func dayQuestionOfRequest(req DayPlanRequest) (*dayQuestion, error) {
 	if t := req.Traffic; t != nil && t.Classes != nil {
 		return nil, InputErrorf("traffic.classes: a day plan sizes each bucket for its own observed rate; give the mix and arrivalCV2 only")
 	}
-	q := &dayQuestion{step: DefaultDayPlanStep, minRequests: DefaultMinRequests, sizeFor: SizeForP95}
+	q := &dayQuestion{step: DefaultDayPlanStep, minRequests: DefaultMinRequests, sizeFor: SizeForP95Modulation}
 	if req.Step != "" {
 		d, err := time.ParseDuration(req.Step)
 		if err != nil || d < minDayPlanStep || d > maxDayPlanStep {
@@ -726,7 +887,7 @@ func dayScenarioOf(in *InputsResponse, id string, req DayPlanRequest) (sc Scenar
 	}
 	sc, err = scenarioOf(in, PlanRequest{InputsID: id, Fleet: &FleetKnob{Prefill: &one, Decode: &one},
 		Traffic: traffic, SLO: slo, Assume: req.Assume, Headroom: req.Headroom})
-	sc.Rate = nil
+	sc.Rate, sc.Concurrency = nil, nil
 	return sc, noTTFT, err
 }
 
@@ -743,6 +904,13 @@ func dayQuestionOf(e *inputsEntry, req DayPlanRequest) (*dayQuestion, error) {
 		return nil, err
 	}
 	q.e = e
+	if req.ExperimentalModels {
+		if q.models = e.models(); q.models == nil {
+			return nil, InputErrorf("experimentalModels: the inputs were resolved with no experimental model; resolve them with ttftModel %q or %q "+
+				"or tpotModel %q (or start the server with --experimental-ttft=v2 or =v2nl-line, or --experimental-tpot=v2)",
+				whatif.QueueRankMixture, whatif.QueueRankMixtureNLLine, whatif.TPOTRenewalLognormal)
+		}
+	}
 	q.lead = DayLeads{Prefill: leadOf(q.lead.Prefill, e.doc.Fleet.Prefill), Decode: leadOf(q.lead.Decode, &e.doc.Fleet.Decode)}
 	if q.sc, q.noTTFT, err = dayScenarioOf(&e.doc, e.id, req); err != nil {
 		return nil, err
@@ -893,6 +1061,15 @@ func shapeKnob(x float64) float64 {
 	return math.Round(math.Exp(math.Round(math.Log(x)/g) * g))
 }
 
+// readShape is k at lengths read from the source's own cycles, each on the
+// shape grid (shapeKnob): the prompt is the source's, not stated, so on a
+// P/D fleet the prefill pods' computed-token hit nets it
+// (Knobs.PromptTokensRead).
+func readShape(k Knobs, prompt, output float64) Knobs {
+	k.PromptTokens, k.OutputTokens, k.PromptTokensRead = shapeKnob(prompt), shapeKnob(output), true
+	return k
+}
+
 // bucketShape is the lengths samples read, weighted by rate (equally where
 // none carried one), and whether any read one.
 func bucketShape(samples []SeriesSample) (prompt, output, hit float64, ok bool) {
@@ -931,7 +1108,9 @@ func (q *dayQuestion) sizedRate(r *DayRate, samples []SeriesSample) (string, flo
 		for i, x := range samples {
 			rates[i] = x.Rate
 		}
-		m := ModulationP95(rates, r.Mean, r.P95)
+		// The bucket's readings overlap where they are closer than the
+		// rate's window: only the share of the noise they hold comes out.
+		m := ModulationP95Every(rates, r.Mean, r.P95, sampleStep(samples, 0).Seconds())
 		r.P95Modulation = &m
 		return SizeForP95Modulation, m
 	case q.sizeFor == SizeForMax:
@@ -989,14 +1168,30 @@ func isRefusal(r whatif.Result) bool {
 // and the effect.
 func dayRefusalOf(role, term string, r whatif.Result, effect string) DayRefusal {
 	u, _ := r.(whatif.Unanswerable)
-	return DayRefusal{Role: role, Term: term, Reason: string(u.Reason), Detail: u.Detail, Hint: refusalHint(term, u.Reason), Effect: effect}
+	hint := refusalHint(term, u.Reason)
+	if u.Reason == whatif.NoPrefillCapacity && slices.Contains(u.Flags, whatif.VPLowerBound) {
+		hint = NoPrefillCapacityLowerBoundHint
+	}
+	return DayRefusal{Role: role, Term: term, Reason: string(u.Reason), Detail: u.Detail, Hint: hint, Effect: effect}
 }
+
+// The words a NoPrefillCapacity refusal is said in, the same on the page and
+// in the CLI: NoPrefillCapacityLowerBoundHint where the source learned V_P
+// only as a lower bound (the prefill pods never queued, flag VPLowerBound),
+// noPrefillCapacityHint where it learned none.
+const (
+	NoPrefillCapacityLowerBoundHint = "Prefill capacity unknown: the prefill pods never queued, so a prefill pod computes at least the V_P " +
+		"in the detail (a lower bound), and its limit was not observed. Assume a prefill speed per pod to price it " +
+		"(--assume-vp, or on the page Assume a term, V_P), or load a busier window."
+	noPrefillCapacityHint = "Prefill capacity unknown: the source learned no prefill speed per pod V_P (it saw no prefill pod busy enough). " +
+		"Assume one (--assume-vp, or on the page Assume a term, V_P), or load a busier window."
+)
 
 // refusalHint is what to do about a refusal, in words.
 func refusalHint(term string, reason whatif.Reason) string {
 	switch {
 	case reason == whatif.NoPrefillCapacity:
-		return "The source learned no prefill rate V_P (it saw no prefill pod busy enough). Assume one: --assume-vp, or on the page Assume a term, V_P."
+		return noPrefillCapacityHint
 	case reason == whatif.NoFixedLatency:
 		return "The source learned no fixed prefill latency a (too few low-load minutes). Assume one: --assume-a, or on the page Assume a term, a."
 	case reason == whatif.TargetBelowFloor && term == termTTFT:
@@ -1026,12 +1221,16 @@ func refusalHint(term string, reason whatif.Reason) string {
 // sizing: a TPOT term that refuses is dropped, a TTFT term that refuses
 // leaves decode sized alone, and a decode knee that refuses sizes nothing,
 // since then no rule bounds decode. Each refusal is added to refused once.
-func (q *dayQuestion) group(ctx context.Context, k Knobs, refused *[]DayRefusal) (*dayGroup, error) {
+func (q *dayQuestion) group(ctx context.Context, k Knobs, models *experimentalModels, refused *[]DayRefusal) (*dayGroup, error) {
 	add := func(r DayRefusal) { addRefusal(refused, r) }
 	sc := q.sc
 	g := &dayGroup{limits: map[int]whatif.Result{}}
+	// The sizer prices with the experimental models the plan was asked to
+	// (q.models, or those at a bucket's own shape), as a size on the same
+	// inputs does; nil is the planner's own, as decode's own limits are
+	// then too (decodeLimit).
 	newSizer := func() *sizer {
-		return &sizer{e: q.e, sc: sc, k: k, bound: q.bound, seen: map[FleetCounts]sizeEval{}, plain: map[FleetCounts]sizeEval{}}
+		return &sizer{e: q.e, sc: sc, k: k, bound: q.bound, models: models, seen: map[FleetCounts]sizeEval{}, plain: map[FleetCounts]sizeEval{}}
 	}
 	g.z = newSizer()
 	if q.noTTFT {
@@ -1145,6 +1344,7 @@ func (q *dayQuestion) decodeLimit(ctx context.Context, g *dayGroup, d int) (what
 	if err != nil {
 		return nil, err
 	}
+	fl = g.z.models.fleet(fl, k)
 	var r whatif.Result
 	if g.z.sc.TPOT != nil {
 		r, _, _ = fl.PlainLimits(g.z.sc.TTFT.Target, g.z.sc.TPOT.Target, g.z.sc.Headroom)
@@ -1181,12 +1381,19 @@ func (q *dayQuestion) sizeBucket(ctx context.Context, g *dayGroup, db *DayBucket
 				return err
 			}
 			x, _ := valueOf(r)
-			db.Status, db.UnmetRole, db.Verdict = BucketUnmet, roleDecode, DayVerdictUnder
+			db.Status, db.UnmetRole, db.Verdict, db.Scope = BucketUnmet, roleDecode, DayVerdictUnder, ScopeDecodeOnly
 			db.Unmet = &Refusal{Reason: ReasonReplicaBound, Detail: fmt.Sprintf("At %d decode replicas, the bound, decode's limit is %.4g r/s, short of %.4g r/s",
 				q.bound.Decode, x, rate)}
 			return nil
 		}
 		lim := figureOf(g.limits[d], unitRate, false)
+		if m := g.z.models; m != nil {
+			// A decode limit the TPOT model set past the highest load served
+			// says so, as a fleet's limit does (sizeBucket below).
+			k := g.z.k
+			k.Prefill, k.Decode = 1, d
+			lim = m.tpot.mark(k, 0, lim)
+		}
 		db.Status, db.Needed, db.Limit = BucketSized, &DayNeeded{Decode: d, AtLeast: true}, &lim
 		db.Flags = appendNew(db.Flags, lim.Flags...)
 		return q.hadVerdict(ctx, g, db, rate)
@@ -1202,8 +1409,12 @@ func (q *dayQuestion) sizeBucket(ctx context.Context, g *dayGroup, db *DayBucket
 			// A refusal the probe at one replica a role did not see: it
 			// holds at more replicas, whatever the rate. It is the
 			// source's, not the bucket's.
+			hint := refusalHint(termFleet, whatif.Reason(u.Refused.Reason))
+			if u.Refused.Reason == string(whatif.NoPrefillCapacity) && slices.Contains(u.Refused.Flags, string(whatif.VPLowerBound)) {
+				hint = NoPrefillCapacityLowerBoundHint
+			}
 			addRefusal(refused, DayRefusal{Role: u.Role, Term: termFleet, Reason: u.Refused.Reason, Detail: u.Refused.Detail,
-				Hint:   refusalHint(termFleet, whatif.Reason(u.Refused.Reason)),
+				Hint:   hint,
 				Effect: "These buckets are not sized: the source refuses the fleet's limit at more replicas than one."})
 			db.Status, db.Verdict = BucketRefused, DayVerdictRefused
 			db.Flags = appendNew(db.Flags, FlagFleetRefused)
@@ -1216,6 +1427,9 @@ func (q *dayQuestion) sizeBucket(ctx context.Context, g *dayGroup, db *DayBucket
 	n := res.Answer.Fleet
 	p := n.Prefill
 	lim := figureOf(z.seen[n].fleet, unitRate, false)
+	// A limit an experimental model set past the highest load served says
+	// so, as a size's step does.
+	lim.Extrapolated = z.seen[n].extrapolated
 	db.Status, db.Needed, db.Limit = BucketSized, &DayNeeded{Prefill: &p, Decode: n.Decode}, &lim
 	db.Flags = appendNew(db.Flags, lim.Flags...)
 	return q.hadVerdict(ctx, g, db, rate)
@@ -1227,9 +1441,16 @@ func (q *dayQuestion) sizeBucket(ctx context.Context, g *dayGroup, db *DayBucket
 // judges over); else match. The cheapest fleet found (Needed) is one fleet
 // that serves the rate: another mix may serve it as well,
 // and the fleet it had is judged on its own mix, never role by role against
-// Needed. With prefill not priced, decode is judged alone.
+// Needed. With prefill not priced, decode is judged alone (Scope
+// ScopeDecodeOnly). A whole fleet's over is withheld where the router
+// measured the bucket's TTFT over its target: a fleet that missed it has
+// nothing to spare. A decode-only over stands: it says decode has a replica
+// to spare, never that the fleet does, and prefill sets the TTFT.
 func (q *dayQuestion) hadVerdict(ctx context.Context, g *dayGroup, db *DayBucket, rate float64) error {
 	a := *db.Actual
+	if g.decodeOnly {
+		db.Scope = ScopeDecodeOnly
+	}
 	serves := func(n FleetCounts) (bool, whatif.Result, error) {
 		if n.Decode < 1 || (!g.decodeOnly && n.Prefill < 1) {
 			return false, nil, nil
@@ -1267,12 +1488,56 @@ func (q *dayQuestion) hadVerdict(ctx context.Context, g *dayGroup, db *DayBucket
 			return err
 		}
 		if ok {
+			if m := db.MeasuredTTFT; !g.decodeOnly && m != nil && !q.noTTFT && *m > q.sc.TTFT.Target {
+				db.Verdict = ""
+				db.Flags = appendNew(db.Flags, FlagMeasuredTTFTOverTarget)
+				return nil
+			}
 			db.Verdict = DayVerdictOver
 			return nil
 		}
 	}
 	db.Verdict = DayVerdictMatch
 	return nil
+}
+
+// measuredTTFT is the TTFT the router measured over a bucket at the TTFT
+// target's statistic, seconds: read off the bucket's last cycle, whose
+// window covers the bucket as a backtest step's does, when it read enough
+// requests for the statistic (minRequestsFor). Nil with no TTFT target, no
+// router histogram, or too few requests.
+func (q *dayQuestion) measuredTTFT(last time.Time, lat map[time.Time]LatencySample) *float64 {
+	if q.noTTFT || !(q.sc.TTFT.Target > 0) {
+		return nil
+	}
+	l, ok := lat[last]
+	if !ok || l.Router == nil {
+		return nil
+	}
+	stat, err := parseStatistic("ttft.statistic", q.sc.TTFT.Statistic)
+	if err != nil {
+		return nil
+	}
+	h, ok := histOf(l.Router.TTFTBuckets)
+	if !ok || h.Total*measureWindowOf(l, MeasuredRouter) < minRequestsFor(stat) {
+		return nil
+	}
+	if stat == 0 {
+		if !(l.Router.TTFTCountRate > 0) {
+			return nil
+		}
+		return ptr(l.Router.TTFTSumRate / l.Router.TTFTCountRate)
+	}
+	v := h.Quantile(stat)
+	if !whatif.Finite(v) {
+		// Past the top bucket: the statistic is at least the top bound, which
+		// says it is over a target under that bound, and nothing of one above.
+		if t := h.Top(); t > q.sc.TTFT.Target {
+			return ptr(t)
+		}
+		return nil
+	}
+	return ptr(v)
 }
 
 // plan sizes every bucket.
@@ -1291,20 +1556,49 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 		out.TTFT = &t
 	}
 	stated := !q.sc.Mix.Observed
+	// withModels prices each bucket with the experimental models, where a
+	// model prices a target the plan asks: at the bucket's own shape, where
+	// the TTFT model prices inside what its fit served (dayplan_shape.go),
+	// else at the window's, the one it was fitted at (WindowShape).
+	byTTFT, byTPOT := q.models.pricing(q.k, !q.noTTFT, q.sc.TPOT != nil)
+	withModels := !stated && (byTTFT || byTPOT)
+	// req is each bucket's requests, which a bucket's shape window is
+	// grown to hold.
+	var req []float64
+	if withModels && byTTFT {
+		req = make([]float64, len(buckets))
+		for i, b := range buckets {
+			if len(b.samples) > 0 {
+				req[i] = rateOf(b.samples).Mean * cycle * float64(len(b.samples))
+			}
+		}
+	}
 	var lo, hi [2]float64
-	groups := map[[2]float64]*dayGroup{}
-	groupFor := func(k Knobs) (*dayGroup, error) {
-		key := [2]float64{k.PromptTokens, k.OutputTokens}
+	// A group is one shape's sizing, shared by the buckets at it. A bucket
+	// the models price at its own shape is grouped by that shape too
+	// (model, bucketHists.key): buckets whose histograms agree on the 5% grid
+	// share the first one's, as buckets of nearly one observed shape share
+	// their planner's fleets; zero where the window's shape is priced.
+	type groupKey struct {
+		shape [2]float64
+		model [2]float64
+	}
+	groups := map[groupKey]*dayGroup{}
+	groupFor := func(k Knobs, models *experimentalModels, model [2]float64) (*dayGroup, error) {
+		key := groupKey{[2]float64{k.PromptTokens, k.OutputTokens}, model}
 		if g := groups[key]; g != nil {
 			return g, nil
 		}
-		g, err := q.group(ctx, k, &out.Refused)
+		g, err := q.group(ctx, k, models, &out.Refused)
 		if err != nil {
 			return nil, err
 		}
 		groups[key] = g
 		return g, nil
 	}
+	// shapes counts the buckets with the models by where their shape came
+	// from: their own, or the window's for a flag.
+	shapes := map[string]int{}
 	// sized is each sized bucket's group and rate, by its index: what the
 	// fleet that holds an hour is priced again at.
 	sized := map[int]sizedBucket{}
@@ -1312,7 +1606,14 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 	for _, x := range series {
 		gpus.Prefill, gpus.Decode = max(gpus.Prefill, x.PrefillGPUs), max(gpus.Decode, x.DecodeGPUs)
 	}
-	for _, b := range buckets {
+	// lat is each cycle's latency by its time, for a bucket's measured TTFT.
+	lat := make(map[time.Time]LatencySample, len(q.e.latency))
+	if len(q.e.latency) == len(series) {
+		for i, x := range series {
+			lat[x.At] = q.e.latency[i]
+		}
+	}
+	for bi, b := range buckets {
 		db := DayBucket{Start: b.start, Samples: len(b.samples), Shape: DayShape{Source: "window"}}
 		if len(b.samples) == 0 {
 			db.Status = BucketNoData
@@ -1334,6 +1635,7 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 			db.Flags = append(db.Flags, FlagOtherVariantsServed)
 		}
 		k := q.k
+		models, model := q.models, [2]float64{}
 		if p, o, h, ok := bucketShape(b.samples); ok {
 			for i, v := range []float64{p, o} {
 				if lo[i] == 0 || v < lo[i] {
@@ -1342,8 +1644,32 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 				hi[i] = max(hi[i], v)
 			}
 			db.Shape.PrefixHitRate = ptr(h)
-			if !stated {
-				k.PromptTokens, k.OutputTokens = shapeKnob(p), shapeKnob(o)
+			switch {
+			case withModels && db.Requests >= q.minRequests && r.Mean > 0:
+				var hs *bucketHists
+				if byTTFT {
+					var flag string
+					hs, flag = q.modelShapeOf(buckets, req, bi)
+					db.Shape.Model = &hs.shape
+					shapes[flag]++
+					if flag != "" {
+						db.Flags = append(db.Flags, FlagWindowShape, flag)
+						break
+					}
+				}
+				if hs != nil && hs.lengthsOK {
+					// The planner's terms at the shape the model reads: over
+					// the same window.
+					p, o = hs.lengths[0], hs.lengths[1]
+				}
+				k = readShape(k, p, o)
+				db.Shape.Source = "bucket"
+				db.Shape.PromptTokens, db.Shape.OutputTokens = ptr(p), ptr(o)
+				models, model = q.models.atBucket(hs), hs.key()
+			case withModels:
+				db.Flags = append(db.Flags, FlagWindowShape)
+			case !stated:
+				k = readShape(k, p, o)
 				db.Shape.Source = "bucket"
 				db.Shape.PromptTokens, db.Shape.OutputTokens = ptr(p), ptr(o)
 			}
@@ -1369,7 +1695,8 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 			db.Flags = append(db.Flags, FlagFewCyclesForP95)
 		}
 		db.SizedFor, db.SizedRate = stat, ptr(rate)
-		g, err := groupFor(k)
+		db.MeasuredTTFT = q.measuredTTFT(b.samples[len(b.samples)-1].At, lat)
+		g, err := groupFor(k, models, model)
 		if err != nil {
 			return nil, err
 		}
@@ -1380,6 +1707,13 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 			sized[len(out.Buckets)] = sizedBucket{g: g, rate: rate}
 		}
 		out.Buckets = append(out.Buckets, db)
+	}
+	switch {
+	case withModels && byTTFT:
+		out.Notes = append(out.Notes, modelShapeNote(shapes))
+	case withModels:
+		out.Notes = append(out.Notes, "With the experimental TPOT model, a bucket is priced at its own rate and its own request shape, the "+
+			"model's ratio at the window's output lengths around the planner's mean TPOT at the bucket's own.")
 	}
 	times := make([]time.Time, len(series))
 	for i, x := range series {
@@ -1413,6 +1747,17 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 			"from the cycles present: a gap over the busiest hours sizes them low.")
 	}
 	out.Summary = summaryOf(out.Buckets, out.Hours, q.step, gpus)
+	// The SLO as measured: how many buckets the router read a TTFT for, and
+	// how many of those missed the target, whatever the plan priced.
+	for _, b := range out.Buckets {
+		if b.MeasuredTTFT == nil {
+			continue
+		}
+		out.Summary.Counts.MeasuredTTFT++
+		if *b.MeasuredTTFT > q.sc.TTFT.Target {
+			out.Summary.Counts.MeasuredTTFTOver++
+		}
+	}
 	if g := q.e.doc.Fleet.GPUsPerReplica(); WeighsGPUs(g) {
 		out.Summary.SizedOnGPUs = &g
 	}
@@ -1443,7 +1788,7 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 	}
 	what := q.sizeFor
 	if what == SizeForP95Modulation {
-		what = "p95 less counting noise (the p95 less a steady one-minute rate's Poisson spread, var - mean/60)"
+		what = "p95 less counting noise (the p95 less a steady one-minute rate's Poisson spread, var - share x mean/60, the share of it readings closer than a minute hold)"
 	}
 	out.Notes = append(out.Notes,
 		steady,
@@ -1475,6 +1820,7 @@ func (q *dayQuestion) plan(ctx context.Context) (*DayPlanResponse, error) {
 		out.Notes = append(out.Notes, "No TTFT target: the request asks none and the policy sets none, so prefill is not sized "+
 			"(PrefillNotPriced) and decode is sized alone, on "+how+". State one to size prefill: --ttft 2s@p90, or in the API slo.ttft.target.")
 	}
+	out.Notes = append(out.Notes, q.modelNotes(out, sized)...)
 	if q.noTTFT || slices.ContainsFunc(out.Refused, func(r DayRefusal) bool { return r.Term == termTTFT }) {
 		out.Notes = append(out.Notes, "Where prefill is not priced, decode is sized on its own limit alone: a lower bound (at least). "+
 			"The fleet's limit, which decode admission can hold down, is not priced.")
@@ -1748,8 +2094,12 @@ func hoursOf(series []SeriesSample, buckets []DayBucket) []DayHour {
 	}
 	type tally struct {
 		under, over, match, refused, withData int
-		peak                                  *DayBucket
-		sized, had                            []*DayBucket
+		// decodeOnly is a bucket judged on decode alone, and fleetUnder a
+		// whole fleet's bucket under or unmet: an hour under is decode's
+		// alone only where no whole fleet's bucket was under.
+		decodeOnly, fleetUnder bool
+		peak                   *DayBucket
+		sized, had             []*DayBucket
 	}
 	var t []tally
 	for i := range buckets {
@@ -1783,6 +2133,9 @@ func hoursOf(series []SeriesSample, buckets []DayBucket) []DayHour {
 		case BucketRefused:
 			c.refused++
 		}
+		if b.Scope != ScopeDecodeOnly && (b.Status == BucketUnmet || (b.Needed != nil && b.Verdict == DayVerdictUnder)) {
+			c.fleetUnder = true
+		}
 		if b.Needed == nil {
 			continue
 		}
@@ -1794,6 +2147,9 @@ func hoursOf(series []SeriesSample, buckets []DayBucket) []DayHour {
 			c.over++
 		case DayVerdictMatch:
 			c.match++
+		}
+		if b.Verdict != "" && b.Scope == ScopeDecodeOnly {
+			c.decodeOnly = true
 		}
 		if peakBucket(*b, c.peak, false) {
 			c.peak = b
@@ -1818,6 +2174,10 @@ func hoursOf(series []SeriesSample, buckets []DayBucket) []DayHour {
 		case c.match > 0 || c.over > 0:
 			out[i].Verdict = DayVerdictMatch
 		}
+		if c.decodeOnly && out[i].Verdict != DayVerdictRefused && out[i].Verdict != "" &&
+			(out[i].Verdict != DayVerdictUnder || !c.fleetUnder) {
+			out[i].Scope = ScopeDecodeOnly
+		}
 	}
 	return out
 }
@@ -1829,7 +2189,7 @@ func hoursOf(series []SeriesSample, buckets []DayBucket) []DayHour {
 // priced prefill: over fewer, they would compare a subset under the label
 // of the whole.
 func summaryOf(buckets []DayBucket, hours []DayHour, step time.Duration, gpus FleetCounts) DaySummary {
-	s := DaySummary{UnderHours: []time.Time{}, OverHours: []time.Time{}, RefusedHours: []time.Time{}}
+	s := DaySummary{UnderHours: []time.Time{}, OverHours: []time.Time{}, DecodeOverHours: []time.Time{}, RefusedHours: []time.Time{}}
 	h := step.Hours()
 	var need, had RoleHours
 	var needP, hadP float64
@@ -1917,6 +2277,10 @@ func summaryOf(buckets []DayBucket, hours []DayHour, step time.Duration, gpus Fl
 		case DayVerdictUnder:
 			s.UnderHours = append(s.UnderHours, hr.Start)
 		case DayVerdictOver:
+			if hr.Scope == ScopeDecodeOnly {
+				s.DecodeOverHours = append(s.DecodeOverHours, hr.Start)
+				continue
+			}
 			s.OverHours = append(s.OverHours, hr.Start)
 		case DayVerdictRefused:
 			s.RefusedHours = append(s.RefusedHours, hr.Start)

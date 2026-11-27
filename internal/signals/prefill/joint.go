@@ -180,7 +180,7 @@ func (w *JointWindow) Observe(c JointCycle) {
 		pull := rm.AvgKVTransferTime
 		pullOK := rm.AvgKVTransferTimeKnown && finitePositive(pull)
 		if pullOK && rhoN > 0 && prompt > 0 {
-			w.pull = append(w.pull, jointRead{at: c.Now, x: w.utilization, y: pull / (1 + lambda*pull), prompt: prompt})
+			w.pull = append(w.pull, jointRead{at: c.Now, x: w.utilization, y: pullWork(pull, lambda), prompt: prompt})
 		}
 		if !rm.AvgITLKnown || !finitePositive(rm.AvgITL) {
 			continue

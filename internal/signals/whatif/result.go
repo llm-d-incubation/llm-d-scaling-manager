@@ -180,6 +180,16 @@ const (
 	// ExtrapolatedFill is an answer whose fill lies above the highest fill
 	// the line's readings were taken at; the basis gives the distance.
 	ExtrapolatedFill Flag = "ExtrapolatedFill"
+	// ExtrapolatedBelowFloor is a figure priced at fewer sequences a replica
+	// than any reading of the floor below the band ran
+	// (BelowBand.LeastSequences): a TPOT, the rate at a TPOT target, the
+	// knee, the admission chain at its mean sequences, or the TTFT's decode
+	// step. It is held to the floor kept by count (BelowBand.ByCount) read at
+	// its own count, below every count the floor saw, or to the lowest-count
+	// floor where that line was not read. Set only where the lowest-count
+	// floor would have held the figure up: one the ITL line reads above it is
+	// not flagged.
+	ExtrapolatedBelowFloor Flag = "ExtrapolatedBelowFloor"
 	// AssumedShape is an answer priced at a prompt or output length the
 	// caller assumed rather than the one the fleet measured.
 	AssumedShape Flag = "AssumedShape"
@@ -259,6 +269,33 @@ type Basis struct {
 	// own wire types (wireBasis), field by field, so this field reaches the
 	// wire only when the CLI maps it (TestJSONSchemaIsPinned holds it out).
 	TTFT *TTFTBasis
+	// Batch is the batch the answer's fill runs against the most the decode
+	// line's fit rows held, where it is past them (the planner's
+	// BatchBeyondFit flag); nil where it is not, or either is unknown.
+	Batch *BatchBeyondFit
+}
+
+// BatchBeyondFit is a decode answer's batch past its line's fit, in
+// sequences an engine rank: Priced is the batch the answer's fill holds,
+// Fitted the most the rows the line was fitted on held. The line is read
+// there all the same; ITL also rises with the batch's tokens past the GEMM
+// roofline, which a line in fill alone does not carry, so a TPOT reads low
+// and a knee high (issues llm-d-incubation/llm-d-scaling-manager#309, #354).
+//
+// Ranks is the data-parallel engine ranks a pod runs, where more than one,
+// and 0 for one: the batches are a rank's, not the pod's.
+type BatchBeyondFit struct {
+	Priced, Fitted int64
+	Ranks          int
+}
+
+// BatchUnit is what a BatchBeyondFit batch counts per, in words: "a pod",
+// or "an engine rank" on a pod of more than one rank.
+func BatchUnit(ranks int) string {
+	if ranks > 1 {
+		return "an engine rank"
+	}
+	return "a pod"
 }
 
 // Answer is a priced figure: Value in the question's unit (requests per

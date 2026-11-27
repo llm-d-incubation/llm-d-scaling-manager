@@ -1,0 +1,14 @@
+# get and update on the plan ConfigMap, by name: the controller writes its
+# suggested ScaledObjects there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-scaledobjects-plan
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["scaling-manager-scaledobjects-plan"]
+  verbs: ["get", "update"]

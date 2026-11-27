@@ -100,15 +100,15 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchITLKeepsSettleThroughMissingRow, SwitchITLReadsFinitePodMean,
 // SwitchITLRestartUnderName, SwitchITLIdleOnEvidence and
 // SwitchITLForgetReachesTheLine, SwitchITLOneSidedAtCap, SwitchTTFTPrice,
-// SwitchTTFTMeasuredSpread, SwitchTTFTMeasuredTransfer,
+// SwitchTTFTMeasuredSpread, SwitchTTFTMeasuredTransfer, SwitchTTFTPullWork,
 // SwitchTTFTPrefixAttention, SwitchTTFTComputedHit, SwitchTTFTTierLoad,
 // SwitchTTFTTierKVWait, SwitchTTFTPSByEngine, SwitchTTFTCachedTokenCost,
 // SwitchTTFTProcessorSharing,
-// SwitchTTFTRouterWait, SwitchTTFTPSOnsets,
+// SwitchTTFTRouterWait, SwitchTTFTRouterWaitInPrefill, SwitchTTFTPSOnsets,
 // SwitchTTFTDecodeGateCharge, SwitchTTFTImbalanceAcrossCounts,
 // SwitchTTFTLowLoadDecodeTTFT, SwitchTTFTHopUnqueued, SwitchTTFTHopWindowMeans,
 // SwitchTTFTDecodeSpeculatingHeld, SwitchTTFTJointInputs,
-// SwitchTTFTPromptSupport and SwitchKVPerRequestOutputDispersion; a name it
+// SwitchTTFTPromptSupport, SwitchKVPerRequestOutputDispersion and SwitchV2Inputs; a name it
 // does not know is an error, and sets nothing. Never called on a production
 // path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -175,6 +175,9 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		SwitchTTFTPromptSupport:    &a.ttftPromptSupport,
 		SwitchTTFTMeasuredTransfer: &a.ttftMeasuredTransfer,
 		SwitchTTFTQuietTransfer:    &a.ttftQuietTransfer,
+		// The KV pull's work, not its stretched time, from each decode row
+		// (ttft.go; issue llm-d-incubation/llm-d-scaling-manager#301).
+		SwitchTTFTPullWork: &a.ttftPullWork,
 		// A prefix hit's cost in the planner, planner-only (ttft.go).
 		SwitchTTFTPrefixAttention: &a.ttftPrefixAttention,
 		// A stated prompt netted by the computed-token hit, planner-only
@@ -200,6 +203,11 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// The router's flow-control wait in the processor-sharing prefill
 		// stage, experimental and off by default (ttft.go).
 		SwitchTTFTRouterWait: &a.ttftRouterWait,
+		// The router's wait taken as inside the prefill price, the
+		// planner's default --router-wait-in-prefill; off from the
+		// constructor (ttft.go, issue
+		// llm-d-incubation/llm-d-scaling-manager#367).
+		SwitchTTFTRouterWaitInPrefill: &a.ttftRouterWaitInPrefill,
 		// The prefill onset on the processor-sharing stage, and the decode
 		// gate's closed share charged to the published rate, both off by
 		// default (ttft.go).
@@ -227,6 +235,10 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// J1: the joint prefill and decode model's inputs, in shadow
 		// (ttft_joint.go).
 		SwitchTTFTJointInputs: &a.ttftJointInputs,
+		// Issue llm-d-incubation/llm-d-scaling-manager#440: the v2 latency
+		// models' inputs and coverage (model_inputs.go). Off from the
+		// constructor.
+		SwitchV2Inputs: &a.v2Inputs,
 
 		// Issue ev-shindin/llm-scaling-manager#276: the spread of output lengths in the KV per request
 		// (output_dispersion.go).

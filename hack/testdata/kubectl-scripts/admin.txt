@@ -1,0 +1,53 @@
+$ scaling-manager-admin.sh --print install --prometheus-url https://prometheus.monitoring.svc:9090
+# The install: the manifest, KEDA's side in keda, the settings. Passive until: scaling-manager-admin.sh set passive=false
+kubectl apply --server-side -f ./scaling-manager.yaml
+kubectl apply --server-side -n keda -f ./scaling-manager-keda.yaml
+kubectl label namespace keda scaling-manager.llmd.ai/keda=true --overwrite
+kubectl create configmap scaling-manager-settings -n scaling-manager-system --from-literal=prometheusURL=https://prometheus.monitoring.svc:9090 --from-literal=kedaNamespace=keda --dry-run=client -o yaml | kubectl apply --server-side --field-manager=scaling-manager-admin -f -
+$ scaling-manager-admin.sh --print install --prometheus-url https://prometheus.monitoring.svc:9090 --prometheus-ca prometheus-ca.crt --keda-namespace keda-system --watch-namespaces team-a,team-b
+# The install: the manifest, KEDA's side in keda-system, the settings. Passive until: scaling-manager-admin.sh set passive=false
+kubectl apply --server-side -f ./scaling-manager.yaml
+kubectl apply --server-side -n keda-system -f ./scaling-manager-keda.yaml
+kubectl label namespace keda-system scaling-manager.llmd.ai/keda=true --overwrite
+kubectl create secret generic scaling-manager-prometheus-ca -n scaling-manager-system --from-file=ca.crt=prometheus-ca.crt --dry-run=client -o yaml | kubectl apply --server-side --field-manager=scaling-manager-admin -f -
+kubectl create configmap scaling-manager-settings -n scaling-manager-system --from-literal=prometheusURL=https://prometheus.monitoring.svc:9090 --from-literal=kedaNamespace=keda-system --from-literal=caFromSecret=true --from-literal=watchNamespaces=team-a,team-b --dry-run=client -o yaml | kubectl apply --server-side --field-manager=scaling-manager-admin -f -
+$ scaling-manager-admin.sh --print upgrade
+kubectl apply --server-side -f ./scaling-manager.yaml
+kubectl apply --server-side -n keda -f ./scaling-manager-keda.yaml
+kubectl label namespace keda scaling-manager.llmd.ai/keda=true --overwrite
+$ scaling-manager-admin.sh --print upgrade --keda-namespace keda-system
+kubectl apply --server-side -f ./scaling-manager.yaml
+kubectl apply --server-side -n keda-system -f ./scaling-manager-keda.yaml
+kubectl label namespace keda-system scaling-manager.llmd.ai/keda=true --overwrite
+$ scaling-manager-admin.sh --print move --keda-namespace keda-system
+# Over an smt install made with --scope cluster: --force-conflicts takes the controller Deployment over from smt, this once.
+kubectl apply --server-side --force-conflicts -f ./scaling-manager.yaml
+kubectl apply --server-side -n keda-system -f ./scaling-manager-keda.yaml
+kubectl label namespace keda-system scaling-manager.llmd.ai/keda=true --overwrite
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p '{"data":{"kedaNamespace":"keda-system"}}'
+# The earlier install's cluster-wide DisaggregatedSet role writer grant: this install grants it per namespace.
+kubectl delete clusterrolebinding scaling-manager-dset-role-writer-rolebinding scaling-manager-dset-role-writer-rolebinding-5414d5c5 --ignore-not-found
+kubectl delete clusterrole scaling-manager-dset-role-writer-role scaling-manager-dset-role-writer-role-5414d5c5 --ignore-not-found
+$ scaling-manager-admin.sh --print namespaces team-a,team-b
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p '{"data":{"watchNamespaces":"team-a,team-b"}}'
+$ scaling-manager-admin.sh --print namespaces --all
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p '{"data":{"watchNamespaces":""}}'
+$ scaling-manager-admin.sh --print set passive=false utilizationShare=shadow
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p '{"data":{"passive":"false","utilizationShare":"shadow"}}'
+$ scaling-manager-admin.sh --print grant-epp team-a team-a-epp
+kubectl create clusterrolebinding scaling-manager-epp-tokenreview.team-a.team-a-epp --clusterrole=scaling-manager-epp-tokenreview-scaling-manager-system --serviceaccount=team-a:team-a-epp --dry-run=client -o yaml | kubectl label --local -f - -o yaml app.kubernetes.io/instance=scaling-manager-system app.kubernetes.io/part-of=scaling-manager scaling-manager.llmd.ai/grant=epp-tokenreview | kubectl apply --server-side --field-manager=scaling-manager-admin -f -
+$ scaling-manager-admin.sh --print status
+kubectl get configmap scaling-manager-controller-status -n scaling-manager-system -o 'go-template={{range $k, $v := .data}}{{$k}}: {{$v}}{{"\n"}}{{end}}'
+$ scaling-manager-admin.sh --print uninstall --keda-namespace keda-system
+# Sharing to shadow first, and wait until the controller runs it, so no transfer mark stays on a pod.
+kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p '{"data":{"utilizationShare":"shadow"}}'
+kubectl wait '--for=jsonpath={.data.utilizationShare}=shadow' configmap/scaling-manager-controller-status -n scaling-manager-system --timeout=60s
+kubectl delete scaledobject -A -l app.kubernetes.io/instance=scaling-manager-system,app.kubernetes.io/managed-by=llm-d-scaling-manager --ignore-not-found
+kubectl delete rolebinding,role,podmonitor,networkpolicy -A -l app.kubernetes.io/instance=scaling-manager-system --ignore-not-found
+kubectl delete clusterrolebinding -l app.kubernetes.io/instance=scaling-manager-system,scaling-manager.llmd.ai/grant=epp-tokenreview --ignore-not-found
+kubectl delete -n keda-system -f ./scaling-manager-keda.yaml --ignore-not-found
+kubectl label namespace keda-system scaling-manager.llmd.ai/keda-
+kubectl delete -f ./scaling-manager.yaml --ignore-not-found --wait=true --timeout=300s
+# What a moved smt install left beside the manifest, labelled with the same instance.
+kubectl delete servicemonitor,serviceaccount,secret,configmap -A -l app.kubernetes.io/instance=scaling-manager-system --ignore-not-found
+kubectl delete clusterrolebinding,clusterrole,clustertriggerauthentication -l app.kubernetes.io/instance=scaling-manager-system --ignore-not-found

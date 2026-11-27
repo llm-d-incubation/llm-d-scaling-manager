@@ -17,6 +17,9 @@ A cluster admin applies the `part=admin` objects once
 ([step 4](#4-cluster-admin-give-keda-its-client-certificate)). The namespace
 owner does the rest, and upgrades the controller.
 
+One controller for the whole cluster instead, from v0.13.0? [Install with
+kubectl, from one manifest](../kubectl-install/).
+
 Tested: the namespaced and the cluster-wide files on Kubernetes, by hand (kind,
 `make test-e2e-release-manifests`) and with the tools image (`make
 test-e2e-tools-install`), in CI on each pull request that changes what
@@ -59,7 +62,7 @@ identity by accident.
 <!-- guide:tools.setup start -->
 ```bash
 # Once per machine. The release's tools image, by the digest the release prints. Each person uses their own kubeconfig.
-TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools@sha256:77be49dde69c86010fabbaac341ab71eceba26ee8f2b0c8fb0cd530669457cc2
+TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools@sha256:30e0f157d368d4c345673c45163b7994a55ff659f308ffe8988ebd1544d0cbca
 mkdir -p ~/.smt && kubectl config view --minify --flatten > ~/.smt/kubeconfig && chmod 600 ~/.smt/kubeconfig
 smt() { docker run --rm --user "$(id -u):$(id -g)" \
   -v "${SMT_KUBECONFIG:-$HOME/.smt/kubeconfig}:/kube/config:ro" -v "$PWD:/work" "$TOOLS" "$@"; }
@@ -111,7 +114,7 @@ The same install with `kubectl`: for GitOps, or to see each step.
 <!-- guide:prerequisites.download start -->
 ```bash
 # The release files. Pick the release you install.
-V=<release, for example v0.12.3>
+V=<release, for example v0.13.1>
 URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
 for f in namespaced settings preflight scaler-tls model-namespace keda-auth; do
   curl -fsSLO $URL/scaling-manager-$f.yaml

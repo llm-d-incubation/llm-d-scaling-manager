@@ -110,6 +110,8 @@ type plateau struct {
 	// prompt, whole and hit are the mean effective prompt, whole prompt and
 	// hit rate of the top bin's minutes (meanPrompt, meanWhole).
 	prompt, whole, hit float64
+	// lo and hi are the range of the top bin's prompts (promptRange).
+	lo, hi float64
 }
 
 // rowOccupancy is the row's requests in prefill per engine over the minute, by
@@ -209,6 +211,7 @@ func occupancyPlateau(ks *keyState) (plateau, bool) {
 		prompts[i] = s.prompt
 	}
 	out.prompt = meanPrompt(prompts)
+	out.lo, out.hi = promptRange(prompts)
 	out.whole, out.hit = meanWhole(bins[top].minutes)
 	return out, true
 }
@@ -239,6 +242,7 @@ func (est *Estimate) plateauFill(ks *keyState, c Cycle) {
 	est.VP, est.VPSource, est.VPRefused, est.VPSamples = pl.level, SourceOccupancyPlateau, "", pl.minutes
 	est.VPLowerBound, est.VPLowerBoundReason, est.VPFlooredAtServed = !pl.flat, "", false
 	est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = pl.prompt, pl.whole, pl.hit
+	est.VPPromptLow, est.VPPromptHigh = pl.lo, pl.hi
 	if !pl.flat {
 		est.floorAtServed(ks, c.VPFloorServed)
 	}

@@ -43,6 +43,16 @@ const (
 	Throughput = "throughput"
 )
 
+// TTFTMixture and TPOTDistribution are the slo analyzer's v2 latency
+// learners: the rank-mixture TTFT fit and the renewal-lognormal TPOT fit the
+// capacity planner runs (docs/proposals/predicted-latency-in-controller.md),
+// fitted on one window per model. The annotation forgets the window through
+// either name.
+const (
+	TTFTMixture      = "ttft-mixture"
+	TPOTDistribution = "tpot-distribution"
+)
+
 // Reporters is every name a Report may carry: Learners, and the two lines
 // forgotten under ITL. It bounds the learner label of the series the Reports
 // set.
@@ -56,7 +66,7 @@ func Reporters() []string {
 // name to that code. A learner joins the list in the PR that moves it onto
 // the shared rules.
 func Learners() []string {
-	return []string{K2, Mu, ITL, Start}
+	return []string{K2, Mu, ITL, Start, TTFTMixture, TPOTDistribution}
 }
 
 // By is what forgot a key.
@@ -106,7 +116,12 @@ type Report struct {
 	// PricingKey is the key that priced the variant this cycle, "" when no
 	// key did.
 	PricingKey string
-	Source     Source
+	// RestoredKey is, when no key priced the variant, the key whose evidence
+	// a snapshot brought back and LastAdmitted dates: an ITL intercept
+	// restored on its own prices no line until readings arrive, and its age
+	// is still worth showing. "" otherwise.
+	RestoredKey string
+	Source      Source
 	// Counts is the cycle's admission outcomes by reason. The reasons are
 	// each learner's own and need not partition its rows: a sum over them
 	// may count a row twice (the ITL line's "settling" readings are counted

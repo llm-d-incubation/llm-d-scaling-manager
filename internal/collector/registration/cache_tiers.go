@@ -28,6 +28,17 @@ const (
 	// GPU prefix cache), host, disk, p2p, external_unspecified. The sources
 	// sum to the GPU and the connector hits together.
 	QueryCachedTokenRateBySource = "cached_token_rate_by_source"
+
+	// QueryKVReuseGapBuckets and QueryKVIdleBeforeEvictBuckets are a pod's
+	// KV residency histograms, over [1m], one series per bucket
+	// (vllm:kv_block_reuse_gap_seconds: one observation per prefix-cache
+	// hit block, the time since its last use;
+	// vllm:kv_block_idle_before_evict_seconds: one per evicted block, the
+	// time it sat unused; with --kv-cache-metrics). The capacity planner
+	// reads them for the prefix hit at another prefill count
+	// (prefill.FitHitModel).
+	QueryKVReuseGapBuckets        = "kv_reuse_gap_buckets"
+	QueryKVIdleBeforeEvictBuckets = "kv_idle_before_evict_buckets"
 )
 
 // perPodRate is the per-pod rate of a vLLM counter over window: each rank
@@ -61,5 +72,19 @@ func registerCacheTierQueries(registry *source.QueryList) {
 			`vllm:prompt_tokens_cached_by_source_total{namespace="{{.namespace}}"}[` + TTFTInputWindow + `])))`,
 		Params:      []string{source.ParamNamespace},
 		Description: "Cached prompt tokens per pod by the tier that supplied them (tokens/s, 1m, one series per source) (vLLM only)",
+	})
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryKVReuseGapBuckets,
+		Type:        source.QueryTypePromQL,
+		Template:    perPodBucketsOnce("vllm:kv_block_reuse_gap_seconds_bucket"),
+		Params:      []string{source.ParamNamespace},
+		Description: "KV block reuse-gap histogram per pod (1m rate, one series per bucket; --kv-cache-metrics) (vLLM only)",
+	})
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryKVIdleBeforeEvictBuckets,
+		Type:        source.QueryTypePromQL,
+		Template:    perPodBucketsOnce("vllm:kv_block_idle_before_evict_seconds_bucket"),
+		Params:      []string{source.ParamNamespace},
+		Description: "KV block idle-before-evict histogram per pod (1m rate, one series per bucket; --kv-cache-metrics) (vLLM only)",
 	})
 }

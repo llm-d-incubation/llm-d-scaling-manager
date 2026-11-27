@@ -289,6 +289,13 @@ kubectl get cm scaling-manager-controller-status -n "$NS" -o jsonpath='{.data}{"
 | `scalerCACert` | with the same flag: the public PEM certificate the scaler's serving certificate verifies against, which is what KEDA is told to trust: the scaler CA, or the OpenShift service CA bundle when that CA issued the serving certificate. Never a private key. A check of the scaler's TLS verifies against it instead of reading Secrets |
 | `scalerCASha256` | the sha256 of the first certificate in `scalerCACert` |
 | `inFlightLedger` | state, not status: the node holes held for replicas whose pods hold no node yet, as JSON, each with its end time ([GPU limiter](gpu-limiter.md#a-replica-must-fit-one-node)). The controller reads it back after a restart or a leader change. Do not edit it; a value it cannot parse is ignored and rewritten |
+| `namespacesManaged` | the [one-manifest install](../guides/kubectl-install/) only (`--watch-namespaces-live`): the namespaces the live `watchNamespaces` setting names, sorted, joined by `,`; `*` when it is empty and every namespace is managed. Empty when a rejected first value manages none |
+| `namespace.<name>` | the same install: one namespace's readiness, starting with `ok`, `waiting` (no ScaledObject has called the scaler yet), `not ready` (a grant a switch needs is missing, with the command) or `not managed` (KEDA called the scaler for it, and `watchNamespaces` leaves it out). The same line is an Event, reason `ScalingManagerNamespace<State>`, on the namespace's ScaledObjects and InferencePools |
+| `namespacesRefused` | with the same flag: one `<namespace>: <why>` per line, for a namespace KEDA called the scaler for in the last 10 minutes that `watchNamespaces` leaves out. Absent when none |
+| `ready` | with `--self-check-interval`: `ok` when no in-controller preflight check fails, else `not ready: ` and the failing checks |
+| `preflight.<check>` | with the same flag: one key per [preflight check](preflight.md), `ok`, `warn`, `fail` or `unknown`, then the detail and the fix. Each change is also an Event on this ConfigMap |
+| `kedaConnection` | with `--keda-namespace` or the `kedaNamespace` setting: `none` (no TLS handshake accepted since start), `current` (KEDA presented the current client certificate) or `stale` (only an older one) |
+| `kedaCopyStale` | with the same flag: `true` while KEDA's copy, which the controller writes, does not hold the current client certificate |
 | `formatVersion` | `1`; bumped only for an incompatible change to these keys |
 
 Only the leader writes it, and only when a value changes. A failed write is

@@ -1580,7 +1580,7 @@ fi
 # Files whose Deployment sets no PROMETHEUS_TOKEN_PATH: nothing to empty, nothing added.
 rm -rf "$W/notoken"; cp -R "$W/dist" "$W/notoken"
 yq -i 'del(select(.kind == "Deployment") | .spec.template.spec.containers[].env[] | select(.name == "PROMETHEUS_TOKEN_PATH"))' "$W/notoken/scaling-manager-namespaced.yaml"
-(cd "$W/notoken" && sha256sum scaling-manager-*.yaml > SHA256SUMS)
+(cd "$W/notoken" && sha256sum scaling-manager*.yaml > SHA256SUMS)
 rm -rf "$W/dryn"
 smt_in "$DEVDIR" install -n team-a --prometheus-url http://p:9090 --allow-http --files "$W/notoken" --dry-run --out "$W/dryn"
 rc=$?
@@ -1821,6 +1821,15 @@ if [ "$rc" = 0 ] && cmp -s "$W/rf/SHA256SUMS" "$W/dist/SHA256SUMS" && [ -f "$W/r
 else
     bad "release-files: exit $rc: $(tail -1 "$W/out")"
 fi
+# Every manifest SHA256SUMS lists is written, scaling-manager.yaml (no dash
+# after the prefix) among them: sha256sum --ignore-missing passes without it.
+want="$(awk '$2 ~ /^scaling-manager.*\.(yaml|sh)$/ {print $2}' "$W/dist/SHA256SUMS" | sort)"
+got="$(cd "$W/rf" && ls -1 scaling-manager*.yaml scaling-manager-*.sh 2>/dev/null | sort)"
+if [ -n "$want" ] && [ "$want" = "$got" ] && printf '%s\n' "$got" | grep -qx scaling-manager.yaml; then
+    ok "release-files writes every manifest SHA256SUMS lists ($(printf '%s\n' "$got" | grep -c .)), scaling-manager.yaml among them"
+else
+    bad "release-files wrote $(printf '%s\n' "$got" | grep -c .) of the $(printf '%s\n' "$want" | grep -c .) manifests SHA256SUMS lists: lacks $(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$got") | tr '\n' ' ')"
+fi
 got="$(BLUE='' NC='' bash -c 'source "$1/deploy/lib/common.sh"; LLMSM_NS=team-a LLMSM_TOOLS_MODE=true llmsm_make_cmd verify-deployment; LLMSM_NS=team-a llmsm_make_cmd verify-deployment' _ "$ROOT")"
 if [ "$got" = "smt admin-finish -n team-a
 NAMESPACE=team-a make verify-deployment" ]; then ok "llmsm_make_cmd names smt admin-finish in tools mode, make otherwise"; else bad "llmsm_make_cmd: $got"; fi
@@ -1829,6 +1838,8 @@ NAMESPACE=team-a make verify-deployment" ]; then ok "llmsm_make_cmd names smt ad
 echo "hack/compare-baked-release-files.sh"
 cmpb() { bash "$ROOT/hack/compare-baked-release-files.sh" "$@" > "$W/out" 2>&1; }
 cmpb "$IMGDIR/release" "$W/dist"; expect_rc "the baked files equal the dist: accepted" 0 $?
+nm="$(awk '$2 ~ /^scaling-manager.*\.yaml$/' "$W/dist/SHA256SUMS" | grep -c .)"
+if grep -q "($nm manifests," "$W/out"; then ok "compare-baked counts the $nm manifests SHA256SUMS lists, scaling-manager.yaml among them"; else bad "compare-baked counted: $(tail -1 "$W/out"), SHA256SUMS lists $nm"; fi
 rm -rf "$W/b2"; cp -R "$IMGDIR/release" "$W/b2"
 echo '{"bundle":"re-signed"}' > "$W/b2/scaling-manager-namespaced.yaml.sigstore.json"
 cmpb "$W/b2" "$W/dist"
@@ -1862,7 +1873,7 @@ rm -rf "$W/dryp"
 smt_in "$W/imagep" install -n team-a --prometheus-url https://p:9090 --dry-run --out "$W/dryp"
 expect_rc "install checks a baked SHA256SUMS that lists the planner binaries the image does not carry" 0 $?
 
-EXPECT_CASES=223
+EXPECT_CASES=225
 echo
 echo "release install ($(yq --version 2>&1)): $PASS passed, $FAIL failed"
 if [ "$FAIL" -ne 0 ]; then

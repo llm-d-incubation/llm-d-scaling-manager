@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
 
 // neverQueuedRecording writes the q32 staircase's warm-up (q32Recording) with
@@ -121,6 +122,31 @@ func TestNeverQueued_Golden(t *testing.T) {
 	}
 }
 
+// A fleet past its decode operating point whose TTFT no fleet prices (V_P
+// only the served peak) is UNDER-PROVISIONED on decode, and its need is
+// decode's alone, at least that many: never "no fleet holds", which read the
+// TTFT no fleet prices as a target every fleet misses.
+// The same where the TTFT is priced only as an upper bound over its target
+// (lowerBoundRecording: V_P floored at the served rate, the target under a
+// floor that is itself at most its figure): no fleet is shown to meet it or
+// to miss it.
+func TestNeverQueued_NeedIsDecodesWhereNoTTFTPrices(t *testing.T) {
+	for name, rec := range map[string]string{"never queued": neverQueuedRecording(t), "lower-bound knee": lowerBoundRecording(t)} {
+		t.Run(name, func(t *testing.T) {
+			rep := atReplicasJSON(t, "at-replicas", "--recording", rec)
+			require.NotEmpty(t, rep.Shapes)
+			v := rep.Shapes[0].Verdict
+			require.Equal(t, whatifapi.VerdictUnder, v.Verdict, v.Summary)
+			require.NotNil(t, v.Needed, v.Summary)
+			assert.Empty(t, v.Needed.Unmet, v.Summary)
+			assert.True(t, v.Needed.DecodeOnly, v.Summary)
+			assert.Greater(t, v.Needed.Decode, rep.Fleet.Decode, v.Summary)
+			assert.NotContains(t, v.Summary, "no fleet up to")
+			assert.Contains(t, v.Summary, "needs at least")
+		})
+	}
+}
+
 // kneeRow is the rate of a capacity row ("prefill knee", "fleet knee"), and
 // whether it reads as a lower bound (">=").
 func kneeRow(t *testing.T, out, row string) (float64, bool) {
@@ -214,6 +240,29 @@ func TestServedKneeFloor(t *testing.T) {
 	assert.Equal(t, lb, none.servedKneeFloor(lb), "the switch off reads no work")
 	refused := whatif.Unanswerable{Reason: whatif.NoPrefillCapacity}
 	assert.Equal(t, whatif.Result(refused), pf.servedKneeFloor(refused))
+}
+
+// #477: where the prefill pods served at the pod count priced only with
+// their backlog growing, no work floors the knee: it is left at its lower
+// bound and flagged ServedWorkUnsteady. A count with steady work is floored
+// as before, unflagged.
+func TestServedKneeFloor_UnsteadyWorkIsNoFloor(t *testing.T) {
+	pf := &pricedFleet{fleet: whatif.TTFTFleet{Prefill: whatif.Prefill{Replicas: 2, PromptTokens: 1000}},
+		servedComputed: map[int]float64{3: 90000}, servedUnsteady: map[int]bool{2: true}}
+	lb := whatif.Answer{Value: 10, Flags: []whatif.Flag{whatif.VPLowerBound}}
+	got, ok := pf.servedKneeFloor(lb).(whatif.Answer)
+	require.True(t, ok)
+	assert.InDelta(t, 10.0, got.Value, 1e-9, "left at its lower bound")
+	assert.True(t, got.HasFlag(servedWorkUnsteady))
+	assert.False(t, got.HasFlag(kneeAtServedWork))
+	assert.False(t, lb.HasFlag(servedWorkUnsteady), "the priced answer is not changed in place")
+
+	steady := *pf
+	steady.fleet.Prefill.Replicas = 3
+	got, ok = steady.servedKneeFloor(lb).(whatif.Answer)
+	require.True(t, ok)
+	assert.InDelta(t, 90.0, got.Value, 1e-9)
+	assert.False(t, got.HasFlag(servedWorkUnsteady))
 }
 
 // A knee raised to the work served (KneeAtServedWork) is still a lower

@@ -86,12 +86,19 @@ var agnosticReplicaQueries = []string{
 	registration.QueryAvgKVTransferTime,
 	registration.QueryTPOTBuckets,
 	registration.QueryComputedTokensBuckets,
+	// vLLM's tokens-per-iteration histogram, recorded only: whether the step
+	// budget binds (registration/ttft_inputs.go).
+	registration.QueryIterationTokensBuckets,
 	// vLLM's KV-connector hits and cached tokens by tier, recorded only
 	// (registration/cache_tiers.go); SGLang publishes its own under other
 	// names, not read here.
 	registration.QueryExternalPrefixCacheHitTokenRate,
 	registration.QueryExternalPrefixCacheQueryTokenRate,
 	registration.QueryCachedTokenRateBySource,
+	// vLLM's KV residency histograms (--kv-cache-metrics), recorded only
+	// (registration/cache_tiers.go).
+	registration.QueryKVReuseGapBuckets,
+	registration.QueryKVIdleBeforeEvictBuckets,
 	// What loading those cached tokens cost: the KV moved into the GPU, read
 	// from a secondary tier, and moved by NIXL, in bytes and seconds,
 	// recorded only (registration/kv_transfers.go).
@@ -101,6 +108,14 @@ var agnosticReplicaQueries = []string{
 	registration.QueryKVTierReadSecondsRate,
 	registration.QueryNIXLByteRate,
 	registration.QueryNIXLSecondsRate,
+	// The API server's own time outside the engine, recorded only
+	// (registration/frontend.go). The HTTP series carry no model_name, so
+	// they are not cut down to the model: they are attached by instance, as
+	// cache_config_info is. vLLM's end-to-end latency carries it.
+	registration.QueryAvgHTTPGenerationTime,
+	registration.QueryAvgHTTPRenderTime,
+	registration.QueryHTTPRenderRate,
+	registration.QueryAvgE2ELatency,
 }
 
 // ttftAgnosticQueries are the agnostic queries above that carry model_name
@@ -111,15 +126,19 @@ var ttftAgnosticQueries = []string{
 	registration.QueryAvgKVTransferTime,
 	registration.QueryTPOTBuckets,
 	registration.QueryComputedTokensBuckets,
+	registration.QueryIterationTokensBuckets,
 	registration.QueryExternalPrefixCacheHitTokenRate,
 	registration.QueryExternalPrefixCacheQueryTokenRate,
 	registration.QueryCachedTokenRateBySource,
+	registration.QueryKVReuseGapBuckets,
+	registration.QueryKVIdleBeforeEvictBuckets,
 	registration.QueryKVOffloadLoadByteRate,
 	registration.QueryKVOffloadLoadSecondsRate,
 	registration.QueryKVTierReadByteRate,
 	registration.QueryKVTierReadSecondsRate,
 	registration.QueryNIXLByteRate,
 	registration.QueryNIXLSecondsRate,
+	registration.QueryAvgE2ELatency,
 }
 
 // recordOnlyReplicaQueries are the replica queries above issued only while a
@@ -132,10 +151,19 @@ var recordOnlyReplicaQueries = map[string]bool{
 	registration.QueryQueueTimeBuckets:    true,
 	registration.QueryAvgPrefillTime:      true,
 	registration.QueryTPOTBuckets:         true,
+	// The tokens per iteration: read by the capacity planner only, from the
+	// recording (capacity.ReadStepBudgetBinding). An analyzer that prices
+	// by the budget's binding takes it out of this list, into
+	// ttftReadReplicaQueries, and reads the same rows.
+	registration.QueryIterationTokensBuckets: true,
 	// The cache tiers: nothing reads them yet.
 	registration.QueryExternalPrefixCacheHitTokenRate:   true,
 	registration.QueryExternalPrefixCacheQueryTokenRate: true,
 	registration.QueryCachedTokenRateBySource:           true,
+	// The KV residency histograms: read by the capacity planner only, from
+	// the recording (saturation.SwitchPrefillHitAtCount's reuse-gap rule).
+	registration.QueryKVReuseGapBuckets:        true,
+	registration.QueryKVIdleBeforeEvictBuckets: true,
 	// What loading them cost: read by the capacity planner only, from the
 	// recording (slo.SwitchTTFTTierLoad).
 	registration.QueryKVOffloadLoadByteRate:    true,
@@ -144,6 +172,12 @@ var recordOnlyReplicaQueries = map[string]bool{
 	registration.QueryKVTierReadSecondsRate:    true,
 	registration.QueryNIXLByteRate:             true,
 	registration.QueryNIXLSecondsRate:          true,
+	// The API server's own time: read by the capacity planner only, from
+	// the recording (whatif.RankMixtureOptions.RemainderServer).
+	registration.QueryAvgHTTPGenerationTime: true,
+	registration.QueryAvgHTTPRenderTime:     true,
+	registration.QueryHTTPRenderRate:        true,
+	registration.QueryAvgE2ELatency:         true,
 }
 
 // ttftReadReplicaQueries are the replica queries above that the TTFT pricing

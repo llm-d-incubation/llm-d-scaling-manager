@@ -379,8 +379,9 @@ the slo analyzer listed, streamed load, router TTFT recorded.
    ```
 
    The summary lists each variant and every flag the capture carries:
-   engine parameters from flags, roles inferred from Pod names, Pods read as
-   Ready without kube-state-metrics, rollouts not seen. Read them before
+   engine parameters from flags, roles inferred from Pod names, roles read
+   from engine signals where nothing states one (with the evidence per Pod),
+   Pods read as Ready without kube-state-metrics, rollouts not seen. Read them before
    trusting the window; the generated recording carries them too.
 
    Every query is required. One that fails (often `query.max-samples` on a
@@ -2545,6 +2546,104 @@ deploy-scaling-manager`
 ([the proposal's Testing section](../proposals/install-from-release.md#testing)).
 The upgrade from the previous release's files is covered by the tools-image
 e2e below.
+
+### Install from the one manifest
+
+`make test-e2e-manifest-install` installs from `scaling-manager.yaml`, the one
+manifest, with the commands of
+[the guide](../guides/kubectl-install/), on the same prerequisites as
+the release-files e2e:
+
+```bash
+CREATE_CLUSTER=true make test-e2e-manifest-install-with-setup
+# or, on a cluster you keep (after make test-e2e-release-manifests-setup):
+make test-e2e-manifest-install
+```
+
+Run it on its own cluster, not after the release-files e2e: KEDA keeps the
+scaler CA of its first connection.
+
+`test/manifest-install/e2e.sh` copies the release files to a scratch
+directory and works there, with the two scripts of the guide,
+`scaling-manager-admin.sh` and `scaling-manager-owner.sh`. No file is edited:
+KEDA runs in `keda-system`, and the files' sums are checked again at the end.
+In order, and a step that fails stops the run:
+
+1. Checks every file against `SHA256SUMS`, then `scaling-manager-admin.sh
+   upgrade --keda-namespace keda-system`: the manifest and
+   `scaling-manager-keda.yaml` in `keda-system`, with no settings yet.
+2. `scaling-manager-admin.sh install` with the Prometheus CA (`caFromSecret`),
+   `kedaNamespace` and `watchNamespaces` `llm-d-sim`; then
+   `scaling-manager-owner.sh monitor llm-d-sim`.
+3. Waits for the rollout, for `settingsSources` to show `prometheusURL` from
+   the settings (the controller waits for it and starts in place, with no
+   restart), and for the status `ready: ok`. The checks that are not `ok` go
+   to the summary. There must be an Event on the status ConfigMap,
+   `namespacesManaged` must be `llm-d-sim`, and `namespace.llm-d-sim` must
+   be there.
+4. `scalerTLS` must start with `mutual TLS`, with no step by a person. KEDA's
+   copy in `keda-system` must hold the client certificate,
+   `kedaCopyStale` must be `false`, no marker ConfigMap may exist, and
+   `preflight.keda.mtls` must turn `ok`. Then `scaling-manager-admin.sh set
+   logVerbosity=3`, a restart setting: the controller must restart itself,
+   show `logVerbosity=settings` in `settingsSources`, and be `ready` again.
+5. Patches `utilizationShare: shadow`, then `scaling-manager-admin.sh
+   upgrade`. The scaler CA, KEDA's copy and the patched key must not change.
+6. `scaling-manager-owner.sh grant` of each grant gives the controller its
+   right in the model namespace only once applied there.
+7. The plan: a model-server Deployment appears in
+   `scaling-manager-scaledobjects-plan`; the suggestion, registered with
+   `scaling-manager-owner.sh register`, becomes a Ready ScaledObject, and
+   `scaling-manager-owner.sh status` shows a `ScalingManagerNamespace` Event
+   in the model namespace.
+8. The negative control: a namespace `watchNamespaces` leaves out, with a
+   Deployment and a ScaledObject on the scaler. `namespacesRefused` must name
+   it, and its owner must read a `ScalingManagerNamespaceNotManaged` Event
+   there. Then `scaling-manager-admin.sh namespaces` lists it: it must be
+   managed and its ScaledObject Ready, with no controller restart.
+9. The smoke suite with `watchNamespaces` empty (every namespace, since its
+   specs make namespaces with generated names) and passive off
+   (`RELEASE_E2E_SMOKE=true`, the default). Then `kedaConnection` must be
+   `current`.
+10. `scaling-manager-admin.sh uninstall`. Nothing labelled
+    `app.kubernetes.io/instance=scaling-manager-system` may be left, the
+    namespace must be gone, KEDA's namespace unlabelled, and every release
+    file as downloaded.
+
+Before the settings exist, the controller must wait with 0 restarts and the
+reason in `ready`, then start with no restart.
+
+The scripts themselves are checked without a cluster by
+`hack/check-kubectl-scripts.sh` (in `make lint-deploy-scripts`): `--print` of
+every command against `hack/testdata/kubectl-scripts/` (`UPDATE=1` rewrites
+it), the same calls in run mode against a stub `kubectl` with nothing else on
+`PATH`, and the refusals.
+
+The summary and the smoke log are in `dist/manifest-e2e-logs`
+(`MANIFEST_E2E_LOGS`). Not in CI yet. Not covered: the upgrade from the
+previous release, Argo CD and Flux.
+
+#### The move from an smt install
+
+`make test-e2e-manifest-migrate` (`test/manifest-install/migrate.sh`), on the
+same prerequisites and on a cluster where no scaling manager was installed:
+
+1. Builds the tools image with the rendered release files, and runs `smt
+   install --scope cluster` from it.
+2. Applies a probe Deployment and a ScaledObject on the scaler over mutual
+   TLS, and waits until KEDA reports it Ready with the scaler's metric.
+3. `scaling-manager-admin.sh move` over the `smt` install (the manifest
+   with `--force-conflicts`, KEDA's side in `keda-system`), then `upgrade`
+   without it, and `namespaces llm-d-sim`.
+4. The controller's new Opaque CA Secret must hold the `smt` CA, the log must
+   say it copied it, KEDA's copy must be unchanged, and `scalerTLS` must be
+   mutual TLS.
+5. `kedaConnection` must turn `current` and the probe stay Ready, with
+   KEDA's operator Pod unchanged: the move needs no restart of KEDA.
+
+Then it removes what both installs made. Run it before the manifest e2e on
+the same cluster, or on its own: it refuses a cluster where
+`scaling-manager-system` exists.
 
 ### Install with the tools image
 

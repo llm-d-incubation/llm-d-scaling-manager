@@ -415,6 +415,15 @@ func (e Envelope) Judge(f Figure) Validation {
 			return Validation{Outside: why}
 		}
 	}
+	// A V_P priced at a prompt the minutes it was read over did not run is
+	// outside the region it was learned in, whatever row the figure matches.
+	if slices.Contains(f.Flags, VPPromptNotCovered) {
+		why, ok := e.OutsideFlags[VPPromptNotCovered]
+		if !ok {
+			why = "prefill speed read at other prompts (" + string(VPPromptNotCovered) + ")"
+		}
+		return Validation{Outside: why}
+	}
 	// A statistic no row of the kind measured is named against all of them.
 	var stats []float64
 	for _, r := range e.Rows {

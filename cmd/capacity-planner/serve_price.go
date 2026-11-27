@@ -48,6 +48,16 @@ type servedSources struct {
 	// weight the inputs cache counts (--inputs-cache-size).
 	uploads         *uploadStore
 	maxUploadWeight int
+	// experimentalTTFT is serve's --experimental-ttft: every source is read
+	// with the experimental TTFT model, as if each request asked for it.
+	experimentalTTFT bool
+	// rankMixture and tpotDistribution are serve's --experimental-ttft=v2
+	// and --experimental-tpot=v2: every source also gives the cycles the
+	// experimental backtest models read (experimentalSeries).
+	rankMixture, tpotDistribution bool
+	// replay is serve's opt-in replay switches, each on for every source
+	// (serve_replay.go).
+	replay replayDefaults
 	// onPass, when set, is called as each pass over a recording file opens,
 	// with the pass's count (recordingSource.onPass): a test's hook.
 	onPass func(pass int)
@@ -71,8 +81,12 @@ func apiError(err error) error {
 func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest) (*whatifapi.Resolved, error) {
 	f := answerFlags{question: "serve", cycle: "last", model: req.Model, variant: req.DecodeVariant, prefillVariant: req.PrefillVariant,
 		serveSelfCheck: req.SelfCheck != nil && *req.SelfCheck,
-		seed:           whatif.DefaultResampling().Seed, vpPlateau: req.PrefillVPPlateau, experimentalTTFT: req.ExperimentalTTFT, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait,
+		seed:           whatif.DefaultResampling().Seed, vpPlateau: req.PrefillVPPlateau, hitAtCount: req.PrefillHitAtCount,
+		vpServiceLine: req.PrefillVPServiceLine, fLoadCurve: req.PrefillFLoadCurve,
+		experimentalTTFT: req.ExperimentalTTFT || s.experimentalTTFT, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait,
 		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter}
+
+	s.replay.apply(&f)
 	src := whatifapi.SourceRequest{Kind: whatifapi.SourcePrometheus}
 	if req.Source != nil {
 		src = *req.Source
@@ -116,6 +130,9 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 	}
 	defer func() { _ = data.Close() }()
 	data.onPass = s.onPass
+	if src.Cycles != nil {
+		data.open = learnreplay.CyclesOf(data.open, src.Cycles.Keeps)
+	}
 	st, err := f.stateOf(ctx, name, data)
 	if err != nil {
 		return nil, hidePath(apiError(err), hide, info.Name)
@@ -126,8 +143,14 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 	}
 	info.Cycle, info.TotalCycles, info.FirstAt, info.LastAt = st.Cycle, st.Cycles, st.FirstAt, st.At
 	res, err := s.resolved(ctx, &f, st, data, info)
-	// The series is the last pass: a file changed under it is refused, and
-	// nothing is kept under the content id its first pass summed.
+	var serr error
+	if err == nil {
+		serr = s.experimentalSeries(data, res, req.TTFTModel != "", req.TPOTModel != "")
+		res.TPOTModel = req.TPOTModel
+	}
+	// The series, and the experimental models' after it, are the last
+	// passes: a file changed under them is refused, and nothing is kept
+	// under the content id its first pass summed.
 	if cerr := data.unchanged(); cerr != nil {
 		return nil, hidePath(apiError(cerr), hide, info.Name)
 	}
@@ -136,7 +159,34 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 			"(--inputs-cache-size %s): load a shorter recording, or ask whoever runs the planner to raise --inputs-cache-size",
 			info.Name, whatifapi.Quantity(int64(res.Bytes)), whatifapi.Quantity(int64(s.maxUploadWeight)))}
 	}
+	if serr != nil {
+		return nil, hidePath(apiError(serr), hide, info.Name)
+	}
 	return res, err
+}
+
+// experimentalSeries reads, where serve prices every backtest with an
+// experimental model (--experimental-ttft=v2, --experimental-tpot=v2), the
+// cycles that model reads and the engines' flags it takes, in a pass of
+// their own over data: the CLI's backtest reads the same (rankMixture,
+// tpotDistribution). Neither changes the inputs' content id. ttftModel and
+// tpotModel say the request asked for the experimental TTFT or TPOT model
+// (whatifapi.InputsRequest.TTFTModel, TPOTModel), which read the same
+// series.
+func (s *servedSources) experimentalSeries(data *recordingSource, res *whatifapi.Resolved, ttftModel, tpotModel bool) error {
+	if s.rankMixture || ttftModel {
+		if err := rankMixtureFrom(data.open, res); err != nil {
+			return err
+		}
+		res.Engine.PrefillSlots = prefillSlotsOf(res)
+	}
+	if s.tpotDistribution || tpotModel {
+		if err := decodeSeriesFrom(data.open, res); err != nil {
+			return err
+		}
+		res.Engine.DecodeSlots, res.Engine.SpecTokens = decodeEngineOf(res)
+	}
+	return nil
 }
 
 // recordingPath is the recording a source names: an upload's name, looked
@@ -358,7 +408,7 @@ func (s *servedSources) resolved(ctx context.Context, f *answerFlags, st *learnr
 	}
 	pricer := &servedState{st: st, decodeVariant: f.variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
 		imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter,
-		experimentalTTFT: f.experimentalTTFT}
+		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}
 	res := &whatifapi.Resolved{
 		Inputs:  inputsDoc(f, st, &variants[0], ps, fleets[0], info),
 		Content: content,
@@ -375,6 +425,21 @@ func (s *servedSources) resolved(ctx context.Context, f *answerFlags, st *learnr
 		// Another replay, so other inputs: never the id of the default's.
 		res.Inputs.PrefillVPPlateau = true
 		res.Content += "\x00" + vpPlateauFlag
+	}
+	if f.hitAtCount {
+		// Another replay, so other inputs: never the id of the default's.
+		res.Inputs.PrefillHitAtCount = true
+		res.Content += "\x00" + hitAtCountFlag
+	}
+	if f.vpServiceLine {
+		// Another replay, so other inputs: never the id of the default's.
+		res.Inputs.PrefillVPServiceLine = true
+		res.Content += "\x00" + vpServiceLineFlag
+	}
+	if f.fLoadCurve {
+		// Another replay, so other inputs: never the id of the default's.
+		res.Inputs.PrefillFLoadCurve = true
+		res.Content += "\x00" + fLoadCurveFlag
 	}
 	if f.experimentalTTFT {
 		// Another replay, so other inputs: never the id of the default's.
@@ -396,7 +461,8 @@ type servedState struct {
 	// imbalanceAcrossCounts is --imbalance-across-counts on at-replicas;
 	// the server prices at the planner's default.
 	imbalanceAcrossCounts bool
-	// loadAwareRouter is --load-aware-router on at-replicas.
+	// loadAwareRouter is --load-aware-router on at-replicas; a request's
+	// assume.loadAwareRouter turns it on for the fleets it reads.
 	loadAwareRouter bool
 	// cachedCost is phi as fitted on the source (fitCachedCosts), nil
 	// where none was.
@@ -405,6 +471,14 @@ type servedState struct {
 	// experimentalTTFT): every fleet read is priced and flagged as the
 	// experimental TTFT model's.
 	experimentalTTFT bool
+	// vpServiceLine is --prefill-vp-service-line (the request's
+	// prefillVPServiceLine): the state was replayed with it, and every
+	// fleet read states it (statedOutside).
+	vpServiceLine bool
+	// fLoadCurve is --prefill-f-load-curve (the request's
+	// prefillFLoadCurve): the state was replayed with it, f is priced
+	// against the load, and every fleet read states it (statedOutside).
+	fLoadCurve bool
 }
 
 // seconds is x seconds as a duration, to the nanosecond.
@@ -433,13 +507,14 @@ func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*serv
 		seed: whatif.DefaultResampling().Seed, set: map[string]bool{"ttft": true, "headroom": true}, warn: io.Discard,
 		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom, priceRouterWait: whatif.DefaultPriceRouterWait,
 		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: s.imbalanceAcrossCounts, loadAwareRouter: s.loadAwareRouter,
-		experimentalTTFT: s.experimentalTTFT}
+		experimentalTTFT: s.experimentalTTFT, vpServiceLine: s.vpServiceLine, fLoadCurve: s.fLoadCurve}
 	set := func(name string) { f.set[name] = true }
 	if k.PromptTokens > 0 {
-		f.inputTokens = k.PromptTokens
+		f.inputTokens, f.inputTokensRead = k.PromptTokens, k.PromptTokensRead
 		set("assume-input-tokens")
 	}
 	f.prefixHit, f.prefixHitRead = k.PrefixHit, k.PrefixHitRead
+	f.prefillComputed = k.PrefillComputedTokens
 	if s.cachedCost != nil {
 		f.cachedCost, f.cachedPhi = s.cachedCost, s.cachedCost.Phi
 	}
@@ -450,6 +525,7 @@ func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*serv
 		f.outputTokens = k.OutputTokens
 		set("assume-output-tokens")
 	}
+	f.stepOutputDispersion = k.OutputDispersion
 	a := k.Assume
 	if a.VP != nil {
 		f.assumeVP = *a.VP
@@ -486,6 +562,12 @@ func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*serv
 	}
 	if err := f.assumeFlowControl(a); err != nil {
 		return nil, apiError(err)
+	}
+	if a.LoadAwareRouter {
+		// --load-aware-router, marked set as the CLI's parse marks it, so the
+		// envelope classes it alike (statedOutside).
+		f.loadAwareRouter = true
+		set("load-aware-router")
 	}
 	if err := f.checkTTFT(); err != nil {
 		return nil, apiError(err)
@@ -548,9 +630,26 @@ type servedFleet struct {
 	q     ttftQuestion
 	tpotQ float64
 	ratio resolvedRatio
+	// model is the experimental model's R_q priced in place of the fleet's
+	// own (WithTPOTRatio); nil prices the fleet's.
+	model *whatifapi.ModelRatio
 	// assumed is the fleet's assumed row as read, before any figure added to
 	// it.
 	assumed []string
+}
+
+// WithTPOTRatio is sf with its TPOT percentile priced at the experimental
+// model's R_q, as an assumed R_q is priced, flagged r.Flag where the
+// assumed one is flagged AssumedTPOTRatio: the percentile curve, its point
+// and decode's limit at the target. The host-bound refusal, a coarse
+// bucket's reading, does not apply: the model's spread is fitted on every
+// bucket.
+func (sf *servedFleet) WithTPOTRatio(r whatifapi.ModelRatio) whatifapi.Fleet {
+	c := *sf
+	c.ratio = resolvedRatio{ratio: whatif.TPOTRatio{Value: r.Value}, flags: append([]whatif.Flag{r.Flag}, r.More...)}
+	c.model = &r
+	c.assumed = append(slices.Clone(sf.assumed), r.Assumed)
+	return &c
 }
 
 // PrefillKnee is replicas-to-slo's prefill knee.
@@ -639,6 +738,8 @@ func (sf *servedFleet) TPOTRatio() whatifapi.Ratio {
 	r := sf.ratio.ratio.Value
 	out := whatifapi.Ratio{Value: &r, Source: sourceLearned, Flags: whatifapi.FlagNames(sf.ratio.flags)}
 	switch {
+	case sf.model != nil:
+		out.Source = sf.model.Source
 	case sf.ratio.ratio.Assumed:
 		out.Source = shapeAssumed
 		out.Flags = append(out.Flags, string(whatif.AssumedTPOTRatio))

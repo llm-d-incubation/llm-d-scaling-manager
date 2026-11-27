@@ -178,11 +178,13 @@ func nearKneeOf(pts []scPoint) *SelfCheckNearKnee {
 }
 
 // nearKneeUnsettled is how many judged steps at 0.8 to 1.0 of the knee had
-// their TTFT left unscored because the queue does not settle in the window.
+// their TTFT left unscored because the queue does not settle in the window
+// (UnscoredUnsettled). A refused TTFT is the refusal's, not counted here.
 func nearKneeUnsettled(steps []BacktestStep) int {
 	n := 0
+	unsettled := func(p BacktestPoint) bool { return p.Unscored == UnscoredUnsettled }
 	for _, st := range steps {
-		if st.Excluded == "" && st.Unsettled && st.Load == LoadNearKnee {
+		if st.Excluded == "" && st.Load == LoadNearKnee && slices.ContainsFunc(st.TTFT, unsettled) {
 			n++
 		}
 	}

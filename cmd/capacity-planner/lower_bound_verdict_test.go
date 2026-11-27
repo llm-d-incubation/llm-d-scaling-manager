@@ -40,14 +40,14 @@ func TestLowerBoundKnee_VerdictIsNotSaturated(t *testing.T) {
 	s := lowerBoundReport(t, rec, "8")
 	v := s.Verdict
 	assert.Equal(t, whatifapi.VerdictNotJudged, v.Verdict, v.Summary)
-	// 4.17, not the 4.04 the floored V_P gives: the knee is raised to the
-	// work the prefill pods sustained (KneeAtServedWork).
-	assert.Contains(t, v.Summary, "1.9x a prefill knee of at least 4.2 r/s")
+	// 4.15, not the 4.04 the floored V_P gives: the knee is raised to the
+	// work the prefill pods sustained with a steady backlog (KneeAtServedWork).
+	assert.Contains(t, v.Summary, "1.9x a prefill knee of at least 4.1 r/s")
 	assert.Contains(t, v.Summary, "the prefill knee rests on a lower bound of V_P")
 	assert.NotContains(t, v.Summary, "saturates;")
 	require.Len(t, v.Checks, 1)
 	assert.False(t, v.Checks[0].Known, v.Checks[0].Reason)
-	assert.Contains(t, v.Checks[0].Reason, "a prefill knee of at least 4.17 r/s (V_P is a lower bound)")
+	assert.Contains(t, v.Checks[0].Reason, "a prefill knee of at least 4.15 r/s (V_P is a lower bound)")
 
 	m := marks(s)
 	assert.Equal(t, whatifapi.CellPastLowerBound, m["100%"], "the cell at the knee")
@@ -66,10 +66,10 @@ func TestLowerBoundKnee_VerdictIsNotSaturated(t *testing.T) {
 	for _, line := range strings.Split(txt, "\n") {
 		if strings.HasPrefix(line, "  measured  ") && strings.Contains(line, "@") {
 			assert.NotContains(t, line, " SAT", "the summary row: %s", line)
-			assert.Contains(t, line, "@4.17 LB", line)
+			assert.Contains(t, line, "@4.15 LB", line)
 		}
 	}
-	assert.Contains(t, txt, "prefill knee      >=4.17")
+	assert.Contains(t, txt, "prefill knee      >=4.15")
 }
 
 // Past decode's own knee too, the fleet saturates whatever bound V_P is:

@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 3,
+  "question": "replicas-to-slo",
+  "source": {
+    "recording": "testdata/staircase-q32/warmup.jsonl.gz",
+    "namespace": "ns-01",
+    "model": "model-02",
+    "firstCycle": 1,
+    "lastCycle": 580,
+    "totalCycles": 580,
+    "firstAt": "2026-11-14T07:09:46.613863541Z",
+    "lastAt": "2026-11-14T09:35:09.792943235Z"
+  },
+  "bands": {
+    "method": "block bootstrap",
+    "blockCycles": 4,
+    "resamples": 200,
+    "seed": 1,
+    "loPercent": 10,
+    "hiPercent": 90
+  },
+  "roles": [
+    {
+      "role": "decode",
+      "variant": "variant-01",
+      "inputs": {
+        "line": {
+          "a": 0.04249685049858612,
+          "b": 0.010425088112190157,
+          "tier": "held",
+          "readings": 0,
+          "fromCycle": 0,
+          "toCycle": 0,
+          "resamples": 0,
+          "tierChanges": 0,
+          "check": {
+            "status": "not-run",
+            "compared": 0,
+            "onRamp": 0,
+            "aboveBand": 0,
+            "tooOld": 65,
+            "past": 0,
+            "medianErrorPct": 0,
+            "worstErrorPct": 0,
+            "signedErrorPct": 0,
+            "fromCycle": 0,
+            "toCycle": 0,
+            "rowKVPerRequest": 0,
+            "otherShape": false
+          }
+        },
+        "fillBand": {
+          "lo": 0.15,
+          "hi": 0.8
+        },
+        "capacityTokens": 764672,
+        "kvPerRequest": 8114.099089776806,
+        "kvPerRequestSource": "measured below the prefix-hit discount, priced at it",
+        "shape": {
+          "inputTokens": 8000,
+          "inputSource": "assumed",
+          "outputTokens": 200,
+          "outputSource": "assumed",
+          "outputDispersion": 1.1409908977680596,
+          "prefixHitRate": 0,
+          "fromCycle": 560,
+          "toCycle": 579,
+          "cycles": 20
+        },
+        "batchCap": 256,
+        "batchCapSource": "flags",
+        "ranks": 1,
+        "replicas": 2,
+        "replicasFrom": "--decode",
+        "headroom": 0.85,
+        "rate": 3.4404938563752423,
+        "rateSource": "headroom x prefill knee",
+        "engine": {
+          "engine": "vllm",
+          "stepBudget": 8192,
+          "stepBudgetSource": "not recorded",
+          "gpuMemoryUtilization": 0.9,
+          "gpuMemoryUtilizationSource": "not recorded",
+          "blockSize": 128,
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
+        }
+      },
+      "results": {
+        "knee": {
+          "answer": {
+            "value": 16.95075000755562,
+            "unit": "r/s",
+            "basis": {
+              "fill": 0.795841134150669,
+              "kneeRate": 16.95075000755562,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [
+                "band top"
+              ],
+              "tier": "held"
+            },
+            "flags": [
+              "AssumedShape",
+              "HeldLine"
+            ],
+            "validation": {
+              "validated": false,
+              "label": "OUTSIDE VALIDATED REGION (--load-aware-router stated, which the run did not price)",
+              "outside": "--load-aware-router stated, which the run did not price"
+            }
+          }
+        },
+        "operatingRate": {
+          "answer": {
+            "value": 3.4404938563752423,
+            "unit": "r/s",
+            "basis": {
+              "fill": 0.045048917044771424,
+              "kneeRate": 16.95075000755562,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [],
+              "tier": "held"
+            },
+            "flags": [
+              "AssumedShape",
+              "HeldLine",
+              "UnvalidatedTTFT",
+              "VPLowerBound",
+              "VPScaledToPrompt",
+              "AssumedPromptSpread"
+            ],
+            "sensitivity": {
+              "lo": 2.542973719929527,
+              "hi": 3.9565679348315284
+            }
+          }
+        },
+        "meanTPOT": {
+          "answer": {
+            "value": 0.012339525204965016,
+            "unit": "s",
+            "basis": {
+              "fill": 0.045048917044771424,
+              "kneeRate": 16.95075000755562,
+              "floor": 0.0108191875128338,
+              "uncapped": 0,
+              "boundBy": [],
+              "tier": "held"
+            },
+            "flags": [
+              "BelowFittedBand",
+              "AssumedShape",
+              "HeldLine",
+              "UnvalidatedTTFT",
+              "VPLowerBound",
+              "VPScaledToPrompt",
+              "AssumedPromptSpread"
+            ],
+            "validation": {
+              "validated": false,
+              "label": "OUTSIDE VALIDATED REGION (--load-aware-router stated, which the run did not price)",
+              "outside": "--load-aware-router stated, which the run did not price"
+            }
+          }
+        }
+      }
+    },
+    {
+      "role": "prefill",
+      "variant": "variant-02",
+      "ttft": {
+        "decodeVariant": "variant-01",
+        "prefillEngine": {
+          "engine": "vllm",
+          "stepBudget": 65536,
+          "stepBudgetSource": "not recorded",
+          "gpuMemoryUtilization": 0.9,
+          "gpuMemoryUtilizationSource": "not recorded",
+          "blockSize": 128,
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
+        },
+        "percentile": 0.9,
+        "rate": 3.4404938563752423,
+        "rateSource": "headroom x prefill knee",
+        "replicas": 2,
+        "replicasFrom": "--prefill",
+        "vp": 17046.48,
+        "vpSource": "learned",
+        "vpOrigin": "peak-under-queue",
+        "vpPromptTokens": 7984.303256867742,
+        "vpWholePromptTokens": 7984.303256867742,
+        "vpPromptHitRate": 0,
+        "wholePromptTokens": 8000,
+        "promptHitRate": 0,
+        "fixedLatencySeconds": 0.014291269449856045,
+        "fixedLatencySource": "learned",
+        "imbalance": 1,
+        "imbalanceSource": "learned",
+        "promptTokens": 8000,
+        "promptSource": "assumed",
+        "promptCV": 0.0577,
+        "promptCVSource": "assumed",
+        "arrivalCV2": 1,
+        "arrivalsSource": "assumed",
+        "transferSecondsPerToken": 0.0000028114833006122766,
+        "transferSource": "held by the decode term, not priced",
+        "decodeSide": "line",
+        "decodeBaseSeconds": -0.08874498911329295,
+        "decodePerTokenSeconds": 0.000012311228655172654,
+        "routerHopBaseSeconds": 0.004043864258375197,
+        "routerHopHeldPromptTokens": 999.0621148232241,
+        "decodeTermSource": "measured",
+        "routerHopSource": "measured",
+        "decodePerStep": 8.627566545897512,
+        "flowControl": "off, inferred",
+        "assumed": [
+          "prompt 8000 tokens (--assume-input-tokens)",
+          "prompt cv 0.0577 (--assume-prompt-cv)",
+          "flow control off (no queue series)",
+          "arrivals Ca^2 1 (--arrival-cv2)",
+          "Poisson arrivals at decode admission (--arrival-cv2 does not reach it)"
+        ]
+      },
+      "results": {
+        "knee": {
+          "answer": {
+            "value": 4.047639831029697,
+            "unit": "r/s",
+            "basis": {
+              "fill": 0,
+              "kneeRate": 4.047639831029697,
+              "floor": 0,
+              "uncapped": 0,
+              "boundBy": [
+                "prefill knee"
+              ],
+              "tier": ""
+            },
+            "flags": [
+              "UnvalidatedTTFT",
+              "VPLowerBound",
+              "VPScaledToPrompt",
+              "AssumedPromptSpread"
+            ],
+            "sensitivity": {
+              "lo": 2.9917337881523847,
+              "hi": 4.654785805684151
+            },
+            "validation": {
+              "validated": false,
+              "label": "OUTSIDE VALIDATED REGION (--load-aware-router stated, which the run did not price)",
+              "outside": "--load-aware-router stated, which the run did not price"
+            }
+          }
+        },
+        "ttft": {
+          "answer": {
+            "value": 7.417463598490764,
+            "unit": "s",
+            "basis": {
+              "fill": 0,
+              "kneeRate": 4.047639831029697,
+              "floor": 0.6605638514836254,
+              "uncapped": 0,
+              "boundBy": [],
+              "tier": "held"
+            },
+            "flags": [
+              "UnvalidatedTTFT",
+              "VPLowerBound",
+              "VPScaledToPrompt",
+              "AssumedPromptSpread",
+              "FlowControlInferredOff",
+              "BelowFittedBand",
+              "KVBoundSlots",
+              "AssumedPoissonArrivals",
+              "TransferHeld",
+              "AssumedArrivalCV2",
+              "AssumedShape",
+              "HeldLine"
+            ],
+            "parts": {
+              "independent": 7.417463598490764,
+              "pooled": 7.417463598490764,
+              "decodeShare": 7.571071657197904e-41,
+              "engineWait": 2.7999856228438675,
+              "kvPullWait": 0.000905271875344851,
+              "kvPullUtilization": 0.038691564092232504,
+              "ownPrefill": 0.6392774925981248,
+              "decodeWait": 1.1207887655833125e-41,
+              "firstStep": 0,
+              "decodeEngine": 0.01771508573732236,
+              "routerHop": 0,
+              "prefillUtilization": 0.85,
+              "vpMarginApplied": 0.05,
+              "waitScale": 0,
+              "waitOffset": 0,
+              "decodeWaitProbability": 7.571071657197904e-41,
+              "prefillKnee": 4.047639831029697,
+              "decodeKnee": 16.95075000755562
+            },
+            "sensitivity": {
+              "lo": 3.6542510143153373,
+              "hi": 7.417463598490764,
+              "refused": "Saturated"
+            },
+            "validation": {
+              "validated": false,
+              "label": "OUTSIDE VALIDATED REGION (--load-aware-router stated, which the run did not price)",
+              "outside": "--load-aware-router stated, which the run did not price"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "exitCode": 0,
+  "note": "estimate from no readings of the line's own of a 580-cycle recording, not a guarantee; see basis (-o json); TTFT is not a bound, and is validated only where its figure says so: the P2 recordings never checked it at a stated Ca^2; the measured envelope did only where a figure reads validated."
+}

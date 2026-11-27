@@ -176,6 +176,26 @@ func TestPageAsksSize(t *testing.T) {
 	}
 }
 
+// The page states a load-aware router under the assumptions: a checkbox in
+// the assume box, wired, sent as assume.loadAwareRouter only when ticked,
+// carried by the link, and cleared when new inputs load.
+// hack/check-planner-exec.mjs runs it.
+func TestPageStatesALoadAwareRouter(t *testing.T) {
+	html, js := pageText(t, "index.html"), pageText(t, "planner.js")
+	start := strings.Index(html, `id="assumebox"`)
+	require.GreaterOrEqual(t, start, 0, "no assume box")
+	end := strings.Index(html[start:], "</details>")
+	require.Positive(t, end, "the assume box does not end")
+	box := html[start : start+end]
+	assert.Contains(t, box, `<input type="checkbox" id="a-lar"> My router balances prefill by load`)
+	for _, want := range []string{`el("a-lar").onchange = () => {`, "k().assume.loadAwareRouter = true;", "delete k().assume.loadAwareRouter;",
+		`if (k.assume.loadAwareRouter) p.set("loadAwareRouter", "1");`, `if (g("loadAwareRouter") === "1") k.assume.loadAwareRouter = true;`,
+		`el("a-lar").checked = false;`, `el("a-lar").checked = !!k.assume.loadAwareRouter;`} {
+		assert.Contains(t, js, want)
+	}
+	assert.Contains(t, pageText(t, "scenario.js"), "loadAwareRouter: /^1$/")
+}
+
 // The page asks again only where retryDelay (scenario.js, checked under node
 // by hack/check-planner-scenarios.sh) says to: a busy server's 503, never a
 // plan stopped at the server's plan budget.
@@ -369,10 +389,17 @@ func TestSourcesWithoutLister(t *testing.T) {
 // table view and a tooltip, and no second y axis on any chart.
 func TestPagePlansADay(t *testing.T) {
 	html, js, day := pageText(t, "index.html"), pageText(t, "planner.js"), pageText(t, "dayplan.js")
-	for _, id := range []string{"dayrun", "daystep", "daysize", "daychart", "daylegend", "daytable", "daysum", "daynotes"} {
+	for _, id := range []string{"dayrun", "daystep", "daysize", "daychart", "daylegend", "daytable", "daysum", "daynotes", "daystale", "dayused"} {
 		assert.Contains(t, html, `id="`+id+`"`)
 	}
-	assert.Contains(t, js, `api("POST", "v1/dayplan", dayRequest())`)
+	// The request asked is the one kept: a knob changed since marks the plan
+	// stale (its cases run under node in hack/check-planner-targets.mjs).
+	assert.Contains(t, js, "const req = dayRequest();")
+	// It can be cancelled (its running view runs under node in
+	// hack/check-planner-dayprogress.mjs).
+	assert.Contains(t, js, `api("POST", "v1/dayplan", req, abort.signal)`)
+	assert.Contains(t, html, `id="daycancel"`)
+	assert.Contains(t, js, "state.dayAsked = JSON.stringify(req);")
 	for _, want := range []string{"delete req.fleet", "delete req.traffic.classes", "dayPlanSVG(d)", "dayTipHTML(state.day, b)", "dayHoursTable(d)"} {
 		assert.Contains(t, js, want)
 	}
@@ -394,7 +421,7 @@ func TestPageJudgesTheFleet(t *testing.T) {
 	html, js, scen := pageText(t, "index.html"), pageText(t, "planner.js"), pageText(t, "scenario.js")
 	for _, want := range []string{`id="rshapes"`, `id="rshapeadd"`, `id="rloads"`, `id="rgrowth"`, `id="rrun"`, `id="rmatrix"`,
 		`id="rstatus" class="hint" aria-live="polite"`, `id="rlegend"`, `<span class="rmark met">ok</span>`, `<span class="rmark missed">MISS</span>`,
-		`<span class="rmark saturated">SAT</span>`, `<span class="rmark unknown">?</span>`, `<span class="rmark notarget">no SLO</span>`, `<select id="rloadstat"`, `<option value="p95" selected>`,
+		`<span class="rmark saturated">SAT</span>`, `<span class="rmark unknown">?</span>`, `<span class="rmark notarget">no SLO</span>`, `<select id="rloadstat"`, `<option value="p95-modulation" selected>`,
 		`<summary>How accurate is this?</summary>`} {
 		assert.Contains(t, html, want)
 	}
@@ -462,6 +489,37 @@ func TestPageClearsAStalePlan(t *testing.T) {
 	assert.Contains(t, failed, "Nothing is shown until a plan prices: type a rate")
 	assert.Contains(t, js, `el("ratenote").textContent = rateNote(p.limits.chosen.rateSource);`)
 	assert.Contains(t, pageText(t, "scenario.js"), "function rateNote(source)")
+}
+
+// A page load runs no check of the planner: POST v1/backtest is asked from
+// runBacktest alone, which runs on a button, never from the load, the panel
+// or opening Check the planner. Before, the panel ran a check of the
+// source's last half after every load, and opening the tab ran another.
+// The panel's words before a check are execView's (scenario.js, run under
+// node by hack/check-planner-scenarios.sh).
+func TestPageChecksThePlannerOnlyWhenAsked(t *testing.T) {
+	html, js := pageText(t, "index.html"), pageText(t, "planner.js")
+	assert.Equal(t, 1, strings.Count(js, `"v1/backtest"`), "v1/backtest is asked from one place")
+	assert.Contains(t, between(t, js, "async function runBacktest(", "\n}\n"), `api("POST", "v1/backtest", req)`)
+	for _, fn := range []string{"async function startExecutive(", "function showView(", "function setInputs(", "function renderExec(", "async function loadInputs("} {
+		body := between(t, js, fn, "\n}\n")
+		assert.NotContains(t, body, "runBacktest", "%s runs no check", fn)
+		assert.NotContains(t, body, "v1/backtest", "%s asks no check", fn)
+	}
+	// Every call of runBacktest is a button's.
+	calls := regexp.MustCompile(`[^\n]*runBacktest\(\)[^\n]*`).FindAllString(js, -1)
+	require.NotEmpty(t, calls, "runBacktest is called")
+	for _, c := range calls {
+		assert.True(t, strings.Contains(c, "if (!el(\"btrun\").disabled) runBacktest();") || strings.Contains(c, "async function runBacktest()"),
+			"runBacktest is called from checkAccuracy alone: %s", strings.TrimSpace(c))
+	}
+	assert.Contains(t, js, `el("btrun").onclick = runBacktest;`)
+	// "Check accuracy on this recording" checks this recording, whichever
+	// test Check the planner had picked.
+	assert.Contains(t, js, `el("btstart").onclick = checkAccuracy;`)
+	assert.Contains(t, between(t, js, "function checkAccuracy(", "\n}\n"), `el("btsplitmode").checked = true;`)
+	assert.Contains(t, between(t, js, "function renderExec(", "\n}\n"), `a.act === "check" ? checkAccuracy`)
+	assert.Contains(t, html, `<button type="button" id="btstart" disabled>Check accuracy on this recording</button>`)
 }
 
 // between is s from the first start up to the end that follows it; both

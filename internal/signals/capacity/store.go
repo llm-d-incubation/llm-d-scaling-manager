@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
@@ -102,6 +104,10 @@ type Store struct {
 	// rec records the engine's writes (FileScaleTarget, EvictStale); nil
 	// when recording is off (WithRecorder).
 	rec *learnrec.Recorder
+	// modelConfigSeen is, keyed like records, what the model-config
+	// annotation last read as (ModelConfig.String), so its reading is logged
+	// once per change rather than every cycle (logModelConfig).
+	modelConfigSeen sync.Map
 }
 
 // NewStore creates an empty capacity store.
@@ -213,10 +219,39 @@ func (s *Store) LoadFromScaleTarget(namespace, modelID, variantName, accelerator
 	}
 	params := ParseEngineArgsOn(inferenceengine.Detect(scaleTarget), scaleTarget,
 		s.defaultsAccelerator(storeKey(namespace, modelID, variantName), accelerator))
+	s.logModelConfig(namespace, modelID, variantName, params.ModelConfig)
 	// Every rollout the scale target reports, read afresh each cycle (see
 	// Record.RollingOut).
 	rolling := scaletarget.RollingOut(scaleTarget)
 	s.FileScaleTarget(namespace, modelID, variantName, accelerator, gpuCount, params, rolling, now)
+}
+
+// logModelConfig logs what the scaling-manager.llmd.ai/model-config
+// annotation on a variant's scale target read as, when that changes: an
+// unreadable annotation says why (the classes then read unknown), a readable
+// one names the classes, and one removed says so. Nothing is logged for a
+// variant that never carried the annotation.
+func (s *Store) logModelConfig(namespace, modelID, variantName string, m ModelConfig) {
+	key := storeKey(namespace, modelID, variantName)
+	now := m.String()
+	prev, seen := s.modelConfigSeen.Load(key)
+	switch {
+	case m.Source == "" && !seen:
+		return
+	case seen && prev.(string) == now:
+		return
+	}
+	s.modelConfigSeen.Store(key, now)
+	log := ctrl.Log.WithName("capacity").WithValues("namespace", namespace, "model", modelID, "variant", variantName)
+	switch {
+	case m.Source == "":
+		log.Info("The model-config annotation was removed: attention kind and MoE class unknown")
+	case m.Error != "":
+		log.Info("The model-config annotation could not be read: attention kind and MoE class unknown",
+			"annotation", "scaling-manager.llmd.ai/model-config", "error", m.Error)
+	default:
+		log.Info("Read the model-config annotation", "attention", m.Attention.String(), "classes", now)
+	}
 }
 
 // FileScaleTarget files what the engine read from a variant's scale target --

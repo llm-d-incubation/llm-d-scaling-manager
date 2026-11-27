@@ -19,7 +19,7 @@ const [scen, day, golden, decodeOnly] = [
 ];
 const ctx = vm.createContext({URLSearchParams});
 for (const f of [scen, day]) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, {filename: f});
-const {dayPlanSVG, dayBucketAt, dayTip, dayTipHTML, dayHoursTable, dayBucketsTable, dayRefusedHTML, daySummaryText, dayLegend} = ctx;
+const {dayPlanSVG, dayBucketAt, dayTip, dayTipHTML, dayHoursTable, dayBucketsTable, dayRefusedHTML, daySummaryText, dayLegend, dayModelsText} = ctx;
 const plan = JSON.parse(fs.readFileSync(golden, "utf8"));
 const half = JSON.parse(fs.readFileSync(decodeOnly, "utf8"));
 const copy = x => JSON.parse(JSON.stringify(x));
@@ -157,7 +157,7 @@ try {
   check("decode-only draws no prefill needed", !hs.has("prefill-needed"));
   check("decode-only draws what prefill had", hs.has("prefill-actual"));
   check("the prefill panel says it is not sized", attrs(hg, "text").some(a => a["data-refused"] === "prefill") &&
-    texts(hg).some(t => t.includes("Prefill replicas not sized") && t.includes(half.refused[0].reason)));
+    texts(hg).some(t => t.includes("Prefill replicas not sized") && t.includes("not learned") && !t.includes(half.refused[0].reason)));
   check("the decode panel says its need is a lower bound", attrs(hg, "text").some(a => a["data-lower-bound"] === "decode") &&
     texts(hg).some(t => t.includes("needed is at least")));
   const priced = copy(plan);
@@ -172,11 +172,34 @@ try {
   // lower bound (prefill-vp-served-unqueued), and a is what it lacks.
   check("the decode-only golden lacks a", half.refused[0].reason === "NoFixedLatency", half.refused[0].reason);
   check("the refusals say what to do", dayRefusedHTML(half).includes("--assume-a"));
-  check("decode-only summary names no prefill figure", daySummaryText(half)[0].includes("prefill not priced"));
+  check("decode-only summary names no prefill figure", daySummaryText(half).some(l => l.startsWith("Needed to hold") && l.includes("prefill not sized")));
   const nothing = copy(half);
   nothing.buckets.forEach(b => { if (b.status === "sized") { b.status = "refused"; delete b.needed; b.verdict = "refused"; } });
   nothing.summary.peakNeeded = null;
-  check("a plan with nothing sized says so", daySummaryText(nothing)[0].startsWith("No bucket was sized"));
+  check("a plan with nothing sized says so", daySummaryText(nothing).some(l => l.startsWith("No bucket was sized")));
+  // Prefill was not sized: decode is judged alone, and nothing says waste.
+  // The golden's decode-only overs stand though their TTFT was measured over
+  // its target: decode has a replica to spare, which is no fleet's.
+  const spare = half;
+  const over = half.buckets.find(x => x.verdict === "over");
+  check("the decode-only golden has a decode-only over", !!over && over.scope === "decode only" && !(over.flags || []).includes("MeasuredTTFTOverTarget"),
+    JSON.stringify(over && [over.scope, over.flags]));
+  check("a decode-only over is a decode replica to spare", dayTip(spare, over).rows.some(r => r[0] === "verdict" && r[1] === "decode only: a decode replica to spare"));
+  const missed = copy(half);
+  const mb = missed.buckets.find(x => x.verdict === "over");
+  delete mb.verdict;
+  delete mb.scope;
+  mb.flags = (mb.flags || []).concat("MeasuredTTFTOverTarget");
+  check("a whole fleet's over withheld on a measured TTFT miss says so", dayTip(missed, mb).rows.some(r => r[0] === "verdict" && r[1] === "not judged: measured TTFT over target"));
+  check("the summary leads with the measured TTFT misses, as risk", /^SLO risk: measured TTFT p95 was over 0\.19 s in every interval measured \(prefill not sized\)\.$/.test(daySummaryText(half)[0]),
+    daySummaryText(half).join(" | "));
+  for (const [name, text] of [["the bucket table", dayBucketsTable(spare)], ["the hour table", dayHoursTable(spare)], ["the summary", daySummaryText(spare).join(" ")]]) {
+    check(`${name} of a decode-only plan says no waste`, !text.includes("waste"), text.slice(0, 160));
+  }
+  check("the decode-only summary is no fleet recommendation", daySummaryText(half).some(l => l.includes("Prefill was not sized, so this is not a fleet recommendation.")));
+  const fleetOver = copy(spare);
+  fleetOver.buckets.forEach(x => { delete x.scope; });
+  check("the same over on a whole fleet is waste", dayTip(fleetOver, fleetOver.buckets.find(x => x.verdict === "over")).rows.some(r => r[0] === "verdict" && r[1] === "over: waste"));
 
   // The tooltip names every value of the bucket under the pointer.
   const b = sized[0], t = Date.parse(b.start) / 1000 + plan.step / 2;
@@ -241,6 +264,29 @@ try {
   check("the hour table writes no markup of a plan", !hours.includes("<img"));
 } catch (e) {
   failures.push("threw: " + (e && e.stack || e));
+}
+
+// A plan priced with an experimental model marks each bucket whose limit
+// it set with the dagger, in the needed cells, and says so; an abstained
+// model is said, and marks nothing; a plan with none says nothing.
+{
+  const v2 = copy(plan);
+  const sized = v2.buckets.filter(b => b.needed && b.limit);
+  sized[0].limit.flags = (sized[0].limit.flags || []).concat(["RankMixtureTTFT"]);
+  v2.ttftModel = {model: "rank-mixture", label: "Experimental TTFT model"};
+  const table = dayBucketsTable(v2);
+  check("a bucket the model sized is marked", (table.match(/\u2020/g) || []).length === 2, (table.match(/\u2020/g) || []).length);
+  check("the model is said, with what it priced", typeof dayModelsText === "function" && new RegExp(`Experimental TTFT model: priced 1 of the ${v2.summary.counts.sized} sized buckets, each marked †`).test(dayModelsText(v2)),
+    typeof dayModelsText === "function" ? dayModelsText(v2) : "no dayModelsText");
+  v2.ttftModel.abstained = "spread not calibrated";
+  check("an abstained model is said", typeof dayModelsText === "function" && /abstained \(spread not calibrated\); the planner's own/.test(dayModelsText(v2)));
+  check("no model, nothing said or marked", typeof dayModelsText === "function" && dayModelsText(plan) === "" && !/\u2020/.test(dayBucketsTable(plan)));
+  // Another experimental flag (a plateau V_P) is no model the plan was
+  // asked for: named in the flags column, not marked, as the command's
+  // hours table does not mark it.
+  const vp = copy(plan);
+  vp.buckets.filter(b => b.needed && b.limit)[0].limit.flags = ["VPFromPlateau"];
+  check("a plateau V_P is not a model's mark", !/\u2020/.test(dayBucketsTable(vp)));
 }
 
 if (failures.length) {

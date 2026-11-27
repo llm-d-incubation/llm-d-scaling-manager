@@ -30,7 +30,7 @@ const (
 
 var (
 	// seriesName matches a series name of the families a capture reads.
-	seriesName = regexp.MustCompile(`\b(?:(?:vllm|sglang|lmcache):[A-Za-z0-9_]+|(?:llm_d_epp|llm_d_disagg_sidecar|inference_extension|kube|lmcache_mp)_[A-Za-z0-9_]+|http_request_duration_seconds_(?:sum|count|bucket))`)
+	seriesName = regexp.MustCompile(`\b(?:(?:vllm|sglang|lmcache):[A-Za-z0-9_]+|(?:llm_d_epp|llm_d_disagg_sidecar|inference_extension|kube|lmcache_mp)_[A-Za-z0-9_]+|http_request_duration_seconds_(?:sum|count|bucket)|DCGM_FI_[A-Z0-9_]+)`)
 	// docRow is a row of the reference table: its first cell is the name.
 	docRow = regexp.MustCompile("(?m)^\\| `([^`]+)` \\|")
 	// cacheRow is a row of the cache-tier table: the name, its source and
@@ -147,7 +147,7 @@ func compare(t *testing.T, where string, read map[string][]string, have map[stri
 // optional series (OptionalSeriesList); their tables are checked apart from
 // the tables of the series a capture reads. cacheSection names them in
 // messages.
-var optionalSections = []string{"## Cache tiers, offloading and KV transfer", "## TTFT outside the engines"}
+var optionalSections = []string{"## Cache tiers, offloading and KV transfer", "## TTFT outside the engines", "## Prefill capacity, load and health"}
 
 const cacheSection = "optional series"
 
@@ -194,7 +194,7 @@ func TestCapacityPlannerMetricsDocListsEveryOptionalSeries(t *testing.T) {
 	for _, s := range OptionalSeriesList {
 		require.Truef(t, seriesName.FindString(s.Name) == s.Name, "optional series %q is not a series name of a known family", s.Name)
 		require.NotContainsf(t, optional, s.Name, "OptionalSeriesList holds %q twice", s.Name)
-		require.Containsf(t, []Tier{TierCachedFleet, TierDiagnostic, TierOutsideEngines}, s.Tier, "%s: tier %q", s.Name, s.Tier)
+		require.Containsf(t, []Tier{TierCachedFleet, TierDiagnostic, TierOutsideEngines, TierPrefillCapacity}, s.Tier, "%s: tier %q", s.Name, s.Tier)
 		optional[s.Name] = s.Tier
 	}
 

@@ -20,6 +20,12 @@ const (
 	statusScalerCACert = "scalerCACert"
 	// statusScalerUnreachable is present while KEDA's handshakes are refused.
 	statusScalerUnreachable = "scalerUnreachable"
+	// statusScalerTLS says how the scaler serves ("mutual TLS: ..." or
+	// "plaintext: ...").
+	statusScalerTLS = "scalerTLS"
+	// statusKEDACopyStale is "true" while KEDA's copy, which the controller
+	// writes on the one-manifest install, is not the current certificate.
+	statusKEDACopyStale = "kedaCopyStale"
 )
 
 // scalerPort is the external-scaler port of ScalerService.

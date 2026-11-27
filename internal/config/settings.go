@@ -48,7 +48,27 @@ const (
 	SettingScaleToZero                  = "scaleToZero"
 	SettingWatchNamespaces              = "watchNamespaces"
 	SettingLogVerbosity                 = "logVerbosity"
+	// SettingKEDANamespace is the namespace KEDA runs in, where the
+	// controller writes KEDA's copy of the scaler's client certificate
+	// (--keda-namespace). restart.
+	SettingKEDANamespace = "kedaNamespace"
+	// SettingCAFromSecret, "true", reads Prometheus's CA from Secret
+	// PrometheusCASecret, which the release manifest mounts at
+	// PrometheusCAFromSecretPath. restart.
+	SettingCAFromSecret = "caFromSecret"
+	// SettingDSetRoleWriter turns the DisaggregatedSet role writer on: the
+	// DSET_ROLE_WRITER advanced key under a settings name. restart.
+	SettingDSetRoleWriter = "dsetRoleWriter"
 )
+
+// PrometheusCASecret is the Secret holding the CA that signed Prometheus's
+// certificate, under key ca.crt. Its name is fixed, so the controller needs
+// no Secret read at all: the Deployment mounts it, optional.
+const PrometheusCASecret = "scaling-manager-prometheus-ca"
+
+// PrometheusCAFromSecretPath is where the Deployment mounts
+// PrometheusCASecret's ca.crt: the CA path caFromSecret "true" sets.
+const PrometheusCAFromSecretPath = "/etc/scaling-manager-prometheus-ca/ca.crt"
 
 // LiveSettingKeys are the settings that take effect within a cycle of a change.
 var LiveSettingKeys = []string{
@@ -74,6 +94,8 @@ var restartSettingKeys = map[string]string{
 	SettingScaleToZero:                  "LLMSM_SCALE_TO_ZERO",
 	SettingWatchNamespaces:              "WATCH_NAMESPACE",
 	SettingLogVerbosity:                 "V",
+	SettingDSetRoleWriter:               "DSET_ROLE_WRITER",
+	SettingKEDANamespace:                "LLMSM_KEDA_NAMESPACE",
 }
 
 // RestartSettingKeys are the settings read only at start, sorted.
@@ -149,7 +171,9 @@ type Settings struct {
 	// limiter key is unset.
 	Limiters []QuotaLimiterConfig
 	// Restart holds the settings read only at start, and the advanced keys,
-	// by loader key (PROMETHEUS_BASE_URL, V, ...), as written.
+	// by loader key (PROMETHEUS_BASE_URL, V, ...), as written. With
+	// watchNamespaces live (Config.WatchNamespacesLive), its WATCH_NAMESPACE
+	// is read from here on every change instead.
 	Restart map[string]string
 }
 
@@ -192,6 +216,8 @@ var legacySettingNames = map[string]string{
 	"LLMSM_QUOTA_KUEUE":                   SettingKueue,
 	"LLMSM_QUOTA_KUEUE_BORROW":            SettingKueueBorrow,
 	"KUEUE_NAMESPACE":                     SettingKueueNamespace,
+	// The label opt-in of the first draft of the one-manifest install.
+	"namespaceSelector": SettingWatchNamespaces,
 }
 
 // UnknownSettingHint says what an unknown key probably meant: the setting a
@@ -227,6 +253,7 @@ func ParseSettings(data map[string]string, quotaKey string) (Settings, SettingsR
 	for _, k := range advancedSettingKeys {
 		known[k] = true
 	}
+	known[SettingCAFromSecret] = true
 	for _, k := range slices.Sorted(maps.Keys(data)) {
 		if !known[k] {
 			rep.Unknown = append(rep.Unknown, k)
@@ -286,6 +313,58 @@ func parseRestartSettings(data map[string]string, out map[string]string, reject 
 		}
 		out[k] = v
 	}
+	parseCAFromSecret(data, out, reject)
+}
+
+// ReadyToStart says whether a controller can start with the settings data:
+// a Prometheus URL is set (here, or PROMETHEUS_BASE_URL in the environment),
+// and the CA file the settings name exists. The kubelet fills an optional
+// Secret volume some seconds after the Secret is created, so a CA Secret made
+// beside the settings is not there yet when they are read. why says what is
+// missing; "" when ok.
+func ReadyToStart(data map[string]string) (ok bool, why string) {
+	if strings.TrimSpace(data[SettingPrometheusURL]) == "" && os.Getenv("PROMETHEUS_BASE_URL") == "" {
+		return false, SettingPrometheusURL + " is not set"
+	}
+	path := strings.TrimSpace(data[SettingPrometheusCACertPath])
+	if on, err := strconv.ParseBool(strings.TrimSpace(data[SettingCAFromSecret])); err == nil && on {
+		path = PrometheusCAFromSecretPath
+	}
+	if path == "" {
+		return true, ""
+	}
+	if _, err := statFile(path); err != nil {
+		return false, fmt.Sprintf("the Prometheus CA %s is not there yet (Secret %s, mounted by the kubelet some seconds after it is created): %v",
+			path, PrometheusCASecret, err)
+	}
+	return true, ""
+}
+
+// statFile is os.Stat; tests replace it.
+var statFile = os.Stat
+
+// parseCAFromSecret puts caFromSecret "true" into out as the CA path the
+// Deployment mounts PrometheusCASecret at. A prometheusCACertPath naming
+// another file contradicts it, and caFromSecret is rejected.
+func parseCAFromSecret(data map[string]string, out map[string]string, reject func(k, format string, a ...any)) {
+	v := strings.TrimSpace(data[SettingCAFromSecret])
+	if v == "" {
+		return
+	}
+	on, err := strconv.ParseBool(v)
+	if err != nil {
+		reject(SettingCAFromSecret, "%q is not true or false", v)
+		return
+	}
+	if !on {
+		return
+	}
+	if p := strings.TrimSpace(data[SettingPrometheusCACertPath]); p != "" && p != PrometheusCAFromSecretPath {
+		reject(SettingCAFromSecret, "it reads the CA from %s, but %s names %q; set one of the two",
+			PrometheusCAFromSecretPath, SettingPrometheusCACertPath, p)
+		return
+	}
+	out[restartSettingKeys[SettingPrometheusCACertPath]] = PrometheusCAFromSecretPath
 }
 
 // validateRestartSetting checks one restart setting's value.
@@ -307,7 +386,7 @@ func validateRestartSetting(key, v string) error {
 		if strings.ContainsAny(v, " \t/:") {
 			return fmt.Errorf("%q is not a host name", v)
 		}
-	case SettingPrometheusInsecureSkipVerify, SettingPrometheusAllowHTTP, SettingScaleToZero:
+	case SettingPrometheusInsecureSkipVerify, SettingPrometheusAllowHTTP, SettingScaleToZero, SettingDSetRoleWriter:
 		if _, err := strconv.ParseBool(v); err != nil {
 			return fmt.Errorf("%q is not true or false", v)
 		}
@@ -319,6 +398,10 @@ func validateRestartSetting(key, v string) error {
 			if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
 				return fmt.Errorf("%q is not a namespace name: %s", ns, strings.Join(errs, "; "))
 			}
+		}
+	case SettingKEDANamespace:
+		if errs := validation.IsDNS1123Label(v); len(errs) > 0 {
+			return fmt.Errorf("%q is not a namespace name: %s", v, strings.Join(errs, "; "))
 		}
 	case SettingLogVerbosity:
 		n, err := strconv.Atoi(v)

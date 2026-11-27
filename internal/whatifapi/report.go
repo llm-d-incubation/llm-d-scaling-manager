@@ -20,7 +20,7 @@ import (
 // inputsId names, which must implement Reporter.
 
 // ReportRequest is POST /v1/report's body. Every field but InputsID
-// defaults: the recorded replicas, the measured shape, 50%, 80% and 100% of
+// defaults: the recorded replicas, the load's shape, 50%, 80% and 100% of
 // the knee and the load seen, the policy's SLO and headroom, TTFT at p50 and
 // p90 and TPOT at the mean and p90.
 type ReportRequest struct {
@@ -28,9 +28,13 @@ type ReportRequest struct {
 	Fleet    *FleetKnob `json:"fleet,omitempty"`
 	// Shapes are the request shapes to answer for: "measured", or
 	// "IL/OL[/hit]" with lengths in tokens, a k suffix for 1024 ("8k/200",
-	// "1k/4k/0.3"). Absent, the measured shape.
+	// "1k/4k/0.3"), or "load", the shape of the cycles the load judged at
+	// was read from. Absent, the load's shape, or the measured one where no
+	// cycle of the load read a shape (a stated load).
 	Shapes []string `json:"shapes,omitempty"`
 	// Loads are the table's rates: "5r/s", "80%" of the shape's fleet knee,
+	// "64c", a mean concurrency (requests in the system, Little's law)
+	// translated into the rate that carries it on each shape's fleet,
 	// "seen", or the load seen grown, "seen x1.5" (also "seen×1.5",
 	// "seen*1.5"): a what-if with its own column and its own verdict, which
 	// never replaces the verdict at the load seen. Absent, 50%, 80%, 100% and
@@ -67,7 +71,8 @@ type ReportRequest struct {
 type ReportQuery struct {
 	// Prefill and Decode are the replica counts; 0 is the recorded count.
 	Prefill, Decode int
-	// Shapes are the shapes to answer for; none is the measured one.
+	// Shapes are the shapes to answer for; none is the load's, or the
+	// measured one where the load read none.
 	Shapes []ReportShapeAsk
 	// Loads are the table's rates; none is 50%, 80%, 100% and seen.
 	Loads []ReportLoadAsk
@@ -111,13 +116,15 @@ type ReportShapeAsk struct {
 }
 
 // ReportLoadAsk is one rate of the tables: Rate requests per second, Share
-// of the shape's fleet knee, or Seen, the load judged at, times X when X is
-// above 0 and not 1 (a growth what-if, judged on its own).
+// of the shape's fleet knee, Concurrency, a mean number of requests in the
+// system translated into a rate on each shape's fleet, or Seen, the load
+// judged at, times X when X is above 0 and not 1 (a growth what-if, judged
+// on its own).
 type ReportLoadAsk struct {
-	Rate, Share float64
-	Seen        bool
-	X           float64
-	// Label is the load as asked ("5r/s", "80%", "seen", "seen x1.5").
+	Rate, Share, Concurrency float64
+	Seen                     bool
+	X                        float64
+	// Label is the load as asked ("5r/s", "80%", "64c", "seen", "seen x1.5").
 	Label string
 }
 
@@ -157,9 +164,11 @@ const (
 	LoadPeak = "peak"
 )
 
-// DefaultLoadStatistic is the statistic judged at when none is asked: p95, so
-// that a window whose mean hides its busy part is judged at the busy part.
-const DefaultLoadStatistic = LoadP95
+// DefaultLoadStatistic is the statistic judged at when none is asked: the
+// p95 less counting noise, so that a window whose mean hides its busy part is
+// judged at the busy part, but a steady stream's one-minute counting noise,
+// which the queueing model already prices, is not counted twice (#295).
+const DefaultLoadStatistic = LoadP95Modulation
 
 // The scopes a verdict covers: the whole fleet, or decode alone when the
 // prefill side does not price.
@@ -206,6 +215,14 @@ type ReportResponse struct {
 	ExitCode     int      `json:"exitCode"`
 	// SelfCheck is the planner checked on the source the report reads.
 	SelfCheck *SelfCheck `json:"selfCheck,omitempty"`
+	// TTFTModel is the experimental TTFT model the tables' TTFT is priced
+	// with, as fitted on the source; absent unless asked
+	// (InputsRequest.TTFTModel, at-replicas --experimental-ttft=v2).
+	TTFTModel *TTFTModelInfo `json:"ttftModel,omitempty"`
+	// TPOTModel is the experimental TPOT model the tables' TPOT percentile
+	// is priced with, as fitted on the source; absent unless asked
+	// (InputsRequest.TPOTModel, at-replicas --experimental-tpot=v2).
+	TPOTModel *TPOTModelInfo `json:"tpotModel,omitempty"`
 }
 
 // ReportShape is the fleet's answer at one request shape.
@@ -235,6 +252,16 @@ type ReportShape struct {
 	Flags []string `json:"flags"`
 	// Assumed is every input the shape's answer assumed, in words.
 	Assumed []string `json:"assumed"`
+	// Untranslated is each concurrency load ("64c") the shape could not
+	// translate into a rate, and why; its row is left out of Table.
+	Untranslated []ReportUntranslated `json:"untranslated,omitempty"`
+}
+
+// ReportUntranslated is a concurrency load no rate was found for: Load as
+// asked, and Reason in words.
+type ReportUntranslated struct {
+	Load   string `json:"load"`
+	Reason string `json:"reason"`
 }
 
 // ReportSource is what the report was read from.
@@ -338,6 +365,53 @@ type ReportDecodeUse struct {
 	// price is taken, which prices no pull stage: then with no wait
 	// (Unpriced says which). The KV fill and the slots leave it out.
 	KVPull *ReportKVPull `json:"kvPull,omitempty"`
+	// KVSpread is how unevenly the window's decode pods were filled
+	// (DecodeKVSpreadOf): a measurement of the fleet that ran, the same on
+	// every shape and every fleet asked. It is reported, not priced: KVFill
+	// is the fill the model predicts at the load (whatif.FillAtRate), not a
+	// measured mean, and nothing reads KVSpread to price it. Nil where no
+	// cycle read two decode pods filled to MinKVSpreadFill.
+	KVSpread *ReportKVSpread `json:"kvSpread,omitempty"`
+}
+
+// ReportKVSpread is the decode pods' KV fill spread the window measured (issue
+// llm-d-incubation/llm-d-scaling-manager#483). Each pod is read at its busiest
+// engine rank, as the load-balance diagnostic reads it, so on a data-parallel
+// pod the busiest fill is its busiest rank's and the mean is the mean of the
+// pods' busiest ranks, not of every rank. Each cycle's ratio is the busiest
+// pod's fill over that mean, read on the cycles with two or more decode pods
+// and a mean of MinKVSpreadFill or more. The ratio grows with the pod count
+// (one pod is never uneven): it is of the fleet that ran, Pods, and says
+// nothing direct of another count.
+type ReportKVSpread struct {
+	// Cycles is how many cycles were read; Median, P95 and Peak are their
+	// busiest/mean ratios.
+	Cycles int     `json:"cycles"`
+	Median float64 `json:"median"`
+	P95    float64 `json:"p95"`
+	Peak   float64 `json:"peak"`
+	// Pods is the decode pods read per cycle over the cycles read.
+	Pods ReportKVSpreadPods `json:"pods"`
+	// AtLoad is the median ratio over the cycles the load judged at was
+	// read from, as MeasuredTTFTAtLoad selects them by rate (atLoadCycle):
+	// every cycle with traffic for the mean, those at or above the rate for
+	// the p95 and the peak. AtLoadCycles is how many; nil with a stated load
+	// or none read.
+	AtLoad       *float64 `json:"atLoad,omitempty"`
+	AtLoadCycles int      `json:"atLoadCycles,omitempty"`
+	// BusiestFillPeak is the highest fill a busiest pod ran at over the
+	// cycles read, MeanFillPeak the highest mean: a KV limit the first
+	// crosses and the second does not is one a mean pod would hide.
+	BusiestFillPeak float64 `json:"busiestFillPeak"`
+	MeanFillPeak    float64 `json:"meanFillPeak"`
+}
+
+// ReportKVSpreadPods is the median, fewest and most decode pods a cycle read
+// over the cycles a ReportKVSpread was read from.
+type ReportKVSpreadPods struct {
+	Median float64 `json:"median"`
+	Min    int     `json:"min"`
+	Max    int     `json:"max"`
 }
 
 // ReportKVPull is the KV pull's load on the decode pods at the load judged.
@@ -396,6 +470,10 @@ type ReportRate struct {
 	Figure
 	OutputTokensPerSecond *float64 `json:"outputTokensPerSecond,omitempty"`
 	Binds                 string   `json:"binds,omitempty"`
+	// Concurrency is the mean number of requests in the system at the rate
+	// (Little's law): unbounded at a knee, where requests queue without
+	// bound; absent where the rate is refused.
+	Concurrency *Concurrency `json:"concurrency,omitempty"`
 	// LowerBound says the rate rests on a prefill speed (V_P) known only as
 	// a lower bound: the true rate is at least Value, and may be higher.
 	LowerBound bool `json:"lowerBound,omitempty"`
@@ -427,6 +505,14 @@ type ReportRow struct {
 	TPOTMean       Figure       `json:"tpotMean"`
 	TPOTPercentile *ReportStat  `json:"tpotPercentile,omitempty"`
 	E2EMeanSum     Figure       `json:"e2eMeanSum"`
+	// Concurrency is the mean number of requests in the system at Rate,
+	// Rate x E2EMeanSum by Little's law, by role; unbounded at or past the
+	// knee.
+	Concurrency *Concurrency `json:"concurrency,omitempty"`
+	// FromConcurrency is the concurrency the row asked in place of a rate
+	// ("64c") and the rate it translates into on the shape's fleet; AtKnee
+	// says the fleet holds fewer requests than that below its knee.
+	FromConcurrency *ConcurrencyRate `json:"fromConcurrency,omitempty"`
 	// Cell is the row in the summary matrix.
 	Cell ReportCell `json:"cell"`
 }
@@ -571,7 +657,7 @@ func FigureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 // handleReport is POST /v1/report.
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	var req ReportRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	out, err := s.report(r.Context(), req)
@@ -619,8 +705,20 @@ func (s *Server) report(ctx context.Context, req ReportRequest) (*ReportResponse
 		return nil, err
 	}
 	out.SchemaVersion = SchemaVersion
+	if e.ttftModel != nil {
+		e.ttftModel.applyToReport(out, q)
+		info := e.ttftModel.info
+		out.TTFTModel = &info
+	}
+	if e.tpotModel != nil {
+		e.tpotModel.applyToReport(out, q)
+		info := e.tpotModel.info
+		out.TPOTModel = &info
+	}
 	// The source's self-check was read before this report stated anything.
 	out.SelfCheck = e.doc.SelfCheck.RanWithout(&Stated{Assume: q.Assume, ArrivalCV2: q.ArrivalCV2})
+	out.WithholdOverOnMeasured(e.series, e.latency)
+	out.AttachKVSpread(e.series)
 	out.JudgeTrust()
 	return out, nil
 }
@@ -764,7 +862,7 @@ func CheckLoadStatistic(s string) error {
 // ParseReportShape reads a shape: "measured", or "IL/OL[/hit]", lengths in
 // tokens with an optional k (1024 tokens), and hit a rate in [0, 1).
 func ParseReportShape(s string) (ReportShapeAsk, error) {
-	if s == "measured" {
+	if s == shapeMeasured {
 		return ReportShapeAsk{Measured: true, Label: s}, nil
 	}
 	if s == ShapeLoad {
@@ -809,7 +907,8 @@ func tokens(s string) (float64, error) {
 }
 
 // ParseReportLoad reads a load: "seen", the load seen grown ("seen x1.5",
-// "seen×1.5" or "seen*1.5"), "80%" of the knee, or "5r/s".
+// "seen×1.5" or "seen*1.5"), "80%" of the knee, "5r/s", or "64c", a mean
+// concurrency in requests.
 func ParseReportLoad(s string) (ReportLoadAsk, error) {
 	switch {
 	case s == "seen":
@@ -839,8 +938,14 @@ func ParseReportLoad(s string) (ReportLoadAsk, error) {
 			return ReportLoadAsk{}, fmt.Errorf("load %q, want a finite rate above 0", s)
 		}
 		return ReportLoadAsk{Rate: x, Label: s}, nil
+	case strings.HasSuffix(s, "c"):
+		x, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, "c")), 64)
+		if err != nil || !usable(x) || math.IsInf(x, 0) || x > MaxConcurrency {
+			return ReportLoadAsk{}, fmt.Errorf("load %q, want a concurrency above 0 and at most %d requests (64c)", s, MaxConcurrency)
+		}
+		return ReportLoadAsk{Concurrency: x, Label: s}, nil
 	}
-	return ReportLoadAsk{}, fmt.Errorf("load %q, want seen, a share of the knee (80%%) or a rate (5r/s)", s)
+	return ReportLoadAsk{}, fmt.Errorf("load %q, want seen, a share of the knee (80%%), a rate (5r/s) or a concurrency (64c)", s)
 }
 
 // reportTarget reads one SLO target; nil with none asked.

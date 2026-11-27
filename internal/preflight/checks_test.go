@@ -18,6 +18,7 @@ var wantChecks = []string{
 	"prometheus.reachable", "metrics.model", "podmonitor.port", "prometheus.selects",
 	"openshift.user-monitoring", "rbac.controller", "rbac.namespaces", "kueue",
 	"overlap", "accelerators", "activation", "lws.disaggregatedset",
+	"conflicts", "policy.source", "metrics.scrape", "metrics.epp",
 }
 
 func TestCheckList(t *testing.T) {
@@ -193,6 +194,21 @@ func TestKEDANetworkPolicy(t *testing.T) {
 		f.dyn = append(f.dyn, apiService("openshift-keda", "keda-metrics-apiserver"))
 		if r := only(t, f.run(t), "keda.networkpolicy"); r.Status != Pass {
 			t.Errorf("got %s %q", r.Status, r.Detail)
+		}
+	})
+	// The one manifest admits KEDA's namespace by label: PASS once KEDA's
+	// namespace carries it, FAIL with the label command until it does.
+	t.Run("admits by the KEDA namespace label", func(t *testing.T) {
+		byLabel := scalerPolicy("keda")
+		byLabel.Spec.Ingress[1].From[0].NamespaceSelector.MatchLabels = map[string]string{KEDANamespaceLabel: valueTrue}
+		f := newFixture(t).add(byLabel)
+		r := only(t, f.run(t), "keda.networkpolicy")
+		if r.Status != Fail || !strings.Contains(r.Fix, "kubectl label namespace keda "+KEDANamespaceLabel+"=true") {
+			t.Errorf("unlabelled: got %s %q fix %q", r.Status, r.Detail, r.Fix)
+		}
+		f = newFixture(t).remove("Namespace", "keda").add(byLabel, namespace("keda", map[string]string{KEDANamespaceLabel: valueTrue}))
+		if r := only(t, f.run(t), "keda.networkpolicy"); r.Status != Pass {
+			t.Errorf("labelled: got %s %q", r.Status, r.Detail)
 		}
 	})
 	t.Run("policy forbidden", func(t *testing.T) {

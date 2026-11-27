@@ -222,7 +222,19 @@ type PolicyReader interface {
 // fitted within SlopeHoldFor, and not under other engine arguments. Arguments
 // unknown on either side are not a change, as the saturation analyzer's own
 // window reset (itlUnderArgs) treats them.
+//
+// An A fitted through a floor's B (heldSlope.floorB) is held only under
+// BaselineFromFloor. Live, a key without it never fits through a floor, but a
+// slope restored from a snapshot (RestoreSlope) can carry one: held, it
+// would price the line through the floor's B with the switch off, as the
+// capacity planner's replay did on every cycle of a restored recording
+// (issue llm-d-incubation/llm-d-scaling-manager#373). Nor is A paired with
+// another B (pin): it is the slope of the floor's line, not of the
+// default's, so it is not held at all.
 func (a Admission) mayHold(s heldSlope, now time.Time) bool {
+	if s.floorB > 0 && !a.BaselineFromFloor {
+		return false
+	}
 	if a.SlopeHoldFor > 0 && now.Sub(s.fittedAt) > a.SlopeHoldFor {
 		return false
 	}

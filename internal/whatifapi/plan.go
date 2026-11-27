@@ -78,12 +78,18 @@ func priceCurves(ctx context.Context, fl Fleet, tpotAsked, prefillRole bool) (*c
 		cs.tpotFloor = noFloor(cs.decodeKnee)
 		return cs, nil
 	}
-	for _, rate := range grid(cs.lowerKnee) {
+	// The experimental TTFT model may draw past a prefill knee that is only
+	// a lower bound, up to the load the fleet served (curveCap).
+	span := cs.lowerKnee
+	if x, ok := fl.(interface{ curveEnd() float64 }); ok {
+		span = max(span, x.curveEnd())
+	}
+	for _, rate := range grid(span) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		t := fl.TTFTAt(rate)
-		cs.ttft = append(cs.ttft, Point{Rate: rate, Figure: figureOf(t, unitSeconds, true)})
+		cs.ttft = append(cs.ttft, Point{Rate: rate, Figure: markExtrapolated(fl, rate, figureOf(t, unitSeconds, true))})
 		if v, ok := t.(whatif.TTFT); ok && cs.ttftFloor.Value == nil {
 			cs.ttftFloor = Figure{Value: ptr(v.Floor), Unit: unitSeconds, Flags: FlagNames(v.Flags)}
 		}
@@ -225,6 +231,10 @@ type limitEntry struct {
 	// plusOne is the fleet's plain limits with one more prefill replica, then
 	// one more decode replica: decode, prefill and fleet each.
 	plusOne [2][3]whatif.Result
+	// plusOneExtrapolated says each step's fleet limit is one the
+	// experimental TTFT or TPOT model set past the highest load served
+	// (inputsEntry.markLimit).
+	plusOneExtrapolated [2]bool
 	// buckets is each bucket line's rate at its target, with the view asked.
 	buckets map[string]whatif.Result
 }
@@ -275,8 +285,10 @@ func (p *planner) priceLimits(ctx context.Context, k Knobs, fl Fleet) (*limitEnt
 		if err != nil {
 			return nil, err
 		}
+		more = p.e.modelFleet(more, kk)
 		d, pr, f := more.PlainLimits(sc.TTFT.Target, tpot, sc.Headroom)
 		le.plusOne[i] = [3]whatif.Result{d, pr, f}
+		le.plusOneExtrapolated[i] = p.e.markLimit(more, kk, figureOf(f, unitRate, false)).Extrapolated
 	}
 	if sc.Views.AllTrafficPerBucket {
 		le.buckets = map[string]whatif.Result{}
@@ -320,14 +332,32 @@ func (p *planner) plan(ctx context.Context) (*PlanResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The experimental TTFT model, where the source was resolved with one,
+	// prices the TTFT curve and point A; every other figure is the
+	// planner's.
+	fl = p.e.modelFleet(fl, k)
 	cs, err := p.curves(ctx, k, fl)
 	if err != nil {
 		return nil, err
 	}
+	// The fleet priced at the mean TTFT: a concurrency is a rate times a
+	// mean time in system.
+	mean, err := p.meanFleet(k, fl)
+	if err != nil {
+		return nil, err
+	}
+	ol := p.outputTokens(k)
 	rate, rateSource := 0.0, RateSourceRequest
+	var fromConcurrency *ConcurrencyRate
 	switch {
 	case sc.Rate != nil:
 		rate = *sc.Rate
+	case sc.Concurrency != nil:
+		cr, err := planRateAtConcurrency(mean, *sc.Concurrency, cs, ol)
+		if err != nil {
+			return nil, err
+		}
+		rate, rateSource, fromConcurrency = cr.Rate, RateSourceConcurrency, &cr
 	case cs.kneeOK:
 		rate, rateSource = sc.Headroom*cs.lowerKnee, cs.rateSource()
 	default:
@@ -342,9 +372,10 @@ func (p *planner) plan(ctx context.Context) (*PlanResponse, error) {
 
 	out := &PlanResponse{SchemaVersion: SchemaVersion, WhatifSchema: p.s.whatifSchema, InputsID: p.e.id, Banner: banner, Scenario: sc}
 	markers := cs.markers(sc.Headroom)
-	out.TTFT = TTFTView{Statistic: sc.TTFT.Statistic, Markers: p.markers("ttft.markers", markers)}
+	out.TTFT = TTFTView{Statistic: sc.TTFT.Statistic, Markers: p.markers("ttft.markers", markers), Model: p.e.ttftModel.view(fl, k)}
 	at, notes := fl.TTFTPoint(rate)
 	out.TTFT.Line = p.line("ttft.line", Line{Bucket: SemanticsMix, Semantics: SemanticsMix, Target: sc.TTFT.Target}, cs, at, ls.Prefill, rate)
+	out.TTFT.Line.AtRate.Figure = markExtrapolated(fl, rate, out.TTFT.Line.AtRate.Figure)
 
 	if sc.TPOT != nil {
 		mean, pct := fl.TPOTAt(rate)
@@ -352,17 +383,37 @@ func (p *planner) plan(ctx context.Context) (*PlanResponse, error) {
 		if pct != nil {
 			at = pct
 		}
+		// The experimental TPOT model, where the source was resolved with
+		// one, prices the percentile; a figure it prices past the highest
+		// load measured is marked.
+		tm := p.e.tpotModel
 		tv := &TPOTView{Statistic: sc.TPOT.Statistic, Target: sc.TPOT.Target, Floor: p.note("tpot.floor", cs.tpotFloor),
-			Curve: p.points("tpot.curve", cs.tpot), Markers: Markers{DecodeKnee: markers.DecodeKnee}}
+			Curve: p.points("tpot.curve", tm.markPoints(k, cs.tpot)), Markers: Markers{DecodeKnee: markers.DecodeKnee},
+			Model: tm.view(fl, k)}
 		if r := fl.TPOTRatio(); r.Value != nil || r.Refused != nil {
 			tv.Ratio = &r
 		}
-		tv.AtRate = RatePoint{Rate: rate, Figure: p.note("tpot.atRate", figureOf(at, unitSeconds, true))}
-		tv.AtTarget = TargetPoint{Seconds: sc.TPOT.Target, Rate: p.note("tpot.atTarget", figureOf(ls.Decode, unitRate, false))}
+		tv.AtRate = RatePoint{Rate: rate, Figure: p.note("tpot.atRate", tm.mark(k, rate, figureOf(at, unitSeconds, true)))}
+		tv.AtTarget = TargetPoint{Seconds: sc.TPOT.Target, Rate: p.note("tpot.atTarget", tm.mark(k, 0, figureOf(ls.Decode, unitRate, false)))}
 		out.TPOT = tv
 	}
 
 	out.Limits = p.limitsOf(rate, rateSource, ls)
+	tm, _ := mean.TTFTPoint(rate)
+	pm, _ := mean.TPOTAt(rate)
+	out.Limits.Chosen.Concurrency = ConcurrencyAt(rate, tm, pm, ol, k.Decode, cs.saturatedAt(rate))
+	out.Limits.Chosen.FromConcurrency = fromConcurrency
+	// A limit the experimental TTFT model set past the highest load the
+	// source served is an extrapolation.
+	out.Limits.Prefill = markExtrapolatedRate(fl, out.Limits.Prefill)
+	out.Limits.Fleet.Figure = markExtrapolatedRate(fl, out.Limits.Fleet.Figure)
+	out.Limits.Fleet.WithoutHeadroom = markExtrapolatedRate(fl, out.Limits.Fleet.WithoutHeadroom)
+	// So is one the experimental TPOT model set.
+	if d := out.Limits.Decode; d != nil {
+		*d = p.e.tpotModel.mark(k, 0, *d)
+	}
+	out.Limits.Fleet.Figure = p.e.tpotModel.mark(k, 0, out.Limits.Fleet.Figure)
+	out.Limits.Fleet.WithoutHeadroom = p.e.tpotModel.mark(k, 0, out.Limits.Fleet.WithoutHeadroom)
 	validatePlan(out, k, fl.Class(), cs, rate)
 	out.Marginal = p.marginal(le, ls.Fleet)
 	if sc.Views.AllTrafficPerBucket {
@@ -383,6 +434,93 @@ func (p *planner) plan(ctx context.Context) (*PlanResponse, error) {
 		out.Flags = append(out.Flags, FlagUse{Flag: name, On: p.flags[name]})
 	}
 	return out, nil
+}
+
+// meanFleet is the fleet at k priced at the mean TTFT: fl itself where k
+// asks the mean.
+func (p *planner) meanFleet(k Knobs, fl Fleet) (Fleet, error) {
+	if k.TTFTPercentile == 0 {
+		return fl, nil
+	}
+	k.TTFTPercentile = 0
+	mean, err := p.e.pricer.Fleet(k)
+	if err != nil {
+		return nil, err
+	}
+	return p.e.ttftModel.fleet(mean, k), nil
+}
+
+// saturatedAt says rate is at or past the lower knee, where requests queue
+// without bound. A prefill knee that is only a lower bound (V_P a lower
+// bound) is not known to saturate there: the figures past it are refused for
+// their own reason.
+func (cs *curveSet) saturatedAt(rate float64) bool {
+	if !cs.kneeOK || rate < cs.lowerKnee {
+		return false
+	}
+	if cs.lowerKneeIsLowerBound() {
+		d, ok := valueOf(cs.decodeKnee)
+		return ok && rate >= d
+	}
+	return true
+}
+
+// lowerKneeIsLowerBound says the lower knee is a prefill knee priced from a
+// V_P known only as a lower bound: the true knee is at least it.
+func (cs *curveSet) lowerKneeIsLowerBound() bool {
+	a, ok := cs.prefillKnee.(whatif.Answer)
+	return ok && a.Value == cs.lowerKnee && slices.Contains(a.Flags, whatif.VPLowerBound)
+}
+
+// planRateAtConcurrency is the rate at which mean, the fleet at the mean
+// TTFT, holds n requests in the system on average, below the lower knee.
+func planRateAtConcurrency(mean Fleet, n float64, cs *curveSet, ol float64) (ConcurrencyRate, error) {
+	if !cs.kneeOK {
+		return ConcurrencyRate{}, InputErrorf("traffic.classes.critical.concurrency: no knee answered to translate a concurrency below (prefill: %s; decode: %s): give a rate",
+			reasonOf(cs.prefillKnee), reasonOf(cs.decodeKnee))
+	}
+	if !(ol > 0) {
+		return ConcurrencyRate{}, InputErrorf("traffic.classes.critical.concurrency: no output length to price the time in the system at: give traffic.mix.outputTokens or a rate")
+	}
+	var refused whatif.Result
+	w := func(rate float64) (float64, bool) {
+		t, _ := mean.TTFTPoint(rate)
+		tm, _ := mean.TPOTAt(rate)
+		v, ok := meanTimeInSystem(t, tm, ol)
+		if !ok && refused == nil {
+			refused = t
+			if _, tok := valueOf(t); tok {
+				refused = tm
+			}
+		}
+		return v, ok
+	}
+	cr, err := RateAtConcurrency(n, cs.lowerKnee, w)
+	switch {
+	case ConcurrencyUnpriced(err):
+		return cr, InputErrorf("traffic.classes.critical.concurrency: the mean time in the system is refused (%s): give a rate", reasonOf(refused))
+	case err != nil:
+		return cr, InputErrorf("traffic.classes.critical.concurrency: %v", err)
+	case cr.AtKnee && cr.Rate >= cs.lowerKnee && cs.lowerKneeIsLowerBound():
+		// Whether the fleet saturates at a knee that is only a lower bound
+		// is not known (#280).
+		return cr, InputErrorf("traffic.classes.critical.concurrency: the fleet holds fewer than %g requests below its prefill knee of at least %.4g r/s, "+
+			"which rests on a lower bound of V_P: the true knee may be higher, so the rate that holds them is not priced; give a rate or assume.vp", n, cs.lowerKnee)
+	}
+	t, _ := mean.TTFTPoint(cr.Rate)
+	cr.LowerBound = upperBoundTTFT(t)
+	return cr, nil
+}
+
+// meanTimeInSystem is TTFT mean + (OL - 1) x TPOT mean, the mean time a
+// request spends in the system; ok false where either mean is refused.
+func meanTimeInSystem(ttft, tpot whatif.Result, ol float64) (float64, bool) {
+	t, tok := valueOf(ttft)
+	p, pok := valueOf(tpot)
+	if !tok || !pok {
+		return 0, false
+	}
+	return t + max(ol-1, 0)*p, true
 }
 
 // reasonOf is a refusal's reason, or "answered".
@@ -484,6 +622,7 @@ func (p *planner) marginal(le *limitEntry, fleet whatif.Result) Marginal {
 	} {
 		decode, prefill, limit := le.plusOne[i][0], le.plusOne[i][1], le.plusOne[i][2]
 		s := MarginalStep{Fleet: step.count, Limit: p.note(step.path, figureOf(limit, unitRate, false)), Binding: binding(prefill, decode)}
+		s.Limit.Extrapolated = le.plusOneExtrapolated[i]
 		now, nowOK := valueOf(fleet)
 		then, thenOK := valueOf(limit)
 		switch {
@@ -548,8 +687,12 @@ func (p *planner) outputTokens(k Knobs) float64 {
 
 // contextWindow is the engines' context window in tokens, from the inputs'
 // TermMaxModelLen, and whether they know it.
-func (p *planner) contextWindow() (float64, bool) {
-	for _, t := range p.e.doc.Terms {
+func (p *planner) contextWindow() (float64, bool) { return contextWindowOf(&p.e.doc) }
+
+// contextWindowOf is the engines' context window in tokens from doc's
+// TermMaxModelLen, and whether doc knows it.
+func contextWindowOf(doc *InputsResponse) (float64, bool) {
+	for _, t := range doc.Terms {
 		if t.Name == TermMaxModelLen && t.Refused == nil && t.Value != nil && *t.Value > 0 {
 			return *t.Value, true
 		}

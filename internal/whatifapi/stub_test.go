@@ -132,6 +132,17 @@ type stubFleet struct {
 	k             Knobs
 	refusePrefill bool
 	r             *stubResolver
+	// model is the R_q an experimental model gave (WithTPOTRatio): the
+	// percentile is the mean times it, and decode's limit at a percentile
+	// target the mean's at the target over it.
+	model *ModelRatio
+}
+
+// WithTPOTRatio is the fleet with its TPOT percentile priced at r.
+func (f *stubFleet) WithTPOTRatio(r ModelRatio) Fleet {
+	c := *f
+	c.model = &r
+	return &c
 }
 
 var noVP = whatif.Unanswerable{Reason: whatif.NoPrefillCapacity, Detail: "no P1 estimate"}
@@ -191,7 +202,10 @@ func (f *stubFleet) TPOTAt(rate float64) (mean, percentile whatif.Result) {
 	mean = whatif.Answer{Value: 0.005 + rate/1000, Basis: whatif.Basis{Floor: 0.005}, Band: &whatif.Interval{Lo: 0.004, Hi: 0.02}}
 	if f.k.TPOTPercentile != 0 {
 		percentile = whatif.Unanswerable{Reason: whatif.NoTPOTHistogram, Detail: "no TPOT histogram"}
-		if f.k.Assume.TPOTRatio != nil {
+		switch {
+		case f.model != nil:
+			percentile = whatif.Answer{Value: f.model.Value * (0.005 + rate/1000), Flags: []whatif.Flag{f.model.Flag}}
+		case f.k.Assume.TPOTRatio != nil:
 			percentile = whatif.Answer{Value: *f.k.Assume.TPOTRatio * (0.005 + rate/1000), Flags: []whatif.Flag{whatif.AssumedTPOTRatio}}
 		}
 	}
@@ -222,7 +236,13 @@ func (f *stubFleet) PlainLimits(ttftSeconds, tpotSeconds, headroom float64) (dec
 	default:
 		prefill = whatif.Answer{Value: knee * (1 - 0.1/ttftSeconds), Basis: whatif.Basis{BoundBy: []whatif.Bound{whatif.BoundTTFT}}}
 	}
-	if tpotSeconds > 0 {
+	switch {
+	case tpotSeconds > 0 && f.model != nil && f.k.TPOTPercentile != 0:
+		// The mean's limit at the target over R_q.
+		at := (tpotSeconds/f.model.Value - 0.005) * 1000
+		decode = whatif.Answer{Value: min(headroom*f.decodeKnee(), at), Flags: []whatif.Flag{f.model.Flag},
+			Basis: whatif.Basis{BoundBy: []whatif.Bound{whatif.BoundTPOT}, Uncapped: at}}
+	case tpotSeconds > 0:
 		decode = whatif.Answer{Value: min(headroom*f.decodeKnee(), (tpotSeconds-0.005)*1000),
 			Basis: whatif.Basis{BoundBy: []whatif.Bound{whatif.BoundTPOT}, Uncapped: (tpotSeconds - 0.005) * 1000}}
 	}
@@ -238,7 +258,7 @@ func (f *stubFleet) PlainLimits(ttftSeconds, tpotSeconds, headroom float64) (dec
 		return decode, prefill, u
 	}
 	// A percentile with no ratio refuses decode's limit, and the fleet's.
-	if tpotSeconds > 0 && f.k.TPOTPercentile != 0 && f.k.Assume.TPOTRatio == nil {
+	if tpotSeconds > 0 && f.k.TPOTPercentile != 0 && f.k.Assume.TPOTRatio == nil && f.model == nil {
 		u := whatif.Unanswerable{Reason: whatif.NoTPOTHistogram, Detail: "no TPOT histogram"}
 		return u, prefill, u
 	}
@@ -247,23 +267,32 @@ func (f *stubFleet) PlainLimits(ttftSeconds, tpotSeconds, headroom float64) (dec
 	if p < lowest {
 		lowest, by = p, whatif.BoundTTFT
 	}
-	if d, ok := valueOf(decode); ok && d < lowest {
-		lowest, by = d, "decode TPOT"
+	var flags []whatif.Flag
+	if d, ok := decode.(whatif.Answer); ok && d.Value < lowest {
+		lowest, by, flags = d.Value, "decode TPOT", d.Flags
 	}
-	return decode, prefill, whatif.Answer{Value: lowest, Basis: whatif.Basis{BoundBy: []whatif.Bound{by}}}
+	return decode, prefill, whatif.Answer{Value: lowest, Flags: flags, Basis: whatif.Basis{BoundBy: []whatif.Bound{by}}}
 }
 
 func (f *stubFleet) TPOTRatio() Ratio {
-	if f.k.TPOTPercentile == 0 {
+	switch {
+	case f.k.TPOTPercentile == 0:
 		return Ratio{}
-	}
-	if f.k.Assume.TPOTRatio == nil {
+	case f.model != nil:
+		v := f.model.Value
+		return Ratio{Value: &v, Source: f.model.Source, Flags: []string{string(f.model.Flag)}}
+	case f.k.Assume.TPOTRatio == nil:
 		return Ratio{Refused: &Refusal{Reason: string(whatif.NoTPOTHistogram), Detail: "no TPOT histogram"}}
 	}
 	return Ratio{Value: f.k.Assume.TPOTRatio, Source: "assumed", Flags: []string{string(whatif.AssumedTPOTRatio)}}
 }
 
-func (f *stubFleet) Assumed() []string { return []string{"Poisson arrivals"} }
+func (f *stubFleet) Assumed() []string {
+	if f.model != nil {
+		return []string{"Poisson arrivals", f.model.Assumed}
+	}
+	return []string{"Poisson arrivals"}
+}
 
 // Class is a P/D fleet the envelope knows nothing else of.
 func (f *stubFleet) Class() whatif.FigureClass {

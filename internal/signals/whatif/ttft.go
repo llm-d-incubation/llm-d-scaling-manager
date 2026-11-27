@@ -77,6 +77,15 @@ type Prefill struct {
 	// V_P is (prefillPlan.rhoM). 0 is not known, and f is then held. Read
 	// only with LoadAwareRouter.
 	ImbalanceUtilization float64
+	// ImbalanceCurveFloor and ImbalanceCurveExcess are f against the load
+	// per pod, f(u) = floor + excess/u, u = rate * E[I_eff] / N_p the
+	// computed tokens a second a pod (prefill.FLoadCurve, learned at this
+	// count). Set, f at a rate is the higher of the plan's f, as it would
+	// price it, and the curve's, at most N_p (fAt), and the knee is where
+	// f(u) * rho reaches 1 - VPMargin. Both 0 is none; set, both are above
+	// 0. The planner sets them with --prefill-f-load-curve; the SLO analyzer
+	// never does.
+	ImbalanceCurveFloor, ImbalanceCurveExcess float64
 	// Replicas is N_p.
 	Replicas int
 	// PromptTokens is E[I_eff], the mean prompt a pod computes (prefix
@@ -120,6 +129,23 @@ type Prefill struct {
 	// (shapedVP, prefixMoved).
 	VPWholePromptTokens, VPPromptHitRate float64
 	WholePromptTokens, PromptHitRate     float64
+	// VPPromptLow and VPPromptHigh are the range of effective prompts the
+	// minutes V_P rests on read (prefill.Estimate.VPPromptLow, VPPromptHigh,
+	// set with saturation.SwitchPrefillVPPromptCoverage); 0 is not known.
+	// Known, a mean prompt more than MaxVPShapeRatio outside them is out of
+	// the region V_P was learned in (promptNotCovered): the knee carries
+	// VPPromptNotCovered and no TTFT is priced. An assumed V_P is never
+	// checked against them.
+	VPPromptLow, VPPromptHigh float64
+	// VPRequestSeconds is r, the part of a request's work on a pod that does
+	// not grow with its prompt, in pod-seconds, where V_P's source measured
+	// it (prefill.Estimate.VPRequestSeconds): at I_vp (VPPromptTokens) a
+	// request's work is I_vp/V_P, r of it paid per request. Set with I_vp
+	// known and r under I_vp/V_P, V_P is priced at the question's prompt
+	// along that split (shapedVP), r held and the rest per token; 0 is not
+	// measured, and V_P is one token rate at every prompt, as before. An
+	// assumed V_P never reads it.
+	VPRequestSeconds float64
 	// PrefixAttention prices the attention over a prefix hit's cached
 	// tokens in the curve's rescale (shapedVP): off, I_eff stands for the
 	// context, as if no token were cached. The replay switch
@@ -128,7 +154,8 @@ type Prefill struct {
 	// CachedContextRead says CachedContextTokens and VPCachedContextTokens
 	// were read: the cached context of the question's mean request and of
 	// V_P's minutes, as the whole prompt less the computed one, every
-	// tier's hits counted (slo.SwitchTTFTTierLoad). With PrefixAttention
+	// tier's hits counted (read with slo.SwitchTTFTPrefixAttention, issue
+	// llm-d-incubation/llm-d-scaling-manager#383). With PrefixAttention
 	// on, shapedVP takes the attention span from them in place of the
 	// prefix-cache hit rates, which count the GPU's hits alone.
 	CachedContextRead                          bool
@@ -299,7 +326,8 @@ const DefaultPriceRouterWait = false
 // prefill knee, a TTFT is flagged FlowControlWaitPriced and stands, and a
 // rate answer may pass the onset. --price-router-wait, or
 // --router-wait-in-prefill=false (assume.routerWait gateStage or none), turns
-// it off. The SLO analyzer has no switch for it.
+// it off. The SLO analyzer's switch for it, slo.SwitchTTFTRouterWaitInPrefill,
+// is off from its constructor until a live check with the controller.
 //
 // On by the router v1.0.0 staircase of issue #287 (Qwen3-32B, 2 prefill and
 // 2 decode, three seeds at Ca^2 4 and two at Poisson), backtested against its
@@ -459,7 +487,8 @@ type TTFTFleet struct {
 	// MaxRouterWaitKneeShare of the prefill knee), so a rate answer may stand
 	// past the onset. The CLI and the planner API turn it on by default
 	// (DefaultRouterWaitInPrefill); it is measured on llm-d-router v1.0.0
-	// only. The struct's zero value is off.
+	// only. The struct's zero value is off, and so is the SLO analyzer's
+	// (slo.SwitchTTFTRouterWaitInPrefill), which a replay turns on.
 	//
 	// On v1.0.0 the gate moves the wait from the pods to the router rather
 	// than adding to it: on the Qwen3-32B flow-control A/B, at six bursty
@@ -647,14 +676,96 @@ func (pl prefillPlan) atRate(rate float64) prefillPlan {
 // PrefixAttention on, both whole prompts known (the hit rates are read with
 // them) and either hit rate above MaterialPrefixHitMove, the rescale reads
 // that argument at I_vp and at the question, h from each side's own hit rate.
-// With CachedContextRead (slo.SwitchTTFTTierLoad), h is each side's cached
+// With CachedContextRead (the planner reads it with PrefixAttention), h is each side's cached
 // context as read, the whole prompt less the computed one, and the span is
 // priced where either side's h is above MaterialPrefixHitMove of its whole
 // prompt: the prefix-cache hit rate counts the GPU's hits alone, and reads a
 // hit from a host, disk or peer tier as a miss though the prompt attends
 // over it. Otherwise I_eff stands for it, as if nothing were cached, and reads V_P
 // high at a hit (issue llm-d-incubation/llm-d-scaling-manager#311).
+//
+// With VPRequestSeconds r measured (requestSplit), V_P is not one token
+// rate. A request's work at I_vp is I_vp/V_P, of which r is paid per request
+// and the rest, k = (I_vp/V_P - r)/I_vp a token, per token, so at E[I] it is
+// r + E[I]*k*g: the mean work of the prompt mix, since the work is linear in
+// the prompt at a given cost a token. g is how far the cost a token grows
+// from I_vp to E[I]: with the curve, as the token rate is rescaled above;
+// with none, 1 at or below I_vp, and above it the growth of the attention
+// span, I_eff + 2h with h the cached context (spanGrowth), as if every
+// per-token cost were attention, which is the most it can grow. Above I_vp
+// the work is never priced above the one-rate figure, E[I]/V_P with V_P
+// held, the price before the split: there V_P is held and flagged as
+// before. Otherwise V_P at E[I] is E[I] over that work, flagged
+// VPScaledToPrompt where it would have been flagged VPShapeMoved: it is
+// priced at the prompt, not held.
+//
+// Held as one token rate, a prompt longer than I_vp paid r once per I_vp
+// tokens, and one shorter paid it less than once a request. Where r is two
+// thirds of the work at I_vp and the context is mostly cached (g near 1),
+// the one-rate knee at twice I_vp is two thirds of the split's, and at half
+// I_vp it is 5/3 of it, over-promising. Above I_vp the span bounds the
+// raise: a line through the prompts of a warm-up read the per-token cost of
+// its longest prompts low, and the split alone priced a knee above the rate
+// the pods saturated at (issue llm-d-incubation/llm-d-scaling-manager#368).
+// On fresh prompts the span doubles with the prompt, so at twice I_vp the
+// bound reaches the one-rate figure, and the knee holds, wherever r is at
+// most two thirds of the work at I_vp. Where r is more, even the span's
+// growth leaves the work under the one-rate figure, and the knee rises.
 func (p Prefill) shapedVP() (float64, Flag) {
+	vp, flag := p.tokenRateVP()
+	r, ok := p.requestSplit()
+	if !ok {
+		return vp, flag
+	}
+	i, ivp := p.PromptTokens, p.VPPromptTokens
+	g := p.VP / vp
+	if !(p.CurveSlope > 0 && p.CurveCurvature > 0) && i > ivp {
+		g = p.spanGrowth()
+	}
+	work := r + i*(ivp/p.VP-r)/ivp*g
+	if i > ivp && !(work < i/vp) {
+		return vp, flag
+	}
+	if flag == VPShapeMoved {
+		flag = VPScaledToPrompt
+	}
+	return i / work, flag
+}
+
+// spanGrowth is the attention span at the question's prompt over the one at
+// I_vp, I_eff + 2h each, at least 1 (shapedVP). h is the cached context, the
+// whole prompt less the computed one, every tier's hits counted: as read
+// (CachedContextRead), else from the whole prompts where both are known,
+// else none on either side. Not the prefix-cache hit rates, which count the
+// GPU's hits alone and read a hit from another tier as computed: the span
+// they give is short, and its growth read high, on one side and not the
+// other (issue llm-d-incubation/llm-d-scaling-manager#383).
+func (p Prefill) spanGrowth() float64 {
+	i, ivp := p.PromptTokens, p.VPPromptTokens
+	switch {
+	case p.CachedContextRead:
+		i, ivp = i+2*p.CachedContextTokens, ivp+2*p.VPCachedContextTokens
+	case p.WholePromptTokens > 0 && p.VPWholePromptTokens > 0:
+		i, ivp = i+2*max(p.WholePromptTokens-i, 0), ivp+2*max(p.VPWholePromptTokens-ivp, 0)
+	}
+	return max(1, i/ivp)
+}
+
+// requestSplit is VPRequestSeconds where shapedVP prices V_P along it: a
+// learned V_P read at a known I_vp, and r above 0 and under I_vp/V_P, the
+// whole of a request's work there. Otherwise false, and V_P is one token
+// rate.
+func (p Prefill) requestSplit() (float64, bool) {
+	r := p.VPRequestSeconds
+	if p.VPAssumed || !(r > 0) || !(p.VPPromptTokens > 0) || !(r < p.VPPromptTokens/p.VP) {
+		return 0, false
+	}
+	return r, true
+}
+
+// tokenRateVP is V_P at the question's mean prompt as one token rate, and
+// the flag it raises (shapedVP).
+func (p Prefill) tokenRateVP() (float64, Flag) {
 	if p.VPAssumed {
 		return p.VP, ""
 	}
@@ -663,7 +774,7 @@ func (p Prefill) shapedVP() (float64, Flag) {
 		switch {
 		case !p.PrefixAttention:
 		case p.CachedContextRead:
-			if h, hvp := p.CachedContextTokens, p.VPCachedContextTokens; max(h/(h+i), hvp/(hvp+ivp)) > MaterialPrefixHitMove {
+			if h, hvp := p.CachedContextTokens, p.VPCachedContextTokens; max(cachedShare(h, i), cachedShare(hvp, ivp)) > MaterialPrefixHitMove {
 				i, ivp = i+2*h, ivp+2*hvp
 			}
 		case p.VPWholePromptTokens > 0 && p.WholePromptTokens > 0 &&
@@ -707,19 +818,50 @@ const MaterialPrefixHitMove = 0.1
 // llm-d-incubation/llm-d-scaling-manager#311). False with either whole
 // prompt unknown, as before, and for an assumed V_P. With no hit on either
 // side it is false: the whole prompt then moves with E[I_eff], which
-// shapedVP reads.
+// shapedVP reads. With CachedContextRead, each side's hit is its cached
+// share of the whole prompt, every tier's hits counted, as shapedVP prices
+// the span: like with like, not the prefix-cache hit rates, which count the
+// GPU's hits alone (issue llm-d-incubation/llm-d-scaling-manager#383).
 func (p Prefill) prefixMoved() bool {
 	if p.VPAssumed || !(p.VPWholePromptTokens > 0) || !(p.WholePromptTokens > 0) {
 		return false
 	}
-	if math.Abs(p.PromptHitRate-p.VPPromptHitRate) > MaterialPrefixHitMove {
+	hit, hitVP := p.PromptHitRate, p.VPPromptHitRate
+	if p.CachedContextRead {
+		hit, hitVP = cachedShare(p.CachedContextTokens, p.PromptTokens), cachedShare(p.VPCachedContextTokens, p.VPPromptTokens)
+	}
+	if math.Abs(hit-hitVP) > MaterialPrefixHitMove {
 		return true
 	}
-	if max(p.PromptHitRate, p.VPPromptHitRate) <= MaterialPrefixHitMove {
+	if max(hit, hitVP) <= MaterialPrefixHitMove {
 		return false
 	}
 	w, wvp := p.WholePromptTokens, p.VPWholePromptTokens
 	return w > MaxVPShapeRatio*wvp || w*MaxVPShapeRatio < wvp
+}
+
+// cachedShare is h cached tokens' share of a whole prompt of h + eff
+// computed ones; 0 where the prompt is empty.
+func cachedShare(h, eff float64) float64 {
+	if !(h+eff > 0) {
+		return 0
+	}
+	return h / (h + eff)
+}
+
+// promptNotCovered reports whether the question's mean prompt lies outside
+// the prompts V_P was read over (VPPromptLow, VPPromptHigh) by more than
+// MaxVPShapeRatio either way. A V_P is the speed of the steps of the minutes
+// it was read in: on longer prompts each token costs more attention, and on
+// shorter ones each request's fixed step cost is shared by fewer tokens, so
+// it is not the capacity at a prompt those minutes never ran, whatever its
+// source says it bounds (issue llm-d-incubation/llm-d-scaling-manager#405).
+// False with the range unknown and for an assumed V_P.
+func (p Prefill) promptNotCovered() bool {
+	if p.VPAssumed || !(p.VPPromptLow > 0) || !(p.VPPromptHigh > 0) {
+		return false
+	}
+	return p.PromptTokens > MaxVPShapeRatio*p.VPPromptHigh || p.PromptTokens*MaxVPShapeRatio < p.VPPromptLow
 }
 
 // check refuses a Prefill the model cannot price, naming the first input
@@ -740,6 +882,9 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		u = refuse(NoImbalance, fmt.Sprintf("no f for %d prefill pods, learned or assumed", p.Replicas))
 	case p.Imbalance != 0 && !(p.Imbalance >= 1 && p.Imbalance <= float64(p.Replicas)):
 		u = refuse(InvalidInput, fmt.Sprintf("f %g, want 1 <= f <= %d (the pods)", p.Imbalance, p.Replicas))
+	case (p.ImbalanceCurveFloor != 0 || p.ImbalanceCurveExcess != 0) &&
+		!(Finite(p.ImbalanceCurveFloor) && p.ImbalanceCurveFloor > 0 && Finite(p.ImbalanceCurveExcess) && p.ImbalanceCurveExcess > 0):
+		u = refuse(InvalidInput, fmt.Sprintf("f against the load %g + %g/u, want both above 0", p.ImbalanceCurveFloor, p.ImbalanceCurveExcess))
 	case !Finite(p.PromptTokens) || !(p.PromptTokens > 0):
 		u = refuse(NoTraffic, fmt.Sprintf("prompt %g tokens", p.PromptTokens))
 	case !(p.PromptCV >= 0 && p.PromptCV <= maxPromptCV):
@@ -755,6 +900,8 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		u = refuse(InvalidInput, fmt.Sprintf("transfer %g s per token", p.TransferSecondsPerToken))
 	case !Finite(p.VPPromptTokens) || p.VPPromptTokens < 0:
 		u = refuse(InvalidInput, fmt.Sprintf("V_P read at %g prompt tokens", p.VPPromptTokens))
+	case !Finite(p.VPRequestSeconds) || p.VPRequestSeconds < 0:
+		u = refuse(InvalidInput, fmt.Sprintf("V_P's per-request work %g s, want a finite value of at least 0 (0 is not measured)", p.VPRequestSeconds))
 	case !Finite(p.VPWholePromptTokens) || p.VPWholePromptTokens < 0 || !Finite(p.WholePromptTokens) || p.WholePromptTokens < 0:
 		u = refuse(InvalidInput, fmt.Sprintf("whole prompt %g, V_P's %g, want finite values of at least 0 (0 is unknown)",
 			p.WholePromptTokens, p.VPWholePromptTokens))
@@ -768,6 +915,9 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 			p.CachedContextTokens, p.VPCachedContextTokens))
 	case !Finite(p.TierLoadSeconds) || p.TierLoadSeconds < 0:
 		u = refuse(InvalidInput, fmt.Sprintf("tier load %g s, want a finite value of at least 0", p.TierLoadSeconds))
+	case !Finite(p.VPPromptLow) || p.VPPromptLow < 0 || !Finite(p.VPPromptHigh) || p.VPPromptHigh < p.VPPromptLow:
+		u = refuse(InvalidInput, fmt.Sprintf("V_P read over prompts %g to %g, want finite values, 0 <= low <= high (0 is unknown)",
+			p.VPPromptLow, p.VPPromptHigh))
 	case !Finite(p.CurveSlope) || p.CurveSlope < 0 || !Finite(p.CurveCurvature) || p.CurveCurvature < 0:
 		u = refuse(InvalidInput, fmt.Sprintf("curve b %g, c %g, want finite values of at least 0", p.CurveSlope, p.CurveCurvature))
 	case !(p.VPMargin >= 0 && p.VPMargin <= MaxVPMargin):
@@ -794,6 +944,7 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 		}{
 			{p.VPAssumed, AssumedVP}, {p.VPLowerBound, VPLowerBound}, {p.VPAboveSlopeBound, VPAboveSlopeBound},
 			{p.VPFromPlateau, VPFromPlateau}, {p.ExperimentalTTFT, ExperimentalTTFT}, {shape != "", shape}, {shape != VPShapeMoved && p.prefixMoved(), VPShapeMoved},
+			{p.promptNotCovered(), VPPromptNotCovered},
 			{p.ImbalanceAssumed, AssumedImbalance}, {p.PromptCVAssumed, AssumedPromptSpread},
 			{p.TransferSecondsPerToken == 0, TransferOmitted},
 		} {
@@ -816,7 +967,19 @@ func (p Prefill) check() (prefillPlan, *Unanswerable) {
 // = 0, k = (f - 1)/(1 - rho_m), at its smaller root. With no margin that
 // root is 1, the pooled knee, unless f - 1 > 1 - rho_m: a pod that hot
 // saturates before the router has the idle pods to steer its excess to.
+//
+// With f against the load (ImbalanceCurveFloor) it is the lower of that
+// knee and the curve's (curveKnee).
 func (pl prefillPlan) knee() float64 {
+	k := pl.flatKnee()
+	if pl.loadCurve() {
+		k = min(k, pl.curveKnee())
+	}
+	return k
+}
+
+// flatKnee is knee without the load curve (ImbalanceCurveFloor).
+func (pl prefillPlan) flatKnee() float64 {
 	f := pl.baseF()
 	pooled := float64(pl.p.Replicas) * pl.vp / pl.p.PromptTokens
 	held := (1 - pl.margin) / f
@@ -830,6 +993,25 @@ func (pl prefillPlan) knee() float64 {
 	disc := (1-k)*(1-k) + 4*k*pl.margin
 	// The smaller root in the form that keeps its digits as k goes to 0.
 	return pooled * 2 * (1 - pl.margin) / ((1 + k) + math.Sqrt(disc))
+}
+
+// loadCurve is whether f against the load is priced (ImbalanceCurveFloor):
+// set, on more than one pod.
+func (pl prefillPlan) loadCurve() bool {
+	return pl.p.Replicas > 1 && pl.p.ImbalanceCurveFloor > 0 && pl.p.ImbalanceCurveExcess > 0
+}
+
+// curveKnee is the rate at which the curve's f(u) * rho reaches
+// 1 - VPMargin, rho = u/V_P the mean pod utilization at the unmargined V_P.
+// f(u) * rho is (floor * u + excess)/V_P, held to N_p * rho, so the root is
+// rho = (1 - VPMargin - excess/V_P)/floor, and at least (1 - VPMargin)/N_p
+// where the cap holds there. fAt is the higher of the flat f and the curve's,
+// each f(rho) * rho rising with the rate, so the knee is the lower of the
+// two roots.
+func (pl prefillPlan) curveKnee() float64 {
+	n := float64(pl.p.Replicas)
+	rho := max((1-pl.margin-pl.p.ImbalanceCurveExcess/pl.vp)/pl.p.ImbalanceCurveFloor, (1-pl.margin)/n)
+	return n * pl.vp * rho / pl.p.PromptTokens
 }
 
 // baseF is the f the plan was given: Prefill.Imbalance, at least 1.
@@ -870,7 +1052,10 @@ func PrefillLoadAt(p Prefill, rate float64) (f, pooled float64, ok bool) {
 	return pl.fAt(rate), rate * p.PromptTokens / (float64(p.Replicas) * pl.vp * (1 - pl.margin)), true
 }
 
-// fAt is f at rate. Off LoadAwareRouter it is the plan's f at every rate.
+// fAt is f at rate: flatFAt, or with a load curve (ImbalanceCurveFloor) the
+// higher of it and the curve's f at the rate's load.
+//
+// flatFAt off LoadAwareRouter is the plan's f at every rate.
 // On, it is f up to rho_m (ImbalanceUtilization), the mean pod utilization
 // it was read at, and past it the excess falls in proportion to the pods'
 // idle capacity:
@@ -889,6 +1074,23 @@ func PrefillLoadAt(p Prefill, rate float64) (f, pooled float64, ok bool) {
 // minutes it was read from say it held, and the shares near the knee are
 // not read until a run sits there.
 func (pl prefillPlan) fAt(rate float64) float64 {
+	f := pl.flatFAt(rate)
+	if !pl.loadCurve() {
+		return f
+	}
+	// f against the load (ImbalanceCurveFloor): the higher of the two, at
+	// most the pods, where the whole load is on one.
+	n := float64(pl.p.Replicas)
+	u := rate * pl.p.PromptTokens / n
+	c := n
+	if u > 0 {
+		c = min(n, pl.p.ImbalanceCurveFloor+pl.p.ImbalanceCurveExcess/u)
+	}
+	return max(f, c)
+}
+
+// flatFAt is fAt without the load curve (ImbalanceCurveFloor).
+func (pl prefillPlan) flatFAt(rate float64) float64 {
 	f := pl.baseF()
 	if !pl.loadAware() {
 		return f
@@ -898,6 +1100,14 @@ func (pl prefillPlan) fAt(rate float64) float64 {
 	if !(rho > rm) {
 		return f
 	}
+	return loadAwareFall(f, rho, rm)
+}
+
+// loadAwareFall is f past rho_m (fAt): 1 + (f - 1)(1 - rho)/(1 - rho_m), at
+// least 1. It is a variable only so a test can put a non-monotone f(rho) in
+// its place and show the TTFT sweeps catch it (ttft_load_aware_test.go):
+// nothing else assigns it.
+var loadAwareFall = func(f, rho, rm float64) float64 {
 	return max(1, 1+(f-1)*(1-rho)/(1-rm))
 }
 
@@ -1112,6 +1322,8 @@ type ttftPlan struct {
 	// servedOnly is Prefill.VPServedOnly on a V_P not the caller's: no TTFT
 	// is priced from it.
 	servedOnly bool
+	// notCovered is Prefill.promptNotCovered: no TTFT is priced from V_P.
+	notCovered bool
 }
 
 // plan checks a fleet and places its flow-control onsets.
@@ -1128,7 +1340,8 @@ func (fl TTFTFleet) plan() (ttftPlan, *Unanswerable) {
 	pl := ttftPlan{pf: pf, d: fl.Decode, fc: fl.FlowControl, ps: fl.ProcessorSharing,
 		psCapped:     fl.ProcessorSharing && fl.Prefill.BeyondProcessorSharing(),
 		kneeUnpriced: fl.LowerBoundKneeUnpriced && fl.Prefill.VPLowerBound && !fl.Prefill.VPAssumed,
-		servedOnly:   fl.Prefill.VPServedOnly && !fl.Prefill.VPAssumed}
+		servedOnly:   fl.Prefill.VPServedOnly && !fl.Prefill.VPAssumed,
+		notCovered:   fl.Prefill.promptNotCovered()}
 	pl.routerWait = (fl.PriceRouterWait || fl.RouterWaitInPrefill) && pl.ps && !pl.psCapped
 	pl.gateStage = pl.routerWait && fl.PriceRouterWait
 	pl.psOnsets = fl.PSOnsets && pl.ps
@@ -1515,6 +1728,17 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		u.Flags = []Flag{VPLowerBound}
 		return priced{u: &u}
 	}
+	if pl.notCovered {
+		// A V_P read at other prompts prices no TTFT here: the queue under it
+		// would rest on a speed the pods were never seen to run at this
+		// prompt, and a lower bound there is not one here.
+		p := pl.pf.p
+		u := refuse(NoPrefillCapacity, fmt.Sprintf("V_P %.0f tokens/s was read over prompts of %.0f to %.0f tokens; "+
+			"a mean prompt of %.0f is outside them, so no TTFT is priced from it; pass --assume-vp for a flagged answer",
+			p.VP, p.VPPromptLow, p.VPPromptHigh, p.PromptTokens))
+		u.Flags = []Flag{VPPromptNotCovered}
+		return priced{u: &u}
+	}
 	if rate >= pk {
 		if pl.kneeUnpriced && !pl.decodeSaturates(rate) {
 			// The decode gate's onset is known whatever bound V_P is: a
@@ -1557,6 +1781,7 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 	out.Parts.TierLoad = pl.pf.p.TierLoadSeconds
 	out.PrefillUtilization = rho
 	out.Parts.OwnPrefill = a + own.mean
+	out.Parts.PrefillWork = pf.work
 	// side is block 1 for a plan's own time: the worst pod's wait and the own
 	// time, or the PS stages; old at the old sum's transfer; pooled, the pods
 	// pooled with no imbalance. Under processor sharing each of the four is
@@ -1680,7 +1905,13 @@ func (pl ttftPlan) priceOne(rate, q float64, withDecodeWait, extras bool) priced
 		if fill < d.Band.Lo {
 			out.Flags = addFlags(out.Flags, BelowFittedBand)
 		}
-		lowest := d.lowestFill()
+		// The floor is the one at the request's own count (lowestFillAt),
+		// as its TPOT reads it (issue
+		// llm-d-incubation/llm-d-scaling-manager#485).
+		lowest, _ := d.lowestFillAt(fill)
+		if _, extrapolated := d.readFill(fill); extrapolated {
+			out.Flags = addFlags(out.Flags, ExtrapolatedBelowFloor)
+		}
 		k = max(fill, lowest)
 		first, floorStep = d.itlAt(k), d.itlAt(lowest)
 		oldFirst, oldFloorStep = first, floorStep

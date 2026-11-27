@@ -455,3 +455,42 @@ func TestPoolComputedBuckets(t *testing.T) {
 	assert.Empty(t, junk)
 	assert.Equal(t, PromptSpread{CV: AssumedPromptCV, Assumed: true}, ReadPromptSpread(junk, 1000))
 }
+
+// The engines' context window closes the bucket past the histogram's last
+// bound: its mass is read in (last bound, window] as every bucket is, at
+// the largest second moment the mean allows, and the spread is a bound
+// again, with ClosedAt saying where. A window at or under the last bound,
+// none, or no mass past it change nothing.
+func TestReadPromptSpreadWithin_ClosesTheLastBucketAtTheContextWindow(t *testing.T) {
+	inf := math.Inf(1)
+	pooled := map[float64]float64{1000: 9, inf: 10}
+	assert.Equal(t, PromptSpread{CV: 3, Clamped: true}, ReadPromptSpreadWithin(pooled, 800, 0))
+	assert.Equal(t, PromptSpread{CV: 3, Clamped: true}, ReadPromptSpreadWithin(pooled, 800, 1000), "a window at the last bound")
+	assert.Equal(t, ReadPromptSpread(pooled, 800), ReadPromptSpreadWithin(pooled, 800, inf), "an infinite window bounds nothing")
+
+	// 9 requests in (0, 1000] and 1 in (1000, 4000] at a mean of 800: on
+	// the lower edges they hold 1000 tokens, and the other 7000 go to the
+	// top bucket first (3000, adding 3000 x 5000 to the second moment),
+	// then to the first (4000, adding 4000 x 1000).
+	got := ReadPromptSpreadWithin(pooled, 800, 4000)
+	assert.False(t, got.Clamped)
+	assert.Equal(t, 4000.0, got.ClosedAt)
+	second := (1000.0*1000 + 3000*5000 + 4000*1000) / 10
+	assert.InDelta(t, math.Sqrt(second/(800.0*800)-1), got.CV, 1e-9)
+	assert.InDelta(t, 4000.0/800, got.MaxRatio, 1e-9, "no prompt is longer than the window")
+
+	// No mass past the last bound: the window is not read.
+	inside := map[float64]float64{1000: 5, 10000: 10, inf: 10}
+	assert.Equal(t, ReadPromptSpread(inside, 5500), ReadPromptSpreadWithin(inside, 5500, 40960))
+	assert.Zero(t, ReadPromptSpreadWithin(inside, 5500, 40960).ClosedAt)
+
+	// A lab P/D run's computed prompts (6k-28k-token prompts, a 0.43 hit),
+	// pooled over its last 20 cycles: vLLM's edges stop at 20000 under a
+	// 40960-token window, and 18% of the requests sat past them. The clamp
+	// read 3; the window bounds it at 1.40.
+	lab := map[float64]float64{1000: 5.5, 2000: 16.9, 5000: 23.98, 10000: 32.56, 20000: 40.48, inf: 49.52}
+	assert.True(t, ReadPromptSpread(lab, 9159.84).Clamped)
+	lr := ReadPromptSpreadWithin(lab, 9159.84, 40960)
+	assert.False(t, lr.Clamped)
+	assert.InDelta(t, 1.399, lr.CV, 1e-3)
+}

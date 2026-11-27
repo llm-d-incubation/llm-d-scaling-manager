@@ -1,39 +1,38 @@
 ns-01/model-02  P/D 1 prefill (variant-02) + 1 decode (variant-01)  window 2026-11-05 21:16-21:36Z, cycle 83 of 83
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
-load judged     26.90 r/s, the p95 of the 80 of 83 cycles with traffic
+load judged     26.89 r/s, the p95 less counting noise of the 80 of 83 cycles with traffic
 load seen       per cycle (1-minute rates): mean 6.91, p95 26.90, peak 30.04 r/s; p95 less counting noise 26.89; busiest 2m0s (8 cycles): 25.94 r/s
 SLO             TPOT mean 5.0 ms (asked)
 cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
 mark = the SLO (TPOT mean 5.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, ? not judged
-summary     50%              80%              100%            seen
-  measured  -/2.5 @15.44 ok  -/3.0 @24.70 ok  -/- @30.88 SAT  -/3.1 @26.90 ok
+summary  50%              80%              100%            seen
+  load   -/2.5 @19.00 ok  -/2.9 @30.40 ok  -/- @38.00 SAT  -/2.8 @26.89 ok
 verdicts
-  measured  NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 500, the shape priced is IL 1000 OL 602, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
+  load    NOT JUDGED: decode only: decode alone holds every target at the p95 less counting noise load of 26.9 r/s; no fewer than its 1 decode would hold it; prefill was not sized (the recording learned no fixed prefill latency; --assume-a states one), so this is not a fleet recommendation.
 
-shape measured: IL 1000 OL 602, prefix hit 0.00 (measured, cycles 64-83)
-  the load's cycles (the p95 and above: 5, cycles 79-83): IL 1000 OL 500, prefix hit 0.00
-  SHAPE/LOAD MISMATCH: the load is priced at a shape more than 20% off the traffic that made it; --shape load prices it at its own
+shape load: IL 1000 OL 500, prefix hit 0.00 (the load's cycles)
+  the load's cycles (the p95's cycles, the p95 and above: 5, cycles 79-83): IL 1000 OL 500, prefix hit 0.00
 utilization at the load judged
-  decode        KV fill 0.540 (band top 0.7), slots 51 of 64, wait p 0.119
+  decode        KV fill 0.378 (band top 0.7), slots 37 of 64, wait p 0.001
   prefill       utilization pooled no fixed prefill latency learned, worst pod no fixed prefill latency learned
-  verdict       NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 500, the shape priced is IL 1000 OL 602, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
-capacity            req/s     out tok/s   bound by
-  prefill knee      no fixed prefill latency learned            P1 refused a: NoPromptSpread; pass --assume-a for a flagged answer
-  decode knee       30.88     18589       decode batch cap at fill 0.680
-                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
-  fleet knee        30.88     18589       decode (prefill not priced)
-  operating (0.85)  26.25     15801       0.85 x fleet knee (scaleUpThreshold)
-  max at SLO        no fixed prefill latency learned            no fleet rate: the prefill side is not priced, and decode alone does not bound the fleet (slo-to-rate gives none either): P1 refused a: NoPromptSpread; pass --assume-a for a flagged answer
-SLO vs load        r/s    TTFT p50/90 ms                    TPOT mean/p90 ms                e2e mean (sum)
-  50% of knee      15.44  no fixed prefill latency learned  2.50/TPOT bucket too wide       no fixed prefill latency learned
-  80% of knee      24.70  no fixed prefill latency learned  2.99/TPOT bucket too wide       no fixed prefill latency learned
-  100% of knee     30.88  no fixed prefill latency learned  saturated/TPOT bucket too wide  no fixed prefill latency learned
-  load seen (87%)  26.90  no fixed prefill latency learned  3.14/TPOT bucket too wide       no fixed prefill latency learned
+  verdict       NOT JUDGED: decode only: decode alone holds every target at the p95 less counting noise load of 26.9 r/s; no fewer than its 1 decode would hold it; prefill was not sized (the recording learned no fixed prefill latency; --assume-a states one), so this is not a fleet recommendation.
+capacity            req/s     out tok/s   in system   bound by
+  prefill knee      no fixed prefill latency learned                        P1 refused a: NoPromptSpread; pass --assume-a for a flagged answer
+  decode knee       38.00     18981       unbounded   decode batch cap at fill 0.647
+                    OUTSIDE VALIDATED REGION (ExtrapolatedFill: an input the run did not price)
+  fleet knee        38.00     18981       unbounded   decode (prefill not priced)
+  operating (0.85)  32.30     16134       -           0.85 x fleet knee (scaleUpThreshold)
+  max at SLO        no fixed prefill latency learned                        no fleet rate: the prefill side is not priced, and decode alone does not bound the fleet (slo-to-rate gives none either): P1 refused a: NoPromptSpread; pass --assume-a for a flagged answer
+SLO vs load        r/s    TTFT p50/90 ms                    TPOT mean/p90 ms                e2e mean (sum)                    in system (mean)
+  50% of knee      19.00  no fixed prefill latency learned  2.48/TPOT bucket too wide       no fixed prefill latency learned  -
+  80% of knee      30.40  no fixed prefill latency learned  2.95/TPOT bucket too wide       no fixed prefill latency learned  -
+  100% of knee     38.00  no fixed prefill latency learned  saturated/TPOT bucket too wide  no fixed prefill latency learned  unbounded
+  load seen (71%)  26.89  no fixed prefill latency learned  2.79/TPOT bucket too wide       no fixed prefill latency learned  -
 checks
-  1 prefill + 1 decode  does not hold: 26.90 r/s is above 0.85 x the fleet knee 30.88 r/s = 26.25 r/s; prefill not priced (no fixed prefill latency learned); TPOT mean 3.1 ms meets 5.0 ms
-flags: DecodeOnly; BatchBeyondFit; ExtrapolatedFill; CoarseTPOTBucket; EngineTPOTHistogram; ShapeLoadMismatch
+  1 prefill + 1 decode  holds: 26.89 r/s within 0.85 x the fleet knee 38.00 r/s = 32.30 r/s; prefill not priced (no fixed prefill latency learned); TPOT mean 2.8 ms meets 5.0 ms
+flags: DecodeOnly; AssumedShape; ExtrapolatedFill; BatchBeyondFit; CoarseTPOTBucket; EngineTPOTHistogram
 
 not validated:
   - decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 43% to 99% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
-  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile
+  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile; in system is the rate times it (Little's law), the requests in the system on average

@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
 
@@ -55,7 +56,34 @@ type serveFlags struct {
 	allowUpload bool
 	// noSelfCheck is --no-self-check: inputs do not self-check unless asked.
 	noSelfCheck bool
-	uploadMax   string
+	// experimentalTTFT is --experimental-ttft: every request is priced with
+	// the experimental TTFT model, so a page user need not ask for it;
+	// rankMixtureTTFT is its =v2, every backtest priced with the
+	// rank-mixture TTFT model (experimentalTTFTValue, as the CLI's), and
+	// the main view of every source; rankMixtureNLLine is =v2nl-line, the
+	// same with the variant whatif.QueueRankMixtureNLLine.
+	experimentalTTFT, rankMixtureTTFT, rankMixtureNLLine bool
+	// rankMixtureStratified is --rank-mixture-stratified: the server's
+	// default for a request that does not say, nil the planner's
+	// (whatifapi.Config.NoRankMixtureStratified).
+	rankMixtureStratified *bool
+	// replay is the opt-in replay switches serve turns on for every source
+	// (serve_replay.go).
+	replay replayDefaults
+	// rankMixtureFit is the variant's modes and the shortest fit window
+	// (rank_mixture_fit.go): the server's defaults for a backtest or a
+	// source that does not set them (whatifapi.Config
+	// RankMixtureKVHold, RankMixtureRemainderSpread,
+	// RankMixtureMinFitWindow).
+	rankMixtureFit rankMixtureFit
+	// tpotFit is --tpot-dist-min-fit-steps (rank_mixture_fit.go): the
+	// server's default (whatifapi.Config.TPOTDistMinFitSteps).
+	tpotFit tpotDistFit
+	// experimentalTPOT is --experimental-tpot (=v2): every backtest, and
+	// the main view of every source, priced with the per-request TPOT
+	// distribution.
+	experimentalTPOT string
+	uploadMax        string
 	// uploads is the store handler made with --allow-upload, for the caller
 	// to Close when the server stops; nil without.
 	uploads *uploadStore
@@ -91,6 +119,13 @@ func runServe(ctx context.Context, args []string, out, warn io.Writer) error {
 	fs.StringVar(&f.allowedNamespaces, "allowed-namespaces", "", "the namespaces a prometheus source may read, comma-separated; default --namespace alone")
 	fs.BoolVar(&f.allInContainer, "listen-all-in-container", false, "in a container whose port is published to the host's loopback only (-p 127.0.0.1:8080:8080): allow --listen 0.0.0.0:PORT with --auth=none; never where the address is reachable from a network. Refused when KUBERNETES_SERVICE_HOST is set, a best-effort tripwire, not enforcement")
 	fs.StringVar(&f.audiences, "token-audiences", "", "with --auth=kubernetes, the audiences a TokenReview checks a token for, comma-separated; default the API server's")
+	fs.Var(experimentalTTFTValue{switches: &f.experimentalTTFT, v2: &f.rankMixtureTTFT, nlLine: &f.rankMixtureNLLine}, experimentalTTFTFlag, "price every request with the experimental TTFT model, as if each asked for experimentalTTFT: for a planner served to people who should see it without asking; =v2 instead prices every backtest with the rank-mixture TTFT model, as if each asked for ttftModel "+string(whatif.QueueRankMixture)+", and the main view of every source (plan, size, report). "+experimentalTTFTV2Usage+"; "+experimentalTTFTNLLineUsage+", as if each asked for ttftModel "+string(whatif.QueueRankMixtureNLLine))
+	fs.Var(optionalBool{&f.rankMixtureStratified, whatif.DefaultRankMixtureStratified}, rankMixtureStratifiedFlag, rankMixtureStratifiedUsage+"; a request's rankMixtureStratified overrides it")
+	f.replay.register(fs)
+	f.rankMixtureFit.registerModes(fs)
+	f.rankMixtureFit.registerWindow(fs)
+	f.tpotFit.register(fs)
+	fs.StringVar(&f.experimentalTPOT, experimentalTPOTFlag, "", "price every backtest, and the main view's TPOT p90 and p95 (plan, size, report), with the experimental per-request TPOT distribution, as if each asked for tpotModel "+whatif.TPOTRenewalLognormal+": "+experimentalTPOTUsage)
 	fs.BoolVar(&f.noSelfCheck, "no-self-check", false, "do not check the planner on each source beside its inputs, unless a request asks (selfCheck true)")
 	fs.BoolVar(&f.allowUpload, "allow-upload", false, "take recordings uploaded from the page (POST /v1/recordings): kept as sent, in a private temporary directory (TMPDIR; TMP on Windows), the last 4, until the server stops. Off by default: whoever may open the planner may then upload")
 	fs.StringVar(&f.uploadMax, "upload-max-size", whatifapi.Quantity(whatifapi.DefaultUploadBytes), "with --allow-upload, the largest upload, a quantity (256Mi); it may gunzip to 16 times that")
@@ -215,8 +250,8 @@ func (f *serveFlags) handler(fs *flag.FlagSet, warn io.Writer) (http.Handler, er
 		return nil, usagef("--auth=%s needs --tls-cert-file and --tls-key-file: a bearer token is not sent in the clear", whatifapi.AuthKubernetes)
 	}
 	if f.planBudget < 0 || f.planBudget > maxPlanBudget {
-		return nil, usagef("--plan-budget %s: want 0 (the default, %s) up to %s: a plan stopped later is refused after the server's %s write timeout has closed the connection",
-			f.planBudget, whatifapi.DefaultPlanBudget, maxPlanBudget, writeTimeout)
+		return nil, usagef("--plan-budget %s: want 0 (the default, %s) up to %s",
+			f.planBudget, whatifapi.DefaultPlanBudget, maxPlanBudget)
 	}
 	if f.maxInputs < 0 {
 		return nil, usagef("--max-inputs %d: want 1 or more, or 0 for the default, %d", f.maxInputs, whatifapi.DefaultMaxInputs)
@@ -250,9 +285,28 @@ func (f *serveFlags) handler(fs *flag.FlagSet, warn io.Writer) (http.Handler, er
 	if err != nil {
 		return nil, err
 	}
-	src := &servedSources{window: f.window, recordings: f.recordings, warn: warn, allowed: allowed}
+	tpotModel, err := experimentalTPOTOf(f.experimentalTPOT)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.rankMixtureFit.check(f.rankMixtureTTFT, f.rankMixtureNLLine); err != nil {
+		return nil, err
+	}
+	if err := f.tpotFit.check(tpotModel != ""); err != nil {
+		return nil, err
+	}
+	warnKVHoldAlone(warn, f.rankMixtureFit.kvHold, f.rankMixtureFit.remainderSpread)
+	src := &servedSources{window: f.window, recordings: f.recordings, warn: warn, allowed: allowed, experimentalTTFT: f.experimentalTTFT,
+		rankMixture: f.rankMixtureTTFT, tpotDistribution: tpotModel != "", replay: f.replay}
 	cfg := whatifapi.Config{Resolver: src, WhatifSchema: "schema-v" + strconv.Itoa(schemaVersion), PlannerVersion: plannerVersion(), SelfCheck: defaultSelfCheck && !f.noSelfCheck, PlanBudget: f.planBudget,
-		MaxInputs: f.maxInputs, MaxInputsBytes: cacheBytes}
+		MaxInputs: f.maxInputs, MaxInputsBytes: cacheBytes, NoRankMixtureStratified: !stratifiedOr(f.rankMixtureStratified),
+		RankMixtureKVHold: f.rankMixtureFit.kvHold, RankMixtureRemainderSpread: f.rankMixtureFit.remainderSpread,
+		RankMixtureRemainderServer: f.rankMixtureFit.remainderServer,
+		RankMixtureMinFitWindow:    f.rankMixtureFit.window(), TPOTDistMinFitSteps: f.tpotFit.steps()}
+	if f.rankMixtureTTFT {
+		cfg.TTFTModel = rankMixtureModel(f.rankMixtureNLLine)
+	}
+	cfg.TPOTModel = tpotModel
 	if f.allowUpload {
 		// Built last, so that no check refusing the flags leaves its
 		// directory behind; the client below is the one step after it.
@@ -308,17 +362,20 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 }
 
 // The server's timeouts. A write may run as long as a cold plan, or a capture
-// of a Prometheus window, takes.
+// of a Prometheus window, takes. A route that computes moves its write deadline
+// to whatifapi.LongRequestDeadline once its body is read, and an upload to its
+// own; these hold for the rest.
 const (
 	readTimeout  = 30 * time.Second
 	writeTimeout = 10 * time.Minute
 	idleTimeout  = 2 * time.Minute
 )
 
-// maxPlanBudget is the largest --plan-budget: a minute under writeTimeout, so
-// a plan stopped at its budget, which may run on for one figure, is refused
-// on a connection still open.
-const maxPlanBudget = writeTimeout - time.Minute
+// maxPlanBudget is the largest --plan-budget. A plan stopped at its budget,
+// which may run on for one figure, is refused on a connection still open: a
+// route that plans has whatifapi.LongRequestDeadline, 30 minutes, and a
+// backtest may first load a recording within that same time.
+const maxPlanBudget = 9 * time.Minute
 
 // namespaces is the namespaces a prometheus source may read: --allowed-namespaces,
 // else --namespace alone, each a DNS-1123 label. With --prometheus, one is

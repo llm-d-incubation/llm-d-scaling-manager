@@ -49,6 +49,11 @@ type PromptSpread struct {
 	// Assumed is no histogram read: CV is AssumedPromptCV. Clamped is a
 	// reading past what the histogram can say: CV is PromptCVStop.
 	Assumed, Clamped bool
+	// ClosedAt is the context window, tokens, the mass past the
+	// histogram's last finite bound was held under
+	// (ReadPromptSpreadWithin), 0 where none was past it or no window
+	// bounded it.
+	ClosedAt float64
 }
 
 // PoolComputedBuckets adds the computed-token histograms of rows' serving rows
@@ -78,6 +83,8 @@ type promptSample struct {
 	cycle             int
 	at                time.Time
 	computed, request float64
+	// pods is the serving rows counted (PromptWindow.MaxPods).
+	pods int
 	// wholeComputed and whole are the computed and the whole prompt tokens
 	// a second of the counted rows that also read a whole prompt over the
 	// computed rate's minute (domain.ReplicaMetrics.AvgInputTokensRecent):
@@ -87,6 +94,13 @@ type promptSample struct {
 	// tiers is the cached tokens by tier and the KV transfers of the
 	// counted rows that read them, for TierLoad (tier_load.go).
 	tiers tierSample
+	// reuseGap and idle are the counted rows' KV residency histograms
+	// summed, upper bound to rate, nil with none read (HitModel).
+	reuseGap, idle map[float64]float64
+	// routerPredicted and routerBest are the router prefix producer's
+	// predicted and best-available cached tokens a second this cycle
+	// (NoteRouterPrefix), 0 with none read (HitModel's K).
+	routerPredicted, routerBest float64
 }
 
 // PromptWindow is a prefill variant's latest PromptWindowCycles cycles with
@@ -117,11 +131,14 @@ func (w *PromptWindow) Note(rows []domain.ReplicaMetrics, cycle int, at time.Tim
 				s.whole += r * il
 			}
 			s.tiers.noteTiers(rm, r)
+			s.reuseGap = addLatencyBuckets(s.reuseGap, rm.KVReuseGapBuckets)
+			s.idle = addLatencyBuckets(s.idle, rm.KVIdleBeforeEvictBuckets)
 		}
 	}
 	if !(s.computed > 0) {
 		return
 	}
+	s.pods = len(counted)
 	if pooled := PoolComputedBuckets(nil, counted); len(pooled) > 0 {
 		s.buckets = pooled
 	}
@@ -129,6 +146,57 @@ func (w *PromptWindow) Note(rows []domain.ReplicaMetrics, cycle int, at time.Tim
 	if len(w.samples) > PromptWindowCycles {
 		w.samples = w.samples[len(w.samples)-PromptWindowCycles:]
 	}
+}
+
+// NoteRouterPrefix adds the router prefix producer's predicted and
+// best-available cached tokens a second, read at cycle, to that cycle's
+// sample (HitModel's duplication K). A cycle Note did not keep, nil router
+// figures or a pair that is not one reading (best under predicted, or none
+// predicted) leave the window as it is.
+func (w *PromptWindow) NoteRouterPrefix(cycle int, r *domain.RouterLatency) {
+	if w == nil || len(w.samples) == 0 || r == nil {
+		return
+	}
+	pr, ba := r.PrefixPredictedTokenRate, r.PrefixBestAvailableTokenRate
+	s := &w.samples[len(w.samples)-1]
+	if s.cycle != cycle || !Finite(pr) || !Finite(ba) || !(pr > 0) || !(ba >= pr) {
+		return
+	}
+	s.routerPredicted, s.routerBest = pr, ba
+}
+
+// AffinityLoss is the share of the cached tokens the router could have hit
+// on the best endpoint that it sent elsewhere, 1 - predicted / best
+// available, summed over the window's cycles that read both
+// (NoteRouterPrefix); false with none.
+func (w *PromptWindow) AffinityLoss() (float64, bool) {
+	if w == nil {
+		return 0, false
+	}
+	var pr, ba float64
+	for _, s := range w.samples {
+		pr += s.routerPredicted
+		ba += s.routerBest
+	}
+	if !(ba > 0) {
+		return 0, false
+	}
+	return max(1-pr/ba, 0), true
+}
+
+// addLatencyBuckets adds b's rates to m by bound, m made on the first
+// bucket read; a bucket that is no reading adds nothing.
+func addLatencyBuckets(m map[float64]float64, b []domain.LatencyBucket) map[float64]float64 {
+	for _, x := range b {
+		if math.IsNaN(x.UpperBound) || !Finite(x.Rate) || x.Rate < 0 {
+			continue
+		}
+		if m == nil {
+			m = map[float64]float64{}
+		}
+		m[x.UpperBound] += x.Rate
+	}
+	return m
 }
 
 // Clone is a copy that a later Note does not reach. Nil stays nil.
@@ -151,6 +219,21 @@ func (w *PromptWindow) Prompt() (tokens float64, from, to, cycles int) {
 		requests += s.request
 	}
 	return computed / requests, w.samples[0].cycle, w.samples[len(w.samples)-1].cycle, len(w.samples)
+}
+
+// MaxPods is the most serving pods one cycle of the window counted, 0 for
+// a nil or empty window. ComputedHit is read over the whole window, so a
+// window that spans a change of prefill count reads a hit from up to that
+// many pods, not only from the count of its last cycle.
+func (w *PromptWindow) MaxPods() int {
+	if w == nil {
+		return 0
+	}
+	n := 0
+	for _, s := range w.samples {
+		n = max(n, s.pods)
+	}
+	return n
 }
 
 // ComputedHit is the share of the whole prompt the prefill engines did not
@@ -180,7 +263,12 @@ func (w *PromptWindow) ComputedHit() (float64, bool) {
 // reaching back before the histogram does not mix two sets of requests. Below
 // PromptWindowMinCycles or PromptWindowMinRequests it is Assumed, whatever the
 // histogram says.
-func (w *PromptWindow) Spread() PromptSpread {
+func (w *PromptWindow) Spread() PromptSpread { return w.SpreadWithin(0) }
+
+// SpreadWithin is Spread with the histogram's mass past its last finite
+// bound held under contextTokens, the engines' context window
+// (ReadPromptSpreadWithin); 0 is no window known, Spread.
+func (w *PromptWindow) SpreadWithin(contextTokens float64) PromptSpread {
 	pooled := map[float64]float64{}
 	var computed, requests float64
 	cycles, counted := 0, 0.0
@@ -209,7 +297,7 @@ func (w *PromptWindow) Spread() PromptSpread {
 	if cycles < PromptWindowMinCycles || counted < PromptWindowMinRequests {
 		return ReadPromptSpread(nil, 0)
 	}
-	return ReadPromptSpread(pooled, computed/requests)
+	return ReadPromptSpreadWithin(pooled, computed/requests, contextTokens)
 }
 
 // promptMeanTolerance is the rounding allowed when a mean sits on the buckets'
@@ -246,7 +334,8 @@ const promptMeanTolerance = 1e-9
 // population's, which no histogram can show.
 //
 // Mass past the last finite bound has no upper bound, so cv is the top and
-// Clamped, as is a cv above it. With no histogram, no request in it, or no mean
+// Clamped, as is a cv above it (ReadPromptSpreadWithin bounds it by the
+// engines' context window). With no histogram, no request in it, or no mean
 // it is AssumedPromptCV, Assumed.
 //
 // MaxRatio is the upper bound of the highest bucket holding requests, over
@@ -256,6 +345,21 @@ const promptMeanTolerance = 1e-9
 // holds whatever the spread inside it. A mean below the lower edges reads
 // every request at its upper bound, and the ratio over it is the same bound.
 func ReadPromptSpread(pooled map[float64]float64, mean float64) PromptSpread {
+	return ReadPromptSpreadWithin(pooled, mean, 0)
+}
+
+// ReadPromptSpreadWithin is ReadPromptSpread where no request's prompt is
+// longer than contextTokens, the engines' context window (--max-model-len):
+// no prompt computes more tokens than it holds, so the mass past the last
+// finite bound lies in (last bound, contextTokens], read at the largest
+// second moment as every bucket is, and the spread is a bound again, not
+// the top: ClosedAt says so. vLLM's histogram edges stop under its
+// context window (1-2-5 up to it, so 20000 under 40960), and on a lab P/D
+// run of 6k-28k-token prompts 12-20% of the computed prompts sat past the
+// last edge: read at the top, cv 3, against 1.4-1.6 bounded by the window.
+// A window at or under the last bound, or 0, bounds nothing:
+// ReadPromptSpread.
+func ReadPromptSpreadWithin(pooled map[float64]float64, mean, contextTokens float64) PromptSpread {
 	assumed := PromptSpread{CV: AssumedPromptCV, Assumed: true}
 	total, ok := pooled[math.Inf(1)]
 	if !ok || !(total > 0) || !(mean > 0) {
@@ -276,8 +380,13 @@ func ReadPromptSpread(pooled map[float64]float64, mean float64) PromptSpread {
 		below = max(below, pooled[u])
 		lower = u
 	}
+	closedAt := 0.0
 	if total > below {
-		return PromptSpread{CV: PromptCVStop, Clamped: true}
+		if !(contextTokens > lower) || !Finite(contextTokens) {
+			return PromptSpread{CV: PromptCVStop, Clamped: true}
+		}
+		buckets = append(buckets, promptBucket{lo: lower, hi: contextTokens, n: total - below})
+		below, closedAt = total, contextTokens
 	}
 	// The buckets count below requests: the +Inf rate can read under the
 	// last bound's, each series' rate extrapolated on its own. The mean is
@@ -298,9 +407,9 @@ func ReadPromptSpread(pooled map[float64]float64, mean float64) PromptSpread {
 	// (promptSecondMoment's tolerance), and no bound is under the mean.
 	ratio := max(top/mean, 1)
 	if !Finite(cv) || cv > PromptCVStop {
-		return PromptSpread{CV: PromptCVStop, MaxRatio: ratio, Clamped: true}
+		return PromptSpread{CV: PromptCVStop, MaxRatio: ratio, Clamped: true, ClosedAt: closedAt}
 	}
-	return PromptSpread{CV: cv, MaxRatio: ratio}
+	return PromptSpread{CV: cv, MaxRatio: ratio, ClosedAt: closedAt}
 }
 
 // promptBucket is one histogram bucket, (lo, hi], and the requests in it.

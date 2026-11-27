@@ -59,7 +59,7 @@ var errNotMonotone = errors.New("the size's search does not hold on this fleet")
 // within the bound does.
 func (s *Server) handleSize(w http.ResponseWriter, r *http.Request) {
 	var req SizeRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	body, err := s.size(r.Context(), req)
@@ -147,6 +147,10 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if sc.Concurrency != nil {
+		return nil, InputErrorf("traffic.classes.critical.concurrency: a size needs a rate; a concurrency is a rate only on a given fleet, " +
+			"so translate it with POST /v1/plan on a fleet and size for that rate")
+	}
 	if sc.Rate == nil {
 		return nil, InputErrorf("traffic.classes.critical.rate: give the rate to size the fleet for")
 	}
@@ -185,7 +189,7 @@ func (s *Server) size(ctx context.Context, req SizeRequest) ([]byte, error) {
 			if s.onSearch != nil {
 				s.onSearch()
 			}
-			z := &sizer{e: e, sc: sc, k: k, rate: *sc.Rate, bound: bound, low: on == SizeOnLow,
+			z := &sizer{e: e, sc: sc, k: k, rate: *sc.Rate, bound: bound, low: on == SizeOnLow, models: e.models(),
 				seen: map[FleetCounts]sizeEval{}, plain: map[FleetCounts]sizeEval{}}
 			if found, err = z.search(ctx); err != nil {
 				return nil, err
@@ -289,6 +293,10 @@ type sizer struct {
 	bound FleetCounts
 	// low sizes on the low end of each limit's span over V_P and f.
 	low bool
+	// models is the experimental models (TTFT and TPOT) the search prices
+	// with: the inputs' for a size, and for a day plan asked for them
+	// (DayPlanRequest.ExperimentalModels); nil for the planner's own.
+	models *experimentalModels
 	// seen is every fleet priced, by its counts; plain, with low, every
 	// fleet priced for decode's own limit alone, without the span.
 	seen, plain map[FleetCounts]sizeEval
@@ -299,6 +307,9 @@ type sizer struct {
 // refused, and then the fleet's too), the prefill role's, and the fleet's.
 type sizeEval struct {
 	decode, prefill, fleet whatif.Result
+	// extrapolated says the fleet limit is one the experimental TTFT or TPOT
+	// model set past the highest load served (experimentalModels.markLimit).
+	extrapolated bool
 }
 
 // at prices the fleet of n, once per search, stopping with ctx's error once
@@ -341,6 +352,7 @@ func (z *sizer) priced(ctx context.Context, cache map[FleetCounts]sizeEval, n Fl
 	if err != nil {
 		return sizeEval{}, err
 	}
+	fl = z.models.fleet(fl, k)
 	tpot := 0.0
 	if z.sc.TPOT != nil {
 		tpot = z.sc.TPOT.Target
@@ -352,6 +364,7 @@ func (z *sizer) priced(ctx context.Context, cache map[FleetCounts]sizeEval, n Fl
 	} else {
 		v.decode, v.prefill, v.fleet = fl.PlainLimits(z.sc.TTFT.Target, tpot, z.sc.Headroom)
 	}
+	v.extrapolated = z.models.markLimit(fl, k, figureOf(v.fleet, unitRate, false)).Extrapolated
 	cache[n] = v
 	return v, nil
 }
@@ -377,6 +390,7 @@ func (z *sizer) step(ctx context.Context, n FleetCounts) (*SizeStep, error) {
 		return nil, err
 	}
 	st := &SizeStep{Fleet: n, Limit: figureOf(v.fleet, unitRate, false), Binding: binding(v.prefill, v.decode)}
+	st.Limit.Extrapolated = v.extrapolated
 	x, ok := valueOf(v.fleet)
 	if a, isAnswer := v.fleet.(whatif.Answer); isAnswer && z.low && a.Sensitivity != nil {
 		if a.Sensitivity.Refused != "" {

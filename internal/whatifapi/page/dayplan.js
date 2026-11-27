@@ -234,10 +234,10 @@ function dayPlanSVG(plan) {
       const r = dayRoleRefusal(plan, p.key);
       if (r) {
         g += `<text class="pnote" data-refused="${esc(p.key)}" x="${DAY_L + lay.pw / 2}" y="${p.top + p.h / 2}" text-anchor="middle">` +
-          `${esc(p.title)} not sized: ${esc(DAY_TERMS[r.term] || r.term)} refused (${esc(r.reason)})</text>`;
+          `${esc(p.title)} not sized: ${esc(r.reason === "NoPrefillCapacity" ? "prefill capacity unknown" : (DAY_TERMS[r.term] || r.term) + " not learned")}</text>`;
       } else if (p.key === "decode" && b.some(k => k.needed && k.needed.atLeast)) {
-        g += `<text class="pnote" data-lower-bound="decode" x="${DAY_L + 4}" y="${p.top + 12}">` +
-          `where prefill is not priced, needed is at least: decode's own limit alone</text>`;
+        g += `<text class="pnote" data-lower-bound="decode" x="${DAY_L + lay.pw / 2}" y="${p.top + p.h - 6}" text-anchor="middle">` +
+          `needed is at least: decode alone, prefill not sized</text>`;
       }
     }
     g += dayLabels(labels, xr + 6, p.top, p.top + p.h);
@@ -285,9 +285,27 @@ function dayLegend() {
 
 // DAY_STATUS is a bucket's status in words.
 const DAY_STATUS = {sized: "sized", tooLittleData: "too little data", noData: "no data", unmet: "beyond the bound",
-  refused: "not sized: the source refused a term"};
+  refused: "not sized: a term was not learned"};
 // DAY_VERDICT is a verdict in words.
 const DAY_VERDICT = {under: "under: SLO risk", over: "over: waste", match: "matches", refused: "refused"};
+// DAY_VERDICT_DECODE is a verdict on decode alone (scope "decode only"): the
+// source did not price prefill, so a decode replica to spare is no fleet's
+// waste.
+const DAY_VERDICT_DECODE = {under: "under: SLO risk (decode only)", over: "decode only: a decode replica to spare", match: "decode only: matches"};
+// DAY_DECODE_ONLY says why a decode-only verdict is not a recommendation.
+const DAY_DECODE_ONLY = "Prefill was not sized, so this is not a fleet recommendation.";
+
+// DAY_TYPE_VP points a day plan that could not price prefill to the box
+// that lets it: a stated V_P sizes prefill in every bucket.
+const DAY_TYPE_VP = "To size prefill, type a prefill speed (V_P per pod) under Assumptions, above the tabs, and plan the day again.";
+
+// dayVerdict is a bucket's or an hour's verdict in words, "" with none: a
+// bucket the model would call over whose measured TTFT missed its target
+// says so in place of a verdict.
+function dayVerdict(x) {
+  if (!x.verdict) return (x.flags || []).includes("MeasuredTTFTOverTarget") ? "not judged: measured TTFT over target" : "";
+  return (x.scope === "decode only" ? DAY_VERDICT_DECODE[x.verdict] : null) || DAY_VERDICT[x.verdict] || x.verdict;
+}
 
 // dayBucketAt is the bucket that holds t, seconds since the epoch, or null.
 function dayBucketAt(plan, t) {
@@ -301,8 +319,8 @@ function dayBucketAt(plan, t) {
 // dayNeededText is a bucket's needed fleet in words: decode sized alone is
 // a lower bound.
 function dayNeededText(n) {
-  if (n.prefill == null) return `at least ${n.decode} decode (prefill not priced)`;
-  return n.atLeast ? `at least ${n.prefill} prefill, ${n.decode} decode (prefill not priced in some buckets)` : `${n.prefill} prefill, ${n.decode} decode`;
+  if (n.prefill == null) return `at least ${n.decode} decode (prefill not sized)`;
+  return n.atLeast ? `at least ${n.prefill} prefill, ${n.decode} decode (prefill not sized in some buckets)` : `${n.prefill} prefill, ${n.decode} decode`;
 }
 
 // dayTip is the tooltip of a bucket: every value at that time, as rows of
@@ -321,8 +339,9 @@ function dayTip(plan, b) {
   if (b.needed) row("needed", dayNeededText(b.needed));
   if (b.actual) row("had", `${b.actual.prefill} prefill, ${b.actual.decode} decode`);
   if (b.notServing) row("asked, not serving", `${b.notServing.prefill} prefill, ${b.notServing.decode} decode`);
-  if (b.hadLimit && b.hadLimit.value != null) row("had fleet serves", dayFmt(b.hadLimit.value) + " r/s");
-  if (b.verdict) row("verdict", DAY_VERDICT[b.verdict] || b.verdict);
+  // Decode judged alone has no fleet limit: the figure would be decode's.
+  if (b.hadLimit && b.hadLimit.value != null && b.scope !== "decode only") row("had fleet serves", dayFmt(b.hadLimit.value) + " r/s");
+  if (dayVerdict(b)) row("verdict", dayVerdict(b));
   if (b.trust) row("self-check", b.trust);
   if (b.unmet) row("beyond the bound", `${b.unmetRole || "fleet"}: ${b.unmet.reason}`);
   if (b.shape && b.shape.promptTokens != null) row("prompt, output", `${b.shape.promptTokens.toFixed(0)}, ${b.shape.outputTokens != null ? b.shape.outputTokens.toFixed(0) : "-"} tokens (${b.shape.source})`);
@@ -339,7 +358,12 @@ function dayTipHTML(plan, b) {
 // dayRefusedHTML is the plan's refusals, each in words: what the source
 // could not price, what to do, and what the plan did instead.
 function dayRefusedHTML(plan) {
-  return (plan.refused || []).map(r => `<li><b>${esc(DAY_TERMS[r.term] || r.term)} refused (${esc(r.reason)}), ${r.buckets} bucket(s).</b> ` +
+  // An unknown prefill capacity reads as the answer view's card does; the
+  // code stays in small type.
+  return (plan.refused || []).map(r => r.reason === "NoPrefillCapacity" ?
+    `<li title="${esc(r.reason)}"><b>${r.buckets} bucket(s):</b> ${esc(noPrefillWords({reason: r.reason, detail: r.detail, flags: /only the rate a prefill pod/.test(r.detail) ? ["VPLowerBound"] : []}))} ` +
+      `Decode is sized alone. ${esc(DAY_TYPE_VP)}</li>` :
+    `<li><b>${esc(DAY_TERMS[r.term] || r.term)} refused (${esc(r.reason)}), ${r.buckets} bucket(s).</b> ` +
     `${esc(r.detail)}. ${esc(r.effect)} <span class="hint">${esc(r.hint)}</span></li>`).join("");
 }
 
@@ -352,7 +376,7 @@ function dayHoursTable(plan) {
     (lead ? "<th>held (with the scale-up lead)</th>" : "") + "<th>had P</th><th>had D</th><th>beyond the bound</th><th></th></tr>";
   for (const h of plan.hours) {
     const busiest = !h.busiest ? "-" : h.busiest.prefill != null ? `${h.busiest.prefill}+${h.busiest.decode}` : `D>=${h.busiest.decode}`;
-    const verdict = (h.verdict ? DAY_VERDICT[h.verdict] : "not sized") + (h.notConfirmed ? ", need not confirmed" : "");
+    const verdict = (dayVerdict(h) || "not sized") + (h.notConfirmed ? ", need not confirmed" : "");
     const atLeast = h.needed && h.needed.atLeast ? ">=" : "";
     const had = role => h.actual == null ? null : h.actual[role] + (h.notServing && h.notServing[role] ? `(+${h.notServing[role]})` : "");
     s += `<tr><td>${esc(h.start.slice(0, 16).replace("T", " "))}</td><td>${h.rate ? dayFmt(h.rate.mean) : "-"}</td><td>${h.rate ? dayFmt(h.rate.p95) : "-"}</td>` +
@@ -362,6 +386,29 @@ function dayHoursTable(plan) {
       `<td>${n(h.unmet)}</td><td>${esc(verdict + (h.trust ? "; " + h.trust : ""))}</td></tr>`;
   }
   return s + "</table>";
+}
+
+// dayModelsText is the experimental models a day plan was asked to price
+// with, in words: abstained, or how many sized buckets each priced, marked
+// with the dagger; "" with none. The notes say why the rest are the
+// planner's own.
+function dayModelsText(plan) {
+  const sized = plan.summary && plan.summary.counts ? plan.summary.counts.sized || 0 : 0;
+  return [[plan.ttftModel, "RankMixtureTTFT"], [plan.tpotModel, "TPOTDistribution"]].filter(([m]) => m).map(([m, flag]) => m.abstained ?
+    `${m.label}: abstained (${m.abstained}); the planner's own prices every bucket.` :
+    `${m.label}: priced ${(plan.buckets || []).filter(b => b.limit && (b.limit.flags || []).includes(flag)).length} of the ${sized} sized buckets, ` +
+      `each marked ${DAGGER} (not validated: outside the validated region); the notes say why the rest are the planner's own.`).join(" ");
+}
+
+// DAY_MODEL_FLAGS are the flags a model the plan was asked to price with
+// puts on a bucket's limit: what the dagger in the bucket table marks, as
+// the command's hours table marks them. Other experimental flags (a
+// plateau V_P, the TTFT switches) are named in the flags column only.
+const DAY_MODEL_FLAGS = ["RankMixtureTTFT", "TPOTDistribution"];
+
+// dayModelDagger is the dagger where a model set the limit, else "".
+function dayModelDagger(limit) {
+  return limit && (limit.flags || []).some(f => DAY_MODEL_FLAGS.includes(f)) ? DAGGER : "";
 }
 
 // dayBucketsTable is every bucket, the table view of the charts: what the
@@ -375,17 +422,39 @@ function dayBucketsTable(plan) {
     s += `<tr><td>${esc(b.start.slice(0, 16).replace("T", " "))}</td><td>${esc(DAY_STATUS[b.status] || b.status)}</td>` +
       `<td>${b.rate ? dayFmt(b.rate.mean) : "-"}</td><td>${b.rate ? dayFmt(b.rate.p95) : "-"}</td>` +
       `<td>${b.sizedRate != null ? dayFmt(b.sizedRate) + " (" + esc(b.sizedFor) + ")" : "-"}</td>` +
-      `<td>${n(b.needed && b.needed.prefill)}</td><td>${n(b.needed && b.needed.decode)}</td><td>${n(b.actual && b.actual.prefill)}</td><td>${n(b.actual && b.actual.decode)}</td>` +
-      `<td>${esc((b.verdict ? DAY_VERDICT[b.verdict] || b.verdict : "") + (b.trust ? "; " + b.trust.split(":")[0] : ""))}</td><td>${esc(why)}</td><td>${esc((b.flags || []).join(", "))}</td></tr>`;
+      `<td>${n(b.needed && b.needed.prefill)}${b.needed ? dayModelDagger(b.limit) : ""}</td><td>${n(b.needed && b.needed.decode)}${b.needed ? dayModelDagger(b.limit) : ""}</td>` +
+      `<td>${n(b.actual && b.actual.prefill)}</td><td>${n(b.actual && b.actual.decode)}</td>` +
+      `<td>${esc(dayVerdict(b) + (b.trust ? "; " + b.trust.split(":")[0] : ""))}</td><td>${esc(why)}</td><td>${esc((b.flags || []).join(", "))}</td></tr>`;
   }
   return s + "</table>";
+}
+
+// dayHourRange is a list of hours in words: "none", "every hour, A to B"
+// where they are every hour with data, "A to B (N hours)" where they run
+// unbroken, else each hour.
+function dayHourRange(plan, hs, days) {
+  if (!hs.length) return "none";
+  const t = hs.map(h => dayTime(h)).sort((a, b) => a - b);
+  const unbroken = t.every((x, i) => i === 0 || x - t[i - 1] === 3600);
+  const clock = x => dayClock(x, days);
+  if (t.length < 3 || !unbroken) return t.map(clock).join(", ");
+  const withData = (plan.hours || []).filter(h => h.rate).length;
+  const span = `${clock(t[0])} to ${clock(t[t.length - 1])}`;
+  return t.length === withData ? `every hour, ${span}` : `${span} (${t.length} hours)`;
 }
 
 // daySummaryText is the summary in a few lines of plain text.
 function daySummaryText(plan) {
   const s = plan.summary, c = s.counts, out = [];
   const days = daySpansDays(plan);
-  const hours = hs => hs.length ? hs.map(h => dayClock(dayTime(h), days)).join(", ") : "none";
+  const hours = hs => dayHourRange(plan, hs, days);
+  // The SLO as the router measured it comes first, as risk: a plan sized on
+  // decode alone never reads as holding it.
+  if (c.measuredTTFT && plan.ttft && c.measuredTTFTOver) {
+    out.push(`SLO risk: measured TTFT ${plan.ttft.statistic} was over ${dayFmt(plan.ttft.target)} s in ` +
+      (c.measuredTTFTOver === c.measuredTTFT ? "every interval measured" : `${c.measuredTTFTOver} of ${c.measuredTTFT} intervals`) +
+      (c.prefillNotPriced ? " (prefill not sized)." : "."));
+  }
   if (s.peakNeeded) {
     const busiest = s.busiestNeeded ? `; the busiest bucket alone ${dayNeededText(s.busiestNeeded)}` : "";
     out.push(`Needed to hold every bucket ${dayNeededText(s.peakNeeded)}${s.peakNotConfirmed ? " (not confirmed: it falls short at a bucket)" : ""}` +
@@ -395,14 +464,24 @@ function daySummaryText(plan) {
       (g ? `the fewest GPUs, at ${g.prefill} a prefill and ${g.decode} a decode replica` : "the fewest replicas in all") +
       ", and another mix may serve it too. The fleet the bucket had is judged whole, at the bucket's rate.");
     if (s.neededGpuHours != null) out.push(`Over the ${c.sized} sized buckets: GPU-hours needed ${s.neededGpuHours.toFixed(1)}, had ${s.hadGpuHours.toFixed(1)}.`);
-    else if (c.prefillNotPriced) out.push(`No GPU-hours of the need: prefill is not priced in ${c.prefillNotPriced} of the ${c.sized} sized buckets.`);
+    else if (c.prefillNotPriced) {
+      out.push(`No GPU-hours of the need: prefill is not sized in ${c.prefillNotPriced} of the ${c.sized} sized buckets.` +
+        ((plan.refused || []).some(r => r.reason === "NoPrefillCapacity") ? " " + DAY_TYPE_VP : ""));
+    }
     if (s.heldReplicaHours) {
       const r = s.heldReplicaHours;
       out.push(`Held with the scale-up lead (each scale-up's replicas from one lead before their bucket): ` +
         `${r.prefill != null ? r.prefill.toFixed(2) + " prefill + " : ""}${r.decode.toFixed(2)} decode replica-hours` +
         `${s.heldGpuHours != null ? ", " + s.heldGpuHours.toFixed(1) + " GPU-hours" : ""}.`);
     }
-    out.push(`Hours under (SLO risk): ${hours(s.underHours)}. Hours over (waste): ${hours(s.overHours)}.`);
+    const decodeOver = s.decodeOverHours || [];
+    if (c.prefillNotPriced === c.sized) {
+      // Prefill priced in no bucket: no fleet is judged over, only decode.
+      out.push(`Hours short of the rate: ${hours(s.underHours)}. Decode only: ${decodeOver.length ? "decode had a replica to spare " + hours(decodeOver) : "no hour had a decode replica to spare"}. ${DAY_DECODE_ONLY}`);
+    } else {
+      out.push(`Hours under (SLO risk): ${hours(s.underHours)}. Hours over (waste): ${hours(s.overHours)}.` +
+        (decodeOver.length ? ` Decode only (prefill not sized in them): hours decode had a replica to spare: ${hours(decodeOver)}.` : ""));
+    }
   } else {
     out.push("No bucket was sized: see the refusals above.");
   }
@@ -410,7 +489,55 @@ function daySummaryText(plan) {
   const p95 = plan.sizeFor === "p95-modulation" ? `${c.sizedForP95Modulation || 0} for their p95 less counting noise` : `${c.sizedForP95} for their p95`;
   out.push(`${c.sized} buckets sized (${p95}, ${c.sizedForMean} for their mean, ${c.sizedForMax} for their max), ` +
     `${c.unmet} beyond the bound, ${c.refused} refused, ${c.tooLittleData} with too little data, ${c.noData} with no data.`);
+  if (c.measuredTTFT && plan.ttft && !c.measuredTTFTOver) {
+    out.push(`Measured TTFT ${plan.ttft.statistic} was within ${dayFmt(plan.ttft.target)} s in all ${c.measuredTTFT} intervals measured.`);
+  }
   if (c.untrusted) out.push(`Self-check: ${c.untrusted} bucket(s) not trusted: their verdicts rest on figures the self-check found inconsistent with this recording (see each bucket).`);
   if (c.notCovered) out.push(`Self-check: ${c.notCovered} bucket(s) not covered: it did not test the rate, fleet or shape each was priced at.`);
   return out;
+}
+
+// dayHeadline is the day plan in one line, over its chart: the most the
+// busiest bucket needed and when, beside what the fleet ran then, and how
+// many hours missed the SLO; "" with nothing sized.
+function dayHeadline(plan) {
+  let peak = null;
+  for (const b of plan.buckets) {
+    if (b.needed && b.sizedRate != null && (!peak || b.sizedRate > peak.sizedRate)) peak = b;
+  }
+  if (!peak) return "";
+  const days = daySpansDays(plan);
+  const n = peak.needed;
+  const need = n.prefill == null ? `at least ${n.decode} decode (prefill not sized)` : `${n.atLeast ? "at least " : ""}${n.prefill} prefill + ${n.decode} decode`;
+  const had = peak.actual ? `; it ran ${peak.actual.prefill} + ${peak.actual.decode}` : "";
+  const under = (plan.summary.underHours || []).length;
+  // The measured miss leads, as risk; the need follows.
+  const measured = dayMeasuredLine(plan);
+  return (measured ? measured + " " : "") + `Peak needed ${need} at ${dayClock(dayTime(peak.start), days)} UTC (${dayFmt(peak.sizedRate)} r/s)${had}.` +
+    (under ? ` ${under} hour${under === 1 ? "" : "s"} short of the rate (red).` : "");
+}
+
+// dayMeasuredLine says how the SLO fared as measured: a plan priced on
+// decode alone says nothing of TTFT, so "no hour missed" would read the
+// unpriced prefill as holding. "" where nothing was measured.
+function dayMeasuredLine(plan) {
+  const c = plan.summary.counts;
+  if (!plan.ttft || !c.measuredTTFT) return c.sized && c.prefillNotPriced === c.sized ? "Prefill was not sized." : "";
+  if (!c.measuredTTFTOver) return `Measured TTFT ${plan.ttft.statistic} was within ${dayFmt(plan.ttft.target)} s in every interval measured.`;
+  return `SLO risk: measured TTFT ${plan.ttft.statistic} was over ${dayFmt(plan.ttft.target)} s in ` +
+    (c.measuredTTFTOver === c.measuredTTFT ? "every interval" : `${c.measuredTTFTOver} of ${c.measuredTTFT} intervals`) +
+    (c.prefillNotPriced ? " (prefill not sized)." : ".");
+}
+
+// dayHoursCSV is the hours as CSV: each hour's rate, the fleet it needed and
+// had, and its verdict in words.
+function dayHoursCSV(plan) {
+  const rows = [["hour_utc", "rate_mean", "rate_p95", "needed_prefill", "needed_decode", "needed_at_least", "had_prefill", "had_decode", "verdict"].join(",")];
+  for (const h of plan.hours) {
+    const n = h.needed || {}, a = h.actual || {};
+    rows.push([h.start, h.rate ? h.rate.mean.toFixed(3) : "", h.rate ? h.rate.p95.toFixed(3) : "", n.prefill == null ? "" : n.prefill,
+      n.decode == null ? "" : n.decode, n.atLeast ? "yes" : "", a.prefill == null ? "" : a.prefill, a.decode == null ? "" : a.decode,
+      dayVerdict(h) || "not sized"].map(csvField).join(","));
+  }
+  return rows.join("\n") + "\n";
 }

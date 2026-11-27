@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 )
 
 var (
@@ -96,9 +97,11 @@ func registerSLOMetrics(registry prometheus.Registerer) error {
 	}
 	sloPredictedTTFT = gauge(constants.LLMSMSLOPredictedTTFTSeconds,
 		"SLO analyzer, shadow only: the TTFT predicted for a prefill variant at its current rate, in "+
-			"seconds, at the objective's percentile. "+constants.SLOTTFTPredictionCaveat+" Absent when the "+
-			"model refuses the rate or llmsm_slo_ttft_reason is a refusal.",
-		ttftLabels())
+			"seconds, at the objective's percentile, by the learner that priced it (slo, the analyzer's own). "+
+			"For a model the v2 models run for (passive, or the utilization share in shadow), also the mean, "+
+			"p90 and p95, and the v2 model's (ttft-mixture) beside them. "+constants.SLOTTFTPredictionCaveat+
+			" Absent when the model refuses the rate or llmsm_slo_ttft_reason is a refusal.",
+		ttftLabels(constants.LabelLearner))
 	sloTTFTUnmet = gauge(constants.LLMSMSLOTTFTUnmet,
 		"SLO analyzer, shadow only: 1 when a prefill variant's current rate misses the TTFT target, "+
 			"including a rate at or over the prefill knee or the decode onset, and a target below the floor, "+
@@ -207,6 +210,21 @@ type SLOTTFTReading struct {
 	// Joint is the joint prefill and decode model in shadow; nil with the
 	// slo-ttft-joint-inputs replay switch off, or not one variant per role.
 	Joint *SLOTTFTJointReading `learnrec:"omitzero"`
+	// Statistics is the same model's TTFT at the current rate by statistic
+	// (constants.SLOPredictedStatistics), for a model the v2 models run
+	// for; nil otherwise. The one Statistic names is Predicted's.
+	Statistics map[string]float64 `learnrec:"omitzero"`
+}
+
+// SLOPrediction is one predicted latency figure beside the default model's
+// own readings: the v2 models' TTFT, and both models' TPOT, by learner.
+type SLOPrediction struct {
+	// Objective is constants.SLOObjectiveTTFT or SLOObjectiveTPOT; Variant
+	// the prefill or decode variant priced; Statistic one of
+	// constants.SLOPredictedStatistics; Learner the learner that priced it
+	// (learn.SLO, TTFTMixture, TPOTDistribution).
+	Objective, Variant, Statistic, Learner string
+	Seconds                                float64
 }
 
 // SLOTTFTJointReading is the joint prefill and decode TTFT model of one
@@ -234,6 +252,9 @@ type SLOModelSnapshot struct {
 	// TTFT is each prefill variant's TTFT pricing; nil with no TTFT target,
 	// no prefill variant, or the slo-ttft-price replay switch off.
 	TTFT []SLOTTFTReading `learnrec:"omitzero"`
+	// Predicted is the v2 models' TTFT and both models' TPOT, for a model
+	// the v2 models run for; nil otherwise.
+	Predicted []SLOPrediction `learnrec:"omitzero"`
 }
 
 // sloStaleAfter is how long a model's SLO series outlive the last cycle that
@@ -324,7 +345,13 @@ func PublishSLO(snap SLOModelSnapshot, now time.Time) {
 		tl := func(pairs ...string) prometheus.Labels {
 			return labels(append([]string{constants.LabelVariantName, t.Variant, constants.LabelStatistic, t.Statistic}, pairs...)...)
 		}
-		set(sloPredictedTTFT, tl(), t.Predicted)
+		set(sloPredictedTTFT, tl(constants.LabelLearner, learn.SLO), t.Predicted)
+		for _, s := range constants.SLOPredictedStatistics {
+			if v, ok := t.Statistics[s]; ok && s != t.Statistic {
+				set(sloPredictedTTFT, labels(constants.LabelVariantName, t.Variant, constants.LabelStatistic, s,
+					constants.LabelLearner, learn.SLO), v)
+			}
+		}
 		set(sloTTFTReplicaRate, tl(), t.PerReplica)
 		switch {
 		case t.Unmet:
@@ -364,6 +391,18 @@ func PublishSLO(snap SLOModelSnapshot, now time.Time) {
 		}
 	}
 
+	for _, p := range snap.Predicted {
+		g := sloPredictedTTFT
+		if p.Objective == constants.SLOObjectiveTPOT {
+			g = sloPredictedTPOT
+		}
+		if g == nil {
+			continue
+		}
+		set(g, labels(constants.LabelVariantName, p.Variant, constants.LabelStatistic, p.Statistic, constants.LabelLearner, p.Learner),
+			p.Seconds)
+	}
+
 	key := snap.Namespace + "/" + snap.ModelName
 	if prev := sloPublished[key]; prev != nil {
 		deleteGone(prev.series, current)
@@ -397,6 +436,7 @@ func DeleteSLOModel(namespace, modelName string) {
 	if sloTarget == nil {
 		return
 	}
+	DeleteSLOModelInputs(namespace, modelName)
 	sloPublishedMu.Lock()
 	defer sloPublishedMu.Unlock()
 	key := namespace + "/" + modelName

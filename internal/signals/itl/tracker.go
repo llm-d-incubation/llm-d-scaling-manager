@@ -1540,13 +1540,24 @@ func (t *Tracker) RestoreSlope(key string, s Slope) {
 	}
 }
 
-// SetBaseline sets the key's intercept, of unknown age: one put back from a
-// stash carries no stamp.
+// SetBaseline sets the key's intercept, of unknown age: SetBaselineAt with a
+// zero stamp.
 func (t *Tracker) SetBaseline(key string, b float64) {
+	t.SetBaselineAt(key, b, time.Time{})
+}
+
+// SetBaselineAt sets the key's intercept and when it was last admitted: one
+// put back from a stash carries the stamp it was put aside with. A zero stamp
+// is an intercept of unknown age.
+func (t *Tracker) SetBaselineAt(key string, b float64, at time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.baselines[key] = b
-	delete(t.baselineAt, key)
+	if at.IsZero() {
+		delete(t.baselineAt, key)
+	} else {
+		t.baselineAt[key] = at
+	}
 }
 
 // WindowLen is how many readings the window filed under key holds, 0 when there

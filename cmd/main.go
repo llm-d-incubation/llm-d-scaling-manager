@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -73,11 +74,13 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/kubecache"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/kueue"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/managedns"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/passive"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/preflight"
 	prometheusutil "github.com/llm-d-incubation/llm-d-scaling-manager/internal/prometheus"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/registry"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaleplan"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scaler"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/scalertls"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
@@ -334,6 +337,41 @@ func main() {
 			"The release files set it; make deploy-scaling-manager provisions the certificates itself and passes "+
 			"--external-scaler-cert-path instead, which this flag refuses.")
 
+	// The install from the one release manifest
+	// (proposal PR #404): each flag is off by
+	// default, so every other install path runs as before.
+	watchNamespacesLive := flag.Bool("watch-namespaces-live", false,
+		"Cluster-scoped installs only: the watchNamespaces setting takes effect without a restart. The cache stays "+
+			"cluster-wide; the setting selects the namespaces the controller manages, an empty one every namespace. "+
+			"The scaler refuses every other namespace, and the status reports each managed namespace's readiness, "+
+			"also as Events in that namespace. Off, the default, reads watchNamespaces at start.")
+	flag.String("keda-namespace", "",
+		"With --external-scaler-tls-bootstrap: the namespace KEDA runs in. The controller then writes KEDA's copy "+
+			"of the client certificate itself, into the Secret scaling-manager-external-scaler-<controller namespace> "+
+			"the release manifest pre-creates there, and needs no marker ConfigMap. The kedaNamespace setting "+
+			"overrides it. Empty, the default, leaves the copy to a person (smt admin-finish).")
+	externalScalerTLSSecrets := flag.String("external-scaler-tls-secrets", "legacy",
+		"With --external-scaler-tls-bootstrap: which Secrets hold the scaler's certificates. legacy: the "+
+			"kubernetes.io/tls placeholders of the release files (scaling-manager-external-scaler-ca, -tls, -client-tls). "+
+			"opaque: the Opaque Secrets of the one manifest (scaling-manager-scaler-ca, -serving, -client), which a "+
+			"server-side re-apply keeps; while they are empty, the legacy Secrets' certificates are copied across, so a "+
+			"move from an smt install keeps the CA KEDA trusts.")
+	externalScalerTLSLive := flag.Bool("external-scaler-tls-live", false,
+		"With --external-scaler-tls-bootstrap: switch the scaler to mutual TLS when KEDA's side comes into place "+
+			"after start, and adopt a new scaler CA while it is in place, with no restart. Off, the choice is made at "+
+			"start and a change asks for a restart.")
+	waitForSettings := flag.Bool("wait-for-settings", false,
+		"When no source names Prometheus, wait for the settings ConfigMap to set prometheusURL instead of exiting: "+
+			"serve the health probes (live, not ready), write ready and preflight.settings with the reason, and start "+
+			"once it is set. The one manifest sets it, since it is applied before the settings.")
+	restartOnSettingsChange := flag.Bool("restart-on-settings-change", false,
+		"Restart when a setting read only at start changes in the settings ConfigMap, instead of asking a person "+
+			"to: the process exits and the kubelet starts it again. A key changed again and again puts the Pod "+
+			"into the kubelet's crash back-off.")
+	selfCheckInterval := flag.Duration("self-check-interval", 0,
+		"Run the preflight checks inside the controller this often and publish each, and ready, in "+
+			"ConfigMap scaling-manager-controller-status. 0, the default, runs none (the preflight Job does).")
+
 	// The warm pool is OFF unless a namespace is named, because it holds GPUs
 	// continuously: that is a cost decision an operator makes, never a default.
 	// Deprecated, inert, and deliberately still parsed: see where it is read.
@@ -475,6 +513,22 @@ func main() {
 	// Precedence: settings ConfigMap > flags > env > config file > defaults
 	// For more information see:
 	// docs/reference/configuration.md
+	if ok, _ := config.ReadyToStart(settingsData); !ok && *waitForSettings {
+		// The one manifest is applied before the settings, and the CA Secret
+		// beside them is mounted some seconds later: wait for both, live and
+		// saying why, instead of a crash back-off.
+		wait := &controllerstatus.SettingsWait{
+			Client:       policyProbe,
+			Namespace:    config.SystemNamespace(),
+			SettingsName: config.SettingsConfigMapName(),
+			ProbeAddr:    flag.CommandLine.Lookup("health-probe-bind-address").Value.String(),
+			Done:         config.ReadyToStart,
+			Log:          setupLog,
+		}
+		if settingsData, err = wait.Wait(signalCtx); err != nil {
+			os.Exit(startupExitCode(signalCtx, setupLog, err, "stopped while waiting for the settings"))
+		}
+	}
 	cfg, err := config.LoadWithSettings(flag.CommandLine, *configFilePath, settingsData)
 	if err != nil {
 		setupLog.Error(err, "failed to load configuration - this is a fatal error")
@@ -785,6 +839,16 @@ func main() {
 		// events.k8s.io Events, which the manager's Role does not grant.
 		Recorder: mgr.GetEventRecorderFor("scaling-manager-configmap-reconciler"), //nolint:staticcheck // SA1019, see above
 		Status:   controllerStatus,
+	}
+	// runCtx ends the manager; with --restart-on-settings-change a changed
+	// restart setting ends it too, and the process exits so the kubelet
+	// starts it again with the new value.
+	runCtx, stopToRestart := context.WithCancelCause(signalCtx)
+	defer stopToRestart(nil)
+	if *restartOnSettingsChange {
+		configMapReconciler.RestartOnSettingsChange = func(changed []string) {
+			stopToRestart(fmt.Errorf("%w: %v", errSettingsRestart, changed))
+		}
 	}
 
 	ctx := ctrl.LoggerInto(signalCtx, setupLog)
@@ -1117,8 +1181,68 @@ func main() {
 	// (docs/plans/engine/keda-driven-discovery.md). Registering before the lease
 	// is held is harmless and useful -- the engines that consume the registry
 	// start on election and find the workloads already there.
+	// watchNamespaces live (--watch-namespaces-live): the scaler refuses every
+	// namespace the setting leaves out, so nothing there is registered; the
+	// reporter publishes the managed and refused sets with each namespace's
+	// readiness, records it as Events in that namespace, and forgets what
+	// was registered, and the InferencePools, in a namespace left out since.
+	var nsAdmission *managedns.Admission
+	var nsReporter *managedns.Reporter
+	// poolRequeue reads every InferencePool again after the managed set
+	// changed; set once the InferencePool reconciler exists.
+	var poolRequeue func(context.Context)
+	if *watchNamespacesLive {
+		if watchNS != "" || !cfg.WatchNamespacesLive() {
+			setupLog.Error(nil, "--watch-namespaces-live is for a cluster-scoped install: the Deployment must name no "+
+				"namespace (--watch-namespace or WATCH_NAMESPACE); the watchNamespaces setting selects them instead",
+				"watchNamespace", watchNS)
+			os.Exit(1)
+		}
+		nsAdmission = &managedns.Admission{Namespaces: cfg.ManagedNamespaces}
+		nsReporter = &managedns.Reporter{Admission: nsAdmission, Sink: controllerStatus,
+			Registry: registry.Default, Pools: ds,
+			OnChange: func(ctx context.Context) {
+				if poolRequeue != nil {
+					poolRequeue(ctx)
+				}
+			},
+			Grants:   func() []managedns.Grant { return neededGrants(cfg) },
+			Access:   managedns.SelfAccess(mgr.GetClient()),
+			Recorder: mgr.GetEventRecorderFor("scaling-manager-namespaces"), //nolint:staticcheck // SA1019: core/v1 events; see the configmap reconciler
+			Log:      ctrl.Log.WithName("managed-namespaces")}
+		if err := mgr.Add(nsReporter); err != nil {
+			setupLog.Error(err, "unable to add the managed-namespace reporter to the manager")
+			os.Exit(1)
+		}
+		// The suggested ScaledObjects for the managed namespaces, which a
+		// person reviews and applies: the listed ones, or with an empty
+		// watchNamespaces those where the controller found an InferencePool
+		// or a registered workload.
+		if err := mgr.Add(&scaleplan.Writer{Client: mgr.GetClient(), Namespace: config.SystemNamespace(),
+			Instance: config.SystemNamespace(), Log: ctrl.Log.WithName("scaledobjects-plan"),
+			Managed: func(context.Context) ([]string, error) {
+				return planNamespaces(cfg, ds, registry.Default), nil
+			}}); err != nil {
+			setupLog.Error(err, "unable to add the ScaledObject plan writer to the manager")
+			os.Exit(1)
+		}
+		names, all := cfg.ManagedNamespaces()
+		setupLog.Info("Managing the namespaces the watchNamespaces setting names, live", "watchNamespaces", names, "every", all)
+	} else if cfg.WatchNamespacesLive() {
+		// WATCH_NAMESPACES_LIVE from the environment or config.yaml, without
+		// the flag: the setting would be read live and the cache left
+		// cluster-wide, with nothing here to enforce it. Refuse to start.
+		setupLog.Error(nil, "WATCH_NAMESPACES_LIVE is set but --watch-namespaces-live is not: set the flag, or leave the key out")
+		os.Exit(1)
+	}
+	var admit scaler.AdmitFunc
+	if nsAdmission != nil {
+		admit = nsAdmission.Admit
+	}
+
 	externalScaler := &scaler.Server{
 		Addr:     *externalScalerBindAddress,
+		Admit:    admit,
 		Client:   mgr.GetAPIReader(),
 		Registry: registry.Default,
 		// A decision is stale after three optimize intervals (and never before
@@ -1148,8 +1272,26 @@ func main() {
 		setupLog.Error(err, "invalid external scaler TLS flags")
 		os.Exit(1)
 	}
+	var kedaCopy *scalertls.KEDACopy
+	if kedaNS := cfg.KEDANamespace(); kedaNS != "" {
+		if !*externalScalerTLSBootstrap {
+			setupLog.Error(nil, "--keda-namespace and the kedaNamespace setting need --external-scaler-tls-bootstrap: KEDA's copy is of the certificate the controller provisions")
+			os.Exit(1)
+		}
+		kedaCopy = &scalertls.KEDACopy{Namespace: kedaNS, SecretName: scalertls.KEDACopySecretName(config.SystemNamespace())}
+	}
+	var tlsSecrets *scalertls.SecretNames
+	switch *externalScalerTLSSecrets {
+	case "legacy":
+	case "opaque":
+		tlsSecrets = &scalertls.OpaqueNames
+	default:
+		setupLog.Error(nil, "--external-scaler-tls-secrets must be legacy or opaque", "value", *externalScalerTLSSecrets)
+		os.Exit(1)
+	}
 	if *externalScalerTLSBootstrap {
-		if err := scalertls.Setup(signalCtx, mgr, externalScaler, controllerStatus, allowedScalerClients[0]); err != nil {
+		if err := scalertls.Setup(signalCtx, mgr, externalScaler, controllerStatus, allowedScalerClients[0],
+			scalertls.SetupOptions{KEDA: kedaCopy, Names: tlsSecrets, Live: *externalScalerTLSLive}); err != nil {
 			setupLog.Error(err, "unable to set up the external scaler TLS bootstrap")
 			os.Exit(1)
 		}
@@ -1192,6 +1334,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The preflight inside the controller (--self-check-interval): the install
+	// from the one release manifest has no preflight Job, so the checks run
+	// here, as the controller's ServiceAccount, and land in the status.
+	if *selfCheckInterval > 0 {
+		env, err := preflight.NewControllerEnv(mgr.GetConfig(), config.SystemNamespace(), 20*time.Second)
+		if err != nil {
+			setupLog.Error(err, "unable to build the in-controller preflight")
+			os.Exit(1)
+		}
+		env.ControllerWritesKEDACopy = kedaCopy != nil
+		if nsAdmission != nil {
+			env.Manages = cfg.Manages
+		}
+		if err := mgr.Add(&preflight.Monitor{Env: env, Sink: controllerStatus, Interval: *selfCheckInterval,
+			Recorder:     mgr.GetEventRecorderFor("scaling-manager-preflight"), //nolint:staticcheck // SA1019: core/v1 events; see the configmap reconciler
+			StatusObject: preflight.StatusObjectRef(config.SystemNamespace()),
+			Log:          ctrl.Log.WithName("preflight")}); err != nil {
+			setupLog.Error(err, "unable to add the in-controller preflight to the manager")
+			os.Exit(1)
+		}
+	}
+
 	// The DisaggregatedSet role writer (DSET_ROLE_WRITER, off by default): the
 	// actuation path for Static roles, which have no /scale for KEDA. Leader
 	// only. Unstructured reads are uncached, so no informer on the sets; the
@@ -1210,6 +1374,13 @@ func main() {
 			Recorder:      mgr.GetEventRecorderFor("scaling-manager-dset-role-writer"), //nolint:staticcheck // SA1019: core/v1 events; see the configmap reconciler
 			Namespaces:    readableWatched,
 			AllNamespaces: watchNS == "",
+		}
+		if nsAdmission != nil {
+			// The one manifest grants the writer per namespace
+			// (scaling-manager-grants.yaml), never on every set in the
+			// cluster: it scans the managed namespaces holding that grant.
+			writer.NamespacesFunc = dsetwriter.GrantedNamespaces(mgr.GetAPIReader(), config.SystemNamespace(),
+				preflight.ControllerServiceAccount, cfg.Manages)
 		}
 		wirePassive(passiveResolver, passiveComponents{RoleWriter: writer})
 		if err := mgr.Add(writer); err != nil {
@@ -1344,6 +1515,11 @@ func main() {
 		Client:    mgr.GetClient(),
 		PoolGKNN:  poolGKNN,
 	}
+	if nsAdmission != nil {
+		inferencePoolReconciler.Managed = cfg.Manages
+		poolRequeue = inferencePoolReconciler.RequeueAll
+		nsReporter.PoolAPIVersion = poolAPIVersion(poolGKNN.Group)
+	}
 
 	if err = inferencePoolReconciler.SetupWithManager(mgr); err != nil {
 		if !errors.Is(err, controller.ErrInferencePoolCRDNotServed) {
@@ -1444,7 +1620,12 @@ func main() {
 		}
 	}
 
-	if err := mgr.Start(signalCtx); err != nil {
+	err = mgr.Start(runCtx)
+	if cause := context.Cause(runCtx); errors.Is(cause, errSettingsRestart) {
+		setupLog.Info("Exiting so the kubelet restarts the controller with the changed settings", "reason", cause.Error())
+		os.Exit(1)
+	}
+	if err != nil {
 		if errors.Is(err, watchns.ErrSetChanged) {
 			// Not a failure: the container restarts and the cache is rebuilt
 			// from the namespaces that are readable now.
@@ -1572,6 +1753,10 @@ var (
 // an answer here rather than a probe the kubelet abandons. A var so a test can
 // shorten it.
 var nodeReadProbeTimeout = 2 * time.Second
+
+// errSettingsRestart is the cause that ends the manager when a restart
+// setting changed and --restart-on-settings-change is set.
+var errSettingsRestart = errors.New("a setting read only at start changed")
 
 // errNodeReadUnanswered is what nodeReadProbe returns, wrapping the List error,
 // before the API server has given a definite answer (success, Forbidden or
@@ -1862,5 +2047,63 @@ func wirePassive(r *passive.Resolver, c passiveComponents) {
 	}
 	if c.RoleWriter != nil {
 		c.RoleWriter.Passive = r
+	}
+}
+
+// neededGrants are the per-namespace grants of scaling-manager-grants.yaml the
+// switches in force need: pod-writer while utilizationShare is active (it
+// marks the pods it lends), dset-role-writer while the role writer is on (a
+// namespace without it is skipped, not failed).
+func neededGrants(cfg *config.Config) []managedns.Grant {
+	var out []managedns.Grant
+	if cfg.LiveSettings().UtilizationShare == config.UtilizationShareSettingActive {
+		out = append(out, managedns.Grant{Name: "pod-writer", Resource: "pods", Verb: "patch",
+			Why: "utilizationShare is active", Required: true})
+	}
+	if cfg.DSetRoleWriterEnabled() {
+		out = append(out, managedns.Grant{Name: "dset-role-writer", Group: "disaggregatedset.x-k8s.io",
+			Resource: "disaggregatedsets", Verb: "patch", Why: "dsetRoleWriter is on"})
+	}
+	return out
+}
+
+// poolLister is the part of the datastore planNamespaces reads.
+type poolLister interface {
+	PoolList() []*poolutil.EndpointPool
+}
+
+// planNamespaces are the namespaces the ScaledObject plan covers: those the
+// watchNamespaces setting names or, when it is empty and every namespace is
+// managed, those where the controller found an InferencePool or a registered
+// workload, sorted. A plan for every namespace in the cluster would be a key
+// per namespace saying it has no model server.
+func planNamespaces(cfg *config.Config, pools poolLister, reg *registry.Registry) []string {
+	names, all := cfg.ManagedNamespaces()
+	if !all {
+		return names
+	}
+	var out []string
+	for _, p := range pools.PoolList() {
+		if !slices.Contains(out, p.Namespace) {
+			out = append(out, p.Namespace)
+		}
+	}
+	for _, e := range reg.Snapshot() {
+		if !slices.Contains(out, e.Namespace) {
+			out = append(out, e.Namespace)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// poolAPIVersion is the apiVersion of the InferencePools of group, for the
+// Events the namespace reporter records on them.
+func poolAPIVersion(group string) string {
+	switch group {
+	case inferencePoolV1alpha2.GroupName:
+		return inferencePoolV1alpha2.SchemeGroupVersion.String()
+	default:
+		return inferencePoolV1.SchemeGroupVersion.String()
 	}
 }

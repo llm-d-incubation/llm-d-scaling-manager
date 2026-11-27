@@ -20,10 +20,6 @@
           "lo": 800,
           "hi": 1250
         },
-        "arrivalCV2": {
-          "lo": 0.8,
-          "hi": 1.25
-        },
         "flowControl": [
           "off"
         ],
@@ -1330,7 +1326,10 @@
     "AboveFlowControlOnset": "past the flow-control onset, where the router's wait is not priced",
     "AssumedA": "a assumed, not learned",
     "AssumedVP": "V_P assumed, not learned",
+    "BatchBeyondFit": "more sequences a pod than the decode line was fitted on, never measured there",
     "ExperimentalTTFT": "experimental TTFT model: processor sharing by engine config, router hop from window means, prefill speed raised to the served work; not validated",
+    "PrefixHitAtCount": "prefix hit extrapolated to another prefill count, never measured there",
+    "PrefixHitHeld": "prefix hit held at more prefill pods than it was read on, never measured there",
     "RouterHopAssumed": "router hop assumed, not learned",
     "VPFromPlateau": "prefill speed from the occupancy plateau, experimental and never validated"
   },

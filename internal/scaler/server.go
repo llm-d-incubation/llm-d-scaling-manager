@@ -85,6 +85,20 @@ type Server struct {
 	// cmd/main.go publishes it in the controller-status ConfigMap.
 	OnReachability func(unreachable bool, detail string)
 
+	// Admit, when set, refuses every call from a namespace it does not admit
+	// (PermissionDenied), before the call registers anything, and ends an open
+	// StreamIsActive stream at its next message once the namespace is refused:
+	// the install whose watchNamespaces setting is live (internal/managedns).
+	// Nil serves every
+	// namespace, as every other install does.
+	Admit AdmitFunc
+
+	// TLSSwitch, when set, delivers a new TLS configuration to serve with,
+	// live: the full server is bound again with it (rebind). The controller
+	// sends one when KEDA's side of mutual TLS comes into place after start
+	// (--external-scaler-tls-live). Nil never switches.
+	TLSSwitch <-chan *tls.Config
+
 	// refusals rate-limits the log line for a refused TLS handshake. Shared by
 	// the standby and the full server, so the hand-off does not reset it.
 	refusals *refusalLog
@@ -292,6 +306,8 @@ func recovered(ctx context.Context, method string, r any) error {
 type served struct {
 	srv *grpc.Server
 	err chan error
+	// handler is what srv serves, for a rebind with another TLS configuration.
+	handler pb.ExternalScalerServer
 }
 
 // bind listens on Addr and starts serving handler; the caller owns the stop.
@@ -325,8 +341,8 @@ func (s *Server) bind(ctx context.Context, handler pb.ExternalScalerServer, opts
 			grpc.ChainUnaryInterceptor(reach.unaryInterceptor),
 			grpc.ChainStreamInterceptor(reach.streamInterceptor))
 	}
-	r := &served{srv: grpc.NewServer(opts...), err: make(chan error, 1)}
-	pb.RegisterExternalScalerServer(r.srv, handler)
+	r := &served{srv: grpc.NewServer(opts...), err: make(chan error, 1), handler: handler}
+	pb.RegisterExternalScalerServer(r.srv, withAdmission(handler, s.Admit))
 	go func() { r.err <- r.srv.Serve(lis) }()
 	return r, nil
 }
@@ -334,14 +350,48 @@ func (s *Server) bind(ctx context.Context, handler pb.ExternalScalerServer, opts
 // run waits for ctx or for Serve to fail, and stops the server on the former.
 func (s *Server) run(ctx context.Context, r *served) error {
 	logger := log.FromContext(ctx).WithName("external-scaler")
-	select {
-	case <-ctx.Done():
-		r.stop()
-		logger.Info("KEDA external scaler stopped")
-		return nil
-	case err := <-r.err:
-		return err
+	for {
+		select {
+		case <-ctx.Done():
+			r.stop()
+			logger.Info("KEDA external scaler stopped")
+			return nil
+		case err := <-r.err:
+			return err
+		case cfg := <-s.TLSSwitch:
+			next, err := s.rebind(ctx, r, cfg)
+			if err != nil {
+				return err
+			}
+			r = next
+			logger.Info("KEDA external scaler now serves with the new TLS configuration, with no restart",
+				"tls", cfg != nil)
+		}
 	}
+}
+
+// rebind serves r's handler with TLS configuration cfg: bound beside r and
+// r stopped after where the platform allows it (overlapBind), so the port is
+// never unbound; r first elsewhere. A client on the old configuration is
+// dropped and dials again.
+func (s *Server) rebind(ctx context.Context, r *served, cfg *tls.Config) (*served, error) {
+	if s.TLSConfig == nil && cfg != nil && s.OnReachability != nil {
+		if reach := s.reach.Load(); reach != nil {
+			reporter := &reachReporter{reach: reach, hook: s.OnReachability, logger: log.FromContext(ctx).WithName("external-scaler")}
+			go reporter.run(ctx, reachCheckInterval)
+		}
+	}
+	s.TLSConfig = cfg
+	if overlapBind {
+		next, err := s.bind(ctx, r.handler)
+		if err != nil {
+			return nil, err
+		}
+		r.stop()
+		return next, nil
+	}
+	r.stop()
+	return s.bind(ctx, r.handler)
 }
 
 // stop drains the server for at most stopGrace, then forces it.

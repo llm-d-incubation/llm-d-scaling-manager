@@ -23,8 +23,9 @@ func withSelfCheck(t *testing.T) {
 	t.Cleanup(func() { defaultSelfCheck, selfCheckVersion = false, plannerVersion })
 }
 
-// selfCheckQ32 is at-replicas on the q32 staircase's warm-up recording.
-var selfCheckQ32 = []string{"at-replicas", "--recording", q32Recording, "--ttft", "2s@p90"}
+// selfCheckQ32 is at-replicas on the q32 staircase's warm-up recording, at
+// the measured shape (the last cycles'), which is other traffic than the load.
+var selfCheckQ32 = []string{"at-replicas", "--recording", q32Recording, "--ttft", "2s@p90", "--shape", "measured"}
 
 // The answer carries its self-check: the line, why, and what to trust,
 // ahead of the answer. The JSON answer carries it too. On the q32 warm-up

@@ -200,12 +200,24 @@ func (sc *Scenario) traffic(t *Traffic) error {
 			if cr := cl.cr; cr != nil && cr.Rate != nil && *cr.Rate != 0 {
 				return InputErrorf("traffic.classes.%s.rate %g: v1 prices one class, the total, as critical; regular and batch need traffic split by priority", cl.name, *cr.Rate)
 			}
+			if cr := cl.cr; cr != nil && cr.Concurrency != nil && *cr.Concurrency != 0 {
+				return InputErrorf("traffic.classes.%s.concurrency %g: v1 prices one class, the total, as critical", cl.name, *cr.Concurrency)
+			}
+		}
+		if cr := c.Critical; cr != nil && cr.Rate != nil && cr.Concurrency != nil {
+			return InputErrorf("traffic.classes.critical: give a rate or a concurrency, not both")
 		}
 		if cr := c.Critical; cr != nil && cr.Rate != nil {
 			if !usable(*cr.Rate) {
 				return InputErrorf("traffic.classes.critical.rate %g, want a finite rate above 0", *cr.Rate)
 			}
 			sc.Rate = ptr(*cr.Rate)
+		}
+		if cr := c.Critical; cr != nil && cr.Concurrency != nil {
+			if x := *cr.Concurrency; !usable(x) || x > MaxConcurrency {
+				return InputErrorf("traffic.classes.critical.concurrency %g, want requests in the system above 0 and at most %d", x, MaxConcurrency)
+			}
+			sc.Concurrency = ptr(*cr.Concurrency)
 		}
 	}
 	if m := t.Mix; m != nil && !m.Observed {

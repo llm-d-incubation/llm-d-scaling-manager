@@ -196,12 +196,18 @@ const (
 	// the prefill pods, S = T/(1 + lambda*T): it needs no queue, and stands
 	// only where every source above refused.
 	SLOTTFTVPInverted = "inverted"
-	SLOTTFTVPNone     = "none"
+	// SLOTTFTVPServiceLine is V_P from the prefill service line, the
+	// engines' prefill time against their computed tokens a request
+	// (prefill.SourceServiceLine): it needs no queue and is no bound. Only
+	// with the saturation analyzer's switch prefill-vp-service-line, off in
+	// the controller.
+	SLOTTFTVPServiceLine = "service-line"
+	SLOTTFTVPNone        = "none"
 )
 
 // SLOTTFTVPSources is every V_P source value, in the order they are published.
 var SLOTTFTVPSources = []string{SLOTTFTVPBusyMinutes, SLOTTFTVPPeakUnderQueue, SLOTTFTVPBackPressureBound,
-	SLOTTFTVPInverted, SLOTTFTVPNone}
+	SLOTTFTVPInverted, SLOTTFTVPServiceLine, SLOTTFTVPNone}
 
 // The joint TTFT model's inputs, the input label's values, in the order
 // they are published.

@@ -143,6 +143,37 @@ func TestVPShapeMoved_WhenThePrefixHitsMove(t *testing.T) {
 	}
 }
 
+// With the cached context read, VPShapeMoved compares each side's cached
+// share of the whole prompt, as the rescale prices the span, not the
+// prefix-cache hit rates (issue llm-d-incubation/llm-d-scaling-manager#383).
+// On a fleet with a host tier the GPU's hit rate sees part of the cache: two
+// sides at the same cached share but read with different GPU hit rates have
+// not moved, and two at the same GPU hit rate with different cached shares
+// have.
+func TestVPShapeMoved_ComparesTheCachedShares(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		hit, vpHit    float64
+		cached, vpCtx float64
+		moved         bool
+	}{
+		// 8k computed on both sides, 24k cached (0.75 of the whole) on both.
+		{"same share, GPU hit rates apart", 0.1, 0.5, 24000, 24000, false},
+		// The same GPU hit rate, but 0.75 of the whole cached against 0.5.
+		{"same GPU hit rate, shares apart", 0.25, 0.25, 24000, 8000, true},
+		{"same share, same hit", 0.25, 0.25, 24000, 24000, false},
+	} {
+		p := hitFleet(8000, 8000+c.cached, c.hit)
+		p.VPPromptTokens, p.VPWholePromptTokens, p.VPPromptHitRate = 8000, 8000+c.vpCtx, c.vpHit
+		p.PrefixAttention = true
+		p.CachedContextRead, p.CachedContextTokens, p.VPCachedContextTokens = true, c.cached, c.vpCtx
+		k := mustAnswer(t, PrefillKnee(p))
+		if k.HasFlag(VPShapeMoved) != c.moved {
+			t.Errorf("%s: flags %v, want VPShapeMoved %v", c.name, k.Flags, c.moved)
+		}
+	}
+}
+
 // A hit rate outside [0, 1) or a negative whole prompt is the caller's
 // mistake.
 func TestPrefill_PrefixInputsChecked(t *testing.T) {

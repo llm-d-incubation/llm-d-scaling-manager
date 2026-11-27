@@ -3,5 +3,5 @@ decode   11.32 r/s          operating-point cap (TPOT alone: 12.03)  ols [11.2 .
          shape IL 1000 OL 1000 (assumed)
          engine vLLM release not recorded
          line check ok at another shape (rows at KV 6615 a request, priced at 1500): median 4.6% off the rate read, line low; 0 of 10 rows past 15%, worst 8.1%, fill 0.52-0.55, cycles 122-131; left out 20 on a ramp, 0 above the band, 10 older than 30m0s
-flags: AssumedShape (IL 1000, OL 1000); OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread); BatchBeyondFit (KV 1500 a request against the rows' 6475; up to 64 sequences a rank priced, 57 seen)
+flags: AssumedShape (IL 1000, OL 1000); OutputSpreadUnread (no output-length histogram: KVreq is ILeff + OL/2, which over-promises by 7-44% on a real spread)
 estimate from 15 readings (cycles 197-220) of a 226-cycle recording, not a guarantee; see basis (-o json)

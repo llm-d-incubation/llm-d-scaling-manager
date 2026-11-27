@@ -3762,7 +3762,9 @@ Built on main 1573829cd. One replay switch, `saturation.SwitchITLBaselineStamped
   no held slope and no above-band fit, where it published 0. A B put back from
   `itlBaselineStash` has none: the stash holds bare floats. The series reads a
   report only when it names a pricing key, and a B restored alone prices no line
-  on an empty window, so no series changes. Nor does a live line: the stamp is
+  on an empty window, so no series changes. (Since #366: a B put aside keeps its
+  stamp in `itlBaselineStashAt`, and a report whose B a snapshot restored names
+  it `RestoredKey`, which the series reads when no key priced.) Nor does a live line: the stamp is
   read for a line with an empty window and no held slope, and `Observe` makes
   none, since both windows age out on `DefaultObservationMaxAge` and an empty
   main window leaves no steady reading to fit. What the stamp gives today is a

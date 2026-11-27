@@ -841,7 +841,7 @@ func TestCapacity_VPPromptTokensIsTheMeanOfItsMinutes(t *testing.T) {
 		require.Equal(t, SourceBusyMinutes, est.VPSource)
 		assert.Equal(t, 3000.0, est.VPPromptTokens, "the mean of the five busy minutes")
 		bm := busyMedian(o.keys["k"], t0.Add(4*minute))
-		assert.Equal(t, busy{rate: 24000, n: 5, prompt: 3000}, bm)
+		assert.Equal(t, busy{rate: 24000, n: 5, prompt: 3000, lo: 1000, hi: 5000}, bm)
 	})
 
 	t.Run("the peak's last PeakRun minutes only", func(t *testing.T) {

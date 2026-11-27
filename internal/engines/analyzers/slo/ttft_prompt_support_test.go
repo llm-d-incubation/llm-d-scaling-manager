@@ -27,7 +27,7 @@ func TestTTFT_ThePromptSupportSwitch(t *testing.T) {
 		r := newTTFTRig(ttftEstimate(), rows)
 		require.NoError(t, r.a.SetSwitchesForReplay(map[string]bool{SwitchTTFTPromptSupport: on}))
 		r.warmPromptWindow(t)
-		return r.a.promptSpread("ns|m|pre", r.in.ReplicaMetrics, r.now).MaxRatio
+		return r.a.promptSpread("ns|m|pre", r.in.ReplicaMetrics, r.now, 0).MaxRatio
 	}
 	assert.InDelta(t, 1.25, spread(true), 1e-12)
 	assert.Zero(t, spread(false))

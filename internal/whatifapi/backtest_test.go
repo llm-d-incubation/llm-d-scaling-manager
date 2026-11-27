@@ -361,19 +361,19 @@ func TestBacktest_JudgesATTFTTarget(t *testing.T) {
 	assert.Positive(t, a.MissedMisses+a.BothMissed, "%+v", *a)
 }
 
-// A source with no prefill variant is refused: a backtest prices a P/D
-// fleet. A step in which another variant also served is not judged: the
+// A fit with no prefill variant (aggregated) tested on a P/D source is
+// refused: a backtest compares one kind of fleet (issue #512). A step in which another variant also served is not judged: the
 // rate and the latency are the whole model's.
 func TestBacktest_PricesAPDFleetOfItsOwnVariants(t *testing.T) {
 	r := &stubResolver{noPrefillRole: true}
+	pd := &stubResolver{}
 	s, l := btSeries(120, 0, 1)
 	fs, fl := btEarlier(btSeries(120, 0, 1))
-	_, err := backtestQuestionOf(btEntry(t, r, "fit", fs, fl, btConfig("H100")), btEntry(t, r, "t", s, l, btConfig("H100")), BacktestRequest{},
+	_, err := backtestQuestionOf(btEntry(t, r, "fit", fs, fl, btConfig("H100")), btEntry(t, pd, "t", s, l, btConfig("H100")), BacktestRequest{},
 		time.Time{}, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no prefill variant")
+	assert.Contains(t, err.Error(), "not the same kind of fleet")
 
-	pd := &stubResolver{}
 	s, l = btSeries(240, 0, 1)
 	for i := 120; i < 140; i++ { // 10:30 to 10:35
 		s[i].OtherPods = 1

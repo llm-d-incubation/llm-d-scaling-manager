@@ -37,7 +37,7 @@ func TestAtReplicasLoadShape(t *testing.T) {
 	m, l := r.Shapes[0], r.Shapes[1]
 	require.NotNil(t, m.LoadShape)
 	ls := *m.LoadShape
-	assert.Equal(t, whatifapi.LoadP95, ls.Statistic)
+	assert.Equal(t, whatifapi.LoadP95Modulation, ls.Statistic, "the default load (#295)")
 	assert.InDelta(t, 1000, ls.InputTokens, 50, "the load's cycles ran 1000-token prompts")
 	assert.InDelta(t, 500, ls.OutputTokens, 50)
 	assert.Greater(t, m.InputTokens, 4*ls.InputTokens, "the measured shape is the last cycles'")

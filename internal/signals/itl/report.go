@@ -51,7 +51,8 @@ func (r Reading) Reasons() map[learn.Reason]int64 {
 // that holds an intercept is as old as the intercept: the newest reading of the
 // full fit that set it, or the stamp a snapshot carried with it
 // (RestoreBaselineAt). Only a key with none of these, or an intercept of
-// unknown age, has no stamp.
+// unknown age, has no stamp. A key whose intercept a snapshot carried, and
+// which prices no line, is the report's RestoredKey when its stamp is known.
 func (t *Tracker) Report(rep learn.Report, key string, r Reading) learn.Report {
 	rep.Counts, rep.Samples, rep.Writes = r.Reasons(), r.Held, int64(r.Offered)
 	if r.Tier != "" {
@@ -68,6 +69,9 @@ func (t *Tracker) Report(rep learn.Report, key string, r Reading) learn.Report {
 		// The intercept the key holds now, not the one Observe read before
 		// its fit: the first full fit that stores B is stamped on its cycle.
 		rep.LastAdmitted = t.BaselineAdmittedAt(key)
+		if rep.PricingKey == "" && !rep.LastAdmitted.IsZero() && t.Restored(key) {
+			rep.RestoredKey = key
+		}
 	}
 	return rep
 }

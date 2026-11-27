@@ -221,7 +221,7 @@ fleet:
     note: |
       On the staircase sample, downloaded as the first sample was: two prefill and two decode replicas, judged at the
       load it saw, with what that load grown by a fifth does beside it, for its own shape and two it never saw. The
-      sample learned no prefill speed, so V_P and a are assumed. Leave out --shape and --load for the measured shape at
+      sample learned no prefill speed, so V_P and a are assumed. Leave out --shape and --load for the shape the load ran at,
       50%, 80% and 100% of the knee and the load seen.
     run: |
       curl -fsSL -o recordings/ttft-staircase-b-on.jsonl.gz \

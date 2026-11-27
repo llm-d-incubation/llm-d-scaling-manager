@@ -57,11 +57,144 @@ type RouterLatency struct {
 	// Collected only while a learner recording is on, read by nothing yet,
 	// and left out of a recording while nil.
 	FlowControlWaitBuckets []LatencyBucket `learnrec:"omitzero"`
+
+	// ProcessingBuckets is the router's request-processing histogram,
+	// seconds, as per-second bucket rates over the same window, sorted by
+	// bound, and ProcessingSumRate and ProcessingCountRate the rates of its
+	// _sum and _count: the router's own time inside the TTFT above, which
+	// the capacity planner's experimental TTFT model draws its remainder
+	// from (whatif.RankMixtureOptions.RemainderSpread). The series carries
+	// no model, so it is joined to a model only where the router's TTFT
+	// names that model alone in the namespace. Nil and zero with no such
+	// series, a failed query or no join. Collected only while a learner
+	// recording is on, and left out of a recording while absent, so a
+	// recording made before it existed is written again byte for byte.
+	ProcessingBuckets   []LatencyBucket `learnrec:"omitzero"`
+	ProcessingSumRate   float64         `learnrec:"omitzero"`
+	ProcessingCountRate float64         `learnrec:"omitzero"`
+
+	// RenderSumRate and RenderCountRate are the rates of the router's
+	// token-producer render histogram's _sum and _count over the same
+	// window: the router's call to a prefill pod's /render handler, inside
+	// its request processing above, which the capacity planner's remainder
+	// server mode (whatif.RankMixtureOptions.RemainderServer) takes out of
+	// the processing as the prefill pods' API-server time. Joined to a
+	// model as the processing series are; zero with no such series, a
+	// failed query or no join. Collected only while a learner recording is
+	// on, and left out of a recording while zero.
+	RenderSumRate   float64 `learnrec:"omitzero"`
+	RenderCountRate float64 `learnrec:"omitzero"`
+	// PrefixPredictedTokenRate and PrefixBestAvailableTokenRate are the
+	// router prefix producer's cached tokens a second over the same window:
+	// predicted on the endpoint each request was sent to, and available on
+	// the endpoint that held the most of its prefix. Their gap is the
+	// affinity the routing gave up, from which the capacity planner reads
+	// the prefix duplication across prefill pods
+	// (prefill.DuplicationOfAffinityLoss). A P/D router runs one producer per
+	// profile; the pair is the producer that predicted the most cached
+	// tokens, the one that routes the prefill pods (a producer for pods with
+	// no prefix cache predicts none). The series carry no model, so the pair
+	// is joined to a model as the processing histogram is. Both zero with no
+	// such series, a failed query or no join; collected only while a learner
+	// recording is on and left out of a recording while zero.
+	PrefixPredictedTokenRate     float64 `learnrec:"omitzero"`
+	PrefixBestAvailableTokenRate float64 `learnrec:"omitzero"`
+
+	// Endpoints is each model-server Pod as the routers that serve this
+	// model saw it over the same window, sorted by Pod: the requests placed
+	// on it, its queue as the router read it, and the requests and tokens
+	// the router holds in flight on it. PrefixProducers is the router's
+	// prefix producers' counts, per producer and endpoint role, over the
+	// same window and routers.
+	//
+	// A router Pod serves the model when its placements over the window
+	// name this model and no other (RouterEndpoint.PlacementRate), so a
+	// second router replica in the namespace, one that serves another
+	// model or routes nothing, is not read. Nil with no such router Pod,
+	// a failed placement query, or a router that publishes no endpoint
+	// series. Collected only while a learner recording is on, read by
+	// nothing yet (#482, #483, #384), and left out of a recording while
+	// nil, so a recording made before they existed is written again byte
+	// for byte.
+	Endpoints       []RouterEndpoint       `learnrec:"omitzero"`
+	PrefixProducers []RouterPrefixProducer `learnrec:"omitzero"`
+}
+
+// RouterEndpoint is one model-server Pod as the routers that serve a model
+// saw it, over RouterLatency.WindowSeconds. A Pod of several engine ranks
+// (one endpoint per target port) is one row, its ranks summed.
+//
+// Each figure is behind a presence bit: a series the router does not
+// publish for this Pod, or a query that failed, is not a zero. Every field
+// is new, so each is left out of a learner recording while zero.
+type RouterEndpoint struct {
+	// Pod is the model-server Pod's name.
+	Pod string `learnrec:"omitzero"`
+
+	// PlacementRate is the requests a second the routers placed on the Pod
+	// (llm_d_epp_scheduler_attempts_total, status success). The router
+	// counts the primary profile's endpoint only: in P/D that is the decode
+	// Pod, so a prefill Pod has no placements and PlacementKnown unset.
+	// It is unset as well for a decode or aggregated Pod no serving router
+	// has placed a request on since it started (no series at all); a Pod
+	// placed on before and idle over the whole window has a series that
+	// stood still, and reads a known rate of zero.
+	PlacementRate  float64 `learnrec:"omitzero"`
+	PlacementKnown bool    `learnrec:"omitzero"`
+
+	// QueueSize is the Pod's waiting requests as the router read them from
+	// the model server, averaged over the window
+	// (llm_d_epp_per_endpoint_queue_size). Every router replica reads the
+	// same model servers, so it is the highest over the serving routers,
+	// never their sum.
+	QueueSize      float64 `learnrec:"omitzero"`
+	QueueSizeKnown bool    `learnrec:"omitzero"`
+
+	// InFlightRequests and InFlightTokens are the requests, and their
+	// uncached prompt tokens, the routers hold in flight on the Pod,
+	// averaged over the window (llm_d_epp_inflight_requests and
+	// llm_d_epp_inflight_tokens, from the router's in-flight load
+	// producer). A prefill Pod's are released at the first token, a decode
+	// or aggregated Pod's at the end of the response. Each router replica
+	// tracks its own requests, so they are summed over the serving routers;
+	// two producers in one router track the same requests, so the larger is
+	// read.
+	InFlightRequests      float64 `learnrec:"omitzero"`
+	InFlightRequestsKnown bool    `learnrec:"omitzero"`
+	InFlightTokens        float64 `learnrec:"omitzero"`
+	InFlightTokensKnown   bool    `learnrec:"omitzero"`
+}
+
+// RouterPrefixProducer is one router prefix producer's counts for one
+// endpoint role (prefill, decode), summed over the routers that serve the
+// model, over RouterLatency.WindowSeconds: the rates of the
+// llm_d_epp_prefix_* histograms' _sum, and of the predicted histogram's
+// _count. The router publishes them per producer and role, not per
+// endpoint. Present only where each of the five queries was read and held
+// a series for this producer and role, so a zero here is a zero the router
+// counted. Every field is new, so each is left
+// out of a learner recording while zero.
+type RouterPrefixProducer struct {
+	// Plugin is the producer's plugin_name and Role its endpoint_role.
+	Plugin string `learnrec:"omitzero"`
+	Role   string `learnrec:"omitzero"`
+
+	// RequestRate is the requests a second the producer predicted for;
+	// PromptTokenRate their prompt tokens; PredictedTokenRate the cached
+	// tokens it predicted on the endpoint chosen; BestPredictedTokenRate
+	// the most on any endpoint the filters kept; BestAvailableTokenRate the
+	// most on any candidate endpoint. Predicted over best available is the
+	// share of the hit the routing kept.
+	RequestRate            float64 `learnrec:"omitzero"`
+	PromptTokenRate        float64 `learnrec:"omitzero"`
+	PredictedTokenRate     float64 `learnrec:"omitzero"`
+	BestPredictedTokenRate float64 `learnrec:"omitzero"`
+	BestAvailableTokenRate float64 `learnrec:"omitzero"`
 }
 
 // Judgeable reports whether r is a reading of the router's latency: a TTFT
-// histogram or a TPOT request rate. The two recorded histograms alone
-// (TPOTBuckets, FlowControlWaitBuckets) are not one, so the slo analyzer
+// histogram or a TPOT request rate. The recorded histograms alone
+// (TPOTBuckets, FlowControlWaitBuckets, ProcessingBuckets) are not one, so the slo analyzer
 // treats a struct holding only them as no reading, as it did before they
 // were collected. Nil is not judgeable.
 func (r *RouterLatency) Judgeable() bool {

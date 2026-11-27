@@ -147,3 +147,25 @@ func TestExperimentalTTFT_TheServerAndTheResolvingCommandsReadIt(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Inputs.ExperimentalTTFT, "day-plan")
 }
+
+// serve --experimental-ttft prices every request with the experimental model,
+// so a page user need not ask: a request that does not ask reads as one that
+// does, under the same inputs id; the flag is in serve's help.
+func TestExperimentalTTFT_ServeFlagTurnsItOnForEveryRequest(t *testing.T) {
+	ctx := context.Background()
+	req := whatifapi.InputsRequest{Source: &whatifapi.SourceRequest{Kind: whatifapi.SourceRecording, Name: filepath.Base(stairBOn)}}
+	asked := req
+	asked.ExperimentalTTFT = true
+	on, err := (&servedSources{warn: io.Discard, recordings: filepath.Dir(stairBOn)}).Resolve(ctx, asked)
+	require.NoError(t, err)
+
+	served := &servedSources{warn: io.Discard, recordings: filepath.Dir(stairBOn), experimentalTTFT: true}
+	got, err := served.Resolve(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, got.Inputs.ExperimentalTTFT)
+	assert.Contains(t, got.Inputs.Assumed, experimentalTTFTNote())
+	assert.Equal(t, on.Content, got.Content, "the served default and the asked-for model share inputs")
+
+	out, _ := runCmd(t, "serve", "-h")
+	assert.Contains(t, out, "-"+experimentalTTFTFlag)
+}

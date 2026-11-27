@@ -337,7 +337,8 @@ func compareEntry(ctx context.Context, p *Prediction, e *inputsEntry, req Compar
 			len(q.testIndices), p.Window.From.UTC().Format(time.RFC3339), p.Window.To.UTC().Format(time.RFC3339), p.Window.Cycles)
 	}
 	slices.SortStableFunc(q.testIndices, func(a, b int) int { return e.series[a].At.Compare(e.series[b].At) })
-	if whole := stepInputsOf(seriesAt(e.series, q.testIndices)); whole.promptCV != nil {
+	q.contextTokens, _ = contextWindowOf(&e.doc)
+	if whole := stepInputsOf(seriesAt(e.series, q.testIndices), q.contextTokens); whole.promptCV != nil {
 		q.promptCV, q.promptMaxRatio = whole.promptCV, whole.promptMaxRatio
 	}
 	q.fit = &inputsEntry{pricer: noPricer{}}
@@ -465,7 +466,7 @@ func PredictionCSV(p *Prediction) string {
 // handlePredict is POST /v1/predict.
 func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 	var req PredictRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	fit, ok := s.inputs.get(req.InputsID)
@@ -504,7 +505,7 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 // handleCompare is POST /v1/compare.
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	var req CompareRequest
-	if !readJSONUpTo(w, r, &req, maxCompareBody) {
+	if !s.readLongJSON(w, r, &req, maxCompareBody) {
 		return
 	}
 	p, err := ReadPrediction(req.Prediction)

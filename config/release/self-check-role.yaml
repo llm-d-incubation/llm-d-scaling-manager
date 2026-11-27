@@ -1,0 +1,20 @@
+# The in-controller preflight's reads in the controller's namespace, by name:
+# the scaler NetworkPolicy (keda.networkpolicy) and the controller's own
+# ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-self-check
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+    app.kubernetes.io/component: preflight
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  resourceNames: ["scaling-manager-external-scaler"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  resourceNames: ["scaling-manager-controller-manager"]
+  verbs: ["get"]

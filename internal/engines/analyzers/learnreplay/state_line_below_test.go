@@ -95,6 +95,45 @@ func TestLineSamples_TheFloorCarriesItsFill(t *testing.T) {
 	assert.InDelta(t, 0.07, fill, 1e-15)
 }
 
+// running sets the requests the input's two decode pods ran, known, -1 for
+// a count not read.
+func running(in domain.AnalyzerInput, a, b int) domain.AnalyzerInput {
+	in.ReplicaMetrics = append([]domain.ReplicaMetrics(nil), in.ReplicaMetrics...)
+	for i, n := range []int{a, b} {
+		in.ReplicaMetrics[i].RunningRequests, in.ReplicaMetrics[i].RunningRequestsKnown = max(n, 0), n >= 0
+	}
+	return in
+}
+
+// The floor is kept by the sequences it was read at (issue
+// llm-d-incubation/llm-d-scaling-manager#286): one pod at 4 sequences reading
+// 10 ms and one at 40 reading 20 ms are two groups, each with its floor, and
+// the line through them is the floor by count; the fewest sequences read is 4.
+// A count not read on one reading leaves the floor standing for every count,
+// and a single group is no line.
+func TestLineSamples_TheFloorIsKeptByItsCount(t *testing.T) {
+	l := noteCycles(lineT0, repeated(30, running(belowInput(0.010, 0.020), 4, 40))...)
+	least, byCount := l.belowBandLeastSequences("dec")
+	assert.InDelta(t, 4, least, 1e-12)
+	assert.InDelta(t, 0.010/36, byCount.A, 1e-12, "the slope through (4, 10 ms) and (40, 20 ms)")
+	assert.InDelta(t, 0.010-4*0.010/36, byCount.B, 1e-12)
+	assert.InDelta(t, 0.010, floorOf(l), 1e-15, "the floor itself is as before")
+
+	in := repeated(30, running(belowInput(0.010, 0.020), 4, 40))
+	in[20] = running(belowInput(0.010, 0.020), 4, -1)
+	least, byCount = noteCycles(lineT0, in...).belowBandLeastSequences("dec")
+	assert.Zero(t, least, "a count not read")
+	assert.True(t, byCount.IsZero())
+
+	least, byCount = noteCycles(lineT0, repeated(30, running(belowInput(0.010, 0.011), 5, 6))...).belowBandLeastSequences("dec")
+	assert.InDelta(t, 5, least, 1e-12)
+	assert.True(t, byCount.IsZero(), "one group is no line")
+
+	least, byCount = noteCycles(lineT0, repeated(12, running(belowInput(0.010, 0.020), 4, 40))...).belowBandLeastSequences("dec")
+	assert.Zero(t, least, "no floor")
+	assert.True(t, byCount.IsZero())
+}
+
 // floorOf is the floor below the band of the decode variant "dec", in seconds.
 func floorOf(l *lineSamples) float64 {
 	f, _ := l.leastBelowBand("dec")

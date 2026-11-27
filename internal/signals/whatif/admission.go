@@ -117,9 +117,16 @@ func DecodeAdmission(d Decode, rate float64) Result {
 	if p.by == BoundBandTop {
 		flags = append(flags, KVBoundSlots)
 	}
+	// Each state is read at the floor of its own count (chainMu, readFill);
+	// the chain says so where its mean sequences sit under every count the
+	// floor saw, as the TPOT at the same rate does.
+	fill := ch.seqs * d.KVPerRequest / d.CapacityTokens
+	if _, extrapolated := d.readFill(fill); extrapolated {
+		flags = addFlags(flags, ExtrapolatedBelowFloor)
+	}
 	return Admission{
 		WaitProbability: ch.wait, Decay: ch.decay, Slots: c, Flags: flags,
-		Basis: Basis{Fill: ch.seqs * d.KVPerRequest / d.CapacityTokens, KneeRate: knee, BoundBy: []Bound{p.by}, Tier: d.Tier},
+		Basis: Basis{Fill: fill, KneeRate: knee, BoundBy: []Bound{p.by}, Tier: d.Tier},
 	}
 }
 

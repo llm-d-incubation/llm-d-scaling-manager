@@ -295,7 +295,7 @@ smt_load_files() {
     SMT_DIR="$SMT_TMP/files"
     mkdir -p "$SMT_DIR"
     n=0
-    for f in "$src"/scaling-manager-*.yaml; do
+    for f in "$src"/scaling-manager.yaml "$src"/scaling-manager-*.yaml; do
         [ -f "$f" ] || continue
         # Listed in SHA256SUMS, or it was not checked.
         grep -qE "  ${f##*/}\$" "$src/SHA256SUMS" || smt_usage "${f##*/} in $src is not listed in its SHA256SUMS"
@@ -305,7 +305,7 @@ smt_load_files() {
     [ "$n" -gt 0 ] || smt_usage "no release files in $src"
     v="$(smt_version)"
     if [ -n "$v" ]; then
-        bad="$(cd "$SMT_DIR" && for f in scaling-manager-*.yaml; do
+        bad="$(cd "$SMT_DIR" && for f in scaling-manager*.yaml; do
             yq ea '[.metadata.labels["app.kubernetes.io/version"] // ""] | .[]' "$f" 2>/dev/null | grep -vxF -- "$v" | sed "s|^|$f: |" | head -1
         done | head -3)"
         [ -z "$bad" ] || smt_usage "these release files are not $v, the release of this image (${bad}). The install logic and the files ship together: use the tools image of the files' release"
@@ -360,9 +360,9 @@ smt_render() {
     SMT_SHIPPED="$SMT_TMP/shipped"
     if [ ! -d "$SMT_SHIPPED" ]; then
         mkdir -p "$SMT_SHIPPED"
-        cp "$SMT_DIR"/scaling-manager-*.yaml "$SMT_SHIPPED/"
+        cp "$SMT_DIR"/scaling-manager*.yaml "$SMT_SHIPPED/"
     fi
-    for f in "$SMT_DIR"/scaling-manager-*.yaml; do
+    for f in "$SMT_DIR"/scaling-manager*.yaml; do
         sed -e "s/__NAMESPACE__/$SMT_NS/g" -e "s/__MODEL_NAMESPACE__/$model/g" "$SMT_SHIPPED/${f##*/}" > "$f" \
             || smt_exit 2 "cannot render ${f##*/} for namespace $SMT_NS"
     done
@@ -2117,7 +2117,7 @@ smt_release_files() {
     src="$(smt_baked_dir)"
     [ -f "$src/SHA256SUMS" ] || smt_usage "this image carries no release files (a development build)"
     mkdir -p "$SMT_OUT" || smt_usage "--out $SMT_OUT: cannot create it"
-    for f in "$src"/scaling-manager-*.yaml "$src"/*.sigstore.json "$src/SHA256SUMS"; do
+    for f in "$src"/scaling-manager.yaml "$src"/scaling-manager-*.yaml "$src"/scaling-manager-*.sh "$src"/*.sigstore.json "$src/SHA256SUMS"; do
         [ -f "$f" ] || continue
         cp "$f" "$SMT_OUT/"
         n=$((n + 1))

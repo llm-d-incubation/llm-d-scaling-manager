@@ -135,7 +135,7 @@ verdicts
 capacity            req/s     out tok/s   bound by
   prefill knee      no prefill speed learned            P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
   decode knee       36.98     7396        decode band top at fill 0.798
-                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
+                    OUTSIDE VALIDATED REGION (ExtrapolatedFill: an input the run did not price)
   fleet knee        36.98     7396        decode (prefill not priced)
 ```
 

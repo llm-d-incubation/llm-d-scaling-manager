@@ -85,7 +85,8 @@ for f in "$BAKED"/*; do
         *) [ -f "$DIST/$b" ] || refuse "the image carries $b, which the release does not upload" ;;
     esac
 done
-manifests="$(find "$DIST" -maxdepth 1 -name 'scaling-manager-*.yaml' | wc -l | tr -d ' ')"
+# scaling-manager.yaml, the one manifest, has no dash after the prefix.
+manifests="$(find "$DIST" -maxdepth 1 \( -name 'scaling-manager.yaml' -o -name 'scaling-manager-*.yaml' \) | wc -l | tr -d ' ')"
 [ "$manifests" -gt 0 ] || refuse "no manifest in $DIST"
 [ "$bundles" -gt "$manifests" ] || refuse "only $bundles bundles for $manifests manifests and SHA256SUMS in $DIST: unsigned files"
 [ "$bad" = 0 ] || exit 1

@@ -19,17 +19,18 @@ import (
 // The capacity planner's switches, through Analyze: off from the
 // constructor, so the controller never runs them (TestPlannerSwitches_OffFromTheConstructor).
 
-// TestPlannerSwitches_OffFromTheConstructor holds the twenty planner-only
+// TestPlannerSwitches_OffFromTheConstructor holds the planner-only
 // switches off in a new analyzer: the controller's behaviour is P1's.
 func TestPlannerSwitches_OffFromTheConstructor(t *testing.T) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	fields := a.switchFields()
 	for _, name := range []string{SwitchPrefillALowLoadPerRank, SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
-		SwitchPrefillFBusyMinutes, SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
+		SwitchPrefillFBusyMinutes, SwitchPrefillFPooledMinutes, SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
 		SwitchITLAdaptiveBandFloor, SwitchITLHoldSteadySlope, SwitchITLLineAtFloor,
-		SwitchTPOTRatioCensored, SwitchDecodeResidencePull, SwitchDecodeBurstFill,
+		SwitchTPOTRatioCensored, SwitchDecodeResidencePull, SwitchDecodeBurstFill, SwitchBacktestStepOutputDispersion,
 		SwitchPlannerCapAtStepBudget, SwitchPrefillVPFloorServed, SwitchPrefillVPServedUnqueued, SwitchPrefillVPWindowBest, SwitchPrefillVPAtServedWork, SwitchMoEBusiestRank,
-		SwitchITLBatchTerm, SwitchPrefillVPOccupancyPlateau} {
+		SwitchITLBatchTerm, SwitchPrefillVPOccupancyPlateau, SwitchPrefillVPPromptCoverage, SwitchPrefillVPLoneRate, SwitchPrefillVPServiceLine, SwitchPrefillHitAtCount,
+		SwitchPrefillFLoadCurve} {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s is planner-only: off from the constructor", name)
 	}
@@ -413,6 +414,55 @@ func TestPrefillFBusyMinutes_LightMinutesThroughAnalyze(t *testing.T) {
 	assert.InDelta(t, 1.033, on.F, 0.005)
 	assert.InDelta(t, 1.454, off.F, 0.01)
 	assert.Equal(t, off.FSamples, on.FSamples, "the same minutes are kept")
+}
+
+// Through Analyze: ten light minutes at 3:1 (5,000 tok/s a pod) and ten
+// busy ones at 1.1:1 (50,000). On, the two loads give a curve that reads
+// the light minutes' f at the light load and the busy ones' at the busy
+// load; off, no curve is fitted. f itself does not move.
+func TestPrefillFLoadCurve_ThroughAnalyze(t *testing.T) {
+	run := func(on bool) prefill.Estimate {
+		h := newObserveHarness(t, &capacity.EngineParams{Engine: inferenceengine.EngineVLLM})
+		require.NoError(t, h.a.SetSwitchesForReplay(map[string]bool{SwitchPrefillFLoadCurve: on}))
+		for range 10 {
+			h.twoPrefillCycle(150, 3)
+		}
+		var est prefill.Estimate
+		for range 10 {
+			est = h.twoPrefillCycle(1500, 1.1)
+		}
+		return est
+	}
+	on, off := run(true), run(false)
+	assert.Nil(t, off.FCurveByPods)
+	c, ok := on.FCurveByPods[2]
+	require.True(t, ok, "%+v", on)
+	require.True(t, c.Identified(), "%+v", c)
+	assert.Equal(t, on.FSamplesByPods[2], c.Minutes, "every minute f is read from")
+	assert.InDelta(t, 1.454, c.At(5000), 0.01, "the light minutes' f")
+	assert.InDelta(t, 1.033, c.At(50000), 0.005, "the busy minutes' f")
+	assert.Equal(t, off.F, on.F)
+}
+
+// Through Analyze: two prefill pods at 1.3:1 serving 60 requests a pod a
+// minute, the long prompts' load. On, pairs of minutes carry 120 a pod and
+// give f: the busiest share 2.6/2.3 = 1.130 less the chance excess at 120 a
+// pod. Off, no minute carries 100 and f is refused.
+func TestPrefillFPooledMinutes_LongPromptsThroughAnalyze(t *testing.T) {
+	run := func(on bool) prefill.Estimate {
+		h := newObserveHarness(t, &capacity.EngineParams{Engine: inferenceengine.EngineVLLM})
+		require.NoError(t, h.a.SetSwitchesForReplay(map[string]bool{SwitchPrefillFPooledMinutes: on}))
+		var est prefill.Estimate
+		for range 20 {
+			est = h.twoPrefillCycle(60, 1.3)
+		}
+		return est
+	}
+	on, off := run(true), run(false)
+	assert.Equal(t, prefill.TooFewImbalanceMinutes, off.FRefused, "%+v", off)
+	require.Empty(t, on.FRefused, "%+v", on)
+	assert.InDelta(t, 1.08, on.F, 0.02)
+	assert.InDelta(t, 10, on.FSamples, 1, "twenty minutes, pooled in pairs")
 }
 
 // holdRampCycle runs one decode cycle of three replicas at fill k reading

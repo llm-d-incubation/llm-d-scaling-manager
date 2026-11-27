@@ -53,6 +53,18 @@ For an operator collecting a window for someone else to plan from.
   ([what it must keep](../capacity-planner/metrics.md#what-your-prometheus-must-keep)).
 - [ ] A window of 30 minutes or more in which load rose. A flat, quiet hour
   teaches the planner little.
+- [ ] Optional, to check TPOT p90 and p95: TPOT histogram edges about 15%
+  apart across the range you serve. With the default router edges (5 to
+  10 ms, 10 to 20 ms) the check cannot place a TPOT percentile and leaves it
+  unscored. Set `metrics.requestTPOTBuckets` in the router's
+  EndpointPickerConfig (an llm-d-router build after v1.0.0,
+  [llm-d-router#3539](https://github.com/llm-d/llm-d-router/pull/3539)), or
+  vLLM's `--custom-histogram-buckets` (v0.32.0 and later), before the window
+  you record ([why](../capacity-planner/check.md#read-the-answer)). For
+  vLLM the family is `inter_token_latency`: it sets the per-request TPOT
+  histogram too. For example:
+  `--custom-histogram-buckets '{"inter_token_latency":[0.005,0.00575,0.0066,0.0076,0.0087,0.01,0.0115,0.0132,0.0152,0.0175,0.02,0.023,0.0265,0.0305,0.035,0.04,0.046,0.053,0.075,0.1,0.25,1.0]}'`
+  ([what it sets](../capacity-planner/check.md#vllms-tpot-buckets)).
 - [ ] `kubectl` access to Prometheus' namespace (a port-forward), or its URL.
 - [ ] For Path 1: the `capacity-planner` binary of the release you run
   ([Get the planner](../capacity-planner/README.md#get-the-planner)), or a
@@ -219,8 +231,13 @@ export CURL_OPTS=""
 # Each is one instant query for a range, metric{namespace=...}[1h]: it returns stored samples, not a resampled grid.
 # A failed query saves its error, so the check below and the converter refuse it. Needs bash, jq and curl 7.76 or later.
 # Lower CHUNK if a query fails with "too many samples".
-# CACHE_METRICS are the optional series: cache tiers, offloading, KV transfer, and the TTFT spent outside the engines.
+# CACHE_METRICS are the optional series: cache tiers, offloading, KV transfer, the TTFT spent outside the engines,
+# prefill capacity, router load, restarts, and the GPUs as the DCGM exporter sees them.
 # Older releases lack many of them, and an absent one saves an empty answer, not a failure. Set LMCACHE_NAMESPACE first if the LMCache server runs in another namespace.
+# DCGM series are selected by the label that names the GPU's Pod, not by the exporter's namespace: DCGM_SELECTOR
+# defaults to exported_namespace='<NAMESPACE>'; set it first to select otherwise, for example DCGM_SELECTOR="exported_pod=~'my-model-.*'".
+# If your Prometheus honors the exporter's labels (honorLabels: true), set DCGM_SELECTOR="namespace='<NAMESPACE>'".
+# A name ending in _ (vllm:hisparse_) saves every series whose name starts with it.
 export METRICS="
 vllm:kv_cache_usage_perc vllm:cache_config_info vllm:inter_token_latency_seconds_sum
 vllm:inter_token_latency_seconds_count vllm:generation_tokens_total vllm:num_requests_running
@@ -236,10 +253,12 @@ vllm:time_to_first_token_seconds_count vllm:time_to_first_token_seconds_bucket
 vllm:request_queue_time_seconds_sum vllm:request_queue_time_seconds_count
 vllm:request_queue_time_seconds_bucket vllm:request_prefill_time_seconds_sum
 vllm:request_prefill_time_seconds_count vllm:request_time_per_output_token_seconds_bucket
+vllm:kv_block_reuse_gap_seconds_bucket vllm:kv_block_idle_before_evict_seconds_bucket vllm:iteration_tokens_total_bucket
 vllm:nixl_xfer_time_seconds_sum vllm:nixl_xfer_time_seconds_count vllm:nixl_bytes_transferred_sum
 vllm:kv_offload_load_bytes_total vllm:kv_offload_load_time_total vllm:kv_offload_tiering_read_bytes_total
 vllm:kv_offload_tiering_read_time_total vllm:num_preemptions_total
-vllm:spec_decode_num_accepted_tokens_total
+vllm:spec_decode_num_accepted_tokens_total vllm:e2e_request_latency_seconds_sum
+vllm:e2e_request_latency_seconds_count http_request_duration_seconds_sum http_request_duration_seconds_count
 sglang:token_usage sglang:max_total_num_tokens sglang:inter_token_latency_seconds_sum
 sglang:inter_token_latency_seconds_count sglang:generation_tokens_total sglang:num_running_reqs
 sglang:num_queue_reqs sglang:prompt_tokens_histogram_sum sglang:prompt_tokens_histogram_count
@@ -258,7 +277,13 @@ llm_d_epp_flow_control_request_enqueue_duration_seconds_count
 inference_extension_flow_control_request_enqueue_duration_seconds_count
 llm_d_epp_scheduler_attempts_total inference_extension_scheduler_attempts_total
 llm_d_epp_flow_control_request_queue_duration_seconds_bucket llm_d_epp_flow_control_pool_saturation
-llm_d_epp_flow_control_requests_total
+llm_d_epp_flow_control_requests_total llm_d_epp_request_processing_duration_seconds_bucket
+llm_d_epp_request_processing_duration_seconds_sum llm_d_epp_request_processing_duration_seconds_count
+llm_d_epp_token_producer_render_duration_seconds_sum llm_d_epp_token_producer_render_duration_seconds_count
+llm_d_epp_prefix_predicted_cached_tokens_sum llm_d_epp_prefix_best_available_cached_tokens_sum
+llm_d_epp_prefix_best_predicted_cached_tokens_sum llm_d_epp_prefix_prompt_tokens_sum
+llm_d_epp_prefix_predicted_cached_tokens_count llm_d_epp_per_endpoint_queue_size
+llm_d_epp_inflight_requests llm_d_epp_inflight_tokens
 kube_pod_info kube_pod_owner kube_replicaset_owner kube_pod_labels kube_pod_status_phase
 kube_pod_status_ready kube_pod_status_ready_time kube_pod_created kube_pod_start_time
 kube_pod_deletion_timestamp kube_pod_container_resource_requests kube_node_labels
@@ -271,9 +296,25 @@ vllm:kv_offload_load_bytes_total vllm:kv_offload_load_time_total vllm:kv_offload
 vllm:kv_offload_store_time_total vllm:kv_offload_total_bytes_total vllm:kv_offload_total_time_total
 vllm:kv_offload_tiering_chunk_queries_total vllm:kv_offload_tiering_chunk_hits_total
 vllm:kv_offload_tiering_read_bytes_total vllm:kv_offload_tiering_read_time_total vllm:kv_offload_config_info
+vllm:kv_offload_tiering_promotion_latency_seconds_sum vllm:kv_offload_tiering_promotion_latency_seconds_count
+vllm:kv_offload_tiering_promotion_latency_seconds_bucket
+vllm:kv_offload_lookup_sync_delay_seconds_bucket vllm:kv_offload_lookup_sync_delay_seconds_sum
+vllm:kv_offload_lookup_sync_delay_seconds_count vllm:kv_offload_lookup_async_delay_seconds_bucket
+vllm:kv_offload_lookup_async_delay_seconds_sum vllm:kv_offload_lookup_async_delay_seconds_count
+vllm:kv_offload_tiering_lookup_sync_delay_seconds_bucket vllm:kv_offload_tiering_lookup_sync_delay_seconds_sum
+vllm:kv_offload_tiering_lookup_sync_delay_seconds_count vllm:kv_offload_tiering_lookup_async_delay_seconds_bucket
+vllm:kv_offload_tiering_lookup_async_delay_seconds_sum vllm:kv_offload_tiering_lookup_async_delay_seconds_count
+vllm:kv_offload_load_size_bucket
+vllm:kv_block_lifetime_seconds_bucket vllm:kv_block_lifetime_seconds_sum vllm:kv_block_lifetime_seconds_count
+vllm:kv_block_idle_before_evict_seconds_bucket vllm:kv_block_idle_before_evict_seconds_sum
+vllm:kv_block_idle_before_evict_seconds_count vllm:kv_block_reuse_gap_seconds_bucket
+vllm:kv_block_reuse_gap_seconds_sum vllm:kv_block_reuse_gap_seconds_count
+vllm:hisparse_
 vllm:nixl_bytes_transferred_sum vllm:nixl_bytes_transferred_count vllm:nixl_xfer_time_seconds_bucket
 vllm:nixl_post_time_seconds_sum vllm:nixl_post_time_seconds_count vllm:nixl_num_failed_transfers_total
+vllm:nixl_num_kv_expired_reqs_total vllm:nixl_num_failed_notifications_total
 vllm:spec_decode_num_accepted_tokens_per_pos_total vllm:spec_decode_num_drafts_total
+vllm:spec_decode_num_draft_tokens_total
 lmcache_mp_lookup_requested_tokens_total lmcache_mp_lookup_hit_tokens_total
 lmcache_mp_lookup_hit_l1_tokens_total lmcache_mp_lookup_hit_l2_tokens_total
 lmcache_mp_lookup_prompt_tokens_total lmcache_mp_lookup_request_hit_tokens_total
@@ -283,6 +324,11 @@ llm_d_epp_request_cached_tokens_sum llm_d_epp_request_cached_tokens_count
 llm_d_epp_request_cached_tokens_bucket llm_d_epp_prefix_predicted_cached_tokens_sum
 llm_d_epp_prefix_predicted_cached_tokens_count llm_d_epp_prefix_best_predicted_cached_tokens_sum
 llm_d_epp_prefix_best_available_cached_tokens_sum llm_d_epp_prefix_prompt_tokens_sum
+llm_d_epp_prefix_best_predicted_cached_tokens_count llm_d_epp_prefix_best_available_cached_tokens_count
+llm_d_epp_prefix_prompt_tokens_count llm_d_epp_prefix_predicted_cached_tokens_bucket
+llm_d_epp_prefix_best_available_cached_tokens_bucket llm_d_epp_prefix_cache_affinity_filter_decisions_total
+llm_d_epp_prefix_indexer_size llm_d_epp_prefix_indexer_hit_ratio_bucket
+llm_d_epp_prefix_indexer_hit_ratio_sum llm_d_epp_prefix_indexer_hit_ratio_count
 sglang:prefill_effective_tokens_total sglang:uncached_prompt_tokens_histogram_sum
 sglang:uncached_prompt_tokens_histogram_count sglang:uncached_prompt_tokens_histogram_bucket
 llm_d_epp_request_processing_duration_seconds_sum llm_d_epp_request_processing_duration_seconds_count
@@ -294,15 +340,42 @@ llm_d_disagg_sidecar_prefill_duration_seconds_sum llm_d_disagg_sidecar_prefill_d
 vllm:e2e_request_latency_seconds_sum vllm:e2e_request_latency_seconds_count
 vllm:request_render_duration_seconds_sum vllm:request_render_duration_seconds_count
 http_request_duration_seconds_sum http_request_duration_seconds_count
+llm_d_epp_scheduler_e2e_duration_seconds_bucket llm_d_epp_scheduler_e2e_duration_seconds_sum
+llm_d_epp_scheduler_e2e_duration_seconds_count llm_d_epp_response_processing_duration_seconds_sum
+llm_d_epp_response_processing_duration_seconds_count llm_d_epp_flow_control_request_queue_duration_seconds_sum
+llm_d_epp_flow_control_request_queue_duration_seconds_count
+vllm:iteration_tokens_total_bucket vllm:iteration_tokens_total_sum vllm:iteration_tokens_total_count
+vllm:request_prefill_time_seconds_bucket vllm:estimated_flops_per_gpu_total
+vllm:estimated_read_bytes_per_gpu_total vllm:estimated_write_bytes_per_gpu_total
+DCGM_FI_DEV_GPU_UTIL DCGM_FI_PROF_SM_ACTIVE DCGM_FI_PROF_PIPE_TENSOR_ACTIVE DCGM_FI_PROF_DRAM_ACTIVE
+DCGM_FI_DEV_POWER_USAGE DCGM_FI_DEV_SM_CLOCK DCGM_FI_DEV_GPU_UTIL_RATIO DCGM_FI_PROF_SM_UTIL_RATIO
+DCGM_FI_PROF_TENSOR_UTIL_RATIO DCGM_FI_PROF_DRAM_UTIL_RATIO DCGM_FI_DEV_BOARD_POWER_WATTS DCGM_FI_DEV_SM_CLOCK_HERTZ
+vllm:request_time_per_output_token_seconds_sum vllm:request_time_per_output_token_seconds_count
+vllm:request_decode_time_seconds_bucket vllm:request_decode_time_seconds_sum
+vllm:request_decode_time_seconds_count vllm:request_success_total
+llm_d_epp_info llm_d_epp_ready_endpoints llm_d_epp_inflight_requests llm_d_epp_inflight_tokens
+llm_d_epp_request_total llm_d_epp_request_error_total
+llm_d_epp_request_input_tokens_bucket llm_d_epp_request_input_tokens_sum llm_d_epp_request_input_tokens_count
+llm_d_epp_request_output_tokens_bucket llm_d_epp_request_output_tokens_sum llm_d_epp_request_output_tokens_count
+llm_d_epp_flow_control_dispatch_cycle_duration_seconds_bucket
+llm_d_epp_flow_control_dispatch_cycle_duration_seconds_sum
+llm_d_epp_flow_control_dispatch_cycle_duration_seconds_count llm_d_epp_flow_control_detector_saturation
+llm_d_epp_flow_control_capacity_utilization_requests llm_d_epp_flow_control_capacity_utilization_bytes
+kube_pod_container_status_restarts_total kube_pod_container_status_last_terminated_reason
 "
 export LMCACHE_NAMESPACE=${LMCACHE_NAMESPACE:-${NAMESPACE}}
+[ -n "${DCGM_SELECTOR:-}" ] || export DCGM_SELECTOR="exported_namespace='${NAMESPACE}'"
 rm -rf planner-export
 mkdir -p planner-export
 failed=0
 for m in ${METRICS} ${CACHE_METRICS}; do
   sel="${m}{namespace='${NAMESPACE}'}"
   [ "${m}" = kube_node_labels ] && sel="${m}"
-  case "${m}" in lmcache_mp_*) sel="${m}{namespace='${LMCACHE_NAMESPACE}'}" ;; esac
+  case "${m}" in
+    lmcache_mp_*) sel="${m}{namespace='${LMCACHE_NAMESPACE}'}" ;;
+    DCGM_*) sel="${m}{${DCGM_SELECTOR}}" ;;
+    *_) sel="{__name__=~'${m}.+',namespace='${NAMESPACE}'}" ;;
+  esac
   t=${FROM}
   while [ "${t}" -lt "${TO}" ]; do
     end=$(( t + CHUNK )); [ "${end}" -gt "${TO}" ] && end=${TO}
@@ -613,7 +686,7 @@ capacity-planner capture  --prometheus URL --namespace NS (--kube-state-metrics 
                           [--step 15s] [--policy FILE]
                           [--engine vllm|sglang] [--engine-args "ARGS"] [--batch-cap N]
                           [--gpus-per-replica 1] [--accelerator NAME]
-                          [--vllm-version 0.34] [--engine-image IMAGE]
+                          [--vllm-version 0.34] [--engine-image IMAGE] [--model-config config.json]
                           [--bearer-token-file FILE] [--ca-file FILE] [--insecure-skip-verify]
                           [--timeout 2m30s] [--force] [--lmcache-namespace NS]
 capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
@@ -624,7 +697,7 @@ capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
 | `--prometheus` | The Prometheus base URL, http or https. Required. An error message never quotes its userinfo, path, query or fragment: they read `REDACTED`. |
 | `--namespace` | The namespace whose models to capture. Required. |
 | `--kube-state-metrics` | Read Pods, owners, readiness, GPUs and nodes from kube-state-metrics in the same Prometheus. |
-| `--role-of ROLE=SELECTOR` | The Pods a label selector picks serve ROLE (`prefill`, `decode`, `both`), as one variant. Repeat per variant. Two selectors that pick the same Pod, or whose name prefixes nest, are refused. |
+| `--role-of ROLE=SELECTOR` | The Pods a label selector picks serve ROLE (`prefill`, `decode`, `both`), as one variant. Repeat per variant. Two selectors that pick the same Pod, or whose name prefixes nest, are refused. The ROLE stated here wins over what the Pods' engines do, also when the selector matched Pod names; a `flag:` line says where the engine signals read another role. |
 | `--from`, `--to` | The window, RFC 3339 or Unix seconds, truncated to the millisecond. Required. |
 | `--step` | The interval between cycles, taken as the run's optimize interval. Whole milliseconds. Default 15s. |
 | `--policy` | A scaling-policy entry (YAML), applied as the default entry. Default: the defaults. |
@@ -633,6 +706,7 @@ capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
 | `--batch-cap` | The engine's batch cap (`--max-num-seqs`, or `--max-running-requests`). Warned about when `--engine-args` sets it too. |
 | `--gpus-per-replica`, `--accelerator` | Stand-ins where kube-state-metrics gives no GPU request or node label. |
 | `--vllm-version`, `--engine-image` | The vLLM release the engines run, as `0.34`, or their image, whose `vllm-openai` tag names it. Stand-ins where kube-state-metrics shows neither; see [The vLLM release](#the-vllm-release). |
+| `--model-config` | The served model's `config.json`, or the checkpoint directory holding it. Its attention kind (full, sliding window, MLA, hybrid) and MoE class (dense, MoE with or without expert parallelism) are recorded with every variant and named beside the engine in the answers. Reported, not priced. The window's variants must all serve that one model. An answer from `--recording` takes the same flag, and reads a `config.json` beside the recording when it is not given. It moves no figure's value, but the `MLAAttention` and `HybridAttention` flags then follow the config, so a figure can read outside the validated region where the name said nothing (or inside, where only an MLA name match put it outside). A sliding window is read as vLLM serves it: on every layer unless `layer_types` or `max_window_layers` say otherwise. |
 | `--bearer-token-file` | A file holding a bearer token. Sent over https only, to Prometheus' own host only, never on a redirect elsewhere. Refused with an http URL, or when the file is empty. |
 | `--ca-file` | A PEM file of the CAs that sign an https Prometheus' certificate, trusted in place of the system's. Refused with an http URL. |
 | `--insecure-skip-verify` | Do not verify the certificate. Warned about on stderr. Refused with an http URL. |
@@ -724,6 +798,12 @@ reads every scrape in its minute at every step.
 - **Bounds.** Steps times queries is bounded at 1,000,000 (a little over two
   days at 15 s), and the samples held at 20 million (a little over a
   gigabyte). Past either, the capture stops with exit 2 unless `--force`.
+- **The cycles are held too.** The capture writes its window line, which
+  carries each variant's role, before its cycles, and a role read from the
+  engine signals needs every cycle, so the cycles are held in memory until the
+  window ends: about the capture's own size uncompressed, one row per engine
+  Pod per step. The step bound above bounds it; with `--force`, expect memory
+  in proportion to steps times engine Pods.
 
 ## Read the command-line answers
 

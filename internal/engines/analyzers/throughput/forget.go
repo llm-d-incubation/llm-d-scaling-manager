@@ -107,6 +107,9 @@ func (a *ThroughputAnalyzer) forgetLearnerLocked(name, namespace, modelID, varia
 		// The start time is the saturation analyzer's alone: this analyzer
 		// keeps no start estimate.
 		return 0, nil, true
+	case learn.TTFTMixture, learn.TPOTDistribution:
+		// The v2 latency learners are the slo analyzer's alone.
+		return 0, nil, true
 	}
 	ctrl.Log.WithName(AnalyzerName).Error(nil, "learner on learn.Learners has no forget decision in the throughput analyzer; nothing forgotten",
 		"learner", name, "namespace", namespace, "modelID", modelID, "variant", variant)

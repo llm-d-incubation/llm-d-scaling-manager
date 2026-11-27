@@ -65,6 +65,7 @@ func (e *Engine) beginCollectorCycle(
 ) {
 	e.ReplicaMetricsCollector.BeginRecordingCycle(e.learnRec.Active())
 	e.ReplicaMetricsCollector.ReadTTFTInputsIn(e.ttftNamespaces(modelGroups))
+	e.ReplicaMetricsCollector.ReadPredictionInputsIn(e.predictionNamespaces(modelGroups))
 }
 
 // attachLearnerRecorder hands rec, nil included, to the capacity store and

@@ -186,6 +186,15 @@ func (r *ConfigMapReconciler) warnIfSettingsNeedRestart(ctx context.Context, cm 
 	if key == "" {
 		return
 	}
+	if r.RestartOnSettingsChange != nil {
+		msg := fmt.Sprintf("settings %s are read only at start and changed: the controller restarts itself to apply them", key)
+		log.FromContext(ctx).Info("Restarting: "+msg, "namespace", cm.GetNamespace(), "configMap", cm.GetName())
+		if r.Recorder != nil {
+			r.Recorder.Event(cm, corev1.EventTypeNormal, constants.K8SEventSettingsRestartRequired, msg)
+		}
+		r.RestartOnSettingsChange(changed)
+		return
+	}
 	msg := fmt.Sprintf("settings %s are read only at start and changed: restart the controller to apply them "+
 		"(kubectl rollout restart deployment/scaling-manager-controller-manager -n %s)", key, cm.GetNamespace())
 	log.FromContext(ctx).Info("Restart required: "+msg, "namespace", cm.GetNamespace(), "configMap", cm.GetName())

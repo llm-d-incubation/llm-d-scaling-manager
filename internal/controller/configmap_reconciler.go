@@ -69,6 +69,12 @@ type ConfigMapReconciler struct {
 	// settingsRestartWarned is the last warned list of settings read only at
 	// start that changed; "" when none is.
 	settingsRestartWarned string
+
+	// RestartOnSettingsChange, when set, is called with the settings read
+	// only at start that changed, in place of asking a person to restart the
+	// controller (--restart-on-settings-change): cmd/main.go ends the
+	// manager and the kubelet starts the container again with them.
+	RestartOnSettingsChange func(changed []string)
 }
 
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch

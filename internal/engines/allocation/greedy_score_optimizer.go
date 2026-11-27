@@ -178,13 +178,15 @@ func (o *GreedyByScoreOptimizer) ShadowOptimize(
 	return shadow.Optimize(ctrl.LoggerInto(ctx, logr.Discard()), requests, constraints)
 }
 
-// attributeGPULimits is applyGPULimitAttribution unless the pass is a shadow.
+// attributeGPULimits is applyGPULimitAttribution unless the pass is a shadow,
+// which only names the bound (applyShadowLimitAttribution).
 func (o *GreedyByScoreOptimizer) attributeGPULimits(
 	decisions []domain.VariantDecision,
 	limited gpuLimitTracker,
 	constraints []*ResourceConstraints,
 ) {
 	if o.quiet {
+		applyShadowLimitAttribution(decisions, limited, constraints)
 		return
 	}
 	applyGPULimitAttribution(decisions, limited, constraints)

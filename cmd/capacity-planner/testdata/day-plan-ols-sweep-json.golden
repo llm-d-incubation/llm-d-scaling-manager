@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "whatifSchema": "schema-v3",
-  "dayPlanId": "sha256:2d728561c4026c8a0113e4562aaeb6620ba683af593f320deab65272bfa957df",
+  "dayPlanId": "sha256:6a983b5f5bacd6da01b0ce9dfd78c6028191c7bb32e416d203e82fb22e599ca1",
   "inputsId": "sha256:615136db4ad0cc3f5fb97b94410f23727f1cb1cfe4d968f3564d287ee654b87b",
   "banner": "TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.",
   "from": "2026-11-01T21:50:00Z",
   "to": "2026-11-01T22:55:00Z",
   "step": 300,
-  "sizeFor": "p95",
+  "sizeFor": "p95-modulation",
   "sizeForSource": "default",
   "minRequests": 30,
   "lead": {
@@ -77,10 +77,11 @@
       "rate": {
         "mean": 0.807831388888889,
         "p95": 1,
-        "max": 1.36
+        "max": 1.36,
+        "p95Modulation": 0.989499438130291
       },
-      "sizedFor": "p95",
-      "sizedRate": 1,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 0.989499438130291,
       "shape": {
         "promptTokens": 1012.1148211105417,
         "outputTokens": 4025.2199583308234,
@@ -168,10 +169,11 @@
       "rate": {
         "mean": 1.677,
         "p95": 1.8800000000000001,
-        "max": 1.92
+        "max": 1.92,
+        "p95Modulation": 1.7130190856388376
       },
-      "sizedFor": "p95",
-      "sizedRate": 1.8800000000000001,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 1.7130190856388376,
       "shape": {
         "promptTokens": 1002.1631265660521,
         "outputTokens": 4004.263677781811,
@@ -259,10 +261,11 @@
       "rate": {
         "mean": 2.42,
         "p95": 9.540000000000001,
-        "max": 16.64
+        "max": 16.64,
+        "p95Modulation": 9.532251440278916
       },
-      "sizedFor": "p95",
-      "sizedRate": 9.540000000000001,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 9.532251440278916,
       "shape": {
         "promptTokens": 998.391777767987,
         "outputTokens": 2497.658584373436,
@@ -353,10 +356,11 @@
       "rate": {
         "mean": 20.866999999999997,
         "p95": 29.560000000000002,
-        "max": 29.72
+        "max": 29.72,
+        "p95Modulation": 29.483319495115346
       },
-      "sizedFor": "p95",
-      "sizedRate": 29.560000000000002,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 29.483319495115346,
       "shape": {
         "promptTokens": 1000.5400618212494,
         "outputTokens": 636.2656395914438,
@@ -387,7 +391,6 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -412,7 +415,6 @@
           "FlowControlInferredOff",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -434,7 +436,6 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
-        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -445,10 +446,11 @@
       "rate": {
         "mean": 21.564999999999994,
         "p95": 29.8,
-        "max": 29.82
+        "max": 29.82,
+        "p95Modulation": 29.791405995113628
       },
-      "sizedFor": "p95",
-      "sizedRate": 29.8,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 29.791405995113628,
       "shape": {
         "promptTokens": 1005.3894563592829,
         "outputTokens": 500.026165532458,
@@ -479,7 +481,6 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -506,7 +507,6 @@
           "BelowFittedBand",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -528,7 +528,6 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
-        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -539,10 +538,11 @@
       "rate": {
         "mean": 2.3105,
         "p95": 2.88,
-        "max": 2.9
+        "max": 2.9,
+        "p95Modulation": 2.834045377245353
       },
-      "sizedFor": "p95",
-      "sizedRate": 2.88,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 2.834045377245353,
       "shape": {
         "promptTokens": 4098.16210609924,
         "outputTokens": 808.4694790373828,
@@ -597,6 +597,7 @@
         "decode": 1
       },
       "verdict": "match",
+      "scope": "decode only",
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
@@ -610,10 +611,11 @@
       "rate": {
         "mean": 2.2229997005939994,
         "p95": 2.88,
-        "max": 2.9
+        "max": 2.9,
+        "p95Modulation": 2.8499519661873354
       },
-      "sizedFor": "p95",
-      "sizedRate": 2.88,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 2.8499519661873354,
       "shape": {
         "promptTokens": 6002.34770993272,
         "outputTokens": 997.8901203684339,
@@ -668,6 +670,7 @@
         "decode": 1
       },
       "verdict": "under",
+      "scope": "decode only",
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
@@ -681,10 +684,11 @@
       "rate": {
         "mean": 1.6760000000000002,
         "p95": 2,
-        "max": 2
+        "max": 2,
+        "p95Modulation": 1.722838615399589
       },
-      "sizedFor": "p95",
-      "sizedRate": 2,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 1.722838615399589,
       "shape": {
         "promptTokens": 4852.230365888334,
         "outputTokens": 1678.5433932251847,
@@ -693,18 +697,18 @@
       },
       "status": "sized",
       "needed": {
-        "decode": 2,
+        "decode": 1,
         "atLeast": true
       },
       "limit": {
-        "value": 3.6601822437707376,
+        "value": 1.8300911218853688,
         "unit": "r/s",
         "band": {
-          "lo": 3.622738855906091,
-          "hi": 3.680897421386203
+          "lo": 1.8113694279530455,
+          "hi": 1.8404487106931016
         },
         "floor": 0.002222528576045067,
-        "uncapped": 3.809999335331627,
+        "uncapped": 1.9049996676658134,
         "boundBy": [
           "operating-point cap"
         ],
@@ -739,7 +743,8 @@
         "prefill": 1,
         "decode": 1
       },
-      "verdict": "under",
+      "verdict": "match",
+      "scope": "decode only",
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
@@ -753,10 +758,11 @@
       "rate": {
         "mean": 11.279999999999998,
         "p95": 15.96,
-        "max": 15.96
+        "max": 15.96,
+        "p95Modulation": 15.950816603933355
       },
-      "sizedFor": "p95",
-      "sizedRate": 15.96,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 15.950816603933355,
       "shape": {
         "promptTokens": 1028.094213614944,
         "outputTokens": 1194.4959569319278,
@@ -787,7 +793,6 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -813,7 +818,6 @@
           "HeldByDecodeAdmission",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -835,7 +839,6 @@
         "HeldByDecodeAdmission",
         "AssumedShape",
         "OutputSpreadUnread",
-        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -846,10 +849,11 @@
       "rate": {
         "mean": 5.132,
         "p95": 15.860000000000001,
-        "max": 15.92
+        "max": 15.92,
+        "p95Modulation": 15.843003817337243
       },
-      "sizedFor": "p95",
-      "sizedRate": 15.860000000000001,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 15.843003817337243,
       "shape": {
         "promptTokens": 1404.2223454139196,
         "outputTokens": 571.9106040769857,
@@ -881,7 +885,6 @@
           "KVBoundSlots",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -909,7 +912,6 @@
           "KVBoundSlots",
           "AssumedShape",
           "OutputSpreadUnread",
-          "BatchBeyondFit",
           "AssumedPoissonArrivals"
         ]
       },
@@ -932,7 +934,6 @@
         "KVBoundSlots",
         "AssumedShape",
         "OutputSpreadUnread",
-        "BatchBeyondFit",
         "AssumedPoissonArrivals"
       ]
     },
@@ -943,10 +944,11 @@
       "rate": {
         "mean": 0.9679998812239983,
         "p95": 2,
-        "max": 2.38
+        "max": 2.38,
+        "p95Modulation": 1.9632177018295827
       },
-      "sizedFor": "p95",
-      "sizedRate": 2,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 1.9632177018295827,
       "shape": {
         "promptTokens": 4552.895020153841,
         "outputTokens": 1736.042004383983,
@@ -1003,6 +1005,7 @@
         "decode": 1
       },
       "verdict": "under",
+      "scope": "decode only",
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
@@ -1105,7 +1108,7 @@
       "decode": 1
     },
     "neededReplicaHours": {
-      "decode": 1.75
+      "decode": 1.6666666666666665
     },
     "hadReplicaHours": {
       "decode": 0.9166666666666667
@@ -1115,7 +1118,7 @@
       "decode": 1.0833333333333333
     },
     "heldReplicaHours": {
-      "decode": 1.8627777777777774
+      "decode": 1.7982407407407404
     },
     "gpusPerReplica": {
       "prefill": 1,
@@ -1126,6 +1129,7 @@
       "2026-11-01T22:00:00Z"
     ],
     "overHours": [],
+    "decodeOverHours": [],
     "refusedHours": [],
     "counts": {
       "sized": 11,
@@ -1133,19 +1137,22 @@
       "refused": 0,
       "tooLittleData": 2,
       "noData": 0,
-      "under": 9,
+      "under": 8,
       "over": 0,
-      "match": 2,
+      "match": 3,
       "sizedForMean": 0,
-      "sizedForP95": 11,
+      "sizedForP95": 0,
       "sizedForMax": 0,
-      "prefillNotPriced": 4
+      "sizedForP95Modulation": 11,
+      "prefillNotPriced": 4,
+      "measuredTTFT": 0,
+      "measuredTTFTOver": 0
     }
   },
-  "searched": 82,
+  "searched": 81,
   "notes": [
     "Steady state: each bucket is sized as if its rate held. A replica must be Ready when its bucket starts, so it starts one lead time before (prefill 67 s learned, decode 68 s learned): held is each role's most need over the bucket and every bucket that starts within its lead after it ends, and the held replica-hours count each scale-up's replicas from one lead before their bucket. The verdicts judge the need, not the held fleet.",
-    "Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).",
+    "Each bucket is sized for the p95 less counting noise (the p95 less a steady one-minute rate's Poisson spread, var - share x mean/60, the share of it readings closer than a minute hold) of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).",
     "Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.",
     "An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the cheapest of the buckets' own fleets that holds them all, in the order a bucket's need is chosen, else each role's most over them. It is not searched for the cheapest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.",
     "A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.",

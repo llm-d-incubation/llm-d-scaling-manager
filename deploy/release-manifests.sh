@@ -65,6 +65,17 @@ RELEASE_FILES=(
     scaling-manager-preflight-cluster.yaml
     scaling-manager-dset-role-writer.yaml
     scaling-manager-dset-role-writer-cluster.yaml
+    scaling-manager.yaml
+    scaling-manager-grants.yaml
+    scaling-manager-monitoring.yaml
+    scaling-manager-keda.yaml
+)
+
+# The scripts beside the manifests, from deploy/kubectl: listed in SHA256SUMS
+# and signed like them.
+RELEASE_SCRIPTS=(
+    scaling-manager-admin.sh
+    scaling-manager-owner.sh
 )
 
 # The files no end-to-end test installs yet. Each says so in its header;
@@ -257,7 +268,7 @@ write() {
 }
 
 mkdir -p "$OUT"
-for f in "${RELEASE_FILES[@]}" SHA256SUMS; do rm -f "$OUT/$f"; done
+for f in "${RELEASE_FILES[@]}" "${RELEASE_SCRIPTS[@]}" SHA256SUMS; do rm -f "$OUT/$f"; done
 
 SED_HOW="Before applying: sed -i \"s/$PLACEHOLDER/<namespace>/g\" <file>"
 
@@ -277,6 +288,113 @@ for platform in kubernetes openshift; do
         | write "scaling-manager-cluster$suffix.yaml" \
             "One controller for the cluster, in namespace $CLUSTER_NS ($platform). Create that namespace first; applies as is." \
             ""
+done
+
+# scaling-manager.yaml: the one manifest, applied with kubectl apply
+# --server-side (proposal PR #404, phase 1). The
+# cluster-wide Kubernetes install above, plus:
+#   - its Namespace, so `kubectl delete -f` removes the install the way KEDA's
+#     and Kueue's do;
+#   - the scaler TLS Secrets as Opaque with no data, which a server-side
+#     re-apply never empties, so they sit in the applied file;
+#   - the ClusterTriggerAuthentication, and the EPP TokenReview ClusterRole
+#     the admin binds per EPP where the router chart did not;
+#   - the reads of the in-controller preflight;
+#   - the switches: watchNamespaces live, the controller writes KEDA's copy,
+#     runs the preflight itself, and starts passive (LLMSM_PASSIVE, below the
+#     passive setting).
+# Nothing in it names KEDA's namespace: KEDA's side is scaling-manager-keda.yaml,
+# applied with -n, the controller reads the kedaNamespace setting
+# (--keda-namespace=keda is only its default), and the scaler NetworkPolicy
+# admits the namespace labelled scaling-manager.llmd.ai/keda=true. No file of
+# this install is edited before it is applied.
+MANIFEST=scaling-manager.yaml
+KEDA_NS_LABEL=scaling-manager.llmd.ai/keda
+release_source() { sed "s/__NAMESPACE__/$CLUSTER_NS/g" "$ROOT/config/release/$1.yaml"; }
+{
+    printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n' "$CLUSTER_NS"
+    echo '---'
+    main_manifest "$WORK/cl-kubernetes.yaml" "$CLUSTER_NS" kubernetes | KEDA_LABEL="$KEDA_NS_LABEL" yq '
+        (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .args) +=
+            ["--watch-namespaces-live=true", "--keda-namespace=keda", "--self-check-interval=1m", "--restart-on-settings-change=true", "--external-scaler-tls-secrets=opaque", "--wait-for-settings=true", "--external-scaler-tls-live=true"]
+        | (select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager") | .env) += [{"name": "LLMSM_PASSIVE", "value": "true"}]
+        | (select(.kind == "NetworkPolicy" and .metadata.name == "scaling-manager-external-scaler") | .spec.ingress[] | select(has("from")) | .from[] | select(has("namespaceSelector")) | .namespaceSelector.matchLabels) = {strenv(KEDA_LABEL): "true"}'
+    echo '---'
+    release_source scaler-tls-opaque-secret
+    for f in scaledobjects-plan-configmap scaledobjects-plan-role scaledobjects-plan-rolebinding \
+        scaler-tls-opaque-role scaler-tls-opaque-rolebinding keda-auth-clustertriggerauthentication \
+        epp-tokenreview-clusterrole self-check-clusterrole self-check-clusterrolebinding self-check-role self-check-rolebinding; do
+        echo '---'
+        release_source "$f"
+    done
+} | label "$CLUSTER_NS" \
+  | write "$MANIFEST" \
+      "The one manifest: namespace $CLUSTER_NS, RBAC, the controller and the ClusterTriggerAuthentication. Apply as downloaded with kubectl apply --server-side -f $MANIFEST, then scaling-manager-keda.yaml in KEDA's namespace, then the settings (scaling-manager-admin.sh install does all three; docs/guides/kubectl-install)." \
+      "Nothing here names KEDA's namespace: label it $KEDA_NS_LABEL=true and set the kedaNamespace setting (scaling-manager-admin.sh install --keda-namespace <ns>). Never edit this file."
+
+# scaling-manager-keda.yaml: KEDA's side, with no namespace, applied in the
+# namespace KEDA runs in:
+#   kubectl apply --server-side -n <KEDA's namespace> -f scaling-manager-keda.yaml
+# KEDA's copy of the client certificate (Opaque, no data), and a Role to get
+# and update it by name, bound to the controller in $CLUSTER_NS.
+{
+    for f in keda-copy-secret keda-copy-role keda-copy-rolebinding; do
+        echo '---'
+        release_source "$f"
+    done
+} | yq 'select(.kind != null) | del(.metadata.namespace)' | label "$CLUSTER_NS" \
+  | write scaling-manager-keda.yaml \
+      "The one manifest's side in KEDA's namespace, with no namespace: KEDA's copy of the scaler's client certificate, which the controller fills, and the Role that lets it, by name." \
+      "kubectl apply --server-side -n <KEDA's namespace> -f scaling-manager-keda.yaml"
+
+# scaling-manager-grants.yaml: the per-namespace grants of the one manifest,
+# with no namespace, applied by the namespace owner in each namespace that
+# needs one and selected by label:
+#   kubectl apply -n <ns> -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=pod-writer
+#   kubectl apply -n <ns> -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=dset-role-writer
+# Each binds the controller in $CLUSTER_NS. Labelled with its instance, so the
+# uninstall's selector finds them in every namespace. The role writer finds
+# the namespaces it may write by these RoleBindings (dsetwriter.GrantedNamespaces).
+grant_label() { G="$1" yq 'del(.metadata.namespace) | .metadata.labels["scaling-manager.llmd.ai/grant"] = strenv(G) | ... comments = ""'; }
+{
+    release_source pod-writer-role | grant_label pod-writer
+    echo '---'
+    release_source pod-writer-rolebinding | grant_label pod-writer
+    echo '---'
+    cat "$ROOT/config/components/dset-role-writer-namespaced/dset-role-writer-role.yaml" | grant_label dset-role-writer
+    echo '---'
+    NS="$CLUSTER_NS" yq '.subjects[].namespace = strenv(NS) | .metadata.name = "scaling-manager-dset-role-writer-" + strenv(NS)' \
+        "$ROOT/config/components/dset-role-writer-namespaced/dset-role-writer-rolebinding.yaml" | grant_label dset-role-writer
+} | label "$CLUSTER_NS" \
+  | write scaling-manager-grants.yaml \
+      "The one manifest's per-namespace grants, with no namespace: patch on pods (utilization share active, the warm pool) and the DisaggregatedSet role writer (get, list, patch on disaggregatedsets). The namespace owner applies one per namespace that needs it (scaling-manager-owner.sh grant), never in git." \
+      "kubectl apply -n <namespace> -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=pod-writer   # or =dset-role-writer"
+
+# scaling-manager-monitoring.yaml: for a model namespace, with no namespace
+# and selected by label: the model-server PodMonitor where nothing scrapes
+# the model servers yet, and the NetworkPolicy rule for the EPP's /metrics
+# where a default deny is in place.
+#   kubectl apply -n <ns> -f scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=modelserver
+#   kubectl apply -n <ns> -f scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=epp-networkpolicy
+{
+    MODELDIR="$WORK/monitoring"
+    mkdir -p "$MODELDIR"
+    ln -s "$ROOT/config/modelserver-metrics" "$MODELDIR/base"
+    printf 'resources:\n- ./base\n' > "$MODELDIR/kustomization.yaml"
+    kustomize_build "$MODELDIR" | yq 'del(.metadata.namespace) | .metadata.labels["scaling-manager.llmd.ai/monitor"] = "modelserver"'
+    echo '---'
+    release_source epp-metrics-networkpolicy | yq 'del(.metadata.namespace) | .metadata.labels["scaling-manager.llmd.ai/monitor"] = "epp-networkpolicy" | ... comments = ""'
+} | label "$CLUSTER_NS" \
+  | write scaling-manager-monitoring.yaml \
+      "The one manifest's per-namespace monitoring, for the namespace owner: a PodMonitor on port modelserver where nothing scrapes the model servers yet (llm-d's monitoring components scrape the same port), and a NetworkPolicy rule letting the controller reach the EPP's /metrics where a default deny is in place." \
+      "kubectl apply -n <namespace> -f scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=modelserver   # or =epp-networkpolicy"
+
+# The two scripts that apply these files as downloaded, with kubectl only:
+# scaling-manager-admin.sh for the cluster admin, scaling-manager-owner.sh for
+# a namespace owner. --print shows the commands instead of running them.
+# Signed and summed with the manifests.
+for f in "${RELEASE_SCRIPTS[@]}"; do
+    install -m 0755 "$ROOT/deploy/kubectl/$f" "$OUT/$f"
 done
 
 NSRAW="$WORK/ns-kubernetes.yaml"
@@ -464,7 +582,7 @@ rm -f "$OUT"/scaling-manager-tools-*.tar.gz
     || die "could not package $TOOLS_TARBALL"
 [ -s "$OUT/$TOOLS_TARBALL" ] || die "$TOOLS_TARBALL is empty"
 
-(cd "$OUT" && sha256sum "${RELEASE_FILES[@]}" "$TOOLS_TARBALL" > SHA256SUMS)
+(cd "$OUT" && sha256sum "${RELEASE_FILES[@]}" "${RELEASE_SCRIPTS[@]}" "$TOOLS_TARBALL" > SHA256SUMS)
 for f in "${RELEASE_FILES[@]}"; do
     printf '%-45s %3s objects\n' "$f" "$(yq ea '[.] | map(select(.kind != null)) | length' "$OUT/$f")"
 done

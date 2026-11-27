@@ -57,10 +57,19 @@ The TTFT pricing's switches, each a `TTFTFleet` field and a replay switch:
   stays off until a cluster staircase with several held steps past the onset
   passes
   ([the router stage](../proposals/slo-capacity-planner-ttft.md#as-built-the-router-stage)).
-  The analyzer has no switch for `TTFTFleet.RouterWaitInPrefill`, which the
-  capacity planner turns on by default (`whatif.DefaultRouterWaitInPrefill`,
-  #287), so past the prefill onset the planner's flag is `FlowControlWaitPriced`
-  where the analyzer's is `AboveFlowControlOnset`.
+- `RouterWaitInPrefill` (`slo-ttft-router-wait-in-prefill`, off from the
+  constructor; the CLI's `--router-wait-in-prefill`, on by default there,
+  `whatif.DefaultRouterWaitInPrefill`, #287): over the same range takes the
+  router's wait as already inside the processor-sharing prefill price
+  (`ttftInputs.routerWaitInPrefill`, `TTFTFleet.RouterWaitInPrefill`). No
+  figure moves; the flag is `FlowControlWaitPriced` in place of
+  `AboveFlowControlOnset`, the verdict is read from the figure, and the
+  published rate may pass the onset. Off, past the prefill onset the planner's
+  flag is `FlowControlWaitPriced` where the analyzer's is
+  `AboveFlowControlOnset`; on, the analyzer prices the planner's fleet as the
+  planner does at its defaults
+  (`TestTTFT_TheRouterWaitInPrefillSwitchIsThePlannersPrice`, issue #367).
+  Turning it on by default waits for a live check with the controller.
 - `PSOnsets` (`slo-ttft-ps-onsets`, off, the CLI's `--ps-onsets` default):
   places the prefill onset on the processor-sharing stage
   (`prefillPlan.psMeanScore`, `ttftPlan.placement`) at `Prefill.RunningCap`.
@@ -82,15 +91,33 @@ it. On:
 - V_P's rescale along the curve reads `I_eff + 2h`, `h` the cached tokens,
   not `I_eff` (`Prefill.shapedVP`, `attentionSpan`). Each computed token
   attends over the cached ones too: at 32k with a 75% hit a pod computes the
-  8k a fresh 8k prompt does, but V_P reads about 1.7x high without it. `h`
-  is `I_eff·hit/(1 − hit)`, from each side's measured hit rate, not the
-  whole prompt less `I_eff` (the two are read over different windows). It
-  needs both whole prompts known and a hit rate above
+  8k a fresh 8k prompt does, but V_P reads about 1.7x high without it.
+  Where the prefill rows read the computed prompt and the whole one, `h` is
+  each side's cached context, every tier's hits counted
+  (`pricedFleet.cachedContext`, `Prefill.CachedContextRead`, issue #383):
+  the question's from the computed-token hit of the same rows and minutes,
+  V_P's from `VPWholePromptTokens − VPPromptTokens`. A token served from a
+  host, disk or peer tier is a miss to the prefix-cache hit rate, yet the
+  prompt attends over it. A prompt netted from a whole one
+  (`--assume-input-tokens`, a backtest's step) reads `h` as the whole less
+  the netted one, so no token is both computed and cached, and only where
+  `slo-ttft-computed-hit` netted it by every tier's hit: netted by the
+  prefix-cache hit rate, a tier's tokens are priced as computed. Only where
+  they are not read is `h`
+  `I_eff·hit/(1 − hit)`, from each side's prefix-cache hit rate. It needs
+  both whole prompts known and a cached share above
   `MaterialPrefixHitMove` on either side; otherwise the rescale is as
   before.
 - The planner nets an assumed prompt by a stated hit rate (`--prefix-hit`),
   else the prefill variant's, not the decode variant's
   (`pricedFleet.effectivePrompt`).
+- A backtest's step is priced at the prompt its own prefill pods computed,
+  their computed tokens over their requests
+  (`whatifapi.Knobs.PrefillComputedTokens`, `pricedFleet.stepComputedPrompt`),
+  and `h` is its whole prompt less that. Off, the step's whole prompt is
+  netted by the fit's hit, so a step that hit, tested against a fit that did
+  not, is priced as if it computed the whole prompt. A step's hit at or under
+  `MaterialPrefixHitMove` moves nothing.
 - The KV transfer scales with the tokens it moves, the whole prompt less the
   decode variant's hits (`pricedFleet.transferPerToken`).
 
@@ -99,8 +126,11 @@ the hit rate V_P was read at (`VPWholePromptTokens`, `VPPromptHitRate`), and
 `VPShapeMoved` is raised where the hits moved (`Prefill.prefixMoved`): the
 hit rate by more than `MaterialPrefixHitMove` (0.1, stated, not measured),
 or the whole prompt by more than `MaxVPShapeRatio` with a hit rate above 0.1
-on either side. A state that recorded no whole prompt raises nothing new. No
-committed recording has a prefix hit, so no golden moves.
+on either side. With the switch on and the cached context read, the hit on
+each side is its cached share of the whole prompt, as the rescale prices it,
+not the prefix-cache hit rate: like with like (issue #383). A state that
+recorded no whole prompt raises nothing new. No committed recording has a
+prefix hit, so no golden moves.
 
 `ComputedHit` (`slo-ttft-computed-hit`, planner-only, off from the
 constructor) nets a whole prompt the planner prices for the prefill pods
@@ -119,6 +149,16 @@ showed, and V_P is read from that counter. Details:
 - A hit the question states (`--prefix-hit`, an `IL/OL/hit` shape) still
   governs. One the load's cycles filled in (`whatifapi.Knobs.PrefixHitRead`)
   does not.
+- The load's shape (`--shape load`, the report's default) is netted this way
+  with the switch off too (`pricedFleet.loadShapeRead`): its hit is the
+  decode variant's, which on a P/D fleet is not the prefill pods'. Its prompt
+  is then in computed tokens, so it keeps the served-work floor
+  (`pricedFleet.servedComputed`).
+- So is a whole prompt read from the source's own cycles with no hit stated
+  (`whatifapi.Knobs.PromptTokensRead`): a day plan's bucket at its own shape
+  (`readShape`) and a backtest's step. `loadShapeRead` is the one rule for
+  both. A stated prompt (`--assume-input-tokens`, a stated mix, a plan's
+  bucket edges) is netted as before.
 - It applies only where the computed-token hit or the hit it replaces is
   above `MaterialPrefixHitMove`. No committed recording has a hit, so it
   moves no golden.
@@ -172,14 +212,19 @@ price took that load as free.
   flagged `TierLoadUnmeasured`. A recording with no split by tier, where the
   computed-token hit is above `MaterialPrefixHitMove`, is flagged
   `TierSplitUnread`.
-- **The attention span (issue #311).** With `slo-ttft-prefix-attention` on
-  too, the span's cached context is the whole prompt less the computed one,
-  every tier's hits counted (`whatif.Prefill.CachedContextRead`): the
-  question's from the computed-token hit of the same rows and minutes, V_P's
-  from `VPWholePromptTokens − VPPromptTokens`. The prefix-cache hit rate sees
-  the GPU's hits alone.
+- **The attention span** is `slo-ttft-prefix-attention`'s, whether this
+  switch is on or not: its cached context counts every tier's hits (issue
+  #383).
 - No committed recording reads the cached tokens by tier, so the switch moves
   no golden.
+- **Not on by default (issue #386).** On a private production P/D recording
+  with a host and a peer tier, neither this switch nor `slo-ttft-tier-kv-wait`
+  reads a figure newly under 0.8 of measured, and the KV wait brings the 75%
+  time split's median mean TTFT closer to measured. At the 50%
+  split, whose figures rest on a lower-bound V_P and read high, both raise
+  the median error and take figures from within 20% to more than 20% over,
+  which the issue's rule forbids. `learnreplay.PlannerSwitches` says when they
+  go on.
 
 `CachedTokenCost` (`slo-ttft-cached-token-cost`, planner-only, off from the
 constructor) prices the load of a cached prompt token. A token served from a

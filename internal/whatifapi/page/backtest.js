@@ -5,7 +5,8 @@
 // page loads this file after scenario.js (esc) and dayplan.js (the time
 // axis helpers) and before planner.js, which puts the markup on the page.
 //
-// Two panels share one time axis: TTFT, then TPOT, each in seconds. Per
+// Two panels share one time axis: TTFT, then TPOT, each on a log axis whose
+// ticks carry their unit (ms under a second, else s). Per
 // panel, the predicted mean and p90 are step lines, the band from the p90 to
 // its upper bound is a wash of the p90's hue, and the measured mean and p90
 // are dots (mean hollow, p90 filled). A measured p90 in a histogram bucket
@@ -20,8 +21,8 @@
 
 // BT_PANELS is each panel: the key of its figures and its title.
 const BT_PANELS = [
-  {key: "ttft", title: "TTFT, seconds", h: 170},
-  {key: "tpot", title: "TPOT, seconds", h: 150},
+  {key: "ttft", title: "TTFT (log scale; each tick carries its unit)", h: 170},
+  {key: "tpot", title: "TPOT (log scale; each tick carries its unit)", h: 150},
 ];
 // BT_STATS are the statistics drawn, each with its class.
 const BT_STATS = [{stat: "mean", cls: "c-0", dot: "dot hollow"}, {stat: "p90", cls: "c-1", dot: "dot"}];
@@ -32,6 +33,56 @@ const BT_CLIP = 3;
 const BT_EXCLUDED = {noTraffic: "no traffic", noMeasurement: "no measured requests", scaling: "replicas changing",
   warmUp: "warm-up", notPriced: "not priced", otherVariants: "other variants serving",
   burst: "a burst near the knee in its window"};
+// BT_V2 is each experimental model's flag on a figure, as the figure says
+// it: a figure priced by one is experimental, and one it abstained on is the
+// planner's own.
+const BT_V2 = {RankMixtureTTFT: "experimental TTFT v2, outside the validated region",
+  RankMixtureAbstained: "TTFT v2 abstained, the planner's own",
+  TPOTDistribution: "experimental TPOT v2, outside the validated region",
+  TPOTDistributionAbstained: "TPOT v2 abstained, the planner's own"};
+
+// btV2Mark is a point's mark: a dagger where an experimental model priced
+// it (the view's one notice says what it means), "" for the planner's own,
+// an abstention included. BT_V2 names each flag in the method's words.
+function btV2Mark(p) {
+  return isExperimental(p.predicted) ? " " + DAGGER : "";
+}
+
+// btInBucket is whether the TPOT distribution's p90 or p95 at a step lies
+// in the measured one's joint bracket (the router's TPOT histogram and,
+// above their first edge, the decode engines'), in words, or "".
+function btInBucket(step, key, stat) {
+  const d = key === "tpot" && step.tpotDistribution;
+  const v = d && (stat === "p90" ? d.p90Inside : stat === "p95" ? d.p95Inside : undefined);
+  if (v == null) return "";
+  return v ? " (in the measured bracket)" : " (not in the measured bracket)";
+}
+
+// btV2Lines are the experimental models' standing, a sentence each: what
+// they price and that it is experimental, or why they abstained; and for
+// TPOT, how often its p90 and p95 landed in the measured joint bracket, and
+// under or over it.
+function btV2Lines(bt) {
+  const out = [];
+  const m = bt.rankMixture;
+  if (m) {
+    out.push(m.abstained ? `EXPERIMENTAL TTFT model v2 (${m.model}) was asked for and abstained: ${m.abstained}. Every TTFT is the planner's own (RankMixtureAbstained).` :
+      `EXPERIMENTAL TTFT model v2 (${m.model}): every TTFT it prices is not validated and reads outside the validated region (RankMixtureTTFT). ${m.assumed}`);
+  }
+  const d = bt.tpotDistribution;
+  if (d) {
+    out.push(d.abstained ? `EXPERIMENTAL TPOT model v2 (${d.model}) was asked for and abstained: ${d.abstained}. Every TPOT percentile is the planner's own (TPOTDistributionAbstained).` :
+      `EXPERIMENTAL TPOT model v2 (${d.model}): every TPOT percentile it prices is not validated and reads outside the validated region (TPOTDistribution); the mean stays the planner's. ${d.assumed}`);
+    const t = d.test;
+    if (!d.abstained && t && t.steps > 0) {
+      const own = v => v == null ? "" : ` (the planner's own: ${v})`;
+      out.push(`TPOT v2 predicted p90 in the measured joint bracket at ${t.p90Inside} of ${t.steps} steps${own(t.defaultP90Inside)}, ` +
+        `under it at ${t.p90Below || 0} and over at ${t.p90Above || 0}; p95 at ${t.p95Inside}${own(t.defaultP95Inside)}, ` +
+        `under at ${t.p95Below || 0} and over at ${t.p95Above || 0}.`);
+    }
+  }
+  return out;
+}
 
 // btPoint is the step's point at stat in key ("ttft" or "tpot"), or null.
 function btPoint(step, key, stat) {
@@ -99,7 +150,7 @@ function btLogTicks(lo, hi) {
 // btSummaryText is the answer in sentences: the verdict, what was not
 // judged, the windows, the configuration and what was measured.
 function btSummaryText(bt) {
-  const out = (bt.verdictLines && bt.verdictLines.length ? bt.verdictLines : [bt.verdict]).concat([bt.excluded]);
+  const out = (bt.verdictLines && bt.verdictLines.length ? bt.verdictLines : [bt.verdict]).concat([bt.excluded], btV2Lines(bt));
   const at = s => s.slice(0, 16).replace("T", " ");
   out.push(`Fitted on ${bt.fit.source} from ${at(bt.fit.from)} to ${at(bt.fit.to)} UTC; tested on ${bt.test.source} from ` +
     `${at(bt.test.from)} to ${at(bt.test.to)} UTC${bt.split ? " (one source split: " + bt.split + ")" : ""}.`);
@@ -117,7 +168,7 @@ function btSummaryText(bt) {
 // the hover reads. Every series is a path or group with data-series, every
 // greyed step a rect with data-excluded.
 function btSVG(bt) {
-  const lay = btLayout(bt), X = lay.X, step = bt.step, xr = DAY_L + lay.pw;
+  const lay = btLayout(bt), X = lay.X, step = bt.step, xr = DAY_L + lay.pw, unres = btUnresolved(bt);
   const days = bt.steps.length && bt.steps[0].start.slice(0, 10) !== bt.steps[bt.steps.length - 1].start.slice(0, 10);
   let s = "";
   for (const p of lay.panels) {
@@ -158,9 +209,18 @@ function btSVG(bt) {
         g += `<path class="line ${cls}" data-series="${p.key}-${stat}-predicted" d="${dayStep(run, step, X, Y)}"/>`;
       }
       let dots = "";
+      const band = unres[`${p.key}-${stat}`];
+      if (band) {
+        // One bucket too wide to place the figure, at many steps: one band
+        // behind the panel, not a bar a step.
+        g = `<rect class="btunres" data-unresolved="${p.key}-${stat}" x="${DAY_L}" y="${Y(band.hi).toFixed(1)}" width="${lay.pw}" ` +
+          `height="${Math.max(Y(band.lo) - Y(band.hi), 1).toFixed(1)}"><title>measured ${esc(stat)} somewhere in ${esc(btFmt(band.lo))} to ` +
+          `${esc(btFmt(band.hi))} at many steps: one histogram bucket, too wide to place it</title></rect>` + g;
+      }
       for (const k of bt.steps) {
         const q = btPoint(k, p.key, stat);
         const cx = X(dayTime(k.start) + step / 2).toFixed(1);
+        if (q && q.measuredBucket && band && q.measuredBucket.lo === band.lo && q.measuredBucket.hi === band.hi) continue;
         if (q && q.measuredBucket) {
           const b = q.measuredBucket;
           dots += `<rect class="btbucket ${cls}" data-bucket="${p.key}-${stat}" x="${(cx - 2).toFixed(1)}" y="${Y(b.hi).toFixed(1)}" ` +
@@ -169,7 +229,9 @@ function btSVG(bt) {
           continue;
         }
         if (!q || q.measured == null || !isFinite(q.measured)) continue;
-        dots += `<circle class="${dot} ${cls}" cx="${cx}" cy="${Y(q.measured).toFixed(1)}" r="3"/>`;
+        // A measured dot carries how it stands against its prediction.
+        const at = btPointClass(q);
+        dots += `<circle class="${dot} ${cls}${at ? " bt-" + at : ""}" cx="${cx}" cy="${Y(q.measured).toFixed(1)}" r="3"/>`;
       }
       g += `<g data-series="${p.key}-${stat}-measured">${dots}</g>`;
       for (const k of bt.steps) {
@@ -279,7 +341,8 @@ function btLegend() {
   const box = cls => `<svg viewBox="0 0 18 10" aria-hidden="true"><rect class="${cls}" x="1" y="1" width="16" height="8"/></svg>`;
   return `<span>${sw("c-0")}mean predicted</span><span>${dot("dot hollow c-0")}mean measured</span>` +
     `<span>${sw("c-1")}p90 predicted</span><span>${dot("dot c-1")}p90 measured</span>` +
-    `<span>${box("btbucket c-1")}p90 measured somewhere in a bucket too wide to place it</span>` +
+    `<span>${box("btbucket c-1")}p90 measured somewhere in a bucket too wide to place it</span><span>${box("btunres")}one bucket too wide, at many steps</span>` +
+    `<span>${dot("dot bt-within")}measured within 20%</span><span>${dot("dot bt-low")}more than 20% over the prediction</span><span>${dot("dot bt-high")}more than 20% under it</span>` +
     `<span>${box("btband")}the planner's own range for p90</span><span>${box("btgrey")}not judged</span>` +
     `<span>${box("btsat")}no figure: the planner calls the fleet overloaded</span><span>&#9650; predicted above the axis</span>`;
 }
@@ -304,14 +367,15 @@ function btPred(p) {
 // and each statistic predicted and measured.
 function btTipHTML(bt, s) {
   let h = `<b>${esc(s.start.slice(11, 16))} UTC</b>: ${esc(s.rate.toFixed(2))} r/s, ${s.prefill} prefill + ${s.decode} decode`;
-  if (s.kneeShare != null) h += `, ${esc((s.kneeShare * 100).toFixed(0))}% of the load the planner thinks it can carry`;
+  if (s.kneeShare != null) h += `, ${esc((s.kneeShare * 100).toFixed(0))}% of the fleet's limit the planner prices for this step (its knee)`;
   if (s.excluded) h += `<br>not judged: ${esc(BT_EXCLUDED[s.excluded] || s.excluded)}${s.detail ? " (" + esc(s.detail) + ")" : ""}`;
   for (const key of ["ttft", "tpot"]) {
     for (const p of s[key] || []) {
       const pred = p.predicted.value != null ? btPred(p) : p.predicted.refused && p.predicted.refused.reason === "Saturated" ?
         "no figure (overloaded)" : "no figure (" + (p.predicted.refused ? p.predicted.refused.reason : "-") + ")";
       const held = p.unscored === "upperBound" ? " (an upper bound the fleet measured under: consistent, not scored)" : "";
-      h += `<br>${key.toUpperCase()} ${esc(p.statistic)}: predicted ${esc(pred)}, measured ${esc(btMeasured(p))}${esc(held)}`;
+      h += `<br>${key.toUpperCase()} ${esc(p.statistic)}: predicted ${esc(pred)}, measured ${esc(btMeasured(p))}${esc(held)}` +
+        `${esc(btInBucket(s, key, p.statistic))}${esc(btV2Mark(p))}`;
     }
   }
   return h;
@@ -329,6 +393,8 @@ function btScoreTable(bt) {
     (region ? `<th>in benchmark conditions: steps</th><th>in benchmark conditions: within 20%</th>` : "") + `</tr></thead><tbody>`;
   for (const key of ["ttft", "tpot"]) {
     for (const sc of bt.summary[key]) {
+      // A statistic with no step scored has no row: btUnscoredList says why.
+      if (!sc.all.steps) continue;
       const a = sc.all, r = sc.inRegion;
       h += `<tr><td>${key.toUpperCase()} ${esc(sc.statistic)}</td><td>${a.steps}</td><td>${num(a.bias)}</td><td>${pct(a.within)}</td>` +
         `<td>${a.low || 0}</td><td>${factor(a.medianError)}</td><td>${factor(a.p90Error)}</td><td>${pct(a.coverage)}</td>` +
@@ -338,21 +404,212 @@ function btScoreTable(bt) {
   return h + "</tbody></table>";
 }
 
-// btStepTable is every step as a table: its time, rate and replicas, each
-// figure predicted and measured, and why it was not judged.
-function btStepTable(bt) {
-  const cell = (s, key, stat) => {
-    const p = btPoint(s, key, stat);
-    if (!p) return "-";
-    const pred = p.predicted.value != null ? btPred(p) : p.predicted.refused ? "no figure" : "-";
-    return `${pred} / ${btMeasured(p)}`;
-  };
-  let h = `<table class="t"><thead><tr><th>step (UTC)</th><th>rate</th><th>prefill + decode</th><th>TTFT mean</th><th>TTFT p90</th>` +
-    `<th>TPOT mean</th><th>TPOT p90</th><th>judged</th></tr></thead><tbody>`;
-  for (const s of bt.steps) {
-    h += `<tr><td>${esc(s.start.slice(11, 16))}</td><td>${esc(s.rate.toFixed(2))}</td><td>${s.prefill} + ${s.decode}</td>` +
-      `<td>${esc(cell(s, "ttft", "mean"))}</td><td>${esc(cell(s, "ttft", "p90"))}</td><td>${esc(cell(s, "tpot", "mean"))}</td>` +
-      `<td>${esc(cell(s, "tpot", "p90"))}</td><td>${s.excluded ? "no: " + esc(BT_EXCLUDED[s.excluded] || s.excluded) : "yes"}</td></tr>`;
+// btStepTable is every step as a table, grouped TTFT then TPOT, each by
+// statistic: a cell is predicted vs measured, ✓ within 20% or ✗ outside it
+// and by how much, and a bucket's note in its tooltip. failingOnly keeps the
+// judged steps with a statistic outside 20%.
+function btStepTable(bt, failingOnly) {
+  const stats = ["mean", "p90", "p95"];
+  const steps = failingOnly ? bt.steps.filter(btFailing) : bt.steps;
+  let h = `<table class="t btsteps"><thead><tr><th rowspan="2">step (UTC)</th><th rowspan="2">rate</th><th rowspan="2">prefill + decode</th>` +
+    `<th colspan="3" class="grp">TTFT, predicted vs measured</th><th colspan="3" class="grp">TPOT, predicted vs measured</th><th rowspan="2">judged</th></tr><tr>` +
+    ["ttft", "tpot"].map(k => stats.map(st => `<th>${k.toUpperCase()} ${st}</th>`).join("")).join("") + `</tr></thead><tbody>`;
+  for (const s of steps) {
+    h += `<tr><td>${esc(s.start.slice(11, 16))}${btBatchChip(s)}</td><td>${esc(s.rate.toFixed(2))}</td><td>${s.prefill} + ${s.decode}</td>`;
+    for (const k of ["ttft", "tpot"]) {
+      for (const st of stats) {
+        const c = btCell(s, k, st);
+        h += `<td class="${c.cls ? "bt-" + c.cls : ""}"${c.title ? ` title="${esc(c.title)}"` : ""}>${esc(c.text)}</td>`;
+      }
+    }
+    h += `<td>${s.excluded ? "no: " + esc(BT_EXCLUDED[s.excluded] || s.excluded) : "yes"}</td></tr>`;
   }
+  if (!steps.length) h += `<tr><td colspan="10">${failingOnly ? "No judged step reads more than 20% off." : "No step."}</td></tr>`;
   return h + "</tbody></table>";
+}
+
+// batchFitWords is a BatchBeyondFit figure's two batches in words, of what
+// (this load, this step): a pod's, or an engine rank's on a pod of several
+// (batchBeyondFit.ranks).
+function batchFitWords(b, what) {
+  const unit = b.ranks > 1 ? "an engine rank" : "a pod";
+  return `The decode line was fitted on up to ${b.fitted} sequences ${unit}; ${what} runs about ${b.priced}`;
+}
+
+// btBatchChip is the warning a step whose decode runs more sequences than
+// the fit's ITL line was fitted on carries beside its time (BatchBeyondFit),
+// "" for any other.
+function btBatchChip(s) {
+  const b = s.batchBeyondFit;
+  if (!b) return "";
+  const words = batchFitWords(b, "this step") + ", so its TPOT may read low and the decode knee high.";
+  return ` <span class="chip flagged" title="${esc(words)}">BatchBeyondFit</span>`;
+}
+
+// ---- The check, read first: the verdict card, the notice, the step table ----
+
+// BT_UNSCORED is why a statistic was not scored at a step, in words.
+const BT_UNSCORED = {fewRequests: "too few measured requests", aboveHistogram: "measured above the histogram's top bucket",
+  refused: "no figure", notMeasured: "not measured", notComparable: "measured as another figure than the one predicted",
+  unsettled: "the load had not settled", burst: "a burst near the knee", unresolvable: "the measured bucket is too wide to place it",
+  upperBound: "an upper bound the fleet measured under"};
+
+// btPointClass is how a point's measured figure stands against its
+// prediction: "within" 20%, "low" (predicted more than 20% under, or
+// measured above the histogram), "high" (more than 20% over), "unresolved"
+// (in a bucket too wide to place it); null where nothing was measured.
+function btPointClass(p) {
+  if (!p) return null;
+  if (p.aboveHistogram) return "low";
+  if (p.measuredBucket && (p.unscored || p.ratio == null)) return "unresolved";
+  if (p.ratio == null) return null;
+  if (p.outsideBucket === "under") return "low";
+  if (p.outsideBucket === "over") return "high";
+  if (Math.abs(p.ratio - 1) <= 0.2) return "within";
+  return p.ratio < 1 ? "low" : "high";
+}
+
+// btPair is a prediction and a measurement in one unit: "2.10 vs 2.20 s",
+// "12 vs 14 ms".
+function btPair(pred, meas) {
+  const s = Math.max(pred, meas) >= 1;
+  const f = v => s ? Number(v.toPrecision(3)) : Number((v * 1000).toPrecision(3));
+  return `${f(pred)} vs ${f(meas)} ${s ? "s" : "ms"}`;
+}
+
+// btCell is one statistic at one step as the step table shows it, with its
+// class and a tooltip: "2.10 vs 2.20 s ✓ 5%", a dagger on an experimental
+// figure, the bucket's note in the tooltip, never in the cell.
+function btCell(s, key, stat) {
+  const p = btPoint(s, key, stat);
+  if (!p) return {text: "-", cls: "", title: ""};
+  const d = dagger(p.predicted);
+  const cls = btPointClass(p) || "";
+  if (p.predicted.value == null) {
+    return {text: "no figure" + d, cls: "", title: p.predicted.refused ? "refused: " + p.predicted.refused.reason : ""};
+  }
+  const title = (p.measuredBucket ? `measured somewhere in ${btFmt(p.measuredBucket.lo)} to ${btFmt(p.measuredBucket.hi)}, a histogram bucket too wide to place it` : "") +
+    btInBucket(s, key, stat) + (p.unscored ? ` Not scored: ${BT_UNSCORED[p.unscored] || p.unscored}.` : "");
+  if (p.aboveHistogram) return {text: `${btPred(p)} vs above the top bucket ✗${d}`, cls, title};
+  // A figure the bucket is too wide to place reads as the bucket, never as
+  // a point inside it.
+  if (p.measuredBucket && (p.measured == null || cls === "unresolved")) {
+    return {text: `${btPred(p)} vs ${btFmt(p.measuredBucket.lo)}-${btFmt(p.measuredBucket.hi)} \u2248${d}`, cls, title};
+  }
+  if (p.measured == null) return {text: btPred(p) + " vs -" + d, cls, title};
+  const mark = cls === "within" ? "✓" : cls === "unresolved" ? "≈" : "✗";
+  const off = p.ratio != null ? ` ${Math.round(Math.abs(p.ratio - 1) * 100)}%` : "";
+  return {text: `${p.predicted.upperBound ? "≤ " : ""}${btPair(p.predicted.value, p.measured)} ${mark}${off}${d}`, cls, title};
+}
+
+// btFailing reports whether a judged step has a scored statistic outside 20%.
+function btFailing(s) {
+  if (s.excluded) return false;
+  return ["ttft", "tpot"].some(k => (s[k] || []).some(p => {
+    const c = btPointClass(p);
+    return c === "low" || c === "high";
+  }));
+}
+
+// btPrimary is the score the verdict quotes for a latency: the target's
+// statistic where it was scored, else the mean.
+function btPrimary(scores, stat) {
+  const scored = (scores || []).filter(x => x.all && x.all.steps > 0);
+  return scored.find(x => x.statistic === stat) || scored.find(x => x.statistic === "mean") || scored[0] || null;
+}
+
+// btVerdictCard is the check in three lines, each with a chip: TTFT and TPOT
+// within 20% of measured, and the range tested.
+function btVerdictCard(bt, ttftStat, tpotStat) {
+  const lines = [];
+  const one = (name, sc) => {
+    if (!sc) return {chip: `${name}: not scored`, text: `${name} was not scored at any step: the step table says why.`, cls: "unresolved"};
+    const a = sc.all, n = Math.round((a.within || 0) * a.steps);
+    const lean = a.bias == null ? "" : a.bias < 0.97 ? `; it reads ${Math.round((1 - a.bias) * 100)}% low` : a.bias > 1.03 ? `; it reads ${Math.round((a.bias - 1) * 100)}% high` : "; no lean";
+    const share = a.steps ? n / a.steps : 0;
+    return {chip: `${name} ${sc.statistic} ${n}/${a.steps} within 20%`, cls: share >= 0.8 ? "within" : share >= 0.5 ? "unresolved" : "low",
+      text: `${name} ${sc.statistic}: within 20% of measured in ${n} of ${a.steps} steps scored${lean}.`};
+  };
+  const tt = btPrimary(bt.summary.ttft, ttftStat);
+  lines.push(one("TTFT", tt));
+  // The header quotes the mean's score: so does the card, beside the target's.
+  const tm = btPrimary(bt.summary.ttft, "mean");
+  if (tt && tm && tm !== tt) lines.push(one("TTFT", tm));
+  lines.push(one("TPOT", btPrimary(bt.summary.tpot, tpotStat)));
+  const judged = (bt.steps || []).filter(s => !s.excluded);
+  if (judged.length) {
+    const lo = Math.min(...judged.map(s => s.rate)), hi = Math.max(...judged.map(s => s.rate));
+    const fleets = [...new Set(judged.map(s => `${s.prefill} prefill + ${s.decode} decode`))];
+    lines.push({chip: `${roundRate(lo)}-${roundRate(hi)} r/s`, cls: "range",
+      text: `Tested ${roundRate(lo)} to ${roundRate(hi)} r/s at ${fleets.length === 1 ? fleets[0] : fleets.join(", ")}, ${judged.length} of ${bt.steps.length} steps judged: another rate or fleet is an extrapolation.`});
+  } else {
+    lines.push({chip: "no step judged", cls: "unresolved", text: "No step was judged: " + (bt.excluded || "see the step table") + "."});
+  }
+  return lines;
+}
+
+// btNotice is the check's one notice: what the dagger means, where a figure
+// came from an experimental model; "" with none.
+function btNotice(bt) {
+  const any = (bt.steps || []).some(s => ["ttft", "tpot"].some(k => (s[k] || []).some(p => isExperimental(p.predicted))));
+  return any ? EXPERIMENTAL_NOTICE.replace(" Check the planner shows how it did on your traffic.", " This check is how it did on your traffic.") : "";
+}
+
+// btUnresolved is the band one histogram bucket spans where a statistic's
+// measured figure fell in it at many steps (its score's sameBucketBand),
+// keyed "tpot-p90": drawn once behind the panel, not as a bar a step.
+function btUnresolved(bt) {
+  const out = {};
+  for (const key of ["ttft", "tpot"]) {
+    for (const sc of (bt.summary && bt.summary[key]) || []) {
+      if (sc.sameBucketBand && sc.sameBucket > 0) out[`${key}-${sc.statistic}`] = sc.sameBucketBand;
+    }
+  }
+  return out;
+}
+
+// btBucketTip is the tip under the charts where a statistic could not be
+// placed for its histogram's bucket width: what to change to measure it.
+function btBucketTip(bt) {
+  const u = btUnresolved(bt), keys = Object.keys(u);
+  if (!keys.length) return "";
+  // A statistic the charts draw first (p90, then the mean), then any other.
+  const k = keys.find(x => x.endsWith("-p90")) || keys.find(x => x.endsWith("-mean")) || keys[0], b = u[k], [key, stat] = k.split("-");
+  return `${key.toUpperCase()} ${stat} was measured inside one histogram bucket, ${btFmt(b.lo)} to ${btFmt(b.hi)}, too wide to score it. ` +
+    "Finer histogram edges measure it: the router's metrics.requestTPOTBuckets and requestTTFTBuckets in the EndpointPickerConfig, or vLLM's " +
+    "--custom-histogram-buckets; edges about 15% apart place p90 and p95 within 20%.";
+}
+
+// btUnscoredList is each statistic not scored at some steps, and why.
+function btUnscoredList(bt) {
+  const out = [];
+  for (const key of ["ttft", "tpot"]) {
+    for (const sc of (bt.summary && bt.summary[key]) || []) {
+      const parts = Object.entries(sc.unscored || {}).filter(([, n]) => n > 0).map(([why, n]) => `${n} ${BT_UNSCORED[why] || why}`);
+      if (parts.length) out.push(`${key.toUpperCase()} ${sc.statistic}: not scored in ${parts.join(", ")}.`);
+    }
+  }
+  return out;
+}
+
+// btStepsCSV is every step as CSV: its time, rate and fleet, and each
+// statistic predicted and measured, seconds.
+function btStepsCSV(bt) {
+  const cols = [["ttft", "mean"], ["ttft", "p90"], ["ttft", "p95"], ["tpot", "mean"], ["tpot", "p90"], ["tpot", "p95"]];
+  const head = ["start", "rate", "prefill", "decode", "judged"];
+  for (const [k, s] of cols) head.push(`${k}_${s}_predicted_seconds`, `${k}_${s}_measured_seconds`, `${k}_${s}_bucket_lo_seconds`, `${k}_${s}_bucket_hi_seconds`, `${k}_${s}_class`);
+  const num = v => v == null || !isFinite(v) ? "" : String(Number(v.toPrecision(6)));
+  const rows = [head.join(",")];
+  for (const s of bt.steps) {
+    const r = [s.start, s.rate.toFixed(3), String(s.prefill), String(s.decode), s.excluded ? "no: " + s.excluded : "yes"];
+    for (const [k, st] of cols) {
+      const p = btPoint(s, k, st);
+      const bk = p && p.measuredBucket;
+      // An unresolved figure exports its bucket, not a point.
+      const unres = p && btPointClass(p) === "unresolved";
+      r.push(num(p && p.predicted.value), unres ? "" : num(p && p.measured), num(bk && bk.lo), num(bk && bk.hi), (p && btPointClass(p)) || "");
+    }
+    rows.push(r.map(csvField).join(","));
+  }
+  return rows.join("\n") + "\n";
 }

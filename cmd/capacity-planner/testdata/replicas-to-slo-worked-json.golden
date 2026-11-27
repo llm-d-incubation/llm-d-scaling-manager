@@ -89,7 +89,9 @@
           "gpuMemoryUtilization": 0.9,
           "gpuMemoryUtilizationSource": "not recorded",
           "blockSize": 128,
-          "blockSizeSource": "not recorded"
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
         }
       },
       "results": {
@@ -109,18 +111,22 @@
               "boundBy": [
                 "batch cap"
               ],
-              "tier": "ols"
+              "tier": "ols",
+              "batchBeyondFit": {
+                "priced": 64,
+                "fitted": 55
+              }
             },
             "flags": [
               "AssumedShape",
               "OutputSpreadUnread",
-              "BatchBeyondFit",
-              "ExtrapolatedFill"
+              "ExtrapolatedFill",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
-              "label": "OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)",
-              "outside": "arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25"
+              "label": "OUTSIDE VALIDATED REGION (--assume-tpot-ratio stated, which the run did not price)",
+              "outside": "--assume-tpot-ratio stated, which the run did not price"
             }
           }
         },
@@ -144,8 +150,7 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ]
           }
         },
@@ -167,8 +172,7 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ],
             "validation": {
               "validated": false,
@@ -196,8 +200,7 @@
             "flags": [
               "AssumedTPOTRatio",
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ],
             "validation": {
               "validated": false,

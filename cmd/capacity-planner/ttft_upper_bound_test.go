@@ -81,9 +81,9 @@ func TestUpperBoundTTFT_TheIssuesLoadIsNotUnder(t *testing.T) {
 	v := s.Verdict
 	assert.Equal(t, whatifapi.VerdictNotJudged, v.Verdict, v.Summary)
 	assert.NotContains(t, v.Summary, "33.9 s against")
-	// 4.2, not the 4.0 V_P gives: the knee is floored at the work the
+	// 4.1, not the 4.0 V_P gives: the knee is floored at the work the
 	// prefill pods served (prefill-vp-served-unqueued, servedKneeFloor).
-	assert.Contains(t, v.Summary, "a prefill knee of at least 4.2 r/s")
+	assert.Contains(t, v.Summary, "a prefill knee of at least 4.1 r/s")
 	assert.True(t, seenTTFT(t, s).UpperBound)
 	assert.Equal(t, whatifapi.CellUpperBound, marks(s)[seenLoad])
 }

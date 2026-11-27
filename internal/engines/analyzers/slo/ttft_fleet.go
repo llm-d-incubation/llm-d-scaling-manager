@@ -20,7 +20,9 @@ const (
 	// Poisson, which over-promises on bursty traffic.
 	AssumedPoissonArrivals whatif.Flag = "AssumedPoissonArrivals"
 	// PromptSpreadClamped is a measured prompt spread with mass past the
-	// histogram's last bound, or above whatif.PromptCVStop: priced at that stop.
+	// histogram's last bound and no context window to hold it under (the
+	// variant's --max-model-len unread, or at or under that bound), or above
+	// whatif.PromptCVStop: priced at that stop.
 	PromptSpreadClamped whatif.Flag = "PromptSpreadClamped"
 	// FlowControlMismatch is a declared slo.flowControl the router's series
 	// contradict: priced as declared.
@@ -93,6 +95,8 @@ type ttftInputs struct {
 	// processorSharing is SwitchTTFTProcessorSharing, routerWait
 	// SwitchTTFTRouterWait.
 	processorSharing, routerWait bool
+	// routerWaitInPrefill is SwitchTTFTRouterWaitInPrefill.
+	routerWaitInPrefill bool
 	// psOnsets is SwitchTTFTPSOnsets, decodeGateCharge
 	// SwitchTTFTDecodeGateCharge.
 	psOnsets, decodeGateCharge bool
@@ -180,7 +184,8 @@ func ttftFleet(in ttftInputs, pods int) (whatif.TTFTFleet, []whatif.Flag) {
 	p.PromptCV, p.PromptCVAssumed, p.PromptMaxRatio = in.spread.CV, in.spread.Assumed, in.spread.MaxRatio
 	p.TransferSecondsPerToken = in.transfer
 	fl := whatif.TTFTFleet{Prefill: p, Decode: in.decode, FlowControl: in.flow, ProcessorSharing: in.processorSharing,
-		PriceRouterWait: in.routerWait, PSOnsets: in.psOnsets, ChargeDecodeGate: in.decodeGateCharge}
+		PriceRouterWait: in.routerWait, RouterWaitInPrefill: in.routerWaitInPrefill, PSOnsets: in.psOnsets,
+		ChargeDecodeGate: in.decodeGateCharge}
 	if in.decode == nil {
 		fl.DecodeTTFT = in.decodeTTFT
 	} else {
@@ -366,6 +371,7 @@ func (a *Analyzer) noteTransfer(key, accelerator, args string, rows []domain.Rep
 	if d := a.decodeTTFT[key]; d != nil {
 		w = &d.transfer
 	}
+	w.PullWork = a.ttftPullWork
 	w.Under(accelerator, args)
 	w.Observe(now, rows)
 	return w.Reading()

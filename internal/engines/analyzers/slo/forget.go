@@ -26,8 +26,9 @@ import (
 // the accelerator memo (accelerators), as the saturation analyzer drops its
 // lastAccelerator: a variant forgotten after a move to new hardware would
 // otherwise key its next line under the old card for any cycle whose pods do
-// not resolve one; and the TTFT windows (imbalance, decodeTTFT, decodeTerms,
-// prompts, joint).
+// not resolve one; the TTFT windows (imbalance, decodeTTFT, decodeTerms,
+// prompts, joint); and the v2 latency learners' window and fits (models),
+// where the variant is the pair's prefill or decode variant.
 //
 // What it keeps: transients, the model's recent fleet history, which is no
 // learned state of the variant; ownSettled (and ownSettle), when each replica
@@ -124,10 +125,29 @@ func (a *Analyzer) forgetLearnerLocked(name, namespace, modelID, variant string)
 		// The start time is the saturation analyzer's alone: this analyzer
 		// keeps no start estimate.
 		return 0, nil, true
+	case learn.TTFTMixture, learn.TPOTDistribution:
+		// One window feeds both v2 learners: the first name forgets it.
+		return a.forgetModelLocked(namespace, modelID, variant)
 	}
 	ctrl.Log.WithName("slo").Error(nil, "learner on learn.Learners has no forget decision in the slo analyzer; nothing forgotten",
 		"learner", name, "namespace", namespace, "modelID", modelID, "variant", variant)
 	return 0, nil, false
+}
+
+// forgetModelLocked forgets the model's v2 latency learners (window and
+// fits, model_learners.go) where the variant is the prefill or the decode
+// variant they read, and returns the one entry dropped. The forget is
+// reported under each learner's own name (noteModelForgottenLocked), not
+// among the line's keys. Callers hold a.mu.
+func (a *Analyzer) forgetModelLocked(namespace, modelID, variant string) (int, []learn.Forgotten, bool) {
+	key := reportModel(namespace, modelID)
+	w := a.models[key]
+	if w == nil || (variant != w.prefill && variant != w.decode) {
+		return 0, nil, true
+	}
+	a.noteModelForgottenLocked(namespace, modelID, w, learn.ByOperator)
+	delete(a.models, key)
+	return 1, nil, true
 }
 
 // forgetLinesLocked forgets the variant's ITL line under every key: what the

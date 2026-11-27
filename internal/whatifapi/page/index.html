@@ -13,14 +13,24 @@
 </head>
 <body>
 <main class="viz-root">
+  <div class="progress" id="progress" role="status" aria-live="polite" hidden>
+    <div class="progbar"><div class="progfill" id="progfill"></div></div>
+    <span id="progtext"></span>
+    <button type="button" id="progcancel">Cancel</button>
+  </div>
   <header>
     <h1>Capacity planner</h1>
     <div class="sub">
       <span id="what">No inputs loaded</span>
       <span class="chip src" id="srcchip" hidden></span>
+      <span class="chip window" id="winchip" hidden></span>
+      <a class="chip trust" id="trustchip" href="#backtest" hidden></a>
       <span class="chip selfcheck" id="sccheck" hidden></span>
     </div>
-    <div class="selfcheckbox" id="scbox" hidden></div>
+    <details class="about" id="scdetails" hidden>
+      <summary>The self-check, in full</summary>
+      <div class="selfcheckbox" id="scbox" hidden></div>
+    </details>
     <details id="source" class="card source">
       <summary>Source: <span id="srcsum">choosing</span></summary>
       <form id="srcform" class="row">
@@ -68,85 +78,16 @@
         <button type="submit" id="load">Load</button>
       </form>
     </details>
-    <div class="banner" id="banner" role="note" hidden></div>
+    <details class="about" id="bannerbox" hidden>
+      <summary>About the TTFT model</summary>
+      <div class="banner" id="banner" role="note"></div>
+    </details>
     <div class="status" id="status" role="status" aria-live="polite"></div>
   </header>
 
-  <fieldset class="modes" id="modes">
-    <legend class="sr">Question</legend>
-    <label><input type="radio" name="mode" value="plan" id="mplan" checked> How much does this fleet serve?</label>
-    <label><input type="radio" name="mode" value="size" id="msize"> What fleet does this traffic need?</label>
-    <span class="hint" id="modenote">Set the replicas; the page prices the most they serve.</span>
-  </fieldset>
-
-  <section class="card scenarios" aria-label="Saved scenarios and compare">
-    <div class="scenrow">
-      <label for="scenname">Scenario</label>
-      <input type="text" id="scenname" maxlength="80" placeholder="a name, or one made from the knobs" autocomplete="off">
-      <button type="button" id="scensave" disabled>Save</button>
-      <label for="scenlist">Saved</label>
-      <select id="scenlist" disabled><option value="">none saved</option></select>
-      <button type="button" id="scenopen" disabled>Open</button>
-      <button type="button" id="scendelete" disabled>Delete</button>
-      <button type="button" id="scenexport" disabled>Export JSON</button>
-      <label class="file" for="scenimport">Import JSON<input type="file" id="scenimport" class="sr" accept=".json,application/json"></label>
-      <span class="hint" id="scencount"></span>
-    </div>
-    <div class="scenrow">
-      <button type="button" id="pina" disabled>Pin as A</button>
-      <button type="button" id="unpin" disabled>Unpin A</button>
-      <span class="hint" id="pinnote">Pin the scenario on screen as A, then change the knobs: A stays drawn dashed.</span>
-    </div>
-  </section>
-
-  <section class="card controls" aria-label="Scenario">
-    <div class="group">
-      <h2>Fleet</h2>
-      <div class="stepper">
-        <span class="name" id="plabel">Prefill replicas</span>
-        <button type="button" id="pdec" aria-label="One prefill replica fewer">-</button>
-        <input type="number" id="prefill" min="1" max="64" step="1" aria-labelledby="plabel">
-        <button type="button" id="pinc" aria-label="One prefill replica more">+</button>
-        <span class="now" id="pnow"></span>
-      </div>
-      <div class="stepper">
-        <span class="name" id="dlabel">Decode replicas</span>
-        <button type="button" id="ddec" aria-label="One decode replica fewer">-</button>
-        <input type="number" id="decode" min="1" max="64" step="1" aria-labelledby="dlabel">
-        <button type="button" id="dinc" aria-label="One decode replica more">+</button>
-        <span class="now" id="dnow"></span>
-      </div>
-      <div class="ctl" id="maxrow" hidden>
-        <label for="maxrep">Search up to, replicas a role</label>
-        <input type="number" id="maxrep" min="1" max="64" step="1" value="32">
-        <label class="toggle" for="sizelow"><input type="checkbox" id="sizelow"> Size for the worst corner of V_P and f</label>
-        <span class="hint">In this mode the replica counts are the answer, not a setting.</span>
-      </div>
-    </div>
-    <div class="group">
-      <h2>Traffic</h2>
-      <div class="ctl">
-        <label for="rate">Critical, r/s <span class="hint">(all traffic priced as one class)</span></label>
-        <div class="slide"><input type="range" id="rate" min="0" max="10" step="0.01">
-          <input type="number" id="ratebox" min="0" step="0.1" aria-label="Critical rate, requests per second"></div>
-        <div class="at" id="ratenote"></div>
-      </div>
-      <div class="ctl disabled" title="Needs traffic split by priority: see the proposal's Traffic classes">
-        <span>Regular, r/s <b>0</b> <span class="hint">later</span></span>
-        <span>Batch, r/s <b>0</b> <span class="hint">later</span></span>
-      </div>
-      <div class="ctl">
-        <label for="priceas">Price at</label>
-        <select id="priceas">
-          <option value="mix">the current mix</option>
-        </select>
-      </div>
-      <div class="ctl">
-        <label for="outtok">Output length, tokens</label>
-        <input type="number" id="outtok" min="1" step="50">
-        <span class="hint" id="outnote"></span>
-      </div>
-    </div>
+  <section class="card controls common" id="common" aria-labelledby="commontitle">
+    <h2 class="whatif" id="commontitle">Targets and assumptions <span class="hint">every view uses these: the answer, the day plan and the
+      right-size judgment. A change marks each view's answer stale until it is asked again; the check of the planner reads none of them.</span></h2>
     <div class="group">
       <h2>SLO</h2>
       <div class="ctl">
@@ -164,218 +105,351 @@
         <div class="at" id="tpotat"></div>
         <div class="ratio" id="ratiorow" hidden>
           <label for="ratio">Assume R_q (percentile over mean)</label>
-          <input type="number" id="ratio" min="1" step="0.05" placeholder="e.g. 1.3">
+          <span class="boxrow"><input type="number" id="ratio" aria-describedby="t-ratio rationote" min="1" step="0.05" placeholder="e.g. 1.3"><span class="tag" id="t-ratio"></span><button type="button" class="reset" id="r-ratio" aria-label="Use the learned R_q" hidden>Use learned</button></span>
           <div class="hint" id="rationote"></div>
         </div>
       </div>
+    </div>
+    <div class="group">
+      <h2>Margin and request shape</h2>
       <div class="ctl">
-        <label for="headroom">Headroom (fraction of the knee)</label>
+        <label for="headroom" title="headroom: the share of the limit the fleet is run at">Safety margin (share of the limit to run at)</label>
         <input type="number" id="headroom" min="0.05" max="1" step="0.05">
+      </div>
+      <div class="ctl">
+        <label for="priceas">Price at</label>
+        <select id="priceas">
+          <option value="mix">the current mix</option>
+        </select>
+      </div>
+      <div class="ctl">
+        <label for="outtok">Output length, tokens</label>
+        <span class="boxrow"><input type="number" id="outtok" aria-describedby="t-outtok outnote" min="1" step="50"><span class="tag" id="t-outtok"></span><button type="button" class="reset" id="r-outtok" aria-label="Use the learned output length" hidden>Use learned</button></span>
+        <span class="hint" id="outnote"></span>
       </div>
     </div>
     <details class="assume" id="assumebox">
       <summary>Assume a term the source did not learn (<span id="assumecount">none typed</span>)</summary>
       <div class="row">
-        <div class="field"><label for="a-vp">V_P, prefill tokens/s</label><input type="number" id="a-vp" min="0" step="1000"><span class="hint" id="l-vp"></span></div>
-        <div class="field"><label for="a-a">a, fixed latency, ms</label><input type="number" id="a-a" min="0" step="1"><span class="hint" id="l-a"></span></div>
-        <div class="field"><label for="a-cv">Prompt cv</label><input type="number" id="a-cv" min="0" step="0.1"><span class="hint" id="l-cv"></span></div>
-        <div class="field"><label for="a-hop">Router hop, ms</label><input type="number" id="a-hop" min="0" step="1"><span class="hint" id="l-hop"></span></div>
-        <div class="field"><label for="a-itlb">Decode ITL B (per-token latency, cache empty), ms</label><input type="number" id="a-itlb" min="0.001" step="0.5"><span class="hint" id="l-itlb"></span></div>
+        <div class="field"><label for="a-vp" title="V_P">Prefill speed V_P per pod, tokens/s</label><span class="boxrow"><input type="number" id="a-vp" aria-describedby="t-a-vp l-vp" min="0" step="1000"><span class="tag" id="t-a-vp"></span><button type="button" class="reset" id="r-a-vp" aria-label="Use the learned V_P" hidden>Use learned</button></span><span class="hint" id="l-vp"></span></div>
+        <div class="field"><label for="a-a" title="a">Fixed prefill latency, ms</label><span class="boxrow"><input type="number" id="a-a" aria-describedby="t-a-a l-a" min="0" step="1"><span class="tag" id="t-a-a"></span><button type="button" class="reset" id="r-a-a" aria-label="Use the learned fixed prefill latency" hidden>Use learned</button></span><span class="hint" id="l-a"></span></div>
+        <div class="field"><label for="a-cv" title="cv">Prompt-length spread</label><span class="boxrow"><input type="number" id="a-cv" aria-describedby="t-a-cv l-cv" min="0" step="0.1"><span class="tag" id="t-a-cv"></span><button type="button" class="reset" id="r-a-cv" aria-label="Use the learned prompt-length spread" hidden>Use learned</button></span><span class="hint" id="l-cv"></span></div>
+        <div class="field"><label for="a-hop">Router hop, ms</label><span class="boxrow"><input type="number" id="a-hop" aria-describedby="t-a-hop l-hop" min="0" step="1"><span class="tag" id="t-a-hop"></span><button type="button" class="reset" id="r-a-hop" aria-label="Use the learned router hop" hidden>Use learned</button></span><span class="hint" id="l-hop"></span></div>
+        <div class="field"><label for="a-itlb">Decode ITL B (per-token latency, cache empty), ms</label><span class="boxrow"><input type="number" id="a-itlb" aria-describedby="t-a-itlb l-itlb" min="0.001" step="0.5"><span class="tag" id="t-a-itlb"></span><button type="button" class="reset" id="r-a-itlb" aria-label="Use the learned ITL B" hidden>Use learned</button></span><span class="hint" id="l-itlb"></span></div>
       </div>
-      <div class="hint">A typed value replaces the learned one and flags every figure that rests on it. Leave a box empty to use the source's. ITL B is used only where decode is refused PinnedDefaultB; the assumed list says when it was not.</div>
+      <div class="hint">A box shows the value the source learned, tagged learned, and sends nothing. A value you type replaces it, tagged assumed, and flags every figure that rests on it; Use learned puts the source's back. ITL B is used only where decode is refused PinnedDefaultB; the assumed list says when it was not.</div>
+      <label class="toggle" for="a-lar"><input type="checkbox" id="a-lar"> My router balances prefill by load</label>
+      <div class="hint">Tick it when the router scores each prefill pod's queue (llm-d's EPP queue scorer): the busiest pod's extra share is held up to the load it was learned at, then falls to none at the pooled prefill limit, which lifts that limit. No recording shows what the router scores, so it is your statement, and every figure reads outside the validated region with it.</div>
     </details>
   </section>
 
-  <div class="tabs" role="tablist" aria-label="Traffic class">
-    <button type="button" class="tab" role="tab" id="tab-critical" aria-selected="true" aria-controls="panel">Critical</button>
-    <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" disabled
-      title="Needs traffic split by priority; see the proposal's Traffic classes">Regular (later)</button>
-    <button type="button" class="tab" role="tab" aria-selected="false" aria-disabled="true" disabled
-      title="Needs traffic split by priority; see the proposal's Traffic classes">Batch (later)</button>
+  <div class="tabs" role="tablist" aria-label="Views">
+    <button type="button" class="tab" role="tab" id="tab-answer" aria-selected="true" aria-controls="view-answer">Answer</button>
+    <button type="button" class="tab" role="tab" id="tab-day" aria-selected="false" aria-controls="view-day" tabindex="-1">Day plan</button>
+    <button type="button" class="tab" role="tab" id="tab-check" aria-selected="false" aria-controls="view-check" tabindex="-1">Check the planner</button>
+    <button type="button" class="tab" role="tab" id="tab-right" aria-selected="false" aria-controls="view-right" tabindex="-1">Right-size</button>
   </div>
-  <section class="card panel" id="panel" role="tabpanel" aria-labelledby="tab-critical">
-    <div class="sizebox" id="sizebox" hidden>
-      <h2 id="sizetitle">The fleet this traffic needs</h2>
-      <div class="sizeanswer" id="sizeanswer" aria-live="polite"></div>
-      <ul class="fewer" id="fewer" aria-label="Why one fewer is not enough"></ul>
-    </div>
-    <div class="comparebox" id="comparebox" hidden>
-      <h2>A, pinned, against the current scenario</h2>
-      <p class="hint" id="comparewhat"></p>
-      <div id="comparetable"></div>
-    </div>
-    <div id="planview">
-    <h2><span id="limitstitle">The most the fleet serves under these SLOs</span> <span class="hint" id="limitsfor"></span></h2>
-    <p class="hint" id="pagetargets" hidden></p>
-    <div class="summary">
-      <div class="hero">
-        <div class="k">Fleet limit</div>
-        <div class="v" id="fleet"></div>
-        <div class="n" id="fleetn"></div>
-        <div class="n" id="chosen"></div>
+  <div class="view" id="view-answer" role="tabpanel" aria-labelledby="tab-answer">
+    <section class="card exec" id="exec" aria-labelledby="exectitle" hidden>
+      <div class="exechead">
+        <h2 id="exectitle">The answer</h2>
+        <span class="hint" id="execsrc"></span>
+        <button type="button" id="execcopy">Copy as image</button>
       </div>
-      <div class="bars">
-        <svg id="bars" viewBox="0 0 640 120" role="img" aria-labelledby="barsdesc"></svg>
-        <p class="sr" id="barsdesc"></p>
-        <ul class="limits" id="limits"></ul>
-      </div>
-    </div>
-    <ul class="marginal" id="marginal" aria-label="One more replica"></ul>
+      <dl class="execlines" id="execlines"></dl>
+      <p class="execslo" id="execslo"></p>
+      <p class="hint" id="execcopied" aria-live="polite"></p>
+    </section>
 
-    <div class="charts">
-      <div class="chart">
-        <h3 id="ttfttitle">TTFT</h3>
-        <div class="cap" id="ttftcap"></div>
-        <svg id="ttftchart" viewBox="0 0 640 340" role="img" aria-labelledby="ttfttitle ttftcap"></svg>
-        <div class="legend" id="ttftlegend"></div>
-        <div class="points" id="ttftpoints"></div>
-        <label class="toggle"><input type="checkbox" id="perbucket"> Show "if all traffic were bucket b" (each bucket priced as its own fleet; no limit is read from it)</label>
-        <label class="toggle" for="bucketedges">Bucket edges, tokens <span class="hint">(blank for 1k, 4k, 8k, 32k, 128k; up to 8, ascending)</span></label>
-        <input type="text" id="bucketedges" placeholder="2k, 16k, 64k" spellcheck="false" autocomplete="off" aria-describedby="bucketedgeserr">
-        <div class="fielderr" id="bucketedgeserr" aria-live="polite"></div>
-        <div id="buckettable"></div>
-      </div>
-      <div class="chart">
-        <h3 id="tpottitle">TPOT</h3>
-        <div class="cap" id="tpotcap">Time per output token on the decode replicas, for the mix.</div>
-        <svg id="tpotchart" viewBox="0 0 460 340" role="img" aria-labelledby="tpottitle tpotcap"></svg>
-        <div class="legend" id="tpotlegend"></div>
-        <div class="points" id="tpotpoints"></div>
-      </div>
-    </div>
-    <details><summary>Table view: the curves' values</summary><div id="curvetable"></div></details>
-    <p class="note">Dashed horizontal line: the target. Dashed vertical line: the rate you set. Open circle: the figure at
-      that rate. Filled circle: the highest rate that meets the target. Shaded band: the span over V_P and f (TTFT) or
-      the bootstrap band (TPOT). Shaded past the lower knee: saturated, where the model answers nothing. With a scenario
-      pinned as A: its curve is the grey dashed line, and its filled circle the highest rate that meets its own target.</p>
-    </div>
-  </section>
-
-  <section class="card dayplan" id="dayplan" aria-labelledby="daytitle">
-    <h2 id="daytitle">Day plan: the replicas the source's traffic needed, bucket by bucket</h2>
-    <p class="hint">Sizes each bucket of the source's window for its own rate, under the SLO, headroom and assumptions set above,
-      and sets the replicas the fleet had beside it. Steady state: it ignores the time a replica takes to start.
-      For a day, load a 24-hour window in Source.</p>
-    <div class="row">
-      <div class="field"><label for="daystep">Bucket</label>
-        <select id="daystep"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option></select></div>
-      <div class="field"><label for="daysize">Size each bucket for its</label>
-        <select id="daysize"><option value="">p95 rate (the mean, less conservative, where a bucket holds fewer than 20 cycles)</option>
-          <option value="mean">mean rate</option><option value="p95">p95 rate</option><option value="p95-modulation">p95 rate less counting noise</option><option value="max">highest rate</option></select></div>
-      <button type="button" id="dayrun" disabled>Plan the day</button>
-    </div>
-    <div id="dayout" hidden>
-      <ul class="dayrefused" id="dayrefused" hidden></ul>
-      <ul class="daysum" id="daysum"></ul>
-      <div class="legend" id="daylegend"></div>
-      <svg id="daychart" viewBox="0 0 960 500" role="img" aria-labelledby="daytitle daydesc"></svg>
-      <p class="sr" id="daydesc"></p>
-      <details><summary>Table view: the hours</summary><div id="daytable"></div></details>
-      <details><summary>Table view: every bucket, with why a bucket was not sized</summary><div id="daybuckets"></div></details>
-      <ul class="daynotes" id="daynotes"></ul>
-    </div>
-  </section>
-
-  <section class="card dayplan backtest" id="backtest" aria-labelledby="bttitle">
-    <h2 id="bttitle">Check the planner against a period it did not see</h2>
-    <p class="hint">Learns from the first part of the source, then predicts the latency of the rest from that period's traffic and
-      replica counts only, never from its measured latency, and compares with what the fleet measured. Or learn from the source and
-      test on another recording of the same configuration. Load a recording of a few hours in Source first.</p>
-    <div class="row">
-      <fieldset class="kind">
-        <legend>Test on</legend>
-        <label><input type="radio" name="btmode" value="split" id="btsplitmode" checked> the rest of this source</label>
-        <label><input type="radio" name="btmode" value="other" id="btothermode"> another recording</label>
-      </fieldset>
-      <div class="field" data-btmode="split"><label for="btsplit">Fit on the first <output id="btsplitout">60%</output></label>
-        <input id="btsplit" type="range" min="10" max="90" step="5" value="60"></div>
-      <div class="field" data-btmode="other" hidden><label for="bttest">Test recording</label>
-        <select id="bttest"></select></div>
-      <div class="field"><label for="btstep">Step</label>
-        <select id="btstep"><option selected>5m</option><option>15m</option><option>30m</option></select></div>
-      <label class="check"><input type="checkbox" id="btallow"> Test another configuration anyway</label>
-      <button type="button" id="btrun" disabled>Run</button>
-    </div>
-    <div id="btout" hidden>
-      <ul class="daysum" id="btsum"></ul>
-      <div class="legend" id="btlegend"></div>
-      <svg id="btchart" viewBox="0 0 960 420" role="img" aria-labelledby="bttitle btdesc"></svg>
-      <p class="sr" id="btdesc"></p>
-      <details><summary>Table view: the scores</summary><div id="btscores"></div></details>
-      <details><summary>Table view: every step</summary><div id="btsteps"></div></details>
-      <ul class="daynotes" id="btnotes"></ul>
-    </div>
-    <details class="blind" id="blind">
-      <summary>Blind: predict now, compare later</summary>
-      <p class="hint">Predict a window from its load alone, a recording with its latency taken out
-        (<code>capacity-planner strip-latency</code>), and keep the prediction file. Later, compare it with the same window
-        measured. The file carries a hash of its inputs and of itself: a file edited and not rehashed, or a window of another load, is
-        refused. The hash shows an edit; it does not sign the file.</p>
+    <section class="card refusal" id="refusal" aria-labelledby="refusaltitle" hidden>
+      <h2 id="refusaltitle">Prefill capacity unknown</h2>
+      <p id="refusaltext"></p>
       <div class="row">
-        <div class="field"><label for="bpwindow">Window to predict</label><select id="bpwindow"></select></div>
-        <button type="button" id="bprun" disabled>Predict</button>
-        <span id="bpout"></span>
+        <button type="button" id="usevp"></button>
+        <button type="button" id="busier">Load a busier window</button>
       </div>
-      <div class="row">
-        <div class="field"><label for="bcfile">Prediction file</label><input id="bcfile" type="file" accept=".json,application/json"></div>
-        <div class="field"><label for="bcmeasured">The same window, measured</label><select id="bcmeasured"></select></div>
-        <button type="button" id="bcrun">Compare</button>
+      <p class="code" id="refusalcode"></p>
+    </section>
+
+    <p class="notice" id="notice" role="note" hidden></p>
+
+    <fieldset class="modes" id="modes">
+      <legend class="sr">Question</legend>
+      <label><input type="radio" name="mode" value="plan" id="mplan" checked> How much does this fleet serve?</label>
+      <label><input type="radio" name="mode" value="size" id="msize"> What fleet does this traffic need?</label>
+      <span class="hint" id="modenote">Set the replicas; the page prices the most they serve.</span>
+    </fieldset>
+
+    <section class="card panel" id="panel" aria-label="The figures">
+      <div class="sizebox" id="sizebox" hidden>
+        <h2 id="sizetitle">The fleet this traffic needs</h2>
+        <div class="sizeanswer" id="sizeanswer" aria-live="polite"></div>
+        <ul class="fewer" id="fewer" aria-label="Why one fewer is not enough"></ul>
+      </div>
+      <div class="comparebox" id="comparebox" hidden>
+        <h2>A, pinned, against the current scenario</h2>
+        <p class="hint" id="comparewhat"></p>
+        <div id="comparetable"></div>
+      </div>
+      <div id="planview">
+      <h2><span id="limitstitle">The most the fleet serves under these SLOs</span> <span class="hint" id="limitsfor"></span></h2>
+      <p class="hint" id="pagetargets" hidden></p>
+      <div class="summary">
+        <div class="hero">
+          <div class="k">Fleet limit</div>
+          <div class="v" id="fleet"></div>
+          <div class="n" id="fleetn"></div>
+          <div class="n" id="chosen"></div>
+        </div>
+        <div class="bars">
+          <svg id="bars" viewBox="0 0 640 120" role="img" aria-labelledby="barsdesc"></svg>
+          <p class="sr" id="barsdesc"></p>
+          <ul class="limits" id="limits"></ul>
+        </div>
+      </div>
+      <ul class="marginal" id="marginal" aria-label="One more replica"></ul>
+
+      <div class="charts">
+        <div class="chart">
+          <h3 id="ttfttitle">TTFT</h3>
+          <div class="cap" id="ttftcap"></div>
+          <svg id="ttftchart" viewBox="0 0 640 340" role="img" aria-labelledby="ttfttitle ttftcap"></svg>
+          <div class="legend" id="ttftlegend"></div>
+          <div class="points" id="ttftpoints"></div>
+          <label class="toggle"><input type="checkbox" id="perbucket"> Show "if all traffic were bucket b" (each bucket estimated as its own fleet; no limit is read from it)</label>
+          <label class="toggle" for="bucketedges">Bucket edges, tokens <span class="hint">(blank for 1k, 4k, 8k, 32k, 128k; up to 8, ascending)</span></label>
+          <input type="text" id="bucketedges" placeholder="2k, 16k, 64k" spellcheck="false" autocomplete="off" aria-describedby="bucketedgeserr">
+          <div class="fielderr" id="bucketedgeserr" aria-live="polite"></div>
+          <div id="buckettable"></div>
+        </div>
+        <div class="chart">
+          <h3 id="tpottitle">TPOT</h3>
+          <div class="cap" id="tpotcap">Time per output token on the decode replicas, for the mix.</div>
+          <svg id="tpotchart" viewBox="0 0 460 340" role="img" aria-labelledby="tpottitle tpotcap"></svg>
+          <div class="legend" id="tpotlegend"></div>
+          <div class="points" id="tpotpoints"></div>
+        </div>
+      </div>
+      <div class="exports" id="planexports"></div>
+      <details><summary>Table view: the curves' values</summary><div id="curvetable"></div></details>
+      <p class="note">Dashed horizontal line: the target. Dashed vertical line: the rate you set. Open circle: the figure at
+        that rate. Filled circle: the highest rate that meets the target. Shaded band: the uncertainty range. Shaded
+        past the lower limit: overloaded, where the model answers nothing. With a scenario
+        pinned as A: its curve is the grey dashed line, and its filled circle the highest rate that meets its own target.</p>
+      </div>
+    </section>
+
+    <section class="card controls" aria-labelledby="whatiftitle">
+      <h2 class="whatif" id="whatiftitle">What if</h2>
+      <div class="group">
+        <h2>Fleet</h2>
+        <div class="stepper">
+          <span class="name" id="plabel">Prefill replicas</span>
+          <button type="button" id="pdec" aria-label="One prefill replica fewer">-</button>
+          <input type="number" id="prefill" min="1" max="64" step="1" aria-labelledby="plabel">
+          <button type="button" id="pinc" aria-label="One prefill replica more">+</button>
+          <span class="now" id="pnow"></span>
+        </div>
+        <div class="stepper">
+          <span class="name" id="dlabel">Decode replicas</span>
+          <button type="button" id="ddec" aria-label="One decode replica fewer">-</button>
+          <input type="number" id="decode" min="1" max="64" step="1" aria-labelledby="dlabel">
+          <button type="button" id="dinc" aria-label="One decode replica more">+</button>
+          <span class="now" id="dnow"></span>
+        </div>
+        <div class="ctl" id="maxrow" hidden>
+          <label for="maxrep">Search up to, replicas a role</label>
+          <input type="number" id="maxrep" min="1" max="64" step="1" value="32">
+          <label class="toggle" for="sizelow"><input type="checkbox" id="sizelow"> Size for the worst case of the uncertainty range</label>
+          <span class="hint">In this mode the replica counts are the answer, not a setting.</span>
+        </div>
+      </div>
+      <div class="group">
+        <h2>Traffic</h2>
+        <div class="ctl">
+          <label for="rate">Request rate, r/s</label>
+          <div class="slide"><input type="range" id="rate" min="0" max="10" step="0.01">
+            <input type="number" id="ratebox" min="0" step="0.1" aria-label="Request rate, requests per second"></div>
+          <div class="at" id="ratenote"></div>
+          <label for="concbox">Or concurrency, requests in the system</label>
+          <input type="number" id="concbox" min="0" step="1" aria-describedby="concnote">
+          <div class="at" id="concnote"></div>
+        </div>
+      </div>
+    </section>
+
+    <details class="card drawer scenarios" id="scendrawer">
+      <summary>Saved scenarios and compare</summary>
+      <div class="scenrow">
+        <label for="scenname">Scenario</label>
+        <input type="text" id="scenname" maxlength="80" placeholder="a name, or one made from the knobs" autocomplete="off">
+        <button type="button" id="scensave" disabled>Save</button>
+        <label for="scenlist">Saved</label>
+        <select id="scenlist" disabled><option value="">none saved</option></select>
+        <button type="button" id="scenopen" disabled>Open</button>
+        <button type="button" id="scendelete" disabled>Delete</button>
+        <button type="button" id="scenexport" disabled>Export JSON</button>
+        <label class="file" for="scenimport">Import JSON<input type="file" id="scenimport" class="sr" accept=".json,application/json"></label>
+        <span class="hint" id="scencount"></span>
+      </div>
+      <div class="scenrow">
+        <button type="button" id="pina" disabled>Pin as A</button>
+        <button type="button" id="unpin" disabled>Unpin A</button>
+        <span class="hint" id="pinnote">Pin the scenario on screen as A, then change the knobs: A stays drawn dashed.</span>
       </div>
     </details>
-  </section>
+    <details class="card drawer" id="flagsdrawer">
+      <summary>Flags (<span id="flagcount">0</span>): what the figures rest on</summary>
+      <ul id="flags"></ul>
+    </details>
+    <details class="card drawer" id="inputsdrawer">
+      <summary>Inputs: <span id="inputsum"></span></summary>
+      <details class="glossary"><summary>Glossary</summary><dl id="glossary"></dl></details>
+      <div class="chips" id="terms"></div>
+      <ul id="assumed"></ul>
+    </details>
+  </div>
 
-  <section class="card report" id="reportcard" aria-labelledby="reporttitle">
-    <h2 id="reporttitle">Is this fleet the right size? <span class="hint">the fleet above, judged at the load the source saw</span></h2>
-    <div class="reportform">
-      <fieldset>
-        <legend>Request shapes</legend>
-        <p class="hint">IL and OL in tokens (k for 1024), hit a rate from 0 to below 1. Leave a row blank for the measured shape.</p>
-        <div id="rshapes"></div>
-        <button type="button" id="rshapeadd">Add a shape</button>
-      </fieldset>
-      <fieldset>
-        <legend>Loads</legend>
-        <label for="rloads">Loads, comma separated</label>
-        <input id="rloads" type="text" value="50%, 80%, 100%, seen" aria-describedby="rloadshint">
-        <p class="hint" id="rloadshint">80% is a share of each shape's fleet knee, 5r/s a rate, seen the load the source saw.</p>
-        <label for="rgrowth">Load seen times</label>
-        <input id="rgrowth" type="number" min="0.1" step="0.1" value="1" aria-describedby="rgrowthhint">
-        <p class="hint" id="rgrowthhint">1.5 adds a column and a line for 50% more traffic; the verdict stays at the load seen.</p>
-        <label for="rloadstat">Judge at the load seen as its</label>
-        <select id="rloadstat" aria-describedby="rloadstathint">
-          <option value="p95" selected>p95 (its busy spells)</option>
-          <option value="mean">mean</option>
-          <option value="peak">peak</option>
-          <option value="p95-modulation">p95 less counting noise</option>
-        </select>
-        <p class="hint" id="rloadstathint">The p95 of the per-cycle load: the fleet must carry its busy spells, not only the average.</p>
-      </fieldset>
-      <button type="button" id="rrun" disabled>Judge the fleet</button>
-    </div>
-    <p id="rstatus" class="hint" aria-live="polite"></p>
-    <div id="rresult" hidden>
-      <p id="rload" class="hint"></p>
-      <ul id="rverdicts" class="rverdicts" tabindex="-1" aria-label="Verdicts"></ul>
-      <p class="hint" id="rlegend"><span class="rmark met">ok</span> every target met
-        <span class="rmark missed">MISS</span> a target missed (<span class="rmark missed">MISS at onset</span> at the flow-control onset) <span class="rmark saturated">SAT</span> saturated
-        <span class="rmark unknown">?</span> not judged <span class="rmark notarget">no SLO</span> no target set.
-        <span id="rlegendstats"></span></p>
-      <table id="rmatrix" aria-label="SLO by request shape and load"></table>
-      <h3 class="rsub">Each shape</h3>
-      <div id="rdetail"></div>
-      <details class="rnotes"><summary>How accurate is this?</summary><ul id="rnotes"></ul></details>
-    </div>
-  </section>
+  <div class="view" id="view-day" role="tabpanel" aria-labelledby="tab-day" hidden>
+    <section class="card dayplan" id="dayplan" aria-labelledby="daytitle">
+      <h2 id="daytitle">Day plan: the replicas the source's traffic needed, bucket by bucket</h2>
+      <p class="hint">Sizes each bucket of the source's window for its own rate, under the SLO, headroom and assumptions set above,
+        and sets the replicas the fleet had beside it. Steady state: it ignores the time a replica takes to start.
+        For a day, load a 24-hour window in Source.</p>
+      <div class="row">
+        <div class="field"><label for="daystep">Bucket</label>
+          <select id="daystep" aria-describedby="daystephint"><option>1m</option><option selected>5m</option><option>15m</option><option>1h</option></select>
+          <span class="hint" id="daystephint">starts where the window cuts into 300 buckets or fewer; each is sized on its own</span></div>
+        <div class="field"><label for="daysize">Size each bucket for its</label>
+          <select id="daysize"><option value="">p95 rate less counting noise (the mean, less conservative, where a bucket holds fewer than 20 cycles)</option>
+            <option value="mean">mean rate</option><option value="p95">p95 rate</option><option value="p95-modulation">p95 rate less counting noise</option><option value="max">highest rate</option></select></div>
+        <button type="button" id="dayrun" disabled>Plan the day</button>
+      </div>
+      <p class="notice dayprogress" id="dayprogress" hidden><span class="spinner" aria-hidden="true"></span>
+        <span id="dayprogtext" role="status" aria-live="polite"></span> <span id="dayprogtime"></span>
+        <button type="button" id="daycancel">Cancel</button></p>
+      <p class="notice" id="daystale" role="note" aria-live="polite" hidden></p>
+      <div id="dayout" hidden>
+        <ul class="dayrefused" id="dayrefused" hidden></ul>
+        <p class="dayhead" id="dayhead"></p>
+        <p class="hint" id="daymodels" hidden></p>
+        <p class="hint" id="dayused"></p>
+        <div class="legend" id="daylegend"></div>
+        <svg id="daychart" viewBox="0 0 960 500" role="img" aria-labelledby="daytitle daydesc"></svg>
+        <p class="sr" id="daydesc"></p>
+        <div class="exports" id="dayexports"></div>
+        <ul class="daysum" id="daysum"></ul>
+        <details><summary>Table view: the hours</summary><div id="daytable"></div></details>
+        <details><summary>Table view: every bucket, with why a bucket was not sized</summary><div id="daybuckets"></div></details>
+        <details><summary>Notes on the plan</summary><ul class="daynotes" id="daynotes"></ul></details>
+      </div>
+    </section>
+  </div>
 
-  <details class="card drawer" id="flagsdrawer">
-    <summary>Flags (<span id="flagcount">0</span>): what the figures rest on</summary>
-    <ul id="flags"></ul>
-  </details>
-  <details class="card drawer" id="inputsdrawer">
-    <summary>Inputs: <span id="inputsum"></span></summary>
-    <div class="chips" id="terms"></div>
-    <ul id="assumed"></ul>
-  </details>
+  <div class="view" id="view-check" role="tabpanel" aria-labelledby="tab-check" hidden>
+    <section class="card dayplan backtest" id="backtest" aria-labelledby="bttitle">
+      <h2 id="bttitle">Check the planner against a period it did not see</h2>
+      <p class="hint">Learns from the first part of the source, then predicts the latency of the rest from that period's traffic and
+        replica counts only, never from its measured latency, and compares with what the fleet measured. Or learn from the source and
+        test on another recording of the same configuration. Load a recording of a few hours in Source first.</p>
+      <div class="row">
+        <fieldset class="kind">
+          <legend>Test on</legend>
+          <label><input type="radio" name="btmode" value="split" id="btsplitmode" checked> the rest of this source</label>
+          <label><input type="radio" name="btmode" value="other" id="btothermode"> another recording</label>
+        </fieldset>
+        <div class="field" data-btmode="split"><label for="btsplit">Fit on the first <output id="btsplitout">50%</output></label>
+          <input id="btsplit" type="range" min="10" max="90" step="5" value="50"></div>
+        <div class="field" data-btmode="other" hidden><label for="bttest">Test recording</label>
+          <select id="bttest"></select></div>
+        <div class="field"><label for="btstep">Step</label>
+          <select id="btstep"><option selected>5m</option><option>15m</option><option>30m</option></select></div>
+        <label class="check"><input type="checkbox" id="btallow"> Test another configuration anyway</label>
+        <button type="button" id="btrun" disabled>Run</button>
+      </div>
+      <p class="notice" id="btnotrun" role="note" hidden>Not checked yet: the page runs no check until you ask, as it takes seconds to a minute.
+        <button type="button" id="btstart" disabled>Check accuracy on this recording</button></p>
+      <div id="btout" hidden>
+        <div class="btverdict" id="btverdict" aria-live="polite"></div>
+        <p class="notice" id="btnotice" role="note" hidden></p>
+        <div class="legend" id="btlegend"></div>
+        <svg id="btchart" viewBox="0 0 960 420" role="img" aria-labelledby="bttitle btdesc"></svg>
+        <p class="sr" id="btdesc"></p>
+        <p class="hint" id="bttip"></p>
+        <div class="exports" id="btexports"></div>
+        <details><summary>Scores</summary><div id="btscores"></div><ul class="daynotes" id="btunscored"></ul></details>
+        <details><summary>Every step</summary>
+          <label class="toggle"><input type="checkbox" id="btfailing"> Failing steps only (a figure more than 20% off)</label>
+          <div class="tablewrap" id="btsteps"></div></details>
+        <details><summary>Method and fit</summary><ul class="daysum" id="btsum"></ul><ul class="daynotes" id="btnotes"></ul></details>
+      </div>
+      <details class="blind" id="blind">
+        <summary>Blind: predict now, compare later</summary>
+        <p class="hint">Predict a window from its load alone, a recording with its latency taken out
+          (<code>capacity-planner strip-latency</code>), and keep the prediction file. Later, compare it with the same window
+          measured. The file carries a hash of its inputs and of itself: a file edited and not rehashed, or a window of another load, is
+          refused. The hash shows an edit; it does not sign the file.</p>
+        <div class="row">
+          <div class="field"><label for="bpwindow">Window to predict</label><select id="bpwindow"></select></div>
+          <button type="button" id="bprun" disabled>Predict</button>
+          <span id="bpout"></span>
+        </div>
+        <div class="row">
+          <div class="field"><label for="bcfile">Prediction file</label><input id="bcfile" type="file" accept=".json,application/json"></div>
+          <div class="field"><label for="bcmeasured">The same window, measured</label><select id="bcmeasured"></select></div>
+          <button type="button" id="bcrun">Compare</button>
+        </div>
+      </details>
+    </section>
+  </div>
+
+  <div class="view" id="view-right" role="tabpanel" aria-labelledby="tab-right" hidden>
+    <section class="card report" id="reportcard" aria-labelledby="reporttitle">
+      <h2 id="reporttitle">Is this fleet the right size? <span class="hint">the fleet set under What if in Answer, judged at the load the source saw, under the targets above the tabs</span></h2>
+      <div class="reportform">
+        <fieldset>
+          <legend>Request shapes</legend>
+          <p class="hint">IL and OL in tokens (k for 1024), hit a rate from 0 to below 1. Leave a row blank for the shape of the traffic the load ran at.</p>
+          <div id="rshapes"></div>
+          <button type="button" id="rshapeadd">Add a shape</button>
+        </fieldset>
+        <fieldset>
+          <legend>Loads</legend>
+          <label for="rloads">Loads, comma separated</label>
+          <input id="rloads" type="text" value="50%, 80%, 100%, seen" aria-describedby="rloadshint">
+          <p class="hint" id="rloadshint">80% is a share of each shape's fleet limit, 5r/s a rate, 64c a concurrency (64 requests in the system on average, as a load generator that keeps 64 open), seen the load the source saw.</p>
+          <label for="rgrowth">Load seen times</label>
+          <input id="rgrowth" type="number" min="0.1" step="0.1" value="1" aria-describedby="rgrowthhint">
+          <p class="hint" id="rgrowthhint">1.5 adds a column and a line for 50% more traffic; the verdict stays at the load seen.</p>
+          <label for="rloadstat">Judge at the load seen as its</label>
+          <select id="rloadstat" aria-describedby="rloadstathint">
+            <option value="p95-modulation" selected>p95 less counting noise (its busy spells)</option>
+            <option value="p95">p95</option>
+            <option value="mean">mean</option>
+            <option value="peak">peak</option>
+          </select>
+          <p class="hint" id="rloadstathint">The p95 of the per-cycle load less the one-minute rate's counting noise, which the queueing model already prices: the fleet must carry its busy spells, not only the average.</p>
+        </fieldset>
+        <button type="button" id="rrun" disabled>Judge the fleet</button>
+      </div>
+      <p id="rstatus" class="hint" aria-live="polite"></p>
+      <div id="rresult" hidden>
+        <p id="rload" class="hint"></p>
+        <p id="rused" class="hint"></p>
+        <div class="exports" id="rexports"></div>
+        <ul id="rverdicts" class="rverdicts" tabindex="-1" aria-label="Verdicts"></ul>
+        <p class="hint" id="rlegend"><span class="rmark met">ok</span> every target met
+          <span class="rmark missed">MISS</span> a target missed (<span class="rmark missed">MISS at onset</span> at the flow-control onset) <span class="rmark saturated">SAT</span> saturated
+          <span class="rmark unknown">?</span> not judged (a figure it needs is not estimated) <span class="rmark notarget">no SLO</span> no target set; - a figure not estimated: open Each shape for why.
+          <span id="rlegendstats"></span></p>
+        <table id="rmatrix" aria-label="SLO by request shape and load"></table>
+        <h3 class="rsub">Each shape</h3>
+        <div id="rdetail"></div>
+        <details class="rnotes"><summary>How accurate is this?</summary><ul id="rnotes"></ul></details>
+      </div>
+    </section>
+  </div>
+
   <div class="tip" id="tip" hidden></div>
 </main>
 </body>

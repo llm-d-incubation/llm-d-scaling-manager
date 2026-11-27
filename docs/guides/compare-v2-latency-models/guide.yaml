@@ -1,0 +1,37 @@
+# Machine-readable half of this guide. The bash blocks in README.md are rendered
+# from here — see hack/render-guides.py — so the commands a reader copies and the
+# commands a tool would run are the same strings.
+name: compare-v2-latency-models
+
+prerequisites:
+  vars:
+    note: The namespace and model to read, and a Prometheus you can reach (port-forward it as the capacity planner's recording guide does).
+    run: |
+      export NAMESPACE=<model namespace>
+      export MODEL_ID=<the model, as llmsm series name it>
+      export PROM_URL=http://localhost:9090
+      q() { curl -sG "${PROM_URL}/api/v1/query" --data-urlencode "query=$1" | jq -r '.data.result[] | [(.metric | del(.__name__) | tostring), .value[1]] | @tsv'; }
+
+read:
+  passive:
+    note: The model is passive (or the utilization share plans in shadow), so the v2 models run for it.
+    run: |
+      q "llmsm_passive_mode{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\", mode!=\"active\"} == 1"
+  coverage:
+    note: Where each model stands, per objective. window-short is normal for the first 12 hours (TTFT) and 2 hours (TPOT).
+    run: |
+      q "llmsm_slo_model_coverage{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\"} == 1"
+      q "llmsm_slo_model_input_missing{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\"}"
+  ttft:
+    note: The TTFT by learner and statistic (slo is the default model, ttft-mixture the v2), beside what the router measured.
+    run: |
+      q "llmsm_slo_predicted_ttft_seconds{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\"}"
+      q "llmsm_slo_observed_seconds{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\", objective=\"ttft\"}"
+  tpot:
+    note: The TPOT by learner and statistic (slo is the default model, tpot-distribution the v2's p90 and p95).
+    run: |
+      q "llmsm_slo_predicted_tpot_seconds{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\"}"
+  sizing:
+    note: The prefill replicas the analyzers ask for (learner empty) and would ask for on the v2 TTFT model (ttft-mixture).
+    run: |
+      q "llmsm_replicas_suggested{exported_namespace=\"${NAMESPACE}\", model_name=\"${MODEL_ID}\", role=\"prefill\"}"

@@ -254,7 +254,7 @@ func TestDayPlanP95NeedsTwentyCycles(t *testing.T) {
 	assert.Equal(t, SizeForMean, p.Buckets[0].SizedFor)
 	assert.Contains(t, p.Buckets[0].Flags, FlagFewCyclesForP95)
 	p = stubDay(t, &stubResolver{}, 20, 3, FleetCounts{Prefill: 1, Decode: 1})
-	assert.Equal(t, SizeForP95, p.Buckets[0].SizedFor)
+	assert.Equal(t, SizeForP95Modulation, p.Buckets[0].SizedFor, "the default (#295)")
 	assert.NotContains(t, p.Buckets[0].Flags, FlagFewCyclesForP95)
 }
 

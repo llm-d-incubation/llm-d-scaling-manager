@@ -120,7 +120,15 @@ type Env struct {
 	// to manage (WatchNamespaceEnv on the Job); empty, what its Deployment
 	// names. Namespace scope only.
 	WatchNamespace string
-	Now            func() time.Time
+	// Manages, when set, says whether the running controller manages a
+	// namespace: its live watchNamespaces setting, on the in-controller run.
+	// Nil: every namespace at cluster scope, unless WatchNamespace names some.
+	Manages func(namespace string) bool
+	// ControllerWritesKEDACopy: the controller writes KEDA's copy of the
+	// client certificate itself (--keda-namespace), so keda.mtls reads its
+	// status rather than the marker a person writes.
+	ControllerWritesKEDACopy bool
+	Now                      func() time.Time
 }
 
 // Report is a whole run.
@@ -175,6 +183,10 @@ var checks = []check{
 	{"accelerators", checkAccelerators},
 	{"activation", checkActivation},
 	{"lws.disaggregatedset", checkLWSDisaggregatedSet},
+	{"conflicts", checkConflicts},
+	{"policy.source", checkPolicySource},
+	{"metrics.scrape", checkScrape},
+	{"metrics.epp", checkEPPMetrics},
 }
 
 // CheckNames lists the checks `check` mode runs, in order.

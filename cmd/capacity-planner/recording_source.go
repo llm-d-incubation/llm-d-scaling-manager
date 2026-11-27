@@ -12,6 +12,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
 
 // recordingSource is a recording read in passes, never held whole: a file,
@@ -104,6 +105,18 @@ func openRecording(path string, regularOnly bool) (*recordingSource, error) {
 		}{readErrors{z}, z}, nil
 	}
 	return s, nil
+}
+
+// openRecordingCycles is openRecording's source of the file at path, read
+// with only the cycles the set holds where it is not nil
+// (learnreplay.CyclesOf).
+func openRecordingCycles(path string, cycles *whatifapi.CycleSet) (*recordingSource, error) {
+	src, err := openRecording(path, false)
+	if err != nil || cycles == nil {
+		return src, err
+	}
+	src.open = learnreplay.CyclesOf(src.open, cycles.Keeps)
+	return src, nil
 }
 
 // Close closes the file under the source, if any.

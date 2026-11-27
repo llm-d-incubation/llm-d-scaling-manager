@@ -88,7 +88,7 @@ that point.
 | `SGLangNoMixedChunk` | An aggregated SGLang Pod without `--enable-mixed-chunk`. Each prefill step stalls every running sequence. | Add `--enable-mixed-chunk`. |
 | `ExtensibleKVCache` | vLLM v0.34's extensible KV cache. The KV capacity read at start-up can grow later. | Record after the cache has grown, or turn it off. |
 | `DefaultBatchCapBelowRelease` | The arguments set no `--max-num-seqs`, so the planner priced 256. This vLLM release runs 1024 on this accelerator, so the decode figures can ask for up to 4x too many replicas. | Set `--max-num-seqs` on the engine, or pass `--batch-cap`. |
-| `BatchBeyondFit` | The shape asked holds less than half the KV per request of the rows the ITL line came from, and the batch priced is larger than any those rows held. ITL also rises with the batch's tokens, which the line does not carry to a new shape. | Record a window at this shape. |
+| `BatchBeyondFit` | Not an engine setting, and only on the figures it applies to. At the figure's load a decode Pod (each engine rank, on a Pod of several data-parallel ranks) runs more sequences than the most the rows the ITL line was fitted on held (for a held line, the rows of the fit it was held from), at any prompt or output length. ITL also rises with the batch, which the line does not carry, so TPOT may read low and the decode knee high. The flags line says both batches: "the decode line was fitted on up to N sequences a pod; this load runs about M". | Record a window that runs this many sequences a Pod. |
 
 ## The planner and the controller disagree on TPOT
 
@@ -108,6 +108,12 @@ readings, in a window whose replicas also ran below the band: a borrowed or
 default line, or one with no readings below the band, is read at the band's
 bottom by both. A figure read below the band carries `BelowFittedBand`.
 
+The planner never reads the line under the lowest ITL its replicas showed below
+the band, the floor. That floor stands for the number of requests a replica ran
+when it was read, and for more. A figure the floor would hold up, at fewer
+requests a replica than any of those readings, is held instead to the floor
+extended down to its own count, and carries `ExtrapolatedBelowFloor`.
+
 ## API errors
 
 | You see | Fix |
@@ -123,6 +129,7 @@ bottom by both. A figure read below the band carries `BelowFittedBand`.
 | `503` with `PlanBudgetExceeded` | The plan took longer than `--plan-budget` (default 5m) and was stopped. Untick "Show if all traffic were bucket b", use fewer bucket edges, or restart the server with a larger `--plan-budget` (at most 9m). [Details](api.md#the-plan-budget). |
 | `503` "the request ended before it was priced" | The client went away or timed out. Ask again. |
 | `500` | A server error; the message, or with `--auth=kubernetes` the server's stderr, says what. |
+| `504`, or the connection closes with no answer, while a long recording loads | A proxy in front of the planner gave up first: an OpenShift Route and oauth-proxy wait 30 s by default. Raise both to 31m ([Long recordings load slowly](in-cluster.md#long-recordings-load-slowly)). The planner itself lets a request run 30 minutes. |
 
 ## A recording is refused: engine rows do not stand for the fleet
 

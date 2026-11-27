@@ -105,6 +105,18 @@ const SwitchPrefillQueueByCapacity = "prefill-queue-by-capacity"
 // SwitchPrefillALowLoadPerRank is.
 const SwitchPrefillFBusyMinutes = "prefill-f-busy-minutes"
 
+// SwitchPrefillFPooledMinutes is the replay switch for f on a fleet whose
+// minutes carry fewer than prefill.MinRequestsPerPodMinute requests a pod
+// (prefill.Cycle.FPooledMinutes). On, consecutive minutes on the same pods
+// are pooled until they carry that many, at most prefill.MaxPooledMinutes,
+// and the pool gives one f, de-biased at its pooled count. A fleet of long
+// prompts serves under the threshold at its knee: the Qwen3-32B lab fleet
+// served about 78 requests a pod a minute, learned no f, and was priced at
+// whatif.ImbalanceFloor at every count above one. Off, such minutes give no
+// f, as before this switch. Planner-only, as SwitchPrefillALowLoadPerRank
+// is.
+const SwitchPrefillFPooledMinutes = "prefill-f-pooled-minutes"
+
 // SwitchPrefillVPFloorServed is the replay switch for the floor under a
 // lower-bound V_P (prefill.Cycle.VPFloorServed). On, a V_P that is a lower
 // bound (the peak under a queue, the back-pressure bound, busy minutes of a
@@ -165,6 +177,65 @@ const SwitchPrefillVPAtServedWork = "prefill-vp-at-served-work"
 // llm-d-incubation/llm-d-scaling-manager#368). Planner-only, as
 // SwitchPrefillALowLoadPerRank is.
 const SwitchPrefillVPOccupancyPlateau = "prefill-vp-occupancy-plateau"
+
+// SwitchPrefillVPPromptCoverage is the replay switch for the prompts a V_P
+// speaks for (prefill.Cycle.VPPromptCoverage). On, V_P carries the range of
+// effective prompts its minutes read (prefill.Estimate.VPPromptLow,
+// VPPromptHigh), and a price at a mean prompt more than whatif.MaxVPShapeRatio
+// outside it is flagged whatif.VPPromptNotCovered, out of the region V_P
+// was learned in, and prices no TTFT. Off, V_P is priced at any prompt, as
+// before this switch (issue llm-d-incubation/llm-d-scaling-manager#405).
+// Planner-only, as SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillVPPromptCoverage = "prefill-vp-prompt-coverage"
+
+// SwitchPrefillVPLoneRate is the replay switch for V_P read from light
+// load (prefill.Cycle.VPLoneRate, prefill/lonerate.go). On, V_P refused for
+// want of a queue, or a lower bound, is read from the lone rate: one
+// request's computed tokens over its prefill time in minutes at under
+// prefill.LoneMaxOccupancy requests in prefill per engine, at the prompt
+// priced, from prefill.MinLoneMinutes such minutes; V_P only where the
+// served peak is at most prefill.LoneServedTolerance over it, else it is
+// recorded as a lower bound and not taken. Off, as before this switch
+// (issue llm-d-incubation/llm-d-scaling-manager#406). Planner-only, as
+// SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillVPLoneRate = "prefill-vp-lone-rate"
+
+// SwitchPrefillVPServiceLine is the replay switch for V_P read from the
+// prefill service line (prefill.Cycle.VPServiceLine,
+// prefill/serviceline.go). On, V_P refused for want of a queue, or the
+// served peak of a fleet that never queued under the line's, is
+// ranks * E[x] / (s0 + E[x]/V): the line
+// S(x) = s0 + x/V fitted to the engines' prefill time, inverted for
+// processor sharing, against their computed tokens a request, s0 kept in
+// the capacity, at the minutes' mean computed prompt E[x]. Not a bound. A
+// V_P read under a queue, a lower bound or not, stands. Off, as before this
+// switch (issues llm-d-incubation/llm-d-scaling-manager#368, #416).
+// Planner-only, as SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillVPServiceLine = "prefill-vp-service-line"
+
+// SwitchPrefillFLoadCurve is the replay switch for f against the load per
+// pod (prefill.Cycle.FLoadCurve, prefill.FLoadCurve). On, each pod count's
+// minutes give f(u) = f_inf + delta/u, u the computed tokens a second a pod,
+// fitted by least squares on 1/u (prefill.Estimate.FCurveByPods); the
+// planner prices f at a rate as the higher of its f and the curve's
+// (whatif.Prefill.ImbalanceCurveFloor). Off, no curve is fitted, as before
+// this switch (issue llm-d-incubation/llm-d-scaling-manager#482).
+// Planner-only and not in learnreplay.PlannerSwitches: the capacity
+// planner's --prefill-f-load-curve turns it on.
+const SwitchPrefillFLoadCurve = "prefill-f-load-curve"
+
+// SwitchPrefillHitAtCount is the replay switch for the prefix hit at a
+// prefill count other than the one the hit was read on
+// (prefill.HitAtCountOf; issue llm-d-incubation/llm-d-scaling-manager#384).
+// On, a planner question priced at another prefill count than the fit's
+// prices the hit there by the reuse-gap rule where the recording holds the
+// KV residency histograms (prefill.FitHitModel), flagged PrefixHitAtCount;
+// without them, at fewer pods the floor hit x N'/N, and the computed prompt
+// tokens a request with it, flagged PrefixHitAtCount, and at more pods the
+// fit's hit held, flagged PrefixHitHeld. Off, as before: the fit's hit at every count. The saturation
+// analyzer reads nothing with it; it holds it for the name. Planner-only, as
+// SwitchPrefillALowLoadPerRank is.
+const SwitchPrefillHitAtCount = "prefill-hit-at-count"
 
 // SwitchPrefillALowLoadByRate is the replay switch for which minutes the fit
 // of a reads as low load (prefill.Cycle.ALowLoadByRate). On, a quiet minute
@@ -323,6 +394,7 @@ func (a *SaturationAnalyzer) PrefillEstimate(namespace, modelID, variant string)
 	est.FByPods = maps.Clone(est.FByPods)
 	est.FSamplesByPods = maps.Clone(est.FSamplesByPods)
 	est.FLoadByPods = maps.Clone(est.FLoadByPods)
+	est.FCurveByPods = maps.Clone(est.FCurveByPods)
 	return est, se.at, true
 }
 
@@ -391,12 +463,23 @@ func (c *cycle) observePrefill() {
 			QueueMin: queueMin, KVFull: kvFullPods, DownstreamSaturated: c.decodeSaturated,
 			Bound: bounds[variant], Settle: view, ALineOnly: !a.prefillAQuadratic,
 			ALowLoadPerRank: a.prefillALowLoadPerRank, AFromTiming: a.prefillAEngineTiming,
-			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes,
-			VPFloorServed: a.prefillVPFloorServed, VPServedUnqueued: a.prefillVPServedUnqueued, VPWindowBest: a.prefillVPWindowBest,
-			VPOccupancyPlateau: a.prefillVPOccupancyPlateau, ALowLoadByRate: a.prefillALowLoadByRate, AMedianOverhead: a.prefillAMedianOverhead, Now: now,
+			QueueByCapacity: a.prefillQueueByCapacity, FBusyMinutes: a.prefillFBusyMinutes, FLoadCurve: a.prefillFLoadCurve,
+			FPooledMinutes: a.prefillFPooledMinutes, VPFloorServed: a.prefillVPFloorServed, VPServedUnqueued: a.prefillVPServedUnqueued, VPWindowBest: a.prefillVPWindowBest,
+			VPOccupancyPlateau: a.prefillVPOccupancyPlateau, VPPromptCoverage: a.prefillVPPromptCoverage, VPLoneRate: a.prefillVPLoneRate,
+			VPServiceLine: a.prefillVPServiceLine, ALowLoadByRate: a.prefillALowLoadByRate, AMedianOverhead: a.prefillAMedianOverhead, Now: now,
 		})
 		a.stashPrefillEstimate(c.input.Namespace, c.input.ModelID, variant, est, now)
-		c.logger.V(perReplicaLogLevel).Info("prefill-capacity-observed",
+		logger := c.logger
+		if a.prefillVPLoneRate {
+			// Only with the switch on, so the line is unchanged off.
+			logger = logger.WithValues("vpLone", est.VPLone, "vpLoneMinutes", est.VPLoneMinutes, "vpLoneIsVP", est.VPLoneIsVP)
+		}
+		if a.prefillVPServiceLine {
+			// Only with the switch on, so the line is unchanged off.
+			logger = logger.WithValues("vpLine", est.VPLine, "vpLineS0", est.VPLineS0, "vpLineSlope", est.VPLineSlope,
+				"vpLineMinutes", est.VPLineMinutes, "vpLineRefused", string(est.VPLineRefused))
+		}
+		logger.V(perReplicaLogLevel).Info("prefill-capacity-observed",
 			"modelID", c.input.ModelID, "namespace", c.input.Namespace, "variant", variant, "key", key,
 			"engine", string(engine), "pods", len(rows[variant]),
 			"vp", est.VP, "vpSource", string(est.VPSource), "vpLowerBound", est.VPLowerBound,
@@ -405,6 +488,7 @@ func (c *cycle) observePrefill() {
 			"vpServedPeak", est.VPServedPeak, "vpFlooredAtServed", est.VPFlooredAtServed,
 			"vpPlateau", est.VPPlateau, "vpPlateauFlat", est.VPPlateauFlat,
 			"vpPlateauMinutes", est.VPPlateauMinutes, "vpPlateauSpan", est.VPPlateauSpan,
+			"vpPromptLow", est.VPPromptLow, "vpPromptHigh", est.VPPromptHigh,
 			"slopeBound", est.SlopeBound, "vpAboveSlopeBound", est.VPAboveSlopeBound,
 			"a", est.A, "aIntercept", est.AIntercept, "aOverhead", est.AOverhead,
 			"aOverheadKnown", est.AOverheadKnown, "aRefused", string(est.ARefused), "aSamples", est.ASamples,

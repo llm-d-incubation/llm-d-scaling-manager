@@ -2,6 +2,7 @@ package whatif
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -43,12 +44,18 @@ func describe(r Result) string {
 	case Answer:
 		basis := v.Basis
 		basis.TTFT = nil
-		return fmt.Sprintf("answer %v flags %v band %s basis %+v ttft %s sensitivity %s",
-			v.Value, v.Flags, followed(v.Band), basis, followed(v.Basis.TTFT), followed(v.Sensitivity))
+		// Batch is the planner's BatchBeyondFit and moves no figure; the
+		// pins predate it, so it is left out of them.
+		basis.Batch = nil
+		return strings.Replace(fmt.Sprintf("answer %v flags %v band %s basis %+v ttft %s sensitivity %s",
+			v.Value, v.Flags, followed(v.Band), basis, followed(v.Basis.TTFT), followed(v.Sensitivity)), " Batch:<nil>", "", 1)
 	case TTFT:
 		s := v.Sensitivity
 		v.Sensitivity = nil
-		return fmt.Sprintf("ttft %+v sensitivity %s", v, followed(s))
+		// PrefillWork splits OwnPrefill for the planner's concurrency and
+		// moves no figure; the pins predate it, so it is left out of them.
+		v.Parts.PrefillWork = 0
+		return strings.Replace(fmt.Sprintf("ttft %+v sensitivity %s", v, followed(s)), " PrefillWork:0", "", 1)
 	default:
 		return fmt.Sprintf("%T %+v", r, r)
 	}

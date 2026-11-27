@@ -25,8 +25,13 @@ var learnedStatePackages = []string{
 
 // wallClockAllowed is every read of the wall clock those packages may keep,
 // keyed "<package dir>/<file>:<func>", with the reason it is not learned state.
-// Empty: a new entry needs a reason a reviewer can check.
-var wallClockAllowed = map[string]string{}
+// A new entry needs a reason a reviewer can check.
+var wallClockAllowed = map[string]string{
+	"slo/model_learners.go:refitModel": "times the refit's own computation against ModelFitBudget, " +
+		"a cost and not a time of the world: it stamps nothing and ages nothing (refitAt is the cycle's now " +
+		"plus the refit interval). An over-budget refit waits twice as long, so a host slow enough moves the " +
+		"next refit; the replay that reads fits (learnreplay.ModelV2At) refits once, on request, past any second one.",
+}
 
 // TestNoWallClockInLearnedState fails on any time.Now, time.Since or
 // time.Until -- called, or taken as a function value -- in the non-test files

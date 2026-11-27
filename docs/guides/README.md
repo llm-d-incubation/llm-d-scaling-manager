@@ -15,8 +15,9 @@ source docs/guides/env.sh
 | guide | for |
 | --- | --- |
 | [Install a small llm-d model](install-small-model/) | **first, if nothing is serving yet.** One 0.6B model on ONE GPU — llm-d's own guides start at 16 |
+| [Install with kubectl, from one manifest](kubectl-install/) | One controller for the cluster, signed files applied as downloaded by two kubectl-only scripts, no docker; the admin lists the namespaces it manages in `watchNamespaces`. From v0.13.0; on an earlier release, use one of the next two |
 | [Install the scaling manager in a namespace](install-in-namespace/) | **start here** when llm-d already serves. One team, one namespace |
-| [Install the scaling manager for the whole cluster](install-cluster-wide/) | one controller for every namespace |
+| [Install the scaling manager for the whole cluster](install-cluster-wide/) | one controller for every namespace, from the tools image or the release files |
 | [Try the scaling manager in passive mode](try-in-passive-mode/) | next to what scales your models today: it reports what it would order and changes nothing, then takes over one model at a time |
 | [Prepare model servers to scale](prepare-workloads/) | **after the install.** The engine image, weights and compile caches on each GPU node, so a new replica starts fast. One recommended configuration, from the release's tools image |
 
@@ -38,6 +39,7 @@ source docs/guides/env.sh
 | [Bridge a scale-up with a warm pool](warm-pool/) | hold models loaded and asleep so a scale-up serves while its replica starts |
 | [Let models borrow from a Kueue cohort](kueue-borrowing/) | a Kueue-bounded quota that grows into GPUs its cohort leaves idle: prerequisites, pilot, reasons, turning it off (experimental) |
 | [Turn on the utilization-share optimizer, safely](utilization-share/) | share one quota between models by weight: shadow first, then active, and how to back out (experimental) |
+| [Compare the v2 latency models with the default](compare-v2-latency-models/) | read the capacity planner's v2 TTFT and TPOT models beside the default, and the prefill fleet they would ask for, on a passive or shadow model (experimental) |
 | [Share GPUs between models in different namespaces](utilization-share-cluster-wide/) | llm-d already serves in several namespaces: one cluster-wide install, one budget, GPUs moving between namespaces (experimental) |
 | [Share GPUs between namespaces with a namespace-scoped install](utilization-share-namespaced/) | the same, with no cluster-wide rights on workloads: the scaling manager manages only the llm-d namespaces, a Role in each, one quota (experimental) |
 

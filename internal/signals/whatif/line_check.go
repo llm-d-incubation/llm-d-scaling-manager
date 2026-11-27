@@ -35,6 +35,11 @@ type LineRow struct {
 	K, KVPerRequest float64
 	// TokenRate is the replica's generated tokens per second.
 	TokenRate float64
+	// Sequences is the sequences the replica ran over the row's window, all
+	// its engine ranks together: TokenRate x the mean ITL (Little), else the
+	// running-requests gauge; 0 where neither was read. The batch a line's
+	// rows held is read from it (the planner's BatchBeyondFit).
+	Sequences float64
 	// Ramp says the row is off the steady gate: its fill or its shape moved
 	// within the gate's time, or it has not been read for that long. A
 	// minute's rate and a minute's fill then span two levels, and say nothing

@@ -802,6 +802,59 @@ are SKIPPED for that refusal, or for no saturated window off a ramp:
   line at all, and the other three are on the default intercept, reading 18.7% to
   22.1% fast. So the four staircase goldens validate nothing of decode.
 
+**A shrink holds at the decode knee's bound (#363).** `at-replicas` sizes decode a
+second time with the decode knee reading as high as its label allows: the
+validating row's upper error inside its region, 99.1% outside every row
+(`needed.decodeAtErrorBound`). An OVER-PROVISIONED verdict never cuts decode
+below that count. A decode replica is spare only where one fewer still meets it,
+and the fleet needed cuts decode no lower. Otherwise decode reads `no spare: N
+decode if the decode knee reads E% high`. Removing capacity is the costly
+mistake, and a knee outside its region read 43% to 99% high on the goldens, so the
+point estimate alone does not license the cut. The cost: outside the region,
+N decode replicas show a spare only where the load is at most (N-1)/(1.991 N) of
+decode's operating point: a quarter at 2, a third at 3, approaching half on a
+large fleet. So fewer fleets read OVER-PROVISIONED on decode. An
+UNDER-PROVISIONED verdict still grows decode to the point estimate and states
+the bound count beside it; where its fleet needed trades decode for prefill, it
+cuts decode no lower than the bound either.
+
+**A shape priced lighter than the load (#361).** Asked for the measured shape
+(`--shape measured`), `at-replicas` prices the load at the decode variant's last
+cycles; by default it prices the load at its own cycles' shape, and this rule
+does not apply. Where the measured shape is more than 20% shorter, in prompt or
+output, than the cycles the load was read from (the same tolerance, read against
+the load's shape, as `ShapeLoadMismatch`), the knee reads high for the load. An
+OVER-PROVISIONED or RIGHT-SIZED verdict on
+it can cut replicas the load needs, so neither is given: the verdict is NOT
+JUDGED, no fleet is sized, and the summary names both shapes and `--shape load`.
+An UNDER-PROVISIONED verdict stands, as a heavier load only makes it more true.
+This is the mirror of the rule that withholds an UNDER on a shape priced heavier
+than the load (#294, #297). A stated shape is the question's, and keeps every
+verdict.
+
+**An aggregated fleet's window check (#357).** The window check withholds an
+UNDER-PROVISIONED verdict where the fleet priced, or a smaller one, served more
+than 1.25x the fleet knee for 3 minutes. On an aggregated fleet, with no prefill
+pods, prefill and decode share the pods, and the check judges that pool on its
+own knee. That knee is the decode knee: the pool's line was fitted on the ITL of
+pods that prefill too, so the prefill chunks in its steps are already in the line,
+at the shape priced. No separate single-pool knee is built. A cycle within 20% of
+the shape priced counts its served rate scaled down to that shape. Where prefill
+binds, the scale is the prompt ratio. Where decode binds, it is the decode knee's
+own: the knee is the sequences resident, fill x C / KVreq, each served once every
+OL steps, so it goes as 1/(OL x KVreq), with KVreq = ILeff + D x OL / 2. The
+scale is the cycle's OL x KVreq over the shape priced's, both read at the shape
+priced's prefix hit and dispersion. The prompt's KV is resident on the decode
+pods on a P/D fleet too, so a shorter prompt raises decode's knee there as well.
+A cycle lighter in both lengths then scales below either length ratio: at 0.85 of
+each, by 0.72 where IL = OL, not by 0.85. Where the batch cap binds, the knee moves
+less with KVreq, so the KVreq ratio is taken only below 1: a cycle counts at or
+below its share at the shape priced, never past it. One pool also prefills in its own steps, so a shorter prompt shortens
+them too; it takes the prompt ratio where that is lower. The pool's run is
+counted on its own replicas: more replicas than priced
+break the run. `TestReport_AnAggregatedPoolIsJudgedOnItsOwnKnee` pins NOT JUDGED
+where the pool served past its knee, and a verdict where it did not.
+
 The rules the page leaves open, chosen here: the row is the unit, as `AvgITL` and
 `generation_tokens` are per pod; a line is asked at the row's fill, clamped to the
 band as an answer is; the knee is read at the row's own shape, on one replica, against
@@ -1717,12 +1770,24 @@ roles[].inputs.batchCap number
 roles[].inputs.batchCapSource string
 roles[].inputs.capacityTokens number
 roles[].inputs.engine object
+roles[].inputs.engine.attention string
 roles[].inputs.engine.blockSize number
 roles[].inputs.engine.blockSizeSource string
 roles[].inputs.engine.engine string
 roles[].inputs.engine.gpuMemoryUtilization number
 roles[].inputs.engine.gpuMemoryUtilizationSource string
+roles[].inputs.engine.modelConfigSource string
+roles[].inputs.engine.moe string
 roles[].inputs.engine.stepBudget number
+roles[].inputs.engine.stepBudgetBinding object
+roles[].inputs.engine.stepBudgetBinding.boundTokens number
+roles[].inputs.engine.stepBudgetBinding.class string
+roles[].inputs.engine.stepBudgetBinding.nearTokens number
+roles[].inputs.engine.stepBudgetBinding.overShare number
+roles[].inputs.engine.stepBudgetBinding.reason string
+roles[].inputs.engine.stepBudgetBinding.share number
+roles[].inputs.engine.stepBudgetBinding.topOpen boolean
+roles[].inputs.engine.stepBudgetBinding.topTokens number
 roles[].inputs.engine.stepBudgetSource string
 roles[].inputs.engine.vllmVersion string
 roles[].inputs.engine.vllmVersionFrom string
@@ -1795,6 +1860,10 @@ roles[].results.knee.answer.band object
 roles[].results.knee.answer.band.hi number
 roles[].results.knee.answer.band.lo number
 roles[].results.knee.answer.basis object
+roles[].results.knee.answer.basis.batchBeyondFit object
+roles[].results.knee.answer.basis.batchBeyondFit.fitted number
+roles[].results.knee.answer.basis.batchBeyondFit.priced number
+roles[].results.knee.answer.basis.batchBeyondFit.ranks number
 roles[].results.knee.answer.basis.boundBy array
 roles[].results.knee.answer.basis.boundBy[] string
 roles[].results.knee.answer.basis.fill number
@@ -1835,6 +1904,10 @@ roles[].results.meanTPOT.answer.band object
 roles[].results.meanTPOT.answer.band.hi number
 roles[].results.meanTPOT.answer.band.lo number
 roles[].results.meanTPOT.answer.basis object
+roles[].results.meanTPOT.answer.basis.batchBeyondFit object
+roles[].results.meanTPOT.answer.basis.batchBeyondFit.fitted number
+roles[].results.meanTPOT.answer.basis.batchBeyondFit.priced number
+roles[].results.meanTPOT.answer.basis.batchBeyondFit.ranks number
 roles[].results.meanTPOT.answer.basis.boundBy array
 roles[].results.meanTPOT.answer.basis.boundBy[] string
 roles[].results.meanTPOT.answer.basis.fill number
@@ -1875,6 +1948,10 @@ roles[].results.operatingRate.answer.band object
 roles[].results.operatingRate.answer.band.hi number
 roles[].results.operatingRate.answer.band.lo number
 roles[].results.operatingRate.answer.basis object
+roles[].results.operatingRate.answer.basis.batchBeyondFit object
+roles[].results.operatingRate.answer.basis.batchBeyondFit.fitted number
+roles[].results.operatingRate.answer.basis.batchBeyondFit.priced number
+roles[].results.operatingRate.answer.basis.batchBeyondFit.ranks number
 roles[].results.operatingRate.answer.basis.boundBy array
 roles[].results.operatingRate.answer.basis.boundBy[] string
 roles[].results.operatingRate.answer.basis.fill number
@@ -1915,6 +1992,10 @@ roles[].results.percentileTPOT.answer.band object
 roles[].results.percentileTPOT.answer.band.hi number
 roles[].results.percentileTPOT.answer.band.lo number
 roles[].results.percentileTPOT.answer.basis object
+roles[].results.percentileTPOT.answer.basis.batchBeyondFit object
+roles[].results.percentileTPOT.answer.basis.batchBeyondFit.fitted number
+roles[].results.percentileTPOT.answer.basis.batchBeyondFit.priced number
+roles[].results.percentileTPOT.answer.basis.batchBeyondFit.ranks number
 roles[].results.percentileTPOT.answer.basis.boundBy array
 roles[].results.percentileTPOT.answer.basis.boundBy[] string
 roles[].results.percentileTPOT.answer.basis.fill number
@@ -1955,6 +2036,10 @@ roles[].results.rate.answer.band object
 roles[].results.rate.answer.band.hi number
 roles[].results.rate.answer.band.lo number
 roles[].results.rate.answer.basis object
+roles[].results.rate.answer.basis.batchBeyondFit object
+roles[].results.rate.answer.basis.batchBeyondFit.fitted number
+roles[].results.rate.answer.basis.batchBeyondFit.priced number
+roles[].results.rate.answer.basis.batchBeyondFit.ranks number
 roles[].results.rate.answer.basis.boundBy array
 roles[].results.rate.answer.basis.boundBy[] string
 roles[].results.rate.answer.basis.fill number
@@ -1992,6 +2077,10 @@ roles[].results.rate.refused.reason string
 roles[].results.ttft object
 roles[].results.ttft.answer object
 roles[].results.ttft.answer.basis object
+roles[].results.ttft.answer.basis.batchBeyondFit object
+roles[].results.ttft.answer.basis.batchBeyondFit.fitted number
+roles[].results.ttft.answer.basis.batchBeyondFit.priced number
+roles[].results.ttft.answer.basis.batchBeyondFit.ranks number
 roles[].results.ttft.answer.basis.boundBy array
 roles[].results.ttft.answer.basis.boundBy[] string
 roles[].results.ttft.answer.basis.fill number
@@ -2074,16 +2163,41 @@ roles[].ttft.fixedLatencyLearned number
 roles[].ttft.fixedLatencySeconds number
 roles[].ttft.fixedLatencySource string
 roles[].ttft.flowControl string
+roles[].ttft.hitAtCount object
+roles[].ttft.hitAtCount.count number
+roles[].ttft.hitAtCount.fitCount number
+roles[].ttft.hitAtCount.fitHit number
+roles[].ttft.hitAtCount.fitPromptTokens number
+roles[].ttft.hitAtCount.hi number
+roles[].ttft.hitAtCount.hit number
+roles[].ttft.hitAtCount.lo number
+roles[].ttft.hitAtCount.promptTokens number
+roles[].ttft.hitAtCount.rule string
 roles[].ttft.imbalance number
+roles[].ttft.imbalanceCurveExcess number
+roles[].ttft.imbalanceCurveFloor number
+roles[].ttft.imbalanceCurveMinutes number
 roles[].ttft.imbalanceSource string
 roles[].ttft.percentile number
 roles[].ttft.prefillEngine object
+roles[].ttft.prefillEngine.attention string
 roles[].ttft.prefillEngine.blockSize number
 roles[].ttft.prefillEngine.blockSizeSource string
 roles[].ttft.prefillEngine.engine string
 roles[].ttft.prefillEngine.gpuMemoryUtilization number
 roles[].ttft.prefillEngine.gpuMemoryUtilizationSource string
+roles[].ttft.prefillEngine.modelConfigSource string
+roles[].ttft.prefillEngine.moe string
 roles[].ttft.prefillEngine.stepBudget number
+roles[].ttft.prefillEngine.stepBudgetBinding object
+roles[].ttft.prefillEngine.stepBudgetBinding.boundTokens number
+roles[].ttft.prefillEngine.stepBudgetBinding.class string
+roles[].ttft.prefillEngine.stepBudgetBinding.nearTokens number
+roles[].ttft.prefillEngine.stepBudgetBinding.overShare number
+roles[].ttft.prefillEngine.stepBudgetBinding.reason string
+roles[].ttft.prefillEngine.stepBudgetBinding.share number
+roles[].ttft.prefillEngine.stepBudgetBinding.topOpen boolean
+roles[].ttft.prefillEngine.stepBudgetBinding.topTokens number
 roles[].ttft.prefillEngine.stepBudgetSource string
 roles[].ttft.prefillEngine.vllmVersion string
 roles[].ttft.prefillEngine.vllmVersionFrom string
@@ -2105,6 +2219,33 @@ roles[].ttft.routerHopLearnedBaseSeconds number
 roles[].ttft.routerHopPerTokenSeconds number
 roles[].ttft.routerHopRefused string
 roles[].ttft.routerHopSource string
+roles[].ttft.routerPolicy object
+roles[].ttft.routerPolicy.cacheAware string
+roles[].ttft.routerPolicy.cacheReason string
+roles[].ttft.routerPolicy.candidates number
+roles[].ttft.routerPolicy.cycles number
+roles[].ttft.routerPolicy.endpoints number
+roles[].ttft.routerPolicy.halvesFalling number
+roles[].ttft.routerPolicy.hitCycles number
+roles[].ttft.routerPolicy.hitMinutes number
+roles[].ttft.routerPolicy.hitReason string
+roles[].ttft.routerPolicy.inFlightCV number
+roles[].ttft.routerPolicy.kept number
+roles[].ttft.routerPolicy.keptFallSE number
+roles[].ttft.routerPolicy.keptHeavy number
+roles[].ttft.routerPolicy.keptLight number
+roles[].ttft.routerPolicy.loadAware string
+roles[].ttft.routerPolicy.loadAwareByHit string
+roles[].ttft.routerPolicy.loadAwareBySpread string
+roles[].ttft.routerPolicy.loadHeavy number
+roles[].ttft.routerPolicy.loadLight number
+roles[].ttft.routerPolicy.placementCV number
+roles[].ttft.routerPolicy.policy string
+roles[].ttft.routerPolicy.producer string
+roles[].ttft.routerPolicy.spreadBalancing number
+roles[].ttft.routerPolicy.spreadCycles number
+roles[].ttft.routerPolicy.spreadEven number
+roles[].ttft.routerPolicy.spreadReason string
 roles[].ttft.targetSeconds number
 roles[].ttft.tierLoad object
 roles[].ttft.tierLoad.fixedLatencyHolds boolean

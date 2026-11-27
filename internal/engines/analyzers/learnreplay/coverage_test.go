@@ -108,13 +108,24 @@ var reviewed = map[reflect.Type]buckets{
 		// (2.5), which only a replay reads and nothing restores.
 		// TakeLearnerReports hands the line's reports to the engine's metrics
 		// and keeps none, as the saturation analyzer's does.
-		readers: []string{"Name", "StateTimeout", "SlopeHoldFor", "Judging", "PathCounts", "TakeLearnerReports"},
+		// ReadsModelInputs reads the v2 inputs switch. ObserveModelInputs
+		// (issue #440) feeds the v2 learners, whose figures no decision
+		// reads, and is not recorded: a recording clears no row, so its
+		// saturation Analyze inputs are the cycles the learners read, and
+		// ModelV2At replays them through the learners from those.
+		// ModelPrefillAsk is their would-be ask, published by the engine for
+		// passive and shadow models only; RefitModel refits them at once, for
+		// ModelV2At alone.
+		readers: []string{"Name", "StateTimeout", "SlopeHoldFor", "Judging", "PathCounts", "TakeLearnerReports",
+			"ReadsModelInputs", "ObserveModelInputs", "ModelPrefillAsk", "RefitModel"},
 		// WithSettleView hands the slo line the engine's settle tracker; the
 		// replay hands it its own, as it does k2's (settle.go).
 		// WithPrefillEstimates hands it the saturation analyzer's prefill
 		// estimates; the replay hands it its own saturation analyzer.
+		// WithModelRefits sets the v2 learners' refit cadence; ModelV2At sets
+		// its own.
 		builders: []string{"WithClock", "WithStateTimeout", "WithSlopeHoldFor", "WithRecorder", "WithSettleView",
-			"WithOptimizationInterval", "WithPrefillEstimates"},
+			"WithOptimizationInterval", "WithPrefillEstimates", "WithModelRefits"},
 		seams: []string{"SetSwitchesForReplay"},
 	},
 	reflect.TypeFor[*throughput.ThroughputAnalyzer](): {
@@ -364,9 +375,10 @@ func TestSwitchHooks_NoProductionPathCallsThem(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	// The walk reached the five hooks themselves, so it read the packages
-	// that define them, and the rest of the tree with them.
-	require.Equal(t, 5, defined, "the walk found %d SetSwitchesForReplay definitions in %d files", defined, files)
+	// The walk reached the six hooks themselves (saturation, slo, throughput,
+	// the capacity store, settle and the steady-state engine), so it read the
+	// packages that define them, and the rest of the tree with them.
+	require.Equal(t, 6, defined, "the walk found %d SetSwitchesForReplay definitions in %d files", defined, files)
 	// ReplaySwitchNames: saturation's, slo's, throughput's and settle's.
 	require.Equal(t, 4, namesDefined, "the walk found %d ReplaySwitchNames definitions", namesDefined)
 	assert.Empty(t, callers, "a production path calls a replay switch hook")
@@ -429,7 +441,9 @@ func ttftInput() domain.AnalyzerInput {
 			TTFTBuckets: []domain.LatencyBucket{{UpperBound: 1, Rate: 2}, {UpperBound: inf, Rate: 2.5}},
 			TPOTSumRate: 0.0625, TPOTCountRate: 2.5,
 			TPOTBuckets:            []domain.LatencyBucket{{UpperBound: 0.05, Rate: 2.25}, {UpperBound: inf, Rate: 2.5}},
-			FlowControlWaitBuckets: []domain.LatencyBucket{{UpperBound: 0.01, Rate: 2}, {UpperBound: inf, Rate: 2.5}}},
+			FlowControlWaitBuckets: []domain.LatencyBucket{{UpperBound: 0.01, Rate: 2}, {UpperBound: inf, Rate: 2.5}},
+			ProcessingBuckets:      []domain.LatencyBucket{{UpperBound: 0.05, Rate: 1.5}, {UpperBound: inf, Rate: 2.5}},
+			ProcessingSumRate:      0.25, ProcessingCountRate: 2.5},
 		FlowControlPools: []domain.FlowControlPool{{WindowSeconds: 300,
 			EffectiveSaturation: 0.875, EffectiveSaturationKnown: true,
 			PrefillSaturation: 0.375, PrefillSaturationKnown: true, DecodeSaturation: 0.875, DecodeSaturationKnown: true,
@@ -460,7 +474,8 @@ var r1Goldens = append([]string{ttftThreePodsFixture, ttftSaturatedFixture, ttft
 var ttftFieldNames = []string{"QueueLengthKnown", "AvgServiceTimeKnown", "AvgTTFTKnown", "PromptTokensBuckets",
 	"OutputTokensBuckets", "TTFTBuckets", "AvgQueueTime", "AvgQueueTimeKnown", "QueueTimeBuckets", "AvgPrefillTime",
 	"AvgPrefillTimeKnown", "AvgKVTransferTime", "AvgKVTransferTimeKnown", "TPOTBuckets", "QueueMin", "QueueMinKnown",
-	"RouterLatency", "FlowControlWaitBuckets", "FlowControlPools", "EffectiveSaturation", "PrefillSaturation",
+	"RouterLatency", "FlowControlWaitBuckets", "ProcessingBuckets", "ProcessingSumRate", "ProcessingCountRate",
+	"FlowControlPools", "EffectiveSaturation", "PrefillSaturation",
 	"DecodeSaturation", "DispatchedRate", "OutcomesKnown"}
 
 // Part 3 (analyzer-learner.md, 2.9): every Analyze records the TTFT model's

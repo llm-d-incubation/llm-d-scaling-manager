@@ -52,11 +52,25 @@ func TestPlannerSwitches_TheTTFTModelStates(t *testing.T) {
 	assert.True(t, sw[PackageSaturation][saturation.SwitchPrefillVPServedUnqueued])
 	assert.True(t, sw[PackageSLO][slo.SwitchTTFTDecodeSpeculatingHeld])
 	for _, name := range []string{saturation.SwitchPrefillVPWindowBest, saturation.SwitchPrefillVPAtServedWork,
-		saturation.SwitchPrefillVPOccupancyPlateau} {
+		saturation.SwitchPrefillVPOccupancyPlateau, saturation.SwitchPrefillVPPromptCoverage,
+		saturation.SwitchPrefillVPLoneRate, saturation.SwitchPrefillVPServiceLine, saturation.SwitchPrefillHitAtCount,
+		saturation.SwitchPrefillFLoadCurve} {
 		assert.NotContains(t, sw[PackageSaturation], name, "off in the planner by default")
 	}
 	for _, name := range []string{slo.SwitchTTFTComputedHit, slo.SwitchTTFTTierLoad, slo.SwitchTTFTTierKVWait,
 		slo.SwitchTTFTPSByEngine, slo.SwitchTTFTHopWindowMeans, slo.SwitchTTFTCachedTokenCost} {
 		assert.NotContains(t, sw[PackageSLO], name, "off in the planner by default")
 	}
+}
+
+// The planner prices each backtest step at its own output spread by default
+// (saturation.SwitchBacktestStepOutputDispersion, issue
+// llm-d-incubation/llm-d-scaling-manager#274), and StateAt's replay turns it
+// on unless the caller sets it; the controller's constructor keeps it off
+// (TestPlannerSwitches_OffFromTheConstructor).
+func TestPlannerSwitches_TheStepOutputDispersionIsOn(t *testing.T) {
+	on, set := PlannerSwitches()[PackageSaturation][saturation.SwitchBacktestStepOutputDispersion]
+	assert.True(t, set, "PlannerSwitches names the step spread")
+	assert.True(t, on, "the planner prices each backtest step at its own output spread")
+	assert.True(t, withPlannerSwitches(nil)[PackageSaturation][saturation.SwitchBacktestStepOutputDispersion])
 }

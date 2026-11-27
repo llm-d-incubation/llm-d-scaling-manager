@@ -168,21 +168,26 @@ func TestAtReplicas_VerdictMonotoneInN(t *testing.T) {
 }
 
 // The verdict names the role that can shrink, and is judged at the load, not
-// at the operating point: at 20 r/s, two prefill and three decode replicas
-// hold with one decode replica fewer, not with one prefill replica fewer.
+// at the operating point: at 20 r/s, two prefill and four decode replicas
+// hold with one decode replica fewer, not with one prefill replica fewer;
+// three decode replicas are what the load needs if the decode knee reads
+// 99% high, so the cut stops there (#363).
 // An over-provisioned decode carries the decode knee's caveat in its one
 // sentence; an under-provisioned fleet names the replica that makes it hold.
 func TestAtReplicas_OverProvisionedNamesTheRole(t *testing.T) {
-	rep := stairReport(t, stairQuery(2, 3, 20))
+	rep := stairReport(t, stairQuery(2, 4, 20))
 	v := rep.Shapes[0].Verdict
 	assert.Equal(t, whatifapi.VerdictOver, v.Verdict, v.Reason)
 	assert.Equal(t, []string{roleDecode}, v.Shrink)
 	assert.Equal(t, whatifapi.ScopeFleet, v.Scope)
 	// The staircase-b decode knee is outside its validated region: the
-	// caveat says so, and the needed fleet gives decode at the 0.6B goldens'
-	// 99.1% (#297): the replica cut is not safe at that bound.
+	// caveat says so, and the needed fleet keeps decode at the count the
+	// 0.6B goldens' 99.1% needs (#297, #363), not the 2 the point estimate
+	// would cut to.
 	assert.Contains(t, v.Summary, "decode knee outside its validated region")
-	assert.Contains(t, v.Summary, "needs 2 prefill + 2 decode (has 2 + 3), 3 decode if the decode knee reads 99% high")
+	assert.Contains(t, v.Summary, "needs 2 prefill + 3 decode (has 2 + 4)")
+	require.NotNil(t, v.Needed)
+	assert.Equal(t, 3, v.Needed.DecodeAtErrorBound)
 	require.Len(t, v.Checks, 3)
 	for _, c := range v.Checks {
 		assert.True(t, strings.HasPrefix(c.Reason, "20.00 r/s "), "each fleet is checked at the load: %s", c.Reason)
@@ -192,9 +197,15 @@ func TestAtReplicas_OverProvisionedNamesTheRole(t *testing.T) {
 		require.GreaterOrEqual(t, i, 0)
 		return v.Checks[i]
 	}
-	assert.True(t, byFleet(2, 3).Holds)
-	assert.True(t, byFleet(2, 2).Holds, byFleet(2, 2).Reason)
-	assert.False(t, byFleet(1, 3).Holds, byFleet(1, 3).Reason)
+	assert.True(t, byFleet(2, 4).Holds)
+	assert.True(t, byFleet(2, 3).Holds, byFleet(2, 3).Reason)
+	assert.False(t, byFleet(1, 4).Holds, byFleet(1, 4).Reason)
+
+	// Three decode replicas are right-sized at that load: two hold at the
+	// point estimate, but not if the decode knee reads 99% high.
+	rep = stairReport(t, stairQuery(2, 3, 20))
+	assert.Equal(t, whatifapi.VerdictRight, rep.Shapes[0].Verdict.Verdict, rep.Shapes[0].Verdict.Reason)
+	assert.Empty(t, rep.Shapes[0].Verdict.Shrink)
 
 	// Two decode replicas are right-sized at that load: one fewer of either
 	// role misses.
@@ -295,7 +306,9 @@ func TestAtReplicas_LoadStatistics(t *testing.T) {
 	for v, row := range st.ServingReplicas {
 		require.Len(t, row, st.Cycles, "%s: one serving count per cycle", v)
 	}
-	rep := stairReport(t, stairQuery(0, 0, 0))
+	pq := stairQuery(0, 0, 0)
+	pq.LoadStatistic = whatifapi.LoadP95
+	rep := stairReport(t, pq)
 	l := rep.Load
 	require.NotNil(t, l.P95)
 	assert.Equal(t, whatifapi.LoadP95, l.Statistic)
@@ -341,13 +354,13 @@ func TestAtReplicas_LoadStatistics(t *testing.T) {
 }
 
 // Growth is a what-if beside the verdict, never in its place: at 20 r/s two
-// prefill and three decode replicas are over-provisioned, and asking what
+// prefill and four decode replicas are over-provisioned, and asking what
 // twice the traffic does (--load-seen-x 2) leaves that verdict, the load
 // judged and every other row as they were, and adds its own column and its
 // own verdict, which differs. "seen x2" in the loads asks the same.
 func TestAtReplicas_GrowthIsAWhatIf(t *testing.T) {
-	base := stairReport(t, stairQuery(2, 3, 20))
-	q := stairQuery(2, 3, 20)
+	base := stairReport(t, stairQuery(2, 4, 20))
+	q := stairQuery(2, 4, 20)
 	q.LoadSeenX = 2
 	grown := stairReport(t, q)
 
@@ -374,7 +387,7 @@ func TestAtReplicas_GrowthIsAWhatIf(t *testing.T) {
 
 	sh, err := whatifapi.ParseReportLoad("seen\u00d72")
 	require.NoError(t, err)
-	q = stairQuery(2, 3, 20)
+	q = stairQuery(2, 4, 20)
 	q.Loads = []whatifapi.ReportLoadAsk{sh}
 	byLoad := stairReport(t, q)
 	require.Len(t, byLoad.Shapes[0].Growth, 1)
@@ -620,7 +633,7 @@ func TestAtReplicas_NeededFleetHolds(t *testing.T) {
 	for _, c := range []struct {
 		np, nd int
 		load   float64
-	}{{2, 2, 0}, {2, 1, 20}, {3, 4, 0}} {
+	}{{2, 2, 0}, {2, 1, 20}, {3, 7, 0}} {
 		t.Run(fmt.Sprintf("%d+%d", c.np, c.nd), func(t *testing.T) {
 			rep := stairReport(t, stairQuery(c.np, c.nd, c.load))
 			v := rep.Shapes[0].Verdict
@@ -637,7 +650,9 @@ func TestAtReplicas_NeededFleetHolds(t *testing.T) {
 			if n.Prefill > 1 {
 				assert.False(t, holds(n.Prefill-1, n.Decode), "%d + %d at %.2f r/s", n.Prefill-1, n.Decode, load)
 			}
-			if n.Decode > 1 {
+			// A decode cut stops at the count the decode knee's error bound
+			// needs (#363): one fewer may hold at the point estimate.
+			if n.Decode > 1 && (n.Decode >= c.nd || n.Decode != n.DecodeAtErrorBound) {
 				assert.False(t, holds(n.Prefill, n.Decode-1), "%d + %d at %.2f r/s", n.Prefill, n.Decode-1, load)
 			}
 			assert.Contains(t, v.Summary, fmt.Sprintf("needs %d prefill + %d decode (has %d + %d)", n.Prefill, n.Decode, c.np, c.nd))
@@ -645,13 +660,13 @@ func TestAtReplicas_NeededFleetHolds(t *testing.T) {
 	}
 }
 
-// The verdict judges each role on its own: three prefill and four decode
+// The verdict judges each role on its own: three prefill and seven decode
 // replicas at the staircase's p95 have a decode replica to spare even at the
-// peak, and no prefill to spare, prefill being 1.9% under its operating
-// point; the sentence says both, and the f the third prefill pod is priced
-// with, which no run learned.
+// peak (six meet the decode knee's error bound), and no prefill to spare,
+// prefill being 2.0% under its operating point; the sentence says both, and
+// the f the third prefill pod is priced with, which no run learned.
 func TestAtReplicas_ShrinkIsPerRole(t *testing.T) {
-	v := stairReport(t, stairQuery(3, 4, 0)).Shapes[0].Verdict
+	v := stairReport(t, stairQuery(3, 7, 0)).Shapes[0].Verdict
 	assert.Equal(t, whatifapi.VerdictOver, v.Verdict, v.Summary)
 	assert.Equal(t, []string{roleDecode}, v.Shrink)
 	require.Len(t, v.Roles, 2)
@@ -662,16 +677,20 @@ func TestAtReplicas_ShrinkIsPerRole(t *testing.T) {
 	assert.True(t, byRole[roleDecode].Spare)
 	assert.Contains(t, byRole[roleDecode].Detail, "even at the peak 43.2 r/s")
 	assert.False(t, byRole[rolePrefill].Spare)
-	assert.Contains(t, byRole[rolePrefill].Detail, "1.9% under its operating point")
+	assert.Contains(t, byRole[rolePrefill].Detail, "2.0% under its operating point")
 	assert.Contains(t, v.Summary, "prefill f 1.5 assumed at 3 pods")
 
 	// Stated at the peak, decode still has one to spare and prefill is past
 	// its edge: the fleet is under-provisioned, and the fleet it needs has
-	// one decode replica fewer than it runs.
-	v = stairReport(t, stairQuery(3, 4, 43.24)).Shapes[0].Verdict
+	// one decode replica fewer than it runs: the six the decode knee's error
+	// bound needs, not the three the point estimate would cut to. An UNDER
+	// verdict's trade cuts decode no lower than an OVER verdict's (#363).
+	v = stairReport(t, stairQuery(3, 7, 43.24)).Shapes[0].Verdict
 	assert.Equal(t, whatifapi.VerdictUnder, v.Verdict, v.Summary)
 	require.NotNil(t, v.Needed)
-	assert.Less(t, v.Needed.Decode, 4, v.Summary)
+	assert.Less(t, v.Needed.Decode, 7, v.Summary)
+	assert.Equal(t, 6, v.Needed.DecodeAtErrorBound, v.Summary)
+	assert.Equal(t, v.Needed.DecodeAtErrorBound, v.Needed.Decode, v.Summary)
 }
 
 // TestNoRoleHint: two variants a capture read as both roles (a P/D fleet with
@@ -688,20 +707,21 @@ func TestNoRoleHint(t *testing.T) {
 }
 
 // The fleet needed never cuts a role the verdict says has no spare: four
-// prefill and four decode replicas at the staircase's p95 (41.7 r/s) have a
+// prefill and seven decode replicas at the staircase's p95 (41.7 r/s) have a
 // decode replica to spare even at the peak (43.2 r/s), and no prefill to
 // spare, since three prefill replicas hold at the p95 but miss at the peak.
 // The fleet needed was once found at the p95 alone, and said "needs 3
 // prefill + 3 decode (has 4 + 4)" right after "prefill: no spare".
 func TestAtReplicas_NeededKeepsARoleWithNoSpare(t *testing.T) {
-	v := stairReport(t, stairQuery(4, 4, 0)).Shapes[0].Verdict
+	v := stairReport(t, stairQuery(4, 7, 0)).Shapes[0].Verdict
 	require.Equal(t, whatifapi.VerdictOver, v.Verdict, v.Summary)
 	assert.Equal(t, []string{roleDecode}, v.Shrink)
 	require.NotNil(t, v.Needed, v.Summary)
-	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 4, Decode: 3, MaxReplicas: whatifapi.DefaultSizeBound},
+	// Decode is cut to the 6 the decode knee's error bound needs (#363).
+	assert.Equal(t, whatifapi.ReportNeeded{Prefill: 4, Decode: 6, MaxReplicas: whatifapi.DefaultSizeBound},
 		whatifapi.ReportNeeded{Prefill: v.Needed.Prefill, Decode: v.Needed.Decode, MaxReplicas: v.Needed.MaxReplicas}, v.Summary)
 	assert.Contains(t, v.Summary, "prefill: no spare: one fewer misses at the peak 43.2 r/s")
-	assert.Contains(t, v.Summary, "needs 4 prefill + 3 decode (has 4 + 4)")
+	assert.Contains(t, v.Summary, "needs 4 prefill + 6 decode (has 4 + 7)")
 	for _, alt := range v.Needed.Alternatives {
 		assert.GreaterOrEqual(t, alt.Prefill, 4, "alternative %d + %d: %s", alt.Prefill, alt.Decode, v.Summary)
 	}
@@ -718,8 +738,8 @@ func TestAtReplicas_NeededAgreesWithSpare(t *testing.T) {
 	for _, c := range []struct {
 		shape  string
 		np, nd int
-	}{{"measured", 3, 4}, {"measured", 4, 4}, {"measured", 4, 5}, {"measured", 5, 4}, {"measured", 5, 5},
-		{"measured", 4, 7}, {"16k/200/0.3", 5, 7}, {"16k/200/0.3", 6, 7}, {"16k/200/0.3", 8, 10}} {
+	}{{"measured", 3, 7}, {"measured", 4, 8}, {"measured", 5, 4}, {"measured", 5, 5},
+		{"measured", 4, 7}, {"16k/200/0.3", 5, 12}, {"16k/200/0.3", 6, 7}, {"16k/200/0.3", 8, 10}} {
 		np, nd := c.np, c.nd
 		t.Run(fmt.Sprintf("%s %d+%d", c.shape, np, nd), func(t *testing.T) {
 			q := stairQuery(np, nd, 0)

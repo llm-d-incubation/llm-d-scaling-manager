@@ -128,6 +128,10 @@ type podMetricData struct {
 	avgKVTransferTimeKnown bool
 	queueMin               float64
 	queueMinKnown          bool
+	// The API server's own time (frontend.go): the generation and render
+	// handlers' means, the render rate and the engine's end-to-end mean,
+	// with their presence bits.
+	frontend frontendReading
 	// The cache tiers (cache_tiers.go): the connector's token rates with
 	// their presence bits, and the cached tokens by source, nil when no
 	// source was read.
@@ -136,6 +140,14 @@ type podMetricData struct {
 	externalQueryRate      float64
 	externalQueryRateKnown bool
 	cachedBySource         map[string]float64
+	// iterationTokensBuckets is the tokens-per-iteration histogram
+	// (registration.QueryIterationTokensBuckets) by bucket bound, nil when
+	// no bucket was read.
+	iterationTokensBuckets map[float64]float64
+	// The KV residency histograms (cache_tiers.go) by bucket bound, nil
+	// when no bucket was read.
+	kvReuseGapBuckets        map[float64]float64
+	kvIdleBeforeEvictBuckets map[float64]float64
 	// kvTransfers is the KV transfers by kind (kv_transfers.go), nil when
 	// none was read.
 	kvTransfers map[string]*kvTransferReading

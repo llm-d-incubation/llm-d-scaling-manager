@@ -183,6 +183,12 @@ type VariantDecision struct {
 	// bound alone. The ResourceConstrained Event and the scaling-decision line
 	// name them beside LimitedBy.
 	LimitedByAlso []string
+	// ShadowLimitedBy is what LimitedBy would name, set by a pass that acts on
+	// nothing (GreedyByScoreOptimizer.ShadowOptimize: a passive model's
+	// would-be pass) instead of WasLimited and LimitedBy, which the sticky
+	// scale-down and the ResourceConstrained Event read. Only the
+	// suggested/provided series (llmsm_replicas_short) read it.
+	ShadowLimitedBy string
 
 	// --- Replica bounds ---
 	// MinReplicas is the minimum number of replicas for this variant (from VA spec field).

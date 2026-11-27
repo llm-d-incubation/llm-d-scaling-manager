@@ -57,9 +57,14 @@ spec:
             capabilities:
               drop:
                 - ALL
+          # One CPU: loading a recording replays it on one core, and a
+          # day-long recording takes minutes even with that core to itself.
+          # With less, on a busy node, the load slows in proportion and runs
+          # into the server's 30-minute deadline. No CPU limit, so an idle
+          # node's spare cores still serve plans in parallel.
           resources:
             requests:
-              cpu: 100m
+              cpu: "1"
               memory: 256Mi
             limits:
               memory: 2Gi

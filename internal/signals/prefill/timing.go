@@ -89,6 +89,9 @@ type timedSample struct {
 	ieff, prefill, occ float64
 	overhead           float64
 	overheadOK         bool
+	// ranks is the row's engine ranks: the service line's V_P is a row's
+	// (serviceline.go).
+	ranks int
 }
 
 // timed is the row's engine prefill timing, and whether it is one: a
@@ -98,7 +101,7 @@ func timed(rm rowTiming, ieff, rr float64) (timedSample, bool) {
 	if !rm.prefillKnown || !finitePositive(rm.prefill) || !finitePositive(ieff) || !finitePositive(rr) {
 		return timedSample{}, false
 	}
-	t := timedSample{ieff: ieff, prefill: rm.prefill, occ: rr * rm.prefill / float64(max(rm.ranks, 1))}
+	t := timedSample{ieff: ieff, prefill: rm.prefill, occ: rr * rm.prefill / float64(max(rm.ranks, 1)), ranks: max(rm.ranks, 1)}
 	if rm.ttftKnown && rm.queueKnown && finitePositive(rm.ttft) && rm.queue >= 0 && isFinite(rm.queue) {
 		if o := rm.ttft - rm.prefill - rm.queue; o >= 0 {
 			t.overhead, t.overheadOK = o, true

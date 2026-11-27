@@ -47,6 +47,27 @@ func TestEnvelope_AStatedInputIsOutside(t *testing.T) {
 		whatif.DefaultEnvelope().Judge(in).String())
 }
 
+// With --prometheus, capture's flags state nothing: the window's flags and
+// --batch-cap say how the window is captured, as capture's do for the
+// recording the files' answer reads, which states none of them (issue #359).
+// A flag that is not capture's still states its input; without --prometheus
+// --batch-cap is a cap to price at, and states it.
+func TestEnvelope_CaptureFlagsStateNothingWithPrometheus(t *testing.T) {
+	set := map[string]bool{"assume-router-hop": true, "batch-cap": true}
+	for _, name := range windowFlags() {
+		if slices.Contains(flagsOutside, name) {
+			set[name] = true
+		}
+	}
+	require.Greater(t, len(set), 2, "precondition: some window flag is in flagsOutside")
+	f := answerFlags{set: set}
+	f.window.prometheus = "http://prometheus.invalid"
+	assert.Equal(t, []string{"--assume-router-hop"}, f.statedOutside(), "with --prometheus")
+
+	recorded := answerFlags{set: map[string]bool{"batch-cap": true, "assume-router-hop": true}}
+	assert.Equal(t, []string{"--batch-cap", "--assume-router-hop"}, recorded.statedOutside(), "with --recording")
+}
+
 // q32ClassB is bucket B's class as the run priced it, on the committed
 // recording: what an API or a CLI question priced the same way reads.
 func q32ClassB() whatif.FigureClass {

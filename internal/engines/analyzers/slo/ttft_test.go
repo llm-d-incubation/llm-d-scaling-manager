@@ -606,6 +606,28 @@ func TestTTFT_AMeasuredSpreadThroughAnalyze(t *testing.T) {
 	assert.NotContains(t, got.Flags, string(whatif.AssumedPromptSpread))
 }
 
+// The prefill variant's --max-model-len holds the mass past the histogram's
+// last bound through Analyze: the spread is read under it, not clamped. An
+// argument the parser could not read, or none, leaves the clamp.
+func TestTTFT_TheContextWindowHoldsTheSpreadThroughAnalyze(t *testing.T) {
+	read := func(params *capacity.EngineParams) metrics.SLOTTFTReading {
+		rows := prefillRows("pre", 4000)
+		rows[0].ComputedTokensBuckets = []domain.LengthBucket{bucket(1000, 1), bucket(math.Inf(1), 2)}
+		r := newTTFTRig(ttftEstimate(), rows)
+		if params != nil {
+			r.a.store = capacity.NewStore()
+			r.a.store.Update("ns", "m", "pre", capacity.Record{EngineParams: params}, r.now)
+		}
+		r.warmPromptWindow(t)
+		return r.one(t)
+	}
+	assert.NotContains(t, read(&capacity.EngineParams{MaxModelLen: 8192}).Flags, string(PromptSpreadClamped))
+	assert.Contains(t, read(&capacity.EngineParams{MaxModelLen: 8192, Unresolved: []string{"max_model_len"}}).Flags,
+		string(PromptSpreadClamped), "an unread argument")
+	assert.Contains(t, read(&capacity.EngineParams{}).Flags, string(PromptSpreadClamped), "no window")
+	assert.Contains(t, read(nil).Flags, string(PromptSpreadClamped), "no engine arguments")
+}
+
 // SwitchTTFTMeasuredSpread off reads the assumed spread from the rows a measured
 // one comes from, as production read before Q1, with the flag and the cv both.
 func TestTTFT_TheMeasuredSpreadSwitch(t *testing.T) {
@@ -625,7 +647,7 @@ func TestTTFT_TheMeasuredSpreadSwitch(t *testing.T) {
 
 	spread := func(on bool) whatif.PromptSpread {
 		r := rig(on)
-		return r.a.promptSpread("ns|m|pre", r.in.ReplicaMetrics, r.now)
+		return r.a.promptSpread("ns|m|pre", r.in.ReplicaMetrics, r.now, 0)
 	}
 	assert.False(t, spread(true).Assumed)
 	assert.Equal(t, whatif.PromptSpread{CV: whatif.AssumedPromptCV, Assumed: true}, spread(false))
@@ -650,7 +672,7 @@ func TestTTFT_TheSpreadIsTheWindowsNotTheCycles(t *testing.T) {
 	for i, rows := range cycles {
 		at := r.now.Add(time.Duration(i) * time.Minute)
 		cli.Note(rows, i, at)
-		got := r.a.promptSpread("k", rows, at)
+		got := r.a.promptSpread("k", rows, at, 0)
 		want := cli.Spread()
 		want.MaxRatio = 0 // SwitchTTFTPromptSupport, off from the constructor
 		assert.Equal(t, want, got, "S1 and the CLI, cycle %d", i)

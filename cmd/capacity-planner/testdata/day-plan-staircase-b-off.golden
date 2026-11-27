@@ -1,4 +1,4 @@
-Day plan for ns-01/model-02, 2026-11-06 01:00 to 2026-11-06 02:20 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
+Day plan for ns-01/model-02, 2026-11-06 01:00 to 2026-11-06 02:20 UTC, buckets of 5m0s, each sized for the p95 less counting noise of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
 scale-up lead: prefill 2m2s (learned), decode 1m47s (learned); held = the need and the replicas starting in the bucket for the buckets after it
 SLO: TTFT p95 190ms; headroom 0.85. TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.
 
@@ -15,13 +15,13 @@ hour (UTC)        rate mean  rate p95 need P need D busiest    held  had P  had 
 2026-11-06 01:00      28.51     38.72      -      -       -       -      2      2  not sized
 2026-11-06 02:00      31.18     42.52      -      -       -       -      2      2  REFUSED (see above)
 
-buckets: 0 sized (0 under, 0 over, 0 match; 0 for the p95, 0 for the mean, 0 for the max), 0 beyond the bound, 15 refused, 1 too little data, 0 no data
+buckets: 0 sized (0 under, 0 over, 0 match; 0 for the p95 less counting noise, 0 for the mean, 0 for the max), 0 beyond the bound, 15 refused, 1 too little data, 0 no data
 needed: no bucket was sized
 had over every bucket with data: 2.67 prefill + 2.67 decode replica-hours, 5.33 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
 hours refused: 02:00
 flags: WindowShape, RateFromDecodeRows, PrefillNotPriced, FewCyclesForP95
 note: Steady state: each bucket is sized as if its rate held. A replica must be Ready when its bucket starts, so it starts one lead time before (prefill 122 s learned, decode 107 s learned): held is each role's most need over the bucket and every bucket that starts within its lead after it ends, and the held replica-hours count each scale-up's replicas from one lead before their bucket. The verdicts judge the need, not the held fleet.
-note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
+note: Each bucket is sized for the p95 less counting noise (the p95 less a steady one-minute rate's Poisson spread, var - share x mean/60, the share of it readings closer than a minute hold) of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).
 note: Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.
 note: An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the cheapest of the buckets' own fleets that holds them all, in the order a bucket's need is chosen, else each role's most over them. It is not searched for the cheapest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.
 note: A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.

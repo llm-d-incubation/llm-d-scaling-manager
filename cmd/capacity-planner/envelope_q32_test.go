@@ -546,8 +546,11 @@ func q32Row(b q32Bucket, g *q32Group) whatif.EnvelopeRow {
 		// A knee is a capacity: no spread moves it.
 		region.PromptCV = nil
 	case whatif.FigureDecodeKnee:
-		// Nor do the prefill pods move decode's.
+		// Nor do the prefill pods move decode's, nor the arrivals' Ca^2: a
+		// knee is a throughput, and a throughput does not depend on how
+		// bursty the arrivals are (issue #359).
 		region.PrefillReplicas, region.PrefillTensorParallel, region.PromptCV = nil, nil, nil
+		region.ArrivalCV2 = nil
 	}
 	errs := make([]float64, 0, len(g.readings))
 	row := whatif.EnvelopeRow{Figure: g.kind, Source: q32Source,

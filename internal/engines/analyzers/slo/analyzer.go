@@ -197,6 +197,9 @@ type Analyzer struct {
 	// ttftQuietTransfer is SwitchTTFTQuietTransfer (ttft.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftQuietTransfer bool
+	// ttftPullWork is SwitchTTFTPullWork (ttft.go): off from the
+	// constructor.
+	ttftPullWork bool
 	// ttftDecodeTerm is SwitchTTFTDecodeTerm (ttft.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftDecodeTerm bool
@@ -206,6 +209,10 @@ type Analyzer struct {
 	// ttftRouterWait is SwitchTTFTRouterWait (ttft.go): off from the
 	// constructor, at whatif.DefaultPriceRouterWait; a replay turns it on.
 	ttftRouterWait bool
+	// ttftRouterWaitInPrefill is SwitchTTFTRouterWaitInPrefill (ttft.go):
+	// off from the constructor, unlike the planner's default
+	// (whatif.DefaultRouterWaitInPrefill); a replay turns it on.
+	ttftRouterWaitInPrefill bool
 	// ttftPSOnsets is SwitchTTFTPSOnsets and ttftDecodeGateCharge
 	// SwitchTTFTDecodeGateCharge (ttft.go): off from the constructor, at
 	// whatif.DefaultPSOnsets and whatif.DefaultChargeDecodeGate; a replay
@@ -233,6 +240,10 @@ type Analyzer struct {
 	// ttftJointInputs is SwitchTTFTJointInputs (ttft_joint.go): on from the
 	// constructor; a replay turns it off (SetSwitchesForReplay).
 	ttftJointInputs bool
+	// v2Inputs is SwitchV2Inputs (model_inputs.go): off from the
+	// constructor; the v2 latency models' inputs are neither collected nor
+	// reported until the default is flipped on evidence.
+	v2Inputs bool
 	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#276,
 	// output_dispersion.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
@@ -250,6 +261,18 @@ type Analyzer struct {
 	// prompts is each prefill variant's prompt window (ttft.go), under the
 	// same key, from the first row to carry a computed-token histogram.
 	prompts map[string]*promptSpreadWindow
+	// models is each model's v2 latency learners (model_learners.go), keyed
+	// namespace|model. Under mu.
+	models map[string]*modelWindow
+	// modelRefitEvery is how often the v2 learners refit, and
+	// modelRefitBackground whether a refit runs in the background
+	// (WithModelRefits); modelRefitting says one does, under mu.
+	modelRefitEvery      time.Duration
+	modelRefitBackground bool
+	modelRefitting       bool
+	// modelMaxWindows is the most models whose v2 windows are kept at
+	// once: ModelMaxWindows from the constructor.
+	modelMaxWindows int
 }
 
 // The batch cap's readers in this analyzer (issue ev-shindin/llm-scaling-manager#420). Each took the cap
@@ -344,6 +367,10 @@ func New(router RouterLatencySource, store *capacity.Store) *Analyzer {
 		decodeTTFT:           make(map[string]*decodeTTFTWindow),
 		decodeTerms:          make(map[string]*decodeTermWindow),
 		joint:                make(map[string]*jointWindow),
+		models:               make(map[string]*modelWindow),
+		modelRefitEvery:      ModelRefitEvery,
+		modelRefitBackground: true,
+		modelMaxWindows:      ModelMaxWindows,
 
 		ttftImbalanceAcrossCounts: whatif.DefaultImbalanceAcrossCounts,
 	}
@@ -437,10 +464,20 @@ func (a *Analyzer) analyze(ctx context.Context, input domain.AnalyzerInput) (*do
 	// The threshold the engine publishes this analyzer's target with: the slo
 	// entry's own when it sets one, the tier's otherwise.
 	scaleUp, _ := cfg.AnalyzerThresholds(domain.SLOAnalyzerName)
+	// A model the v2 models run for publishes the predicted latency of both
+	// models (model_published.go): its generating variants' lines are kept
+	// for the TPOT figures.
+	var lines map[string]itl.Model
+	if a.modelObserved(input.Namespace, input.ModelID) {
+		lines = map[string]itl.Model{}
+	}
 	var decodeLines []ttftDecodeLine
 	for _, vs := range fleet.variants {
 		key := a.variantKey(input.Namespace, input.ModelID, vs)
 		vc, reading, d := a.priceVariant(input, vs, key, fleet, tpotTarget, scaleUp, now)
+		if lines != nil && d.line.Tier != "" {
+			lines[vs.VariantName] = d.line.Model
+		}
 		a.noteLineLearner(logger, input.Namespace, input.ModelID, vs, key, d, now)
 		if domain.CanonicalRole(vs.Role) == domain.RoleDecode {
 			decodeLines = append(decodeLines, ttftDecodeLine{state: vs, detail: d})
@@ -510,6 +547,15 @@ func (a *Analyzer) analyze(ctx context.Context, input domain.AnalyzerInput) (*do
 	snap.TTFT, asks = a.priceTTFTVariants(logger, input, cfg, fleet, decodeLines, j.Latency, now)
 	if a.ttftSizesPrefill {
 		sizePrefill(result, asks, fleet, modelArrival(input, fleet))
+	}
+	if lines != nil {
+		snap.Predicted = a.modelPredictions(input, lines)
+		if reports := a.modelReports(input.Namespace, input.ModelID); len(reports) > 0 {
+			model := reportModel(input.Namespace, input.ModelID)
+			a.mu.Lock()
+			a.learnerReports[model] = append(a.learnerReports[model], reports...)
+			a.mu.Unlock()
+		}
 	}
 
 	// A window that covered a wake or a starting replica is not judged: the
@@ -973,6 +1019,15 @@ func (a *Analyzer) evictStale(now time.Time) Evicted {
 			ev.TTFTWindows++
 		}
 	}
+	for key, w := range a.models {
+		if now.Sub(w.seen) > a.stateTimeout {
+			if ns, model, ok := strings.Cut(key, "|"); ok {
+				a.noteModelForgottenLocked(ns, model, w, learn.ByEvicted)
+			}
+			delete(a.models, key)
+			ev.Models++
+		}
+	}
 	a.evictOwnSettleLocked(now)
 	return ev
 }
@@ -982,11 +1037,13 @@ type Evicted struct {
 	Lines, Baselines, Transients, Accelerators int
 	// TTFTWindows counts the imbalance, decode-TTFT and prompt windows.
 	TTFTWindows int `learnrec:"omitzero"`
+	// Models counts the models whose v2 latency learners were evicted.
+	Models int `learnrec:"omitzero"`
 }
 
 // Any reports whether anything was evicted.
 func (e Evicted) Any() bool {
-	return e.Lines+e.Baselines+e.Transients+e.Accelerators+e.TTFTWindows > 0
+	return e.Lines+e.Baselines+e.Transients+e.Accelerators+e.TTFTWindows+e.Models > 0
 }
 
 // beginCycle marks the start of an engine cycle. The engine calls it once per

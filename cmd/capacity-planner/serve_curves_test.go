@@ -222,7 +222,7 @@ func TestServeRefusesUnsafeBinds(t *testing.T) {
 		{[]string{"serve", "--recordings", filepath.Join(dir, "missing"), "--listen", "127.0.0.1:0"}, "not a directory"},
 		{[]string{"serve", "--recordings", dir, "--listen", "127.0.0.1:0", "--plan-budget", "-1s"}, "--plan-budget -1s: want 0"},
 		{[]string{"serve", "--recordings", dir, "--listen", "127.0.0.1:0", "--plan-budget", "9m1s"}, "up to 9m0s"},
-		{[]string{"serve", "--recordings", dir, "--listen", "127.0.0.1:0", "--plan-budget", "10m"}, "10m0s write timeout"},
+		{[]string{"serve", "--recordings", dir, "--listen", "127.0.0.1:0", "--plan-budget", "10m"}, "--plan-budget 10m0s: want 0"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := run(ctx, c.args, io.Discard, io.Discard)

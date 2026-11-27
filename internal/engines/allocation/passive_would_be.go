@@ -4,6 +4,9 @@ import (
 	"context"
 	"maps"
 
+	"github.com/go-logr/logr"
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/accelerator"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 )
@@ -92,4 +95,26 @@ func PassiveWouldBe(ctx context.Context, optimizer ScalingOptimizer, passive []M
 		return g.ShadowOptimize(ctx, passive, left)
 	}
 	return optimizer.Optimize(ctx, passive, left)
+}
+
+// PassiveWouldBeFitted is PassiveWouldBe fitted to the nodes the last pass of
+// optimizer left: what a passive model would get were it active, node fit
+// included. It reports only (the suggested/provided series); the would-be
+// decision a passive model publishes stays PassiveWouldBe's. Nil unless
+// optimizer is a GreedyByScoreOptimizer whose last pass had a node view.
+//
+// It runs quiet, on a Clone of that view, so the view the cycle goes on with
+// (the utilization share's, the warm pool's) is untouched; the clone logs no
+// pod layout either, as the shared layout log would.
+func PassiveWouldBeFitted(ctx context.Context, optimizer ScalingOptimizer, passive []ModelScalingRequest,
+	constraints []*ResourceConstraints, active []domain.VariantDecision) []domain.VariantDecision {
+	g, ok := optimizer.(*GreedyByScoreOptimizer)
+	if !ok || len(passive) == 0 || g.pass == nil || g.pass.nodes == nil {
+		return nil
+	}
+	shadow := *g
+	shadow.quiet = true
+	shadow.Nodes = g.pass.nodes.Clone()
+	shadow.Nodes.layouts = nil
+	return shadow.Optimize(ctrl.LoggerInto(ctx, logr.Discard()), passive, ChargeGrowth(constraints, active))
 }

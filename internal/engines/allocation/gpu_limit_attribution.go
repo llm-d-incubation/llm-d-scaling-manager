@@ -141,26 +141,12 @@ func applyGPULimitAttribution(
 			continue
 		}
 		d.WasLimited = true
-		switch cause {
-		case limitedByNodeFit:
-			d.LimitedBy = NodeFitLimiterName
-		case limitedByPairWhole, limitedByLenderCannotReclaim:
-			// A rule held it back, not scarcity: no warm pool contends.
-			d.LimitedBy = PairBorrowsWholeName
-			if cause == limitedByLenderCannotReclaim {
-				d.LimitedBy = LenderCannotReclaimName
-			}
-			emitter.RecordDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
-			continue
-		default:
-			if names := bindingProviders(constraints, d.Namespace, d.AcceleratorName); len(names) > 0 {
-				d.LimitedBy, d.LimitedByAlso = names[0], names[1:]
-				if len(d.LimitedByAlso) == 0 {
-					d.LimitedByAlso = nil
-				}
-			}
-		}
+		d.LimitedBy, d.LimitedByAlso = limitNames(cause, constraints, d)
 		emitter.RecordDecisionsLimitedTotalMetric(d.VariantName, d.Namespace, d.LimitedBy)
+		if cause == limitedByPairWhole || cause == limitedByLenderCannotReclaim {
+			// A rule held it back, not scarcity: no warm pool contends.
+			continue
+		}
 
 		// A warm pool of this accelerator type, in this namespace, should stop
 		// competing for GPUs a model replica is being denied. See
@@ -170,6 +156,42 @@ func applyGPULimitAttribution(
 				contended[d.Namespace] = map[string]bool{}
 			}
 			contended[d.Namespace][d.AcceleratorName] = true
+		}
+	}
+}
+
+// limitNames is what LimitedBy and LimitedByAlso name for a variant cause held
+// back: node fit or a borrowing rule by its name, a pool by the providers that
+// bound it, in the declared order (none when no provider imposes a finite
+// bound).
+func limitNames(cause limitCause, constraints []*ResourceConstraints, d *domain.VariantDecision) (string, []string) {
+	switch cause {
+	case limitedByNodeFit:
+		return NodeFitLimiterName, nil
+	case limitedByPairWhole:
+		return PairBorrowsWholeName, nil
+	case limitedByLenderCannotReclaim:
+		return LenderCannotReclaimName, nil
+	}
+	names := bindingProviders(constraints, d.Namespace, d.AcceleratorName)
+	if len(names) == 0 {
+		return "", nil
+	}
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	return names[0], names[1:]
+}
+
+// applyShadowLimitAttribution is applyGPULimitAttribution for a pass that acts
+// on nothing: it names the bound in ShadowLimitedBy only, and publishes,
+// counts and marks nothing else (see domain.VariantDecision.ShadowLimitedBy).
+func applyShadowLimitAttribution(decisions []domain.VariantDecision, limited gpuLimitTracker,
+	constraints []*ResourceConstraints) {
+	for i := range decisions {
+		d := &decisions[i]
+		if cause, ok := limited[d.VariantName]; ok {
+			d.ShadowLimitedBy, _ = limitNames(cause, constraints, d)
 		}
 	}
 }

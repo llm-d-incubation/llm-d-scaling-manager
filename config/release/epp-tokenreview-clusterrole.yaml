@@ -1,0 +1,21 @@
+# What an EPP's ServiceAccount needs for its /metrics authentication, which
+# the controller scrapes directly: create tokenreviews and
+# subjectaccessreviews, what the built-in system:auth-delegator grants and
+# nothing else. On the one manifest (scaling-manager.yaml) it is bound per EPP
+# by the cluster admin, only where the router chart did not grant it:
+#   scaling-manager-admin.sh grant-epp <namespace> <EPP ServiceAccount>
+# Named after the install, so an smt install's shared
+# scaling-manager-epp-metrics-auth is never touched.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaling-manager-epp-tokenreview-__NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]

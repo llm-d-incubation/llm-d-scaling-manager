@@ -5,7 +5,8 @@
 # The alert says scaling decisions run on stale data, so it counts only the
 # queries decisions read. A learner_recording query feeds only a learner
 # recording (docs/proposals/analyzer-learner.md, 2.9), and a ttft_inputs query
-# only the shadow TTFT pricing: their failures show on the counter and do not
+# only the shadow TTFT pricing, and a slo_model_inputs query only the shadow
+# slo analyzer v2 models: their failures show on the counter and do not
 # raise the alert.
 rule_files:
   - rules.yaml
@@ -32,12 +33,15 @@ tests:
           - exp_labels: {severity: warning, query_type: router_latency, reason: timeout}
 
   # 2. A recording whose every query fails, with the scaling queries
-  #    healthy, never fires. Nor do the TTFT pricing's.
+  #    healthy, never fires. Nor do the TTFT pricing's, nor the slo
+  #    analyzer v2 models'.
   - interval: 1m
     input_series:
       - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="learner_recording",reason="timeout"}'
         values: '0+60x30'
       - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="ttft_inputs",reason="timeout"}'
+        values: '0+60x30'
+      - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="slo_model_inputs",reason="timeout"}'
         values: '0+60x30'
       - series: 'llmsm_metrics_collection_errors_total{namespace="scaling-manager",pod="scaling-manager-a",query_type="kv_cache",reason="timeout"}'
         values: '0x30'

@@ -1,0 +1,19 @@
+# The kubectl stub of hack/check-kubectl-scripts.sh, which puts a bash
+# shebang above it (PATH then holds nothing else to find bash with). One line
+# per call in $STUB_LOG, the arguments quoted the way the scripts print them;
+# stdin drained when the last argument is "-", so a pipe never blocks.
+# STUB_FAIL makes every call fail.
+word() {
+    if [[ "$1" =~ ^[A-Za-z0-9_./:=,@%+-]+$ ]]; then
+        printf '%s' "$1"
+    else
+        printf "'%s'" "${1//\'/\'\\\'\'}"
+    fi
+}
+line="kubectl"
+for a in "$@"; do line+=" $(word "$a")"; done
+printf '%s\n' "$line" >> "$STUB_LOG"
+if [ "${*: -1}" = "-" ]; then
+    while IFS= read -r _; do :; done
+fi
+[ -z "${STUB_FAIL:-}" ]

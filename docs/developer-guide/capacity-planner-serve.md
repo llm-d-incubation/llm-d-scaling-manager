@@ -273,7 +273,14 @@ cycle, with no recording of its own) and `learnreplay.SeriesFrom`. Each pass
 holds one line (`learnrec.Scanner`). `TestServeResolvesALargeRecordingWithoutHoldingIt`
 holds it to that. A plan whose client goes away stops between figures.
 The HTTP server's timeouts are in `serve.go`: read 30 s, idle 2 minutes,
-write 10 minutes (`writeTimeout`).
+write 10 minutes (`writeTimeout`). A handler that computes reads its body
+with `Server.readLongJSON`, which then moves the connection's write deadline
+to `whatifapi.LongRequestDeadline` (30 minutes) through
+`http.ResponseController`. The read deadline is left alone: `net/http`
+clears it once the body is read, so the 30 s read timeout bounds only the
+body, and a client that leaves still ends the request's context.
+`TestLongRequestOutlivesServerTimeouts` holds it. Uploads set their own
+deadlines (`uploadDeadline`).
 
 ## The plan budget
 
@@ -287,8 +294,9 @@ is that error. Nothing of a stopped plan is cached, and its slot is freed.
 The budget is checked between figures, so a plan can run past it by one
 figure. A size's search is not under the budget, only the plan it answers
 with. A request that joins a plan already in flight shares that plan's clock.
-`maxPlanBudget` in `serve.go` is 9 minutes, a minute under `writeTimeout`, so
-the refusal is written before the connection closes; `--plan-budget` 0 is
+`maxPlanBudget` in `serve.go` is 9 minutes, well under
+`whatifapi.LongRequestDeadline` (every route that plans has it), so the
+refusal is written before the connection closes; `--plan-budget` 0 is
 `DefaultPlanBudget` (5 minutes).
 
 The page retries only a 503 with `Retry-After` (`retryDelay` in

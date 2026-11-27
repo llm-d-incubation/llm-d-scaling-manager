@@ -1334,6 +1334,12 @@ const (
 	// They run in a namespace with a TTFT target and while recording; the
 	// pricing is shadow, so a failure here never touches scaling either.
 	QueryTypeTTFTInputs = "ttft_inputs"
+	// QueryTypeSLOModelInputs is every query only the slo analyzer's v2
+	// latency models read (slo.SwitchV2Inputs): the per-pod inputs no other
+	// analyzer reads, and the router's TPOT histogram. A query a recording
+	// or a TTFT target issues too is counted under that type instead. The
+	// models are shadow, so a failure here never touches scaling.
+	QueryTypeSLOModelInputs = "slo_model_inputs"
 )
 
 // Value for the LabelUnit Prometheus label: the metric carries an absolute

@@ -213,6 +213,14 @@ type Cycle struct {
 	// minutes only (busiestMinutes), not from every minute
 	// (saturation.SwitchPrefillFBusyMinutes).
 	FBusyMinutes bool
+	// FLoadCurve fits f against the load at each pod count
+	// (Estimate.FCurveByPods, fLoadCurves;
+	// saturation.SwitchPrefillFLoadCurve).
+	FLoadCurve bool
+	// FPooledMinutes pools consecutive minutes under MinRequestsPerPodMinute
+	// requests a pod until they carry it, so a fleet of long prompts learns f
+	// (imbalance_pool.go; saturation.SwitchPrefillFPooledMinutes).
+	FPooledMinutes bool
 	// VPFloorServed raises a lower-bound V_P to the highest computed-token
 	// rate a pod was seen to sustain, queued or not (Estimate.floorAtServed;
 	// saturation.SwitchPrefillVPFloorServed).
@@ -232,6 +240,25 @@ type Cycle struct {
 	// a queue or is a lower bound under it (plateau.go;
 	// saturation.SwitchPrefillVPOccupancyPlateau).
 	VPOccupancyPlateau bool
+	// VPPromptCoverage records the prompt lengths the minutes V_P rests on
+	// cover (Estimate.VPPromptLow, VPPromptHigh), so a price at a prompt
+	// outside them is flagged out of region and prices no TTFT
+	// (whatif.Prefill.VPPromptLow; saturation.SwitchPrefillVPPromptCoverage).
+	VPPromptCoverage bool
+	// VPLoneRate reads V_P from light load, the lone rate: one request's
+	// computed tokens over its prefill time at under LoneMaxOccupancy
+	// requests in prefill per engine, at the prompt the cycle's rows carry,
+	// where V_P is refused for want of a queue or is a lower bound
+	// (lonerate.go; saturation.SwitchPrefillVPLoneRate).
+	VPLoneRate bool
+	// VPServiceLine reads V_P from the prefill service line: the engine's
+	// prefill time, inverted for processor sharing, against its computed
+	// tokens a request, S(x) = s0 + x/V, priced with s0 in the capacity at
+	// the minutes' mean computed prompt, where V_P is refused for want of a
+	// queue or is the served peak of a fleet that never queued, under it
+	// (serviceline.go;
+	// saturation.SwitchPrefillVPServiceLine).
+	VPServiceLine bool
 	// ALowLoadByRate reads a minute as low load, for the fit of a, by its
 	// request rate against its prompt cluster's service time
 	// (lowLoadByRate), not against its own: a minute whose prefill ran slow
@@ -294,6 +321,25 @@ type Estimate struct {
 	VPPlateauMinutes      int
 	VPPlateauSpan         float64
 	VPPlateauMaxOccupancy float64
+	// VPLone is the lone rate (lonerate.go), read with Cycle.VPLoneRate,
+	// whether or not V_P is taken from it; zero with fewer than
+	// MinLoneMinutes lone minutes at the prompt priced. VPLoneMinutes is how
+	// many such minutes were read, and VPLoneIsVP says the served peak is at
+	// most LoneServedTolerance over the lone rate, so it is V_P, not a lower
+	// bound.
+	VPLone        float64
+	VPLoneMinutes int
+	VPLoneIsVP    bool
+	// VPLine is V_P from the service line (serviceline.go), read with
+	// Cycle.VPServiceLine, whether or not V_P is taken from it; zero where
+	// the line is refused (VPLineRefused). VPLineS0 and VPLineSlope are its
+	// intercept, seconds, and slope, seconds a computed token on one engine,
+	// and VPLineMinutes how many timed minutes it read.
+	VPLine        float64
+	VPLineS0      float64
+	VPLineSlope   float64
+	VPLineMinutes int
+	VPLineRefused Refusal
 	// VPQueuedMinutes, VPLongestQueuedRun and VPBusyMinutes say why V_P was
 	// refused or where it stands: the samples kept that held a queue on
 	// some sample, the longest run of them (a peak needs PeakRun), and the
@@ -326,6 +372,25 @@ type Estimate struct {
 	// (whatif.Prefill.VPWholePromptTokens). Both zero where VPPromptTokens
 	// is, or where one of the minutes read no whole prompt.
 	VPWholePromptTokens, VPPromptHitRate float64
+	// VPPromptLow and VPPromptHigh are the 10th and 90th percentiles of the
+	// effective prompt lengths of the minutes V_P rests on (promptRange): the
+	// prompts V_P was read over, where VPPromptTokens is their mean. Set only
+	// with Cycle.VPPromptCoverage and a V_P whose minutes all read a prompt;
+	// zero otherwise (the back-pressure bound records none). A V_P of busy
+	// minutes speaks for the prompts it was read at: priced at a mean prompt
+	// outside them it is not the capacity there, in either direction (issue
+	// llm-d-incubation/llm-d-scaling-manager#405).
+	VPPromptLow, VPPromptHigh float64
+	// VPRequestSeconds is the part of a request's work on one pod that does
+	// not grow with its prompt, in pod-seconds (an engine rank's
+	// per-request occupancy over the pod's ranks), where the source V_P came
+	// from measured it beside the per-token part: at VPPromptTokens the
+	// request's work is VPPromptTokens/VP, and VPRequestSeconds of it is
+	// paid whatever the prompt. Zero is not measured, and V_P is then priced
+	// as one token rate at every prompt, as before
+	// (whatif.Prefill.VPRequestSeconds). The service line sets it
+	// (serviceline.go).
+	VPRequestSeconds float64
 
 	// A is the fixed latency in seconds: the low-load fit's intercept plus
 	// the least overhead (AvgTTFT - AvgServiceTime) seen at low load, the
@@ -401,6 +466,12 @@ type Estimate struct {
 	// no entry, where no f is given.
 	FLoad       float64
 	FLoadByPods map[int]float64
+	// FCurveByPods is f against the load at each pod count, fitted over
+	// every minute kept at that count (fLoadCurves), with
+	// Cycle.FLoadCurve; nil without it. A count with too few minutes, or
+	// whose fit is not identified, has an entry all the same: a reader asks
+	// FLoadCurve.Identified.
+	FCurveByPods map[int]FLoadCurve
 	// FMultiRank is a kept minute with a row of more than one engine rank: a
 	// data-parallel pod, or an LWS group whose every Pod runs an engine,
 	// collapsed to one row. f is then the spread across rows; the spread
@@ -453,6 +524,10 @@ type sample struct {
 	// Cycle.VPOccupancyPlateau.
 	occ   float64
 	occOK bool
+	// lone is the minute's lone speed (loneSpeed), valid when loneOK; read
+	// only with Cycle.VPLoneRate.
+	lone   float64
+	loneOK bool
 }
 
 // promptPoint is one row's effective prompt length, for the steady gate.
@@ -488,11 +563,18 @@ type keyState struct {
 	pods     map[string]*podState
 	f        []fSample
 	lastSeen time.Time
+	// pool is the minutes pooled toward the next f (Cycle.FPooledMinutes).
+	pool fPool
 	// bestQueued is the best peak under a queue the key has read since its
 	// first cycle, with the last minute of its run, kept past Retention for
 	// Cycle.VPWindowBest; bestQueuedOK says one was read.
 	bestQueued   busy
 	bestQueuedOK bool
+	// bestServed is the highest served peak the key has read since its
+	// first cycle, kept past Retention for Cycle.VPLoneRate: a lone rate is
+	// V_P only where no pod was ever seen to serve more than
+	// LoneServedTolerance over it (loneFill).
+	bestServed float64
 }
 
 // Observer is the learned state of every key. Safe for concurrent use.
@@ -613,22 +695,32 @@ func (o *Observer) Observe(c Cycle) Estimate {
 				s.overhead, s.overheadOK = rm.AvgTTFT-svc, true
 			}
 		}
-		if c.AFromTiming && c.Disaggregated && ieffOK && rrOK {
+		if (c.AFromTiming || c.VPServiceLine) && c.Disaggregated && ieffOK && rrOK {
 			s.timed, s.timedOK = timed(rowTiming{prefill: rm.AvgPrefillTime, prefillKnown: rm.AvgPrefillTimeKnown,
 				ttft: rm.AvgTTFT, ttftKnown: rm.AvgTTFTKnown, queue: rm.AvgQueueTime, queueKnown: rm.AvgQueueTimeKnown,
 				ranks: rm.Ranks()}, ieff, rr)
 		}
-		if c.VPOccupancyPlateau && c.Disaggregated {
+		if (c.VPOccupancyPlateau || c.VPLoneRate) && c.Disaggregated {
 			s.occ, s.occOK = rowOccupancy(rm)
 		}
+		if c.VPLoneRate && c.Disaggregated && ieffOK {
+			s.lone, s.loneOK = loneSpeed(rm, ieff)
+		}
 		ps.add(s)
-		shares = append(shares, share{rate: s.rate, rateOK: s.rateOK, requests: rr, requestsOK: rrOK, multiRank: s.multiRank})
+		shares = append(shares, share{pod: rm.PodName, rate: s.rate, rateOK: s.rateOK, requests: rr, requestsOK: rrOK, multiRank: s.multiRank})
 	}
 	ks.prune(c.Now)
 
-	ks.noteImbalance(shares, allAdmitted, c.Now)
+	ks.noteImbalance(shares, allAdmitted, c.FPooledMinutes, c.Now)
 	est.capacity(ks, c, sglang)
 	est.plateauFill(ks, c)
+	if c.VPLoneRate {
+		ref, _ := MeanEffectivePrompt(c.Rows, sglang)
+		est.loneFill(ks, c, ref)
+	}
+	if c.VPServiceLine {
+		est.lineFill(ks)
+	}
 	est.fixed(ks, c)
 	if c.AFromTiming {
 		switch est.ARefused {
@@ -640,6 +732,12 @@ func (o *Observer) Observe(c Cycle) Estimate {
 	}
 	est.curveBound()
 	est.imbalance(ks, shares, serving, c.FBusyMinutes)
+	if c.FLoadCurve {
+		est.FCurveByPods = fLoadCurves(ks.f)
+	}
+	if !c.VPPromptCoverage || est.VPRefused != "" {
+		est.VPPromptLow, est.VPPromptHigh = 0, 0
+	}
 	return est
 }
 

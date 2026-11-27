@@ -1074,7 +1074,7 @@ stays TPOT's.
 per model. With one prefill variant per model, compare them on the model and
 statistic:
 
-    max by (exported_namespace, model_name, statistic) (llmsm_slo_predicted_ttft_seconds)
+    max by (exported_namespace, model_name, statistic) (llmsm_slo_predicted_ttft_seconds{learner="slo"})
       / on (exported_namespace, model_name, statistic)
     max by (exported_namespace, model_name, statistic) (llmsm_slo_observed_seconds{objective="ttft"})
 

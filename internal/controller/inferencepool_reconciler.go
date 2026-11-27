@@ -31,10 +31,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	v1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	"sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/common"
@@ -45,13 +47,31 @@ type InferencePoolReconciler struct {
 	client.Client
 	Datastore datastore.Datastore
 	PoolGKNN  common.GKNN
+	// Managed, when set, says whether the controller manages a namespace:
+	// the live watchNamespaces setting (config.Config.Manages). A pool in a
+	// namespace it does not manage is dropped from the datastore, so its EPP
+	// is not scraped. Nil manages every namespace the cache sees.
+	Managed func(namespace string) bool
+
+	// requeue carries the pools RequeueAll sends, to read them again after
+	// the managed namespaces changed.
+	requeue chan event.GenericEvent
 }
+
+// requeueBuffer bounds the pools RequeueAll queues before it blocks.
+const requeueBuffer = 1024
 
 func (c *InferencePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("group", c.PoolGKNN.Group).V(logutil.DEFAULT)
 	ctx = ctrl.LoggerInto(ctx, logger)
 
 	logger.Info("Reconciling InferencePool", "namespace", req.Namespace, "name", req.Name)
+
+	if c.Managed != nil && !c.Managed(req.Namespace) {
+		logger.Info("InferencePool in a namespace this controller does not manage (watchNamespaces). Removing pool from datastore")
+		c.Datastore.PoolDelete(req.Namespace + "/" + req.Name)
+		return ctrl.Result{}, nil
+	}
 
 	// 1. Initialize a generic client.Object based on the group.
 	var obj client.Object
@@ -145,8 +165,12 @@ func (c *InferencePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("looking up %s %s: %w", gv, inferencePoolKind, err)
 	}
 
+	c.requeue = make(chan event.GenericEvent, requeueBuffer)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(obj, builder.WithPredicates(inferencePoolPredicate())).
+		// RequeueAll: the pools of a namespace managed since, or no longer,
+		// read again with no change to the pools themselves.
+		WatchesRawSource(source.Channel(c.requeue, &handler.EnqueueRequestForObject{})).
 		// The EPP metrics port comes from the endpoint picker's Service, not
 		// from the pool, so a change to it bumps no pool generation. Before the
 		// predicate it reached Reconcile only by accident: the next status write
@@ -155,6 +179,43 @@ func (c *InferencePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// the scrape source read them through it), so this adds no informer.
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(c.poolsForService)).
 		Complete(c)
+}
+
+// RequeueAll reads every InferencePool of this reconciler's group again: the
+// managed namespaces changed (watchNamespaces), so a pool may now be managed
+// or no longer. Before SetupWithManager, or with no pool, it does nothing.
+func (c *InferencePoolReconciler) RequeueAll(ctx context.Context) {
+	if c.requeue == nil {
+		return
+	}
+	var objs []client.Object
+	switch c.PoolGKNN.Group {
+	case v1.GroupName:
+		var pools v1.InferencePoolList
+		if err := c.List(ctx, &pools); err != nil {
+			log.FromContext(ctx).Error(err, "Listing InferencePools after the managed namespaces changed")
+			return
+		}
+		for i := range pools.Items {
+			objs = append(objs, &pools.Items[i])
+		}
+	case v1alpha2.GroupName:
+		var pools v1alpha2.InferencePoolList
+		if err := c.List(ctx, &pools); err != nil {
+			log.FromContext(ctx).Error(err, "Listing InferencePools after the managed namespaces changed")
+			return
+		}
+		for i := range pools.Items {
+			objs = append(objs, &pools.Items[i])
+		}
+	}
+	for _, o := range objs {
+		select {
+		case c.requeue <- event.GenericEvent{Object: o}:
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // poolsForService maps an endpoint picker Service to the pools of this

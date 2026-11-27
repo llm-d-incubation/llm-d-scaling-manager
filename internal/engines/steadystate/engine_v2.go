@@ -211,6 +211,9 @@ func (e *Engine) runAnalyzers(
 	// thresholds after it runs (buildNamedResult).
 	input := e.buildAnalyzerInput(ctx, modelID, namespace, replicaMetrics, config,
 		variantStates, variantMetadata, scaleTargets, variants, schedulerQueue, arrivalRate)
+	// Observe only: what the router scores, read from its series on the
+	// input (load_balance.go).
+	e.observeRouterPolicy(logger, namespace, modelID, input, now)
 
 	// Run saturation analyzer (always needed for PerReplicaCapacity).
 	baseResult, err := e.runSaturation(ctx, input)
@@ -815,6 +818,7 @@ func (e *Engine) pruneAnalyzerSeries(activeKeys map[string]bool) {
 	}
 	// Published before the model reached recordAnalyzerMetrics, so tracked
 	// apart from lastAnalyzerSeries.
+	e.retainModelInputs(activeKeys)
 	e.retainLoadBalance(activeKeys)
 	e.retainSettle(activeKeys)
 	e.retainRouting(activeKeys)
@@ -827,6 +831,7 @@ func (e *Engine) pruneAnalyzerSeries(activeKeys map[string]bool) {
 // Safe to call repeatedly — it empties its own bookkeeping, so subsequent idle
 // cycles are no-ops.
 func (e *Engine) evictAllAnalyzerSeries() {
+	e.retainModelInputs(nil)
 	for modelKey, state := range e.decodePacking {
 		e.metricsEmitter.DeleteDecodePackingForModel(state.namespace, state.modelID)
 		delete(e.decodePacking, modelKey)

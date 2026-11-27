@@ -260,7 +260,8 @@ func (t termPlan) at(itl, oldStep float64) (engine, hop float64) {
 // the prompt's own prefill: a refusal keeps them. Nothing that sets only a wait
 // is here: a floor has none.
 var floorFlags = []Flag{DecodeTermOmitted, DecodeStepSlopeAssumed, RouterHopAssumed, DecodeTermFloored, DecodeTermPrefixHits,
-	AssumedVP, VPLowerBound, VPAboveSlopeBound, VPFromPlateau, ExperimentalTTFT, VPScaledToPrompt, VPShapeMoved, AssumedPromptSpread}
+	AssumedVP, VPLowerBound, VPAboveSlopeBound, VPFromPlateau, ExperimentalTTFT, VPScaledToPrompt, VPShapeMoved, VPPromptNotCovered,
+	AssumedPromptSpread}
 
 // belowFloor is the refusal of a target at or under the floor, with the floor's
 // flags. Where the term's assumed parts alone put the floor over the target, it

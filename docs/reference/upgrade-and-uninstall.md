@@ -7,6 +7,11 @@ in.
 > Part of the [deployment guide](../../deploy/). Day-to-day checks are in
 > [After the install](operations.md); symptoms in [Troubleshooting](troubleshooting.md).
 
+Installed with kubectl from the one manifest? Its
+[upgrade and rollback](../guides/kubectl-install/README.md#upgrade-and-rollback) and
+[uninstall](../guides/kubectl-install/README.md#uninstall) are in its guide.
+This page covers the `smt`, release-file and checkout installs.
+
 ## Pin the version
 
 An install from a checkout of `main` deploys
@@ -19,20 +24,18 @@ production on it.
 Pin a release tag or a digest, and deploy with the manifests from the **same**
 release. An image older than the manifests crash-loops on flags it does not
 know. Releases are listed on the
-[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases);
-the current one is `v0.12.3`.
-A checked-out release deploys its own tag, so `IMG_TAG` below only makes that
-explicit. Each release's notes list its image digest; a digest names one build,
-and a tag could in principle be re-pushed.
+[Releases page](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases).
+Each release's notes list its image digest. A digest names one build, and a
+tag could in principle be re-pushed.
 
 ```bash
-git checkout v0.12.3
-make deploy-scaling-manager NAMESPACE=<namespace> IMG_TAG=v0.12.3
-# or by digest (v0.12.3's, from its release notes)
-make deploy-scaling-manager NAMESPACE=<namespace> \
-  IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:c6527a853298c5094e0af7428c911b1175bdb06e07ea901eaf94e0f08df8cffb
+CONTROLLER_VERSION=v0.13.1
+CONTROLLER_IMAGE=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:a61b2dcec9d0e4c6de1a6c5cb7aad1e5705e748f3646bf8ab7b88d25abb213d3
+git checkout "$CONTROLLER_VERSION"
+make deploy-scaling-manager NAMESPACE=<namespace> IMG="$CONTROLLER_IMAGE"
 # out-of-reach shape (the cluster admin runs it): the controller runs in llmsm-<namespace>
-NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> LLMSM_WATCH_NS=<namespace> IMG_TAG=v0.12.3
+NAMESPACE=<namespace> make deploy-scaling-manager LLMSM_NS=llmsm-<namespace> \
+  LLMSM_WATCH_NS=<namespace> IMG="$CONTROLLER_IMAGE"
 ```
 
 `IMG_TAG` sets the tag of the default `IMG`; `IMG` replaces the whole reference.
@@ -128,6 +131,120 @@ changed, and there is no compatibility path. Reinstall.
    ```
 3. Install from this tree and re-create what you need. Learned state, tuned
    policy, labels on namespaces and ScaledObject addresses are not carried over.
+
+### Upgrading from v0.13.0 to v0.13.1
+
+[Upgrade](#upgrade) as for any release. An existing install is unchanged: the
+controller's RBAC, settings and alerts are the same as in v0.13.0, and
+`make workload-patch` need not be run again.
+
+- **P/D verdicts and sizes can move.** On a P/D fleet whose prefill pods serve
+  part of the prompt from cache, v0.13.0's report priced the cached tokens as
+  computed at the load's shape, its default, and read the prefill knee low by
+  the cache hit. v0.13.1 nets the prompt by the prefill pods' own hit, so the
+  prefill knee rises, and a fleet v0.13.0 called UNDER-PROVISIONED, or sized
+  larger, can read as it serves. Aggregated fleets and a stated shape are
+  unchanged. On v0.13.0, `--shape measured` gives the right knee. A day plan's
+  buckets and a backtest's steps net the prompt the same way, so their sizes,
+  verdicts and figures move too.
+- **Recordings move forward only.** A learner recording or a capture made with
+  v0.13.1 keeps the router's request-processing histogram whenever the router
+  exports it, and a v0.13.0 `capacity-planner` refuses it with an unknown-field
+  error. Read it with the v0.13.1 planner, which reads every older recording.
+- **Backtests and the experimental models.** A backtest step is priced at its
+  own output spread; no flag gives the v0.13.0 figure back. With
+  `--experimental-ttft=v2`, the rank mixture prices with stratified service
+  moments by default; `--rank-mixture-stratified=false` prices the v0.13.0 way.
+- **More of the default model's answers move.** None has an opt-out.
+  - *Decode at light load.* The ITL floor is read at the number of sequences a
+    replica runs, so the TPOT mean, the decode knee, the admission wait and the
+    rate at a TPOT target move at light load. A TPOT target under v0.13.0's
+    floor is now answered instead of refused, flagged `ExtrapolatedBelowFloor`.
+  - *Long prompts.* The prompt spread is bounded by the engine's
+    `--max-model-len`, and the prefill imbalance is learned from pooled
+    minutes, so on a long-prompt fleet the rate at a TTFT target and the prefill
+    knee rise, often by a large factor. The controller's shadow TTFT uses the
+    same spread bound.
+  - *A lower-bound prefill knee* is floored only at work the pods held steady for
+    5 minutes, so it can read a little lower, flagged `ServedWorkUnsteady`.
+  - *Backtests* read the measured TPOT p90 and p95 from the router's and the
+    decode engines' histograms together, so TPOT scores and verdicts move.
+- **The in-cluster planner requests 1 CPU** (was 100m), and a request that
+  computes may run for 30 minutes. Behind an OpenShift Route or oauth-proxy,
+  raise their timeouts to `31m` as the in-cluster guide shows, or a day-long
+  recording's load is cut.
+- **The page** keeps the SLO targets, the safety margin, the request shape and
+  the assumed terms above the tabs, shared by every view. A saved link keeps
+  its values as assumptions.
+- **Two series gain a `learner` label.** For passive models, and for every
+  model while the utilization share plans in shadow, the slo analyzer now
+  also prices TTFT and TPOT with the capacity planner's v2 models
+  ([SLO analyzer v2 latency models](prometheus.md#slo-analyzer-v2-latency-models)).
+  `llmsm_slo_predicted_ttft_seconds` carries `learner="slo"` on the figure
+  v0.13.0 published and `learner="ttft-mixture"` on the v2 model's.
+  `llmsm_replicas_suggested` carries an empty `learner` on the analyzers'
+  own ask and `learner="ttft-mixture"` on the v2 model's would-be prefill
+  ask. A query that sums or joins either series without the label now
+  matches both: `sum by (variant_name) (llmsm_replicas_suggested)` counts a
+  passive model's prefill twice. Filter on `learner="slo"` and `learner=""`
+  for the v0.13.0 figures.
+- **The controller keeps up to 16 v2 windows**, about 15 MiB each for a large
+  P/D model, inside its 512 MiB memory limit.
+
+### Upgrading from v0.12.4 to v0.13.0
+
+[Upgrade](#upgrade) as for any release. An existing install is unchanged: `smt`,
+the existing release files and `make deploy-scaling-manager` install as in
+v0.12.4, the controller's RBAC, settings and alerts are the same, and
+`make workload-patch` need not be run again.
+
+- **A new install, opt-in.** The release also carries the kubectl install from
+  one manifest (`scaling-manager.yaml` and its companions, applied by
+  `scaling-manager-admin.sh` and `scaling-manager-owner.sh`). Its behaviour is
+  behind flags only that manifest sets. To move an existing install to it, see
+  [Install with kubectl, from one manifest](../guides/kubectl-install/).
+- **New controller metrics.** `llmsm_replicas_suggested`,
+  `llmsm_replicas_provided`, `llmsm_replicas_short`, `llmsm_replicas_borrowed`
+  and `llmsm_quota_remaining_after_suggested_gpus` appear with no change to
+  scaling. The `ResourceConstrained` Event states both numbers.
+- **Capacity planner verdicts and sizes can move.** Each has a flag that gives
+  the v0.12.4 figure back:
+  - `at-replicas` and `day-plan` judge and size at the p95 of the arrival rate
+    less its one-minute counting noise: `--load-statistic p95` or
+    `--size-for p95` for the old figure;
+  - the report judges at the traffic's own shape: `--shape measured` for the
+    old answer;
+  - an OVER-PROVISIONED verdict keeps decode at its error bound, and a shape
+    priced more than 20% lighter than the load reads NOT JUDGED.
+- **The page checks its accuracy only when asked** ("Check accuracy on this
+  recording"); it no longer runs the check after each load.
+- **The experimental models stay off by default.** A planner served with
+  `--experimental-ttft=v2 --experimental-tpot=v2` now also prices the page's
+  main view, its sizes and the growth row with them
+  ([the experimental models](../guides/capacity-planner/page-and-commands.md)).
+- **Recordings.** `capture` collects more optional series. Record with v0.13.0
+  tools for this planner.
+
+### Upgrading from v0.12.3 to v0.12.4
+
+[Upgrade](#upgrade) as for any release. Nothing in the controller changes: its
+RBAC, settings and alerts are as in v0.12.3, and `make workload-patch` need not
+be run again. The changes are in the capacity planner and the recording tools:
+
+- **Two experimental models, off by default.** `capacity-planner backtest`
+  takes `--experimental-ttft=v2` and `--experimental-tpot=v2`. Without the
+  flags every answer is byte for byte as in v0.12.3. With them, every figure the
+  models price is flagged and reads OUTSIDE VALIDATED REGION
+  ([the experimental models](../guides/capacity-planner/page-and-commands.md)).
+- **`capacity-planner serve` takes the same flags**, so a planner served to
+  people (for example in a cluster) uses the models for every backtest without
+  anyone switching them on. Add them to the StatefulSet's `args`
+  ([run it in a cluster](../guides/capacity-planner/in-cluster.md)).
+- **Recordings.** `capture` also saves the speculative-decoding acceptance per
+  draft position. A recording made with v0.12.4 tools loads in a v0.12.4
+  planner; record with v0.12.4 tools for this planner.
+- **Hiding names.** The export accepts recordings made with v0.12.3's capture,
+  which it refused before.
 
 ### Upgrading from v0.12.2 to v0.12.3
 

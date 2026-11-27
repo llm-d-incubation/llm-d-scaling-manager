@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "whatifSchema": "schema-v3",
-  "dayPlanId": "sha256:7a576ab6f7a424042d6bc76b6f1f50fdcfb0ad26687dc576f08fac627fd0fab2",
+  "dayPlanId": "sha256:fbb92641d008a1042019440dc124195df579a0ba00a64cc8a8a66391ac1ec890",
   "inputsId": "sha256:273982439b94fabac4555dd8d9408e900f40c912f397d57bfa091731dd41ca2e",
   "banner": "TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.",
   "from": "2026-11-06T02:15:00Z",
   "to": "2026-11-06T03:35:00Z",
   "step": 300,
-  "sizeFor": "p95",
+  "sizeFor": "p95-modulation",
   "sizeForSource": "default",
   "minRequests": 30,
   "lead": {
@@ -75,8 +75,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 2,
@@ -94,20 +99,28 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "over",
+      "scope": "decode only",
+      "measuredTTFT": 0.19868965517241383,
       "flags": [
         "RateFromDecodeRows",
         "FewCyclesForP95",
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -117,10 +130,11 @@
       "rate": {
         "mean": 17.35610477777778,
         "p95": 18.86,
-        "max": 19.04
+        "max": 19.04,
+        "p95Modulation": 18.788236988098582
       },
-      "sizedFor": "p95",
-      "sizedRate": 18.86,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 18.788236988098582,
       "shape": {
         "promptTokens": 7995.988997259266,
         "outputTokens": 200.01205292980535,
@@ -144,8 +158,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 2,
@@ -163,18 +182,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "match",
+      "scope": "decode only",
+      "measuredTTFT": 0.19525537323780912,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -184,10 +211,11 @@
       "rate": {
         "mean": 18.231,
         "p95": 19.02,
-        "max": 19.760000000000005
+        "max": 19.760000000000005,
+        "p95Modulation": 18.669331273506973
       },
-      "sizedFor": "p95",
-      "sizedRate": 19.02,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 18.669331273506973,
       "shape": {
         "promptTokens": 7998.423755525561,
         "outputTokens": 199.91038832852638,
@@ -211,8 +239,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 2,
@@ -230,18 +263,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "match",
+      "scope": "decode only",
+      "measuredTTFT": 0.19723316735224072,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -251,10 +292,11 @@
       "rate": {
         "mean": 24.040000000000003,
         "p95": 25.04,
-        "max": 25.22
+        "max": 25.22,
+        "p95Modulation": 24.79544225495477
       },
-      "sizedFor": "p95",
-      "sizedRate": 25.04,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 24.79544225495477,
       "shape": {
         "promptTokens": 8003.7044682068445,
         "outputTokens": 200.11736802595658,
@@ -278,8 +320,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 2,
@@ -297,18 +344,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "match",
+      "scope": "decode only",
+      "measuredTTFT": 0.19985416983138388,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -318,10 +373,11 @@
       "rate": {
         "mean": 24.653,
         "p95": 25.96,
-        "max": 28.52
+        "max": 28.52,
+        "p95Modulation": 25.809335961086617
       },
-      "sizedFor": "p95",
-      "sizedRate": 25.96,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 25.809335961086617,
       "shape": {
         "promptTokens": 8007.071089245529,
         "outputTokens": 200.21952149982536,
@@ -345,11 +401,16 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
-        "decode": 3,
+        "decode": 2,
         "atLeast": true
       },
       "hadLimit": {
@@ -364,18 +425,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "match",
+      "scope": "decode only",
+      "measuredTTFT": 0.25312244897959163,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -385,10 +454,11 @@
       "rate": {
         "mean": 30.399,
         "p95": 31.16,
-        "max": 31.54
+        "max": 31.54,
+        "p95Modulation": 30.399
       },
-      "sizedFor": "p95",
-      "sizedRate": 31.16,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 30.399,
       "shape": {
         "promptTokens": 8006.342285913271,
         "outputTokens": 199.9390916798532,
@@ -397,23 +467,28 @@
       },
       "status": "sized",
       "needed": {
-        "decode": 3,
+        "decode": 2,
         "atLeast": true
       },
       "limit": {
-        "value": 46.67586315183158,
+        "value": 31.117242101221052,
         "unit": "r/s",
         "band": {
-          "lo": 54.50164415157404,
-          "hi": 63.76814578715678
+          "lo": 36.33442943438269,
+          "hi": 42.51209719143785
         },
         "boundBy": [
           "band top"
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -431,18 +506,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
-      "verdict": "under",
+      "verdict": "match",
+      "scope": "decode only",
+      "measuredTTFT": 0.3346247156937074,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -452,10 +535,11 @@
       "rate": {
         "mean": 31.236000000000008,
         "p95": 32.34,
-        "max": 32.38
+        "max": 32.38,
+        "p95Modulation": 31.236000000000008
       },
-      "sizedFor": "p95",
-      "sizedRate": 32.34,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 31.236000000000008,
       "shape": {
         "promptTokens": 8000.564472433626,
         "outputTokens": 200.01533076327047,
@@ -479,8 +563,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -498,18 +587,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.34090432503276547,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -519,10 +616,11 @@
       "rate": {
         "mean": 33.483000000000004,
         "p95": 34.86,
-        "max": 35.08
+        "max": 35.08,
+        "p95Modulation": 33.483000000000004
       },
-      "sizedFor": "p95",
-      "sizedRate": 34.86,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 33.483000000000004,
       "shape": {
         "promptTokens": 8007.820054670675,
         "outputTokens": 200.08083437867163,
@@ -546,8 +644,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -565,18 +668,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.35105530187721967,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -586,10 +697,11 @@
       "rate": {
         "mean": 34.306999999999995,
         "p95": 35.22,
-        "max": 35.72
+        "max": 35.72,
+        "p95Modulation": 34.306999999999995
       },
-      "sizedFor": "p95",
-      "sizedRate": 35.22,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 34.306999999999995,
       "shape": {
         "promptTokens": 7991.899261214301,
         "outputTokens": 200.02606675958577,
@@ -613,8 +725,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -632,18 +749,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.36140277194456116,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -653,10 +778,11 @@
       "rate": {
         "mean": 35.760000000000005,
         "p95": 36.76,
-        "max": 36.800000000000004
+        "max": 36.800000000000004,
+        "p95Modulation": 35.760000000000005
       },
-      "sizedFor": "p95",
-      "sizedRate": 36.76,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 35.760000000000005,
       "shape": {
         "promptTokens": 7994.09191645955,
         "outputTokens": 199.9628127494847,
@@ -680,8 +806,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -699,18 +830,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.36908634222919934,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -720,10 +859,11 @@
       "rate": {
         "mean": 36.185,
         "p95": 37.62,
-        "max": 37.800000000000004
+        "max": 37.800000000000004,
+        "p95Modulation": 37.17977721993476
       },
-      "sizedFor": "p95",
-      "sizedRate": 37.62,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 37.17977721993476,
       "shape": {
         "promptTokens": 7994.045867060845,
         "outputTokens": 199.9424115555136,
@@ -747,8 +887,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -766,18 +911,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.3709067769646835,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -787,10 +940,11 @@
       "rate": {
         "mean": 38.78300000000001,
         "p95": 39.6,
-        "max": 40.34
+        "max": 40.34,
+        "p95Modulation": 38.78300000000001
       },
-      "sizedFor": "p95",
-      "sizedRate": 39.6,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 38.78300000000001,
       "shape": {
         "promptTokens": 8000.486746595175,
         "outputTokens": 199.98161694910792,
@@ -814,8 +968,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -833,18 +992,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.3846257374631269,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -854,10 +1021,11 @@
       "rate": {
         "mean": 38.419000000000004,
         "p95": 40.02,
-        "max": 41.52
+        "max": 41.52,
+        "p95Modulation": 39.463120506800344
       },
-      "sizedFor": "p95",
-      "sizedRate": 40.02,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 39.463120506800344,
       "shape": {
         "promptTokens": 7998.371272048702,
         "outputTokens": 199.9377494039078,
@@ -881,8 +1049,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -900,18 +1073,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.38437288809381837,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -921,10 +1102,11 @@
       "rate": {
         "mean": 41.548,
         "p95": 42.660000000000004,
-        "max": 42.660000000000004
+        "max": 42.660000000000004,
+        "p95Modulation": 41.73254708294799
       },
-      "sizedFor": "p95",
-      "sizedRate": 42.660000000000004,
+      "sizedFor": "p95-modulation",
+      "sizedRate": 41.73254708294799,
       "shape": {
         "promptTokens": 8000.744564045814,
         "outputTokens": 200.03456870153158,
@@ -948,8 +1130,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -967,18 +1154,26 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.5906832871652814,
       "flags": [
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -1015,8 +1210,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 3,
@@ -1034,19 +1234,27 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
+      "measuredTTFT": 0.5442519019442096,
       "flags": [
         "FewCyclesForP95",
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     },
     {
@@ -1083,8 +1291,13 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "held": {
         "decode": 1,
@@ -1102,20 +1315,28 @@
         ],
         "flags": [
           "AssumedShape",
-          "ExtrapolatedFill"
-        ]
+          "ExtrapolatedFill",
+          "BatchBeyondFit"
+        ],
+        "batchBeyondFit": {
+          "priced": 111,
+          "fitted": 85
+        }
       },
       "actual": {
         "prefill": 2,
         "decode": 2
       },
       "verdict": "over",
+      "scope": "decode only",
+      "measuredTTFT": 0.5616247755834829,
       "flags": [
         "RateFromDecodeRows",
         "FewCyclesForP95",
         "PrefillNotPriced",
         "AssumedShape",
-        "ExtrapolatedFill"
+        "ExtrapolatedFill",
+        "BatchBeyondFit"
       ]
     }
   ],
@@ -1144,6 +1365,7 @@
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
       "sized": 9,
       "unmet": 0
     },
@@ -1171,6 +1393,7 @@
         "decode": 2
       },
       "verdict": "under",
+      "scope": "decode only",
       "sized": 7,
       "unmet": 0
     }
@@ -1189,7 +1412,7 @@
       "atLeast": true
     },
     "neededReplicaHours": {
-      "decode": 3.3333333333333335
+      "decode": 3.25
     },
     "hadReplicaHours": {
       "decode": 2.666666666666666
@@ -1199,7 +1422,7 @@
       "decode": 2.666666666666666
     },
     "heldReplicaHours": {
-      "decode": 3.3930555555555557
+      "decode": 3.3097222222222222
     },
     "gpusPerReplica": {
       "prefill": 1,
@@ -1211,6 +1434,7 @@
       "2026-11-06T03:00:00Z"
     ],
     "overHours": [],
+    "decodeOverHours": [],
     "refusedHours": [],
     "counts": {
       "sized": 16,
@@ -1218,19 +1442,22 @@
       "refused": 0,
       "tooLittleData": 0,
       "noData": 0,
-      "under": 10,
+      "under": 9,
       "over": 2,
-      "match": 4,
+      "match": 5,
       "sizedForMean": 3,
-      "sizedForP95": 13,
+      "sizedForP95": 0,
       "sizedForMax": 0,
-      "prefillNotPriced": 16
+      "sizedForP95Modulation": 13,
+      "prefillNotPriced": 16,
+      "measuredTTFT": 16,
+      "measuredTTFTOver": 16
     }
   },
   "searched": 5,
   "notes": [
     "Steady state: each bucket is sized as if its rate held. A replica must be Ready when its bucket starts, so it starts one lead time before (prefill 122 s learned, decode 107 s learned): held is each role's most need over the bucket and every bucket that starts within its lead after it ends, and the held replica-hours count each scale-up's replicas from one lead before their bucket. The verdicts judge the need, not the held fleet.",
-    "Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).",
+    "Each bucket is sized for the p95 less counting noise (the p95 less a steady one-minute rate's Poisson spread, var - share x mean/60, the share of it readings closer than a minute hold) of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).",
     "Needed is the fewest replicas whose fleet limit, at the SLO and headroom 0.85, reaches the rate: the fewest in all, ties to fewer decode (POST /v1/size's search, whatifapi.SmallestFleet). Another mix may serve the rate too. The fleet the bucket had is judged as one fleet at the same rate: under when its limit falls short, over when one replica fewer of either role would still serve it.",
     "An hour's need, and the peak, is a fleet that holds every sized bucket in it, priced again at each bucket's rate and shape: the cheapest of the buckets' own fleets that holds them all, in the order a bucket's need is chosen, else each role's most over them. It is not searched for the cheapest: a smaller mix may hold them too. The busiest bucket's own fleet is given beside it (busiest); it need not hold a bucket of a lower rate but longer requests.",
     "A bucket with fewer than 30 requests is not sized (too little data); a bucket no cycle fell in has no data.",

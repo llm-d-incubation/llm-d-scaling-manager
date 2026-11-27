@@ -1,4 +1,4 @@
-Day plan for ns/model-02, 2026-11-01 00:00 to 2026-11-02 00:00 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (default; the mean where a bucket holds fewer than 20 cycles)
+Day plan for ns/model-02, 2026-11-01 00:00 to 2026-11-02 00:00 UTC, buckets of 5m0s, each sized for the p95 of its cycle rates (request; the mean where a bucket holds fewer than 20 cycles)
 scale-up lead: prefill 1m7s (learned), decode 1m8s (learned); held = the need and the replicas starting in the bucket for the buckets after it
 SLO: TTFT p95 500ms, TPOT mean 4ms; headroom 0.85. TTFT model UNVALIDATED. Not a bound, and which way it errs depends on the prompt spread. At the assumed cv 2 (flags AssumedPromptSpread, SpreadBeyondProcessorSharing) it reads high: over the router at 13 of 14 points, worst 3.15x at p90 and 4.13x at p95. At the spread actually sent it reads low: under at 9 of 14, worst 33% under.
 
@@ -37,7 +37,7 @@ replica-hours held with the scale-up lead, each scale-up's replicas from one lea
 had over every bucket with data: 47.00 prefill + 70.50 decode replica-hours, 117.50 GPU-hours (GPUs per replica: 1 prefill, 1 decode)
 hours under (SLO risk): 14:00, 15:00, 16:00, 17:00
 hours over (waste): 00:00, 01:00, 02:00, 03:00, 04:00, 05:00, 06:00, 07:00, 08:00, 09:00, 10:00, 11:00, 12:00, 13:00, 18:00, 19:00, 20:00, 21:00, 22:00, 23:00
-flags: UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeTermOmitted, RouterHopAssumed, SpreadBeyondProcessorSharing, FlowControlInferredOff, HeldByDecodeAdmission, AssumedShape, OutputSpreadUnread, BatchBeyondFit, AssumedPoissonArrivals, AssumedImbalance
+flags: UnvalidatedTTFT, AssumedVP, AssumedPromptSpread, TransferOmitted, DecodeTermOmitted, RouterHopAssumed, SpreadBeyondProcessorSharing, FlowControlInferredOff, HeldByDecodeAdmission, AssumedShape, OutputSpreadUnread, AssumedPoissonArrivals, AssumedImbalance
 note: Window gaps: 5760 cycles expected, 5640 present (2% missing), largest gap 30m0s from 02:59 to 03:30Z. A bucket inside a gap has no data, and one a gap cuts into is sized from the cycles present: a gap over the busiest hours sizes them low.
 note: Steady state: each bucket is sized as if its rate held. A replica must be Ready when its bucket starts, so it starts one lead time before (prefill 67 s learned, decode 68 s learned): held is each role's most need over the bucket and every bucket that starts within its lead after it ends, and the held replica-hours count each scale-up's replicas from one lead before their bucket. The verdicts judge the need, not the held fleet.
 note: Each bucket is sized for the p95 of its cycles' rates. A p95 needs 20 cycles in the bucket; with fewer the bucket is sized for its mean, which is less conservative (FewCyclesForP95).

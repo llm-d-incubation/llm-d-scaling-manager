@@ -79,6 +79,12 @@ const (
 	// is written with the certificate and removed once KEDA presents it, by
 	// whichever replica sees that.
 	PendingAnnotation = "scaling-manager.llmd.ai/keda-copy-pending"
+	// CAFilledAnnotation, on the CA Secret under Ensurer.Names, says the
+	// controller filled it once, by a copy from an earlier install or by
+	// minting (only with Ensurer.MigrateFrom set). A CA emptied after that is
+	// a rotation: a new CA is minted, never the earlier install's copied
+	// back. The rotate command empties the data and keeps the annotation.
+	CAFilledAnnotation = "scaling-manager.llmd.ai/ca-filled"
 	// ServiceCAConfigMap holds the OpenShift service CA bundle in every
 	// namespace, under ServiceCAKey: what KEDA must trust when the service CA
 	// issued the serving certificate.
@@ -183,6 +189,104 @@ type Ensurer struct {
 	ClientSAN string
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Names are the three Secrets; nil is LegacyNames, the kubernetes.io/tls
+	// placeholders every install but the one manifest makes.
+	Names *SecretNames
+	// MigrateFrom, when set, names an earlier install's three Secrets: while
+	// the CA under Names is empty and was never filled (CAFilledAnnotation),
+	// a CA and leaves there that are the scaling manager's are copied across
+	// rather than a new CA minted, so KEDA, which keeps the CA of its first
+	// connection, stays connected.
+	MigrateFrom *SecretNames
+}
+
+// SecretNames names the scaler's three certificate Secrets.
+type SecretNames struct {
+	CA, Serving, Client string
+}
+
+// LegacyNames are the kubernetes.io/tls Secrets of the release files, smt
+// and make: a re-apply of a file holding them empties them.
+var LegacyNames = SecretNames{CA: CASecretName, Serving: ServingSecretName, Client: ClientSecretName}
+
+// OpaqueNames are the Opaque Secrets with no data the one manifest
+// (scaling-manager.yaml) carries, which a server-side re-apply keeps. New
+// names, because the type of an existing Secret cannot change.
+var OpaqueNames = SecretNames{CA: "scaling-manager-scaler-ca", Serving: "scaling-manager-scaler-serving",
+	Client: "scaling-manager-scaler-client"}
+
+func (e *Ensurer) names() SecretNames {
+	if e.Names != nil {
+		return *e.Names
+	}
+	return LegacyNames
+}
+
+// migrate copies an earlier install's certificates (MigrateFrom) into the
+// Secrets under Names while the CA there is empty: each pair whose new
+// Secret is an empty placeholder of ours and whose old one is ours and holds
+// a certificate. It returns the Secrets it filled. An absent old Secret is
+// skipped, and a new CA is then minted as on a fresh install. One it may not
+// read is an error, never absent: no new CA is minted over one KEDA trusts.
+func (e *Ensurer) migrate(ctx context.Context) ([]string, error) {
+	if e.MigrateFrom == nil {
+		return nil, nil
+	}
+	to, from := e.names(), *e.MigrateFrom
+	newCA, err := e.get(ctx, to.CA)
+	if err != nil || ownerOf(newCA) != ownerUs || !empty(newCA) {
+		return nil, err
+	}
+	if _, filled := newCA.Annotations[CAFilledAnnotation]; filled {
+		// Emptied after the controller filled it: a rotation.
+		return nil, nil
+	}
+	oldCA, err := e.get(ctx, from.CA)
+	if err != nil || ownerOf(oldCA) != ownerUs || empty(oldCA) {
+		return nil, err
+	}
+	var copied []string
+	// The leaves first and the CA last: a pass that stops halfway leaves the
+	// new CA empty, and the next pass copies again.
+	for _, p := range [][2]string{{from.Serving, to.Serving}, {from.Client, to.Client}, {from.CA, to.CA}} {
+		src, err := e.get(ctx, p[0])
+		if err != nil {
+			return copied, err
+		}
+		dst, err := e.get(ctx, p[1])
+		if err != nil {
+			return copied, err
+		}
+		if ownerOf(src) != ownerUs || empty(src) || ownerOf(dst) != ownerUs || !empty(dst) {
+			continue
+		}
+		if dst.Data == nil {
+			dst.Data = map[string][]byte{}
+		}
+		for _, k := range []string{corev1.TLSCertKey, corev1.TLSPrivateKeyKey, corev1.ServiceAccountRootCAKey} {
+			dst.Data[k] = src.Data[k]
+		}
+		if v, ok := src.Annotations[PendingAnnotation]; ok {
+			if dst.Annotations == nil {
+				dst.Annotations = map[string]string{}
+			}
+			dst.Annotations[PendingAnnotation] = v
+		}
+		if p[1] == to.CA {
+			if dst.Annotations == nil {
+				dst.Annotations = map[string]string{}
+			}
+			dst.Annotations[CAFilledAnnotation] = "copied from " + p[0]
+		}
+		if err := e.Writer.Update(ctx, dst); err != nil {
+			if apierrors.IsConflict(err) {
+				return copied, errRace
+			}
+			return copied, fmt.Errorf("copying Secret %s into %s in %s: %w", p[0], p[1], e.Namespace, err)
+		}
+		copied = append(copied, p[0]+" -> "+p[1])
+	}
+	return copied, nil
 }
 
 // Outcome is what one Ensure pass found and did.
@@ -209,6 +313,9 @@ type Outcome struct {
 	Pending string
 	// Adopted lists the Secrets kept as they were.
 	Adopted []string
+	// Migrated lists the Secrets this pass copied from an earlier install,
+	// "<from> -> <to>" (Ensurer.MigrateFrom).
+	Migrated []string
 	// Problems are what keeps the scaler from mutual TLS, or will: each says
 	// what is wrong and what to run. Empty when nothing needs a person.
 	Problems []string
@@ -258,19 +365,23 @@ func (e *Ensurer) tlsAddressHost() string { return ServiceName + "." + e.Namespa
 
 func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 	now := e.now()
-	caSecret, err := e.get(ctx, CASecretName)
+	migrated, err := e.migrate(ctx)
 	if err != nil {
 		return nil, err
 	}
-	servingSecret, err := e.get(ctx, ServingSecretName)
+	caSecret, err := e.get(ctx, e.names().CA)
 	if err != nil {
 		return nil, err
 	}
-	clientSecret, err := e.get(ctx, ClientSecretName)
+	servingSecret, err := e.get(ctx, e.names().Serving)
 	if err != nil {
 		return nil, err
 	}
-	o := &Outcome{}
+	clientSecret, err := e.get(ctx, e.names().Client)
+	if err != nil {
+		return nil, err
+	}
+	o := &Outcome{Migrated: migrated}
 	// cert-manager renews what it issues and would overwrite a write here,
 	// and a CA minted beside its leaves would sign nothing they chain to:
 	// when it manages any of the three, nothing is written.
@@ -283,13 +394,17 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 	var ca *keyPair
 	switch caOwner := ownerOf(caSecret); {
 	case caOwner == ownerAbsent:
-		o.Problems = append(o.Problems, e.placeholderProblem(CASecretName))
+		o.Problems = append(o.Problems, e.placeholderProblem(e.names().CA))
 		return o, nil
 	case caOwner == ownerUs && empty(caSecret):
 		if ca, err = mintCA(e.Namespace, now); err != nil {
 			return nil, fmt.Errorf("minting the scaler CA: %w", err)
 		}
-		if err := e.write(ctx, caSecret, ca, ca.certPEM, nil); err != nil {
+		var filled map[string]string
+		if e.MigrateFrom != nil {
+			filled = map[string]string{CAFilledAnnotation: "minted"}
+		}
+		if err := e.write(ctx, caSecret, ca, ca.certPEM, filled); err != nil {
 			return nil, err
 		}
 		o.CAMinted = true
@@ -302,14 +417,14 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 			o.Problems = append(o.Problems, fmt.Sprintf(
 				"Secret %s holds no usable CA (%v). The controller never replaces an existing CA: KEDA keeps the CA it first "+
 					"connected with until its operator restarts. To have a new one minted: %s",
-				CASecretName, err, e.rotateCommand()))
+				e.names().CA, err, e.rotateCommand()))
 			return o, nil
 		}
-		o.Adopted = append(o.Adopted, CASecretName)
+		o.Adopted = append(o.Adopted, e.names().CA)
 		if !ca.cert.NotAfter.After(now.Add(RenewBefore)) {
 			o.Problems = append(o.Problems, fmt.Sprintf(
 				"the scaler CA (Secret %s) expires %s. The controller never rotates it by itself. To rotate it: %s",
-				CASecretName, ca.cert.NotAfter.UTC().Format(time.RFC3339), e.rotateCommand()))
+				e.names().CA, ca.cert.NotAfter.UTC().Format(time.RFC3339), e.rotateCommand()))
 		}
 	default:
 		// Someone else's CA: their certificates too. Serve them if they are
@@ -321,12 +436,12 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 	// The serving certificate.
 	switch ownerOf(servingSecret) {
 	case ownerAbsent:
-		o.Problems = append(o.Problems, e.placeholderProblem(ServingSecretName))
+		o.Problems = append(o.Problems, e.placeholderProblem(e.names().Serving))
 	case ownerUs:
 		leaf, why := e.keep(servingSecret, ca, e.servingDNSNames(), x509.ExtKeyUsageServerAuth, false, now)
 		if why == "" {
 			o.Serving = leaf
-			o.Adopted = append(o.Adopted, ServingSecretName)
+			o.Adopted = append(o.Adopted, e.names().Serving)
 			break
 		}
 		if leaf, err = issueLeaf(ca, "llmsm-external-scaler."+e.Namespace+".svc", e.servingDNSNames(),
@@ -343,20 +458,20 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 			o.Problems = append(o.Problems, fmt.Sprintf(
 				"Secret %s is %s and not usable (%v); the controller does not overwrite it. Replace it with the placeholder "+
 					"and the controller issues one: kubectl delete secret %s -n %s && %s",
-				ServingSecretName, ownerOf(servingSecret), err, ServingSecretName, e.Namespace, e.placeholderCommand(ServingSecretName)))
+				e.names().Serving, ownerOf(servingSecret), err, e.names().Serving, e.Namespace, e.placeholderCommand(e.names().Serving)))
 		}
 	}
 
 	// KEDA's client certificate.
 	switch ownerOf(clientSecret) {
 	case ownerAbsent:
-		o.Problems = append(o.Problems, e.placeholderProblem(ClientSecretName))
+		o.Problems = append(o.Problems, e.placeholderProblem(e.names().Client))
 	case ownerUs:
 		leaf, why := e.keep(clientSecret, ca, []string{e.ClientSAN}, x509.ExtKeyUsageClientAuth, true, now)
 		if why == "" {
 			o.Client = leaf.cert
 			o.Pending = clientSecret.Annotations[PendingAnnotation]
-			o.Adopted = append(o.Adopted, ClientSecretName)
+			o.Adopted = append(o.Adopted, e.names().Client)
 			break
 		}
 		// The CA KEDA trusts changes only when the certificate it holds does
@@ -380,7 +495,7 @@ func (e *Ensurer) ensureOnce(ctx context.Context) (*Outcome, error) {
 			"Secret %s is %s; the controller does not overwrite it, and KEDA's copy must come from it. "+
 				"If it is not KEDA's client certificate for this scaler, replace it with the placeholder and the controller issues one: "+
 				"kubectl delete secret %s -n %s && %s",
-			ClientSecretName, ownerOf(clientSecret), ClientSecretName, e.Namespace, e.placeholderCommand(ClientSecretName)))
+			e.names().Client, ownerOf(clientSecret), e.names().Client, e.Namespace, e.placeholderCommand(e.names().Client)))
 	}
 	return o, nil
 }
@@ -466,21 +581,21 @@ func (e *Ensurer) external(ctx context.Context, o *Outcome, caSecret, servingSec
 	if err != nil {
 		o.Problems = append(o.Problems, fmt.Sprintf(
 			"the scaler TLS Secrets are %s, so the controller writes none of them, and Secret %s holds no usable CA certificate (%v)",
-			caOwner, CASecretName, err))
+			caOwner, e.names().CA, err))
 		return o, nil
 	}
 	if clientSecret == nil || !sameCert(clientSecret.Data[corev1.ServiceAccountRootCAKey], caCert) {
 		o.Problems = append(o.Problems, fmt.Sprintf(
 			"the scaler TLS Secrets are %s, so the controller writes none of them, and Secret %s does not carry the CA of Secret %s "+
-				"as its ca.crt, which is what KEDA's copy trusts", caOwner, ClientSecretName, CASecretName))
+				"as its ca.crt, which is what KEDA's copy trusts", caOwner, e.names().Client, e.names().CA))
 		return o, nil
 	}
 	o.CA = caCert
-	o.Adopted = append(o.Adopted, CASecretName, ClientSecretName)
+	o.Adopted = append(o.Adopted, e.names().CA, e.names().Client)
 	if err := e.serveExternal(ctx, o, servingSecret, caCert, clientSecret.Data[corev1.ServiceAccountRootCAKey], now); err != nil {
 		o.Problems = append(o.Problems, fmt.Sprintf(
 			"the scaler TLS Secrets are %s, so the controller writes none of them, and Secret %s is not usable (%v)",
-			caOwner, ServingSecretName, err))
+			caOwner, e.names().Serving, err))
 	}
 	return o, nil
 }
@@ -557,7 +672,7 @@ func (e *Ensurer) write(ctx context.Context, cur *corev1.Secret, pair *keyPair, 
 // holds the certificate with fingerprint presented: KEDA presented it, so its
 // copy is in place.
 func (e *Ensurer) ClearPending(ctx context.Context, presented string) error {
-	s, err := e.get(ctx, ClientSecretName)
+	s, err := e.get(ctx, e.names().Client)
 	if err != nil || s == nil {
 		return err
 	}
@@ -571,7 +686,7 @@ func (e *Ensurer) ClearPending(ctx context.Context, presented string) error {
 	next := s.DeepCopy()
 	delete(next.Annotations, PendingAnnotation)
 	if err := e.Writer.Update(ctx, next); err != nil && !apierrors.IsConflict(err) {
-		return fmt.Errorf("updating Secret %s in %s: %w", ClientSecretName, e.Namespace, err)
+		return fmt.Errorf("updating Secret %s in %s: %w", e.names().Client, e.Namespace, err)
 	}
 	return nil
 }
@@ -585,7 +700,10 @@ func (e *Ensurer) placeholderProblem(name string) string {
 // placeholderCommand creates the empty placeholder for Secret name, as
 // PlaceholderFile does.
 func (e *Ensurer) placeholderCommand(name string) string {
-	role := map[string]string{CASecretName: "ca", ServingSecretName: "serving", ClientSecretName: "client"}[name]
+	if e.Names != nil && *e.Names == OpaqueNames {
+		return "kubectl apply --server-side -f scaling-manager.yaml   # the manifest holds it, Opaque with no data"
+	}
+	role := map[string]string{e.names().CA: "ca", e.names().Serving: "serving", e.names().Client: "client"}[name]
 	return fmt.Sprintf("kubectl create secret generic %s -n %s --type=kubernetes.io/tls --from-literal=tls.crt= "+
 		"--from-literal=tls.key= --from-literal=ca.crt= && kubectl label secret %s -n %s %s=%s app.kubernetes.io/part-of=scaling-manager",
 		name, e.Namespace, name, e.Namespace, OwnerLabel, role)
@@ -595,7 +713,7 @@ func (e *Ensurer) placeholderCommand(name string) string {
 func (e *Ensurer) rotateCommand() string {
 	return fmt.Sprintf("kubectl patch secret %s -n %s --type merge -p '{\"data\":{\"tls.crt\":\"\",\"tls.key\":\"\",\"ca.crt\":\"\"}}' ; "+
 		"the controller mints a new CA and certificates into it within its check interval and then says how to wire KEDA "+
-		"to them (scalerTLSAction in ConfigMap scaling-manager-controller-status)", CASecretName, e.Namespace)
+		"to them (scalerTLSAction in ConfigMap scaling-manager-controller-status)", e.names().CA, e.Namespace)
 }
 
 // Fingerprint is the SHA-256 of a certificate's DER, in hex.

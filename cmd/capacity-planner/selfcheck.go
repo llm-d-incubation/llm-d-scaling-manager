@@ -55,7 +55,7 @@ func (f *answerFlags) foldFits(decodeVariant, prefillVariant string) []whatifapi
 	for c, st := range f.folds {
 		out = append(out, whatifapi.FoldFit{Cycle: c, At: st.At, Pricer: &servedState{st: st, decodeVariant: decodeVariant,
 			prefillVariant: prefillVariant, hint: f.hintSource(), imbalanceAcrossCounts: f.imbalanceAcrossCounts, loadAwareRouter: f.loadAwareRouter,
-			experimentalTTFT: f.experimentalTTFT}})
+			experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}})
 	}
 	return out
 }
@@ -81,7 +81,19 @@ func (f *answerFlags) checkRecording(ctx context.Context, st *learnreplay.State,
 			Folds: []whatifapi.SelfCheckFold{}, Checks: []whatifapi.SelfCheckRule{}}
 		return
 	}
-	f.checked = whatifapi.SelfCheckOf(ctx, res, whatifapi.SelfCheckInfo{PlannerVersion: selfCheckVersion(), Stated: stated})
+	ci := whatifapi.SelfCheckInfo{PlannerVersion: selfCheckVersion(), Stated: stated}
+	if f.tpotDistribution {
+		// The answer prices its TPOT percentiles with the experimental
+		// model: so does the self-check, on the decode series it fits on.
+		if err := decodeSeriesFrom(src.open, res); err != nil {
+			f.checked = &whatifapi.SelfCheck{Status: whatifapi.SelfCheckNotRun, Why: err.Error(), Line: "Self-check not run: " + err.Error() + ".",
+				Folds: []whatifapi.SelfCheckFold{}, Checks: []whatifapi.SelfCheckRule{}}
+			return
+		}
+		res.Engine.DecodeSlots, res.Engine.SpecTokens = decodeEngineOf(res)
+		ci.TPOTModel = f.tpotModel
+	}
+	f.checked = whatifapi.SelfCheckOf(ctx, res, ci)
 	f.checked.Seconds = time.Since(t0).Seconds()
 }
 
@@ -145,6 +157,15 @@ func (f *answerFlags) stated() (*whatifapi.Stated, error) {
 	// learn V_P from the plateau too.
 	if f.vpPlateau {
 		st.Replayed, st.Outside = append(st.Replayed, "--"+vpPlateauFlag), true
+	}
+	if f.hitAtCount {
+		st.Replayed = append(st.Replayed, "--"+hitAtCountFlag)
+	}
+	if f.vpServiceLine {
+		st.Replayed, st.Outside = append(st.Replayed, "--"+vpServiceLineFlag), true
+	}
+	if f.fLoadCurve {
+		st.Replayed, st.Outside = append(st.Replayed, "--"+fLoadCurveFlag), true
 	}
 	if f.experimentalTTFT {
 		st.Replayed, st.Outside = append(st.Replayed, "--"+experimentalTTFTFlag), true

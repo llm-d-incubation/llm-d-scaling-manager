@@ -49,10 +49,42 @@ type Resolved struct {
 	// self-check stamps an issue with.
 	Folds          []FoldFit
 	PlannerVersion string
+	// Mixture is each cycle as the experimental rank-mixture TTFT model
+	// reads it, Mixture[i] the cycle of Series[i]
+	// (learnreplay.MixtureSeriesFrom); nil unless that model was asked for
+	// (BacktestRequest.TTFTModel).
+	Mixture []whatif.MixtureCycle
+	// Decode is each cycle as the experimental TPOT distribution reads it,
+	// Decode[i] the cycle of Series[i] (learnreplay.DecodeSeriesFrom); nil
+	// unless that model was asked for (BacktestRequest.TPOTModel).
+	Decode []whatif.DecodeCycle
+	// TPOTModel is the experimental TPOT distribution Decode was read for
+	// (whatif.TPOTRenewalLognormal or whatif.TPOTPerLengthMixture; "" the
+	// former), what a day plan and at-replicas fit on it.
+	TPOTModel string
+	// Engine is the engines' flags those models read, as the source gives
+	// them; zero where neither model was asked for. A backtest request that
+	// does not state them takes the fit's.
+	Engine EngineSlots
+	// TTFTModel is how a caller outside a server fits the TTFT model on
+	// Mixture (DayPlan): the zero value is v2 at its defaults.
+	TTFTModel TTFTModelOptions
+	// TPOTMinFitSteps is the fewest fit steps the TPOT distribution fits on
+	// for that caller (DayPlan), 0 MinTPOTDistFitSteps.
+	TPOTMinFitSteps int
 	// Bytes is an estimate of the memory the entry keeps alive (the Pricer,
 	// the Series and the Inputs), its weight in the inputs cache
 	// (Config.MaxInputsBytes); 0 weighs nothing.
 	Bytes int
+}
+
+// EngineSlots is what the experimental backtest models read of the engines'
+// flags: the prefill and decode engines' max-num-seqs (PrefillSlots as the
+// prompts a prefill rank runs at once: 1 without chunked prefill) and the
+// decode engine's num_speculative_tokens; 0 not read (or no speculative
+// decoding).
+type EngineSlots struct {
+	PrefillSlots, DecodeSlots, SpecTokens int
 }
 
 // Pricer builds the fleet a scenario prices. It must be safe to call from
@@ -72,14 +104,32 @@ type Knobs struct {
 	// of the observed ones (the CLI's --assume-input-tokens and
 	// --assume-output-tokens, flagged AssumedShape); 0 is the observed one.
 	PromptTokens, OutputTokens float64
+	// PromptTokensRead says PromptTokens is a whole prompt read from the
+	// source's own cycles (a day plan's bucket, a backtest's step), not
+	// stated: its hit is then the source's too, and on a P/D fleet the
+	// prefill pods' computed-token hit nets it, as it nets a PrefixHit read
+	// from the load's cycles (PrefixHitRead). The decode rows' prefix-cache
+	// hit is not a hit of the prefill pods: netted by it, the prompt their
+	// caches served was priced as computed.
+	PromptTokensRead bool
 	// PrefixHit is a stated prefix-cache hit rate in [0, 1), nil the
 	// observed one (flagged AssumedShape).
 	PrefixHit *float64
 	// PrefixHitRead says PrefixHit was read from the source (the load's
-	// cycles, ReportShapeAsk.Load), not stated: a computed-token hit replaces
-	// it where the replay turned slo.SwitchTTFTComputedHit on, and a stated
-	// one governs.
+	// cycles, ReportShapeAsk.Load), not stated: on a P/D fleet the prefill
+	// pods' computed-token hit replaces it, with slo.SwitchTTFTComputedHit on
+	// or off, and a stated one governs.
 	PrefixHitRead bool
+	// PrefillComputedTokens is the prompt the prefill pods computed a
+	// request, read over the same cycles as PromptTokens (a backtest's
+	// step), off the prefill pods' rows where PromptTokens is read off the
+	// decode rows; 0 is none. It moves a figure only where the replay turned
+	// slo.SwitchTTFTPrefixAttention on: the prefill work is then this
+	// prompt, and PromptTokens less it is the cached context its attention
+	// spans (whatif.Prefill.CachedContextRead). PrefixHit is not used for
+	// it: that hit nets the decode variant's prompt too, with the switch off
+	// as on.
+	PrefillComputedTokens float64
 	// CachedTokenCost is phi, the cost of a cached prompt token, priced in
 	// place of the one the pricer fitted (CachedTokenCost); nil is the
 	// pricer's own. It moves a figure only where the replay turned
@@ -95,7 +145,13 @@ type Knobs struct {
 	// Assume.PromptCV, and where the replay did not turn on
 	// slo.SwitchTTFTPromptSupport.
 	PromptMaxRatio float64
-	ArrivalCV2     *float64
+	// OutputDispersion is the spread of the output lengths, D =
+	// E[O^2]/E[O]^2 (shape.Dispersion), that a backtest step's decode rows
+	// read, priced in place of the fit's where the replay turned
+	// saturation.SwitchBacktestStepOutputDispersion on (the planner's
+	// default); 0 is the fit's. No flag sets it.
+	OutputDispersion float64
+	ArrivalCV2       *float64
 	// Headroom is the operating point's fraction of the lower knee.
 	Headroom float64
 }
@@ -138,6 +194,28 @@ type Fleet interface {
 	// Class is the class the envelope judges the fleet's figures by
 	// (whatif.FigureClass): its pods, accelerator, shape and flow control.
 	Class() whatif.FigureClass
+}
+
+// TPOTRatioFleet is a Fleet whose TPOT percentile is its mean TPOT times a
+// ratio R_q, and which can price it at a ratio an experimental model gives
+// in place of its own (tpot_model_main.go): its percentile curve, its point
+// and decode's limit at a percentile target alike.
+type TPOTRatioFleet interface {
+	Fleet
+	// WithTPOTRatio is the fleet with its TPOT percentile priced at r.
+	WithTPOTRatio(r ModelRatio) Fleet
+}
+
+// ModelRatio is R_q as an experimental model gives it: Value, the Flag on
+// every figure priced with it, the Source the plan's ratio names, and the
+// Assumed line the fleet adds.
+type ModelRatio struct {
+	Value float64
+	Flag  whatif.Flag
+	// More is the flags the ratio's figures carry beside Flag.
+	More    []whatif.Flag
+	Source  string
+	Assumed string
 }
 
 // LimitSet is slo-to-rate's rates at one set of targets. Notes is what the

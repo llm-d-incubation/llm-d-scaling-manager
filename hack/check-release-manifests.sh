@@ -70,6 +70,11 @@ done
 # The role writer grant: opt-in, and the only files that may grant more than
 # get on disaggregatedsets.
 DSETW_FILES="scaling-manager-dset-role-writer.yaml scaling-manager-dset-role-writer-cluster.yaml"
+# The one manifest, its KEDA, grants and monitoring files, and the two
+# scripts that apply them (proposal PR #404) have rules of their own, which
+# hack/check-manifest-install.sh and hack/check-kubectl-scripts.sh assert;
+# here they are only listed in SHA256SUMS and signed.
+MANIFEST_FILE="scaling-manager.yaml scaling-manager-grants.yaml scaling-manager-monitoring.yaml scaling-manager-keda.yaml scaling-manager-admin.sh scaling-manager-owner.sh"
 ALL_FILES="$MAIN_FILES scaling-manager-settings.yaml scaling-manager-model-namespace.yaml scaling-manager-activate.yaml scaling-manager-keda-auth.yaml scaling-manager-scaler-tls.yaml scaling-manager-kueue.yaml scaling-manager-alerts.yaml scaling-manager-policy-example.yaml scaling-manager-metrics-reader.yaml scaling-manager-preflight.yaml scaling-manager-preflight-cluster.yaml $DSETW_FILES"
 
 render() {
@@ -142,13 +147,16 @@ check_dir() {
     local d="$1" f n bad=0 sub="$WORK/sub" js="$WORK/json" keda want got ins safile split
     say() { echo "  FAIL: $*"; bad=$((bad + 1)); }
 
-    for f in $ALL_FILES SHA256SUMS $TOOLS_TARBALL; do
+    for f in $ALL_FILES $MANIFEST_FILE SHA256SUMS $TOOLS_TARBALL; do
         [ -s "$d/$f" ] || say "$f was not written"
     done
     [ "$bad" = 0 ] || return "$bad"
     (cd "$d" && sha256sum -c --quiet SHA256SUMS >/dev/null 2>&1) || say "SHA256SUMS does not match the files"
-    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(( $(echo $ALL_FILES | wc -w) + 1 ))" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files and $TOOLS_TARBALL"
+    [ "$(wc -l < "$d/SHA256SUMS")" -eq "$(( $(echo $ALL_FILES $MANIFEST_FILE | wc -w) + 1 ))" ] || say "SHA256SUMS does not list exactly the $(echo $ALL_FILES | wc -w) release files, $MANIFEST_FILE and $TOOLS_TARBALL"
     grep -q "  $TOOLS_TARBALL\$" "$d/SHA256SUMS" || say "SHA256SUMS does not list $TOOLS_TARBALL"
+    for f in $MANIFEST_FILE; do
+        grep -q "  $f\$" "$d/SHA256SUMS" || say "SHA256SUMS does not list $f"
+    done
     # The tools tarball: the image's files under scaling-manager-tools/, the
     # scripts executable, lib/ beside them, the version, and nothing else.
     local listing want_list
@@ -560,7 +568,7 @@ fi
 # the rule it breaks, not merely fail.
 caught() {
     local name="$1" expect="$2" d="$3"
-    (cd "$d" && sha256sum $ALL_FILES $TOOLS_TARBALL > SHA256SUMS)
+    (cd "$d" && sha256sum $ALL_FILES $MANIFEST_FILE $TOOLS_TARBALL > SHA256SUMS)
     if check_dir "$d" > "$WORK/m-$name.log" 2>&1; then
         fail "negative control '$name' was not caught"
     elif grep -q -- "$expect" "$WORK/m-$name.log"; then
@@ -804,10 +812,13 @@ sign_dist() {
 }
 sign_dist
 if sign_run; then
-    want=$(( $(echo $ALL_FILES | wc -w) + 2 + 5 ))
+    want=$(( $(echo $ALL_FILES $MANIFEST_FILE | wc -w) + 2 + 5 ))
     got="$(grep -c '^sign-blob --yes --bundle ' "$WORK/wf/cosign.log")"
     bundles="$(find "$WORK/wf/run/dist" -name '*.sigstore.json' | wc -l)"
     if [ "$got" = "$want" ] && [ "$bundles" = "$want" ] && [ -s "$WORK/wf/run/dist/SHA256SUMS.sigstore.json" ] \
+        && [ -s "$WORK/wf/run/dist/scaling-manager.yaml.sigstore.json" ] \
+        && [ -s "$WORK/wf/run/dist/scaling-manager-admin.sh.sigstore.json" ] \
+        && [ -s "$WORK/wf/run/dist/scaling-manager-owner.sh.sigstore.json" ] \
         && [ -s "$WORK/wf/run/dist/capacity-planner-$VERSION-darwin-arm64.sigstore.json" ] \
         && [ -s "$WORK/wf/run/dist/capacity-planner-$VERSION-windows-amd64.exe.sigstore.json" ]; then
         pass

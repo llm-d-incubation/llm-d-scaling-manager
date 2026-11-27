@@ -36,6 +36,15 @@ func TestStateAt_TheVPAtServedWorkSwitchReachesThePrefillState(t *testing.T) {
 	assert.True(t, stateWith(t, map[string]map[string]bool{PackageSaturation: {saturation.SwitchPrefillVPAtServedWork: true}}).VPAtServedWork)
 }
 
+// saturation.SwitchPrefillHitAtCount reaches the planner through the prefill
+// state, off unless the replay's options turn it on, and is not among the
+// planner's switches.
+func TestStateAt_TheHitAtCountSwitchReachesThePrefillState(t *testing.T) {
+	assert.NotContains(t, PlannerSwitches()[PackageSaturation], saturation.SwitchPrefillHitAtCount, "planner-only and off")
+	assert.False(t, stateWith(t, nil).HitAtCount)
+	assert.True(t, stateWith(t, map[string]map[string]bool{PackageSaturation: {saturation.SwitchPrefillHitAtCount: true}}).HitAtCount)
+}
+
 // slo.SwitchTTFTTierKVWait reaches the planner through the prefill state, off
 // unless the replay's options turn it on, and is not among the planner's
 // switches.

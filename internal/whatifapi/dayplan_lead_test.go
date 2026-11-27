@@ -213,7 +213,7 @@ func TestDayPlanSizedForP95Modulation(t *testing.T) {
 	for i, x := range s {
 		rates[i] = x.Rate
 	}
-	assert.Equal(t, ModulationP95(rates, b.Rate.Mean, b.Rate.P95), *b.SizedRate, "the bucket's own cycles, at its mean and p95")
+	assert.Equal(t, ModulationP95Every(rates, b.Rate.Mean, b.Rate.P95, 15), *b.SizedRate, "the bucket's own cycles 15 s apart, at its mean and p95")
 	assert.Equal(t, 1, p.Summary.Counts.SizedForP95Modulation)
 	assert.Zero(t, p.Summary.Counts.SizedForP95)
 
@@ -224,9 +224,9 @@ func TestDayPlanSizedForP95Modulation(t *testing.T) {
 	assert.Equal(t, SizeForMean, p.Buckets[0].SizedFor)
 	assert.Contains(t, p.Buckets[0].Flags, FlagFewCyclesForP95)
 
-	// The default stays the p95, which carries no p95Modulation.
+	// The p95 asked carries no p95Modulation.
 	res.Series = s
-	p, err = DayPlan(t.Context(), res, DayPlanRequest{}, "schema-v3")
+	p, err = DayPlan(t.Context(), res, DayPlanRequest{SizeFor: SizeForP95}, "schema-v3")
 	require.NoError(t, err)
 	assert.Equal(t, SizeForP95, p.Buckets[0].SizedFor)
 	assert.Nil(t, p.Buckets[0].Rate.P95Modulation)

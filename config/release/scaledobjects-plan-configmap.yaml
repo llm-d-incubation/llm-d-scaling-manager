@@ -1,0 +1,11 @@
+# The controller's suggested ScaledObjects, one key per managed namespace
+# (internal/scaleplan). Pre-created with no data, so a server-side re-apply
+# keeps what the controller wrote, and the controller needs no create on
+# ConfigMaps. Review a key, then apply it in that namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-manager-scaledobjects-plan
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager

@@ -139,14 +139,20 @@ func TestExport_EveryRecordedStringIsClassified(t *testing.T) {
 	// the external analyzer's rule form: a demand rule's query, threshold and
 	// role, and a target query, its token and the reduction. 157 with the
 	// cache tiers: ReplicaMetrics.CachedTokenRateBySource's source and
-	// KVTransferRates' kind, both vocabulary.
-	assert.Len(t, values, 157, "string value sites")
+	// KVTransferRates' kind, both vocabulary. 161 with the predicted
+	// latency beside the default's (issue #440): SLOPrediction's objective,
+	// variant, statistic and learner. 164 with the router's per-endpoint
+	// series (#475): an endpoint's Pod, a prefix producer's plugin and role.
+	// 167 with EngineParams.ModelConfig (issues #501, #503): its Source and
+	// Error, redacted, and its Attention, vocabulary.
+	assert.Len(t, values, 167, "string value sites")
 	// 51 since learner PR 5c: LearnedState.StartSamples and StartAdmittedAt,
 	// keyed like StartSeconds, and AnalyzerResult.RoleStartSeeded, by role.
 	// 52 since 5d: LearnedState.StartCounted. 53 since ev-shindin/llm-scaling-manager#495's
 	// LearnedState.ITLBaselineAdmittedAt, keyed like ITLBaseline. 54 with J1's
-	// joint reading's Inputs, keyed by input.
-	assert.Len(t, keys, 54, "string-keyed maps")
+	// joint reading's Inputs, keyed by input. 55 with the TTFT reading's
+	// Statistics, keyed by statistic (issue #440).
+	assert.Len(t, keys, 55, "string-keyed maps")
 }
 
 // canaryRecording is a small recording with one more event, of an owner the

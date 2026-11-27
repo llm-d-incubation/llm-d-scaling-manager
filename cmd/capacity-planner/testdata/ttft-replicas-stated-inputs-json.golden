@@ -83,7 +83,9 @@
           "gpuMemoryUtilization": 0.9,
           "gpuMemoryUtilizationSource": "not recorded",
           "blockSize": 128,
-          "blockSizeSource": "not recorded"
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
         }
       },
       "results": {
@@ -103,18 +105,22 @@
               "boundBy": [
                 "batch cap"
               ],
-              "tier": "ols"
+              "tier": "ols",
+              "batchBeyondFit": {
+                "priced": 64,
+                "fitted": 55
+              }
             },
             "flags": [
               "AssumedShape",
               "OutputSpreadUnread",
-              "BatchBeyondFit",
-              "ExtrapolatedFill"
+              "ExtrapolatedFill",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
-              "label": "OUTSIDE VALIDATED REGION (arrivals Ca^2 1.5, measured 0.8 to 1.25)",
-              "outside": "arrivals Ca^2 1.5, measured 0.8 to 1.25"
+              "label": "OUTSIDE VALIDATED REGION (--assume-vp stated, which the run did not price)",
+              "outside": "--assume-vp stated, which the run did not price"
             }
           }
         },
@@ -138,8 +144,7 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ]
           }
         },
@@ -161,8 +166,7 @@
             },
             "flags": [
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ],
             "validation": {
               "validated": false,
@@ -185,7 +189,9 @@
           "gpuMemoryUtilization": 0.9,
           "gpuMemoryUtilizationSource": "not recorded",
           "blockSize": 128,
-          "blockSizeSource": "not recorded"
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
         },
         "percentile": 0.9,
         "rate": 11.316587731453538,
@@ -283,8 +289,7 @@
               "AssumedPoissonArrivals",
               "AssumedArrivalCV2",
               "AssumedShape",
-              "OutputSpreadUnread",
-              "BatchBeyondFit"
+              "OutputSpreadUnread"
             ],
             "parts": {
               "independent": 0.2095911139700388,

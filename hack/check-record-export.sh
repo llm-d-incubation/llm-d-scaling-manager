@@ -61,7 +61,7 @@ $CHECK"
   ) > "$dir.out" 2>&1
 }
 
-PRESENT="vllm:kv_cache_usage_perc vllm:external_prefix_cache_hits_total vllm:prompt_tokens_cached_by_source_total lmcache_mp_lookup_hit_tokens_total llm_d_disagg_sidecar_prefill_duration_seconds_sum"
+PRESENT="vllm:kv_cache_usage_perc vllm:external_prefix_cache_hits_total vllm:prompt_tokens_cached_by_source_total lmcache_mp_lookup_hit_tokens_total llm_d_disagg_sidecar_prefill_duration_seconds_sum vllm:hisparse_cache_hits_total vllm:hisparse_cache_misses_total DCGM_FI_PROF_SM_ACTIVE"
 
 # 1. Some cache-tier series present, the rest absent: nothing fails, every
 # CACHE_METRICS name has its two chunks, and the check names which are there.
@@ -77,11 +77,11 @@ for m in $cache; do
   have=$(ls "$TMP/ok/planner-export/${m//:/_}".*.json 2>/dev/null | wc -l)
   [ "$have" -eq 2 ] || { echo "FAIL: $m has $have of 2 chunks" >&2; fail=1; }
 done
-[ "$n" -ge 65 ] || { echo "FAIL: CACHE_METRICS holds $n names, fewer than the 65 the export list needs" >&2; fail=1; }
-for m in vllm:external_prefix_cache_hits_total vllm:prompt_tokens_cached_by_source_total lmcache_mp_lookup_hit_tokens_total llm_d_disagg_sidecar_prefill_duration_seconds_sum; do
+[ "$n" -ge 158 ] || { echo "FAIL: CACHE_METRICS holds $n names, fewer than the 158 the export list needs" >&2; fail=1; }
+for m in vllm:external_prefix_cache_hits_total vllm:prompt_tokens_cached_by_source_total lmcache_mp_lookup_hit_tokens_total llm_d_disagg_sidecar_prefill_duration_seconds_sum vllm:hisparse_ DCGM_FI_PROF_SM_ACTIVE; do
   grep -qx "present: $m" "$out" || { echo "FAIL: the check did not report $m present" >&2; fail=1; }
 done
-for m in vllm:kv_offload_load_time_total sglang:prefill_effective_tokens_total llm_d_epp_request_cached_tokens_bucket http_request_duration_seconds_sum vllm:request_render_duration_seconds_sum; do
+for m in vllm:kv_offload_load_time_total sglang:prefill_effective_tokens_total llm_d_epp_request_cached_tokens_bucket http_request_duration_seconds_sum vllm:request_render_duration_seconds_sum DCGM_FI_DEV_GPU_UTIL; do
   grep -qx "absent: $m" "$out" || { echo "FAIL: the check did not report $m absent" >&2; fail=1; }
 done
 if grep -q "^present: vllm:kv_cache_usage_perc" "$out"; then
@@ -93,7 +93,7 @@ fi
 if ! python3 "$CONVERT" -o "$TMP/ok.om" "$TMP"/ok/planner-export/*.json 2>"$TMP/conv.err"; then
   echo "FAIL: the converter refused the export: $(cat "$TMP/conv.err")" >&2; fail=1
 else
-  for m in vllm:external_prefix_cache_hits_total lmcache_mp_lookup_hit_tokens_total; do
+  for m in vllm:external_prefix_cache_hits_total lmcache_mp_lookup_hit_tokens_total vllm:hisparse_cache_hits_total vllm:hisparse_cache_misses_total DCGM_FI_PROF_SM_ACTIVE; do
     grep -q "^$m{" "$TMP/ok.om" || { echo "FAIL: $m did not reach the converted file" >&2; fail=1; }
   done
 fi
@@ -103,6 +103,14 @@ fi
 record nolmc
 grep -qx "absent: lmcache_mp_lookup_hit_tokens_total" "$TMP/nolmc.out" || {
   echo "FAIL: LMCACHE_NAMESPACE is not what finds the LMCache server's series" >&2; fail=1; }
+
+# 2b. DCGM series are selected by DCGM_SELECTOR, not by the engines'
+# namespace label: one that selects another namespace reads them absent.
+grep -qx "absent: DCGM_FI_PROF_SM_ACTIVE" "$TMP/nolmc.out" && {
+  echo "FAIL: the default DCGM_SELECTOR did not find the GPU's Pod namespace" >&2; fail=1; }
+record dcgm LMCACHE_NAMESPACE=lmc "DCGM_SELECTOR=exported_namespace='other'"
+grep -qx "absent: DCGM_FI_PROF_SM_ACTIVE" "$TMP/dcgm.out" || {
+  echo "FAIL: DCGM_SELECTOR is not what selects the DCGM series" >&2; fail=1; }
 
 # 3. A cache-tier query that fails is a failure, not an absence.
 serve --present "$PRESENT" --fail "vllm:kv_offload_load_bytes_total"

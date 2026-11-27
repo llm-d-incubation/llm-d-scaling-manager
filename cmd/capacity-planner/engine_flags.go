@@ -64,11 +64,15 @@ const (
 	// default of 256 where the engine's release runs 1024 on its accelerator:
 	// the decode figures can over-ask up to four times.
 	defaultBatchCapBelowRelease whatif.Flag = "DefaultBatchCapBelowRelease"
-	// batchBeyondFit is a shape whose KV per request is under 1/shapeFitRatio
-	// of the rows' the line was read on, priced at a
-	// per-rank batch past the largest those rows held: ITL also rises with the
-	// batch's tokens past the GEMM roofline, which a line in fill alone does
-	// not carry across shapes (issue #309).
+	// batchBeyondFit is a decode figure whose fill runs more sequences an
+	// engine rank than the most the rows the ITL line was fitted on held (the
+	// held fit's rows for a held line), whatever the KV a request: ITL also
+	// rises with the batch's tokens past the GEMM roofline, which a line in
+	// fill alone does not carry, so the TPOT reads low and the knee high
+	// (issues #309, #354). Not an engine note: each figure is checked at its
+	// own fill (pricedVariant.qualify), and the figure is printed unchanged.
+	// Until #354 it was raised on every figure of a variant, and only for a
+	// shape under half the rows' KV a request, priced at the band's top.
 	batchBeyondFit whatif.Flag = "BatchBeyondFit"
 )
 
@@ -82,11 +86,6 @@ const batchCapSourceDefault = "default"
 // 1.5 to 2.5 ms. It flags a percentile (hostBoundTPOTTail) and, where R_q
 // was read off coarse buckets, refuses it (hostBoundRefusal).
 const hostBoundITL = 0.005
-
-// shapeFitRatio is how far apart, as a ratio, the KV per request asked and
-// the line's rows' may be before a batch past the rows' is flagged
-// (batchBeyondFit).
-const shapeFitRatio = 2.0
 
 // hybridModels and mlaModels are fragments of a model's name, lowercased, that
 // name a hybrid-attention or an MLA family.
@@ -145,15 +144,12 @@ func (pv pricedVariant) engineNotes() []engineNote {
 			add(pastCUDAGraphCeiling, "graphs to %d sequences a rank, priced at up to %d", ceiling, batch)
 		}
 	}
-	model := strings.ToLower(p.ModelPath)
-	if model == "" {
-		model = strings.ToLower(pv.model)
+	hybrid, mla := pv.attentionFamily()
+	if hybrid != "" {
+		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", hybrid)
 	}
-	if fam := familyOf(model, hybridModels); fam != "" {
-		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", fam)
-	}
-	if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
-		add(mlaAttention, "%s: %s", fam, pv.mlaBinds())
+	if mla != "" {
+		add(mlaAttention, "%s: %s", mla, pv.mlaBinds())
 	}
 	if c := p.KVConnector; c != "" && !strings.Contains(strings.ToLower(c), "nixl") {
 		add(kvConnectorUnmodeled, "%s", c)
@@ -172,16 +168,43 @@ func (pv pricedVariant) engineNotes() []engineNote {
 		add(defaultBatchCapBelowRelease, "priced at %d a rank; vLLM on %s defaults to %d: state --max-num-seqs or --batch-cap",
 			pv.perRank, pv.state.Accelerator, def)
 	}
-	if seen, fitKV, ok := pv.fitBatch(); ok && batch > seen && pv.decode.KVPerRequest > 0 {
-		// Only a shorter shape: with more KV a request than the rows, a
-		// fill holds fewer sequences than the line was read with, and the
-		// line reads the ITL high, the safe side.
-		if r := pv.decode.KVPerRequest / fitKV; r < 1/shapeFitRatio {
-			add(batchBeyondFit, "KV %s a request against the rows' %s; up to %d sequences a rank priced, %d seen",
-				num(round(pv.decode.KVPerRequest)), num(round(fitKV)), batch, seen)
-		}
-	}
 	return out
+}
+
+// attentionFamily is what makes pv's model hybrid-attention or MLA, each ""
+// where it is not: the attention kind its model config states (issue #501),
+// and, with no config read, the family its name falls in, as before the
+// config was read.
+//
+// A config never clears a hybrid the name says: a hybrid the reader does not
+// know reads as full attention, and clearing the flag on that would put a
+// hybrid's figures inside the envelope on the reader's miss. The name's family
+// is kept, and the detail says the config reads otherwise. A config does
+// clear an MLA family's name (an MLA family's dense distillation is common),
+// and names MLA or a window or hybrid layers wherever it reads one.
+func (pv pricedVariant) attentionFamily() (hybrid, mla string) {
+	p := pv.state.Params
+	model := strings.ToLower(p.ModelPath)
+	if model == "" {
+		model = strings.ToLower(pv.model)
+	}
+	byName := familyOf(model, hybridModels)
+	if !p.ModelConfig.Read() {
+		if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
+			mla = fam
+		}
+		return byName, mla
+	}
+	switch p.AttentionKind() {
+	case capacity.AttentionSlidingWindow, capacity.AttentionHybrid:
+		return p.ModelConfig.AttentionText(), ""
+	case capacity.AttentionMLA:
+		mla = p.ModelConfig.AttentionText()
+	}
+	if byName != "" {
+		hybrid = fmt.Sprintf("%s by its name, though the model config reads %s", byName, p.ModelConfig.AttentionText())
+	}
+	return hybrid, mla
 }
 
 // familyOf is the first of families model's name contains, "" with none.
@@ -247,34 +270,84 @@ func (pv pricedVariant) mlaBinds() string {
 	return by
 }
 
-// fitBatch is the most sequences one engine rank held on the rows the line is
-// checked on, and their median KV per request; ok false with no such row.
-// A row on a ramp or above the band says nothing of the line and is left out.
-func (pv pricedVariant) fitBatch() (seen int64, kv float64, ok bool) {
+// fitBatch is the most sequences one engine rank held on the rows the line
+// was fitted on (learnreplay.VariantState.FitRows: the line's own, or the
+// held fit's for a held line), else on the latest rows the line is checked
+// on (LineRows); ok false with no such row. A row's batch is the sequences it
+// ran (whatif.LineRow.Sequences), else its fill over the KV a request held.
+// A row on a ramp is left out, and a latest row above the band: it says
+// nothing of the line (a fit row above it is an above-band line's own).
+func (pv pricedVariant) fitBatch() (seen int64, ok bool) {
 	c := pv.decode.CapacityTokens
 	if !(c > 0) {
-		return 0, 0, false
+		return 0, false
+	}
+	rows, fit := pv.state.FitRows, true
+	if len(rows) == 0 {
+		rows, fit = pv.state.LineRows, false
 	}
 	ranks := float64(max(pv.state.Ranks, 1))
-	var kvs []float64
 	most := 0.0
-	for _, r := range pv.state.LineRows {
-		if r.Ramp || r.AboveBand || !(r.KVPerRequest > 0) || !(r.K > 0) {
+	for _, r := range rows {
+		// The fit rows are the line's own, above the band only where
+		// it was fitted there; of the latest rows, one above the band
+		// says nothing of a line fitted in it.
+		if r.Ramp || (r.AboveBand && !fit) || !(r.K > 0) {
 			continue
 		}
-		kvs = append(kvs, r.KVPerRequest)
-		most = max(most, r.K*c/r.KVPerRequest/ranks)
+		switch {
+		case r.Sequences > 0:
+			most = max(most, r.Sequences/ranks)
+		case r.KVPerRequest > 0:
+			// A row that read no sequences: its fill over the KV a
+			// request held.
+			most = max(most, r.K*c/r.KVPerRequest/ranks)
+		default:
+			continue
+		}
+		ok = true
 	}
-	if len(kvs) == 0 {
-		return 0, 0, false
+	return int64(math.Ceil(most)), ok
+}
+
+// batchAt is the sequences one engine rank runs at fill k: k x C / KVreq a
+// replica over its ranks, never past the batch cap; 0 where the KV is
+// unknown.
+func (pv pricedVariant) batchAt(k float64) int64 {
+	d := pv.decode
+	if !(d.CapacityTokens > 0 && d.KVPerRequest > 0 && k > 0) {
+		return 0
 	}
-	slices.Sort(kvs)
-	mid := len(kvs) / 2
-	kv = kvs[mid]
-	if len(kvs)%2 == 0 {
-		kv = (kvs[mid-1] + kvs[mid]) / 2
+	n := int64(math.Floor(k * d.CapacityTokens / d.KVPerRequest / float64(max(pv.state.Ranks, 1))))
+	if pv.perRank > 0 {
+		n = min(n, pv.perRank)
 	}
-	return int64(math.Ceil(most)), kv, true
+	return n
+}
+
+// beyondFit is the batch a decode figure at fill k runs against the most its
+// line's fit rows held, where it is past them (batchBeyondFit); ok false
+// where it is not, or either is unknown.
+func (pv pricedVariant) beyondFit(k float64) (whatif.BatchBeyondFit, bool) {
+	seen, ok := pv.fitBatch()
+	if !ok {
+		return whatif.BatchBeyondFit{}, false
+	}
+	if n := pv.batchAt(k); n > seen {
+		b := whatif.BatchBeyondFit{Priced: n, Fitted: seen}
+		if pv.state.Ranks > 1 {
+			b.Ranks = pv.state.Ranks
+		}
+		return b, true
+	}
+	return whatif.BatchBeyondFit{}, false
+}
+
+// batchBeyondFitText is what a batchBeyondFit flag rests on, in plain words:
+// the batch the line was fitted on and the most the figures flagged run.
+func (pv pricedVariant) batchBeyondFitText(b whatif.BatchBeyondFit) string {
+	return fmt.Sprintf("the decode line was fitted on up to %d sequences %s; this load runs about %d, so TPOT may read low and the decode knee high",
+		b.Fitted, whatif.BatchUnit(b.Ranks), b.Priced)
 }
 
 // hostBound reports whether pv's per-token latency with an empty cache, its
@@ -295,7 +368,8 @@ func (pv pricedVariant) tpotFlags(r resolvedRatio, percentile bool) []whatif.Fla
 	if !percentile || r.ratio.Assumed || r.refused != nil {
 		return r.flags
 	}
-	if _, ok := pv.hostBound(); !ok || slices.Contains(r.flags, hostBoundTPOTTail) {
+	// The experimental TPOT model's spread is fitted, not host jitter.
+	if _, ok := pv.hostBound(); !ok || slices.Contains(r.flags, hostBoundTPOTTail) || slices.Contains(r.flags, whatif.TPOTDistribution) {
 		return r.flags
 	}
 	return append(slices.Clone(r.flags), hostBoundTPOTTail)

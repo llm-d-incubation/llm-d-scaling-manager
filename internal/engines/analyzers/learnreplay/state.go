@@ -15,6 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
@@ -95,9 +96,19 @@ type State struct {
 	// clustered arrivals (saturation.SwitchDecodeBurstFill,
 	// whatif.Decode.ArrivalCV2).
 	DecodeBurstFill bool
+	// StepOutputDispersion says a decode figure priced at a stated output
+	// spread (a backtest step's own, whatifapi.Knobs.OutputDispersion) reads
+	// its KV per request at that spread, not the fit's
+	// (saturation.SwitchBacktestStepOutputDispersion).
+	StepOutputDispersion bool
 	// Prefill is each prefill variant at the cycle, by name, as a TTFT
 	// question reads it (state_ttft.go).
 	Prefill []PrefillState
+	// RouterPolicy is what the router scores, the prefix cache, the load,
+	// both or neither, read from its series over every cycle up to Cycle by
+	// the reader the controller reads its own cycles with
+	// (balance.RouterCycleOf, balance.Tracker.ObserveRouter).
+	RouterPolicy balance.RouterPolicy
 	// FlowControlSeries says the router's flow-control queue series exists for
 	// the model at the cycle, by S1's rule (domain.AnalyzerInput.FlowControlSeries).
 	// False is no queue series, which a scrape gap reads as too.
@@ -202,6 +213,12 @@ type VariantState struct {
 	// release's defaults resolve to where the arguments set none. Nil where
 	// the store holds none.
 	Params *capacity.EngineParams
+	// StepTokens is the variant's tokens-per-iteration histogram, pooled over
+	// its rows of every cycle up to the one asked
+	// (capacity.StepTokens.Add of domain.ReplicaMetrics.IterationTokensBuckets):
+	// whether its step budget binds (StepBudgetBinding). Empty (no Samples)
+	// where no row carried the series.
+	StepTokens capacity.StepTokens
 	// Shape is the traffic the variant served (shapeOf).
 	Shape MeasuredShape
 	// Resident is the KV a running request held, measured over the same
@@ -224,12 +241,29 @@ type VariantState struct {
 	// LineRows is the variant's rows of its latest cycles that have one, off
 	// a ramp and on one, for the line check (state_line.go).
 	LineRows []whatif.LineRow
+	// FitRows is the variant's rows the line was fitted on, steady and in
+	// the band (above it for an above-band line): a refitted line's over the
+	// cycles its readings span, a held
+	// line's over the window of its last own fit (lineSamples.fitRows). The
+	// planner reads the most sequences a rank they held, and flags a figure
+	// priced past it (BatchBeyondFit). Nil where they are not known: the
+	// planner then reads LineRows.
+	FitRows []whatif.LineRow
 	// BelowBandITL is the floor below the band, in seconds: the 10th
 	// percentile of the variant's latest mean ITLs read off a ramp at a fill
 	// under the band's bottom (whatif.BelowBand.LeastITL). 0 with fewer than
 	// itl.BelowBandMinReadings, where the line is not read below the band.
 	// BelowBandFill is the fill that reading was taken at, 0 with none.
 	BelowBandITL, BelowBandFill float64
+	// BelowBandLeastSequences is the fewest sequences a replica ran in the
+	// readings the floor was read from (whatif.BelowBand.LeastSequences): a
+	// floor read at 20 sequences a replica does not stand for one (issue
+	// llm-d-incubation/llm-d-scaling-manager#286). 0 with no floor, or where
+	// a reading's count was not read. BelowBandByCount is the floor kept by
+	// those sequences (whatif.BelowBand.ByCount), the zero Model where it was
+	// not read.
+	BelowBandLeastSequences float64
+	BelowBandByCount        itl.Model
 	// BusiestRankFill says the line, its readings, its band and its rows are
 	// read at the variant's busiest engine rank, not the mean over its ranks:
 	// a data-parallel MoE engine under saturation.SwitchMoEBusiestRank, whose
@@ -256,6 +290,11 @@ type VariantState struct {
 	// LineAtFloor is set, whether or not the line itself was.
 	LineAtFloor bool
 	LineLift    float64
+	// MaxFill is the highest KV fill a steady reading of the variant's
+	// replicas read up to the cycle (the fill its line reads, fillForITL), 0
+	// with none: under the line's least fill (itl.DefaultMinObservableK), no
+	// line by fill is fitted (issue llm-d-incubation/llm-d-scaling-manager#512).
+	MaxFill float64
 }
 
 // MeasuredShape is the shape a variant served over the cycles it had
@@ -300,6 +339,10 @@ type shapeSample struct {
 //     counted by its capacity part only, so deferred waits are not a queue.
 //   - saturation.SwitchPrefillFBusyMinutes: f, the prefill imbalance, the
 //     median of the busiest minutes, not of every minute.
+//   - saturation.SwitchPrefillFPooledMinutes: f from consecutive minutes
+//     pooled to prefill.MinRequestsPerPodMinute requests a pod, where a
+//     minute alone carries fewer (a fleet of long prompts), in place of no
+//     f and whatif.ImbalanceFloor at every count above one.
 //   - saturation.SwitchPrefillALowLoadByRate: a's low-load minutes read by
 //     their rate against their prompt cluster's service time, not their own.
 //   - saturation.SwitchPrefillAMedianOverhead: a's overhead the median of
@@ -339,6 +382,21 @@ type shapeSample struct {
 //     with MTP on every decode pod, the held figure, fitted on the first half,
 //     read the decode engine's measured TTFT of the second within 20% on
 //     most five-minute steps, where the old sum read a few percent of it.
+//   - saturation.SwitchBacktestStepOutputDispersion: a backtest step priced
+//     at its own output spread, not the fit's (issue
+//     llm-d-incubation/llm-d-scaling-manager#274). Only a backtest states
+//     one (whatifapi.Knobs.OutputDispersion), so no other answer moves. On
+//     the 0.6B staircase's 1000/1000 A phases, fitted on warm-ups that end
+//     on short outputs (D 1.26), the predicted decode fill falls from 1.87
+//     to 1.59 times what the pods held, and the Qwen3-32B A-off phase's
+//     from 1.19 to 1.05. On
+//     the 8000/200 B and C phases, where the prompt holds most of the KV,
+//     the first B-off phase's rises from 1.24 to 1.37, as two steps it
+//     refused are now priced. No backtest figure newly reads more than 20%
+//     under what was measured, in TTFT or TPOT. With the hold and the lift
+//     (both off, below) it deepens two Qwen3-32B A-off TTFT steps already
+//     under (mean 0.69 to 0.46 of measured): look at those again before
+//     the hold and the lift go on.
 //
 // slo.SwitchTTFTHopWindowMeans, planner-only, reads the router hop on its
 // windows' means: the median of at least prefill.MinHopMeanWindows windows,
@@ -410,6 +468,48 @@ type shapeSample struct {
 // lower bound. One warm-up's self-check falls from weak to inconsistent with
 // it. It stays off until TTFT under a lower-bound knee is priced.
 //
+// saturation.SwitchPrefillVPPromptCoverage is planner-only and not listed
+// (issue llm-d-incubation/llm-d-scaling-manager#405): it keeps the prompts
+// the minutes V_P rests on read, and prices no TTFT from a V_P at a mean
+// prompt more than whatif.MaxVPShapeRatio outside them
+// (whatif.VPPromptNotCovered). It goes on once the public cross-validation
+// shows no figure newly under what was measured and no worse self-check.
+//
+// saturation.SwitchPrefillVPLoneRate is planner-only and not listed (issue
+// llm-d-incubation/llm-d-scaling-manager#406): it reads V_P from light load,
+// one request's computed tokens over its prefill time at the prompt priced,
+// where no queue gives one and the served peak agrees with it. It goes on
+// once the public cross-validation shows no figure newly under what was
+// measured, no worse self-check, and the prefill knee within 15% of the
+// measured one on the staircases whose knee was measured.
+//
+// saturation.SwitchPrefillVPServiceLine is planner-only and not listed
+// (issues llm-d-incubation/llm-d-scaling-manager#368, #416): it reads V_P
+// from the prefill service line, the engines' prefill time against their
+// computed tokens a request, s0 kept in the capacity, where no queue gives
+// one. On the public recordings whose line is read beside a V_P from a
+// queue it reads 0.85 to 1.05 of it (0.6B and Qwen3-32B warm-ups), but on
+// the 0.6B warm-up's 50% split, fitted on the light half, it reads under
+// the busy V_P, three TTFT figures it newly prices read 0.67 to 0.79 of
+// what was measured, and at-replicas' self-check falls from not run to
+// inconsistent on two warm-ups (the fleet called overloaded where it
+// served). It goes on once the public cross-validation shows no figure
+// newly under what was measured and no worse self-check.
+//
+// saturation.SwitchPrefillHitAtCount is planner-only and not listed (issue
+// llm-d-incubation/llm-d-scaling-manager#384): it prices the prefix hit at a
+// prefill count other than the fit's, the floor hit x N'/N at fewer pods and
+// the fit's hit held at more. It goes on once the public cross-validation
+// shows no figure newly under what was measured.
+//
+// saturation.SwitchPrefillFLoadCurve is planner-only and not listed (issue
+// llm-d-incubation/llm-d-scaling-manager#482): it fits f against the load
+// per pod at each prefill count, f(u) = f_inf + delta/u, and the planner
+// prices f at a rate as the higher of its f and the curve's. It passed one
+// pre-registered offline test on the lab's Qwen3-32B recordings (a later
+// run at the same count, held out); it goes on once the public
+// cross-validation shows no figure newly under what was measured.
+//
 // saturation.SwitchPrefillVPWindowBest is planner-only and not listed: it
 // keeps the peak under a queue read anywhere in the recording, not only in
 // the last 6 hours, flagged with its age (VPFromEarlierInWindow). No public
@@ -417,6 +517,24 @@ type shapeSample struct {
 // queued only at its busiest hours it prices the rest of the day's TTFT from
 // that lower bound, and the TTFT read many times what was measured. It is
 // on only with --experimental-ttft.
+//
+// slo.SwitchTTFTTierLoad and slo.SwitchTTFTTierKVWait are planner-only and
+// not listed (issue llm-d-incubation/llm-d-scaling-manager#386). Their
+// first real test is a private production P/D recording whose prefill pods
+// serve a material share of the prompt from a host tier and a little from a
+// peer tier, both priced from the recorded offload load with no flag. Its
+// default TTFT is refused (no V_P learned), so it was scored with
+// --experimental-ttft, the two switches alone changed. No figure newly reads
+// under 0.8 of measured with either, on a time split, a load split or the
+// busiest hour of the test, and with the KV wait the median mean TTFT of
+// the 75% time split comes closer to measured. But at the 50%
+// split, whose figures rest on a lower-bound V_P and read high, both raise
+// the median error of the mean and p90 TTFT and take figures from within
+// 20% of measured to more than 20% over, which the issue's rule forbids;
+// the load split's mean does the same. The engine's KV wait is several times
+// the transfer's own seconds there, so the tier load alone moves little.
+// They go on once a recording with a tier and a V_P learned under a queue
+// passes that rule.
 //
 // saturation.SwitchMoEBusiestRank is not listed either: it reads a
 // data-parallel MoE engine's line at its busiest rank (issue
@@ -460,18 +578,20 @@ type shapeSample struct {
 //     was measured.
 func PlannerSwitches() map[string]map[string]bool {
 	return map[string]map[string]bool{PackageSaturation: {
-		saturation.SwitchPrefillALowLoadPerRank:  true,
-		saturation.SwitchPrefillAEngineTiming:    true,
-		saturation.SwitchPrefillQueueByCapacity:  true,
-		saturation.SwitchPrefillFBusyMinutes:     true,
-		saturation.SwitchPrefillALowLoadByRate:   true,
-		saturation.SwitchPrefillAMedianOverhead:  true,
-		saturation.SwitchITLAdaptiveBandFloor:    true,
-		saturation.SwitchPrefillVPFloorServed:    true,
-		saturation.SwitchPrefillVPServedUnqueued: true,
-		saturation.SwitchPlannerCapAtStepBudget:  true,
-		saturation.SwitchITLBaselineFromFloor:    false,
-		saturation.SwitchITLFloorBaselineHeld:    false,
+		saturation.SwitchPrefillALowLoadPerRank:       true,
+		saturation.SwitchPrefillAEngineTiming:         true,
+		saturation.SwitchPrefillQueueByCapacity:       true,
+		saturation.SwitchPrefillFBusyMinutes:          true,
+		saturation.SwitchPrefillFPooledMinutes:        true,
+		saturation.SwitchPrefillALowLoadByRate:        true,
+		saturation.SwitchPrefillAMedianOverhead:       true,
+		saturation.SwitchITLAdaptiveBandFloor:         true,
+		saturation.SwitchPrefillVPFloorServed:         true,
+		saturation.SwitchPrefillVPServedUnqueued:      true,
+		saturation.SwitchPlannerCapAtStepBudget:       true,
+		saturation.SwitchBacktestStepOutputDispersion: true,
+		saturation.SwitchITLBaselineFromFloor:         false,
+		saturation.SwitchITLFloorBaselineHeld:         false,
 	}, PackageSLO: {
 		slo.SwitchTTFTHopUnqueued:           true,
 		slo.SwitchTTFTDecodeSpeculatingHeld: true,
@@ -552,9 +672,10 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	type snap struct {
 		st                       *State
 		windows, engine, arrived int
-		rows                     map[string][]whatif.LineRow
-		below                    map[string][2]float64 // ITL seconds, fill
+		rows, fit                map[string][]whatif.LineRow
+		below                    map[string]belowBand
 		ratios                   map[string]float64
+		maxFill                  map[string]float64
 	}
 	snaps := map[int]*snap{}
 	opts.Mode = Normal
@@ -579,6 +700,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		times    []time.Time
 		ranges   = map[string]ShapeRange{}
 		series   = map[string][]CycleShape{}
+		steps    = map[string]*capacity.StepTokens{}
 	)
 	ttft.promptSupport = opts.Switches[PackageSLO][slo.SwitchTTFTPromptSupport]
 	ttft.hopWindowMeans = opts.Switches[PackageSLO][slo.SwitchTTFTHopWindowMeans]
@@ -587,13 +709,16 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	censored := opts.Switches[PackageSaturation][saturation.SwitchTPOTRatioCensored]
 	residence := opts.Switches[PackageSaturation][saturation.SwitchDecodeResidencePull]
 	burst := opts.Switches[PackageSaturation][saturation.SwitchDecodeBurstFill]
+	stepSpread := opts.Switches[PackageSaturation][saturation.SwitchBacktestStepOutputDispersion]
 	ttft.prefixAttention = opts.Switches[PackageSLO][slo.SwitchTTFTPrefixAttention]
 	ttft.computedHit = opts.Switches[PackageSLO][slo.SwitchTTFTComputedHit]
 	ttft.tierLoad = opts.Switches[PackageSLO][slo.SwitchTTFTTierLoad]
 	ttft.tierKVWait = opts.Switches[PackageSLO][slo.SwitchTTFTTierKVWait]
 	ttft.psByEngine = opts.Switches[PackageSLO][slo.SwitchTTFTPSByEngine]
+	ttft.pullWork = opts.Switches[PackageSLO][slo.SwitchTTFTPullWork]
 	ttft.servedOn = opts.Switches[PackageSaturation][saturation.SwitchPrefillVPServedUnqueued]
 	ttft.vpAtServed = opts.Switches[PackageSaturation][saturation.SwitchPrefillVPAtServedWork]
+	ttft.hitAtCount = opts.Switches[PackageSaturation][saturation.SwitchPrefillHitAtCount]
 	ttft.cachedTokenCost = opts.Switches[PackageSLO][slo.SwitchTTFTCachedTokenCost]
 	ttft.specHeld = opts.Switches[PackageSLO][slo.SwitchTTFTDecodeSpeculatingHeld]
 	// SwitchITLPerToken is on from the saturation analyzer's constructor: a
@@ -643,6 +768,11 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		noteShapes(shapes, in.ReplicaMetrics, n)
 		noteRanges(ranges, shapes, n)
 		noteSeries(series, shapes, n)
+		since := stepTokensWindow
+		if len(times) > 1 {
+			since = times[len(times)-1].Sub(times[len(times)-2])
+		}
+		noteStepTokens(steps, in.ReplicaMetrics, since)
 		noteResident(resident, in, n)
 		ttft.note(in, n, ev.Now)
 		args := func(variant string) string {
@@ -657,6 +787,14 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		}
 		ttft.noteJoint(in, ev.Now, args, sglang)
 		lines.note(in, n, ev.Now, busiest)
+		for _, rep := range r.sat.LearnerReports()[in.Namespace+"|"+in.ModelID] {
+			if rep.Learner != learn.ITL {
+				continue
+			}
+			if t := saturation.ITLTier(rep.Source, false); t == whatif.TierOLS || t == whatif.TierPinnedB {
+				lines.noteOwnFit(rep.Variant, ev.Now)
+			}
+		}
 		batch.note(in)
 		ttft.noteTerm(in, ev.Now, args)
 		if n == cycle || early[n] {
@@ -665,6 +803,9 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				v := &s.Variants[i]
 				v.ShapeRange = ranges[v.Variant]
 				v.ShapeSeries = slices.Clone(series[v.Variant])
+				if s := steps[v.Variant]; s != nil {
+					v.StepTokens = s.Clone()
+				}
 				if domain.CanonicalRole(v.Role) != domain.RolePrefill {
 					v.Resident = residentOf(resident[v.Variant], v.Shape)
 				}
@@ -684,12 +825,17 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				return true
 			}
 			sn := &snap{st: s, windows: len(windows), engine: len(engine), arrived: len(arrivals),
-				rows: map[string][]whatif.LineRow{}, below: map[string][2]float64{}, ratios: map[string]float64{}}
+				rows: map[string][]whatif.LineRow{}, fit: map[string][]whatif.LineRow{}, below: map[string]belowBand{}, ratios: map[string]float64{},
+				maxFill: map[string]float64{}}
 			for _, v := range s.Variants {
 				sn.rows[v.Variant] = slices.Clone(lines.rows(v.Variant))
+				v.ReadingsFrom, v.ReadingsTo = cyclesSpanned(v.LineReadings, cycleAt)
+				sn.fit[v.Variant] = lines.fitRows(v)
 				itlSec, fill := lines.leastBelowBand(v.Variant)
-				sn.below[v.Variant] = [2]float64{itlSec, fill}
+				least, byCount := lines.belowBandLeastSequences(v.Variant)
+				sn.below[v.Variant] = belowBand{itlSec: itlSec, fill: fill, least: least, byCount: byCount}
 				sn.ratios[v.Variant] = lines.busiestRatio(v.Variant)
+				sn.maxFill[v.Variant] = lines.maxFill[v.Variant]
 			}
 			snaps[n] = sn
 		}
@@ -708,11 +854,15 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	st.FirstAt, st.TPOTWindows, st.EngineTPOTWindows, st.Cycles = firstAt, windows, engine, total
 	st.ArrivalRates, st.ServingReplicas = arrivals, servingUpTo(serving, len(arrivals))
 	st.CycleTimes, st.TPOTRatioCensored, st.DecodeResidencePull, st.DecodeBurstFill = times, censored, residence, burst
+	st.StepOutputDispersion = stepSpread
 	for i := range st.Variants {
 		st.Variants[i].ReadingsFrom, st.Variants[i].ReadingsTo = cyclesSpanned(st.Variants[i].LineReadings, cycleAt)
 		st.Variants[i].LineRows = lines.rows(st.Variants[i].Variant)
+		st.Variants[i].FitRows = lines.fitRows(st.Variants[i])
 		st.Variants[i].BelowBandITL, st.Variants[i].BelowBandFill = lines.leastBelowBand(st.Variants[i].Variant)
+		st.Variants[i].BelowBandLeastSequences, st.Variants[i].BelowBandByCount = lines.belowBandLeastSequences(st.Variants[i].Variant)
 		st.Variants[i].BusiestRankRatio = lines.busiestRatio(st.Variants[i].Variant)
+		st.Variants[i].MaxFill = lines.maxFill[st.Variants[i].Variant]
 		st.Variants[i].liftToFloor(lineAtFloor && st.disaggregated())
 	}
 	var out map[int]*State
@@ -726,13 +876,17 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		s.ArrivalRates = slices.Clone(arrivals[:sn.arrived])
 		s.ServingReplicas = servingUpTo(serving, sn.arrived)
 		s.TPOTRatioCensored, s.DecodeResidencePull, s.DecodeBurstFill = censored, residence, burst
+		s.StepOutputDispersion = stepSpread
 		s.CycleTimes = slices.Clone(times[:sn.arrived])
 		for i := range s.Variants {
 			s.Variants[i].ReadingsFrom, s.Variants[i].ReadingsTo = cyclesSpanned(s.Variants[i].LineReadings, cycleAt)
 			s.Variants[i].LineRows = sn.rows[s.Variants[i].Variant]
+			s.Variants[i].FitRows = sn.fit[s.Variants[i].Variant]
 			b := sn.below[s.Variants[i].Variant]
-			s.Variants[i].BelowBandITL, s.Variants[i].BelowBandFill = b[0], b[1]
+			s.Variants[i].BelowBandITL, s.Variants[i].BelowBandFill = b.itlSec, b.fill
+			s.Variants[i].BelowBandLeastSequences, s.Variants[i].BelowBandByCount = b.least, b.byCount
 			s.Variants[i].BusiestRankRatio = sn.ratios[s.Variants[i].Variant]
+			s.Variants[i].MaxFill = sn.maxFill[s.Variants[i].Variant]
 			s.Variants[i].liftToFloor(lineAtFloor && s.disaggregated())
 		}
 		out[c] = s
@@ -934,16 +1088,10 @@ func shapeOf(samples []shapeSample) MeasuredShape {
 // tpotWindow is the router's per-request TPOT histogram of one cycle, as the
 // what-if library reads it: bucket rates for counts, which give the same
 // quantile and mean.
+// It is whatif.TPOTWindowOf, the window the slo analyzer's default TPOT
+// percentile reads from its own cycles.
 func tpotWindow(rl *domain.RouterLatency) (whatif.TPOTWindow, bool) {
-	if rl == nil || len(rl.TPOTBuckets) == 0 {
-		return whatif.TPOTWindow{}, false
-	}
-	w := whatif.TPOTWindow{Sum: rl.TPOTSumRate, Count: rl.TPOTCountRate, SumMeasured: true,
-		Buckets: make([]whatif.HistogramBucket, len(rl.TPOTBuckets))}
-	for i, b := range rl.TPOTBuckets {
-		w.Buckets[i] = whatif.HistogramBucket{UpperEdge: b.UpperBound, Count: b.Rate}
-	}
-	return w, true
+	return whatif.TPOTWindowOf(rl)
 }
 
 // analyzedPolicy is in's recorded config, or, where the saturation analyzer

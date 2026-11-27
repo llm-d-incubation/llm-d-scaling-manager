@@ -244,6 +244,16 @@ namespace](../guides/install-in-namespace/). A [cluster-wide
 install](../guides/install-cluster-wide/) runs one controller for every
 namespace.
 
+The [one-manifest install](../guides/kubectl-install/) (v0.13.0 and
+later) is cluster-wide too, with one difference: the `watchNamespaces`
+setting takes effect without a restart, and selects the namespaces the
+controller acts in while its cache stays cluster-wide. The scaler refuses a
+ScaledObject in any other namespace, and the controller drops that
+namespace's InferencePools. It also runs its preflight checks itself, fills
+its own scaler certificates and KEDA's copy, reports each namespace's
+readiness as Events in that namespace, and writes a suggested ScaledObject
+per model server for you to review and apply.
+
 A cluster admin can also publish one policy in the `scaling-manager-policy` namespace.
 Self-managed controllers read it in place of their own. Two kinds do not:
 

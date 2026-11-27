@@ -146,15 +146,15 @@ func TestServeRefusesAForeignHost(t *testing.T) {
 }
 
 // --plan-budget 0 is the default budget, and the largest budget allowed ends
-// a minute before the write timeout, so a stopped plan's refusal is written
-// on a connection still open.
+// well before a computing route's deadline, so a stopped plan's refusal is
+// written on a connection still open.
 func TestServePlanBudgetBounds(t *testing.T) {
 	for _, b := range []time.Duration{0, time.Second, maxPlanBudget} {
 		f := serveFlags{recordings: t.TempDir(), listen: "127.0.0.1:0", auth: whatifapi.AuthNone, planBudget: b}
 		_, err := f.handler(newFlags("serve", io.Discard), io.Discard)
 		require.NoError(t, err, "--plan-budget %s", b)
 	}
-	assert.Less(t, maxPlanBudget, writeTimeout)
+	assert.Less(t, maxPlanBudget, whatifapi.LongRequestDeadline)
 	assert.Less(t, whatifapi.DefaultPlanBudget, maxPlanBudget)
 	f := serveFlags{recordings: t.TempDir(), listen: "127.0.0.1:0", auth: whatifapi.AuthNone, planBudget: writeTimeout}
 	_, err := f.handler(newFlags("serve", io.Discard), io.Discard)

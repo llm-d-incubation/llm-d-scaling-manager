@@ -114,8 +114,8 @@ func TestCapture_AFailedOptionalCheckDoesNotFailTheCapture(t *testing.T) {
 	assert.Contains(t, lines[slices.IndexFunc(lines, func(l string) bool { return len(l) > 9 && l[:9] == "unchecked" })], hits.Name)
 }
 
-// A capture checks its own engine's series and the router's and LMCache's,
-// never the other engine's.
+// A capture checks its own engine's series and the router's, LMCache's,
+// kube-state-metrics' and DCGM's, never the other engine's.
 func TestOptionalFor_ChecksTheCapturedEngineOnly(t *testing.T) {
 	for engine, other := range map[inferenceengine.Engine]string{
 		inferenceengine.EngineVLLM: SourceSGLang, inferenceengine.EngineSGLang: SourceVLLM} {
@@ -124,8 +124,9 @@ func TestOptionalFor_ChecksTheCapturedEngineOnly(t *testing.T) {
 			sources[s.Source] = true
 		}
 		assert.False(t, sources[other], "%s checks %s series", engine, other)
-		assert.True(t, sources[SourceRouter] && sources[SourceLMCache] && sources[SourceSidecar],
-			"%s skips the router's, LMCache's or the sidecar's series", engine)
+		assert.True(t, sources[SourceRouter] && sources[SourceLMCache] && sources[SourceSidecar] &&
+			sources[SourceKSM] && sources[SourceDCGM],
+			"%s skips the router's, LMCache's, the sidecar's, kube-state-metrics' or DCGM's series", engine)
 	}
 }
 
@@ -176,10 +177,16 @@ func TestOptionalQuery(t *testing.T) {
 		OptionalQuery(optionalByName(t, "vllm:kv_offload_config_info"), "llm"))
 	assert.Equal(t, `count(llm_d_epp_request_cached_tokens_bucket{namespace="llm"})`,
 		OptionalQuery(optionalByName(t, "llm_d_epp_request_cached_tokens_bucket"), "llm"))
-	// The engine's HTTP time is read for the chat handler only, not every
-	// handler the API server serves.
-	assert.Equal(t, `sum(http_request_duration_seconds_sum{namespace="llm",handler="/v1/chat/completions"})`,
+	// The engine's HTTP time is read for every handler, broken down by it.
+	assert.Equal(t, `sum by (handler) (http_request_duration_seconds_sum{namespace="llm"})`,
 		OptionalQuery(optionalByName(t, "http_request_duration_seconds_sum"), "llm"))
+	// A DCGM series is selected by the GPU's Pod namespace, not the
+	// exporter's.
+	assert.Equal(t, `count(DCGM_FI_PROF_SM_ACTIVE{exported_namespace="llm"})`,
+		OptionalQuery(optionalByName(t, "DCGM_FI_PROF_SM_ACTIVE"), "llm"))
+	// A prefix checks every series of its family, as one.
+	assert.Equal(t, `count({__name__=~"vllm:hisparse_.+",namespace="llm"})`,
+		OptionalQuery(optionalByName(t, "vllm:hisparse_"), "llm"))
 	assert.Equal(t, `sum by (extension_point) (llm_d_epp_plugin_duration_seconds_sum{namespace="llm"})`,
 		OptionalQuery(optionalByName(t, "llm_d_epp_plugin_duration_seconds_sum"), "llm"))
 }

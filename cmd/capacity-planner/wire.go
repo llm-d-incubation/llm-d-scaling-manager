@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
@@ -138,12 +139,18 @@ type wireTTFT struct {
 	FixedLatencyLearned *float64 `json:"fixedLatencyLearned,omitempty"`
 	Imbalance           float64  `json:"imbalance,omitempty"`
 	ImbalanceSource     string   `json:"imbalanceSource,omitempty"`
-	PromptTokens        float64  `json:"promptTokens,omitempty"`
-	PromptSource        string   `json:"promptSource,omitempty"`
-	PromptFromCycle     int      `json:"promptFromCycle,omitempty"`
-	PromptToCycle       int      `json:"promptToCycle,omitempty"`
-	PromptCV            float64  `json:"promptCV,omitempty"`
-	PromptCVSource      string   `json:"promptCVSource,omitempty"`
+	// ImbalanceCurveFloor and ImbalanceCurveExcess are f against the load
+	// priced (--prefill-f-load-curve, whatif.Prefill.ImbalanceCurveFloor),
+	// fitted over ImbalanceCurveMinutes minutes; absent where none is.
+	ImbalanceCurveFloor   float64 `json:"imbalanceCurveFloor,omitempty"`
+	ImbalanceCurveExcess  float64 `json:"imbalanceCurveExcess,omitempty"`
+	ImbalanceCurveMinutes int     `json:"imbalanceCurveMinutes,omitempty"`
+	PromptTokens          float64 `json:"promptTokens,omitempty"`
+	PromptSource          string  `json:"promptSource,omitempty"`
+	PromptFromCycle       int     `json:"promptFromCycle,omitempty"`
+	PromptToCycle         int     `json:"promptToCycle,omitempty"`
+	PromptCV              float64 `json:"promptCV,omitempty"`
+	PromptCVSource        string  `json:"promptCVSource,omitempty"`
 	// PromptCVRead is the histogram's figure an --assume-prompt-cv stands in
 	// place of, and ArrivalCV2 Ca^2 from --arrival-cv2: absent with neither.
 	PromptCVRead   *float64 `json:"promptCVRead,omitempty"`
@@ -157,6 +164,11 @@ type wireTTFT struct {
 	// the GPU, as slo.SwitchTTFTTierLoad prices it (tierLoad); absent with
 	// the switch off, or where it prices none.
 	TierLoad *wireTierLoad `json:"tierLoad,omitempty"`
+	// HitAtCount is the prefix hit priced at a prefill count other than
+	// the recorded one, as saturation.SwitchPrefillHitAtCount prices it
+	// (priceHitAtCount); absent with the switch off, or at the recorded
+	// count.
+	HitAtCount *wireHitAtCount `json:"hitAtCount,omitempty"`
 	// DecodeSide is how decode's part was priced: line, "decode engine" or
 	// omitted; the two figures are the decode engine's measured pair.
 	DecodeSide             string  `json:"decodeSide,omitempty"`
@@ -187,7 +199,11 @@ type wireTTFT struct {
 	RouterHopSource             string   `json:"routerHopSource,omitempty"`
 	DecodePerStep               float64  `json:"decodePerStep,omitempty"`
 	FlowControl                 string   `json:"flowControl,omitempty"`
-	Assumed                     []string `json:"assumed"`
+	// RouterPolicy is what the router scores, read from its series
+	// (learnreplay.State.RouterPolicy); absent where the source holds none
+	// of them. It sets no price: --load-aware-router still does.
+	RouterPolicy *balance.RouterPolicy `json:"routerPolicy,omitempty"`
+	Assumed      []string              `json:"assumed"`
 }
 
 // wireInputs is what a variant was priced from.
@@ -471,6 +487,18 @@ type wireBasis struct {
 	// PrefillOnlyRate is the rate the prefill side alone allows, on a TTFT
 	// rate; Floor and KneeRate then read the TTFT's (whatif.TTFTBasis).
 	PrefillOnlyRate float64 `json:"prefillOnlyRate,omitempty"`
+	// BatchBeyondFit is the batch the answer's fill runs past the most the
+	// decode line's fit rows held, where it is (flag BatchBeyondFit).
+	BatchBeyondFit *wireBatchBeyondFit `json:"batchBeyondFit,omitempty"`
+}
+
+// wireBatchBeyondFit is whatif.BatchBeyondFit on the wire, in sequences an
+// engine rank: a pod's with one rank, and Ranks, absent then, says how many
+// a pod runs otherwise.
+type wireBatchBeyondFit struct {
+	Priced int64 `json:"priced"`
+	Fitted int64 `json:"fitted"`
+	Ranks  int   `json:"ranks,omitempty"`
 }
 
 // wireRefusal is whatif.Unanswerable on the wire.
@@ -520,6 +548,9 @@ func toWire(r whatif.Result, unit string) *wireResult {
 		}
 		if t := v.Basis.TTFT; t != nil {
 			a.Basis.Floor, a.Basis.KneeRate, a.Basis.PrefillOnlyRate = t.Floor, t.KneeRate, t.PrefillOnlyRate
+		}
+		if b := v.Basis.Batch; b != nil {
+			a.Basis.BatchBeyondFit = &wireBatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
 		}
 		for _, f := range v.Flags {
 			a.Flags = append(a.Flags, string(f))
@@ -616,10 +647,10 @@ func inputsOf(f *answerFlags, pv pricedVariant) *wireInputs {
 		Shape: wireShape{InputTokens: pv.shape.AvgInputTokens, InputSource: shapeMeasured,
 			OutputTokens: pv.shape.AvgOutputTokens, OutputSource: shapeMeasured, PrefixHitRate: pv.shape.PrefixHitRate,
 			FromCycle: pv.state.Shape.FromCycle, ToCycle: pv.state.Shape.ToCycle, Cycles: pv.state.Shape.Cycles,
-			OutputDispersion: pv.state.Shape.OutputDispersion},
+			OutputDispersion: pv.outputDispersion},
 		BatchCap: pv.perRank, BatchCapSource: pv.state.BatchCapSource,
 		Ranks: max(pv.state.Ranks, 1), Replicas: pv.decode.Replicas, ReplicasFrom: "recording",
-		Engine: engineOf(pv.state.Params),
+		Engine: engineOf(&pv.state),
 	}
 	if pv.assumedIL {
 		in.Shape.InputSource = shapeAssumed

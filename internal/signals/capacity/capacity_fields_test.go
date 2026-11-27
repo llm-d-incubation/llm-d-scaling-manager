@@ -97,6 +97,9 @@ var (
 		// record removes a MAX clamp, which over-states capacity. The latency
 		// fingerprint hashes it instead.
 		"Image": "a tag changes every rebuild; refusing records removes a max clamp",
+		// What the model's config.json says, read for the report only. The
+		// checkpoint that decides it, ModelPath and ModelRevision, is compared.
+		"ModelConfig": "decided by the compared checkpoint; reported, not priced",
 	}
 )
 

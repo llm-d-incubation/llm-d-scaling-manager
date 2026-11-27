@@ -373,6 +373,9 @@ func (a *SaturationAnalyzer) forgetLearnerLocked(name, namespace, modelID, varia
 		return a.forgetITLLocked(namespace, modelID, variant, by), true
 	case learn.Start:
 		return a.forgetStartLocked(namespace, modelID, variant, by), true
+	case learn.TTFTMixture, learn.TPOTDistribution:
+		// The v2 latency learners are the slo analyzer's alone.
+		return 0, true
 	}
 	ctrl.Log.WithName("saturation").Error(nil, "learner on learn.Learners has no forget code; nothing forgotten",
 		"learner", name, "namespace", namespace, "modelID", modelID, "variant", variant)

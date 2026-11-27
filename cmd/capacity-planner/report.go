@@ -12,6 +12,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
@@ -83,7 +84,7 @@ func decodeKneeOutside() string {
 }
 
 // e2eNote says what the e2e column is.
-const e2eNote = "e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile"
+const e2eNote = "e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile; in system is the rate times it (Little's law), the requests in the system on average"
 
 // noSLONote is the verdict's basis with no target at all.
 const noSLONote = "no SLO target (the policy sets none; pass --ttft or --tpot): judged on headroom alone"
@@ -138,6 +139,8 @@ type reporter struct {
 	// kneeOutside whether any shape's decode knee priced outside its region.
 	kneeV       whatif.Validation
 	kneeOutside bool
+	// untranslated is each concurrency load the shape found no rate for.
+	untranslated []whatifapi.ReportUntranslated
 }
 
 // fleetKey names a fleet priced: the shape, the counts and the statistics.
@@ -158,9 +161,6 @@ func (s *servedState) Report(ctx context.Context, q whatifapi.ReportQuery) (*wha
 func buildReport(ctx context.Context, st *learnreplay.State, s *servedState, q whatifapi.ReportQuery) (*whatifapi.ReportResponse, error) {
 	r := &reporter{ctx: ctx, st: st, s: s, q: q, fleets: map[fleetKey]*servedFleet{}}
 	r.resolveTargets()
-	if len(r.q.Shapes) == 0 {
-		r.q.Shapes = []whatifapi.ReportShapeAsk{{Measured: true, Label: "measured"}}
-	}
 	if len(r.q.Loads) == 0 {
 		for _, l := range defaultLoads {
 			a, _ := whatifapi.ParseReportLoad(l)
@@ -178,6 +178,9 @@ func buildReport(ctx context.Context, st *learnreplay.State, s *servedState, q w
 	// from the cycles the load was read at.
 	var load whatifapi.ReportLoad
 	r.loadOf(&load)
+	if len(r.q.Shapes) == 0 {
+		r.q.Shapes = []whatifapi.ReportShapeAsk{defaultShape(r.loadShape)}
+	}
 	r.q.Shapes = slices.Clone(r.q.Shapes)
 	if err := r.resolveLoadShapes(); err != nil {
 		return nil, err
@@ -193,9 +196,9 @@ func buildReport(ctx context.Context, st *learnreplay.State, s *servedState, q w
 		FirstAt: st.FirstAt, LastAt: st.At, Gaps: whatifapi.WindowGapsOf(st.CycleTimes)}
 	out.Fleet = whatifapi.ReportFleet{Prefill: np, Decode: nd, PrefillVariant: base.pf.variant, DecodeVariant: base.pv.state.Variant,
 		PrefillFrom: from(q.Prefill), DecodeFrom: from(q.Decode),
-		DecodeEngine: engineInfo(base.pv.state.Params)}
+		DecodeEngine: engineInfo(&base.pv.state)}
 	if base.pf.variant != "" {
-		out.Fleet.PrefillEngine = engineInfo(variantParams(st, base.pf.variant))
+		out.Fleet.PrefillEngine = engineInfo(variantState(st, base.pf.variant))
 	}
 	out.Load = load
 	out.SLO = r.sloOf()
@@ -226,6 +229,18 @@ func buildReport(ctx context.Context, st *learnreplay.State, s *servedState, q w
 	out.NotValidated = append(out.NotValidated, e2eNote)
 	out.ExitCode = code
 	return out, nil
+}
+
+// defaultShape is the shape a report prices when none is asked: the load's
+// own (whatifapi.ShapeLoad), the lengths of the cycles the load judged at was
+// read from, so that the verdict prices the load at the traffic that made it;
+// the measured shape where no cycle of the load read one (a stated load, or
+// none read a shape).
+func defaultShape(loadShape *whatifapi.ReportLoadShape) whatifapi.ReportShapeAsk {
+	if loadShape == nil {
+		return whatifapi.ReportShapeAsk{Measured: true, Label: "measured"}
+	}
+	return whatifapi.ReportShapeAsk{Load: true, Label: whatifapi.ShapeLoad}
 }
 
 // shapeReport prices the fleet at the shape r.sh: its exit code, and whether
@@ -274,6 +289,10 @@ func (r *reporter) shapeReport(ctx context.Context, np, nd int) (whatifapi.Repor
 	r.capacity(&rs.Capacity, base, ev)
 	r.use(&rs.Utilization, base, ev)
 	if rs.Table, err = r.table(ctx, ev); err != nil {
+		return rs, 0, false, err
+	}
+	rs.Untranslated = r.untranslated
+	if err := r.capacityConcurrency(&rs.Capacity, ev); err != nil {
 		return rs, 0, false, err
 	}
 	if rs.Verdict, err = r.verdict(np, nd, ev); err != nil {
@@ -482,7 +501,7 @@ func (r *reporter) addAssumed(words ...string) {
 }
 
 // loadOf is the load the fleet is judged at: the query's, else the statistic
-// asked (p95 by default) of the per-cycle arrival rate over the window's
+// asked (the p95 less counting noise by default) of the per-cycle arrival rate over the window's
 // cycles that read one above 0, refused (WindowGapAtPeak) when a gap in the
 // window could hide its peak (gapAtPeak). A growth load is a what-if of
 // its own (shapeReport), never the load judged at. The mean, p95 and
@@ -505,7 +524,7 @@ func (r *reporter) loadOf(l *whatifapi.ReportLoad) {
 		stats = loadStats(rates)
 		mean, p95, peak := stats[whatifapi.LoadMean], stats[whatifapi.LoadP95], stats[whatifapi.LoadPeak]
 		l.Mean, l.P95, l.Peak = &mean, &p95, &peak
-		mod := whatifapi.ModulationP95(rates, mean, p95)
+		mod := whatifapi.ModulationP95Every(rates, mean, p95, cycleSeconds(r.st))
 		stats[whatifapi.LoadP95Modulation] = mod
 		l.P95Modulation = &mod
 		l.P95IsPeak = len(rates) < minP95Cycles
@@ -1030,6 +1049,44 @@ func (r *reporter) capacity(c *whatifapi.ReportLimits, base *servedFleet, ev fle
 	plateauValidation(&c.MaxAtSLO, whatif.FigureRateAtTTFT, maxRate)
 }
 
+// capacityConcurrency adds the mean concurrency to each capacity rate: at a
+// knee, unbounded; at the operating point and the most at the SLO, priced on
+// the fleet at the mean TTFT.
+func (r *reporter) capacityConcurrency(c *whatifapi.ReportLimits, ev fleetEval) error {
+	mean, err := r.fleet(r.q.Prefill, r.q.Decode, 0, r.q.TPOTPercentile)
+	if err != nil {
+		return err
+	}
+	ol := r.pv.shape.AvgOutputTokens
+	for _, k := range []*whatifapi.ReportRate{&c.PrefillKnee, &c.DecodeKnee, &c.FleetKnee} {
+		switch {
+		case k.Value == nil:
+		case k.LowerBound:
+			// At least the knee: the true knee, past which requests queue
+			// without bound, may be higher (#280).
+			k.Concurrency = whatifapi.LowerBoundKneeConcurrency()
+		default:
+			k.Concurrency = whatifapi.ConcurrencyAt(*k.Value, nil, nil, ol, 0, true)
+		}
+	}
+	if !ev.kneeOK {
+		// The operating point and the most at the SLO are the fleet knee's
+		// figure here (capacity).
+		c.Operating.Concurrency, c.MaxAtSLO.Concurrency = c.FleetKnee.Concurrency, c.FleetKnee.Concurrency
+		return nil
+	}
+	for _, x := range []*whatifapi.ReportRate{&c.Operating, &c.MaxAtSLO} {
+		if x.Value == nil {
+			continue
+		}
+		rate := *x.Value
+		t, _ := mean.TTFTPoint(rate)
+		tm, _ := mean.TPOTAt(rate)
+		x.Concurrency = whatifapi.ConcurrencyAt(rate, t, tm, ol, mean.pv.decode.Replicas, r.pastKnee(rate, ev))
+	}
+	return nil
+}
+
 // rate is a rate row: the figure, the output tokens it carries, what binds.
 func (r *reporter) rate(res whatif.Result, ol float64, binds string) whatifapi.ReportRate {
 	out := whatifapi.ReportRate{Figure: whatifapi.FigureOf(res, unitRate, false), Binds: binds}
@@ -1059,7 +1116,7 @@ func prefillBinds(sf *servedFleet) string {
 // servedWorkWords says a prefill knee is the work the prefill pods sustained
 // (kneeAtServedWork): knee x the prompt priced, over that prompt.
 func servedWorkWords(knee, prompt float64) string {
-	return fmt.Sprintf("prefill work served: the %s computed tokens/s the prefill pods sustained over 2 min / %s tokens",
+	return fmt.Sprintf("prefill work served: the %s computed tokens/s the prefill pods sustained over 5 min, backlog steady / %s tokens",
 		num(round(knee*prompt)), num(round(prompt)))
 }
 
@@ -1233,6 +1290,7 @@ func (r *reporter) table(ctx context.Context, ev fleetEval) ([]whatifapi.ReportR
 		return nil, err
 	}
 	rows := []whatifapi.ReportRow{}
+	r.untranslated = nil
 	for _, l := range r.q.Loads {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1253,6 +1311,16 @@ func (r *reporter) table(ctx context.Context, ev fleetEval) ([]whatifapi.ReportR
 			}
 		case l.Share > 0:
 			continue
+		case l.Concurrency > 0:
+			cr, why := r.rateAtConcurrency(mean, l.Concurrency, ev)
+			if why != "" {
+				r.untranslated = append(r.untranslated, whatifapi.ReportUntranslated{Load: l.Label, Reason: why})
+				continue
+			}
+			row.Rate, row.Label, row.FromConcurrency = cr.Rate, l.Label+" concurrent", &cr
+			if cr.AtKnee {
+				row.Label += ", saturates"
+			}
 		default:
 			row.Rate, row.Label = l.Rate, l.Label
 		}
@@ -1283,10 +1351,60 @@ func (r *reporter) table(ctx context.Context, ev fleetEval) ([]whatifapi.ReportR
 		row.E2EMeanSum = whatifapi.FigureOf(e2eSum(ttftMean, tm, r.pv.shape.AvgOutputTokens), unitSeconds, true)
 		// A sum of an upper bound is one too (#369).
 		row.E2EMeanSum.UpperBound = row.E2EMeanSum.Value != nil && upperBoundTTFT(ttftMean)
+		row.Concurrency = whatifapi.ConcurrencyAt(row.Rate, ttftMean, tm, r.pv.shape.AvgOutputTokens, mean.pv.decode.Replicas,
+			r.pastKnee(row.Rate, ev))
 		row.Cell = r.cell(slo, cellTTFT, row, ev)
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// pastKnee says rate is at or past the fleet knee, where requests queue
+// without bound; past a knee that is only a lower bound, short of decode's,
+// it is not known to be (#280).
+func (r *reporter) pastKnee(rate float64, ev fleetEval) bool {
+	if !ev.kneeOK || rate < ev.knee {
+		return false
+	}
+	return !ev.lowerBound || rate >= ev.decodeKneeRate()
+}
+
+// rateAtConcurrency is the rate at which the fleet holds n requests in the
+// system on average, on mean, the fleet priced at the mean TTFT: the rate
+// at which rate x (TTFT mean + (OL - 1) x TPOT mean) is n, below the fleet
+// knee. why says, in words, why there is none.
+func (r *reporter) rateAtConcurrency(mean *servedFleet, n float64, ev fleetEval) (whatifapi.ConcurrencyRate, string) {
+	if !ev.kneeOK {
+		return whatifapi.ConcurrencyRate{}, "no fleet knee to translate a concurrency below"
+	}
+	ol := r.pv.shape.AvgOutputTokens
+	var refused whatif.Result
+	w := func(rate float64) (float64, bool) {
+		t, _ := mean.TTFTPoint(rate)
+		tm, _ := mean.TPOTAt(rate)
+		sum := e2eSum(t, tm, ol)
+		v, ok := valueOf(sum)
+		if !ok && refused == nil {
+			refused = sum
+		}
+		return v, ok
+	}
+	cr, err := whatifapi.RateAtConcurrency(n, ev.knee, w)
+	switch {
+	case whatifapi.ConcurrencyUnpriced(err):
+		return cr, "the mean time in the system is refused: " + refusalWords(refused)
+	case err != nil:
+		return cr, err.Error()
+	case cr.AtKnee && ev.lowerBound && cr.Rate >= ev.knee:
+		// The fleet holds fewer below a knee that is only a lower bound:
+		// whether it saturates there is not known (#280).
+		return whatifapi.ConcurrencyRate{}, fmt.Sprintf("the fleet holds fewer below its prefill knee of at least %.2f r/s, "+
+			"which rests on a lower bound of V_P: the true knee may be higher, so the rate that holds them is not priced; "+
+			"--assume-vp states a V_P", ev.knee)
+	}
+	t, _ := mean.TTFTPoint(cr.Rate)
+	cr.LowerBound = upperBoundTTFT(t)
+	return cr, ""
 }
 
 // ttftStat is the TTFT at q and rate on sf, flagged where the tail rests on
@@ -1375,12 +1493,16 @@ func e2eSum(ttft, tpot whatif.Result, ol float64) whatif.Result {
 //   - UNDER-PROVISIONED on a known miss at the load judged;
 //   - NOT JUDGED where it would be UNDER-PROVISIONED on a load of other
 //     traffic than the shape priced, or one the window's own fleet served
-//     past the knee (notJudgedUnder), when its own check is not judged, or
-//     when the prefill side does not price and decode alone holds;
+//     past the knee (notJudgedUnder), when its own check is not judged,
+//     when the prefill side does not price and decode alone holds, or where
+//     the fleet holds on a measured shape priced lighter than the load's
+//     cycles, whose knee reads high for the load (phasesLighter, #361);
 //   - OVER-PROVISIONED when a role has a replica to spare: one fewer of it
 //     holds the whole fleet at the load judged, and the role's own check
 //     (knee and target) at the peak too, since removing capacity is the
-//     costly mistake;
+//     costly mistake; a decode replica is spare only where one fewer is
+//     still the count the load needs if the decode knee reads as high as
+//     its label allows (decodeAtBound, #363);
 //   - RIGHT-SIZED otherwise.
 //
 // Each role's standing is reported (Roles), and on UNDER and OVER the
@@ -1399,6 +1521,7 @@ func (r *reporter) verdict(np, nd int, base fleetEval) (whatifapi.ReportVerdict,
 	if !r.brief {
 		lead = "at " + r.loadWords + ", "
 	}
+	lighter := r.phasesLighter()
 	switch {
 	case !base.kneeOK:
 		v.Verdict = whatifapi.VerdictNotJudged
@@ -1440,11 +1563,22 @@ func (r *reporter) verdict(np, nd int, base fleetEval) (whatifapi.ReportVerdict,
 		v.Summary = fmt.Sprintf("%s: %s%s cannot be priced (%s).", v.Verdict, lead, base.slo.unknown,
 			refusalWords(base.slo.unknownFig))
 		return v, nil
+	case lighter != "":
+		// Ahead of decode alone holding: its decode-only need is sized on
+		// the same knee, and can name fewer decode than the fleet has.
+		v.Verdict = whatifapi.VerdictNotJudged
+		v.Reason += ". " + lighter
+		v.Summary = fmt.Sprintf("%s: %s %s.", v.Verdict, phasesWords, lighter)
+		return v, nil
 	case !base.prefillPriced:
 		v.Verdict = whatifapi.VerdictNotJudged
 		v.Reason += ". The prefill side is not priced: decode alone cannot show the fleet right-sized or over-provisioned"
-		v.Summary = fmt.Sprintf("%s: the prefill side is not priced (%s); decode alone holds %s%s.", v.Verdict,
-			refusalWords(base.prefillKnee), r.targetWords(), strings.TrimSuffix(" "+lead, ", "))
+		need, err := r.decodeOnlyNeed(np, nd, base, &v)
+		if err != nil {
+			return v, err
+		}
+		v.Summary = fmt.Sprintf("%s: decode only: decode alone holds %s%s; %s; prefill was not sized (%s), so this is not a fleet recommendation.",
+			v.Verdict, r.targetWords(), strings.TrimSuffix(" "+lead, ", "), need, refusalWords(base.prefillKnee))
 		return v, nil
 	}
 	roles, restsOnDecode, notes, err := r.roles(np, nd, base, &v)
@@ -1484,6 +1618,38 @@ func (r *reporter) verdict(np, nd int, base fleetEval) (whatifapi.ReportVerdict,
 		v.Reason += ". " + noSLONote
 	}
 	return v, nil
+}
+
+// ttftNeverPriced reports whether a TTFT is refused for a reason no replica
+// count lifts: a prefill speed, fixed latency or imbalance the source did not
+// learn, or one known only as the rate a pod was seen to compute (both
+// NoPrefillCapacity). A rate past a lower-bound knee (PastLowerBoundKnee)
+// is not one: more prefill replicas raise that knee.
+func ttftNeverPriced(r whatif.Result) bool {
+	u, ok := r.(whatif.Unanswerable)
+	if !ok {
+		return false
+	}
+	switch u.Reason {
+	case whatif.NoPrefillCapacity, whatif.NoFixedLatency, whatif.NoImbalance:
+		return true
+	}
+	return false
+}
+
+// decodeOnlyNeed is, on a fleet whose prefill side is not priced and whose
+// decode holds, how many decode replicas hold decode's own check (needed's
+// decode-only search), in words: "4-6 decode would hold it", from the
+// fewest to the fleet's own. It sets v.Needed, decode only.
+func (r *reporter) decodeOnlyNeed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict) (string, error) {
+	words, _, err := r.needed(np, nd, base, v)
+	if err != nil || v.Needed == nil || v.Needed.Unmet != "" {
+		return words, err
+	}
+	if d := v.Needed.Decode; d < nd {
+		return fmt.Sprintf("%d-%d decode would hold it", d, nd), nil
+	}
+	return fmt.Sprintf("no fewer than its %d decode would hold it", nd), nil
 }
 
 // A window contradicts the model when the fleet priced, or a smaller one,
@@ -1583,9 +1749,52 @@ func (r *reporter) phasesDiffer(binds string) string {
 	if !r.sh.Measured || ls == nil || !(heavier(il, ls.InputTokens) || olHeavier) {
 		return ""
 	}
-	return fmt.Sprintf("the load's cycles ran at IL %s OL %s, the shape priced is IL %s OL %s, so the knee is of other traffic and "+
-		"no verdict is priced on it; --shape load prices the load at its own shape", num(round(ls.InputTokens)), num(round(ls.OutputTokens)),
-		num(round(il)), num(round(ol)))
+	return r.shapesWords("so the knee is of other traffic and no verdict is priced on it")
+}
+
+// phasesLighter says how the load's cycles ran heavier than the measured
+// shape priced, "" where they did not or a shape was stated: a shape priced
+// lighter than the load's in a length (more than
+// whatifapi.ShapeLoadTolerance under it) reads its knee high for the load,
+// so a verdict that the fleet holds, RIGHT-SIZED or OVER-PROVISIONED, is not
+// given on it (#361). It can cut replicas the load needs. An UNDER on such a
+// knee holds the more, and keeps its verdict.
+func (r *reporter) phasesLighter() string {
+	ls := r.loadShape
+	il, ol := r.pv.shape.AvgInputTokens, r.pv.shape.AvgOutputTokens
+	lighter := func(x, ref float64) bool { return x > 0 && ref > 0 && 1-x/ref > whatifapi.ShapeLoadTolerance }
+	if !r.sh.Measured || ls == nil || !(lighter(il, ls.InputTokens) || lighter(ol, ls.OutputTokens)) {
+		return ""
+	}
+	return r.shapesWords("so the knee reads high for the load and no verdict that the fleet holds is priced on it")
+}
+
+// shapesWords says the load's cycles' shape and the shape priced, then so,
+// and how to price the load at its own shape.
+func (r *reporter) shapesWords(so string) string {
+	ls := r.loadShape
+	return fmt.Sprintf("the load's cycles ran at IL %s OL %s, the shape priced is IL %s OL %s, %s; --shape load prices the load at its own shape",
+		num(round(ls.InputTokens)), num(round(ls.OutputTokens)), num(round(r.pv.shape.AvgInputTokens)), num(round(r.pv.shape.AvgOutputTokens)), so)
+}
+
+// decodeKneeScale is the decode knee at the shape priced over the knee at
+// cycle c's shape: a rate c served, times it, is that rate at the shape
+// priced. A decode knee is the sequences resident, the fill times the KV
+// capacity over the KV one request holds (KVreq = ILeff + D*OL/2), each
+// served once every OL steps: it goes as 1/(OL*KVreq). The prompt's KV is
+// resident on the decode pods, P/D or not, so a shorter prompt raises the
+// knee too. Both KVreq are read with the shape priced's prefix hit and
+// output dispersion, so only the lengths move the ratio. Where the batch
+// cap binds, the knee moves less with KVreq than that, so the KVreq ratio
+// is taken only where it is below 1: a cycle then counts at or below its
+// share at the shape priced, never past it. Callers check both lengths are
+// above 0.
+func (r *reporter) decodeKneeScale(c learnreplay.CycleShape) float64 {
+	s := r.pv.shape
+	kv := func(il, ol float64) float64 {
+		return shape.New(il, ol, s.PrefixHitRate).WithOutputDispersion(s.OutputDispersion).KVreq
+	}
+	return c.OutputTokens / s.AvgOutputTokens * min(1, kv(c.InputTokens, c.OutputTokens)/kv(s.AvgInputTokens, s.AvgOutputTokens))
 }
 
 // contradicted says how the window's own fleet served more than the model
@@ -1597,9 +1806,14 @@ func (r *reporter) phasesDiffer(binds string) string {
 // at least one replica and at most the replicas priced (CurrentReplicas
 // less PendingReplicas, summed over the role's variants), and the decode
 // replicas served above the share times the fleet knee; a cycle lighter
-// than the shape priced in the length the binding role's knee goes by
-// (prompt for prefill, output for decode) counts its rate scaled down by
-// that ratio, as its own knee is that much higher. The share is
+// than the shape priced counts its rate scaled down to the shape priced, as
+// its own knee is that much higher: by the prompt ratio where prefill binds,
+// and by decodeKneeScale where decode does. An aggregated fleet, with no
+// prefill variant, is one pool judged on its own knee: the decode knee its
+// line prices, fitted on pods that prefill too, with the pool's run counted
+// on its replicas; its scale is the lower of decodeKneeScale and the prompt
+// ratio, since a shorter prompt also shortens the prefill work in its steps
+// (#357). The share is
 // contradictShare, over the band's top where that sets the decode knee:
 // such a knee stops at the highest fill the line was fitted to, short of a
 // full replica. Where the recording holds every cycle's clock
@@ -1688,7 +1902,14 @@ func (r *reporter) contradicted(np, nd int, base fleetEval) string {
 			case rolePrefill:
 				x *= min(1, c.InputTokens/il)
 			case roleDecodeWord:
-				x *= min(1, c.OutputTokens/ol)
+				s := r.decodeKneeScale(c)
+				if !hasPrefill {
+					// An aggregated pool also prefills on the same pods,
+					// in the steps its line was fitted on: a shorter
+					// prompt shortens them too (#357).
+					s = min(s, c.InputTokens/il)
+				}
+				x *= min(1, s)
 			}
 		}
 		if unknown[i] || !atShape || !(whatif.Finite(x) && x > over) || !within(dec[i], nd) || (checkPrefill && !within(pre[i], np)) {
@@ -1782,7 +2003,8 @@ func noteText(notes []string) string {
 
 // roles judges each role's own standing at the load: a role has a replica
 // to spare when one fewer of it holds the whole fleet at the load judged,
-// and its own check (knee and target) at the peak as well. It fills
+// and its own check (knee and target) at the peak as well; decode, also
+// where one fewer still meets the decode knee's error bound. It fills
 // v.Roles, v.Shrink and v.Checks, and says the roles in words, whether a
 // spare rests on the decode knee, and the assumed f any of it rests on.
 func (r *reporter) roles(np, nd int, base fleetEval, v *whatifapi.ReportVerdict) (string, bool, []string, error) {
@@ -1823,6 +2045,11 @@ func (r *reporter) roles(np, nd int, base fleetEval, v *whatifapi.ReportVerdict)
 					rr.Detail = "no spare: one fewer misses at the peak " + rateWords(shrinkAt)
 				}
 			}
+			if d, eb, ok := r.decodeAtBound(base, nd); rr.Spare && role == roleDecodeWord && ok && d > nd-1 {
+				// One fewer holds at the point estimate, but not if the
+				// decode knee reads as high as its label allows (#363).
+				rr.Spare, rr.Detail = false, "no spare: "+boundWords(d, eb)
+			}
 			switch {
 			case rr.Spare:
 				rr.Detail = "one fewer holds" + peak
@@ -1862,7 +2089,9 @@ func (r *reporter) marginWords(op float64) string {
 // needed line).
 // A role it cuts, below np prefill or nd decode, must also hold its own
 // check at the peak, the test roles judges a spare by: removing capacity
-// is the costly mistake. Both tests being monotone in each count, it then
+// is the costly mistake. Decode it cuts no lower than the count the load
+// needs if the decode knee reads as high as its label allows (#363), as a
+// decode spare must. Both tests being monotone in each count, it then
 // never cuts a role roles says has no spare unless it trades the role for
 // more of the other, which v.Grow names and the sentence says. Such a trade is not capped at the
 // fleet's count of the other role: an under-provisioned fleet needs more
@@ -1909,7 +2138,18 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 	}
 	// decodeHolds is decode's own check, which the prefill count does not
 	// move: at the load, and at the peak on a cut.
+	// boundHolds is whether n cuts decode no lower than the count the load
+	// needs if the decode knee reads as high as its label allows (#363):
+	// a cut must hold at that bound, as a decode spare must. Monotone in the
+	// decode count.
+	dBound, _, bounded := r.decodeAtBound(base, nd)
+	boundHolds := func(n whatifapi.FleetCounts) bool {
+		return !bounded || n.Decode >= nd || n.Decode >= dBound
+	}
 	decodeHolds := func(n whatifapi.FleetCounts) (bool, error) {
+		if !boundHolds(n) {
+			return false, nil
+		}
 		e, err := at(n)
 		if err != nil || !e.decodeOK {
 			return false, err
@@ -1921,13 +2161,18 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 		return err == nil && e.decodeOK, err
 	}
 	holds := func(n whatifapi.FleetCounts) (bool, error) {
+		if !boundHolds(n) {
+			return false, nil
+		}
 		e, err := at(n)
 		if err != nil || !e.holds {
 			return false, err
 		}
 		return cutHolds(n)
 	}
-	if !base.prefillPriced {
+	// decodeOnly is the need on decode's own check alone: the fewest decode
+	// replicas, a lower bound of the fleet's need.
+	decodeOnly := func() (string, []string, error) {
 		d, ok, err := whatifapi.SmallestCount(1, bound, func(d int) (bool, error) {
 			return decodeHolds(whatifapi.FleetCounts{Prefill: max(np, 1), Decode: d})
 		})
@@ -1945,6 +2190,12 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 		}
 		return fmt.Sprintf("needs at least %d decode (has %d)", d, nd) + r.atBound(base, nd, out), nil, nil
 	}
+	// A TTFT the source cannot price at any fleet (ttftNeverPriced) holds at
+	// no fleet the search would try: the need is decode's alone, a lower
+	// bound, never "no fleet holds".
+	if !base.prefillPriced || (r.ttft != nil && ttftNeverPriced(base.ttftAt)) {
+		return decodeOnly()
+	}
 	cost, minimizes := whatifapi.ReplicaCost(gpus)
 	out.Minimizes = minimizes
 	search := func() (whatifapi.FleetCounts, string, error) {
@@ -1954,6 +2205,10 @@ func (r *reporter) needed(np, nd int, base fleetEval, v *whatifapi.ReportVerdict
 	switch {
 	case err != nil:
 		return "", nil, err
+	case unmet != "" && r.ttft != nil && upperBoundTTFT(base.ttftAt):
+		// The TTFT is known only as an upper bound (V_P a lower bound), so no
+		// fleet is shown to hold it, nor to miss it: the need is decode's.
+		return decodeOnly()
 	case unmet != "":
 		out.Unmet = unmet
 		return fmt.Sprintf("no fleet up to %d replicas of each role holds", bound), nil, nil
@@ -2035,6 +2290,16 @@ func (r *reporter) atBound(base fleetEval, nd int, out *whatifapi.ReportNeeded) 
 		return ""
 	}
 	return fmt.Sprintf(", %s%d decode if the decode knee reads %.0f%% high", more, d, e*100)
+}
+
+// boundWords says the decode count d the load needs when the decode knee
+// reads e high, "more than" the search's bound past it, as atBound does.
+func boundWords(d int, e float64) string {
+	more := ""
+	if d > whatifapi.DefaultSizeBound {
+		d, more = whatifapi.DefaultSizeBound, "more than "
+	}
+	return fmt.Sprintf("%s%d decode if the decode knee reads %.0f%% high", more, d, e*100)
 }
 
 // decodeAtBound is the decode replicas the load needs at the operating
@@ -2163,7 +2428,10 @@ func refusalWords(res whatif.Result) string {
 	}
 	switch u.Reason {
 	case whatif.NoPrefillCapacity:
-		return "the recording learned no prefill speed; --assume-vp states one"
+		if slices.Contains(u.Flags, whatif.VPLowerBound) {
+			return "prefill capacity unknown: the prefill pods never queued, so their speed is only a lower bound; --assume-vp states one"
+		}
+		return "prefill capacity unknown: the recording learned no prefill speed; --assume-vp states one"
 	case whatif.NoFixedLatency:
 		return "the recording learned no fixed prefill latency; --assume-a states one"
 	case whatif.NoImbalance:

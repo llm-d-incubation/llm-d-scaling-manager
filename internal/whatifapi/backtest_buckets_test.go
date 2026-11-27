@@ -220,9 +220,16 @@ func TestBacktest_TheMeanIsTheQuotedFigure(t *testing.T) {
 	assert.True(t, strings.HasPrefix(line, "mean TPOT: within 20% of measured in 10 of the 10 five-minute steps scored"), line)
 	assert.Contains(t, line, "p90 TPOT not scored in 10: the measured p90 fell in a histogram bucket wider than 20% of its lower edge")
 
+	assert.True(t, strings.HasSuffix(line, "too wide to place it, with the prediction inside it or within 20% of its edge. "+TPOTBucketHint), line)
+	assert.Contains(t, TPOTBucketHint, "metrics.requestTPOTBuckets")
+	assert.Contains(t, TPOTBucketHint, "--custom-histogram-buckets")
+	line, _ = verdictPart("TPOT", scoresAt(10, 0.92, 10, 0.9, 10), "five-minute steps")
+	assert.NotContains(t, line, TPOTBucketHint, "every p90 placed: no hint")
+
 	line, _ = verdictPart("TTFT", scoresAt(10, 1.02, 4, 0.85, 10), "five-minute steps")
 	assert.Contains(t, line, "p90 TTFT: within 20% in 4 of 4, median ratio 0.85.")
 	assert.Contains(t, line, "p90 TTFT not scored in 6")
+	assert.NotContains(t, line, TPOTBucketHint, "the hint names the TPOT buckets")
 
 	// With no mean scored the p90 leads, as before.
 	_, quoted = verdictPart("TPOT", scoresAt(0, 0, 8, 1.1, 8), "five-minute steps")

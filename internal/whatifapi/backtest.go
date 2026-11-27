@@ -1,7 +1,6 @@
 package whatifapi
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
@@ -290,6 +290,18 @@ type BacktestRequest struct {
 	TestInputsID string `json:"testInputsId,omitempty"`
 	Split        string `json:"split,omitempty"`
 	FitUntil     string `json:"fitUntil,omitempty"`
+	// FitBelow and TestAbove split by load, in place of Split and FitUntil:
+	// the fit is read from the steps whose arrival rate is below FitBelow
+	// alone, and only the steps at or above TestAbove are judged. Each is a
+	// rate in requests per second ("12.5") or a percentile of its side's
+	// step rates ("p50"), over the steps that served traffic. With
+	// TestInputsID, FitBelow reads InputsID's steps and TestAbove
+	// TestInputsID's, and a test step the fit read a cycle of is not judged.
+	FitBelow  string `json:"fitBelow,omitempty"`
+	TestAbove string `json:"testAbove,omitempty"`
+	// FitCycles is the cycles the fit was read from, for a split by load
+	// (LoadFitCycles); set by the caller that resolved the fit, never sent.
+	FitCycles *CycleSet `json:"-"`
 	// Step is a step's length, 1m to 1h; absent, 5m. Settle is how long
 	// after a change of replicas, and after the test's first cycle, a step
 	// is not judged; absent, 2m.
@@ -308,6 +320,71 @@ type BacktestRequest struct {
 	// Assume types a term the fit did not learn, as a plan's assume does;
 	// every figure it moves is flagged, and the answer lists it.
 	Assume *Assume `json:"assume,omitempty"`
+	// TTFTModel prices TTFT with an experimental model in place of the
+	// planner's: "" is the planner's, whatif.QueueRankMixture
+	// (backtest_rank_mixture.go) and its variant
+	// whatif.QueueRankMixtureNLLine (backtest_rank_mixture_nl.go) the
+	// others. Every TTFT it prices reads OUTSIDE VALIDATED REGION.
+	TTFTModel string `json:"ttftModel,omitempty"`
+	// RankMixtureFitSteps turns on the rank mixture's fit-step fixes: its
+	// KV-deferral lines and prompt slopes fitted on the steps under rho 0.9
+	// only, and the ranks' shares read at the priced load
+	// (whatif.RankMixtureOptions CleanFitSteps, SharesAtLoad). Off by
+	// default; read only with TTFTModel rank-mixture.
+	RankMixtureFitSteps bool `json:"rankMixtureFitSteps,omitempty"`
+	// RankMixtureStratified prices the rank mixture with stratified service
+	// moments (whatif.RankMixtureOptions.StratifiedMoments): each rank's
+	// mean service and cs^2 integrated over the computed-token law, not
+	// from its own draws. Absent, the server's default (on, unless the
+	// server was started with --rank-mixture-stratified=false); false
+	// reads them from each rank's own draws. Read only with TTFTModel
+	// rank-mixture.
+	RankMixtureStratified *bool `json:"rankMixtureStratified,omitempty"`
+	// RankMixtureKVHold reads the KV-deferral lines no further than the
+	// fit window's 95th percentile rank utilization, held past it, not
+	// extrapolated (whatif.RankMixtureOptions.KVHold). Off by default;
+	// only with TTFTModel rank-mixture-nl-line.
+	RankMixtureKVHold bool `json:"rankMixtureKVHold,omitempty"`
+	// RankMixtureRemainderSpread draws the router's remainder from the
+	// router's measured request-processing time, where the fit window
+	// recorded it (whatif.RankMixtureOptions.RemainderSpread); without it
+	// the remainder is its line, as off, and the assumed line says so. Off
+	// by default; only with TTFTModel rank-mixture-nl-line.
+	RankMixtureRemainderSpread bool `json:"rankMixtureRemainderSpread,omitempty"`
+	// RankMixtureRemainderServer draws the router's remainder from the
+	// prefill pods' API servers and the router's own work, on the remainder
+	// spread's shape, where the fit window recorded the pods' HTTP and
+	// end-to-end series (whatif.RankMixtureOptions.RemainderServer);
+	// without them the remainder is the spread, and the assumed line says
+	// so. Off by default; only with TTFTModel rank-mixture-nl-line and
+	// RankMixtureRemainderSpread.
+	RankMixtureRemainderServer bool `json:"rankMixtureRemainderServer,omitempty"`
+	// RankMixtureMinFitWindow is the shortest fit window the model, v2 or
+	// its variant, prices from, a duration ("4h"): absent, the server's
+	// default, else whatif.MinSpreadFitWindow (12h). A model fitted on a
+	// window under 12h is flagged RankMixtureShortFitWindow. Only with a
+	// TTFTModel.
+	RankMixtureMinFitWindow string `json:"rankMixtureMinFitWindow,omitempty"`
+	// PrefillSlots is the prefill engine's max-num-seqs, read by
+	// TTFTModel's limited-PS check; 0 not known.
+	PrefillSlots int `json:"prefillSlots,omitempty"`
+	// TPOTModel prices the TPOT percentiles with an experimental
+	// per-request distribution in place of the planner's ratio: "" is the
+	// planner's, and whatif.TPOTRenewalLognormal the only other
+	// (backtest_tpot_distribution.go). The mean TPOT stays the planner's.
+	// Every percentile it prices reads OUTSIDE VALIDATED REGION.
+	TPOTModel string `json:"tpotModel,omitempty"`
+	// DecodeSlots is the decode engine's max-num-seqs and SpecTokens its
+	// num_speculative_tokens, read by TPOTModel; 0 not known (or, for
+	// SpecTokens, no speculative decoding).
+	DecodeSlots int `json:"decodeSlots,omitempty"`
+	SpecTokens  int `json:"specTokens,omitempty"`
+	// TPOTDistMinFitSteps is the fewest fit steps the TPOT distribution
+	// fits on: absent, the server's default, else MinTPOTDistFitSteps (24,
+	// two hours of 5-minute steps). A distribution fitted on fewer than 24
+	// is flagged TPOTDistributionShortFit. At least MinTPOTDistFitStepsFloor;
+	// only with a TPOTModel.
+	TPOTDistMinFitSteps int `json:"tpotDistMinFitSteps,omitempty"`
 }
 
 // BacktestResponse is POST /v1/backtest's answer, and capacity-planner
@@ -327,11 +404,14 @@ type BacktestResponse struct {
 	Fit          BacktestWindow `json:"fit"`
 	Test         BacktestWindow `json:"test"`
 	// Split is how one source was split ("60%", or the time), "" with two.
-	Split    string         `json:"split,omitempty"`
-	Config   BacktestConfig `json:"config"`
-	Step     float64        `json:"step"`
-	Settle   float64        `json:"settle"`
-	Measured string         `json:"measured"`
+	Split string `json:"split,omitempty"`
+	// LoadSplit is the split by load, where the request asked one
+	// (FitBelow, TestAbove); Split then says it in words.
+	LoadSplit *BacktestLoadSplit `json:"loadSplit,omitempty"`
+	Config    BacktestConfig     `json:"config"`
+	Step      float64            `json:"step"`
+	Settle    float64            `json:"settle"`
+	Measured  string             `json:"measured"`
 	// MeasuredNote says what the measured figures are.
 	MeasuredNote string `json:"measuredNote"`
 	// Assumed is every input of the prediction the test did not give.
@@ -344,6 +424,13 @@ type BacktestResponse struct {
 	Steps           []BacktestStep   `json:"steps"`
 	Summary         BacktestSummary  `json:"summary"`
 	Notes           []string         `json:"notes"`
+	// RankMixture is the experimental TTFT model's fit, where the request
+	// asked for it (BacktestRequest.TTFTModel).
+	RankMixture *RankMixtureReport `json:"rankMixture,omitempty"`
+	// TPOTDistribution is the experimental TPOT distribution's fit and its
+	// score at the histogram's resolution, where the request asked for it
+	// (BacktestRequest.TPOTModel).
+	TPOTDistribution *TPOTDistReport `json:"tpotDistribution,omitempty"`
 }
 
 // BacktestWindow is one side of a backtest: its inputs, and the time it
@@ -411,6 +498,12 @@ type BacktestStep struct {
 	// scored (UnscoredUnsettled).
 	RelaxationSeconds *float64 `json:"relaxationSeconds,omitempty"`
 	Unsettled         bool     `json:"unsettled,omitempty"`
+	// RankMixture is the experimental TTFT model's checks at the step,
+	// where the request asked for it.
+	RankMixture *RankMixtureCheck `json:"rankMixture,omitempty"`
+	// TPOTDist is the experimental TPOT distribution at the step, where
+	// the request asked for it.
+	TPOTDist *TPOTDistCheck `json:"tpotDistribution,omitempty"`
 	// TTFTBurst says the step's window is a burst (burstIn) against a
 	// prefill knee priced from a lower bound of V_P, and not against
 	// decode's knee: the true prefill knee may be far higher, so the step is
@@ -425,6 +518,12 @@ type BacktestStep struct {
 	// Target is the TTFT target judged, predicted and measured: met,
 	// missed or unknown.
 	Target *BacktestJudged `json:"target,omitempty"`
+	// BatchBeyondFit is the batch the step's decode runs past the most the
+	// fit's ITL line rows held (flag BatchBeyondFit): its mean TPOT's, or,
+	// on a step past the decode knee, the knee's, where the TPOT is refused.
+	// Its TPOT may read low and the decode knee high. Absent where the batch
+	// is inside the fit's.
+	BatchBeyondFit *BatchBeyondFit `json:"batchBeyondFit,omitempty"`
 }
 
 // BacktestPoint is one statistic of a step: the prediction (with the
@@ -446,7 +545,10 @@ type BacktestPoint struct {
 	// in, where it is too wide to place the percentile (MeasuredBucketWidth):
 	// the truth is somewhere in it. With the prediction inside it the pair
 	// is not scored (unresolvable); with the prediction outside it,
-	// OutsideBucket says which side.
+	// OutsideBucket says which side. For the router's TPOT p90 and p95 it is
+	// the joint bracket (whatif.JointBracket: the router's TPOT histogram and,
+	// above their first edge, the decode engines', at their sampling noise),
+	// and Measured its point.
 	MeasuredBucket *Band `json:"measuredBucket,omitempty"`
 	// OutsideBucket is "under" or "over" where the prediction fell so far
 	// below or above MeasuredBucket that even its nearer edge is more than
@@ -516,6 +618,9 @@ type BacktestExcluded struct {
 	NotPriced     int `json:"notPriced"`
 	OtherVariants int `json:"otherVariants"`
 	Burst         int `json:"burst"`
+	// Load is the steps of the test's span outside a load split's test
+	// (ExcludedLoad).
+	Load int `json:"load,omitempty"`
 }
 
 // BacktestScore is one statistic's score.
@@ -588,7 +693,7 @@ const (
 // handleBacktest is POST /v1/backtest.
 func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 	var req BacktestRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	out, err := s.backtest(r.Context(), req)
@@ -607,6 +712,19 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 // backtest answers req on one plan slot, within the plan budget. A split
 // resolves the fit at the split, as POST /v1/inputs would, and keeps it.
 func (s *Server) backtest(ctx context.Context, req BacktestRequest) (*BacktestResponse, error) {
+	// The server's experimental models (Config.TTFTModel, TPOTModel) price
+	// a request that names none, as if it had.
+	if req.TTFTModel == "" {
+		req.TTFTModel = s.ttftModel
+	}
+	if req.TPOTModel == "" {
+		req.TPOTModel = s.tpotModel
+	}
+	if req.RankMixtureStratified == nil {
+		on := s.stratified()
+		req.RankMixtureStratified = &on
+	}
+	s.rankMixtureDefaults(&req)
 	test, ok := s.inputs.get(req.InputsID)
 	if !ok {
 		return nil, errUnknownInputs
@@ -614,14 +732,30 @@ func (s *Server) backtest(ctx context.Context, req BacktestRequest) (*BacktestRe
 	fit := test
 	var cutoff time.Time
 	split := ""
-	if req.TestInputsID != "" {
+	if err := checkLoadSplit(req); err != nil {
+		return nil, err
+	}
+	switch {
+	case loadSplitAsked(req):
+		// The fit is InputsID's source read again from its steps below
+		// FitBelow alone; the test, TestInputsID's or InputsID's whole.
+		if req.TestInputsID != "" {
+			if test, ok = s.inputs.get(req.TestInputsID); !ok {
+				return nil, errUnknownInputs
+			}
+		}
+		var err error
+		if fit, req.FitCycles, err = s.loadFit(ctx, fit, req); err != nil {
+			return nil, err
+		}
+	case req.TestInputsID != "":
 		if req.Split != "" || req.FitUntil != "" {
 			return nil, InputErrorf("split and fitUntil split one source: give them without testInputsId")
 		}
 		if test, ok = s.inputs.get(req.TestInputsID); !ok {
 			return nil, errUnknownInputs
 		}
-	} else {
+	default:
 		var cycle int
 		var err error
 		if cycle, cutoff, split, err = splitOf(test, req.Split, req.FitUntil); err != nil {
@@ -631,20 +765,22 @@ func (s *Server) backtest(ctx context.Context, req BacktestRequest) (*BacktestRe
 		if err != nil {
 			return nil, err
 		}
-		if !acquire(s.inputSlots) {
-			return nil, errBusy
-		}
-		res, err := s.resolver.Resolve(ctx, in)
-		<-s.inputSlots
-		if err != nil {
+		if fit, err = s.refit(ctx, in); err != nil {
 			return nil, err
 		}
-		doc := res.Inputs
-		doc.SchemaVersion, doc.WhatifSchema = SchemaVersion, s.whatifSchema
-		doc.InputsID = contentID("inputs", res.Content)
-		fit = &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency,
-			config: res.Config, bytes: res.Bytes}
-		fit = s.inputs.add(doc.InputsID, fit)
+	}
+	// The engines' flags the models read are the fit's, as the source gives
+	// them, where the request does not state them.
+	if req.TTFTModel != "" && req.PrefillSlots == 0 {
+		req.PrefillSlots = fit.engine.PrefillSlots
+	}
+	if req.TPOTModel != "" {
+		if req.DecodeSlots == 0 {
+			req.DecodeSlots = fit.engine.DecodeSlots
+		}
+		if req.SpecTokens == 0 {
+			req.SpecTokens = fit.engine.SpecTokens
+		}
 	}
 	q, err := backtestQuestionOf(fit, test, req, cutoff, split)
 	if err != nil {
@@ -667,6 +803,43 @@ func (s *Server) backtest(ctx context.Context, req BacktestRequest) (*BacktestRe
 	return out, nil
 }
 
+// refit resolves in, the fit of a split, on one input slot, and keeps it.
+func (s *Server) refit(ctx context.Context, in InputsRequest) (*inputsEntry, error) {
+	if !acquire(s.inputSlots) {
+		return nil, errBusy
+	}
+	res, err := s.resolver.Resolve(ctx, in)
+	<-s.inputSlots
+	if err != nil {
+		return nil, err
+	}
+	doc := res.Inputs
+	doc.SchemaVersion, doc.WhatifSchema = SchemaVersion, s.whatifSchema
+	doc.InputsID = contentID("inputs", res.Content)
+	fit := &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency,
+		config: res.Config, bytes: res.Bytes, mixture: res.Mixture, decode: res.Decode, engine: res.Engine}
+	return s.inputs.add(doc.InputsID, fit), nil
+}
+
+// loadFit is the fit of a split by load: e's recording read again from its
+// steps below req.FitBelow alone (LoadFitCycles), and those cycles.
+func (s *Server) loadFit(ctx context.Context, e *inputsEntry, req BacktestRequest) (*inputsEntry, *CycleSet, error) {
+	if e.doc.Source.Kind != SourceRecording {
+		return nil, nil, InputErrorf("a split by load reads the fit from a recording's steps: a %q source is split by time (split, fitUntil)", e.doc.Source.Kind)
+	}
+	cs, err := LoadFitCycles(&Resolved{Series: e.series}, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	in, err := refitRequest(e, 0, time.Time{})
+	if err != nil {
+		return nil, nil, err
+	}
+	in.Source.Cycles = cs
+	fit, err := s.refit(ctx, in)
+	return fit, cs, err
+}
+
 // Backtest answers req against sources resolved outside a server: the CLI's
 // backtest, on the same code path as POST /v1/backtest. For a split, fit is
 // the source read at the split (cutoff) and wholeTest the whole source the
@@ -675,7 +848,8 @@ func Backtest(ctx context.Context, fit, wholeTest *Resolved, req BacktestRequest
 	entry := func(res *Resolved) *inputsEntry {
 		doc := res.Inputs
 		doc.InputsID = contentID("inputs", res.Content)
-		return &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency, config: res.Config}
+		return &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency, config: res.Config,
+			mixture: res.Mixture, decode: res.Decode}
 	}
 	q, err := backtestQuestionOf(entry(fit), entry(wholeTest), req, cutoff, split)
 	if err != nil {
@@ -749,7 +923,8 @@ func splitOf(e *inputsEntry, split, fitUntil string) (int, time.Time, string, er
 // cycle's time.
 func refitRequest(e *inputsEntry, cycle int, cutoff time.Time) (InputsRequest, error) {
 	d := e.doc
-	in := InputsRequest{Model: d.Model, DecodeVariant: d.Fleet.Decode.Variant, PrefillVPPlateau: d.PrefillVPPlateau, ExperimentalTTFT: d.ExperimentalTTFT}
+	in := InputsRequest{Model: d.Model, DecodeVariant: d.Fleet.Decode.Variant, PrefillVPPlateau: d.PrefillVPPlateau, PrefillHitAtCount: d.PrefillHitAtCount,
+		PrefillVPServiceLine: d.PrefillVPServiceLine, PrefillFLoadCurve: d.PrefillFLoadCurve, ExperimentalTTFT: d.ExperimentalTTFT}
 	if d.Fleet.Prefill != nil {
 		in.PrefillVariant = d.Fleet.Prefill.Variant
 	}
@@ -781,10 +956,13 @@ type backtestQuestion struct {
 	promptCV  *float64
 	// promptMaxRatio is promptCV's bound (stepInputs.promptMaxRatio).
 	promptMaxRatio float64
-	config         BacktestConfig
-	assumed        []string
-	testIndices    []int
-	assume         Assume
+	// contextTokens is the test's engines' context window (contextWindowOf),
+	// which holds each step's prompt spread; 0 where unknown.
+	contextTokens float64
+	config        BacktestConfig
+	assumed       []string
+	testIndices   []int
+	assume        Assume
 	// targetAsked is the target as the answer names it.
 	targetAsked *Objective
 	// source is the latency scored against; measureWindow, when above 0,
@@ -797,6 +975,14 @@ type backtestQuestion struct {
 	// cachedCost is phi priced at every step in place of the pricer's own
 	// (Knobs.CachedTokenCost), for FitCachedTokenCost; nil is the pricer's.
 	cachedCost *float64
+	// mixture is the experimental TTFT model fitted on the fit window, nil
+	// unless the request asked for it.
+	mixture *rankMixtureQ
+	// tpotDist is the experimental TPOT distribution fitted on the fit
+	// window, nil unless the request asked for it.
+	tpotDist *tpotDistQ
+	// load is the split by load, nil unless the request asked one.
+	load *loadSplit
 }
 
 // backtestQuestionOf checks req against fit and test, and refuses a test
@@ -843,8 +1029,14 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	if fit.id == test.id && cutoff.IsZero() {
 		return nil, InputErrorf("the test is the fit's own source: a backtest scores a period the planner did not see; split it, or test another recording")
 	}
-	if fit.doc.Fleet.Prefill == nil || test.doc.Fleet.Prefill == nil {
-		return nil, InputErrorf("the inputs have no prefill variant: a backtest prices a P/D fleet")
+	// A P/D fleet is priced with both roles. An aggregated one (no prefill
+	// variant, its decode variant serving both roles) is priced on its
+	// decode line alone: its TPOT, with its TTFT refused (issue
+	// llm-d-incubation/llm-d-scaling-manager#512). The fit and the test
+	// must be the same kind of fleet.
+	if (fit.doc.Fleet.Prefill == nil) != (test.doc.Fleet.Prefill == nil) {
+		return nil, InputErrorf("the fit and the test are not the same kind of fleet: one has a prefill variant and the other none; " +
+			"a backtest compares a P/D fleet with a P/D fleet, or an aggregated one with an aggregated one")
 	}
 	if fit.doc.Model != test.doc.Model {
 		return nil, InputErrorf("the fit is model %q and the test model %q: a backtest compares one model", fit.doc.Model, test.doc.Model)
@@ -863,6 +1055,19 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 			testIdx = append(testIdx, i)
 		}
 	}
+	if err := checkLoadSplit(req); err != nil {
+		return nil, err
+	}
+	if loadSplitAsked(req) {
+		if !cutoff.IsZero() {
+			return nil, InputErrorf("fitBelow and testAbove split by load, split and fitUntil by time: give one")
+		}
+		oneSource := fit.doc.Source.Kind == test.doc.Source.Kind && fit.doc.Source.Name == test.doc.Source.Name
+		if q.load, testIdx, err = loadSplitOf(fit, test, req, q.step, oneSource); err != nil {
+			return nil, err
+		}
+		q.split = q.load.words()
+	}
 	q.config = compareConfig(withFlowControl(fit.config, fit.series, fitIdx), withFlowControl(test.config, test.series, testIdx))
 	if !q.config.Match {
 		if !req.AllowConfigMismatch {
@@ -872,12 +1077,20 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 		}
 		q.config.Allowed = true
 	}
-	for i, x := range test.series {
-		if (q.cutoff.IsZero() || x.At.After(q.cutoff)) && (until.IsZero() || !x.At.After(until)) {
-			q.testIndices = append(q.testIndices, i)
+	if q.load != nil {
+		q.testIndices = testIdx
+	} else {
+		for i, x := range test.series {
+			if (q.cutoff.IsZero() || x.At.After(q.cutoff)) && (until.IsZero() || !x.At.After(until)) {
+				q.testIndices = append(q.testIndices, i)
+			}
 		}
 	}
-	if len(q.testIndices) == 0 {
+	switch {
+	case len(q.testIndices) == 0 && q.load != nil:
+		return nil, InputErrorf("testAbove %s (%.4g r/s): no step of the test at or above it that the fit did not read, nothing to test on",
+			req.TestAbove, q.load.testRate)
+	case len(q.testIndices) == 0:
 		return nil, InputErrorf("no test cycle after the split")
 	}
 	slices.SortStableFunc(q.testIndices, func(a, b int) int { return test.series[a].At.Compare(test.series[b].At) })
@@ -885,7 +1098,7 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	if int(span/q.step)+1 > maxBacktestSteps {
 		return nil, InputErrorf("the test spans %s: at a step of %s that is more than %d steps; ask a longer step", span, q.step, maxBacktestSteps)
 	}
-	if cutoff.IsZero() {
+	if cutoff.IsZero() && q.load == nil {
 		// Two sources: the fit must end before the test starts. A fit that
 		// reaches into the test's time saw its latency; one recorded after
 		// it may open with learned state (an ITL line) the controller
@@ -900,7 +1113,8 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	}
 	// The test's prompt spread is an input, its lengths, never its latency:
 	// pooled over the test's cycles, for a step whose own reads none.
-	if whole := stepInputsOf(seriesAt(test.series, q.testIndices)); whole.promptCV != nil {
+	q.contextTokens, _ = contextWindowOf(&test.doc)
+	if whole := stepInputsOf(seriesAt(test.series, q.testIndices), q.contextTokens); whole.promptCV != nil {
 		q.promptCV, q.promptMaxRatio = whole.promptCV, whole.promptMaxRatio
 	}
 	if a := req.Assume; a != nil {
@@ -917,6 +1131,59 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	if q.cv2 == nil {
 		q.assumed = append(q.assumed, "random (Poisson) arrivals: the recording does not measure how bursty arrivals are; "+
 			"state it with --arrival-cv2 (arrivalCV2) when known")
+	}
+	if err := checkMinFitWindow(req.RankMixtureMinFitWindow, req.TTFTModel); err != nil {
+		return nil, err
+	}
+	if err := checkTPOTMinFitSteps(req.TPOTDistMinFitSteps, req.TPOTModel); err != nil {
+		return nil, err
+	}
+	if (req.RankMixtureKVHold || req.RankMixtureRemainderSpread) && req.TTFTModel != string(whatif.QueueRankMixtureNLLine) {
+		return nil, InputErrorf("rankMixtureKVHold and rankMixtureRemainderSpread are modes of ttftModel %q: give them with that model",
+			whatif.QueueRankMixtureNLLine)
+	}
+	if err := checkRemainderServer(req.RankMixtureRemainderServer, req.RankMixtureRemainderSpread, req.TTFTModel); err != nil {
+		return nil, err
+	}
+	switch req.TTFTModel {
+	case "":
+		if req.RankMixtureFitSteps {
+			return nil, InputErrorf("rankMixtureFitSteps changes the fit of ttftModel %q: give it with that model", whatif.QueueRankMixture)
+		}
+	case string(whatif.QueueRankMixture), string(whatif.QueueRankMixtureNLLine):
+		// The model prices only where its identifiability checks pass;
+		// otherwise it abstains, and every TTFT is the planner's own.
+		sw := rankMixtureSwitchesOf(req)
+		switch {
+		case len(test.mixture) != len(test.series):
+			q.mixture = abstainedMixture("the test source did not give the per-rank series")
+		default:
+			fitted, ferr := fitRankMixture(fit, fitIdx, q.step, req.PrefillSlots, sw)
+			if ferr != nil {
+				q.mixture = abstainedMixture(ferr.Error())
+			} else {
+				q.mixture = fitted.identified().withHitAtCount(fit, fitIdx)
+			}
+		}
+		q.mixture.report.Model = string(sw.model())
+		q.assumed = append(q.assumed, q.mixture.assumedLines()...)
+	default:
+		return nil, InputErrorf("ttftModel %q, want %q, %q or none", req.TTFTModel, whatif.QueueRankMixture, whatif.QueueRankMixtureNLLine)
+	}
+	switch req.TPOTModel {
+	case "":
+	case whatif.TPOTRenewalLognormal, whatif.TPOTPerLengthMixture:
+		// The distribution prices only where its checks pass; otherwise it
+		// abstains, and every TPOT percentile is the planner's own.
+		if len(test.decode) != len(test.series) {
+			q.tpotDist = &tpotDistQ{report: TPOTDistReport{Model: req.TPOTModel, Experimental: true, FoldC: []float64{},
+				Fold: []TPOTDistScore{}, Abstained: "the test source did not give the decode series"}}
+		} else {
+			q.tpotDist = fitTPOTDist(fit, fitIdx, q.step, req.DecodeSlots, req.SpecTokens, req.TPOTModel, req.TPOTDistMinFitSteps)
+		}
+		q.assumed = append(q.assumed, q.tpotDist.assumedLines()...)
+	default:
+		return nil, InputErrorf("tpotModel %q, want %q, %q or none", req.TPOTModel, whatif.TPOTRenewalLognormal, whatif.TPOTPerLengthMixture)
 	}
 	return q, nil
 }
@@ -1043,13 +1310,15 @@ type stepOf struct {
 }
 
 // defaultMeasureWindow is the rate window a measurement is read over when
-// the source does not say: the engines' histograms are over a minute.
-const defaultMeasureWindow = 60.0
+// the source does not say (whatif.DefaultMeasureWindow).
+const defaultMeasureWindow = whatif.DefaultMeasureWindow
 
-// measureWindowOf is the window, seconds, the latency at l was read over.
+// measureWindowOf is the window, seconds, the latency at l was read over:
+// the router's own for the router (whatif.RouterWindowOf, as the
+// experimental models' fits read it), defaultMeasureWindow otherwise.
 func measureWindowOf(l LatencySample, source string) float64 {
-	if source == MeasuredRouter && l.Router != nil && l.Router.WindowSeconds > 0 {
-		return l.Router.WindowSeconds
+	if source == MeasuredRouter {
+		return whatif.RouterWindowOf(l.Router)
 	}
 	return defaultMeasureWindow
 }
@@ -1113,7 +1382,7 @@ func (q *backtestQuestion) layout() ([]stepOf, []time.Time, time.Time) {
 func (q *backtestQuestion) predictSteps(ctx context.Context) ([]stepOf, []BacktestStep, error) {
 	steps, changes, first := q.layout()
 	p := &predictor{pricer: q.fit.pricer, fleets: map[predictKey]Fleet{}, cv2: q.cv2, promptCV: q.promptCV, promptMaxRatio: q.promptMaxRatio,
-		headroom: q.fit.doc.Policy.Headroom, assume: q.assume, cachedCost: q.cachedCost}
+		headroom: q.fit.doc.Policy.Headroom, assume: q.assume, cachedCost: q.cachedCost, aggregated: !q.pd()}
 	out := make([]BacktestStep, 0, len(steps))
 	var fl fluid
 	for _, st := range steps {
@@ -1123,7 +1392,11 @@ func (q *backtestQuestion) predictSteps(ctx context.Context) ([]stepOf, []Backte
 		if st.anchor < 0 {
 			fl.reset()
 		}
-		out = append(out, q.stepOf(p, st, changes, first, &fl))
+		s := q.stepOf(p, st, changes, first, &fl)
+		if q.load != nil && st.anchor < 0 {
+			q.load.excluded(&s, st.start)
+		}
+		out = append(out, s)
 	}
 	return steps, out, nil
 }
@@ -1142,6 +1415,10 @@ func (q *backtestQuestion) run(ctx context.Context) (*BacktestResponse, error) {
 		Steps: []BacktestStep{}, Notes: []string{}}
 	out.Fit = windowOf(q.fit, nil, q.cutoff)
 	out.Test = windowOf(test, q.testIndices, time.Time{})
+	if q.load != nil {
+		r := q.load.report
+		out.LoadSplit = &r
+	}
 	if c := q.fit.doc.CachedTokenCost; c != nil {
 		// The fit's phi prices every step (slo.SwitchTTFTCachedTokenCost).
 		cc := *c
@@ -1153,6 +1430,9 @@ func (q *backtestQuestion) run(ctx context.Context) (*BacktestResponse, error) {
 			scoreStep(&s, measuredOf(test.latency[st.anchor], source, st.windowSeconds, q.pd()), q.target)
 		}
 		out.Steps = append(out.Steps, s)
+	}
+	if q.tpotDist != nil {
+		q.scoreTPOTDist(steps, out)
 	}
 	q.finish(out)
 	return out, nil
@@ -1174,9 +1454,21 @@ func (q *backtestQuestion) finish(out *BacktestResponse) {
 		}
 		out.Assumed = append(out.Assumed, fmt.Sprintf("the prompt-length spread of %d judged steps was not read (no computed-token histogram): %s is priced", unread, from))
 	}
-	out.VerdictLines, out.Excluded = verdictOf(out, q.step)
+	out.VerdictLines, out.Excluded = verdictOf(out, q.step, !q.pd())
 	out.Verdict = strings.Join(out.VerdictLines, " ")
 	out.Notes = append(out.Notes, backtestNotes(q)...)
+	if n := batchBeyondFitNote(out.Steps); n != "" {
+		out.Notes = append(out.Notes, n)
+	}
+	if q.mixture != nil {
+		r := q.mixture.report
+		out.RankMixture = &r
+	}
+	if q.tpotDist != nil {
+		r := q.tpotDist.report
+		out.TPOTDistribution = &r
+		out.Notes = append(out.Notes, q.tpotDist.note())
+	}
 	out.BacktestID = contentID("backtest", struct {
 		Fit, Test    string
 		Cutoff       time.Time
@@ -1187,6 +1479,22 @@ func (q *backtestQuestion) finish(out *BacktestResponse) {
 		Assume       Assume
 		Allowed      bool
 	}{q.fitID(), q.test.id, q.cutoff, q.step, q.settle, q.source, q.target, q.cv2, q.assume, q.config.Allowed})
+	if q.mixture != nil {
+		out.BacktestID = contentID("backtest", struct {
+			ID, Model, Assumed, Abstained string
+			Stratified                    bool
+		}{out.BacktestID, q.mixture.report.Model, q.mixture.report.Assumed, q.mixture.report.Abstained, q.mixture.report.Stratified})
+	}
+	if q.tpotDist != nil {
+		out.BacktestID = contentID("backtest", struct{ ID, TPOTModel, Assumed, Abstained string }{out.BacktestID, q.tpotDist.report.Model,
+			q.tpotDist.report.Assumed, q.tpotDist.report.Abstained})
+	}
+	if q.load != nil {
+		out.BacktestID = contentID("backtest", struct {
+			ID   string
+			Load BacktestLoadSplit
+		}{out.BacktestID, q.load.report})
+	}
 }
 
 // fitID is the fit's inputs id, or the prediction's for a comparison.
@@ -1295,7 +1603,7 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		out.Excluded, out.Detail = ExcludedNoMeasurement, "no cycle in the step"
 		return out
 	}
-	in := stepInputsOf(seriesAt(q.test.series, st.window))
+	in := stepInputsOf(seriesAt(q.test.series, st.window), q.contextTokens)
 	out.Rate, out.Prefill, out.Decode = in.rate, in.prefill, in.decode
 	if in.hasShape {
 		out.PromptTokens, out.OutputTokens = ptr(in.prompt), ptr(in.output)
@@ -1320,8 +1628,10 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		out.Excluded, out.Detail = ExcludedScaling, fmt.Sprintf("the replicas changed in its measurement window or within %s before it", q.settle)
 	case in.otherPods:
 		out.Excluded, out.Detail = ExcludedOtherVariants, "variants other than the priced ones also served: the rate and the latency are the whole model's"
-	case in.prefill == 0 || in.decode == 0:
+	case q.pd() && (in.prefill == 0 || in.decode == 0):
 		out.Excluded, out.Detail = ExcludedNotPriced, fmt.Sprintf("%d prefill and %d decode pods served: a P/D fleet is priced with both", in.prefill, in.decode)
+	case !q.pd() && in.decode == 0:
+		out.Excluded, out.Detail = ExcludedNotPriced, "no aggregated pod served"
 	}
 	pred, err := p.predict(in)
 	if err != nil {
@@ -1331,7 +1641,13 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		}
 		return out
 	}
-	if pred.prefillKnee != nil {
+	if q.mixture != nil {
+		q.priceMixture(&pred, &out, st)
+	}
+	if q.tpotDist != nil {
+		q.priceTPOTDist(&pred, &out, st)
+	}
+	if pred.prefillKnee != nil && !q.mixturePriced(out) {
 		if tr := relaxationSeconds(in.rate, *pred.prefillKnee, in.prefill, pred.ca2, pred.promptCV); tr > 0 && !math.IsInf(tr, 1) {
 			out.RelaxationSeconds = ptr(tr)
 			out.Unsettled = !settles(tr, st.windowSeconds)
@@ -1369,7 +1685,8 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 					lo, hi, *judgeKnee, in.rate)
 			}
 		}
-		if _, _, ok := burstIn(samples, *pred.knee); ok && pred.kneeLowerBound && out.Excluded == "" && in.rate < *pred.knee {
+		if _, _, ok := burstIn(samples, *pred.knee); ok && pred.kneeLowerBound && out.Excluded == "" && in.rate < *pred.knee &&
+			!q.mixturePriced(out) {
 			out.TTFTBurst = true
 		}
 		out.KneeShare = ptr(in.rate / *pred.knee)
@@ -1383,6 +1700,7 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		out.TTFT = append(out.TTFT, predictedPoint(q, pred.ttft[i], pred.ttftBound[i]))
 		out.TPOT = append(out.TPOT, predictedPoint(q, pred.tpot[i], pred.tpotBound[i]))
 	}
+	out.BatchBeyondFit = pred.beyondFit
 	return out
 }
 
@@ -1439,11 +1757,14 @@ func scoreStep(out *BacktestStep, m measured, target *ReportTarget) {
 	}
 	for i := range out.TTFT {
 		why := m.ttftWhy[i]
-		if why == "" && out.Unsettled {
+		// A refused figure counts by its refusal, not twice: a step
+		// that does not settle or is a burst unscores only a figure
+		// priced.
+		priced := out.TTFT[i].Predicted.Value != nil
+		if why == "" && out.Unsettled && priced {
 			why = UnscoredUnsettled
 		}
-		if why == "" && out.TTFTBurst && out.TTFT[i].Predicted.Value != nil {
-			// A refused figure counts by its refusal, not twice.
+		if why == "" && out.TTFTBurst && priced {
 			why = UnscoredBurst
 		}
 		out.TTFT[i] = scoredPoint(out.TTFT[i], m.ttft[i], m.requests, m.ttftTop, why, m.ttftBucket[i])
@@ -1462,6 +1783,9 @@ type stepInputs struct {
 	prefill, decode int
 	prompt, output  float64
 	hasShape        bool
+	// computed is the prompt the step's prefill pods computed a request,
+	// their computed tokens over their requests; 0 where they read none.
+	computed float64
 	// promptCV is the step's own prompt spread, read from its prefill
 	// pods' computed-token histograms; nil where they read none.
 	promptCV *float64
@@ -1469,22 +1793,34 @@ type stepInputs struct {
 	// histograms bound (whatif.PromptSpread.MaxRatio), raised to
 	// promptCVGrid; 0 with none.
 	promptMaxRatio float64
+	// outputDispersion is the step's own output spread, D = E[O^2]/E[O]^2
+	// over its decode rows (outputDispersionOf), on outputDispersionGrid;
+	// 0 where a cycle of the step read none.
+	outputDispersion float64
 	// otherPods says variants other than the priced ones served in it.
 	otherPods bool
 }
 
 // stepInputsOf is the step's inputs: its mean rate, the median serving pods
-// of each role, and its lengths weighted by rate.
-func stepInputsOf(samples []SeriesSample) stepInputs {
+// of each role, and its lengths weighted by rate. contextTokens is the
+// engines' context window, which holds the prompt spread's mass past the
+// histogram's last bound (whatif.ReadPromptSpreadWithin); 0 where unknown.
+func stepInputsOf(samples []SeriesSample, contextTokens float64) stepInputs {
 	in := stepInputs{rate: rateOf(samples).Mean}
 	a := actualOf(samples)
 	in.prefill, in.decode = a.Prefill, a.Decode
 	in.prompt, in.output, _, in.hasShape = bucketShape(samples)
 	in.otherPods = slices.ContainsFunc(samples, func(x SeriesSample) bool { return x.OtherPods > 0 })
+	in.outputDispersion = outputDispersionOf(samples)
 	pooled := map[float64]float64{}
-	var computed, requests float64
+	var computed, requests, computedAll, requestsAll float64
 	for _, x := range samples {
-		if x.PromptBuckets == nil || !(x.PromptRequestRate > 0) {
+		if !(x.PromptRequestRate > 0) {
+			continue
+		}
+		computedAll += x.PromptComputedRate
+		requestsAll += x.PromptRequestRate
+		if x.PromptBuckets == nil {
 			continue
 		}
 		computed += x.PromptComputedRate
@@ -1493,8 +1829,11 @@ func stepInputsOf(samples []SeriesSample) stepInputs {
 			pooled[b] += r
 		}
 	}
+	if requestsAll > 0 {
+		in.computed = computedAll / requestsAll
+	}
 	if requests > 0 {
-		if sp := whatif.ReadPromptSpread(pooled, computed/requests); !sp.Assumed {
+		if sp := whatif.ReadPromptSpreadWithin(pooled, computed/requests, contextTokens); !sp.Assumed {
 			in.promptCV = ptr(math.Round(sp.CV/promptCVGrid) / (1 / promptCVGrid))
 			in.promptMaxRatio = maxRatioOnGrid(sp.MaxRatio)
 		}
@@ -1505,6 +1844,41 @@ func stepInputsOf(samples []SeriesSample) stepInputs {
 // promptCVGrid is the grid a step's prompt spread is priced on, so that
 // steps of nearly one spread share a fleet.
 const promptCVGrid = 0.05
+
+// outputDispersionGrid is the grid a step's output spread is priced on, so
+// that steps of nearly one spread share a fleet.
+const outputDispersionGrid = 0.05
+
+// outputDispersionOf is the step's output spread, D = E[O^2]/E[O]^2 over
+// its cycles' decode rows, each cycle weighted by its rate as bucketShape
+// weights the lengths, rounded to outputDispersionGrid: 0 where a cycle
+// that read an output length read no E[O^2] (the two must be one reading of
+// the same rows), or none read a length. Pooled over the step, not the
+// mean of each cycle's D: lengths that vary from cycle to cycle are a
+// spread the step's requests hold too.
+func outputDispersionOf(samples []SeriesSample) float64 {
+	var w, ol, sq float64
+	for _, x := range samples {
+		if !x.HasShape {
+			continue
+		}
+		if !(x.OutputTokensSquared > 0) || !(x.OutputTokens > 0) {
+			return 0
+		}
+		wx := x.Rate
+		if !(wx > 0) {
+			wx = 1e-9
+		}
+		w += wx
+		ol += wx * x.OutputTokens
+		sq += wx * x.OutputTokensSquared
+	}
+	if !(w > 0) {
+		return 0
+	}
+	d := shape.Dispersion(ol/w, sq/w)
+	return math.Round(d/outputDispersionGrid) * outputDispersionGrid
+}
 
 // maxRatioOnGrid is a prompt bound raised to promptCVGrid, so that steps of
 // nearly one bound share a fleet: raised, as a higher bound prices more of
@@ -1519,11 +1893,13 @@ func maxRatioOnGrid(r float64) float64 {
 
 // predictKey is one fleet a backtest prices.
 type predictKey struct {
-	np, nd         int
-	prompt, output float64
-	promptCV       float64
-	promptMaxRatio float64
-	q              float64
+	np, nd           int
+	prompt, output   float64
+	computed         float64
+	promptCV         float64
+	promptMaxRatio   float64
+	outputDispersion float64
+	q                float64
 }
 
 // predictor prices steps from the fit alone: the Pricer, and the inputs of
@@ -1541,6 +1917,9 @@ type predictor struct {
 	assume Assume
 	// cachedCost is Knobs.CachedTokenCost at every step.
 	cachedCost *float64
+	// aggregated says the fleet has no prefill variant: each step is priced
+	// at its decode pods alone, which serve both roles.
+	aggregated bool
 }
 
 // prediction is one step's figures at each statistic of backtestStats.
@@ -1556,6 +1935,9 @@ type prediction struct {
 	// promptCV is the prompt spread priced, and ca2 the arrivals' (1 for
 	// random arrivals).
 	promptCV, ca2 float64
+	// beyondFit is the batch the step's decode runs past its line's fit
+	// (BacktestStep.BatchBeyondFit), nil inside it.
+	beyondFit *BatchBeyondFit
 }
 
 // predict prices one step at each statistic: the TTFT as a report's table
@@ -1563,13 +1945,18 @@ type prediction struct {
 // TPOT, bounded by the top of its band. Each carries the envelope's verdict.
 func (p *predictor) predict(in stepInputs) (prediction, error) {
 	var out prediction
-	if !(in.rate > 0) || in.prefill == 0 || in.decode == 0 {
+	if !(in.rate > 0) || (in.prefill == 0 && !p.aggregated) || in.decode == 0 {
 		return out, errors.New("no fleet to price")
 	}
 	for _, q := range backtestStats {
-		k := predictKey{np: in.prefill, nd: in.decode, q: q, promptCV: -1}
+		k := predictKey{np: in.prefill, nd: in.decode, q: q, promptCV: -1, outputDispersion: in.outputDispersion}
 		if in.hasShape {
 			k.prompt, k.output = shapeKnob(in.prompt), shapeKnob(in.output)
+			// The computed prompt on the same grid, never above the whole
+			// one: it is read only with slo.SwitchTTFTPrefixAttention on.
+			if in.computed > 0 {
+				k.computed = min(shapeKnob(in.computed), k.prompt)
+			}
 		}
 		// A spread read from a histogram carries the bound that histogram
 		// sets on the prompt; a typed one (assume.promptCV) carries none.
@@ -1588,12 +1975,16 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 		}
 		fl, ok := p.fleets[k]
 		if !ok {
-			kn := Knobs{Prefill: k.np, Decode: k.nd, PromptTokens: k.prompt, OutputTokens: k.output, TTFTPercentile: q, TPOTPercentile: q,
+			// The step's prompt is read from its cycles, not stated
+			// (Knobs.PromptTokensRead).
+			kn := Knobs{Prefill: k.np, Decode: k.nd, PromptTokens: k.prompt, PromptTokensRead: k.prompt > 0, OutputTokens: k.output, TTFTPercentile: q, TPOTPercentile: q,
 				ArrivalCV2: p.cv2, Headroom: p.headroom}
 			kn.Assume = p.assume
 			kn.Assume.PromptCV = cv
 			kn.PromptMaxRatio = k.promptMaxRatio
+			kn.OutputDispersion = k.outputDispersion
 			kn.CachedTokenCost = p.cachedCost
+			kn.PrefillComputedTokens = k.computed
 			var err error
 			if fl, err = p.pricer.Fleet(kn); err != nil {
 				return out, err
@@ -1629,6 +2020,9 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 			kneeShare = shareOf(in.rate, v)
 		}
 		pf = validate(pf, kind, q, class, kneeShare)
+		if q == 0 {
+			out.beyondFit = stepBeyondFit(pf, fl.DecodeKnee(), in.rate)
+		}
 		var pb *float64
 		if pf.Value != nil && pf.Band != nil {
 			pb = ptr(max(*pf.Value, pf.Band.Hi))
@@ -1664,6 +2058,54 @@ func (p *predictor) predict(in stepInputs) (prediction, error) {
 		out.tpot, out.tpotBound = append(out.tpot, pf), append(out.tpotBound, pb)
 	}
 	return out, nil
+}
+
+// stepBeyondFit is a step's batch past its decode line's fit: the mean TPOT's
+// (mean), or, where the step's rate is at or past the decode knee and the
+// TPOT is refused, the knee's, priced at the batch the knee runs. Nil inside
+// the fit's batch.
+func stepBeyondFit(mean Figure, knee whatif.Result, rate float64) *BatchBeyondFit {
+	if b := mean.BatchBeyondFit; b != nil {
+		c := *b
+		return &c
+	}
+	k, ok := knee.(whatif.Answer)
+	if !ok || mean.Refused == nil || k.Basis.Batch == nil || rate < k.Value {
+		return nil
+	}
+	b := k.Basis.Batch
+	return &BatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
+}
+
+// batchBeyondFitNote is the note a backtest adds where steps ran past the
+// batch the fit's decode line was fitted on (BacktestStep.BatchBeyondFit):
+// which, and the batches; "" with none.
+func batchBeyondFitNote(steps []BacktestStep) string {
+	var at []string
+	var fitted, lo, hi int64
+	ranks := 0
+	for _, s := range steps {
+		b := s.BatchBeyondFit
+		if b == nil || s.Excluded != "" {
+			continue
+		}
+		at = append(at, s.Start.UTC().Format("15:04"))
+		fitted, ranks = b.Fitted, b.Ranks
+		if lo == 0 || b.Priced < lo {
+			lo = b.Priced
+		}
+		hi = max(hi, b.Priced)
+	}
+	if len(at) == 0 {
+		return ""
+	}
+	runs := fmt.Sprintf("about %d", lo)
+	if hi != lo {
+		runs = fmt.Sprintf("about %d to %d", lo, hi)
+	}
+	return fmt.Sprintf("BatchBeyondFit on %d judged steps (%s): the decode line was fitted on up to %d sequences %s; these steps run %s, "+
+		"so TPOT may read low and the decode knee high. The figures are priced all the same.", len(at), strings.Join(at, ", "), fitted,
+		whatif.BatchUnit(ranks), runs)
 }
 
 // measured is one step's measured figures at each statistic of
@@ -1715,10 +2157,10 @@ func measuredOf(l LatencySample, source string, windowSeconds float64, pd bool) 
 	th, tok := histOf(tb)
 	ph, pok := histOf(pb)
 	if tok {
-		m.requests, m.ttftTop = th.total*windowSeconds, th.top()
+		m.requests, m.ttftTop = th.Total*windowSeconds, th.Top()
 	}
 	if pok {
-		m.tpotRequests, m.tpotTop = ph.total*windowSeconds, ph.top()
+		m.tpotRequests, m.tpotTop = ph.Total*windowSeconds, ph.Top()
 	}
 	for i, q := range backtestStats {
 		switch q {
@@ -1726,77 +2168,73 @@ func measuredOf(l LatencySample, source string, windowSeconds float64, pd bool) 
 			m.ttft[i], m.tpot[i] = ttftMean, tpotMean
 		default:
 			if tok {
-				m.ttft[i], m.ttftBucket[i] = ptr(th.quantile(q)), th.coarseBucket(q)
+				m.ttft[i], m.ttftBucket[i] = ptr(th.Quantile(q)), th.coarseBucket(q)
 			}
 			if pok {
-				m.tpot[i], m.tpotBucket[i] = ptr(ph.quantile(q)), ph.coarseBucket(q)
+				m.tpot[i], m.tpotBucket[i] = ptr(ph.Quantile(q)), ph.coarseBucket(q)
+				if source == MeasuredRouter && (q == 0.9 || q == 0.95) {
+					m.tpot[i], m.tpotBucket[i] = jointTPOT(l, windowSeconds, q, m.tpot[i], m.tpotBucket[i])
+				}
 			}
 		}
 	}
 	return m
 }
 
-// latencyHist is a cumulative latency histogram, repaired to be monotone,
-// ending in +Inf.
+// jointTPOT is the router's measured TPOT q-quantile read from every
+// per-request TPOT histogram the cycle l holds at once (whatif.JointBracket:
+// the router's and, above their first edge, the decode engines', at their
+// sampling noise): the bracket's point, and the bracket where it is too wide
+// to place the quantile (MeasuredBucketWidth), the pair then unresolvable
+// with the prediction inside it. Where the bracket is open above (the
+// quantile within noise of the top edge) the router's own reading, meas and
+// bucket, stands.
+func jointTPOT(l LatencySample, windowSeconds, q float64, meas *float64, bucket *Band) (*float64, *Band) {
+	r := l.Router
+	if r == nil || len(r.TPOTBuckets) == 0 {
+		return meas, bucket
+	}
+	edges, cum := make([]float64, len(r.TPOTBuckets)), make([]float64, len(r.TPOTBuckets))
+	for i, b := range r.TPOTBuckets {
+		edges[i], cum[i] = b.UpperBound, b.Rate
+	}
+	counts := make([]float64, len(cum))
+	prev := 0.0
+	for i, c := range cum {
+		c = max(prev, c)
+		counts[i] = (c - prev) * windowSeconds
+		prev = c
+	}
+	st := withEngineTPOT(whatif.TPOTDistStep{Edges: edges, Counts: counts}, l.EngineTPOT)
+	b, ok := whatif.JointBracket(st, q)
+	if !ok || math.IsInf(b.Hi, 1) || !whatif.Finite(b.Point) {
+		return meas, bucket
+	}
+	p := ptr(b.Point)
+	if meas != nil && math.Abs(b.Point-*meas) <= 1e-9*math.Abs(*meas) {
+		// The router's own linear reading, recomputed from shares in place
+		// of rates: keep the router's figure, not its rounding.
+		p = meas
+	}
+	if b.Lo > 0 && b.Hi <= (1+MeasuredBucketWidth)*b.Lo*(1+bucketEps) {
+		return p, nil
+	}
+	return p, &Band{Lo: b.Lo, Hi: b.Hi}
+}
+
+// latencyHist is a cumulative latency histogram (whatif.LatencyHist, the
+// one the slo analyzer's v2 models read), with the backtest's bucket
+// placement (coarseBucket).
 type latencyHist struct {
-	buckets []domain.LatencyBucket
-	total   float64
+	whatif.LatencyHist
 }
 
-// histOf is the histogram bs, repaired as Prometheus's histogram_quantile
-// repairs one; ok false with no +Inf bucket or no request.
+// histOf is the histogram in, repaired as Prometheus's histogram_quantile
+// repairs one (whatif.LatencyHistOf); ok false with no +Inf bucket or no
+// request.
 func histOf(in []domain.LatencyBucket) (latencyHist, bool) {
-	bs := make([]domain.LatencyBucket, 0, len(in))
-	for _, b := range in {
-		if math.IsNaN(b.UpperBound) || !whatif.Finite(b.Rate) || b.Rate < 0 {
-			continue
-		}
-		bs = append(bs, b)
-	}
-	slices.SortFunc(bs, func(x, y domain.LatencyBucket) int { return cmp.Compare(x.UpperBound, y.UpperBound) })
-	if len(bs) == 0 || !math.IsInf(bs[len(bs)-1].UpperBound, 1) {
-		return latencyHist{}, false
-	}
-	for i := 1; i < len(bs); i++ {
-		bs[i].Rate = max(bs[i].Rate, bs[i-1].Rate)
-	}
-	total := bs[len(bs)-1].Rate
-	if !(total > 0) {
-		return latencyHist{}, false
-	}
-	return latencyHist{buckets: bs, total: total}, true
-}
-
-// top is the highest finite bound, 0 with none.
-func (h latencyHist) top() float64 {
-	if len(h.buckets) < 2 {
-		return 0
-	}
-	return h.buckets[len(h.buckets)-2].UpperBound
-}
-
-// quantile is the q-quantile by linear interpolation inside its bucket, as
-// histogram_quantile, but +Inf in the +Inf bucket: the top bound would read
-// the tail low.
-func (h latencyHist) quantile(q float64) float64 {
-	rank := q * h.total
-	for i, b := range h.buckets {
-		if b.Rate < rank {
-			continue
-		}
-		if math.IsInf(b.UpperBound, 1) {
-			return math.Inf(1)
-		}
-		lower, below := 0.0, 0.0
-		if i > 0 {
-			lower, below = h.buckets[i-1].UpperBound, h.buckets[i-1].Rate
-		}
-		if b.Rate == below {
-			return b.UpperBound
-		}
-		return lower + (b.UpperBound-lower)*(rank-below)/(b.Rate-below)
-	}
-	return math.Inf(1)
+	h, ok := whatif.LatencyHistOf(in)
+	return latencyHist{h}, ok
 }
 
 // coarseBucket is the finite bucket holding the q-quantile where it is too
@@ -1804,8 +2242,8 @@ func (h latencyHist) quantile(q float64) float64 {
 // from 0 included; nil where it is narrow enough, or the quantile is above
 // the top bucket (scored as a miss, not placed).
 func (h latencyHist) coarseBucket(q float64) *Band {
-	rank := q * h.total
-	for i, b := range h.buckets {
+	rank := q * h.Total
+	for i, b := range h.Buckets {
 		if b.Rate < rank {
 			continue
 		}
@@ -1814,7 +2252,7 @@ func (h latencyHist) coarseBucket(q float64) *Band {
 		}
 		lower := 0.0
 		if i > 0 {
-			lower = h.buckets[i-1].UpperBound
+			lower = h.Buckets[i-1].UpperBound
 		}
 		if lower > 0 && b.UpperBound <= (1+MeasuredBucketWidth)*lower*(1+bucketEps) {
 			return nil
@@ -1988,6 +2426,8 @@ func summarize(steps []BacktestStep, target bool) BacktestSummary {
 			s.Excluded.OtherVariants++
 		case ExcludedBurst:
 			s.Excluded.Burst++
+		case ExcludedLoad:
+			s.Excluded.Load++
 		}
 	}
 	s.TTFT, s.TPOT = scoresOf(steps)
@@ -2281,11 +2721,17 @@ func secondsWords(x float64) string {
 }
 
 // backtestHint is what to do about a statistic no step priced, by the
-// refusal's reason.
-func backtestHint(reason string, only bool) string {
+// refusal's reason, on an aggregated fleet (no prefill variant) where aggregated.
+func backtestHint(reason string, only, aggregated bool) string {
 	every := "every step was"
 	if !only {
 		every = "the steps so refused were"
+	}
+	if aggregated && reason == string(whatif.NoLine) {
+		// An aggregated pod with a large KV cache may never fill to the band:
+		// a longer fit at the same load learns no more (issue #512).
+		return "the aggregated pods learned no ITL line by KV fill: a line needs their fill to span the ITL band, " +
+			"and each step's refusal names the highest fill they read"
 	}
 	switch reason {
 	case string(whatif.Saturated):
@@ -2295,7 +2741,8 @@ func backtestHint(reason string, only bool) string {
 			"and the true knee may be higher, so the planner gave no price there and does not call it overloaded"
 	case string(whatif.NoPrefillCapacity):
 		return "no prefill speed was learned to price a TTFT from: none under a queue, or, where the prefill pods never queued, " +
-			"only the rate a pod computed, which prices the knee as a lower bound and no TTFT; fit on more (a larger split, or a longer recording)"
+			"only the rate a pod computed, which prices the knee as a lower bound and no TTFT, or one read only at prompts other than the step's " +
+			"(VPPromptNotCovered); fit on more (a larger split, or a longer recording)"
 	case string(whatif.NoFixedLatency), string(whatif.PinnedDefaultB), string(whatif.NoLine):
 		return "the fitted part held too few busy minutes to learn from; fit on more (a larger split, or a longer recording)"
 	}
@@ -2308,6 +2755,12 @@ func backtestHint(reason string, only bool) string {
 // and why; then the p90 beside it, over the steps whose measured p90 a
 // bucket could place.
 func verdictPart(name string, scores []BacktestScore, unit string) (line string, quoted *BacktestScore) {
+	return verdictPartFor(name, scores, unit, false)
+}
+
+// verdictPartFor is verdictPart; aggregated says the fleet has no prefill
+// variant, whose refusals a hint names in its own terms (backtestHint).
+func verdictPartFor(name string, scores []BacktestScore, unit string, aggregated bool) (line string, quoted *BacktestScore) {
 	quoted = primaryScore(scores)
 	if quoted == nil && upperBoundSteps(scores) > 0 {
 		w := fmt.Sprintf("The planner's %s was not scored in any step.%s", name, upperBoundWords(name, scores, ""))
@@ -2326,10 +2779,10 @@ func verdictPart(name string, scores []BacktestScore, unit string) (line string,
 				n := scores[i].Refused[r]
 				why = append(why, fmt.Sprintf("%s in %d", r, n))
 				if hint == "" || r != string(whatif.Saturated) {
-					hint = backtestHint(r, only)
+					hint = backtestHint(r, only, aggregated)
 				}
 				if r == string(whatif.PastLowerBoundKnee) || r == string(whatif.NoPrefillCapacity) {
-					hints = append(hints, backtestHint(r, only))
+					hints = append(hints, backtestHint(r, only, aggregated))
 				}
 			}
 			if !only && len(hints) > 1 {
@@ -2444,9 +2897,18 @@ func upperBoundWords(name string, scores []BacktestScore, more string) string {
 		"and the fleet measured at or under it: consistent, and not scored for accuracy (upperBound).", n, more, name, name)
 }
 
+// TPOTBucketHint is how to measure a TPOT percentile the histogram is too
+// coarse to place: the verdict says it after the steps it left unscored,
+// and the page shows the verdict as it is, so the CLI and the page say it
+// in the same words.
+const TPOTBucketHint = "To measure it, give the histogram finer edges: the router's metrics.requestTPOTBuckets in the " +
+	"EndpointPickerConfig (an llm-d-router build after v1.0.0), or vLLM's --custom-histogram-buckets (v0.32.0 and later). " +
+	"Edges about 15% apart place p90 and p95 within 20%."
+
 // percentileWords is the p90 beside the figure a verdict quotes: within 20%
 // in how many of the steps its measured p90 could be placed, and in how
-// many a histogram bucket too wide to place it left it unscored.
+// many a histogram bucket too wide to place it left it unscored, with
+// TPOTBucketHint after TPOT's.
 func percentileWords(name string, scores []BacktestScore) string {
 	i := slices.IndexFunc(scores, func(x BacktestScore) bool { return x.Statistic == statP90 })
 	if i < 0 {
@@ -2471,6 +2933,9 @@ func percentileWords(name string, scores []BacktestScore) string {
 			}
 		}
 		w += "."
+		if name == "TPOT" {
+			w += " " + TPOTBucketHint
+		}
 	}
 	return w
 }
@@ -2479,7 +2944,7 @@ func percentileWords(name string, scores []BacktestScore) string {
 // and what was not judged in one more. It says only what the judged steps
 // say: each share is over the steps the planner gave a figure for, with
 // the steps it did not, and why, beside it.
-func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
+func verdictOf(out *BacktestResponse, step time.Duration, aggregated bool) ([]string, string) {
 	s := out.Summary
 	span := out.Test.To.Sub(out.Test.From)
 	if out.Test.Cycles > 1 {
@@ -2490,8 +2955,8 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 	if s.Judged == 0 {
 		lines = append(lines, "no step could be judged; see what was not judged.")
 	} else {
-		ttft, tq := verdictPart("TTFT", s.TTFT, unit)
-		tpot, pq := verdictPart("TPOT", s.TPOT, unit)
+		ttft, tq := verdictPartFor("TTFT", s.TTFT, unit, aggregated)
+		tpot, pq := verdictPartFor("TPOT", s.TPOT, unit, aggregated)
 		lines = append(lines, ttft, tpot)
 		region, scored := 0, 0
 		for _, sc := range []*BacktestScore{tq, pq} {
@@ -2514,7 +2979,8 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 		n    int
 		what string
 	}{{e.WarmUp, "warm-up"}, {e.Scaling, "replicas changing"}, {e.NoTraffic, "no traffic"}, {e.NoMeasurement, "no measured requests"},
-		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}, {e.Burst, "a burst near the knee in its window"}} {
+		{e.NotPriced, "not priced"}, {e.OtherVariants, "other variants serving"}, {e.Burst, "a burst near the knee in its window"},
+		{e.Load, "outside the test's load"}} {
 		if x.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", x.n, x.what))
 		}
@@ -2539,7 +3005,9 @@ func backtestNotes(q *backtestQuestion) []string {
 			"measured percentiles are interpolated inside the histogram's buckets, and one whose bucket is wider than %.0f%% of its lower "+
 			"edge is too wide to place: the bucket, not the traffic, would set it. A prediction more than 20%% beyond that bucket's "+
 			"nearer edge is a certain miss, scored against that edge, which understates the miss, and never within; one nearer is "+
-			"shown and not scored (unresolvable). The verdict quotes the mean, the histogram's sum over its count.", minRequestsFor(0.5), minRequestsFor(0.9), minRequestsFor(0.95), MeasuredBucketWidth*100),
+			"shown and not scored (unresolvable). The router's TPOT p90 and p95 are read from its TPOT histogram and, above their "+
+			"first edge, the decode engines' together, each at its sampling noise: the bracket both allow is the bucket, and a reading "+
+			"inside it (log survival linear in log TPOT) the measured figure. The verdict quotes the mean, the histogram's sum over its count.", minRequestsFor(0.5), minRequestsFor(0.9), minRequestsFor(0.95), MeasuredBucketWidth*100),
 		fmt.Sprintf("Median ratio is the middle step's predicted over measured; typical and worst-10%% miss the median and p90 of the factor "+
 			"between them; under the upper bound the share measured at or under the planner's own upper estimate, where it gives one; "+
 			"within, the share inside %.0f%%. A measured figure above the histogram's top bucket, or a prediction more than 20%% "+

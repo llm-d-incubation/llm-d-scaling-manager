@@ -382,7 +382,7 @@ jobs:
             IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:0000000000000000000000000000000000000000000000000000000000000000
           # The release signs each file; the check compares bytes, so any
           # bundle stands in here.
-          for f in dist/tools-release/*.yaml dist/tools-release/*.tar.gz dist/tools-release/SHA256SUMS; do
+          for f in dist/tools-release/*.yaml dist/tools-release/*.sh dist/tools-release/*.tar.gz dist/tools-release/SHA256SUMS; do
             printf '{"pr-check":"%s"}\n' "${f##*/}" > "$f.sigstore.json"
           done
           # Dockerfile.tools requires the baked SHA256SUMS to be this one.
@@ -609,6 +609,9 @@ jobs:
 
       - name: Run make guides-check
         run: make guides-check
+
+      - name: Check the controller image in the release docs
+        run: bash deploy/ci-pr-checks/tools-pin.sh --controller pr
 
       # The pool Pod is described in config/warmpool and COPIED into
       # deploy/warmpool.sh by a generator, so the script needs no repo, no yq

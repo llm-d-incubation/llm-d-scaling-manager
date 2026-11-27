@@ -107,7 +107,7 @@ func (pf *pricedFleet) priceCachedLoad(f *answerFlags) {
 	if !(phi > 0) {
 		return
 	}
-	hit, ok := pf.promptWindow.ComputedHit()
+	hit, ok := pf.pricedComputedHit()
 	if !ok || hit < whatifapi.MinCachedTokenCostShare {
 		return
 	}

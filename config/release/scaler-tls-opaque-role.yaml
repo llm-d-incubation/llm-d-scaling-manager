@@ -1,0 +1,31 @@
+# The one manifest's scaler TLS rights: get and update on its three Opaque
+# Secrets by name, get alone on the kubernetes.io/tls Secrets an earlier
+# install holds (their certificates are copied across, never written), and
+# get on the OpenShift service CA bundle. Never create.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-manager-scaler-tls-opaque
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: scaling-manager
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  - scaling-manager-scaler-ca
+  - scaling-manager-scaler-serving
+  - scaling-manager-scaler-client
+  verbs: ["get", "update"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  - scaling-manager-external-scaler-ca
+  - scaling-manager-external-scaler-tls
+  - scaling-manager-external-scaler-client-tls
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames:
+  - openshift-service-ca.crt
+  verbs: ["get"]

@@ -330,6 +330,17 @@ of every minute read `f` 1.23, where the busy minutes' raw shares were 1.01 to
 1.06 and their `f` 1.00, so the knee read about 20% low (issue #266). Below the knee the busy minutes' `f` prices
 the worst pod's queue a little low.
 
+Long prompts serve fewer than 100 requests a pod a minute even at the knee:
+the Qwen3-32B lab fleet, at about 16000 tokens a prompt, served about 78. It
+learned no `f`, so the planner priced every count above one at the 1.5 floor.
+The planner pools consecutive minutes on the same pods until they carry 100
+requests a pod between them, five minutes at most, and de-biases the pool at
+its pooled count (`saturation.SwitchPrefillFPooledMinutes`). A minute that
+carries 100 alone is read alone, as before, even after lighter minutes. The
+controller does not pool. Open: the lab fleet learned `f` at two pods only,
+1.00 there, and the count curve carries it to 1.00 at four, where four pods'
+pooled minutes measured about 1.13.
+
 **`f` by load** (issue #300). On every recording that learned `f`, the
 de-biased `f` of each minute falls as the pods fill. By the minute's mean pod
 utilization `ρ` (computed tokens a pod over `V_P`), median `f`, two pods, a
@@ -369,6 +380,42 @@ The linear fall is a stated shape: the table above has it falling, not its
 form near the knee. No recording says what the router scores (the backtest's
 `notRecordedConfig`), so the flag is the operator's statement, and it is off by
 default.
+
+**`f` against the load per pod** (`--prefill-f-load-curve`,
+`saturation.SwitchPrefillFLoadCurve`, opt-in; issue #482). The busiest pod
+carries a roughly fixed amount of prefill work over the mean (a prefix group
+or a long prompt the router keeps on one pod), and the router spreads the
+rest, so the busiest pod's excess share falls as the inverse of the load:
+
+    f(u) = f_inf + delta/u,     u = computed tokens a second a pod
+
+P1 fits it at each pod count by least squares of every kept minute's
+de-biased `f` on `1/u` (`prefill.FLoadCurve`, `Estimate.FCurveByPods`), and
+prices it only with at least 8 minutes, `delta > 0` and `f_inf > 0`. The
+planner prices `f` at a rate as the higher of its `f` (held, or falling with
+`--load-aware-router`) and `f(u)`, `u = rate · E[I_eff] / N_p`, at most
+`N_p`. `f(u)·ρ` is `(f_inf·u + delta)/V_P`, which rises with the rate, so
+TTFT stays monotone, and the knee is the lower of today's and the root of
+`f(u)·ρ = 1 − margin`, `ρ = (1 − margin − delta/V_P)/f_inf`. A count with no
+identified fit keeps its `f`, and the answer says so.
+
+It was scored once, against acceptance written first, on the lab's Qwen3-32B
+fleet of long prompts on 2 prefill pods with minutes pooled
+(`SwitchPrefillFPooledMinutes`, which it needs: no minute of those runs
+carries 100 requests a pod alone). The figures are the planner's own pools
+and fit. Fitted on one run (23 pools, 850 to 13,200 tokens a second a pod):
+`f_inf` 0.9575, `delta` 590.8; its four light pools read 1.52 to 1.71 and the
+curve 1.56 to 1.65 there. Held out, a later run at the same count (19 pools,
+3,000 to 13,400): mean absolute error 0.029 against 0.048 for one `f` at every
+load, median signed error on its light pools 0.000, and at the busy load
+`f(u)` within 0.03 of the busy `f`; the 2+2 knee on the fit run fell 0.6%
+(2.71 to 2.70 requests a second, the guard allowed 3%). Reported only, at 4 pods: the 2-pod curve
+gave 1.125 and 1.124 at the loads where 1.125 and 1.085 were measured.
+Limits: the held-out run has no pool under 3,000 tokens a second a pod, so
+the regime under 1,000 rests on the fit run alone, and those light pools were
+its first 12 minutes, where a warm-up (a cold prefix cache) is not ruled out. It stays
+off, and every figure it prices reads OUTSIDE VALIDATED REGION, until the
+public cross-validation shows no figure newly under what was measured.
 
 Sticky routing
 (one pod wins a whole refresh window `w`) averages back toward 1 per minute; the
@@ -543,8 +590,8 @@ that is itself wrong (the exponential tail, Poisson arrivals, an omitted
 | `AssumedDecodeStepSlope`, `AssumedRouterHopSeconds` (no fit) | Under-promises if they stand above the fleet's true figures, which is the point. Each is flagged, and a refusal or a move of 25% that one alone decides says so. A long prompt may hop further than 20 ms |
 | `V_P` from a lower bound | Under-promises. The planner floors it at the rate the pods were seen to compute and gives no figure past a knee priced from it (`PastLowerBoundKnee`) |
 | A mix of prompt lengths priced at its mean on a convex prefill curve ([a limit of P3](#prefill-capacity)) | Over-promises: an even 8k/52k mix at a `V_P` read at 30k is priced 32% under its prefill time. The rescale ([after P2](#as-built-p3-after-p2)) moves `V_P` to the mean, not the mix, and `VPShapeMoved`, comparing means, does not flag it |
-| `V_P` rescaled on computed tokens alone at a prefix hit (`slo-ttft-prefix-attention` off) | Over-promises: the cached tokens' attention is left out, about 1.7x on `V_P` at 32k with a 75% hit against fresh 8k. Flagged `VPShapeMoved` where the hit rate moved from the one `V_P` was read at. No committed run has hits, so this is not measured |
-| `V_P` rescaled at a prefix hit (`slo-ttft-prefix-attention` on) on P1's low-load curve | Over-promises if the low-load minutes had hits: the curve is fitted on `I_eff`, so `b` absorbs about `2c·h` of the cached tokens' attention and the rescale `s(I_vp)/s(I)` flattens, reading `V_P` high. The fit assumes a hit rate near 0 at low load. No committed run has hits, so this is not measured |
+| `V_P` rescaled on computed tokens alone at a prefix hit (`slo-ttft-prefix-attention` off) | Over-promises: the cached tokens' attention is left out, about 1.7x on `V_P` at 32k with a 75% hit against fresh 8k. Flagged `VPShapeMoved` where the hit rate moved from the one `V_P` was read at. Measured on a lab Qwen3-32B P/D run (6000 computed tokens a request at hits 0, 0.5 and 0.75): priced on the computed prompt alone, the 0.75 phase read a median 0.56 of the measured mean TTFT (issue #311) |
+| `V_P` rescaled at a prefix hit (`slo-ttft-prefix-attention` on) on P1's low-load curve | Over-promises if the low-load minutes had hits: the curve is fitted on `I_eff`, so `b` absorbs about `2c·h` of the cached tokens' attention and the rescale `s(I_vp)/s(I)` flattens, reading `V_P` high. The fit assumes a hit rate near 0 at low load. On the same lab run, fitted on a staircase with no hits, it read a median 1.07 of the measured mean TTFT at the 0.75 hit, against 1.15 with no hit (issue #311) |
 | `V_P` rescaled along the curve with no fixed cost per step, `s(I_vp)/s(I)` | Under-promises for a longer prompt only if P1's low-load `b` and `c` are the busy step's per-token cost, which is not measured: on run 2 at 37k it read 1.5% above the served `V_P` (over-promises), covered by the margin only from `ρ` 0.6. No-act (`VPScaledToPrompt`) until a second point confirms it. Held (not raised) for a shorter prompt |
 | The decode engine's TTFT added at its mean to every percentile | Over-promises at the tail by `(r − 1)·D`, `r` decode's p90 over its mean, 1.1–1.8 on the P2 runs (coarse buckets): up to about 20% of the router's p90 at `r` 1.8 (37k: about 127 ms of 0.795 s, 16%; 1k: about 10 ms of 0.047 s, 21%). At each level's own measured `r` it is less: 37k `r` 1.48, about 76 ms (10%); 1k `r` 1.54, about 7 ms (14%) |
 | The decode engine's TTFT held at the rate it was measured at | Either way: `RateForTTFT` extrapolates to other rates with `D` frozen, and decode's own queue at a higher rate is not in it |
@@ -1809,6 +1856,28 @@ always in the CLI:
 - `T_X` is the KV pull, work `I·κ`, as a processor-sharing stage on the decode
   pod it lands on, the `N_d` pods sharing the arrivals evenly. A pull that
   saturates its pods is refused (`Saturated`).
+- `κ` is read from the decode rows' NIXL transfer time `T`
+  (`vllm:nixl_xfer_time_seconds`), which is the pull's time on a loaded pod,
+  already stretched. Read as the work, the stage stretches it a second time.
+  On the public P/D staircase with flow control on, the transfer window's last
+  cycles read 60 ms at about 21 r/s a decode pod. At 30.8 r/s the pull was
+  priced at utilization 0.93 and a wait of 0.78 s, and the mean TTFT at 1.02 s.
+  The router measured a p50 of 0.16 s and a p90 of 0.28 s, and the rows' own
+  transfer read 40 ms. The pull also set the decode count for a TTFT target:
+  4 decode pods where decode's own knee needs 3 (issue #301). With the
+  replay switch `slo-ttft-pull-work` on, each row's reading is the work at the
+  row's request rate `λ`, `S = T/(1 + λT)`: the work whose processor-sharing
+  time at `λ` is the `T` measured (the identity the joint sizing section below
+  checks on the Qwen3-32B 2+2 phases, 24.4-24.8 ms at every step). On the 0.6B
+  staircase it reads 25-28 ms at every load from 4 to 22 r/s a decode pod. It
+  takes Poisson arrivals: a burstier stream stretches the same work more, so
+  the work it reads is the larger, the safe side. `T` is the mean of one
+  transfer and `λ` the pod's request rate, so `S` is a request's work where a
+  request makes one transfer on each rank; with more, less stretch comes out,
+  again the safe side. `D` below is netted of `S`, not of the time the pull
+  took in `D`'s own windows, so the stretch those windows saw stays in `D`: a
+  surplus, small where `D` was fitted at a light load. Off by
+  default; the planner's replay does not turn it on yet.
 - `D`'s per-token part comes net of the pull, since `D` was fitted with the pull
   inside it. On the staircase's warm-up that is 5.616e-6 less 2.541e-6, 3.074e-6
   s a token: at 8000 tokens `D`'s per-token part falls from 44.9 to 24.6 ms, and
@@ -2485,9 +2554,12 @@ router; it does not add any. So past the onset the processor-sharing figure
 stands. A new opt-in switch, `TTFTFleet.RouterWaitInPrefill`
 (`--router-wait-in-prefill`), says so. It was off by default until #287's
 router v1.0.0 staircase, backtested, turned it on in the CLI and the planner
-API (docs/developer-guide/testing.md, "Router v1.0.0, backtested"); the SLO
-analyzer has no switch for it yet. The gate stage above stays the switch for
-v0.11.0, where this one must be set off.
+API (docs/developer-guide/testing.md, "Router v1.0.0, backtested"). The SLO
+analyzer's switch for it, `slo-ttft-router-wait-in-prefill` (issue #367), is
+off from the constructor: on, the analyzer prices the planner's fleet as the
+planner does by default, and turning it on by default waits for a live check
+with the controller. The gate stage above stays the switch for v0.11.0, where
+this one must be set off.
 
 ### What was measured
 

@@ -14,6 +14,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/logging"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/metrics"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
@@ -71,6 +72,26 @@ const SwitchTTFTProcessorSharing = "slo-ttft-processor-sharing"
 // onset (docs/proposals/slo-capacity-planner-ttft.md, "As built: the router
 // stage").
 const SwitchTTFTRouterWait = "slo-ttft-router-wait"
+
+// SwitchTTFTRouterWaitInPrefill is the replay switch for
+// whatif.TTFTFleet.RouterWaitInPrefill: on, the router's wait past the
+// prefill flow-control onset is taken as already inside the
+// processor-sharing prefill price, as the capacity planner's
+// --router-wait-in-prefill (on by default there,
+// whatif.DefaultRouterWaitInPrefill) and the planner API's
+// assume.routerWait inPrefill take it. The figure does not move: where the
+// switch takes (processor sharing at a prompt spread up to
+// whatif.MaxPSPromptCV, a rate up to whatif.MaxRouterWaitKneeShare of the
+// prefill knee), the TTFT is flagged FlowControlWaitPriced in place of
+// AboveFlowControlOnset and read by its figure (whatif.TTFTMeets), and the
+// published rate may stand past the onset. Off, as before, the wait is
+// flagged AboveFlowControlOnset and is a miss however low the figure. Off
+// from the constructor, so the controller's verdict does not move until a
+// live check with the controller turns it on; a replay turns it on (issue
+// llm-d-incubation/llm-d-scaling-manager#367). Measured on llm-d-router
+// v1.0.0 only (#287); on v0.11.0 the figure reads short past the onset. With
+// SwitchTTFTRouterWait on too, the gate stage takes, as in the planner.
+const SwitchTTFTRouterWaitInPrefill = "slo-ttft-router-wait-in-prefill"
 
 // SwitchTTFTPSOnsets is the replay switch for whatif.TTFTFleet.PSOnsets: on,
 // the prefill flow-control onset is placed on the processor-sharing stage
@@ -199,7 +220,16 @@ const SwitchTTFTPromptSupport = "slo-ttft-prompt-support"
 // tokens, I_eff + 2h, not I_eff alone (whatif.Prefill.PrefixAttention); the
 // prefill work is the prompt net of the prefill variant's hit, not the
 // decode variant's; and the KV transfer moves the prompt net of the decode
-// variant's hit. Off, as before. Planner-only: off from the constructor, and
+// variant's hit. h, the cached context, is the whole prompt less the
+// computed one where the prefill rows read both (whatif.Prefill
+// .CachedContextRead), every tier's hits counted, and the prefix-cache hit
+// rate only where they do not: that rate counts the GPU's hits alone, and a
+// token served from a host, disk or peer tier is attended over all the same
+// (issue llm-d-incubation/llm-d-scaling-manager#383). A backtest's step
+// states the prompt its prefill pods computed beside its whole prompt
+// (whatifapi.Knobs.PrefillComputedTokens): on, the step is priced at that
+// computed prompt with the rest as its cached context, not at its whole
+// prompt netted by the fit's hit. Off, as before. Planner-only: off from the constructor, and
 // not in learnreplay.PlannerSwitches, so it is off in the planner too until
 // a backtest turns it on. The analyzer itself reads no whole prompt and
 // prices nothing with it; the planner reads it through the replay
@@ -218,8 +248,11 @@ const SwitchTTFTPrefixAttention = "slo-ttft-prefix-attention"
 // offload tier or a KV connector reads as computed there, and the prefill
 // work as more than the engines' own computed-token counter shows; V_P is
 // read from that counter. A hit stated by the question still governs. Off,
-// as before. Planner-only: off from the constructor; the analyzer prices no
-// stated prompt.
+// as before, but for the load's shape (--shape load, the report's default):
+// its hit is read, not stated, and on a P/D fleet it is the decode
+// variant's, so the planner nets it by the computed-token hit either way.
+// Planner-only: off from the constructor; the analyzer prices no stated
+// prompt.
 const SwitchTTFTComputedHit = "slo-ttft-computed-hit"
 
 // SwitchTTFTTierLoad is the replay switch for a cached prompt token from a
@@ -227,17 +260,14 @@ const SwitchTTFTComputedHit = "slo-ttft-computed-hit"
 // the GPU prefix cache alone; a hit from a host, disk or peer tier is loaded
 // into the GPU first, and the price took it as free. On, where the prefill
 // rows read the cached tokens by tier (domain.ReplicaMetrics
-// .CachedTokenRateBySource) and the KV transfers (KVTransferRates):
-//
-//   - a request's TTFT carries the load of its cached tokens from outside
-//     the GPU (whatif.Prefill.TierLoadSeconds): the tokens each tier served
-//     times the bytes a token moved over the bandwidth the transfer read,
-//     whatif.PromptWindow.TierLoad, with no overlap with the request's own
-//     prefill (the OffloadingConnector loads before the request is
-//     scheduled), so an upper bound where a connector overlaps it;
-//   - with SwitchTTFTPrefixAttention on, the attention span's cached
-//     context is the whole prompt less the computed one, every tier's hits
-//     counted, not the GPU's hit rate (whatif.Prefill.CachedContextRead).
+// .CachedTokenRateBySource) and the KV transfers (KVTransferRates), a
+// request's TTFT carries the load of its cached tokens from outside the GPU
+// (whatif.Prefill.TierLoadSeconds): the tokens each tier served times the
+// bytes a token moved over the bandwidth the transfer read,
+// whatif.PromptWindow.TierLoad, with no overlap with the request's own
+// prefill (the OffloadingConnector loads before the request is scheduled),
+// so an upper bound where a connector overlaps it. The attention over every
+// tier's cached context is SwitchTTFTPrefixAttention's.
 //
 // A tier serving whatif.MinTierShare of the prompt or more with no transfer
 // reading, or no split by tier where the computed-token hit is material,
@@ -310,6 +340,21 @@ const SwitchTTFTMeasuredTransfer = "slo-ttft-measured-transfer"
 // accelerator or of engine arguments sweeps the window. It moves no golden, since
 // no committed recording prices a line; its unit tests hold it.
 const SwitchTTFTQuietTransfer = "slo-ttft-quiet-transfer"
+
+// SwitchTTFTPullWork is the replay switch for what the transfer window reads of
+// each decode row (prefill.TransferWindow.PullWork): on, the KV pull's own work,
+// the row's measured NIXL transfer time with the processor-sharing stretch at the
+// row's request rate taken out, T/(1 + lambda T); off, the time as measured, as
+// before. The pull is priced as a processor-sharing stage on the decode pods, so
+// a time measured under load priced as the work stretches the pull twice: on the
+// public P/D staircase with flow control on, the window's last cycles read 60 ms
+// at 21 r/s a decode pod, the pull priced at utilization 0.93 at 30.8 r/s, and
+// 0.78 s of a mean TTFT of 1.02 s was that wait, where the router measured 0.17 s
+// and the rows' transfer read 40 ms (issue
+// llm-d-incubation/llm-d-scaling-manager#301). Read as work, the rows read
+// 25-28 ms at every load of that ladder. The analyzer reads it in the window it
+// prices from (noteTransfer); off from the constructor.
+const SwitchTTFTPullWork = "slo-ttft-pull-work"
 
 const (
 	// decodeBoundRatio is how far the prefill side's own rate must exceed
@@ -624,6 +669,9 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 	joint := a.noteJoint(input, fleet, prefills, decodes, prefillRows, decodeRows, arrival, term, now)
 
 	view := &prefill.Settle{View: a.settleView(), Model: utils.GetNamespacedKey(input.Namespace, input.ModelID)}
+	// A model the v2 models run for publishes the mean, p90 and p95 beside
+	// the objective's percentile (model_published.go).
+	statistics := a.modelObserved(input.Namespace, input.ModelID)
 	var out []metrics.SLOTTFTReading
 	var asks map[string]int
 	for _, v := range prefills {
@@ -643,12 +691,13 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 		prompt, _ := prefill.MeanEffectivePrompt(rows, a.sglang(input, []string{v}))
 		in := ttftInputs{
 			est: est, estimateAt: estimateAt, pods: pods, otherPods: readyPrefill - pods, percent: cfg.SLO.TTFTPercentile(),
-			prompt: prompt, spread: a.promptSpread(ttftWindowKey(input.Namespace, input.ModelID, v), rows, now),
+			prompt: prompt, spread: a.promptSpread(ttftWindowKey(input.Namespace, input.ModelID, v), rows, now,
+				contextTokens(a.engineParams(input.Namespace, input.ModelID, v))),
 			shares:   a.noteShare(ttftWindowKey(input.Namespace, input.ModelID, v), pods, share, shareOK, now),
 			transfer: a.transferPerToken(transfer, decodeRows, prompt), decode: decode, decodeVariant: decodeVariant,
 			transferHeld: a.ttftMeasuredTransfer && a.ttftQuietTransfer && transfer.Held,
 			decodeTTFT:   measured, term: term, legacyDecodeSum: !a.ttftDecodeTerm, flow: flow, mismatch: mismatch,
-			processorSharing: a.ttftProcessorSharing, routerWait: a.ttftRouterWait,
+			processorSharing: a.ttftProcessorSharing, routerWait: a.ttftRouterWait, routerWaitInPrefill: a.ttftRouterWaitInPrefill,
 			psOnsets: a.ttftPSOnsets, decodeGateCharge: a.ttftDecodeGateCharge,
 			acrossCounts: a.ttftImbalanceAcrossCounts, aFromJoint: aFromJoint,
 		}
@@ -665,11 +714,15 @@ func (a *Analyzer) priceTTFTVariants(logger logr.Logger, input domain.AnalyzerIn
 				asks[v] = n
 			}
 		}
-		out = append(out, metrics.SLOTTFTReading{
+		reading := metrics.SLOTTFTReading{
 			Variant: v, Statistic: statistic, Predicted: p.published(), PerReplica: p.perReplica,
 			Unmet: p.unmet, VPSource: vpSource(est), Reason: p.reason, Refused: p.currentRefusal(),
 			Flags: publishedFlags(p.flags), Joint: joint.reading(),
-		})
+		}
+		if statistics && !math.IsNaN(reading.Predicted) {
+			reading.Statistics = defaultTTFTStatistics(in, arrival)
+		}
+		out = append(out, reading)
 		logTTFT(logger, input, v, in, p, arrival, target)
 		logJoint(logger, input, v, joint)
 	}
@@ -692,7 +745,9 @@ type promptSpreadWindow struct {
 // reads its spread, the what-if CLI's reading of the same traffic; assumed
 // with SwitchTTFTMeasuredSpread off. The cycle's mean is not what cv is read
 // at: the window's is, so the mean and the histogram cover the same cycles.
-func (a *Analyzer) promptSpread(key string, rows []domain.ReplicaMetrics, now time.Time) whatif.PromptSpread {
+// window is the engines' context window, which holds the mass past the
+// histogram's last bound (whatif.PromptWindow.SpreadWithin); 0 where unknown.
+func (a *Analyzer) promptSpread(key string, rows []domain.ReplicaMetrics, now time.Time, window float64) whatif.PromptSpread {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	w := a.prompts[key]
@@ -708,11 +763,22 @@ func (a *Analyzer) promptSpread(key string, rows []domain.ReplicaMetrics, now ti
 	if !a.ttftMeasuredSpread {
 		return whatif.ReadPromptSpread(nil, 0)
 	}
-	s := w.window.Spread()
+	s := w.window.SpreadWithin(window)
 	if !a.ttftPromptSupport {
 		s.MaxRatio = 0
 	}
 	return s
+}
+
+// contextTokens is the engines' context window, tokens, from their
+// arguments (--max-model-len): 0 with none read, or one the parser could
+// not read, as the planner's contextOf reads it.
+func contextTokens(params *capacity.EngineParams) float64 {
+	if params == nil || params.MaxModelLen <= 0 || slices.Contains(params.Unresolved, "max_model_len") ||
+		slices.Contains(params.Unresolved, "context_length") {
+		return 0
+	}
+	return float64(params.MaxModelLen)
 }
 
 // transferPerToken is the transfer the pricing reads: 0 with

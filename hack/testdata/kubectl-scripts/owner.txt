@@ -1,0 +1,22 @@
+$ scaling-manager-owner.sh --print monitor team-a
+kubectl apply --server-side -n team-a -f ./scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=modelserver
+$ scaling-manager-owner.sh --print network team-a
+# Only where a default-deny ingress policy is in place: this one selects every pod of team-a.
+kubectl apply --server-side -n team-a -f ./scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=epp-networkpolicy
+$ scaling-manager-owner.sh --print register team-a
+# The controller's suggestion for team-a, applied as is. Review it first: kubectl get configmap scaling-manager-scaledobjects-plan -n scaling-manager-system -o jsonpath={.data.team-a}
+kubectl get configmap scaling-manager-scaledobjects-plan -n scaling-manager-system -o 'jsonpath={.data.team-a}' | kubectl apply -n team-a -f -
+$ scaling-manager-owner.sh --print register team-a policy.yaml
+kubectl apply -n team-a -f policy.yaml
+$ scaling-manager-owner.sh --print unregister team-a
+kubectl delete scaledobject -n team-a -l app.kubernetes.io/managed-by=llm-d-scaling-manager --ignore-not-found
+$ scaling-manager-owner.sh --print policy team-a policy.yaml
+kubectl apply -n team-a -f policy.yaml
+# The label needs patch on the Namespace; without it, ask the cluster admin to run this line.
+kubectl label namespace team-a scaling-manager.llmd.ai/config-enabled=true --overwrite
+$ scaling-manager-owner.sh --print grant pod-writer team-a
+kubectl apply --server-side -n team-a -f ./scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=pod-writer
+$ scaling-manager-owner.sh --print grant dset-role-writer team-a
+kubectl apply --server-side -n team-a -f ./scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=dset-role-writer
+$ scaling-manager-owner.sh --print status team-a
+kubectl get events -n team-a --field-selector source=scaling-manager-namespaces --sort-by=.lastTimestamp

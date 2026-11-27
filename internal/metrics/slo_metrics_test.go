@@ -103,6 +103,35 @@ var _ = Describe("PublishSLO", func() {
 			Expect(oneHot(constants.LLMSMSLOTTFTRefused, constants.LabelReason)).To(BeEmpty())
 		})
 
+		It("publishes the default's statistics and the v2 models' figures side by side, by learner, and drops them when gone", func() {
+			r := reading()
+			r.Statistics = map[string]float64{constants.SLOStatisticMean: 0.9, constants.SLOStatisticP90: 1.5, constants.SLOStatisticP95: 1.8}
+			snap := snapshot("m")
+			snap.TTFT = []SLOTTFTReading{r}
+			snap.Predicted = []SLOPrediction{
+				{Objective: constants.SLOObjectiveTTFT, Variant: "pre", Statistic: "p90", Learner: "ttft-mixture", Seconds: 1.4},
+				{Objective: constants.SLOObjectiveTPOT, Variant: "dec", Statistic: "mean", Learner: "slo", Seconds: 0.02},
+				{Objective: constants.SLOObjectiveTPOT, Variant: "dec", Statistic: "p95", Learner: "tpot-distribution", Seconds: 0.05},
+			}
+			PublishSLO(snap, t0)
+			series := func(name string) map[string]float64 {
+				out := map[string]float64{}
+				for _, m := range family(name) {
+					out[label(m, constants.LabelVariantName)+"/"+label(m, constants.LabelStatistic)+"/"+label(m, constants.LabelLearner)] =
+						m.GetGauge().GetValue()
+				}
+				return out
+			}
+			Expect(series(constants.LLMSMSLOPredictedTTFTSeconds)).To(Equal(map[string]float64{
+				"pre/p90/slo": 1.5, "pre/mean/slo": 0.9, "pre/p95/slo": 1.8, "pre/p90/ttft-mixture": 1.4}))
+			Expect(series(constants.LLMSMSLOPredictedTPOTSeconds)).To(Equal(map[string]float64{
+				"dec/mean/slo": 0.02, "dec/p95/tpot-distribution": 0.05}))
+
+			publish(reading())
+			Expect(series(constants.LLMSMSLOPredictedTTFTSeconds)).To(Equal(map[string]float64{"pre/p90/slo": 1.5}))
+			Expect(series(constants.LLMSMSLOPredictedTPOTSeconds)).To(BeEmpty())
+		})
+
 		It("publishes the joint model beside the reading, its flags on its own flag series", func() {
 			publish(reading())
 			Expect(family(constants.LLMSMSLOTTFTJointInput)).To(BeEmpty(), "no joint reading, no joint series")

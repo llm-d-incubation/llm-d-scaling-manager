@@ -59,6 +59,7 @@ data:
   # the resourceNames of the Namespace reads, which name only the controller's
   # namespace: ClusterRole scaling-manager-policy-namespace-reader-role-<ns>,
   # and scaling-manager-kueue-reader-role-<ns> with kueue "true".
+  # On the one-manifest install (scaling-manager.yaml) it is live instead.
   watchNamespaces: ""
   # Log verbosity, the controller's --v. restart.
   logVerbosity: "2"

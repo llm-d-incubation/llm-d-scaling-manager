@@ -36,6 +36,18 @@ func loadSettingsLayer(v *viper.Viper, flagSet *flag.FlagSet, data map[string]st
 		st.otherAtStart[k] = v.GetString(k)
 	}
 	st.deploymentWatchNamespace = NormalizeWatchNamespace(v.GetString("WATCH_NAMESPACE"))
+	// watchNamespaces live (--watch-namespaces-live) on a cluster-scoped
+	// Deployment: the setting narrows which namespaces are managed on every
+	// change, and never the cache, which stays cluster-wide. It is not a
+	// start value, so it does not reach WATCH_NAMESPACE.
+	st.watchLive = v.GetBool("WATCH_NAMESPACES_LIVE") && st.deploymentWatchNamespace == ""
+	if st.watchLive {
+		st.live.Restart = map[string]string{}
+		if ws, ok := restart["WATCH_NAMESPACE"]; ok {
+			st.live.Restart["WATCH_NAMESPACE"] = ws
+			delete(restart, "WATCH_NAMESPACE")
+		}
+	}
 	if ws, ok := restart["WATCH_NAMESPACE"]; ok {
 		if err := NarrowsWatchNamespaces(st.deploymentWatchNamespace, ws); err != nil {
 			ctrl.Log.Error(err, "Settings value rejected; the namespaces the Deployment names apply",

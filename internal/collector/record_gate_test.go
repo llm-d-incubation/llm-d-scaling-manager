@@ -60,7 +60,16 @@ var recordOnlyNames = []string{
 	registration.QueryPromptTokensBuckets, registration.QueryTTFTBuckets, registration.QueryAvgQueueTime,
 	registration.QueryQueueTimeBuckets, registration.QueryQueueMin, registration.QueryAvgPrefillTime,
 	registration.QueryAvgKVTransferTime, registration.QueryTPOTBuckets, registration.QueryComputedTokensBuckets,
-	registration.QuerySLORouterTPOTBuckets, registration.QueryFlowControlWaitBuckets,
+	registration.QuerySLORouterTPOTBuckets, registration.QueryFlowControlWaitBuckets, registration.QuerySLORouterProcessingBuckets,
+	registration.QuerySLORouterProcessingSum, registration.QuerySLORouterProcessingCount,
+	registration.QuerySLORouterRenderSum, registration.QuerySLORouterRenderCount,
+	registration.QueryAvgHTTPGenerationTime, registration.QueryAvgHTTPRenderTime, registration.QueryHTTPRenderRate,
+	registration.QueryAvgE2ELatency,
+	registration.QuerySLORouterPrefixPredicted, registration.QuerySLORouterPrefixBestAvailable,
+	registration.QuerySLORouterPrefixBestPredicted, registration.QuerySLORouterPrefixPrompt,
+	registration.QuerySLORouterPrefixRequests, registration.QuerySLORouterEndpointPlacements,
+	registration.QuerySLORouterEndpointQueue, registration.QuerySLORouterEndpointInFlightRequests,
+	registration.QuerySLORouterEndpointInFlightTokens,
 	registration.QueryFlowControlPoolModels, registration.QueryFlowControlPoolSaturation, registration.QueryFlowControlOutcomes,
 }
 
@@ -104,8 +113,14 @@ func TestRecordOnlyQueries_IssuedOnlyWhileRecording(t *testing.T) {
 		total += src.asked[q]
 	}
 	// The spec's cost (analyzer-learner.md, 2.9): for a vLLM namespace whose
-	// models list no slo analyzer, the recording adds these queries a cycle.
-	assert.Equal(t, 17, total)
+	// models list no slo analyzer, the recording adds these queries a cycle:
+	// its 17, the router's request-processing histogram with its _sum
+	// and _count, recorded for the capacity planner's remainder spread,
+	// for its remainder server the router's render _sum and _count and
+	// the pods' four API-server queries, the router prefix producer's
+	// two token rates, for its prefix duplication, and the router's
+	// per-endpoint series (4) and the prefix producers' other counts (3).
+	assert.Equal(t, 35, total)
 }
 
 // The recording flag is the cycle's: on, then off, then on again, each cycle
@@ -158,10 +173,15 @@ func TestRecordOnlyQueries_FailureCountedOnceUnderItsOwnType(t *testing.T) {
 			"recording %v: the three slo router queries, once each", recording)
 		want, wantRead := 0.0, 0.0
 		if recording {
-			// 6 per pod, 3 per pod for the cache tiers, 6 per pod for the KV transfers, 2 router
-			// histograms, 3 pool queries; and the 3 per pod and 2 router
-			// queries the TTFT pricing reads, under their own type.
-			want, wantRead = 20, 5
+			// 6 per pod, 1 per pod for the tokens per iteration, 3 per pod for the
+			// cache tiers, 2 per pod for the KV
+			// residency histograms, 6 per pod for the KV transfers, 2 router
+			// histograms, the router's request processing (3) and render (2), 4
+			// per pod for the API server, the router prefix producer's two token
+			// rates, its other three counts, the router's four per-endpoint
+			// series, 3 pool queries; and the 3 per pod and 2 router queries
+			// the TTFT pricing reads, under their own type.
+			want, wantRead = 41, 5
 		}
 		assert.Equal(t, want, errorsOfType(t, registry, constants.QueryTypeLearnerRecording), "recording %v", recording)
 		assert.Equal(t, wantRead, errorsOfType(t, registry, constants.QueryTypeTTFTInputs), "recording %v", recording)
@@ -183,7 +203,11 @@ func TestCollectRouterLatency_RefreshErrorCountedPerIssuedQuery(t *testing.T) {
 	c.EndCycle()
 	assert.Equal(t, 3.0, errorsOfType(t, registry, constants.QueryTypeRouterLatency))
 	assert.Equal(t, 2.0, errorsOfType(t, registry, constants.QueryTypeTTFTInputs))
-	assert.Equal(t, 2.0, errorsOfType(t, registry, constants.QueryTypeLearnerRecording))
+	// The TPOT and flow-control wait histograms, the router's request
+	// processing with its _sum and _count, its render _sum and _count, and
+	// the prefix producer's two token rates, its other three counts, and the
+	// four per-endpoint series.
+	assert.Equal(t, 16.0, errorsOfType(t, registry, constants.QueryTypeLearnerRecording))
 }
 
 // The router TTFT histogram is sorted by bound, so two identical cycles

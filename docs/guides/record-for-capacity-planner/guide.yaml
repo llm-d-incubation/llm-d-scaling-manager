@@ -107,8 +107,13 @@ manual:
       Each is one instant query for a range, metric{namespace=...}[1h]: it returns stored samples, not a resampled grid.
       A failed query saves its error, so the check below and the converter refuse it. Needs bash, jq and curl 7.76 or later.
       Lower CHUNK if a query fails with "too many samples".
-      CACHE_METRICS are the optional series: cache tiers, offloading, KV transfer, and the TTFT spent outside the engines.
+      CACHE_METRICS are the optional series: cache tiers, offloading, KV transfer, the TTFT spent outside the engines,
+      prefill capacity, router load, restarts, and the GPUs as the DCGM exporter sees them.
       Older releases lack many of them, and an absent one saves an empty answer, not a failure. Set LMCACHE_NAMESPACE first if the LMCache server runs in another namespace.
+      DCGM series are selected by the label that names the GPU's Pod, not by the exporter's namespace: DCGM_SELECTOR
+      defaults to exported_namespace='<NAMESPACE>'; set it first to select otherwise, for example DCGM_SELECTOR="exported_pod=~'my-model-.*'".
+      If your Prometheus honors the exporter's labels (honorLabels: true), set DCGM_SELECTOR="namespace='<NAMESPACE>'".
+      A name ending in _ (vllm:hisparse_) saves every series whose name starts with it.
     run: |
       export METRICS="
       vllm:kv_cache_usage_perc vllm:cache_config_info vllm:inter_token_latency_seconds_sum
@@ -125,10 +130,12 @@ manual:
       vllm:request_queue_time_seconds_sum vllm:request_queue_time_seconds_count
       vllm:request_queue_time_seconds_bucket vllm:request_prefill_time_seconds_sum
       vllm:request_prefill_time_seconds_count vllm:request_time_per_output_token_seconds_bucket
+      vllm:kv_block_reuse_gap_seconds_bucket vllm:kv_block_idle_before_evict_seconds_bucket vllm:iteration_tokens_total_bucket
       vllm:nixl_xfer_time_seconds_sum vllm:nixl_xfer_time_seconds_count vllm:nixl_bytes_transferred_sum
       vllm:kv_offload_load_bytes_total vllm:kv_offload_load_time_total vllm:kv_offload_tiering_read_bytes_total
       vllm:kv_offload_tiering_read_time_total vllm:num_preemptions_total
-      vllm:spec_decode_num_accepted_tokens_total
+      vllm:spec_decode_num_accepted_tokens_total vllm:e2e_request_latency_seconds_sum
+      vllm:e2e_request_latency_seconds_count http_request_duration_seconds_sum http_request_duration_seconds_count
       sglang:token_usage sglang:max_total_num_tokens sglang:inter_token_latency_seconds_sum
       sglang:inter_token_latency_seconds_count sglang:generation_tokens_total sglang:num_running_reqs
       sglang:num_queue_reqs sglang:prompt_tokens_histogram_sum sglang:prompt_tokens_histogram_count
@@ -147,7 +154,13 @@ manual:
       inference_extension_flow_control_request_enqueue_duration_seconds_count
       llm_d_epp_scheduler_attempts_total inference_extension_scheduler_attempts_total
       llm_d_epp_flow_control_request_queue_duration_seconds_bucket llm_d_epp_flow_control_pool_saturation
-      llm_d_epp_flow_control_requests_total
+      llm_d_epp_flow_control_requests_total llm_d_epp_request_processing_duration_seconds_bucket
+      llm_d_epp_request_processing_duration_seconds_sum llm_d_epp_request_processing_duration_seconds_count
+      llm_d_epp_token_producer_render_duration_seconds_sum llm_d_epp_token_producer_render_duration_seconds_count
+      llm_d_epp_prefix_predicted_cached_tokens_sum llm_d_epp_prefix_best_available_cached_tokens_sum
+      llm_d_epp_prefix_best_predicted_cached_tokens_sum llm_d_epp_prefix_prompt_tokens_sum
+      llm_d_epp_prefix_predicted_cached_tokens_count llm_d_epp_per_endpoint_queue_size
+      llm_d_epp_inflight_requests llm_d_epp_inflight_tokens
       kube_pod_info kube_pod_owner kube_replicaset_owner kube_pod_labels kube_pod_status_phase
       kube_pod_status_ready kube_pod_status_ready_time kube_pod_created kube_pod_start_time
       kube_pod_deletion_timestamp kube_pod_container_resource_requests kube_node_labels
@@ -160,9 +173,25 @@ manual:
       vllm:kv_offload_store_time_total vllm:kv_offload_total_bytes_total vllm:kv_offload_total_time_total
       vllm:kv_offload_tiering_chunk_queries_total vllm:kv_offload_tiering_chunk_hits_total
       vllm:kv_offload_tiering_read_bytes_total vllm:kv_offload_tiering_read_time_total vllm:kv_offload_config_info
+      vllm:kv_offload_tiering_promotion_latency_seconds_sum vllm:kv_offload_tiering_promotion_latency_seconds_count
+      vllm:kv_offload_tiering_promotion_latency_seconds_bucket
+      vllm:kv_offload_lookup_sync_delay_seconds_bucket vllm:kv_offload_lookup_sync_delay_seconds_sum
+      vllm:kv_offload_lookup_sync_delay_seconds_count vllm:kv_offload_lookup_async_delay_seconds_bucket
+      vllm:kv_offload_lookup_async_delay_seconds_sum vllm:kv_offload_lookup_async_delay_seconds_count
+      vllm:kv_offload_tiering_lookup_sync_delay_seconds_bucket vllm:kv_offload_tiering_lookup_sync_delay_seconds_sum
+      vllm:kv_offload_tiering_lookup_sync_delay_seconds_count vllm:kv_offload_tiering_lookup_async_delay_seconds_bucket
+      vllm:kv_offload_tiering_lookup_async_delay_seconds_sum vllm:kv_offload_tiering_lookup_async_delay_seconds_count
+      vllm:kv_offload_load_size_bucket
+      vllm:kv_block_lifetime_seconds_bucket vllm:kv_block_lifetime_seconds_sum vllm:kv_block_lifetime_seconds_count
+      vllm:kv_block_idle_before_evict_seconds_bucket vllm:kv_block_idle_before_evict_seconds_sum
+      vllm:kv_block_idle_before_evict_seconds_count vllm:kv_block_reuse_gap_seconds_bucket
+      vllm:kv_block_reuse_gap_seconds_sum vllm:kv_block_reuse_gap_seconds_count
+      vllm:hisparse_
       vllm:nixl_bytes_transferred_sum vllm:nixl_bytes_transferred_count vllm:nixl_xfer_time_seconds_bucket
       vllm:nixl_post_time_seconds_sum vllm:nixl_post_time_seconds_count vllm:nixl_num_failed_transfers_total
+      vllm:nixl_num_kv_expired_reqs_total vllm:nixl_num_failed_notifications_total
       vllm:spec_decode_num_accepted_tokens_per_pos_total vllm:spec_decode_num_drafts_total
+      vllm:spec_decode_num_draft_tokens_total
       lmcache_mp_lookup_requested_tokens_total lmcache_mp_lookup_hit_tokens_total
       lmcache_mp_lookup_hit_l1_tokens_total lmcache_mp_lookup_hit_l2_tokens_total
       lmcache_mp_lookup_prompt_tokens_total lmcache_mp_lookup_request_hit_tokens_total
@@ -172,6 +201,11 @@ manual:
       llm_d_epp_request_cached_tokens_bucket llm_d_epp_prefix_predicted_cached_tokens_sum
       llm_d_epp_prefix_predicted_cached_tokens_count llm_d_epp_prefix_best_predicted_cached_tokens_sum
       llm_d_epp_prefix_best_available_cached_tokens_sum llm_d_epp_prefix_prompt_tokens_sum
+      llm_d_epp_prefix_best_predicted_cached_tokens_count llm_d_epp_prefix_best_available_cached_tokens_count
+      llm_d_epp_prefix_prompt_tokens_count llm_d_epp_prefix_predicted_cached_tokens_bucket
+      llm_d_epp_prefix_best_available_cached_tokens_bucket llm_d_epp_prefix_cache_affinity_filter_decisions_total
+      llm_d_epp_prefix_indexer_size llm_d_epp_prefix_indexer_hit_ratio_bucket
+      llm_d_epp_prefix_indexer_hit_ratio_sum llm_d_epp_prefix_indexer_hit_ratio_count
       sglang:prefill_effective_tokens_total sglang:uncached_prompt_tokens_histogram_sum
       sglang:uncached_prompt_tokens_histogram_count sglang:uncached_prompt_tokens_histogram_bucket
       llm_d_epp_request_processing_duration_seconds_sum llm_d_epp_request_processing_duration_seconds_count
@@ -183,15 +217,42 @@ manual:
       vllm:e2e_request_latency_seconds_sum vllm:e2e_request_latency_seconds_count
       vllm:request_render_duration_seconds_sum vllm:request_render_duration_seconds_count
       http_request_duration_seconds_sum http_request_duration_seconds_count
+      llm_d_epp_scheduler_e2e_duration_seconds_bucket llm_d_epp_scheduler_e2e_duration_seconds_sum
+      llm_d_epp_scheduler_e2e_duration_seconds_count llm_d_epp_response_processing_duration_seconds_sum
+      llm_d_epp_response_processing_duration_seconds_count llm_d_epp_flow_control_request_queue_duration_seconds_sum
+      llm_d_epp_flow_control_request_queue_duration_seconds_count
+      vllm:iteration_tokens_total_bucket vllm:iteration_tokens_total_sum vllm:iteration_tokens_total_count
+      vllm:request_prefill_time_seconds_bucket vllm:estimated_flops_per_gpu_total
+      vllm:estimated_read_bytes_per_gpu_total vllm:estimated_write_bytes_per_gpu_total
+      DCGM_FI_DEV_GPU_UTIL DCGM_FI_PROF_SM_ACTIVE DCGM_FI_PROF_PIPE_TENSOR_ACTIVE DCGM_FI_PROF_DRAM_ACTIVE
+      DCGM_FI_DEV_POWER_USAGE DCGM_FI_DEV_SM_CLOCK DCGM_FI_DEV_GPU_UTIL_RATIO DCGM_FI_PROF_SM_UTIL_RATIO
+      DCGM_FI_PROF_TENSOR_UTIL_RATIO DCGM_FI_PROF_DRAM_UTIL_RATIO DCGM_FI_DEV_BOARD_POWER_WATTS DCGM_FI_DEV_SM_CLOCK_HERTZ
+      vllm:request_time_per_output_token_seconds_sum vllm:request_time_per_output_token_seconds_count
+      vllm:request_decode_time_seconds_bucket vllm:request_decode_time_seconds_sum
+      vllm:request_decode_time_seconds_count vllm:request_success_total
+      llm_d_epp_info llm_d_epp_ready_endpoints llm_d_epp_inflight_requests llm_d_epp_inflight_tokens
+      llm_d_epp_request_total llm_d_epp_request_error_total
+      llm_d_epp_request_input_tokens_bucket llm_d_epp_request_input_tokens_sum llm_d_epp_request_input_tokens_count
+      llm_d_epp_request_output_tokens_bucket llm_d_epp_request_output_tokens_sum llm_d_epp_request_output_tokens_count
+      llm_d_epp_flow_control_dispatch_cycle_duration_seconds_bucket
+      llm_d_epp_flow_control_dispatch_cycle_duration_seconds_sum
+      llm_d_epp_flow_control_dispatch_cycle_duration_seconds_count llm_d_epp_flow_control_detector_saturation
+      llm_d_epp_flow_control_capacity_utilization_requests llm_d_epp_flow_control_capacity_utilization_bytes
+      kube_pod_container_status_restarts_total kube_pod_container_status_last_terminated_reason
       "
       export LMCACHE_NAMESPACE=${LMCACHE_NAMESPACE:-${NAMESPACE}}
+      [ -n "${DCGM_SELECTOR:-}" ] || export DCGM_SELECTOR="exported_namespace='${NAMESPACE}'"
       rm -rf planner-export
       mkdir -p planner-export
       failed=0
       for m in ${METRICS} ${CACHE_METRICS}; do
         sel="${m}{namespace='${NAMESPACE}'}"
         [ "${m}" = kube_node_labels ] && sel="${m}"
-        case "${m}" in lmcache_mp_*) sel="${m}{namespace='${LMCACHE_NAMESPACE}'}" ;; esac
+        case "${m}" in
+          lmcache_mp_*) sel="${m}{namespace='${LMCACHE_NAMESPACE}'}" ;;
+          DCGM_*) sel="${m}{${DCGM_SELECTOR}}" ;;
+          *_) sel="{__name__=~'${m}.+',namespace='${NAMESPACE}'}" ;;
+        esac
         t=${FROM}
         while [ "${t}" -lt "${TO}" ]; do
           end=$(( t + CHUNK )); [ "${end}" -gt "${TO}" ] && end=${TO}

@@ -117,7 +117,13 @@ type ReplicaMetricsCollector struct {
 	// pricing's inputs for (ReadTTFTInputsIn). Part of the cycle, like
 	// cycleRecord.
 	cycleTTFTNamespaces map[string]bool
-	cycleMu             sync.Mutex
+	// cyclePredictNamespaces is the namespaces this cycle reads the
+	// slo analyzer's v2 models' inputs for (ReadPredictionInputsIn), and
+	// cyclePredictRows the rows it read them into, by namespace/model
+	// (PredictionRows). Part of the cycle, like cycleRecord.
+	cyclePredictNamespaces map[string]bool
+	cyclePredictRows       map[string][]domain.ReplicaMetrics
+	cycleMu                sync.Mutex
 	// warnedLWSGroups is the namespace/group keys warnLWSRanks has warned
 	// about, so it says so once per group, not every cycle. Guarded by
 	// cycleMu.
@@ -245,6 +251,8 @@ func (c *ReplicaMetricsCollector) BeginRecordingCycle(record bool) {
 	c.cyclePods = make(map[string]namespacePods)
 	c.cycleRecord = record
 	c.cycleTTFTNamespaces = nil
+	c.cyclePredictNamespaces = nil
+	c.cyclePredictRows = nil
 }
 
 // EndCycle closes the cycle opened by BeginCycle and releases the memoized
@@ -254,6 +262,8 @@ func (c *ReplicaMetricsCollector) EndCycle() {
 	defer c.cycleMu.Unlock()
 	c.cycleRecord = false
 	c.cycleTTFTNamespaces = nil
+	c.cyclePredictNamespaces = nil
+	c.cyclePredictRows = nil
 	c.cycleResults = nil
 	c.cyclePods = nil
 }
@@ -336,6 +346,12 @@ func (c *ReplicaMetricsCollector) CollectReplicaMetrics(
 	vaEventTracker map[string]bool,
 ) ([]domain.ReplicaMetrics, error) {
 	replicaMetrics, err := c.collectReplicaMetrics(ctx, modelID, namespace, scaleTargets)
+	if err == nil {
+		// The slo analyzer's v2 models keep the rows its queries filled;
+		// everything below, and every analyzer, reads them as a collection
+		// without it would have built them.
+		replicaMetrics = c.splitPredictionRows(namespace, modelID, replicaMetrics)
+	}
 
 	// Determine if metrics are available in this cycle
 	metricsAvailable := err == nil && len(replicaMetrics) > 0

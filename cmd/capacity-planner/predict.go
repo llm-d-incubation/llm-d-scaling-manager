@@ -56,6 +56,9 @@ func runPredict(ctx context.Context, args []string, out, warn io.Writer) error {
 	if f.fit == "" || window == "" || dst == "" {
 		return usagef("--fit, --window and -o are required")
 	}
+	if f.rankMixtureTTFT {
+		return usagef("--%s=%s is backtest's only: the model is fitted on a backtest's fit window", experimentalTTFTFlag, experimentalTTFTV2)
+	}
 	ctrllog.SetLogger(logr.Discard())
 	bt, err := f.request()
 	if err != nil {

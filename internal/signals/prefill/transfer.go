@@ -27,11 +27,34 @@ type transferRead struct {
 // floor under the priced TTFT, and a quiet figure from long ago must not lower it.
 // Past that the fleet's every-row figure stands, which reads high, and with no
 // reading at all there is none: the caller's TransferOmitted.
+//
+// With PullWork set, each row's reading is the pull's own work, not the time
+// it took: the KV pull is priced as a processor-sharing stage on the decode pod
+// (whatif.TTFTFleet.ProcessorSharing), so the time a row measured at its request
+// rate lambda is already that stage's stretched time, T = S/(1 - lambda S).
+// Pricing T as the work S stretched it a second time. The row's work is
+// S = T/(1 + lambda T), the work whose processor-sharing time at lambda is T.
 type TransferWindow struct {
+	// PullWork reads each row's work from its time at its own request rate
+	// (pullWork). The SLO analyzer's switch slo-ttft-pull-work, off by default.
+	PullWork          bool
 	quiet, all        []transferRead
 	now               time.Time
 	readThisCycle     bool
 	accelerator, args string
+}
+
+// pullWork is the processor-sharing work S of a stage whose mean time at
+// arrival rate lambda is t: t = S/(1 - lambda S), so S = t/(1 + lambda t).
+// Here t is a row's mean NIXL transfer and lambda the pod's request rate, the
+// rate the pull stage prices at, so S is a request's work where a request makes
+// one transfer on each rank. Where it makes more, the transfers arrive faster
+// than lambda and less stretch is taken out than t holds. Poisson arrivals: a
+// burstier stream stretches the same work more, so S read at Poisson is the
+// larger. Both leave S high, the safe side. The caller passes a finite rate
+// above 0 (requestRate), so 1 + lambda t is above 1.
+func pullWork(t, lambda float64) float64 {
+	return t / (1 + lambda*t)
 }
 
 // TransferReading is a TransferWindow at its latest cycle.
@@ -78,7 +101,11 @@ func (w *TransferWindow) Observe(now time.Time, rows []domain.ReplicaMetrics) {
 			math.IsInf(rm.AvgKVTransferTime, 0) || !(rm.AvgKVTransferTime > 0) {
 			continue
 		}
-		sum += rm.AvgKVTransferTime
+		t := rm.AvgKVTransferTime
+		if lambda, ok := requestRate(rm); w.PullWork && ok {
+			t = pullWork(t, lambda)
+		}
+		sum += t
 		n++
 		queued = queued || rm.QueueLength > 0
 	}

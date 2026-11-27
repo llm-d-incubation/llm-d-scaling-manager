@@ -468,16 +468,27 @@ check-doc-comment-owner: ## Fail on a doc comment describing a different declara
 # minutes is about twice that package's time on a runner with the goldens:
 # 868 s before the TTFT staircase's four, and 1729 s with them, 96% of the 30
 # minutes this was. One -timeout covers every package of one go test, so it
-# cannot be scoped to learnreplay alone.
-TEST_TIMEOUT ?= 60m
+# cannot be scoped to learnreplay alone. 90 minutes since cmd/capacity-planner
+# grew to 2000 s on a runner (56% of 60), and one slow runner doubled both it
+# and learnreplay (3600+ s and 2765 s) with no change of its own.
+TEST_TIMEOUT ?= 90m
+
+# The race-detector pass after it (see test) runs whole packages under -race,
+# several times slower than without: internal/whatifapi alone ran past go
+# test's default 10m on a runner, and took 384 s on a 22-CPU workstation. A
+# runner 2 to 3 times slower puts it at 13 to 19 minutes, and one slow runner
+# has doubled a package's time before (TEST_TIMEOUT), so 60 minutes.
+RACE_TEST_TIMEOUT ?= 60m
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest helm check-import-direction check-doc-comment-owner ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" PATH="$(LOCALBIN):$(PATH)" go test -timeout $(TEST_TIMEOUT) $$(go list ./... | grep -v /e2e | grep -v /benchmark) ./test/e2e/fixtures/ -coverprofile cover.out
 	@# The race detector on the packages whose concurrency spec only it can
-	@# check (a few seconds): without -race that spec proves no deadlock and
-	@# nothing more.
-	CGO_ENABLED=1 go test -race -count=1 ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/ ./internal/whatifapi/...
+	@# check: without -race that spec proves no deadlock and nothing more. It
+	@# runs whole packages, and internal/whatifapi under -race ran past go
+	@# test's default 10m on a runner, so it carries its own limit
+	@# (RACE_TEST_TIMEOUT).
+	CGO_ENABLED=1 go test -race -count=1 -timeout $(RACE_TEST_TIMEOUT) ./internal/engines/analyzers/slo/ ./internal/signals/itl/ ./internal/signals/learnrec/ ./internal/whatifapi/...
 	CGO_ENABLED=1 go test -race -count=1 -timeout 20m -run 'TestServeConcurrent' ./cmd/capacity-planner/
 
 # The commit a build is made from, recorded in each learner recording's start
@@ -1710,6 +1721,55 @@ test-e2e-release-manifests-setup: ## Kind prerequisites for test-e2e-release-man
 
 .PHONY: test-e2e-release-manifests-with-setup
 test-e2e-release-manifests-with-setup: test-e2e-release-manifests-setup test-e2e-release-manifests ## Prerequisites, then the release-files e2e (never deletes the cluster)
+
+# The install from the one manifest (test/manifest-install/e2e.sh,
+# proposal PR #404, phase 1), with scaling-manager-admin.sh and
+# scaling-manager-owner.sh on the files as rendered: the manifest and KEDA's
+# side in KEDA's namespace with no edit, the settings with watchNamespaces;
+# ready from the in-controller preflight, mutual TLS with KEDA's copy written
+# by the controller, an upgrade that keeps the certificates and a live switch,
+# a namespace watchNamespaces leaves out refused at the scaler and told so in
+# its own namespace, then listed live with no restart, the smoke suite (with
+# watchNamespaces empty, every namespace), and the uninstall with its
+# leftovers check. On the same kind prerequisites as
+# test-e2e-release-manifests, in the cluster scope.
+# docs/developer-guide/testing.md, "Install from the one manifest".
+MANIFEST_E2E_LOGS ?= $(CURDIR)/dist/manifest-e2e-logs
+.PHONY: test-e2e-manifest-install
+test-e2e-manifest-install: kustomize ## Install from scaling-manager.yaml with scaling-manager-admin.sh and -owner.sh, and check it (kind, after test-e2e-release-manifests-setup)
+	@set -e; \
+	$(MAKE) --no-print-directory release-e2e-dist; \
+	rm -rf "$(MANIFEST_E2E_LOGS)"; \
+	smoke=""; \
+	if [ "$(RELEASE_E2E_SMOKE)" = true ]; then \
+		smoke="E2E_EXPECT_SCALER_TLS=true $(MAKE) --no-print-directory test-e2e-smoke CONTROLLER_NAMESPACE=scaling-manager-system KUBECONFIG=$(KUBECONFIG) DEPLOY_ALERTING_RULES=false"; \
+	fi; \
+	KUBECONFIG=$(KUBECONFIG) MODEL_NS=$(E2E_EMULATED_LLMD_NAMESPACE) KEDA_NS=$(E2E_KEDA_NAMESPACE) \
+		MONITORING_NS=$(E2E_MONITORING_NAMESPACE) E2E_LOG_DIR="$(MANIFEST_E2E_LOGS)" SMOKE_CMD="$$smoke" \
+		bash test/manifest-install/e2e.sh "$(RELEASE_E2E_DIST)"
+
+# The move from an smt install to the one manifest
+# (test/manifest-install/migrate.sh): smt install --scope cluster from the
+# tools image built with the release files, a ScaledObject over mutual TLS,
+# then scaling-manager.yaml applied over it. The controller must copy the smt
+# CA into its Opaque Secrets, and KEDA must stay connected with no restart of
+# its operator. On a cluster where no scaling manager was installed yet.
+.PHONY: test-e2e-manifest-migrate
+test-e2e-manifest-migrate: kustomize ## Move an smt install to scaling-manager.yaml and check mutual TLS holds (kind, after test-e2e-release-manifests-setup)
+	@set -e; \
+	$(MAKE) --no-print-directory release-e2e-dist; \
+	rm -rf "$(MANIFEST_E2E_LOGS)-migrate"; \
+	echo "Building $(TOOLS_E2E_IMG) with the release files baked in"; \
+	docker build -q -f Dockerfile.tools --build-context release="$(RELEASE_E2E_DIST)" \
+		--build-arg VERSION=$(RELEASE_E2E_VERSION) \
+		--build-arg RELEASE_SHA256SUMS="$$(sha256sum "$(RELEASE_E2E_DIST)/SHA256SUMS" | cut -d' ' -f1)" \
+		-t $(TOOLS_E2E_IMG) .; \
+	KUBECONFIG=$(KUBECONFIG) TOOLS_IMG=$(TOOLS_E2E_IMG) MODEL_NS=$(E2E_EMULATED_LLMD_NAMESPACE) KEDA_NS=$(E2E_KEDA_NAMESPACE) \
+		MONITORING_NS=$(E2E_MONITORING_NAMESPACE) E2E_LOG_DIR="$(MANIFEST_E2E_LOGS)-migrate" \
+		bash test/manifest-install/migrate.sh "$(RELEASE_E2E_DIST)"
+
+.PHONY: test-e2e-manifest-install-with-setup
+test-e2e-manifest-install-with-setup: test-e2e-release-manifests-setup test-e2e-manifest-install ## Prerequisites, then the one-manifest install e2e (never deletes the cluster)
 
 # The whole-node utilization-share specs (label utilization-share-wholenode): a
 # large model whose replica is one whole 8-GPU node, or a LeaderWorkerSet group
@@ -3319,6 +3379,12 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@bash -n hack/check-release-latest.sh
 	@bash -n deploy/release-manifests.sh
 	@bash -n hack/check-release-manifests.sh
+	@bash -n hack/check-manifest-install.sh
+	@bash -n hack/check-kubectl-scripts.sh
+	@bash -n deploy/kubectl/scaling-manager-admin.sh
+	@bash -n deploy/kubectl/scaling-manager-owner.sh
+	@bash -n test/manifest-install/e2e.sh
+	@bash -n test/manifest-install/migrate.sh
 	@bash -n hack/check-release-install.sh
 	@bash -n hack/compare-baked-release-files.sh
 	@bash -n hack/testdata/release-install/kubectl
@@ -3638,9 +3704,7 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@echo "Checking no doc applies the sample scaling policy over an install..."
 	@# The sample has no limiters: applying it removes the GPU limit.
 	@bash hack/check-policy-apply-docs.sh
-	@echo "Checking the docs pin the tools image of the release their newTag names..."
-	@# The v0.12.2 tag pinned v0.12.1's tools digest in every install guide: the
-	@# digest exists only after the run builds the image, and nothing said so.
+	@echo "Checking the docs pin the tools and controller images of the release their newTag names..."
 	@bash -n deploy/ci-pr-checks/tools-pin.sh
 	@bash hack/check-tools-pin.sh
 	@echo "Checking only the highest final release tag moves latest..."
@@ -3666,6 +3730,15 @@ lint-deploy-scripts: ## Run bash -n for deploy/install.sh, deploy/lib/*.sh, and 
 	@# time and requires each break to be caught. An image by tag, a Namespace
 	@# in the file, or a hashed ClusterRole name all render and parse cleanly.
 	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-release-manifests.sh
+	@echo "Checking the one manifest, scaling-manager.yaml: Opaque Secrets with no data, the switches, KEDA's side..."
+	@# proposal PR #404: the file is applied again
+	@# with kubectl apply --server-side on every upgrade, so a Secret with data
+	@# empties the certificates the controller wrote; and it is applied as
+	@# downloaded, so it names no namespace but its own (KEDA's side is
+	@# scaling-manager-keda.yaml, applied with -n).
+	@KUSTOMIZE=$(KUSTOMIZE) bash hack/check-manifest-install.sh
+	@echo "Checking scaling-manager-admin.sh and scaling-manager-owner.sh: --print pinned, run equal to --print, kubectl only..."
+	@bash hack/check-kubectl-scripts.sh
 	@echo "Checking smt admin-setup, install and admin-finish against the release files..."
 	@# docs/proposals/two-command-install.md: the exit codes, --dry-run equal to
 	@# the sed-substituted files, files refused on a bad SHA256SUMS or another

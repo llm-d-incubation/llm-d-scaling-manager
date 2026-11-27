@@ -93,6 +93,7 @@ func lineText(pv pricedVariant) string {
 func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 	var flags []whatif.Flag
 	fill := -1.0
+	var batch whatif.BatchBeyondFit
 	for _, r := range results {
 		var from []whatif.Flag
 		switch a := r.(type) {
@@ -100,6 +101,9 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 			from = a.Flags
 			if a.HasFlag(whatif.ExtrapolatedFill) {
 				fill = max(fill, a.Basis.Fill)
+			}
+			if b := a.Basis.Batch; b != nil && b.Priced > batch.Priced {
+				batch = *b
 			}
 		case whatif.TTFT:
 			from = a.Flags
@@ -139,6 +143,12 @@ func flagsLine(b *strings.Builder, pv pricedVariant, results ...whatif.Result) {
 			parts = append(parts, fmt.Sprintf("%s (%.4f ms a batch token past %.0f per rank)", f, pv.decode.Batch.Slope*1e3, pv.decode.Batch.Roof))
 		case whatif.LineNearGate:
 			parts = append(parts, fmt.Sprintf("%s (%d/%d)", f, pv.lines.TierChanges(), pv.lines.Drawn))
+		case batchBeyondFit:
+			if batch.Priced == 0 {
+				parts = append(parts, string(f))
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s (%s)", f, pv.batchBeyondFitText(batch)))
 		default:
 			if d := pv.engineNoteText(f); d != "" {
 				parts = append(parts, fmt.Sprintf("%s (%s)", f, d))

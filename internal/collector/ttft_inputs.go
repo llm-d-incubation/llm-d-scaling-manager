@@ -22,6 +22,9 @@ var ttftInputHistograms = []struct {
 	{registration.QueryTTFTBuckets, func(d *podMetricData) *map[float64]float64 { return &d.ttftBuckets }},
 	{registration.QueryQueueTimeBuckets, func(d *podMetricData) *map[float64]float64 { return &d.queueTimeBuckets }},
 	{registration.QueryTPOTBuckets, func(d *podMetricData) *map[float64]float64 { return &d.tpotBuckets }},
+	{registration.QueryKVReuseGapBuckets, func(d *podMetricData) *map[float64]float64 { return &d.kvReuseGapBuckets }},
+	{registration.QueryKVIdleBeforeEvictBuckets, func(d *podMetricData) *map[float64]float64 { return &d.kvIdleBeforeEvictBuckets }},
+	{registration.QueryIterationTokensBuckets, func(d *podMetricData) *map[float64]float64 { return &d.iterationTokensBuckets }},
 }
 
 // ttftInputFigures are the TTFT model's per-pod figures read under
@@ -56,6 +59,7 @@ func (c *ReplicaMetricsCollector) extractTTFTInputs(ctx context.Context, modelID
 	}
 	c.extractCacheTiers(ctx, modelID, namespace, results, podData)
 	c.extractKVTransfers(ctx, modelID, namespace, results, podData)
+	c.extractFrontend(ctx, modelID, namespace, results, podData)
 }
 
 // extractNonNegative reads one per-instance figure into the value and

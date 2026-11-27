@@ -154,6 +154,12 @@ type Writer struct {
 	Namespaces []string
 	// AllNamespaces scans every namespace, for a cluster-scoped install.
 	AllNamespaces bool
+	// NamespacesFunc, when set, returns the namespaces to scan on each pass,
+	// in place of Namespaces and AllNamespaces: on the one-manifest install,
+	// the managed namespaces that hold the per-namespace grant
+	// (GrantedNamespaces), so the writer needs no patch on every set in the
+	// cluster. An error skips the pass.
+	NamespacesFunc func(ctx context.Context) ([]string, error)
 	// Interval between passes, and DecisionTTL, past which a positive
 	// decision no longer speaks for its role (the external scaler's rule).
 	Interval, DecisionTTL time.Duration
@@ -236,6 +242,13 @@ func (w *Writer) Pass(ctx context.Context) {
 	namespaces := w.Namespaces
 	if w.AllNamespaces {
 		namespaces = []string{metav1.NamespaceAll}
+	}
+	if w.NamespacesFunc != nil {
+		var err error
+		if namespaces, err = w.NamespacesFunc(ctx); err != nil {
+			ctrl.LoggerFrom(ctx).Error(err, "Cannot tell which namespaces hold the role writer's grant; skipping this pass")
+			return
+		}
 	}
 	seen := map[roleKey]bool{}
 	for _, ns := range namespaces {

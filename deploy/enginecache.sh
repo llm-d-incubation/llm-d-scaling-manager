@@ -30,6 +30,7 @@
 #
 #   enginecache.sh apply  -n NS --path DIR --image IMG [--seed-claim PVC[:SUBPATH]] [--dry-run]
 #                                                                     prepare DIR/engine-cache on every accelerator node
+#                                                                     rebind an owned, released volume for the same namespace and path
 #   enginecache.sh status -n NS [--node-selector KEY=VALUE[,...]]     which nodes are prepared, which are not, and why
 #   enginecache.sh delete -n NS [--dry-run]                           drop the claim, volume and preparer (the caches stay)
 #   enginecache.sh publish -n NS [--dry-run]                          fill the seed claim from every prepared node, then re-seed every node
@@ -683,6 +684,38 @@ $(seed_mount_yaml)
 EOF
 }
 
+# A Retain PV can outlive its claim. Keep the reservation by claim name,
+# but remove the previous claim's identity before applying its replacement.
+rebind_released_cache_volume() {
+    local pv fields state managed_by path storage_class policy claim_namespace claim_name phase claim_uid version claim_ref patch
+    pv="$(pv_for)"
+    fields='{.metadata.labels.app\.kubernetes\.io/managed-by}{"|"}{.spec.hostPath.path}{"|"}{.spec.storageClassName}{"|"}'
+    fields+='{.spec.persistentVolumeReclaimPolicy}{"|"}{.spec.claimRef.namespace}{"|"}{.spec.claimRef.name}{"|"}'
+    fields+='{.status.phase}{"|"}{.spec.claimRef.uid}{"|"}{.metadata.resourceVersion}{"|"}{.spec.claimRef}'
+    state="$(kubectl get pv "$pv" --ignore-not-found -o "jsonpath=$fields")" ||
+        log_error "cannot read PersistentVolume ${pv} for ${NAMESPACE}/${CLAIM}"
+    [ -n "$state" ] || return 0
+    IFS='|' read -r managed_by path storage_class policy claim_namespace claim_name phase claim_uid version claim_ref <<< "$state"
+    # An admin may have manually cleared claimRef. The manifest can restore
+    # the reservation on an Available volume with no claimRef.
+    if [[ "$managed_by" != scaling-manager-enginecache || "$path" != "${NODE_PATH}/${SUBDIR}" ||
+          "$storage_class" != "$STORAGE_CLASS" || "$policy" != Retain ]] ||
+       { [[ "$claim_namespace" != "$NAMESPACE" || "$claim_name" != "$CLAIM" ]] &&
+         [[ "$phase" != Available || -n "$claim_ref" ]]; }; then
+        local found="managed-by '${managed_by}', path '${path}', storage class '${storage_class}', reclaim policy '${policy}'"
+        found+=", claim '${claim_namespace}/${claim_name}', phase '${phase}'"
+        log_error "PersistentVolume ${pv} does not match the Retain engine cache for ${NAMESPACE}/${CLAIM} at ${NODE_PATH}/${SUBDIR} on ${STORAGE_CLASS} (found ${found}). Refusing to modify it"
+    fi
+    [[ "$phase" == Released && -n "$claim_uid" ]] || return 0
+    [ -n "$version" ] || log_error "PersistentVolume ${pv} has no resourceVersion; cannot safely rebind it"
+
+    # The read version makes the patch conditional on the volume we inspected.
+    # Merge patch can remove claimRef.resourceVersion when it is already absent.
+    printf -v patch '{"metadata":{"resourceVersion":"%s"},"spec":{"claimRef":{"uid":null,"resourceVersion":null}}}' "$version"
+    kubectl patch pv "$pv" --type merge --patch "$patch" >/dev/null ||
+        log_error "cannot clear the old claim identity on PersistentVolume ${pv} (requires patch permission on persistentvolumes and an unchanged volume resourceVersion. See the kubectl error above)"
+}
+
 cmd_apply() {
     [ -n "$NAMESPACE" ] || log_error "apply needs -n NAMESPACE"
     [ -n "$NODE_PATH" ] || log_error "apply needs --path DIR (a directory on the node)"
@@ -726,6 +759,7 @@ cmd_apply() {
     fi
     # an existing claim keeps its size (deploy/lib/nodedir.sh says why)
     nodedir_claim_capacity "$NAMESPACE" "$CLAIM" "$CAPACITY_GIVEN" "enginecache.sh delete -n ${NAMESPACE}"
+    rebind_released_cache_volume
     render | kubectl apply -f - >/dev/null
     log_info "preparing ${NODE_PATH}/${SUBDIR} on $(accelerator_selector_text "$NODE_SELECTOR"); claim ${CLAIM}${SEED_CLAIM:+, seeded from ${SEED_CLAIM}${SEED_SUBPATH:+:$SEED_SUBPATH}} -- mount it read-write and point VLLM_CACHE_ROOT, FLASHINFER_WORKSPACE_BASE, TRITON_CACHE_DIR and PYTHONPYCACHEPREFIX (pycache/<image key>) under it"
     if kubectl api-resources --api-group=security.openshift.io 2>/dev/null | grep -q securitycontextconstraints; then

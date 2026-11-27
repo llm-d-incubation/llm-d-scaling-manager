@@ -116,6 +116,12 @@ func TestTTFTGolden(t *testing.T) {
 		{"ttft-q32-assumed-spread", q32TTFT("replicas-to-slo", "--ttft-percentile", "90"), 0},
 		{"ttft-q32-as-priced", q32TTFT("replicas-to-slo", "--ttft-percentile", "90", "--assume-prompt-cv", "0.0577", "--arrival-cv2", "1", "--flow-control", "off"), 0},
 		{"ttft-q32-as-priced-json", q32TTFT("replicas-to-slo", "--ttft-percentile", "90", "--assume-prompt-cv", "0.0577", "--arrival-cv2", "1", "-o", "json"), 0},
+		// The same with --load-aware-router stated (the API's
+		// assume.loadAwareRouter, TestServeParity): f is 1 on the warm-up,
+		// so no figure moves, and every figure reads outside for the stated
+		// switch the run did not price.
+		{"ttft-q32-load-aware-json", q32TTFT("replicas-to-slo", "--ttft-percentile", "90", "--assume-prompt-cv", "0.0577", "--arrival-cv2", "1",
+			"--load-aware-router", "-o", "json"), 0},
 		{"ttft-q32-rate-as-priced", q32TTFT("slo-to-rate", "--ttft", "7599.1ms@p90", "--assume-prompt-cv", "0.0577", "--arrival-cv2", "1", "--flow-control", "off"), 0},
 		{"ttft-q32-rate-assumed-spread", q32TTFT("slo-to-rate", "--ttft", "7599.1ms@p90"), 0},
 		// Bucket C (Ca^2 4) with flow control on, at its frozen p95 target:
@@ -246,6 +252,46 @@ func TestTTFT_TheSpreadOrder(t *testing.T) {
 		assert.Equal(t, whatif.AssumedPromptCV, pf.fleet.Prefill.PromptCV, name)
 		assert.True(t, pf.fleet.Prefill.PromptCVAssumed, name)
 		assert.Equal(t, shapeAssumed, pf.in.PromptCVSource, name)
+	}
+}
+
+// A histogram with requests past its last bound is held under the prefill
+// engines' context window where their recorded arguments say it: the cv is
+// the bound there (whatif.ReadPromptSpreadWithin), named as such, not the
+// stop. Another variant's window, or an argument the parser could not read,
+// leaves it at the stop.
+func TestTTFT_ThePromptSpreadIsHeldUnderTheContextWindow(t *testing.T) {
+	inf := math.Inf(1)
+	past := []domain.LengthBucket{{UpperBound: 1000, Rate: 1}, {UpperBound: inf, Rate: 2}}
+	withWindow := func(vs ...learnreplay.VariantState) *learnreplay.State {
+		st := learnedState()
+		w := &whatif.PromptWindow{}
+		for i := range whatif.PromptWindowMinCycles {
+			w.Note([]domain.ReplicaMetrics{{Ready: true, PrefillComputedTokenRate: 2000, PrefillComputedTokenRateKnown: true,
+				RequestRate: 1, RequestRateKnown: true, ComputedTokensBuckets: past}}, i, time.Unix(int64(60*i), 0))
+		}
+		st.Prefill[0].PromptWindow = w
+		st.Variants = vs
+		return st
+	}
+	want := whatif.ReadPromptSpreadWithin(map[float64]float64{1000: 1, inf: 2}, 2000, 8192)
+	require.False(t, want.Clamped)
+	require.Less(t, want.CV, whatif.PromptCVStop)
+
+	pf := fleetOf(t, withWindow(learnreplay.VariantState{Variant: "pre", MaxModelLen: 8192}), answerFlags{})
+	require.Nil(t, pf.refused)
+	assert.Equal(t, want.CV, pf.fleet.Prefill.PromptCV)
+	assert.Equal(t, shapeMeasured, pf.in.PromptCVSource)
+	assert.Contains(t, strings.Join(pf.in.Assumed, " "), "held under the context window, 8192 tokens")
+
+	for name, st := range map[string]*learnreplay.State{
+		"no window":          withWindow(),
+		"another variant's":  withWindow(learnreplay.VariantState{Variant: "other", MaxModelLen: 8192}),
+		"an unread argument": withWindow(learnreplay.VariantState{Variant: "pre", MaxModelLen: 8192, MaxModelLenUnresolved: true}),
+	} {
+		pf = fleetOf(t, st, answerFlags{})
+		assert.Equal(t, whatif.PromptCVStop, pf.fleet.Prefill.PromptCV, name)
+		assert.Equal(t, shapeClamped, pf.in.PromptCVSource, name)
 	}
 }
 
@@ -1181,7 +1227,7 @@ func TestPrometheus_TheTTFTAnswerIsTheFilesAnswer(t *testing.T) {
 // series. So the identity here says that capture carries those series into
 // the capture file, generate into the recording, and the replay reads them
 // back the same in both modes, and the assertions after it say what they read
-// is the fake's: f 1.5, a transfer of 20 ms, the gate on. It says nothing of
+// is the fake's: f its 1.5 de-biased, a transfer of 20 ms, the gate on. It says nothing of
 // whether a real engine's series mean what the model takes them to.
 func TestPrometheus_TheTTFTInputsCrossTheCapture(t *testing.T) {
 	srv := pdRichServer(t)
@@ -1212,8 +1258,12 @@ func TestPrometheus_TheTTFTInputsCrossTheCapture(t *testing.T) {
 	require.GreaterOrEqual(t, i, 0, out)
 	in := w.Roles[i].TTFT
 	assert.Equal(t, 2, in.Replicas)
-	assert.Equal(t, "assumed", in.ImbalanceSource, "minutes of 100 requests a pod are needed to learn f")
-	near(t, "f, the raw share", in.Imbalance, 1.5, 1e-9)
+	// No minute alone carries prefill.MinRequestsPerPodMinute requests a
+	// pod; the planner pools them (SwitchPrefillFPooledMinutes) and learns
+	// the fake's 3:1 share, 1.5, less the chance excess at the pooled count.
+	assert.Equal(t, "learned", in.ImbalanceSource, "f from pooled minutes")
+	near(t, "f, the share de-biased", in.Imbalance, 1.45, 0.01)
+	assert.Less(t, in.Imbalance, 1.5, "the de-bias takes the chance excess off")
 	assert.Equal(t, "on", in.FlowControl)
 	assert.Contains(t, in.Assumed, "flow-control thresholds 5 and 0.8 (upstream defaults)")
 	assert.Equal(t, "line", in.DecodeSide)

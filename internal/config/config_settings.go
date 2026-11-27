@@ -81,6 +81,50 @@ type settingsState struct {
 	// names (flag, environment, config.yaml), normalized, before the
 	// watchNamespaces setting narrows them.
 	deploymentWatchNamespace string
+	// watchLive: the watchNamespaces setting is read on every change, on a
+	// cluster-scoped Deployment (WATCH_NAMESPACES_LIVE). It selects the
+	// managed namespaces; the cache stays cluster-wide.
+	watchLive bool
+}
+
+// WatchNamespacesLive reports whether the watchNamespaces setting takes
+// effect without a restart: --watch-namespaces-live on a Deployment that
+// names no namespace. Thread-safe.
+func (c *Config) WatchNamespacesLive() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.settings.watchLive
+}
+
+// ManagedNamespaces returns the namespaces this controller manages, and all
+// when it manages every namespace. With watchNamespaces live it is the
+// setting in force, read on every change; otherwise the namespaces watched
+// since start (WatchNamespaces). An empty list is every namespace, on both,
+// except a live setting rejected with no value before it: nothing is managed
+// then, and all is false.
+// Thread-safe.
+func (c *Config) ManagedNamespaces() (namespaces []string, all bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.settings.watchLive {
+		v, set := c.settings.live.Restart["WATCH_NAMESPACE"]
+		if _, bad := c.settings.report.Rejected[SettingWatchNamespaces]; bad && !set {
+			// Rejected with no value before it: fail closed, never to
+			// every namespace.
+			return nil, false
+		}
+		namespaces = ParseWatchNamespaces(v)
+	} else {
+		namespaces = ParseWatchNamespaces(c.infrastructure.watchNamespace)
+	}
+	return namespaces, len(namespaces) == 0
+}
+
+// Manages reports whether this controller manages namespace
+// (ManagedNamespaces). Thread-safe.
+func (c *Config) Manages(namespace string) bool {
+	namespaces, all := c.ManagedNamespaces()
+	return all || slices.Contains(namespaces, namespace)
 }
 
 // DeploymentWatchNamespace returns the namespaces the controller's Deployment
@@ -217,6 +261,9 @@ func (c *Config) SettingsRestartChanged(s Settings) []string {
 	}
 	var out []string
 	for name, loaderKey := range restartSettingKeys {
+		if name == SettingWatchNamespaces && c.settings.watchLive {
+			continue
+		}
 		if !sameSettingValue(effective(s.Restart, loaderKey), effective(c.settings.atStart, loaderKey)) {
 			out = append(out, name)
 		}
@@ -252,6 +299,12 @@ func (c *Config) SettingsSources() map[string]string {
 			src = SettingSourceDefault
 		}
 		out[name] = src
+	}
+	if c.settings.watchLive {
+		out[SettingWatchNamespaces] = SettingSourceDefault
+		if _, ok := c.settings.live.Restart["WATCH_NAMESPACE"]; ok {
+			out[SettingWatchNamespaces] = SettingSourceSettings
+		}
 	}
 	def := c.saturation.globalPolicy[GlobalDefaultsKey]
 	switch {

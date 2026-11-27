@@ -1,6 +1,7 @@
 package learnreplay
 
 import (
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -36,13 +37,34 @@ type lineSamples struct {
 	// drops as idle, and the floor below the band is read from
 	// (whatif.BelowBand.LeastITL, itl.BelowBandFloor), each with its fill.
 	below map[string][]itl.Observation
+	// belowSequences is the sequences each of below's readings ran on its
+	// replica (rowSequences), index for index, 0 where that was not read: the
+	// count the floor was read at, as its fill is the fill (issue
+	// llm-d-incubation/llm-d-scaling-manager#286).
+	belowSequences map[string][]float64
+	// maxFill is each variant's highest fill a steady row read, off a ramp
+	// (VariantState.MaxFill).
+	maxFill map[string]float64
 	// ratios is each variant's latest busiest/mean rank fill ratios
 	// (domain.ReplicaMetrics.BusiestRankFillRatio), at most
 	// busiestRatioRows of them, from rows whose busiest rank fills at least
 	// the band's bottom; kept only for a variant whose line is read at its
 	// busiest rank (saturation.SwitchMoEBusiestRank).
 	ratios map[string][]float64
+	// fit is each variant's steady rows, off a ramp, in the band and above
+	// it (an above-band line's are there), over a line's whole window
+	// (fitRowsAge) and not its latest shapeCycles cycles alone: the rows a
+	// line's fit rests on, and the batch it held (fitRows). ownFitAt is when
+	// each variant's line was last its own fit (noteOwnFit): a held line's
+	// fit was made then.
+	fit      map[string][]whatif.LineRow
+	ownFitAt map[string]time.Time
 }
+
+// fitRowsAge is how far back a variant's fit rows reach: a line's window
+// (itl.DefaultObservationMaxAge), and the steady readings it carries past it
+// (itl.DefaultSteadyCarry).
+const fitRowsAge = itl.DefaultObservationMaxAge + itl.DefaultSteadyCarry
 
 // busiestRatioRows is how many rows a variant's busiest/mean rank fill ratio
 // is the median of: one row a replica a cycle, so an hour of one replica at
@@ -76,7 +98,48 @@ func fillForITL(rm domain.ReplicaMetrics, busiest func(variant string) bool) flo
 func newLineSamples() *lineSamples {
 	return &lineSamples{steady: map[string][]whatif.LineRow{}, ramps: map[string][]whatif.LineRow{},
 		above: map[string][]whatif.LineRow{}, fills: map[string][]fillAt{}, below: map[string][]itl.Observation{},
-		ratios: map[string][]float64{}}
+		ratios: map[string][]float64{}, fit: map[string][]whatif.LineRow{}, ownFitAt: map[string]time.Time{},
+		belowSequences: map[string][]float64{}, maxFill: map[string]float64{}}
+}
+
+// noteOwnFit notes that variant's line at is its own fit, not held or
+// borrowed (whatif.TierOLS, whatif.TierPinnedB): a line held later was
+// fitted from the rows up to it.
+func (l *lineSamples) noteOwnFit(variant string, at time.Time) {
+	l.ownFitAt[variant] = at
+}
+
+// fitRows is the rows the line of vs was fitted on, for the batch its fit
+// held (VariantState.FitRows): a refitted line's, the rows of the cycles its
+// readings span (VariantState.ReadingsFrom to ReadingsTo), in the band, and
+// above it too for a line fitted there (whatif.TierAboveBand), whose
+// readings are all above it; a held line's, the rows in the band of the
+// window that ends at the cycle its line was last its own fit.
+// Nil for any other line, or with no such row: the planner then reads the
+// latest rows (VariantState.LineRows).
+func (l *lineSamples) fitRows(vs VariantState) []whatif.LineRow {
+	rows := l.fit[vs.Variant]
+	var out []whatif.LineRow
+	switch {
+	case vs.Refitted && vs.ReadingsFrom > 0:
+		above := vs.Tier == whatif.TierAboveBand
+		for _, r := range rows {
+			if r.Cycle >= vs.ReadingsFrom && r.Cycle <= vs.ReadingsTo && (above || !r.AboveBand) {
+				out = append(out, r)
+			}
+		}
+	case vs.Tier == whatif.TierHeld:
+		at, ok := l.ownFitAt[vs.Variant]
+		if !ok {
+			return nil
+		}
+		for _, r := range rows {
+			if !r.AboveBand && !r.At.After(at) && !r.At.Before(at.Add(-fitRowsAge)) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }
 
 // leastBelowBand is the variant's floor below the band, in seconds
@@ -91,6 +154,50 @@ func (l *lineSamples) leastBelowBand(variant string) (itlSec, fill float64) {
 		return 0, 0
 	}
 	return p.ITLSec, p.K
+}
+
+// belowBand is a variant's floor below the band as a state reads it: the
+// floor and its fill (leastBelowBand), the fewest sequences its readings ran
+// and the floor kept by them (belowBandLeastSequences).
+type belowBand struct {
+	itlSec, fill, least float64
+	byCount             itl.Model
+}
+
+// belowBandLeastSequences is the fewest sequences a replica ran in the
+// readings the variant's floor below the band is read from (leastBelowBand),
+// and the floor kept by those sequences (whatif.BelowBand.ByCount): the
+// readings grouped by octave of their sequences, each group's floor read as
+// the variant's is (itl.BelowBandPoint, the sequences in place of the fill),
+// and the line through those floors (itl.Fit). A floor read at 20 sequences
+// a replica does not stand for one (issue
+// llm-d-incubation/llm-d-scaling-manager#286). least is 0 with no floor, or
+// where a reading's count was not read (rowSequences): the floor then stands
+// for every count, as before. byCount is the zero Model with fewer than two
+// groups holding a floor, or where the fit fails.
+func (l *lineSamples) belowBandLeastSequences(variant string) (least float64, byCount itl.Model) {
+	below, seqs := l.below[variant], l.belowSequences[variant]
+	if _, ok := itl.BelowBandPoint(below); !ok || len(seqs) != len(below) {
+		return 0, itl.Model{}
+	}
+	least = math.Inf(1)
+	groups := map[float64][]itl.Observation{}
+	for i, n := range seqs {
+		if !(n > 0) || math.IsInf(n, 0) {
+			return 0, itl.Model{}
+		}
+		least = min(least, n)
+		g := math.Floor(math.Log2(n))
+		groups[g] = append(groups[g], itl.Observation{K: n, ITLSec: below[i].ITLSec})
+	}
+	floors := make([]itl.Observation, 0, len(groups))
+	for _, g := range slices.Sorted(maps.Keys(groups)) {
+		if p, ok := itl.BelowBandPoint(groups[g]); ok {
+			floors = append(floors, p)
+		}
+	}
+	byCount, _ = itl.Fit(floors)
+	return least, byCount
 }
 
 // rows is the variant's rows, of all three.
@@ -129,13 +236,18 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 			s = s.WithOutputDispersion(shape.Dispersion(rm.AvgOutputTokens, rm.AvgOutputTokensSquared))
 		}
 		ramp := l.onRamp(rm.PodName, fillAt{k: k, kvReq: s.KVreq, at: at}, steady)
+		if !ramp && k > l.maxFill[rm.VariantName] {
+			l.maxFill[rm.VariantName] = k
+		}
 		if !ramp && k > 0 && k < bottom && rm.ITLState() == domain.ITLFinite && rm.AvgITL > 0 && !math.IsInf(rm.AvgITL, 0) {
 			b := l.below[rm.VariantName]
 			b = append(b, itl.Observation{K: k, ITLSec: rm.AvgITL, Timestamp: at})
+			n := l.belowSequences[rm.VariantName]
+			n = append(n, rowSequences(rm))
 			if len(b) > itl.BelowBandWindow {
-				b = b[len(b)-itl.BelowBandWindow:]
+				b, n = b[len(b)-itl.BelowBandWindow:], n[len(n)-itl.BelowBandWindow:]
 			}
-			l.below[rm.VariantName] = b
+			l.below[rm.VariantName], l.belowSequences[rm.VariantName] = b, n
 		}
 		if !rm.GenerationTokenRateKnown || !(rm.GenerationTokenRate > 0) || !(k >= itl.DefaultGPSMinKForVerification) {
 			continue
@@ -147,9 +259,56 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 		case ramp:
 			kept = l.ramps
 		}
-		kept[rm.VariantName] = keepCycles(append(kept[rm.VariantName], whatif.LineRow{Cycle: cycle, At: at, K: k, KVPerRequest: rowResidentKV(rm, s),
-			TokenRate: rm.GenerationTokenRate, Ramp: ramp, AboveBand: k > top}), shapeCycles)
+		row := whatif.LineRow{Cycle: cycle, At: at, K: k, KVPerRequest: rowResidentKV(rm, s),
+			TokenRate: rm.GenerationTokenRate, Sequences: rowSequences(rm), Ramp: ramp, AboveBand: k > top}
+		kept[rm.VariantName] = keepCycles(append(kept[rm.VariantName], row), shapeCycles)
+		if !ramp {
+			l.fit[rm.VariantName] = append(l.fit[rm.VariantName], row)
+		}
 	}
+	l.pruneFit(at)
+}
+
+// pruneFit drops the fit rows older than fitRowsAge before now, or before
+// the cycle a variant's line was last its own fit where that is earlier: a
+// line held since keeps the rows its fit was made on.
+func (l *lineSamples) pruneFit(now time.Time) {
+	for v, rows := range l.fit {
+		from := now
+		if at, ok := l.ownFitAt[v]; ok && at.Before(from) {
+			from = at
+		}
+		cutoff := from.Add(-fitRowsAge)
+		i := 0
+		for i < len(rows) && rows[i].At.Before(cutoff) {
+			i++
+		}
+		if i > 0 {
+			l.fit[v] = slices.Clone(rows[i:])
+		}
+	}
+}
+
+// rowSequences is the sequences a replica ran over the row's window
+// (whatif.LineRow.Sequences): its generated tokens per second times its mean
+// ITL (Little), a window mean as the row's fill is, over the tokens a step
+// emits where speculation accepted drafts (vLLM's ITL is the step's time);
+// else the running-requests gauge; 0 with neither. The fill times the
+// capacity over the KV a request is not used: the KV a request is read off
+// one scrape, the fill over a minute, and on the Qwen3-32B warm-up their
+// ratio reads 271 sequences a pod where Little reads 210.
+func rowSequences(rm domain.ReplicaMetrics) float64 {
+	if rm.ITLState() == domain.ITLFinite && rm.AvgITL > 0 && !math.IsInf(rm.AvgITL, 0) && rm.GenerationTokenRate > 0 {
+		n := rm.GenerationTokenRate * rm.AvgITL
+		if rm.SpecAcceptedPerStepKnown && rm.SpecAcceptedPerStep > 0 {
+			n /= 1 + rm.SpecAcceptedPerStep
+		}
+		return n
+	}
+	if rm.RunningRequestsKnown && rm.RunningRequests > 0 {
+		return float64(rm.RunningRequests)
+	}
+	return 0
 }
 
 // rowResidentKV is the KV a request held on the row, as the line check prices

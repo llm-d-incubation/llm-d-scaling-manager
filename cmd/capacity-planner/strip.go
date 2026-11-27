@@ -25,10 +25,12 @@ import (
 // latencyKeys are the keys a cycle's input carries a measured latency
 // under, at any depth: each engine row's TTFT, inter-token, service, queue,
 // prefill and KV-transfer times, means and histograms, with their presence
-// bits, and the router's histograms and flow-control wait.
+// bits, and the router's histograms, its request processing and
+// flow-control wait.
 var latencyKeys = map[string]bool{
 	"TTFTBuckets": true, "TPOTBuckets": true, "QueueTimeBuckets": true, "FlowControlWaitBuckets": true,
 	"TTFTSumRate": true, "TTFTCountRate": true, "TPOTSumRate": true, "TPOTCountRate": true,
+	"ProcessingBuckets": true, "ProcessingSumRate": true, "ProcessingCountRate": true,
 	"AvgTTFT": true, "AvgTTFTKnown": true,
 	"AvgITL": true, "AvgITLKnown": true, "AvgITLEmpty": true,
 	"AvgServiceTime": true, "AvgServiceTimeKnown": true,
@@ -138,8 +140,20 @@ func stripLatency(r io.Reader, w io.Writer, gz bool) (stripStats, error) {
 			if rl, ok := input["RouterLatency"].(map[string]any); ok {
 				// The router's window is what the latency will be measured
 				// over, where it measures TTFT; else the engines' minute is.
+				// The prefix producers' cached tokens and the per-endpoint
+				// load are no latency: they stay, for the prefix
+				// duplication and the load across Pods.
+				kept := map[string]any{}
 				if b, _ := rl["TTFTBuckets"].([]any); len(b) > 0 {
-					input["RouterLatency"] = map[string]any{"WindowSeconds": rl["WindowSeconds"]}
+					kept["WindowSeconds"] = rl["WindowSeconds"]
+				}
+				for _, k := range []string{"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate", "Endpoints", "PrefixProducers"} {
+					if v, ok := rl[k]; ok {
+						kept[k] = v
+					}
+				}
+				if len(kept) > 0 {
+					input["RouterLatency"] = kept
 				} else {
 					delete(input, "RouterLatency")
 				}

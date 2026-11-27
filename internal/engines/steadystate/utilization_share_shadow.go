@@ -99,6 +99,11 @@ type utilizationShareState struct {
 	// planned is the models (namespace/modelID) the evaluation in progress
 	// plans, whose pass placements the node picture does not count.
 	planned map[string]bool
+	// wouldBe is, for every variant a group planned in shadow this cycle
+	// (shadow mode, or a group holding a passive model), the target the share
+	// would set it to (shareWouldBe), keyed namespace/variant. Only the
+	// suggested/provided series read it; nil when no group planned in shadow.
+	wouldBe map[string]int
 }
 
 // resetActuation forgets every ledger. A transfer's donor marks stay on its
@@ -134,7 +139,7 @@ func (e *Engine) evaluateUtilizationShare(ctx context.Context, requests []alloca
 	scaleTargets map[string]scaletarget.ScaleTargetAccessor) (overrides map[string]utilizationShareOverride) {
 	logger := ctrl.LoggerFrom(ctx).WithName("utilization-share")
 	st := &e.utilizationShare
-	st.planned = nil
+	st.planned, st.wouldBe = nil, nil
 	// The optimizer must never cost the cycle it rides on: a bug here loses
 	// this cycle's report and leaves today's decisions, not the controller.
 	defer func() {
@@ -142,7 +147,7 @@ func (e *Engine) evaluateUtilizationShare(ctx context.Context, requests []alloca
 			logger.Error(fmt.Errorf("panic: %v\n%s", r, debug.Stack()),
 				"Utilization share: evaluation failed; skipping it this cycle")
 			metrics.PublishUtilizationShare(nil)
-			overrides = nil
+			overrides, st.wouldBe = nil, nil
 		}
 	}()
 
@@ -295,6 +300,11 @@ func (e *Engine) evaluateUtilizationShare(ctx context.Context, requests []alloca
 			if act.evaluation != nil {
 				ev = *act.evaluation
 			}
+		} else {
+			if st.wouldBe == nil {
+				st.wouldBe = map[string]int{}
+			}
+			maps.Copy(st.wouldBe, shareWouldBe(g, ev))
 		}
 		scope := g.Scope
 		if scope == "" {

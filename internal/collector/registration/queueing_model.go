@@ -151,6 +151,7 @@ func RegisterQueueingModelQueries(sourceRegistry *source.SourceRegistry) {
 	registerTTFTInputQueries(registry)
 	registerCacheTierQueries(registry)
 	registerKVTransferQueries(registry)
+	registerFrontendQueries(registry)
 }
 
 // registerSGLangQueueingModelQueries registers the SGLang variants of the

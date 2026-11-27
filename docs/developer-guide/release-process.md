@@ -106,13 +106,17 @@ The workflow checks where a tag is, not who reviewed it. Review on `main` and
    then runs `make warmpool-render` (it copies the image into
    `deploy/warmpool.sh`; the PR checks fail if it was not run). It sets the
    same `newTag: vX.Y.Z` in `config/capacity-planner/base/kustomization.yaml`
-   (the PR checks fail when it differs from the controller's). It pins the
-   docs' tools image to the release's tag:
-   `bash deploy/ci-pr-checks/tools-pin.sh pin :vX.Y.Z` (the PR checks fail
-   while the docs name another release's image). The tools image carries the
-   release files the run signs, so its digest exists only after the run: a
-   release commit cannot name it, and the v0.12.2 tag named v0.12.1's. The
-   release fails before it builds anything if any of the four is not the tag.
+   (the PR checks fail when it differs from the controller's). Pin both
+   images in the docs to the release tag:
+   ```bash
+   bash deploy/ci-pr-checks/tools-pin.sh pin :vX.Y.Z
+   bash deploy/ci-pr-checks/tools-pin.sh --controller pin :vX.Y.Z
+   ```
+
+   The controller command also updates the manifest checkout version in the
+   install, upgrade, and benchmark examples. The image digests are available
+   after the release run builds them. The PR and release checks require the
+   release tag in these pins before the workflow builds the images.
 2. **Bump dependency pins**, if the release moves one (for example
    [llm-d-inference-sim](https://github.com/llm-d/llm-d-inference-sim)), in
    every file `hack/upstream-versions.sh` lists for it. Same PR. See
@@ -195,13 +199,14 @@ the two supported installs, the attached files and `make deploy-scaling-manager`
 
 ### 5. Point the docs at the release
 
-Open a docs PR to `main` that replaces the previous version with the new one in
-the install, upgrade and benchmark docs, pins the new multi-arch index digest
-from the run's summary where the docs pin one, and adds the upgrade section for
-this release to `docs/reference/upgrade-and-uninstall.md`. The tools image
-moves from `tools:vX.Y.Z` to its digest with the command the `release-tools`
-job summary prints, `bash deploy/ci-pr-checks/tools-pin.sh pin
-@sha256:<digest>`; every pin must then name that one digest.
+Open a docs PR to `main` that pins the docs to the published multi-arch index
+digests and adds the upgrade section for this release to
+`docs/reference/upgrade-and-uninstall.md`. The `release` job summary prints
+`bash deploy/ci-pr-checks/tools-pin.sh --controller pin @sha256:<digest>` for the
+controller. The `release-tools` job summary prints
+`bash deploy/ci-pr-checks/tools-pin.sh pin @sha256:<digest>` for the tools image.
+Use each job's own digest. Update any remaining version-specific prose in the
+install, upgrade, and benchmark docs as needed.
 
 ### If the release fails
 
@@ -275,9 +280,9 @@ branch's tags are refused.
    the proxy job existed has no proxy pin to set, and one before
    `config/capacity-planner` no planner pin; do not backport the
    `ci-release.yaml` planner pin step to such a line, where it fails every
-   tag), pins the docs' tools image with
-   `bash deploy/ci-pr-checks/tools-pin.sh pin :v0.10.2`, and moves every
-   version reference on the branch to `v0.10.2`; list them with
+   tag), pins the docs' tools and controller images as in the pre-release
+   checklist, and moves every version reference on the branch to
+   `v0.10.2`; list them with
    `git grep -n 'v0\.10\.[0-9]' -- docs deploy hack/benchmark`. It adds
    "Upgrading from v0.10.1 to v0.10.2" to
    `docs/reference/upgrade-and-uninstall.md`. Pre-release checklist items 2
@@ -531,6 +536,11 @@ Design and rules: [install-from-release.md](../proposals/install-from-release.md
 | `scaling-manager-metrics-reader.yaml` | optional, Kubernetes: binds the scraping Prometheus account to the metrics-reader ClusterRole |
 | `scaling-manager-preflight.yaml` | the preflight Job (`manager preflight check`, image by digest), its ServiceAccount, and its read-only Role and ClusterRole; reads pods and PodMonitors in the controller's namespace only, and no Secret ([preflight.md](../reference/preflight.md)) |
 | `scaling-manager-preflight-cluster.yaml` | the same for the cluster-wide install in `scaling-manager-system` (`--scope=cluster`): lists pods, Deployments and PodMonitors in every namespace. Applies as is |
+| `scaling-manager.yaml` | the one manifest for the cluster ([kubectl install](../guides/kubectl-install/)), in `scaling-manager-system`, applied as is: the controller with the in-controller preflight, its own scaler certificates, the suggested-plan ConfigMap and passive by default (`LLMSM_PASSIVE=true`) |
+| `scaling-manager-keda.yaml` | the one manifest's side in KEDA's namespace, with no namespace: KEDA's copy of the client certificate and the Role that lets the controller fill it by name. Applied with `-n <KEDA's namespace>` |
+| `scaling-manager-grants.yaml` | the one manifest's per-namespace grants, with no namespace: `pod-writer` and `dset-role-writer`, selected by label, applied by the namespace owner with `-n` |
+| `scaling-manager-monitoring.yaml` | for a model namespace, with no namespace: the model-server PodMonitor and the NetworkPolicy rule for the EPP's `/metrics`, selected by label |
+| `scaling-manager-admin.sh`, `scaling-manager-owner.sh` | the cluster admin's and the namespace owner's scripts for the one manifest: `kubectl` only, files applied as downloaded, `--print` for GitOps. Summed and signed like the manifests |
 | `scaling-manager-dset-role-writer.yaml`, `-dset-role-writer-cluster.yaml` | optional: the DisaggregatedSet role writer's grant, `get`, `list` and `patch` on `disaggregatedsets` (a Role in `__NAMESPACE__`, or a ClusterRole for `scaling-manager-system`), copied from `config/components/dset-role-writer*`. The only files that grant more than `get` on them; `smt --dset-role-writer` applies them |
 
 `make test-e2e-release-manifests` installs the namespaced files on kind with

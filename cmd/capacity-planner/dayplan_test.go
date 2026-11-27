@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
 
@@ -40,7 +41,10 @@ func init() {
 		if f.recording == "" {
 			return realResolv(ctx, f, warn)
 		}
-		key := strings.Join([]string{f.recording, f.model, f.prefillVariant, f.decodeVariant}, "\x00")
+		// A recording resolved for an experimental model reads the series
+		// the model is fitted on: another resolution.
+		key := strings.Join([]string{f.recording, f.model, f.prefillVariant, f.decodeVariant,
+			strconv.FormatBool(f.rankMixtureTTFT), strconv.FormatBool(f.tpotDistribution)}, "\x00")
 		once, _ := resolved.LoadOrStore(key, sync.OnceValues(func() (*whatifapi.Resolved, error) {
 			return realResolv(context.Background(), f, io.Discard)
 		}))
@@ -98,6 +102,12 @@ func TestDayPlanGolden(t *testing.T) {
 		{"day-plan-staircase-b-on", []string{"day-plan", "--recording", stair("ttft-staircase-b-on")}, 3},
 		{"day-plan-staircase-b-on-json", []string{"day-plan", "-o", "json", "--recording", stair("ttft-staircase-b-on")}, 3},
 		{"day-plan-staircase-b-off", []string{"day-plan", "--recording", stair("ttft-staircase-b-off")}, 3},
+		// Asked for the experimental models on a recording too short to fit
+		// them (under 12 h): each says it abstained, and the plan is the
+		// planner's own, figure for figure (TestDayPlanV2AbstainedIsTheDefault).
+		{"day-plan-staircase-b-on-v2", []string{"day-plan", "--recording", stair("ttft-staircase-b-on"), "--experimental-ttft=v2", "--experimental-tpot=v2"}, 3},
+		{"day-plan-staircase-b-on-v2-json", []string{"day-plan", "-o", "json", "--recording", stair("ttft-staircase-b-on"),
+			"--experimental-ttft=v2", "--experimental-tpot=v2"}, 3},
 	} {
 		t.Run(c.name, func(t *testing.T) { checkGolden(t, c.name, c.code, c.args) })
 	}
@@ -253,6 +263,8 @@ func dayPlanParity() map[string]struct {
 			Assume: &whatifapi.Assume{VP: fp(30000)}, MinRequests: minReq, Step: "5m0s"}},
 		"day-plan-staircase-b-on-json": {dayPlanFlags{recording: stair("ttft-staircase-b-on")}, whatifapi.DayPlanRequest{
 			MinRequests: minReq, Step: "5m0s"}},
+		"day-plan-staircase-b-on-v2-json": {dayPlanFlags{recording: stair("ttft-staircase-b-on"), rankMixtureTTFT: true, tpotDistribution: true},
+			whatifapi.DayPlanRequest{MinRequests: minReq, Step: "5m0s", ExperimentalModels: true}},
 	}
 }
 
@@ -264,7 +276,15 @@ func TestDayPlanAPIParity(t *testing.T) {
 			res, err := resolveDay(context.Background(), &c.flags, io.Discard)
 			require.NoError(t, err)
 			h := whatifapi.New(whatifapi.Config{Resolver: stubResolver{res}, WhatifSchema: "schema-v" + strconv.Itoa(schemaVersion)}).Handler()
-			code, body := apiPost(t, h, "/v1/inputs", whatifapi.InputsRequest{})
+			// Inputs resolved for the models the command line fitted.
+			var ask whatifapi.InputsRequest
+			if c.flags.rankMixtureTTFT {
+				ask.TTFTModel = string(whatif.QueueRankMixture)
+			}
+			if c.flags.tpotDistribution {
+				ask.TPOTModel = whatif.TPOTRenewalLognormal
+			}
+			code, body := apiPost(t, h, "/v1/inputs", ask)
 			require.Equal(t, 200, code, "%s", body)
 			var in whatifapi.InputsResponse
 			require.NoError(t, json.Unmarshal(body, &in))
@@ -308,9 +328,11 @@ func day24h() []whatifapi.SeriesSample {
 	return out
 }
 
-// dayRequest is the 24-hour plan's question.
+// dayRequest is the 24-hour plan's question. It sizes each bucket for its
+// p95, which the tests on it check, not the default p95 less counting noise
+// (#295): the day's jitter is not counting noise.
 func dayRequest() whatifapi.DayPlanRequest {
-	return whatifapi.DayPlanRequest{SLO: &whatifapi.SLORequest{TTFT: &whatifapi.Objective{Statistic: "p95", Target: fp(0.5)},
+	return whatifapi.DayPlanRequest{SizeFor: whatifapi.SizeForP95, SLO: &whatifapi.SLORequest{TTFT: &whatifapi.Objective{Statistic: "p95", Target: fp(0.5)},
 		TPOT: &whatifapi.Objective{Statistic: statMean, Target: fp(0.004)}}, Assume: &whatifapi.Assume{VP: fp(30000)}}
 }
 
@@ -556,4 +578,55 @@ func jsonStrict(b []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// Asked for on a recording too short to fit them, the experimental models
+// abstain: the plan names each with why, and every figure, refusal and count
+// is the planner's own, under an id of its own. The flags are refused
+// without a recording, and a TPOT model the planner does not know is a usage
+// error.
+func TestDayPlanV2AbstainedIsTheDefault(t *testing.T) {
+	plain, code := dayJSON(t, "--recording", stair("ttft-staircase-b-on"))
+	require.Equal(t, 3, code)
+	v2, code := dayJSON(t, "--recording", stair("ttft-staircase-b-on"), "--experimental-ttft=v2", "--experimental-tpot=v2")
+	require.Equal(t, 3, code)
+	assert.Nil(t, plain.TTFTModel)
+	assert.Nil(t, plain.TPOTModel)
+	require.NotNil(t, v2.TTFTModel)
+	require.NotNil(t, v2.TPOTModel)
+	assert.NotEmpty(t, v2.TTFTModel.Abstained, "the TTFT model abstains on a short window")
+	assert.NotEmpty(t, v2.TPOTModel.Abstained, "the TPOT model abstains on a short window")
+	assert.NotEqual(t, plain.DayPlanID, v2.DayPlanID)
+	assert.Equal(t, plain.Refused, v2.Refused)
+	assert.Equal(t, plain.Summary, v2.Summary)
+	assert.Equal(t, plain.Buckets, v2.Buckets)
+
+	_, code = runCmd(t, "day-plan", "--prometheus", "http://127.0.0.1:1", "--namespace", "x", "--experimental-ttft=v2")
+	assert.Equal(t, 2, code, "v2 fits its model on a recording")
+	_, code = runCmd(t, "day-plan", "--recording", stair("ttft-staircase-b-on"), "--experimental-tpot=v3")
+	assert.Equal(t, 2, code, "no TPOT model v3")
+}
+
+// A bucket a model priced marks its hour with the dagger, whatever zone
+// its start was read in, and the models' line counts what each priced.
+// No golden carries such a bucket: the public recordings are too short for
+// the models to fit.
+func TestDayPlanMarksTheHoursAModelPriced(t *testing.T) {
+	hour := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)
+	zoned := hour.Add(5 * time.Minute).In(time.FixedZone("x", 3600))
+	p := &whatifapi.DayPlanResponse{
+		Buckets: []whatifapi.DayBucket{
+			{Start: zoned, Status: whatifapi.BucketSized, Limit: &whatifapi.Figure{Flags: []string{string(whatif.RankMixtureTTFT)}}},
+			{Start: hour.Add(time.Hour), Status: whatifapi.BucketSized, Limit: &whatifapi.Figure{}},
+		},
+		TTFTModel: &whatifapi.TTFTModelInfo{Label: "Experimental TTFT model"},
+		TPOTModel: &whatifapi.TPOTModelInfo{Label: "Experimental TPOT model"},
+	}
+	p.Summary.Counts.Sized = 2
+	marked := experimentalHours(p)
+	assert.True(t, marked[hour.Unix()], "the hour of the bucket the model priced")
+	assert.False(t, marked[hour.Add(time.Hour).Unix()], "the hour of a bucket the planner priced")
+	text := dayModelsText(p)
+	assert.Contains(t, text, "Experimental TTFT model: priced 1 of the 2 sized buckets, each marked "+dagger)
+	assert.Contains(t, text, "Experimental TPOT model: priced 0 of the 2 sized buckets")
 }

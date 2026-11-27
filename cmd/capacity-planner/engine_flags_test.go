@@ -103,9 +103,6 @@ func TestEngineNotes_EachUnmodeledConfiguration(t *testing.T) {
 		{"the parser's default cap on an H200", func(pv *pricedVariant) {
 			pv.state.Params.MaxNumSeqsSet, pv.state.BatchCapSource = false, batchCapSourceDefault
 		}, defaultBatchCapBelowRelease, "priced at 256 a rank; vLLM on H200 defaults to 1024: state --max-num-seqs or --batch-cap"},
-		{"a short shape past the rows' batch", func(pv *pricedVariant) {
-			pv.state.LineRows = []whatif.LineRow{{K: 0.5, KVPerRequest: 20000}, {K: 0.6, KVPerRequest: 20000}, {K: 0.9, KVPerRequest: 20000, AboveBand: true}}
-		}, batchBeyondFit, "KV 4000 a request against the rows' 20000; up to 200 sequences a rank priced, 30 seen"},
 	} {
 		pv := denseVariant()
 		p := *pv.state.Params
@@ -119,8 +116,8 @@ func TestEngineNotes_EachUnmodeledConfiguration(t *testing.T) {
 }
 
 // The edges each flag stops at: NIXL is modeled, a cap the operator set or
-// typed is not the parser's default, a batch the budget holds is not past
-// it, and a shape near the rows' is not another shape.
+// typed is not the parser's default, and a batch the budget holds is not past
+// it.
 func TestEngineNotes_TheEdgesAreNotFlagged(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -141,19 +138,10 @@ func TestEngineNotes_TheEdgesAreNotFlagged(t *testing.T) {
 		{"SGLang aggregated with mixed chunk", func(pv *pricedVariant) {
 			pv.state.Params.Engine, pv.state.Role, pv.state.Params.MixedChunk = inferenceengine.EngineSGLang, domain.RoleBoth, true
 		}},
-		{"the rows' shape", func(pv *pricedVariant) {
-			pv.state.LineRows = []whatif.LineRow{{K: 0.5, KVPerRequest: 5000}}
-		}},
-		{"a longer shape than the rows'", func(pv *pricedVariant) {
-			pv.state.LineRows = []whatif.LineRow{{K: 0.5, KVPerRequest: 1000}}
-		}},
 		{"a distilled R1 is dense", func(pv *pricedVariant) { pv.state.Params.ModelPath = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B" }},
 		{"R1-0528-Qwen3 is dense", func(pv *pricedVariant) { pv.state.Params.ModelPath = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B" }},
 		{"Gemma 1 2B is full attention", func(pv *pricedVariant) { pv.state.Params.ModelPath = "google/gemma-2b-it" }},
 		{"a dense Granite 4", func(pv *pricedVariant) { pv.state.Params.ModelPath = "ibm-granite/granite-4.0-micro" }},
-		{"another shape inside the rows' batch", func(pv *pricedVariant) {
-			pv.state.LineRows = []whatif.LineRow{{K: 0.8, KVPerRequest: 1000}}
-		}},
 	} {
 		pv := denseVariant()
 		p := *pv.state.Params

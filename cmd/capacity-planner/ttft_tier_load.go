@@ -11,9 +11,10 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
-// The load of a cached prompt token from a tier outside the GPU, and the
-// attention over every tier's cached context, as slo.SwitchTTFTTierLoad
-// prices them (whatif.PromptWindow.TierLoad). Off, nothing here runs.
+// The load of a cached prompt token from a tier outside the GPU, as
+// slo.SwitchTTFTTierLoad prices it (whatif.PromptWindow.TierLoad), and the
+// attention over every tier's cached context, as
+// slo.SwitchTTFTPrefixAttention prices it. Both off, nothing here runs.
 
 // tierLoadUnmeasured is a fleet whose prefill pods served a material share
 // of the prompt from a tier outside the GPU with no transfer reading that
@@ -49,10 +50,8 @@ type wireTierTransfer struct {
 }
 
 // tierLoad prices the load of the question's cached tokens from outside
-// the GPU into the prefill side (whatif.Prefill.TierLoadSeconds), and with
-// slo.SwitchTTFTPrefixAttention on reads the attention span's cached
-// context from the whole prompt less the computed one. Nothing with the
-// switch off.
+// the GPU into the prefill side (whatif.Prefill.TierLoadSeconds). Nothing
+// with the switch off.
 //
 // The load at the traffic read is each transfer's seconds over the tokens
 // it moved, times a request's tokens of those tiers: the bytes a token
@@ -75,7 +74,6 @@ func (pf *pricedFleet) tierLoad(ps *learnreplay.PrefillState) {
 		return
 	}
 	p := &pf.fleet.Prefill
-	pf.cachedContext()
 	tl, ok := pf.promptWindow.TierLoad()
 	if !ok {
 		if hit, read := pf.promptWindow.ComputedHit(); read && hit > whatif.MaterialPrefixHitMove {
@@ -94,6 +92,11 @@ func (pf *pricedFleet) tierLoad(ps *learnreplay.PrefillState) {
 		return
 	}
 	share := tl.OuterShare
+	if r := pf.hitAtCount; r != nil && r.Rule == prefill.HitReuseGap {
+		// The share of the tiers past the GPU at the fleet's prefill count,
+		// as the reuse-gap rule moved it (priceHitAtCount).
+		share *= r.TierScale
+	}
 	if pf.pv != nil && pf.pv.assumedHit && !pf.pv.hitRead {
 		share = min(share, pf.pv.shape.PrefixHitRate)
 	}
@@ -141,10 +144,17 @@ func (pf *pricedFleet) tierLoad(ps *learnreplay.PrefillState) {
 
 // cachedContext reads the attention span's cached context from the whole
 // prompt less the computed one, on both sides (whatif.Prefill
-// .CachedContextRead), with slo.SwitchTTFTPrefixAttention on: the
-// question's from the computed-token hit of the same rows and minutes, or
-// from a stated whole prompt and hit; V_P's from the whole and computed
-// prompts of its own minutes. Either unread leaves the hit rates to it.
+// .CachedContextRead), with slo.SwitchTTFTPrefixAttention on, whether
+// slo.SwitchTTFTTierLoad is on or not (issue
+// llm-d-incubation/llm-d-scaling-manager#383): the question's from the
+// computed-token hit of the same rows and minutes, or from a stated whole
+// prompt and hit; V_P's from the whole and computed prompts of its own
+// minutes. A prompt netted from a whole one (--assume-input-tokens, a
+// backtest's step, the decode variant's shape) is read as the whole less
+// the netted one, so no token is both computed and cached, and only where
+// slo.SwitchTTFTComputedHit netted it by every tier's hit. A token served from a host, disk or peer tier is a miss to the
+// GPU's prefix-cache hit rate, yet the prompt attends over it. Either side
+// unread leaves the hit rates to it.
 func (pf *pricedFleet) cachedContext() {
 	p := &pf.fleet.Prefill
 	if !p.PrefixAttention || !(p.VPWholePromptTokens > 0) || !(p.PromptTokens > 0) {
@@ -152,10 +162,20 @@ func (pf *pricedFleet) cachedContext() {
 	}
 	var h float64
 	switch {
+	case pf.stepComputed:
+		h = max(p.WholePromptTokens-p.PromptTokens, 0)
 	case pf.pv != nil && pf.pv.assumedHit && !pf.pv.hitRead && p.WholePromptTokens > 0:
 		h = max(p.WholePromptTokens-p.PromptTokens, 0)
+	case pf.in.PromptSource != shapeMeasured:
+		// A prompt netted from a whole one: netted by the prefix-cache hit
+		// rate, a tier's tokens are priced as computed, and the hit rates
+		// stand.
+		if _, _, ok := pf.netByComputedHit(); !ok || !(p.WholePromptTokens > 0) {
+			return
+		}
+		h = max(p.WholePromptTokens-p.PromptTokens, 0)
 	default:
-		hit, ok := pf.promptWindow.ComputedHit()
+		hit, ok := pf.pricedComputedHit()
 		if !ok {
 			return
 		}

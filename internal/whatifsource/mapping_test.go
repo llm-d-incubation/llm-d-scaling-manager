@@ -229,7 +229,8 @@ func TestCapture_AsksEveryReplicaQueryTheRecordingCollectorAsks(t *testing.T) {
 	for _, name := range []string{registration.QuerySLORouterTTFTBuckets, registration.QuerySLORouterTPOTSum,
 		registration.QuerySLORouterTPOTCount, registration.QuerySLORouterTPOTBuckets, registration.QueryFlowControlWaitBuckets,
 		registration.QueryFlowControlPoolModels, registration.QueryFlowControlPoolSaturation, registration.QueryFlowControlOutcomes,
-		registration.QuerySchedulerQueueSize, registration.QuerySchedulerQueueBytes, registration.QueryModelArrivalRate} {
+		registration.QuerySchedulerQueueSize, registration.QuerySchedulerQueueBytes, registration.QueryModelArrivalRate,
+		registration.QuerySLORouterProcessingBuckets, registration.QuerySLORouterProcessingSum, registration.QuerySLORouterProcessingCount} {
 		assert.True(t, asked[promQL(t, name)], "the model-level %s was not asked", name)
 	}
 }
@@ -288,6 +289,10 @@ func TestCapture_ModelLevelQueriesFillTheInput(t *testing.T) {
 			srv.Set(promQL(t, registration.QuerySLORouterTPOTCount), promtest.Const(model(), 2))
 			srv.Set(promQL(t, registration.QuerySLORouterTPOTBuckets), promtest.Const(model("le", "0.05"), 1.75))
 			srv.Set(promQL(t, registration.QueryFlowControlWaitBuckets), promtest.Const(model("le", "0.01"), 0.5))
+			srv.Set(promQL(t, registration.QuerySLORouterProcessingBuckets), promtest.Const(map[string]string{"le": "0.05"}, 1.25),
+				promtest.Const(map[string]string{"le": "+Inf"}, 2))
+			srv.Set(promQL(t, registration.QuerySLORouterProcessingSum), promtest.Const(map[string]string{}, 0.08))
+			srv.Set(promQL(t, registration.QuerySLORouterProcessingCount), promtest.Const(map[string]string{}, 2))
 		})
 		require.NotNil(t, c.Input.RouterLatency)
 		rl := c.Input.RouterLatency
@@ -296,6 +301,10 @@ func TestCapture_ModelLevelQueriesFillTheInput(t *testing.T) {
 		assert.Equal(t, 2.0, rl.TPOTCountRate)
 		assert.Equal(t, []domain.LatencyBucket{{UpperBound: 0.05, Rate: 1.75}}, rl.TPOTBuckets)
 		assert.Equal(t, []domain.LatencyBucket{{UpperBound: 0.01, Rate: 0.5}}, rl.FlowControlWaitBuckets)
+		assert.Equal(t, []domain.LatencyBucket{{UpperBound: 0.05, Rate: 1.25}, {UpperBound: math.Inf(1), Rate: 2}}, rl.ProcessingBuckets,
+			"the router's request processing, captured as the controller records it")
+		assert.Equal(t, 0.08, rl.ProcessingSumRate)
+		assert.Equal(t, 2.0, rl.ProcessingCountRate)
 		assert.Equal(t, float64(registration.SLORouterWindowSeconds), rl.WindowSeconds)
 	})
 	t.Run("router TPOT sum NaN", func(t *testing.T) {

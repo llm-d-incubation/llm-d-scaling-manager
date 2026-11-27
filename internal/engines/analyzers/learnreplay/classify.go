@@ -188,6 +188,14 @@ var valueRules = map[string]rule{
 	"VariantName": rename("variant"), "Variants": rename("variant"),
 	"Variant": {classComposite, "variant"}, "Donor": {classComposite, "variant"},
 	"PodName": rename("pod"), "UnplacedPods": rename("pod"), "AffectedPods": rename("pod"),
+
+	// The router's view of a model-server Pod (domain.RouterEndpoint): the
+	// same Pod, so the same pseudonym, as its ReplicaMetrics row.
+	"Endpoints.Pod": rename("pod"),
+	// A router prefix producer's plugin_name: a name the router's
+	// configuration gives it.
+	"PrefixProducers.Plugin": rename("name"),
+
 	"Image":    rename("image"),
 	"Revision": rename("revision"), "ModelRevision": rename("revision"),
 	"Token":             rename("token"),
@@ -201,6 +209,8 @@ var valueRules = map[string]rule{
 	"RateSource": {class: classVocab}, "Source": {class: classVocab}, "Excluded": {class: classVocab},
 	"Objective": {class: classVocab}, "Statistic": {class: classVocab}, "LearnedFrom": {class: classVocab},
 	"VPSource": {class: classVocab}, "Refused": {class: classVocab}, "Flags": {class: classVocab},
+	// The learner a predicted figure is published under (metrics.SLOPrediction).
+	"Learner":         {class: classVocab},
 	"FlowControl":     {class: classVocab},
 	"FreshnessStatus": {class: classVocab}, "Quantity": {class: classVocab}, "Engine": {class: classVocab},
 	"Scope": {class: classVocab}, "Type": {class: classVocab}, "AnalyzerName": {class: classAnalyzer},
@@ -213,6 +223,8 @@ var valueRules = map[string]rule{
 	"Quantization": {class: classVocab}, "KVConnector": {class: classVocab},
 	"VLLMVersionFrom":     {class: classVocab},
 	"KVOffloadingBackend": {class: classVocab}, "MemoryLayout": {class: classMemoryLayout},
+	// The attention kind a model config reads (capacity.AttentionKind).
+	"Attention": {class: classVocab},
 	// A KV transfer's kind (domain.KVTransferOffloadLoad and the others).
 	"KVTransferRates.Kind": {class: classVocab},
 
@@ -237,6 +249,10 @@ var valueRules = map[string]rule{
 	"Error": {class: classText}, "Issues": {class: classText}, "Caveats": {class: classText},
 
 	"Query": {class: classRedact}, "DecodeErr": {class: classRedact}, "Err": {class: classRedact},
+	// The model config's source can be a local path (the planner's
+	// --model-config), and its error can quote the config's own keys, which
+	// an annotation's author chose: neither passes through.
+	"ModelConfig.Source": {class: classRedact}, "ModelConfig.Error": {class: classRedact},
 	// An external analyzer's target query names which fallback answered with a
 	// word the operator chose; how it reduces Pods is the code's own word.
 	"E": {class: classRedact}, "TargetReduce": {class: classVocab},
@@ -277,6 +293,8 @@ var keyRules = map[string]rule{
 	"Parameters": {class: classVocab},
 	// The joint TTFT model's inputs, keyed by input (J1).
 	"Inputs": {class: classVocab},
+	// The default TTFT model's figures, keyed by statistic (issue #440).
+	"Statistics": {class: classVocab},
 	// The composite's per-role maps, keyed by role.
 	"Holds": {class: classVocab}, "HoldReasons": {class: classVocab}, "ReleaseBound": {class: classVocab},
 	"OtherFrames": {class: classVocab}, "RoleCapacities": {class: classVocab}, "RoleSpare": {class: classVocab},
@@ -316,6 +334,9 @@ var vocabulary = withWords(cacheTierWords(), withWords(saturation.LowerBoundRole
 	// (whatifsource.VLLMVersionFromFlag, VLLMVersionFromEngineImage).
 	capacity.VLLMVersionFromAnnotation, capacity.VLLMVersionFromImageTag, "--vllm-version", "--engine-image",
 	"MultiConnector", "P2pNcclConnector", "native", "lmcache", "cpu",
+	// The attention kinds a model config reads (capacity.EngineParams.ModelConfig).
+	string(capacity.AttentionFull), string(capacity.AttentionSlidingWindow), string(capacity.AttentionMLA),
+	string(capacity.AttentionHybrid),
 	// The tier's slo.flowControl.
 	string(config.SLOFlowControlEnabled), string(config.SLOFlowControlDisabled),
 	// The redaction marker.

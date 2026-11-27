@@ -17,7 +17,8 @@ vm.runInContext(fs.readFileSync(file, "utf8"), ctx, {filename: file});
 const S = name => vm.runInContext(name, ctx);
 const {esc, linkProblem, checkScenario, readScenarioFile, parseStore, visibleScenarios, putScenario, dropScenario, freeName,
   cleanName, delta, fleetDelta, scenarioTitle, sourceProblem, linkAtLoadStart, linkAtLoadEnd, beginOpen, importPlan, sameCurve, figDelta,
-  compareRows, parseEdges, linkedEdges, edgesBoxProblem, beyondContext, contextNote, bucketSeries, retryDelay} = ctx;
+  compareRows, parseEdges, linkedEdges, edgesBoxProblem, beyondContext, contextNote, bucketSeries, retryDelay, measuredSplit,
+  ttftModelNote, tpotModelNote} = ctx;
 const MAX_NAME = S("MAX_NAME"), MAX_SCENARIOS = S("MAX_SCENARIOS"), MAX_LINK = S("MAX_LINK");
 
 let passed = 0;
@@ -45,7 +46,7 @@ check("esc of a number", esc(5) === "5");
 
 // linkProblem: every link linkParams writes is admitted ...
 const good = "recording=run.jsonl.gz&cycle=3&model=m&prefillVariant=p&decodeVariant=d&prefill=2&decode=1&rate=6.5&ttftStat=p90&ttft=0.8" +
-  "&tpotStat=mean&tpot=0.05&ratio=1.3&headroom=0.85&priceAs=1k&out=1000&vp=30000&a=0.02&promptCV=1.2&routerHop=0.003&perBucket=1";
+  "&tpotStat=mean&tpot=0.05&ratio=1.3&headroom=0.85&priceAs=1k&out=1000&vp=30000&a=0.02&promptCV=1.2&routerHop=0.003&loadAwareRouter=1&perBucket=1";
 for (const link of [good, "namespace=llm&headroom=0.85", "namespace=llm&mode=size&max=40&low=1&rate=2&headroom=0.85",
   "recording=r.jsonl.gz&ttftStat=p99.9&ttft=1"]) {
   check(`admits ${link.slice(0, 50)}`, linkProblem(link) === "", linkProblem(link));
@@ -65,6 +66,8 @@ for (const [link, want] of [
   ["recording=r&ttftStat=max", "ttftStat cannot be"],
   ["recording=r&mode=plan", "mode cannot be"],
   ["recording=r&low=true", "low cannot be"],
+  ["recording=r&loadAwareRouter=true", "loadAwareRouter cannot be"],
+  ["recording=r&loadAwareRouter=0", "loadAwareRouter cannot be"],
   ["recording=r&model=", "model is not a name"],
   ["recording=r&model=a%0Db", "model is not a name"],
   ["recording=r&model=" + "m".repeat(254), "model is not a name"],
@@ -455,25 +458,49 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
   check("one length is not a shape", reportShapeProblem("8k") !== "");
   check("a hit of 1 is not a shape", reportShapeProblem("1k/1k/1") !== "");
   check("a length past 1024k is refused", reportShapeProblem("2000k/200") !== "");
-  check("blank boxes are the measured shape", shapeText({il: "", ol: " ", hit: ""}) === "measured");
+  check("blank boxes are the load's own shape", shapeText({il: "", ol: " ", hit: ""}) === "load");
   check("a row with a hit", shapeText({il: "1k", ol: "4k", hit: "0.3"}) === "1k/4k/0.3");
-  check("blank rows are one measured shape", JSON.stringify(reportShapes([{}, {il: "1k", ol: "1k"}, {}, {il: "1k", ol: "1k"}])) ===
-    JSON.stringify(["measured", "1k/1k"]), JSON.stringify(reportShapes([{}, {il: "1k", ol: "1k"}, {}])));
-  check("no rows is the measured shape", JSON.stringify(reportShapes([])) === JSON.stringify(["measured"]));
+  check("blank rows beside a typed one are one load shape", JSON.stringify(reportShapes([{}, {il: "1k", ol: "1k"}, {}, {il: "1k", ol: "1k"}])) ===
+    JSON.stringify(["load", "1k/1k"]), JSON.stringify(reportShapes([{}, {il: "1k", ol: "1k"}, {}])));
+  check("no rows is the server's default shape", JSON.stringify(reportShapes([])) === JSON.stringify([]));
+  check("blank rows alone are the server's default shape", JSON.stringify(reportShapes([{}, {}])) === JSON.stringify([]));
   check("empty loads are the server's default", parseReportLoads("").loads.length === 0 && parseReportLoads("").problem === "");
   check("loads are read in order", JSON.stringify(parseReportLoads("50%, 5r/s ,seen").loads) === JSON.stringify(["50%", "5r/s", "seen"]));
   check("a share past 100% is refused", parseReportLoads("150%").problem !== "");
   check("a load with no unit is refused", parseReportLoads("5").problem !== "");
+  check("a concurrency is a load", JSON.stringify(parseReportLoads("64c, 2.5c").loads) === JSON.stringify(["64c", "2.5c"]),
+    JSON.stringify(parseReportLoads("64c, 2.5c")));
+  check("a concurrency of 0 is refused", parseReportLoads("0c").problem !== "");
+  check("a concurrency past the bound is refused", parseReportLoads("2000000c").problem !== "");
+  const {concurrencyShort, concurrencyNote} = ctx;
+  check("a cell names the requests in the system", concurrencyShort({fleet: {value: 12.4}}) === "~12 in system", concurrencyShort({fleet: {value: 12.4}}));
+  check("a small concurrency keeps a decimal", concurrencyShort({fleet: {value: 2.46}}) === "~2.5 in system");
+  check("a cell past the knee says unbounded", concurrencyShort({unbounded: true, fleet: {}}) === "in system: unbounded");
+  check("a refused concurrency prints nothing", concurrencyShort({fleet: {refused: {reason: "NoLine"}}}) === "");
+  const note = concurrencyNote({concurrency: {fleet: {value: 30}, prefill: {value: 4}, decode: {value: 25}, decodePerPod: {value: 12.5}},
+    fromConcurrency: {concurrency: 30, rate: 2.5}});
+  check("the plan's note gives the asked concurrency, its rate and the roles", note.includes("30 requests in the system on average is 2.5 r/s") &&
+    note.includes("About 30 requests in the system on average (4.0 in prefill, 25 decoding (13 a decode pod))"), note);
+  const sat = concurrencyNote({concurrency: {unbounded: true, fleet: {}}, fromConcurrency: {concurrency: 500, rate: 9, atKnee: true}});
+  check("a concurrency past what the fleet holds says it saturates", sat.includes("saturate this fleet") && sat.includes("queue without bound"), sat);
+  const atLimit = concurrencyNote({concurrency: {unbounded: true, fleet: {}}, fromConcurrency: {concurrency: 500, rate: 9, atKnee: true}}, 9);
+  check("a rate at the limit is the limit's", atLimit.includes("the limit's 9"), atLimit);
+  const short = concurrencyNote({concurrency: {fleet: {value: 40}}, fromConcurrency: {concurrency: 500, rate: 7, atKnee: true}}, 9);
+  check("a rate short of the limit is not called the limit's", short.includes("short of the limit") && !short.includes("limit's"), short);
+  const atLeast = concurrencyNote({concurrency: {fleet: {value: 30, upperBound: true}}, fromConcurrency: {concurrency: 30, rate: 2.5, lowerBound: true}});
+  check("a rate from an upper-bound time in system is at least its figure", atLeast.includes("is at least 2.5 r/s"), atLeast);
+  const gate = concurrencyNote({concurrency: {fleet: {value: 30}, routerQueue: {value: 3}, prefill: {value: 2}, decode: {value: 20}}});
+  check("the router's gate is a term of its own", gate.includes("(3.0 held at the router, 2.0 in prefill, 20 decoding)"), gate);
 
   const slo = {ttft: {statistic: "p95", target: 2}, tpot: {statistic: "mean", target: 0.03}};
   const asked = reportRequest({inputsId: "sha256:x", fleet: {decode: 3}, shapes: [{}, {il: "1k", ol: "1k"}, {il: "16k", ol: "200", hit: "0.3"}, {}],
     loads: "50%, 80%, 5r/s, seen", growth: "1.2", loadStatistic: "p95", headroom: 0.8, slo, assume: {vp: 200000}});
-  const want = {inputsId: "sha256:x", shapes: ["measured", "1k/1k", "16k/200/0.3"], fleet: {decode: 3}, loads: ["50%", "80%", "5r/s", "seen", "seen x1.2"],
+  const want = {inputsId: "sha256:x", shapes: ["load", "1k/1k", "16k/200/0.3"], fleet: {decode: 3}, loads: ["50%", "80%", "5r/s", "seen", "seen x1.2"],
     loadStatistic: "p95", headroom: 0.8, slo, ttftStatistics: ["p95"], tpotStatistic: "mean", assume: {vp: 200000}};
   check("the body carries every control", asked.problem === "" && JSON.stringify(asked.body) === JSON.stringify(want), JSON.stringify(asked));
   check("the headroom knob is sent", reportRequest({inputsId: "i", headroom: 0.7}).body.headroom === 0.7);
   check("a headroom of 1 is left to the policy", !("headroom" in reportRequest({inputsId: "i", headroom: 1}).body));
-  check("no rows asks for the measured shape", JSON.stringify(reportRequest({inputsId: "i"}).body) === JSON.stringify({inputsId: "i", shapes: ["measured"]}));
+  check("no rows leaves the shape to the server", JSON.stringify(reportRequest({inputsId: "i"}).body) === JSON.stringify({inputsId: "i"}));
   check("a growth of 1 is left out", !("loads" in reportRequest({inputsId: "i", growth: "1"}).body));
   check("a bad growth is refused", reportRequest({inputsId: "i", growth: "-2"}).body === null);
   check("a bad shape is refused before asking", reportRequest({inputsId: "i", shapes: [{il: "8k"}]}).body === null);
@@ -576,7 +603,7 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
     "Judged at the p95 load of 41.7 r/s; the source saw mean 31.6, p95 41.7, peak 43.2 r/s over 282 busy cycles.", vg.load);
   check("a missed-at-onset cell says so", S("REPORT_MARKS")["missed at onset"][1] === "MISS at onset");
   check("a cell past a lower-bound knee is not called saturated", S("REPORT_MARKS")["past a lower-bound knee"][0] === "unknown" &&
-    S("REPORT_MARKS")["past a lower-bound knee"][1] === "past a lower-bound knee");
+    S("REPORT_MARKS")["past a lower-bound knee"][1] === "past prefill's lower-bound limit");
   const lb = reportView({slo, load: {rate: {value: 12.48}}, loads: [], shapes: [{label: "measured", utilization: {decode: {}, prefill: {}}, table: [],
     capacity: Object.assign(knees(4.04, "prefill"), {prefillKnee: {value: 4.04, lowerBound: true}, fleetKnee: {value: 4.04, binds: "prefill", lowerBound: true}}),
     verdict: {verdict: "NOT JUDGED", scope: "fleet", summary: "NOT JUDGED: at the p95 load of 12.5 r/s, 3.1x a prefill knee of at least 4.0 r/s."}}]});
@@ -705,6 +732,81 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
     check(`${source}: asks for a rate`, n.includes("Type your request rate."), n);
   }
 }
+// One wording for a prefill capacity the source could not learn, in size
+// mode and the plan view alike: a lower bound says "at least", and neither
+// says the source learned nothing when it learned a lower bound.
+{
+  const {noPrefillWords, kneeLowerBound, refusalText} = ctx;
+  const lb = {reason: "NoPrefillCapacity", flags: ["VPLowerBound"],
+    detail: "V_P 18000 tokens/s is only the rate a prefill pod was seen to compute (it never queued for capacity): no TTFT is priced from it; pass --assume-vp for a flagged answer"};
+  const none = {reason: "NoPrefillCapacity", detail: "V_P 0 tokens/s"};
+  const w = noPrefillWords(lb);
+  check("a lower-bound V_P is at least its speed", w.includes("at least 18,000 tokens/s (a lower bound)"), w);
+  check("a lower-bound V_P never reads as nothing learned", !w.includes("learned no"), w);
+  check("a lower-bound V_P names no CLI flag", !w.includes("--assume-vp"), w);
+  check("no V_P learned says so", noPrefillWords(none).includes("learned no prefill speed per pod"), noPrefillWords(none));
+  check("both open alike", w.startsWith("Prefill capacity unknown") && noPrefillWords(none).startsWith("Prefill capacity unknown"));
+  check("the report says a lower bound too", refusalText({refused: lb}).includes("only a lower bound"), refusalText({refused: lb}));
+  check("a knee on a lower-bound V_P is at least", kneeLowerBound({value: 20.5, flags: ["VPLowerBound"]}) && !kneeLowerBound({value: 20.5}));
+}
+
+// measuredSplit: the experimental TTFT model's curve is solid up to the
+// highest load measured and dashed beyond it, the dashed part starting at
+// the last measured point so that the two meet, and no point lost.
+{
+  const q = (x, e) => ({x, y: x / 10, extrapolated: e});
+  const curve = [q(1, false), q(2, false), q(3, true), q(4, true)];
+  const s = measuredSplit(curve);
+  check("measuredSplit: solid up to the last measured point", s.measured.map(p => p.x).join() === "1,2", JSON.stringify(s.measured));
+  check("measuredSplit: dashed from the last measured point on", s.beyond.map(p => p.x).join() === "2,3,4", JSON.stringify(s.beyond));
+  check("measuredSplit: every extrapolated point is dashed", curve.filter(p => p.extrapolated).every(p => s.beyond.includes(p)));
+  check("measuredSplit: no extrapolated point is solid", s.measured.every(p => !p.extrapolated));
+  const none = measuredSplit([q(1, false), q(2, false)]);
+  check("measuredSplit: nothing extrapolated, nothing dashed", none.beyond.length === 0 && none.measured.length === 2);
+  const all = measuredSplit([q(1, true), q(2, true)]);
+  check("measuredSplit: all extrapolated, all dashed", all.measured.length === 0 && all.beyond.length === 2);
+  check("measuredSplit: an empty curve", measuredSplit([]).measured.length === 0 && measuredSplit([]).beyond.length === 0);
+}
+
+// ttftModelNote: the label, the evidence and the dashed part in one line;
+// the reason the planner's TTFT stands where the model did not price.
+{
+  const m = {label: "Experimental TTFT model", priced: true, evidence: "held-out steps: 9 of 12 within 20%", measuredUpTo: 4.5678,
+    beyond: "beyond the highest load measured", rightEnd: "the curve's right end is an estimate from the fitted prefill service rate"};
+  const n = ttftModelNote(m);
+  check("ttftModelNote: names the model", n.startsWith("Experimental TTFT model"), n);
+  check("ttftModelNote: the evidence", n.includes("held-out steps: 9 of 12 within 20%"), n);
+  check("ttftModelNote: what is dashed, and from where", n.includes("dashed: beyond the highest load measured (4.57 r/s)"), n);
+  check("ttftModelNote: the right end", n.includes("right end is an estimate"), n);
+  const bare = ttftModelNote({label: "Experimental TTFT model", priced: true});
+  check("ttftModelNote: no evidence, no claim", bare === "Experimental TTFT model.", bare);
+  const not = ttftModelNote({label: "Experimental TTFT model", priced: false, notPriced: "the model abstained: x"});
+  check("ttftModelNote: not priced says why", not.includes("not used here (the model abstained: x)") && not.includes("planner's own"), not);
+  check("ttftModelNote: no model, no note", ttftModelNote(undefined) === "" && ttftModelNote(null) === "");
+}
+
+// tpotModelNote: the experimental TPOT model's note on the TPOT figure, the
+// same parts as the TTFT's; not priced, the planner's own percentile is
+// drawn, never its TTFT.
+{
+  const m = {label: "Experimental TPOT model", priced: true, measuredUpTo: 13.456, beyond: "beyond the highest load measured",
+    evidence: "held-out steps, at the measured mean: p90 in the measured bucket on 20 of 24, p95 on 19"};
+  const n = tpotModelNote(m);
+  check("tpotModelNote: names the model", n.startsWith("Experimental TPOT model"), n);
+  check("tpotModelNote: the evidence", n.includes("p90 in the measured bucket on 20 of 24"), n);
+  check("tpotModelNote: what is dashed, and from where", n.includes("dashed: beyond the highest load measured (13.5 r/s)"), n);
+  check("tpotModelNote: no right end of its own", !n.includes("right end"), n);
+  const not = tpotModelNote({label: "Experimental TPOT model", priced: false, notPriced: "the model prices p90 and p95, not p99"});
+  check("tpotModelNote: not priced says why", not.includes("not used here (the model prices p90 and p95, not p99)"), not);
+  check("tpotModelNote: the planner's own percentile stands", not.includes("planner's own TPOT percentile is drawn") && !not.includes("TTFT"), not);
+  check("tpotModelNote: no model, no note", tpotModelNote(undefined) === "" && tpotModelNote(null) === "");
+  // A TPOT curve the model prices splits where its points are marked, as
+  // the TTFT's does.
+  const curve = [{x: 1, y: 0.01, extrapolated: false}, {x: 2, y: 0.02, extrapolated: true}];
+  const s = measuredSplit(curve);
+  check("measuredSplit: a TPOT curve meets at its last measured point", s.measured.length === 1 && s.beyond.map(p => p.x).join() === "1,2",
+    JSON.stringify(s));
+}
 } catch (e) {
   failures.push("a case threw, and the cases after it did not run: " + e.message);
 }
@@ -716,7 +818,7 @@ if (failures.length) {
 }
 // EXPECTED_CASES is how many cases this file runs: a case that silently
 // stops running (an early return, a renamed function) fails the check.
-const EXPECTED_CASES = 339;
+const EXPECTED_CASES = 384;
 if (passed !== EXPECTED_CASES) {
   console.error(`check-planner-scenarios: ${passed} cases ran; expected ${EXPECTED_CASES}`);
   process.exit(1);

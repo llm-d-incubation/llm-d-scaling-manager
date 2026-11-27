@@ -580,6 +580,26 @@ type ReplicaMetrics struct {
 	// by a pod that runs the NIXL connector. Known as AvgQueueTime is.
 	AvgKVTransferTime      float64 `learnrec:"omitzero"`
 	AvgKVTransferTimeKnown bool    `learnrec:"omitzero"`
+	// AvgFrontendTime is the time a generation request spends in the
+	// engine's API server outside the engine, seconds, over [5m]: the HTTP
+	// handler's mean on the generation endpoints less vLLM's mean
+	// end-to-end latency. A difference of two means, so it can read a little
+	// under 0. AvgRenderTime is the mean HTTP handler time of the render
+	// endpoints (the router's /render call to a prefill pod), seconds, and
+	// RenderRate their requests a second, over the same [5m]. vLLM only
+	// (http_request_duration_seconds, e2e_request_latency_seconds). Each
+	// Known is set where its series were all read (AvgFrontendTime needs
+	// both means); a pod the router does not render on reads no RenderRate.
+	// Recorded for the capacity planner's router remainder
+	// (whatif.RankMixtureOptions.RemainderServer) and read by nothing in the
+	// controller; collected only while a learner recording is on, and left
+	// out of a recording while unknown.
+	AvgFrontendTime      float64 `learnrec:"omitzero"`
+	AvgFrontendTimeKnown bool    `learnrec:"omitzero"`
+	AvgRenderTime        float64 `learnrec:"omitzero"`
+	AvgRenderTimeKnown   bool    `learnrec:"omitzero"`
+	RenderRate           float64 `learnrec:"omitzero"`
+	RenderRateKnown      bool    `learnrec:"omitzero"`
 	// TPOTBuckets is the engine's per-request time-per-output-token
 	// histogram, seconds, over [1m]: each request's own mean TPOT, the
 	// fallback source for the TPOT ratio where the router's is missing.
@@ -630,6 +650,24 @@ type ReplicaMetrics struct {
 	// merge by summing each source's rate, and the pod has the split only
 	// when every rank had one. Nil when absent.
 	CachedTokenRateBySource []SourceRate `learnrec:"omitzero"`
+	// KVReuseGapBuckets and KVIdleBeforeEvictBuckets are the pod's KV
+	// residency histograms, seconds, as per-second rates over [1m], each
+	// bound's rate summed over its ranks (vllm:kv_block_reuse_gap_seconds,
+	// one observation per prefix-cache hit block, the time since its last
+	// use; vllm:kv_block_idle_before_evict_seconds, one per evicted block,
+	// the time it sat unused; --kv-cache-metrics). Read by the capacity
+	// planner alone, for the prefix hit at another prefill count
+	// (prefill.FitHitModel). Nil when absent.
+	KVReuseGapBuckets        []LatencyBucket `learnrec:"omitzero"`
+	KVIdleBeforeEvictBuckets []LatencyBucket `learnrec:"omitzero"`
+	// IterationTokensBuckets is the pod's tokens-per-iteration histogram,
+	// as iterations a second over [1m] at or under each bound, each bound's
+	// rate summed over its ranks (vllm:iteration_tokens_total, one
+	// observation per engine iteration: the computed prompt tokens of the
+	// prefills it completed, each whole, and the tokens it generated). It says
+	// whether the step budget (--max-num-batched-tokens) binds
+	// (capacity.ReadStepBudgetBinding). Nil when absent, as on SGLang.
+	IterationTokensBuckets []LengthBucket `learnrec:"omitzero"`
 	// KVTransferRates is what the pod spent moving KV that it did not
 	// compute, over [1m], one entry per kind, sorted by kind
 	// (KVTransferOffloadLoad, KVTransferTierRead, KVTransferNIXL): bytes a
@@ -680,6 +718,13 @@ type SourceRate struct {
 // ITL and its three states, the tokens a step emits, the batch against the
 // cap, the queue and preemptions, the generation rate and the KV. A field
 // is written to a recording only when set.
+//
+// It also keeps the engine's own prefill readings (RequestRate through
+// PrefillComputedTokenRate), which the merged row holds only summed or
+// averaged over the group: the capacity planner's experimental TTFT model
+// (whatif.RankMixture) fits each rank's processor-sharing service time and
+// its traffic share from them. The ITL line does not read them, and an
+// engine's row (EngineRows) does not carry them.
 type EngineReading struct {
 	PodName                  string  `learnrec:"omitzero"`
 	EngineRanks              int     `learnrec:"omitzero"`
@@ -702,6 +747,31 @@ type EngineReading struct {
 	GenerationTokenRateKnown bool    `learnrec:"omitzero"`
 	TokensInUse              int64   `learnrec:"omitzero"`
 	TotalKvCapacityTokens    int64   `learnrec:"omitzero"`
+
+	// RequestRate, AvgTTFT, AvgQueueTime, AvgPrefillTime, AvgInputTokens and
+	// PrefillComputedTokenRate are the engine's own, as ReplicaMetrics
+	// defines them, with their bits.
+	RequestRate                   float64 `learnrec:"omitzero"`
+	RequestRateKnown              bool    `learnrec:"omitzero"`
+	AvgTTFT                       float64 `learnrec:"omitzero"`
+	AvgTTFTKnown                  bool    `learnrec:"omitzero"`
+	AvgQueueTime                  float64 `learnrec:"omitzero"`
+	AvgQueueTimeKnown             bool    `learnrec:"omitzero"`
+	AvgPrefillTime                float64 `learnrec:"omitzero"`
+	AvgPrefillTimeKnown           bool    `learnrec:"omitzero"`
+	AvgInputTokens                float64 `learnrec:"omitzero"`
+	PrefillComputedTokenRate      float64 `learnrec:"omitzero"`
+	PrefillComputedTokenRateKnown bool    `learnrec:"omitzero"`
+
+	// AvgFrontendTime, AvgRenderTime and RenderRate are the engine's API
+	// server's own, as ReplicaMetrics defines them, with their bits: each
+	// Pod of such a group runs its own API server.
+	AvgFrontendTime      float64 `learnrec:"omitzero"`
+	AvgFrontendTimeKnown bool    `learnrec:"omitzero"`
+	AvgRenderTime        float64 `learnrec:"omitzero"`
+	AvgRenderTimeKnown   bool    `learnrec:"omitzero"`
+	RenderRate           float64 `learnrec:"omitzero"`
+	RenderRateKnown      bool    `learnrec:"omitzero"`
 }
 
 // EngineReadingOf is what the ITL line reads of an engine's row.
@@ -715,7 +785,16 @@ func EngineReadingOf(rm ReplicaMetrics) EngineReading {
 		QueueLength: rm.QueueLength, MaxRankQueueLength: rm.MaxRankQueueLength,
 		PreemptionRate: rm.PreemptionRate, PreemptionRateKnown: rm.PreemptionRateKnown,
 		GenerationTokenRate: rm.GenerationTokenRate, GenerationTokenRateKnown: rm.GenerationTokenRateKnown,
-		TokensInUse: rm.TokensInUse, TotalKvCapacityTokens: rm.TotalKvCapacityTokens}
+		TokensInUse: rm.TokensInUse, TotalKvCapacityTokens: rm.TotalKvCapacityTokens,
+		RequestRate: rm.RequestRate, RequestRateKnown: rm.RequestRateKnown,
+		AvgTTFT: rm.AvgTTFT, AvgTTFTKnown: rm.AvgTTFTKnown,
+		AvgQueueTime: rm.AvgQueueTime, AvgQueueTimeKnown: rm.AvgQueueTimeKnown,
+		AvgPrefillTime: rm.AvgPrefillTime, AvgPrefillTimeKnown: rm.AvgPrefillTimeKnown,
+		AvgInputTokens:           rm.AvgInputTokens,
+		PrefillComputedTokenRate: rm.PrefillComputedTokenRate, PrefillComputedTokenRateKnown: rm.PrefillComputedTokenRateKnown,
+		AvgFrontendTime: rm.AvgFrontendTime, AvgFrontendTimeKnown: rm.AvgFrontendTimeKnown,
+		AvgRenderTime: rm.AvgRenderTime, AvgRenderTimeKnown: rm.AvgRenderTimeKnown,
+		RenderRate: rm.RenderRate, RenderRateKnown: rm.RenderRateKnown}
 }
 
 // rowOf is e as a row of its group: the group's identity (namespace, model,

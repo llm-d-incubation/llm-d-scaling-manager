@@ -28,18 +28,31 @@ func SensitivityFleets(fl TTFTFleet) []TTFTFleet {
 	for _, vp := range []float64{p.VP * (1 - SensitivityShare), p.VP * (1 + SensitivityShare)} {
 		if p.Replicas < 2 || p.Imbalance < 1 {
 			at := fl
-			at.Prefill.VP = vp
+			at.Prefill = p.WithVP(vp)
 			out = append(out, at)
 			continue
 		}
 		for _, f := range []float64{p.Imbalance * (1 - SensitivityShare), p.Imbalance * (1 + SensitivityShare)} {
 			at := fl
-			at.Prefill.VP = vp
+			at.Prefill = p.WithVP(vp)
 			at.Prefill.Imbalance = min(max(f, 1), float64(p.Replicas))
 			out = append(out, at)
 		}
 	}
 	return out
+}
+
+// WithVP is p at V_P = vp, its per-request work (VPRequestSeconds) scaled by
+// the same ratio, so every request's work moves by p.VP/vp, and every knee
+// by vp/p.VP, at any prompt. Unmeasured (0), that work stays 0; at a vp
+// that is no capacity it is left as it was, and the V_P is refused
+// (Prefill.check).
+func (p Prefill) WithVP(vp float64) Prefill {
+	if p.VPRequestSeconds > 0 && p.VP > 0 && vp > 0 && Finite(vp) {
+		p.VPRequestSeconds *= p.VP / vp
+	}
+	p.VP = vp
+	return p
 }
 
 // SensitivitySpan is the span of value over the corners' results. A corner

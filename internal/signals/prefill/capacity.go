@@ -1,6 +1,7 @@
 package prefill
 
 import (
+	"math"
 	"slices"
 	"time"
 )
@@ -101,8 +102,8 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 	bm := busyMedian(ks, c.Now)
 	est.VPBusyMinutes = bm.n
 	if bm.n >= MinBusyMinutes {
-		est.VP, est.VPSource, est.VPSamples, est.VPPromptTokens = bm.rate, SourceBusyMinutes, bm.n, bm.prompt
-		est.VPWholePromptTokens, est.VPPromptHitRate = bm.whole, bm.hit
+		est.VP, est.VPSource, est.VPSamples = bm.rate, SourceBusyMinutes, bm.n
+		est.setPrompts(bm)
 		if bm.multiRank {
 			est.VPLowerBound, est.VPLowerBoundReason = true, DataParallelRanks
 			est.floorAtServed(ks, c.VPFloorServed)
@@ -115,7 +116,7 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 	}
 	if ok {
 		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = pk.rate, SourcePeakUnderQueue, true, PeakRun
-		est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = pk.prompt, pk.whole, pk.hit
+		est.setPrompts(pk)
 		est.floorAtServed(ks, c.VPFloorServed)
 		return
 	}
@@ -127,7 +128,7 @@ func (est *Estimate) capacity(ks *keyState, c Cycle, sglang bool) {
 	if pk, ok := servedPeak(ks); ok && c.VPServedUnqueued {
 		est.VP, est.VPSource, est.VPLowerBound, est.VPSamples = pk.rate, SourceServedPeak, true, PeakRun
 		est.VPLowerBoundReason, est.VPServedPeak = NeverQueued, pk.rate
-		est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = pk.prompt, pk.whole, pk.hit
+		est.setPrompts(pk)
 		return
 	}
 	est.VPRefused = NoPrefillCapacity
@@ -183,8 +184,8 @@ func (est *Estimate) floorAtServed(ks *keyState, on bool) {
 	if !on || !(pk.rate > est.VP) {
 		return
 	}
-	est.VP, est.VPPromptTokens, est.VPSamples, est.VPFlooredAtServed = pk.rate, pk.prompt, PeakRun, true
-	est.VPWholePromptTokens, est.VPPromptHitRate = pk.whole, pk.hit
+	est.VP, est.VPSamples, est.VPFlooredAtServed = pk.rate, PeakRun, true
+	est.setPrompts(pk)
 }
 
 // busy is the busy minutes' reading: the median rate, how many minutes,
@@ -200,6 +201,40 @@ type busy struct {
 	hit       float64
 	// at is the last minute of a peak's run (peakRun); unset otherwise.
 	at time.Time
+	// lo and hi are the 10th and 90th percentiles of the minutes' prompts
+	// (promptRange), both zero when one of them read none.
+	lo, hi float64
+}
+
+// setPrompts records the prompts b was read at on est: its mean prompt,
+// whole prompt and hit rate, and the range of its minutes' prompts.
+func (est *Estimate) setPrompts(b busy) {
+	est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = b.prompt, b.whole, b.hit
+	est.VPPromptLow, est.VPPromptHigh = b.lo, b.hi
+}
+
+// promptLowQuantile and promptHighQuantile are the quantiles of the minutes'
+// prompts that bound the range a V_P speaks for (Estimate.VPPromptLow,
+// VPPromptHigh): a tenth of the minutes may sit outside each end, so one odd
+// minute does not widen the range.
+const (
+	promptLowQuantile  = 0.10
+	promptHighQuantile = 0.90
+)
+
+// promptRange is the promptLowQuantile and promptHighQuantile of prompts, by
+// the nearest rank, both zero when one of them is zero (not read), as
+// meanPrompt is. It does not reorder prompts.
+func promptRange(prompts []float64) (lo, hi float64) {
+	if len(prompts) == 0 || meanPrompt(prompts) == 0 {
+		return 0, 0
+	}
+	xs := slices.Sorted(slices.Values(prompts))
+	rank := func(q float64) float64 {
+		i := int(math.Ceil(q*float64(len(xs)))) - 1
+		return xs[min(max(i, 0), len(xs)-1)]
+	}
+	return rank(promptLowQuantile), rank(promptHighQuantile)
 }
 
 // busyMedian is the busy reading over every replica's busy minutes no older
@@ -223,6 +258,7 @@ func busyMedian(ks *keyState, now time.Time) busy {
 	}
 	out.rate, out.n, out.prompt = median(rates), len(rates), meanPrompt(prompts)
 	out.whole, out.hit = meanWhole(minutes)
+	out.lo, out.hi = promptRange(prompts)
 	return out
 }
 
@@ -299,6 +335,7 @@ func peakRun(ks *keyState, queued bool) (busy, bool) {
 			if sustained > best.rate {
 				best = busy{rate: sustained, prompt: meanPrompt(prompts[len(prompts)-PeakRun:]), at: s.at}
 				best.whole, best.hit = meanWhole(minutes[len(minutes)-PeakRun:])
+				best.lo, best.hi = promptRange(prompts[len(prompts)-PeakRun:])
 				found = true
 			}
 		}

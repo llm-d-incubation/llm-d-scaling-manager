@@ -178,8 +178,22 @@ func checkKEDANetworkPolicy(ctx context.Context, s *state) ([]Result, string) {
 				ScalerNetworkPolicy, shipped, keda),
 			Fix: fmt.Sprintf(`sed -i "s#kubernetes.io/metadata.name: %s\$#kubernetes.io/metadata.name: %s#" %s   # before applying it`, shipped, keda, files)}}, ""
 	}
-	admitted, rule := scalerAdmits(np)
 	source := "NetworkPolicy " + ScalerNetworkPolicy
+	if scalerAdmitsByLabel(np) {
+		// The one manifest names no KEDA namespace: it admits the namespace
+		// labelled KEDANamespaceLabel=true, which the admin labels.
+		n, err := s.env.Kube.CoreV1().Namespaces().Get(ctx, keda, metav1.GetOptions{})
+		if err != nil {
+			return []Result{unknown("namespace "+keda, err)}, ""
+		}
+		if n.Labels[KEDANamespaceLabel] == valueTrue {
+			return []Result{{Status: Pass, Detail: fmt.Sprintf("%s admits the namespace labelled %s=true, and %s, where KEDA runs, is", source, KEDANamespaceLabel, keda)}}, ""
+		}
+		return []Result{{Status: Fail,
+			Detail: fmt.Sprintf("%s admits port 9090 from the namespace labelled %s=true, and %s, where KEDA runs, is not: KEDA's calls are dropped and no ScaledObject scales", source, KEDANamespaceLabel, keda),
+			Fix:    fmt.Sprintf("kubectl label namespace %s %s=true   # scaling-manager-admin.sh upgrade --keda-namespace %s does it", keda, KEDANamespaceLabel, keda)}}, ""
+	}
+	admitted, rule := scalerAdmits(np)
 	switch {
 	case rule < 0:
 		return []Result{{Status: Unknown, Detail: source + " in " + ns + " admits port 9090 by no namespace name; what it lets in is not known here"}}, ""
@@ -195,6 +209,30 @@ func checkKEDANetworkPolicy(ctx context.Context, s *state) ([]Result, string) {
 	return []Result{{Status: Fail,
 		Detail: fmt.Sprintf("%s admits port 9090 from %s, but KEDA runs in %s: KEDA's calls are dropped and no ScaledObject scales", source, strings.Join(admitted, ", "), keda),
 		Fix:    fix}}, ""
+}
+
+// KEDANamespaceLabel marks the namespace KEDA runs in, on the one-manifest
+// install: its scaler NetworkPolicy admits port 9090 from the namespace
+// carrying it, "true", so the manifest names no KEDA namespace.
+const KEDANamespaceLabel = "scaling-manager.llmd.ai/keda"
+
+// scalerAdmitsByLabel reports whether the rule for port 9090 admits the
+// namespaces labelled KEDANamespaceLabel=true.
+func scalerAdmitsByLabel(np *networkingv1.NetworkPolicy) bool {
+	for _, rule := range np.Spec.Ingress {
+		for _, p := range rule.Ports {
+			if p.Port == nil || p.Port.IntValue() != 9090 {
+				continue
+			}
+			for _, peer := range rule.From {
+				if peer.NamespaceSelector != nil && peer.PodSelector == nil &&
+					peer.NamespaceSelector.MatchLabels[KEDANamespaceLabel] == valueTrue {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // scalerAdmits returns the namespaces the policy admits to port 9090 by name,
@@ -243,6 +281,9 @@ func checkKEDAMTLS(ctx context.Context, s *state) ([]Result, string) {
 		keda = "<KEDA namespace>"
 	}
 	copyName := "scaling-manager-external-scaler-" + ns
+	if s.env.ControllerWritesKEDACopy {
+		return checkKEDAMTLSWrittenByController(ctx, s, copyName), ""
+	}
 	steps := mtlsSteps(ns, keda, copyName)
 	marker, err := s.env.Kube.CoreV1().ConfigMaps(ns).Get(ctx, KEDAMarkerConfigMap, metav1.GetOptions{})
 	if err != nil {
@@ -283,6 +324,34 @@ func checkKEDAMTLS(ctx context.Context, s *state) ([]Result, string) {
 			Fix:    restart + "\n# or KEDA's copy does not match the scaler; copy it again:\n" + steps}}, ""
 	}
 	return []Result{{Status: Pass, Detail: fmt.Sprintf("ClusterTriggerAuthentication %s in place, and the controller reports no refused handshake (no scalerUnreachable in %s)", cta, ControllerStatusConfigMap)}}, ""
+}
+
+// checkKEDAMTLSWrittenByController judges KEDA's side when the controller
+// writes KEDA's copy itself (the one-manifest install): there is no marker,
+// and no step for a person, so it reads what the controller says in its
+// status: how the scaler serves, whether the copy is current, and whether
+// KEDA's handshakes are refused.
+func checkKEDAMTLSWrittenByController(ctx context.Context, s *state, copyName string) []Result {
+	ns := s.env.Namespace
+	status, err := s.env.Kube.CoreV1().ConfigMaps(ns).Get(ctx, ControllerStatusConfigMap, metav1.GetOptions{})
+	if err != nil {
+		return []Result{unknown("ConfigMap "+ControllerStatusConfigMap+" in "+ns, err)}
+	}
+	tlsState := status.Data[statusScalerTLS]
+	switch {
+	case tlsState == "":
+		return []Result{{Status: Unknown, Detail: "the controller has not said how the scaler serves yet (no scalerTLS)"}}
+	case !strings.HasPrefix(tlsState, "mutual TLS"):
+		return []Result{{Status: Fail, Detail: "the scaler serves " + tlsState,
+			Fix: "see scalerTLSAction in ConfigMap " + ControllerStatusConfigMap + " in " + ns}}
+	case status.Data[statusKEDACopyStale] == valueTrue:
+		return []Result{{Status: Fail, Detail: "KEDA's copy, Secret " + copyName + ", does not hold the current client certificate",
+			Fix: "see scalerTLSAction in ConfigMap " + ControllerStatusConfigMap + " in " + ns}}
+	case status.Data[statusScalerUnreachable] != "":
+		return []Result{{Status: Fail, Detail: "the controller reports KEDA cannot reach the scaler (scalerUnreachable): " + status.Data[statusScalerUnreachable],
+			Fix: "restart KEDA's operator, which keeps a connection made before the CA changed"}}
+	}
+	return []Result{{Status: Pass, Detail: "the scaler serves mutual TLS, and the controller keeps KEDA's copy " + copyName + " current"}}
 }
 
 // mtlsSteps are the commands that put KEDA's side of mutual TLS in place:

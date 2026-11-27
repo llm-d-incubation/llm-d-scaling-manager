@@ -129,15 +129,18 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchStartConfirmsByDistinctPod, SwitchPrefillBusyMinutes,
 // SwitchPrefillAQuadratic, SwitchPrefillALowLoadPerRank,
 // SwitchPrefillAEngineTiming, SwitchPrefillQueueByCapacity,
-// SwitchPrefillFBusyMinutes, SwitchPrefillVPFloorServed,
+// SwitchPrefillFBusyMinutes, SwitchPrefillFPooledMinutes, SwitchPrefillVPFloorServed,
 // SwitchPrefillVPServedUnqueued, SwitchPrefillVPWindowBest,
 // SwitchPrefillVPAtServedWork, SwitchPrefillVPOccupancyPlateau,
+// SwitchPrefillVPPromptCoverage,
+// SwitchPrefillVPLoneRate, SwitchPrefillVPServiceLine, SwitchPrefillHitAtCount,
+// SwitchPrefillFLoadCurve,
 // SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
 // SwitchITLAdaptiveBandFloor,
 // SwitchITLHoldSteadySlope, SwitchITLLineAtFloor, SwitchMoEBusiestRank,
 // SwitchITLBatchTerm, SwitchTPOTRatioCensored,
 // SwitchDecodeResidencePull, SwitchDecodeBurstFill,
-// SwitchK2DecodeBudgetAtComputedPrompt, SwitchDecodeLandedNeedsABound,
+// SwitchBacktestStepOutputDispersion, SwitchK2DecodeBudgetAtComputedPrompt, SwitchDecodeLandedNeedsABound,
 // SwitchK2BatchAtITLTarget,
 // SwitchITLBaselineFromFloor, SwitchITLFloorBaselineHeld,
 // SwitchITLOneSidedAtCap,
@@ -272,6 +275,9 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// The planner's f: the median of the busiest minutes
 		// (prefill.Cycle.FBusyMinutes). Off from the constructor.
 		SwitchPrefillFBusyMinutes: &a.prefillFBusyMinutes,
+		// The planner's f from pooled minutes on a fleet of long prompts
+		// (prefill.Cycle.FPooledMinutes). Off from the constructor.
+		SwitchPrefillFPooledMinutes: &a.prefillFPooledMinutes,
 		// The planner's floor under a lower-bound V_P: the highest rate a
 		// pod was seen to compute (prefill.Cycle.VPFloorServed). Off from
 		// the constructor.
@@ -292,6 +298,26 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// occupancy (prefill.Cycle.VPOccupancyPlateau). Off from the
 		// constructor.
 		SwitchPrefillVPOccupancyPlateau: &a.prefillVPOccupancyPlateau,
+		// Issue llm-d-incubation/llm-d-scaling-manager#405: the prompts the
+		// planner's V_P speaks for (prefill.Cycle.VPPromptCoverage). Off
+		// from the constructor.
+		SwitchPrefillVPPromptCoverage: &a.prefillVPPromptCoverage,
+		// Issue llm-d-incubation/llm-d-scaling-manager#406: the planner's
+		// V_P from light load, the lone rate (prefill.Cycle.VPLoneRate).
+		// Off from the constructor.
+		SwitchPrefillVPLoneRate: &a.prefillVPLoneRate,
+		// Issues llm-d-incubation/llm-d-scaling-manager#368, #416: the
+		// planner's V_P from the prefill service line
+		// (prefill.Cycle.VPServiceLine). Off from the constructor.
+		SwitchPrefillVPServiceLine: &a.prefillVPServiceLine,
+		// Issue llm-d-incubation/llm-d-scaling-manager#482: the planner's
+		// f against the load per pod (prefill.Cycle.FLoadCurve). Off from
+		// the constructor.
+		SwitchPrefillFLoadCurve: &a.prefillFLoadCurve,
+		// Issue llm-d-incubation/llm-d-scaling-manager#384: the planner's
+		// prefix hit at another prefill count (prefill.HitAtCountOf). Off
+		// from the constructor.
+		SwitchPrefillHitAtCount: &a.prefillHitAtCount,
 		// The planner's a: low load read by rate against the prompt
 		// cluster's service time, and the median overhead
 		// (prefill.Cycle.ALowLoadByRate, AMedianOverhead). Off from the
@@ -329,6 +355,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// (decode_burst_fill.go). Off from the constructor; the analyzer
 		// does not read it.
 		SwitchDecodeBurstFill: &a.decodeBurstFill,
+		// The planner's backtest prices each step at its own output spread
+		// (backtest_step_dispersion.go). Off from the constructor; the
+		// analyzer does not read it.
+		SwitchBacktestStepOutputDispersion: &a.backtestStepOutputDispersion,
 		// Issue llm-d-incubation/llm-d-scaling-manager#201: a decode's
 		// derived k2 charges its budget the prompt it computes
 		// (decode_budget.go), and a landed request is a decode's backlog

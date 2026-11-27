@@ -40,6 +40,9 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 				f.PrefillOnlyRate = ptr(t.PrefillOnlyRate)
 			}
 		}
+		if b := v.Basis.Batch; b != nil {
+			f.BatchBeyondFit = &BatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
+		}
 		return f
 	case whatif.TTFT:
 		f := Figure{Value: ptr(v.Seconds), Unit: unitSeconds, Sensitivity: spanOf(v.Sensitivity, true), Flags: FlagNames(v.Flags)}

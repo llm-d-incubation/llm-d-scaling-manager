@@ -12,7 +12,117 @@ replicas, under load that rises in steps. Every output below was printed by
 the planner at v0.12.3 on that sample; only the annotations are added. The
 page's **Judge the fleet** answers with the same report, in panels.
 
-## The answer, from the top
+## On the page: the answer first
+
+The page opens on the **Answer** tab. Its top panel is the answer in a few
+lines, small enough to paste on a slide (**Copy as image**). Each line has a
+badge that says how far to trust it:
+
+| Badge | Means |
+| --- | --- |
+| Measured | Read off the recording: the fleet, its busiest load, the latency it measured. |
+| Checked on your data | The planner predicted held-out hours of your own traffic, and this is how close it came. |
+| Estimate | The model's figure: sizing, headroom, the verdict. |
+
+The lines, top down:
+
+- **Fleet today**: the replicas and GPUs the source ran, its busiest two
+  minutes and its peak.
+- **Verdict**: whether the fleet saturates at its busiest load, and the TTFT
+  and TPOT it measured at the busiest held-out step against your targets.
+- **Right size**: the fleet judged at the traffic's own shape. Where prefill
+  was not sized it says so: "Decode only: 4-6 decode would hold TPOT.
+  Prefill was not sized, so this is not a fleet recommendation."
+- **Headroom**: how far the load can grow before each role's limit. "at
+  least" marks a limit known only as a lower bound.
+- **+25% / +50% traffic**: the fleet the busiest load grown by a quarter
+  and by a half needs, at the same SLO and shape, as "N prefill + M decode
+  (G GPUs)". The page sizes each with `POST /v1/size` once the busiest load
+  is judged. A size past the highest load measured says "extrapolated past
+  the tested range"; one resting on a prefill limit known only as a lower
+  bound says fewer prefill may do. Where no fleet serves the rate the row
+  says why. Under the default model, where prefill's limit is not measured,
+  the row says it cannot size more traffic and what to do: load a busier
+  window, or use the speed the pods were seen at. A source with no prefill
+  variant is not sized: the page sizes prefill and decode together.
+  Change the SLO targets, their percentiles or the shape and the page asks
+  the verdict and these sizes again; until the answers arrive those rows
+  read "Judging..." or "Sizing...", never the answer for the old targets.
+- **Accuracy**: how many held-out five-minute steps the planner predicted
+  within 20%, which way it leans, and the rates and fleet that check
+  covers. Outside that range an answer is an extrapolation. The page runs
+  no check when it loads: until you run one, the row shows the server's
+  quick check or self-check where there is one, else "Not checked yet",
+  with a **Check accuracy on this recording** button that runs it.
+- **SLO used**: the targets, and whether they are the page's defaults.
+
+The chip at the top, "Checked on your traffic: TTFT 130/144 within 20%",
+opens **Check the planner**, which holds the evidence. Before a check it
+quotes the server's quick check where there is one ("Quick check on your
+traffic: ..."), reads "Self-check only: full accuracy check not run yet"
+where the server's self-check filled the Accuracy row, and "Accuracy not
+checked yet" otherwise.
+
+### When prefill capacity is unknown
+
+If the prefill pods never queued, the recording shows only that they handle
+at least the speed they ran at, not their limit. The page then shows one
+card instead of a refused figure:
+
+> **Prefill capacity unknown.** The prefill pods never queued, so they handle
+> at least 18,000 tokens/s per pod, but their limit is not observed. Decode
+> alone serves up to 40 r/s.
+
+It has two buttons:
+
+- **Use 18,000 tokens/s as the limit (conservative)** prices prefill at the
+  speed seen. Every figure on it is flagged as assumed, and the real limit
+  can only be higher.
+- **Load a busier window** opens the source. Pick a window where prefill ran
+  busy enough to queue.
+
+The code (`NoPrefillCapacity`) sits under the card in small type, and in the
+Flags drawer.
+
+### One notice a view
+
+How far to trust the figures is said once a view, never in every cell. A
+figure priced by an experimental model carries a dagger (†), and the view's
+notice says what it means: "Experimental model (checked on your data)". Which
+figures fall outside the validated region is in the **Flags** drawer. The
+TTFT model's validation figures are under **About the TTFT model**, below the
+source.
+
+### The other tabs
+
+- **Day plan**: a chart of the replicas each bucket needed against the
+  replicas the fleet ran, hours that missed the SLO in red, and "Peak needed
+  N at HH:MM" above it. The hourly table is closed below. Where prefill was
+  not sized, a spare decode replica is "decode only", never waste.
+- **Check the planner**: a three-line verdict card (TTFT and TPOT within 20%,
+  and the range tested), then the charts. A measured dot is coloured by how
+  it stands against the prediction: within 20%, more than 20% over, or more
+  than 20% under. A figure the histogram cannot place, at many steps, is one
+  grey band. The scores, every step and the method are closed below. In the
+  step table a cell reads "2.10 vs 2.20 s ✓ 5%": predicted against measured,
+  within 20%, 3% apart. **Failing steps only** keeps the steps more than 20%
+  off.
+- **Right-size**: the fleet judged at the traffic's own shape, with your
+  shapes and loads beside it, as described below for the CLI.
+
+Every result card has **Copy link**, **Download CSV** and **Download JSON**.
+
+### A figure the histogram cannot place
+
+A percentile is read from the measured histogram. When one bucket is too
+wide (10 ms to 20 ms is 2x wide), the measured p90 is somewhere in it, and
+the check cannot score a prediction against it. The Check tab draws that
+bucket as one band and says so under the charts. Finer edges measure it:
+the router's `metrics.requestTPOTBuckets` in the EndpointPickerConfig, or
+vLLM's `--custom-histogram-buckets` ([the value](check.md#vllms-tpot-buckets)). Edges about 15% apart place p90 and p95
+within 20%.
+
+## The answer, from the CLI
 
 ### 1. The self-check: predicted against measured
 
@@ -98,13 +208,13 @@ utilization at the load judged
 ### 5. The knee: how much the fleet carries
 
 ```text
-capacity            req/s     out tok/s   bound by
-  prefill knee      no prefill speed learned            P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
-  decode knee       36.98     7396        decode band top at fill 0.798
-                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
-  fleet knee        36.98     7396        decode (prefill not priced)
-  operating (0.85)  31.44     6287        0.85 x fleet knee (scaleUpThreshold)
-  max at SLO        no prefill speed learned            no fleet rate: the prefill side is not priced, and decode alone does not bound the fleet (slo-to-rate gives none either): P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
+capacity            req/s     out tok/s   in system   bound by
+  prefill knee      no prefill speed learned                        P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
+  decode knee       36.98     7396        unbounded   decode band top at fill 0.798
+                    OUTSIDE VALIDATED REGION (ExtrapolatedFill: an input the run did not price)
+  fleet knee        36.98     7396        unbounded   decode (prefill not priced)
+  operating (0.85)  31.44     6287        -           0.85 x fleet knee (scaleUpThreshold)
+  max at SLO        no prefill speed learned                        no fleet rate: the prefill side is not priced, and decode alone does not bound the fleet (slo-to-rate gives none either): P1 refused V_P of variant-02: no prefill speed learned; pass --assume-vp for a flagged answer
 ```
 
 The **knee** is the rate at which a role saturates: past it, queues grow
@@ -117,6 +227,12 @@ at 36.98 r/s, when its KV cache fills to 0.8.
   burst.
 - `max at SLO`: the highest rate that still meets every target. It needs
   TTFT, so it is refused here.
+- `in system`: how many requests are in the system on average at that
+  rate, see [the SLO against load](#6-the-slo-against-load-and-the-checks).
+  At a knee the queue grows without bound, so there is no average:
+  `unbounded`. At a knee that is only a lower bound (`>=`) it reads
+  `not known`: the queue grows without bound only past the true knee,
+  which may be higher.
 - `prefill knee ... refused`: this sample has no measurement of prefill
   speed (V_P), so prefill is not priced. `--assume-vp` states one, and
   every figure on it is flagged as assumed.
@@ -124,11 +240,11 @@ at 36.98 r/s, when its KV cache fills to 0.8.
 ### 6. The SLO against load, and the checks
 
 ```text
-SLO vs load         r/s    TTFT p50/90 ms            TPOT mean/p90 ms           e2e mean (sum)
-  50% of knee       18.49  no prefill speed learned  3.15/TPOT bucket too wide  no prefill speed learned
-  80% of knee       29.59  no prefill speed learned  6.81/TPOT bucket too wide  no prefill speed learned
-  100% of knee      36.98  no prefill speed learned  saturated                  no prefill speed learned
-  load seen (113%)  41.70  no prefill speed learned  saturated                  no prefill speed learned
+SLO vs load         r/s    TTFT p50/90 ms            TPOT mean/p90 ms           e2e mean (sum)            in system (mean)
+  50% of knee       18.49  no prefill speed learned  3.15/TPOT bucket too wide  no prefill speed learned  -
+  80% of knee       29.59  no prefill speed learned  6.81/TPOT bucket too wide  no prefill speed learned  -
+  100% of knee      36.98  no prefill speed learned  saturated                  no prefill speed learned  unbounded
+  load seen (113%)  41.70  no prefill speed learned  saturated                  no prefill speed learned  unbounded
 checks
   2 prefill + 2 decode  does not hold: 41.70 r/s is 1.1x the fleet knee of 36.98 r/s; prefill not priced (no prefill speed learned); TTFT p95 not judged (no prefill speed learned)
 ```
@@ -137,6 +253,29 @@ The latency at each load, and each fleet the planner tried. `TPOT bucket
 too wide`: the router's histogram buckets are too coarse to read a p90,
 so only the mean is given.
 
+`in system (mean)` is the load as a concurrency: how many requests are in
+the system on average at that rate, from arrival to the last token. It is
+the rate times `e2e mean (sum)` (Little's law), so it is an average, not a
+peak. It needs the mean TTFT and the mean TPOT: here TTFT is not priced, so
+it reads `-`. At or past the knee it reads `unbounded`: the queue grows
+there, and no average holds. In `-o json` each row's `concurrency` also
+splits it by where the requests are: `prefill` (in the prefill engine:
+waiting there or computing their prompt), `routerQueue` (held at the
+router's flow-control gate, when that gate is priced), `decode` (the rate
+times OL times the mean TPOT, the sequences decoding at once) and
+`decodePerPod`. The fleet figure is more than their sum: it also holds
+the fixed latency, the hop and the KV pull.
+
+To check `prefill` against a running fleet, do not sum vLLM's
+`num_requests_running` and `num_requests_waiting` gauges on the prefill
+pods: vLLM sets them after each step has dropped the requests it
+finished, so a prompt prefilled in one step never shows in them, and they
+read low. Use the pods' own histograms instead: the request rate times
+the mean queue time plus the mean prefill time.
+
+If you drive load at a fixed concurrency, ask for it as a load:
+`--load 64c` is the rate at which the fleet holds 64 requests on average.
+
 ### 7. Flags and what is not validated
 
 ```text
@@ -144,7 +283,7 @@ flags: DecodeOnly; ExtrapolatedFill; BelowFittedBand; CoarseTPOTBucket; HostBoun
 
 not validated:
   - decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 43% to 99% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
-  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile
+  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile; in system is the rate times it (Little's law), the requests in the system on average
 ```
 
 Every flag names something an answer rests on that was assumed, stretched
@@ -182,6 +321,11 @@ With `--prefill 4 --decode 4`:
   measured  OVER-PROVISIONED: at the p95 load of 41.7 r/s, decode: one fewer holds even at the peak 43.2 r/s; prefill: one fewer holds even at the peak 43.2 r/s; needs 3 prefill + 3 decode (has 4 + 4), 6 decode if the decode knee reads 99% high; at f 1 needs 3 + 3, at f 1.5 needs 4 + 3 (decode knee outside its validated region; prefill f 1 assumed at 4 pods; prefill f 1 assumed at 3 pods).
 ```
 
+From the release after v0.12.3, decode reads `no spare: 6 decode if the
+decode knee reads 99% high` here and the fleet needed is 3 prefill + 4
+decode: a decode cut must also hold if the decode knee reads as high as its
+label allows ([outside validated region](#outside-validated-region)).
+
 And with no prefill speed: the first command, with `--decode 3`:
 
 ```text
@@ -192,7 +336,7 @@ And with no prefill speed: the first command, with `--decode 3`:
 | --- | --- | --- |
 | UNDER-PROVISIONED | The busy load runs past headroom times the knee, or misses a target. | Scale to the fleet it `needs`. Size each role's `maxReplicaCount` at least that high. |
 | RIGHT-SIZED | Every target holds with headroom, and no role has a replica to spare. | Nothing. `no spare (11.6% under its operating point)` says how close each role is. |
-| OVER-PROVISIONED | A role has a replica to spare: one fewer still holds every target at the busy load, and at the peak. | Remove the spare, or lower `minReplicaCount`. It never names a cut that fails at the peak. |
+| OVER-PROVISIONED | A role has a replica to spare: one fewer still holds every target at the busy load, and at the peak. | Remove the spare, or lower `minReplicaCount`. It never names a cut that fails at the peak, nor a decode cut below the count the decode knee's error bound needs. |
 | NOT JUDGED | A figure the verdict needs is refused, the load and the shape priced are different traffic, or the window contradicts the model. The sentence says which. | Do what it names: `--assume-vp` for a missing prefill speed, `--shape load` for a shape mismatch, or a longer recording. |
 
 The first three verdicts above rest on the stated prefill speed, which this
@@ -255,7 +399,7 @@ has every rule; [Check the planner](check.md) runs a longer check yourself.
 
 ```text
   decode knee       36.98     7396        decode band top at fill 0.798
-                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
+                    OUTSIDE VALIDATED REGION (ExtrapolatedFill: an input the run did not price)
 ```
 
 Each figure says whether a measured run covered conditions like yours.

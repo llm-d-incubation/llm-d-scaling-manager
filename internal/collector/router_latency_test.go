@@ -368,3 +368,120 @@ func TestCollectRouterLatency_TPOTBuckets(t *testing.T) {
 	}}
 	assert.Nil(t, NewReplicaMetricsCollector(src, nil, nil, nil, nil).CollectRouterLatency(context.Background(), "model-a", "ns"))
 }
+
+// TestCollectRouterLatency_Processing pins the router's request-processing
+// histogram the capacity planner's remainder spread is recorded with. The
+// series carries no model: it is read whole for the namespace, a NaN or
+// unparsable bucket dropped, and joined to the model only where the
+// router's TTFT names that model alone. Its _sum and _count are one
+// reading: either failed, neither. Not recording, it is not asked.
+func TestCollectRouterLatency_Processing(t *testing.T) {
+	ttftOf := func(models ...string) *source.MetricResult {
+		r := &source.MetricResult{}
+		for _, m := range models {
+			r.Values = append(r.Values, source.MetricValue{Labels: map[string]string{seriesTargetModelLabel: m, "le": "+Inf"}, Value: 1})
+		}
+		return r
+	}
+	buckets := &source.MetricResult{Values: []source.MetricValue{
+		{Labels: map[string]string{"le": "+Inf"}, Value: 3},
+		{Labels: map[string]string{"le": "0.05"}, Value: 2},
+		{Labels: map[string]string{"le": "0.1"}, Value: math.NaN()},
+		{Labels: map[string]string{"le": "slow"}, Value: 1},
+	}}
+	sum := &source.MetricResult{Values: []source.MetricValue{{Labels: map[string]string{}, Value: 0.6}}}
+	count := &source.MetricResult{Values: []source.MetricValue{{Labels: map[string]string{}, Value: 3}}}
+	results := func(ttft *source.MetricResult) map[string]*source.MetricResult {
+		return map[string]*source.MetricResult{registration.QuerySLORouterTTFTBuckets: ttft,
+			registration.QuerySLORouterProcessingBuckets: buckets, registration.QuerySLORouterProcessingSum: sum,
+			registration.QuerySLORouterProcessingCount: count}
+	}
+	collect := func(results map[string]*source.MetricResult, record bool) *domain.RouterLatency {
+		src := &mockMetricsSource{refreshFunc: func(context.Context, source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			return results, nil
+		}}
+		c := NewReplicaMetricsCollector(src, nil, nil, nil, nil)
+		c.BeginRecordingCycle(record)
+		defer c.EndCycle()
+		return c.CollectRouterLatency(context.Background(), "model-a", "ns")
+	}
+
+	got := collect(results(ttftOf("model-a")), true)
+	require.NotNil(t, got)
+	assert.Equal(t, []domain.LatencyBucket{{UpperBound: 0.05, Rate: 2}, {UpperBound: math.Inf(1), Rate: 3}}, got.ProcessingBuckets)
+	assert.Equal(t, 0.6, got.ProcessingSumRate)
+	assert.Equal(t, 3.0, got.ProcessingCountRate)
+
+	got = collect(results(ttftOf("model-a", "model-b")), true)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ProcessingBuckets, "two models behind the namespace's routers: the time is neither's")
+	assert.Zero(t, got.ProcessingCountRate)
+	assert.Nil(t, collect(results(ttftOf("model-b")), true), "the router's TTFT names another model: no join, nothing read")
+	assert.Nil(t, collect(results(&source.MetricResult{}), true), "no router TTFT, no join, nothing read")
+
+	r := results(ttftOf("model-a"))
+	r[registration.QuerySLORouterProcessingSum] = &source.MetricResult{Error: errors.New("timeout"), Values: sum.Values}
+	got = collect(r, true)
+	require.NotNil(t, got)
+	assert.NotNil(t, got.ProcessingBuckets, "the histogram stands without its mean")
+	assert.Zero(t, got.ProcessingSumRate, "a failed _sum is no mean")
+	assert.Zero(t, got.ProcessingCountRate)
+
+	got = collect(results(ttftOf("model-a")), false)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ProcessingBuckets, "not recording, the processing series is not asked")
+	assert.Zero(t, got.ProcessingCountRate)
+}
+
+// TestCollectRouterLatency_PrefixAffinity pins the router prefix producer's
+// predicted and best-available cached tokens the capacity planner reads the
+// prefix duplication from. A P/D router runs one producer per profile and
+// each counts every prompt: the pair is the producer that predicted the
+// most (a producer for pods with no prefix cache predicts none), never a
+// sum over producers. It is joined to the model as the processing series
+// is; a failed query, or a best-available under the predicted, is none.
+func TestCollectRouterLatency_PrefixAffinity(t *testing.T) {
+	ttft := &source.MetricResult{Values: []source.MetricValue{
+		{Labels: map[string]string{seriesTargetModelLabel: "model-a", "le": "+Inf"}, Value: 1}}}
+	producer := func(name, role string, v float64) source.MetricValue {
+		return source.MetricValue{Labels: map[string]string{"plugin_name": name, "endpoint_role": role}, Value: v}
+	}
+	results := func(pred, best []source.MetricValue) map[string]*source.MetricResult {
+		return map[string]*source.MetricResult{registration.QuerySLORouterTTFTBuckets: ttft,
+			registration.QuerySLORouterPrefixPredicted:     {Values: pred},
+			registration.QuerySLORouterPrefixBestAvailable: {Values: best}}
+	}
+	collect := func(results map[string]*source.MetricResult, record bool) *domain.RouterLatency {
+		src := &mockMetricsSource{refreshFunc: func(context.Context, source.RefreshSpec) (map[string]*source.MetricResult, error) {
+			return results, nil
+		}}
+		c := NewReplicaMetricsCollector(src, nil, nil, nil, nil)
+		c.BeginRecordingCycle(record)
+		defer c.EndCycle()
+		return c.CollectRouterLatency(context.Background(), "model-a", "ns")
+	}
+
+	pd := results(
+		[]source.MetricValue{producer("approx", "prefill", 965), producer("decode-prefix", "prefill", 0)},
+		[]source.MetricValue{producer("approx", "prefill", 971), producer("decode-prefix", "prefill", 979)})
+	got := collect(pd, true)
+	require.NotNil(t, got)
+	assert.Equal(t, 965.0, got.PrefixPredictedTokenRate, "the producer that predicted, not the sum")
+	assert.Equal(t, 971.0, got.PrefixBestAvailableTokenRate)
+
+	got = collect(results([]source.MetricValue{producer("approx", "prefill", 10)},
+		[]source.MetricValue{producer("approx", "prefill", 5)}), true)
+	require.NotNil(t, got)
+	assert.Zero(t, got.PrefixPredictedTokenRate, "best under predicted: not one reading")
+	assert.Zero(t, got.PrefixBestAvailableTokenRate)
+
+	failed := results([]source.MetricValue{producer("approx", "prefill", 965)}, []source.MetricValue{producer("approx", "prefill", 971)})
+	failed[registration.QuerySLORouterPrefixBestAvailable].Error = errors.New("timeout")
+	got = collect(failed, true)
+	require.NotNil(t, got)
+	assert.Zero(t, got.PrefixPredictedTokenRate, "either query failed: neither")
+
+	got = collect(pd, false)
+	require.NotNil(t, got)
+	assert.Zero(t, got.PrefixPredictedTokenRate, "not recording, the prefix series are not asked")
+}

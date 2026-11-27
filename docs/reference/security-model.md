@@ -241,6 +241,34 @@ cluster-scoped Kueue (`kueue-reader`) and policy reads in place. With
 `LLMSM_LIMITER_TYPE=quota` or `all` it revokes the two Kueue reads that go with
 a quota: the Kueue controller read and the cluster-wide borrowing read.
 
+### The one-manifest install
+
+The [kubectl install](../guides/kubectl-install/) runs one controller in
+`scaling-manager-system`, with the cluster-wide reads above and these
+grants of its own, each by name where Kubernetes allows it:
+
+- **Scaler certificates**: a Role in its namespace, `get` and `update` on the
+  three Opaque Secrets `scaling-manager-scaler-{ca,serving,client}` by name,
+  and `get` on the earlier install's Secrets, to copy their CA once. No
+  `create` on Secrets anywhere.
+- **KEDA's copy**: a Role in KEDA's namespace (`scaling-manager-keda.yaml`),
+  `get` and `update` on that one Secret by name.
+- **Suggested plan**: a Role in its namespace, `get` and `update` on ConfigMap
+  `scaling-manager-scaledobjects-plan` by name.
+- **Self-check**: a read-only ClusterRole and Role for the in-controller
+  preflight, including listing RoleBindings, so the role writer finds the
+  namespaces that granted it.
+- **Per namespace, bound by the namespace owner**: `pod-writer` (`patch` on
+  pods) and `dset-role-writer` (`get`, `list`, `patch` on
+  DisaggregatedSets), from `scaling-manager-grants.yaml`. Never cluster-wide.
+- **EPP token reviews**: ClusterRole `scaling-manager-epp-tokenreview-*`
+  (`create` on tokenreviews and subjectaccessreviews), bound by the cluster
+  admin to an EPP's own ServiceAccount, never to the controller's.
+
+The scaler refuses, with `PermissionDenied`, every call from a namespace
+the `watchNamespaces` setting leaves out, and ends an open `StreamIsActive`
+stream at its next message once its namespace is left out.
+
 ## What it writes
 
 The controller **never writes Deployments, StatefulSets, LeaderWorkerSets or
@@ -446,7 +474,7 @@ answers at that address. Set `PROMETHEUS_TLS_INSECURE_SKIP_VERIFY` to
 
 | Image | Default | Recommendation |
 | --- | --- | --- |
-| Controller | from a checkout of `main`: `ghcr.io/llm-d-incubation/llm-d-scaling-manager:main`, a **floating** tag rebuilt on every push to main. The installer sets `imagePullPolicy: Always` for it; a kustomize or GitOps render keeps the manifest's `IfNotPresent`, so a node keeps whichever `:main` it pulled first. From a checkout of a release tag: that release's image, signed with cosign | install a release: `git checkout v0.12.3`, which deploys `:v0.12.3`, or pin its digest from the [release notes](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases), `IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>` (the digest form has not been verified end to end through the installer yet) ([upgrade and uninstall](upgrade-and-uninstall.md#pin-the-version)). A floating tag means any pod restart can run different code. A registry host with a port (`host:5000/...`) is not parsed correctly by the installer yet; use a Kustomize overlay for that until it is fixed |
+| Controller | from a checkout of `main`: `ghcr.io/llm-d-incubation/llm-d-scaling-manager:main`, a **floating** tag rebuilt on every push to main. The installer sets `imagePullPolicy: Always` for it; a kustomize or GitOps render keeps the manifest's `IfNotPresent`, so a node keeps whichever `:main` it pulled first. From a checkout of a release tag: that release's image, signed with cosign | install a release: `git checkout v0.13.1`, which deploys `:v0.13.1`, or pin its digest from the [release notes](https://github.com/llm-d-incubation/llm-d-scaling-manager/releases), `IMG=ghcr.io/llm-d-incubation/llm-d-scaling-manager@sha256:<digest>` (the digest form has not been verified end to end through the installer yet) ([upgrade and uninstall](upgrade-and-uninstall.md#pin-the-version)). A floating tag means any pod restart can run different code. A registry host with a port (`host:5000/...`) is not parsed correctly by the installer yet; use a Kustomize overlay for that until it is fixed |
 | Warm-pool launcher | `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher:v0.8.0@sha256:...` (single-Pod pools) | pinned by digest in `config/warmpool/`. Not cosign-signed upstream, so the digest is the only integrity check |
 | Warm-pool launcher, built here (optional) | none: used only when passed with `--launcher-image` | `ghcr.io/llm-d-incubation/llm-d-scaling-manager/warmpool-launcher`, published by each release that carries it. Signed with cosign; pin its digest. Runs as **root**, like the vLLM image it is built on (`Dockerfile.warmpool-launcher` sets no `USER`). Built on vLLM v0.34.0, itself pinned by digest |
 | Warm-pool proxy | from a checkout of `main`: `ghcr.io/llm-d-incubation/llm-d-scaling-manager/warmpool-proxy:main`, a **floating** tag rebuilt on every push to main. From a checkout of a release tag: that release's image, signed with cosign | install a release, or pin the digest from the release run's summary with `--proxy-image` |

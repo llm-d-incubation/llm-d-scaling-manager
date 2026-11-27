@@ -98,6 +98,11 @@ type infrastructureConfig struct {
 	// writing spec.roles[].spec.replicas (DSET_ROLE_WRITER, internal/dsetwriter).
 	// Off by default: it needs patch on disaggregatedsets, an admin grant.
 	dsetRoleWriter bool
+	// kedaNamespace is the namespace KEDA runs in, where the controller
+	// writes KEDA's copy of the scaler's client certificate
+	// (LLMSM_KEDA_NAMESPACE: --keda-namespace, or the kedaNamespace
+	// setting). Empty: a person writes the copy.
+	kedaNamespace string
 }
 
 // tlsConfig holds TLS certificate paths
@@ -419,6 +424,16 @@ func (c *Config) DSetRoleWriterEnabled() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.infrastructure.dsetRoleWriter
+}
+
+// KEDANamespace returns the namespace KEDA runs in, where the controller
+// writes KEDA's copy of the scaler's client certificate: the kedaNamespace
+// setting, else --keda-namespace. Empty when neither is set: a person writes
+// the copy. Thread-safe.
+func (c *Config) KEDANamespace() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.infrastructure.kedaNamespace
 }
 
 // ============================================================================

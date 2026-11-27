@@ -166,16 +166,26 @@ func TestReport_JudgeTrust(t *testing.T) {
 
 // TTFT steps near the knee left unscored as unsettled are counted beside
 // the near-knee rule: in its words where it runs, and as why it did not
-// where too few steps there were scored.
+// where too few steps there were scored. A step whose TTFT was refused is
+// the refusal's, not counted as unsettled.
 func TestSelfCheckNearKneeUnsettled(t *testing.T) {
-	steps := []BacktestStep{
-		{Load: LoadNearKnee, Unsettled: true},
-		{Load: LoadNearKnee, Unsettled: true},
-		{Load: LoadNearKnee, Unsettled: true, Excluded: ExcludedBurst},
-		{Load: LoadBelow80, Unsettled: true},
-		{Load: LoadNearKnee},
+	m := measured{requests: 1000, ttft: []*float64{ptr(1.0)}, ttftWhy: []string{""}, ttftBucket: []*Band{nil}}
+	step := func(load string, unsettled bool, excluded string, pred *float64) BacktestStep {
+		st := BacktestStep{Load: load, Unsettled: unsettled, Excluded: excluded,
+			TTFT: []BacktestPoint{{Statistic: "p90", Predicted: Figure{Value: pred}}}}
+		scoreStep(&st, m, nil)
+		return st
 	}
-	assert.Equal(t, 2, nearKneeUnsettled(steps), "judged steps near the knee only")
+	steps := []BacktestStep{
+		step(LoadNearKnee, true, "", ptr(1.0)),
+		step(LoadNearKnee, true, "", ptr(1.0)),
+		step(LoadNearKnee, true, ExcludedBurst, ptr(1.0)),
+		step(LoadBelow80, true, "", ptr(1.0)),
+		step(LoadNearKnee, false, "", ptr(1.0)),
+		step(LoadNearKnee, true, "", nil),
+	}
+	assert.Equal(t, UnscoredRefused, steps[5].TTFT[0].Unscored, "a refused TTFT at an unsettled step counts by its refusal")
+	assert.Equal(t, 2, nearKneeUnsettled(steps), "judged steps near the knee with a priced TTFT only")
 
 	fig := func(scored int) *SelfCheckFigure {
 		return &SelfCheckFigure{Bias: ptr(1), Steps: 10, Levels: 10, NearKnee: &SelfCheckNearKnee{Steps: scored, Worst: 1}, NearKneeUnsettled: 2}

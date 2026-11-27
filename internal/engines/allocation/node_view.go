@@ -126,8 +126,12 @@ type LayoutLog struct {
 	seen sync.Map
 }
 
-// first reports whether variant is logged for the first time.
+// first reports whether variant is logged for the first time. A nil log logs
+// nothing: a quiet pass's view (PassiveWouldBeFitted).
 func (l *LayoutLog) first(variant string) bool {
+	if l == nil {
+		return false
+	}
 	_, seen := l.seen.LoadOrStore(variant, true)
 	return !seen
 }

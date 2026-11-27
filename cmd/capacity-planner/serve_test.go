@@ -125,6 +125,9 @@ func wantOf(r *wireResult) whatifapi.Figure {
 	if a.Basis.PrefillOnlyRate > 0 {
 		f.PrefillOnlyRate = fp(a.Basis.PrefillOnlyRate)
 	}
+	if b := a.Basis.BatchBeyondFit; b != nil {
+		f.BatchBeyondFit = &whatifapi.BatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
+	}
 	return f
 }
 
@@ -275,6 +278,12 @@ func parityCases() []parityCase {
 				Assume: &whatifapi.Assume{PromptCV: fp(0.0577)},
 				SLO:    &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
 		}, replicasQuestion},
+		{"ttft-q32-load-aware-json", "q32.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
+			sent := &whatifapi.Traffic{Mix: &whatifapi.Mix{PromptTokens: 8000, OutputTokens: 200}, ArrivalCV2: fp(1)}
+			return whatifapi.PlanRequest{Fleet: &whatifapi.FleetKnob{Prefill: ip(2), Decode: ip(2)}, Traffic: at(r, sent),
+				Assume: &whatifapi.Assume{PromptCV: fp(0.0577), LoadAwareRouter: true},
+				SLO:    &whatifapi.SLORequest{TTFT: obj("p90", 1), TPOT: obj(statMean, 0.01)}}
+		}, replicasQuestion},
 		{"ttft-assume-a-json", "saturated.jsonl.gz", "", func(r float64) whatifapi.PlanRequest {
 			return whatifapi.PlanRequest{Traffic: at(r, nil), Assume: &whatifapi.Assume{A: fp(0.011)},
 				SLO: &whatifapi.SLORequest{TTFT: obj("p95", 1), TPOT: obj(statMean, 0.01)}}
@@ -304,7 +313,7 @@ func TestServeParityCoversEveryJSONGolden(t *testing.T) {
 	}
 	dayCovered := slices.Collect(maps.Keys(dayPlanParity()))
 	slices.Sort(dayCovered)
-	require.Len(t, days, 2, "the day plan's JSON goldens")
+	require.Len(t, days, 3, "the day plan's JSON goldens")
 	assert.Equal(t, days, dayCovered)
 	assert.Equal(t, backtestParity, backtests, "the backtest's JSON goldens")
 	cases := parityCases()
@@ -314,7 +323,7 @@ func TestServeParityCoversEveryJSONGolden(t *testing.T) {
 	}
 	slices.Sort(names)
 	slices.Sort(covered)
-	require.Len(t, names, 11, "the JSON goldens")
+	require.Len(t, names, 12, "the JSON goldens")
 	assert.Equal(t, names, covered)
 }
 

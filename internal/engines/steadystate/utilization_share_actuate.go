@@ -586,12 +586,67 @@ func (e *Engine) shareOverrides(g allocation.ShareGroup, variantKey func(string,
 	for role, vs := range g.Variants {
 		for _, v := range vs {
 			k := variantKey(role, v.Name)
-			d := max(e.utilizationShare.desired[k], v.Min)
-			if v.Max > 0 {
-				d = min(d, v.Max)
-			}
+			d := clampShareTarget(v, e.utilizationShare.desired[k])
 			e.utilizationShare.desired[k] = d
 			out[k] = utilizationShareOverride{Target: d, Why: why}
+		}
+	}
+	return out
+}
+
+// clampShareTarget is a share target d of variant v within the variant's
+// replica bounds.
+func clampShareTarget(v allocation.ShareVariant, d int) int {
+	d = max(d, v.Min)
+	if v.Max > 0 {
+		d = min(d, v.Max)
+	}
+	return d
+}
+
+// shareWouldBe is the target the share would set each variant of a group it
+// plans in shadow to, keyed namespace/variant, as the active share moves them:
+// every variant from what it runs, each actionable role moved by whole
+// replicas to its integer target -- a role above it giving from its Give
+// variant, one below it growing its Grow variant, the variants rescale and the
+// transfers use -- and every target within its variant's bounds
+// (clampShareTarget, as shareOverrides). It is where the transfers the active
+// share would start end, not one cycle's step of them: the active share paces
+// them over several cycles.
+func shareWouldBe(g allocation.ShareGroup, ev allocation.ShareEvaluation) map[string]int {
+	key := func(role, variant string) string {
+		return utils.GetNamespacedKey(g.Origins[role].Namespace, variant)
+	}
+	out := map[string]int{}
+	for role, vs := range g.Variants {
+		for _, v := range vs {
+			out[key(role, v.Name)] = v.Current
+		}
+	}
+	replicaGPUs := map[string]int{}
+	for _, r := range g.Roles {
+		replicaGPUs[r.Key] = max(1, r.ReplicaGPUs)
+	}
+	for _, v := range ev.Roles {
+		if !v.Actionable {
+			continue
+		}
+		// Whole replicas, as ReplicasToMove counts them.
+		switch n := (v.Integer - v.Committed) / max(1, replicaGPUs[v.Key]); {
+		case n > 0:
+			if gv, ok := g.Grow[v.Key]; ok {
+				out[key(v.Key, gv.Name)] += n
+			}
+		case n < 0:
+			if gv, ok := g.Give[v.Key]; ok {
+				out[key(v.Key, gv.Name)] += n
+			}
+		}
+	}
+	for role, vs := range g.Variants {
+		for _, v := range vs {
+			k := key(role, v.Name)
+			out[k] = clampShareTarget(v, out[k])
 		}
 	}
 	return out
@@ -765,10 +820,15 @@ func (e *Engine) decideV2(ctx context.Context, optimizer allocation.ScalingOptim
 	// already read, and their would-be growth takes nothing from a model that
 	// scales. Their would-be figures come from a pass over what is left.
 	var decisions []domain.VariantDecision
+	// The passive models' would-be pass fitted to the nodes, for the
+	// suggested/provided series only (replica_gap.go): it decides nothing.
+	var passiveFitted []domain.VariantDecision
 	if active, passive := allocation.SplitPassive(requests); len(passive) > 0 {
 		withheld := allocation.WithholdPromised(constraints, promised)
 		decisions = optimizer.Optimize(ctx, active, withheld)
+		decided := len(decisions)
 		decisions = append(decisions, allocation.PassiveWouldBe(ctx, optimizer, passive, withheld, decisions)...)
+		passiveFitted = allocation.PassiveWouldBeFitted(ctx, optimizer, passive, withheld, decisions[:decided])
 	} else {
 		decisions = optimizer.Optimize(ctx, requests, allocation.WithholdPromised(constraints, promised))
 	}
@@ -782,6 +842,9 @@ func (e *Engine) decideV2(ctx context.Context, optimizer allocation.ScalingOptim
 		e.admitPassInFlight(requests, decisions, scaleTargets, time.Now())
 	}
 	e.reportQuotaAloneAllocation(ctx, optimizer, requests, allocation.WithholdPromised(constraints, promised), decisions)
+	// What the pass left short, before the share sets its targets over it.
+	gaps := planReplicaGaps(ctx, requests, decisions, passiveFitted, constraints)
+	defer func() { e.cycleGaps = gaps }()
 	// The share plans on what the pass left for the models it does not plan,
 	// and plans its own models afresh: it overrides their targets, so what the
 	// pass ordered for them is not spent. What the pass left includes its
@@ -794,9 +857,11 @@ func (e *Engine) decideV2(ctx context.Context, optimizer allocation.ScalingOptim
 	// borrowing figures.
 	overrides := e.evaluateUtilizationShare(ctx, requests, allocation.GuaranteedOnly(constraints), scaleTargets)
 	e.utilizationShare.left = nil
+	gaps.noteShareWouldBe(e.utilizationShare.wouldBe)
 	if len(overrides) > 0 {
 		applied := applyUtilizationShareOverrides(decisions, overrides)
 		ctrl.LoggerFrom(ctx).V(logging.DEBUG).Info("Utilization share: set planned targets", "variants", applied)
+		gaps.noteShare(decisions)
 	}
 	// Republish the warm pool's headroom with this pass's promises withheld,
 	// so a transfer that started filling this cycle is not open to the pool

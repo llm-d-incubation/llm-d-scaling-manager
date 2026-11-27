@@ -150,6 +150,13 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// committed recording's cycle reaches a priced fleet. Its unit tests hold
 	// it (heldBy).
 	slo.SwitchTTFTRouterWait: nil,
+	// The router's wait taken as inside the prefill price, the planner's
+	// default --router-wait-in-prefill, off from the constructor (issue
+	// #367). It moves no golden, for the gate stage's reason: it moves a
+	// flag and a verdict only above the prefill onset with flow control on,
+	// and no committed recording's cycle reaches a priced fleet. Its unit
+	// tests hold it (heldBy).
+	slo.SwitchTTFTRouterWaitInPrefill: nil,
 	// The prefill onset on the processor-sharing stage, and the decode gate's
 	// closed share charged to the published rate, both off in production
 	// (whatif.DefaultPSOnsets, whatif.DefaultChargeDecodeGate). They move no
@@ -190,6 +197,10 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// no ask, no composite. Its unit tests and the model row hold it
 	// (heldBy).
 	slo.SwitchTTFTJointInputs: nil,
+	// Issue llm-d-incubation/llm-d-scaling-manager#440: the v2 latency
+	// models' inputs. Analyze never reads them: the engine hands them to
+	// ObserveModelInputs, which publishes coverage only. No golden moves.
+	slo.SwitchV2Inputs: nil,
 	// ev-shindin/llm-scaling-manager#495's one slow pod (mu_slow_pod.go), four switches, measured each
 	// alone against all off:
 	//
@@ -302,6 +313,12 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// recording prices a line (the decode term's reason, above). Its unit test
 	// holds it (heldBy).
 	slo.SwitchTTFTQuietTransfer: nil,
+
+	// The KV pull's work read from each decode row at its request rate
+	// (issue llm-d-incubation/llm-d-scaling-manager#301). It moves no golden:
+	// no committed recording prices a line in the analyzer (the decode term's
+	// reason, above). Its unit tests hold it (heldBy).
+	slo.SwitchTTFTPullWork: nil,
 
 	// llm-d-incubation/llm-d-scaling-manager#302 on the slo price: off from
 	// the constructor, so every golden replay runs it off. On, it moves
@@ -1273,6 +1290,7 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	saturation.SwitchPrefillAEngineTiming:   nil,
 	saturation.SwitchPrefillQueueByCapacity: nil,
 	saturation.SwitchPrefillFBusyMinutes:    nil,
+	saturation.SwitchPrefillFPooledMinutes:  nil,
 	saturation.SwitchPrefillALowLoadByRate:  nil,
 	saturation.SwitchPrefillAMedianOverhead: nil,
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
@@ -1291,8 +1309,14 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	// request sees beside clustered arrivals. Planner-only, off; read by the
 	// planner's answer at a stated Ca^2, not the replay, so no learner
 	// golden moves. Its unit tests hold it.
-	saturation.SwitchDecodeBurstFill:      nil,
-	saturation.SwitchPrefillVPFloorServed: nil,
+	saturation.SwitchDecodeBurstFill: nil,
+	// llm-d-incubation/llm-d-scaling-manager#274: a backtest step priced at
+	// its own output spread. Planner-only, off from the constructor and on
+	// in the planner; read by the planner's answer at a spread the backtest
+	// states, not the replay, so no learner golden moves (the planner's
+	// backtest goldens do). Its unit tests hold it.
+	saturation.SwitchBacktestStepOutputDispersion: nil,
+	saturation.SwitchPrefillVPFloorServed:         nil,
 	// The planner's V_P on a fleet that never queued (served peak as a
 	// lower bound). Planner-only, off; the controller's replays never run
 	// it, so no learner golden moves. Its unit tests hold it.
@@ -1309,6 +1333,31 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	// replay runs it off and off alone from all on moves nothing. Its unit
 	// tests hold it (heldBy).
 	saturation.SwitchPrefillVPOccupancyPlateau: nil,
+	// llm-d-incubation/llm-d-scaling-manager#405: the prompts V_P speaks
+	// for. Planner-only, off from the constructor, so every golden replay
+	// runs it off and off alone from all on moves nothing. Its unit tests
+	// hold it (heldBy).
+	saturation.SwitchPrefillVPPromptCoverage: nil,
+	// llm-d-incubation/llm-d-scaling-manager#406: V_P from the lone rate.
+	// Planner-only, off from the constructor, so every golden replay runs
+	// it off and off alone from all on moves nothing. Its unit tests hold
+	// it (heldBy).
+	saturation.SwitchPrefillVPLoneRate: nil,
+	// llm-d-incubation/llm-d-scaling-manager#368, #416: V_P from the
+	// prefill service line. Planner-only, off from the constructor, so every
+	// golden replay runs it off and off alone from all on moves nothing. Its
+	// unit tests hold it (heldBy).
+	saturation.SwitchPrefillVPServiceLine: nil,
+	// llm-d-incubation/llm-d-scaling-manager#384: the prefix hit at another
+	// prefill count. Planner-only, off from the constructor, so every golden
+	// replay runs it off and off alone from all on moves nothing. Its unit
+	// tests hold it (heldBy).
+	saturation.SwitchPrefillHitAtCount: nil,
+	// llm-d-incubation/llm-d-scaling-manager#482: f against the load per
+	// pod. Planner-only, off from the constructor, so every golden replay
+	// runs it off and off alone from all on moves nothing. Its unit tests
+	// hold it (heldBy).
+	saturation.SwitchPrefillFLoadCurve: nil,
 	// llm-d-incubation/llm-d-scaling-manager#281: the router hop read off
 	// windows whose prefill pods held no queue, the planner's too (S1's off
 	// from the constructor; the planner reads it for its own windows).
@@ -1726,6 +1775,14 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestImbalance_BusyIsComputedTokensNotRequests"},
 		{"../saturation", "TestPrefillFBusyMinutes_LightMinutesThroughAnalyze"},
 	},
+	saturation.SwitchPrefillFPooledMinutes: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestImbalance_PooledMinutesLearnFUnderTheThreshold"},
+		{"../../../signals/prefill", "TestImbalance_AMinuteAtTheThresholdIsReadAlone"},
+		{"../../../signals/prefill", "TestImbalance_AMinuteAtTheThresholdAfterLightOnesIsReadAlone"},
+		{"../../../signals/prefill", "TestImbalance_APoolEndsAtABreak"},
+		{"../saturation", "TestPrefillFPooledMinutes_LongPromptsThroughAnalyze"},
+	},
 	saturation.SwitchPrefillVPFloorServed: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
 		{"../../../signals/prefill", "TestCapacity_ALowerBoundIsFlooredAtTheServedPeak"},
@@ -1779,6 +1836,65 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestPlateau_RaisesALowerBoundUnderIt"},
 		{"../../../signals/prefill", "TestPlateau_ARisingPlateauIsFlooredAtTheServedPeak"},
 		{"../saturation", "TestPrefillVPOccupancyPlateau_ThroughAnalyze"},
+	},
+	saturation.SwitchPrefillHitAtCount: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{".", "TestStateAt_TheHitAtCountSwitchReachesThePrefillState"},
+		{"../../../signals/prefill", "TestHitAtCount_TheLabRunFittedOnTwoPods"},
+		{"../../../signals/prefill", "TestHitAtCount_TheSameCountMovesNothing"},
+		{"../../../signals/prefill", "TestHitAtCount_Edges"},
+		{"../../../signals/prefill", "TestHitAtCount_TheFloor"},
+		{"../../../signals/prefill", "TestHitModel_TheLabCountTransfer"},
+		{"../../../signals/prefill", "TestHitAtCountOf_WithTheLaw"},
+		{"../../../signals/prefill", "TestFitHitModel_RefusesWhatDoesNotCloseIt"},
+		{"../../../signals/whatif", "TestComputedAtCount"},
+		{"../../../signals/whatif", "TestPromptWindow_HitModel"},
+	},
+	saturation.SwitchPrefillVPPromptCoverage: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestPromptCoverage_BusyMinutesCarryTheirRange"},
+		{"../../../signals/prefill", "TestPromptCoverage_OffCarriesNone"},
+		{"../../../signals/prefill", "TestPromptCoverage_PlateauCarriesItsRange"},
+		{"../../../signals/prefill", "TestPromptCoverage_LoneRateCarriesItsRange"},
+		{"../../../signals/whatif", "TestPromptNotCovered_PricesNoTTFTOutsideTheRange"},
+		{"../../../signals/whatif", "TestPromptNotCovered_InsideTheRangeIsPriced"},
+		{"../saturation", "TestPrefillVPPromptCoverage_ThroughAnalyze"},
+	},
+	saturation.SwitchPrefillVPServiceLine: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestServiceLine_FillsAFleetThatNeverQueued"},
+		{"../../../signals/prefill", "TestServiceLine_TheSharingIsTakenOut"},
+		{"../../../signals/prefill", "TestServiceLine_AbstainsWithTooFewMinutes"},
+		{"../../../signals/prefill", "TestServiceLine_RefusesPromptsThatDoNotSpread"},
+		{"../../../signals/prefill", "TestServiceLine_RefusesANegativeInterceptOrSlope"},
+		{"../../../signals/prefill", "TestServiceLine_RefusesAnUncertainSlope"},
+		{"../../../signals/prefill", "TestServiceLine_BusyMinutesWin"},
+		{"../../../signals/prefill", "TestServiceLine_APeakUnderAQueueStands"},
+		{"../../../signals/prefill", "TestServiceLine_BusyMinutesOverRanksStand"},
+		{"../../../signals/prefill", "TestServiceLine_TheBackPressureBoundStands"},
+		{"../../../signals/prefill", "TestServiceLine_AServedPeakStandsOnlyAboveTheLine"},
+		{"../../../signals/prefill", "TestServiceLine_AWindowPeakStandsWithItsAge"},
+		{"../saturation", "TestPrefillVPServiceLine_ThroughAnalyze"},
+	},
+	saturation.SwitchPrefillFLoadCurve: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestFLoadCurve_FitsTheInverseOfTheLoad"},
+		{"../../../signals/prefill", "TestFLoadCurve_NotIdentified"},
+		{"../../../signals/prefill", "TestFLoadCurve_OnlyWithTheSwitch"},
+		{"../../../signals/whatif", "TestFLoadCurve_TheKneeIsTheLowerRoot"},
+		{"../saturation", "TestPrefillFLoadCurve_ThroughAnalyze"},
+	},
+	saturation.SwitchPrefillVPLoneRate: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/prefill", "TestLoneRate_IsVPWhereTheServedPeakAgrees"},
+		{"../../../signals/prefill", "TestLoneRate_ABatchingGainLeavesItALowerBound"},
+		{"../../../signals/prefill", "TestLoneRate_AbstainsWithTooFewMinutes"},
+		{"../../../signals/prefill", "TestLoneRate_OnlyThePromptPricedCounts"},
+		{"../../../signals/prefill", "TestLoneRate_BusyMinutesWin"},
+		{"../../../signals/prefill", "TestLoneRate_ADataParallelRowCountsItsRanks"},
+		{"../../../signals/prefill", "TestLoneRate_AnAgedServedPeakStillBounds"},
+		{"../../../signals/prefill", "TestLoneRate_RaisesALowerBoundToTheLargerOfTheTwo"},
+		{"../saturation", "TestPrefillVPLoneRate_ThroughAnalyze"},
 	},
 	// The first holds it off from the constructor; the others run it on and
 	// off and assert both, in the window, through Analyze and in the
@@ -1885,6 +2001,14 @@ var heldBy = map[string][]heldTest{
 		{"../../../../cmd/capacity-planner", "TestDecodeBurst_TheStatedCa2OnTheSwitch"},
 		{".", "TestDecodeSwitches_EachSetsOnlyItsOwnField"},
 	},
+	saturation.SwitchBacktestStepOutputDispersion: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../../cmd/capacity-planner", "TestStepOutputDispersion_TheStepsSpreadOnTheSwitch"},
+		{"../../../whatifapi", "TestBacktestStep_ReadsItsOwnOutputSpread"},
+		{".", "TestPlannerSwitches_TheStepOutputDispersionIsOn"},
+		{".", "TestSeries_TheDecodeRowsOutputSpread"},
+		{".", "TestDecodeSwitches_EachSetsOnlyItsOwnField"},
+	},
 	saturation.SwitchITLBaselineFromFloor: {
 		{"../saturation", "TestITLBaselineFromFloor_OnFromTheConstructor"},
 		{".", "TestPlannerSwitches_TheFloorBIsOffInThePlanner"},
@@ -1981,6 +2105,15 @@ var heldBy = map[string][]heldTest{
 	},
 	// Runs the switch on and off and asserts both.
 	slo.SwitchTTFTQuietTransfer: {{"../slo", "TestTTFT_TheQuietTransferSwitch"}, {"../slo", "TestTTFT_TheHeldTransferAgesOut"}},
+	// Issue llm-d-incubation/llm-d-scaling-manager#301: the window's reading on
+	// and off, in the analyzer and in the planner's replay, and the planner's
+	// KV pull at the staircase's load on and off.
+	slo.SwitchTTFTPullWork: {
+		{"../../../signals/prefill", "TestTransferWindow_PullWorkTakesTheStretchOut"},
+		{"../slo", "TestTTFT_ThePullWorkSwitch"},
+		{".", "TestStateAt_ThePullWorkSwitchReachesTheTransfer"},
+		{"../../../../cmd/capacity-planner", "TestAtReplicas_PullWorkPricesTheMeasuredPull"},
+	},
 	// llm-d-incubation/llm-d-scaling-manager#302: off from the constructor,
 	// and the price's cap on and off.
 	slo.SwitchCapAtStepBudget: {{"../slo", "TestCapAtStepBudget_TheSwitch"}},
@@ -2010,6 +2143,14 @@ var heldBy = map[string][]heldTest{
 	// switch on and off through priceTTFT and asserts both flags and verdicts.
 	slo.SwitchTTFTRouterWait: {
 		{"../slo", "TestTTFT_TheRouterWaitSwitch"},
+	},
+	// The router's wait inside the prefill price (issue #367): the first runs
+	// the switch off from the constructor and on through Analyze to the
+	// priced fleet; the second prices one fleet with it on and off and holds
+	// it on to the planner's price at its defaults.
+	slo.SwitchTTFTRouterWaitInPrefill: {
+		{"../slo", "TestTTFT_TheRouterWaitInPrefillSwitchReachesTheFleet"},
+		{"../slo", "TestTTFT_TheRouterWaitInPrefillSwitchIsThePlannersPrice"},
 	},
 	// The onset switches: it prices one fleet with both on and off through
 	// priceTTFT, and asserts the onsets, the shared rate and the verdicts.
@@ -2055,6 +2196,12 @@ var heldBy = map[string][]heldTest{
 		{"../slo", "TestTTFTJoint_TheInvertedVPStandsWhereP1Refused"},
 		{"../slo", "TestTTFTJoint_PublishedBesideP1"},
 		{".", "TestGoldens_TTFTJointModelRow"},
+	},
+	// The first runs the switch off from the constructor and on, and asserts
+	// both; the second holds the engine to asking the collector only when on.
+	slo.SwitchV2Inputs: {
+		{"../slo", "TestObserveModelInputs_ReportsWhereEachModelStands"},
+		{"../../steadystate", "TestSLOV2Inputs_NamesEveryNamespaceWhenOn"},
 	},
 	// It runs the switch on and off through Analyze and asserts both.
 	saturation.SwitchITLClearsOnNewRevision: {

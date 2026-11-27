@@ -57,9 +57,10 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	fs.Lookup("headroom").Usage = "the operating point as a fraction of the fleet knee, in (0, 1); default the policy's scaleUpThreshold"
 	fs.Lookup("variant").Usage = "the decode variant to judge; required when the model has several (the refusal names them)"
 	var rf reportFlags
-	fs.Var(&rf.shapes, "shape", "a request shape to answer for, repeatable: measured (the default), load (the shape of the cycles the load judged at was read from), "+
-		"or IL/OL[/hit] in tokens, k for 1024 (8k/200, 1k/4k/0.3)")
-	fs.Var(&rf.loads, "load", "a rate the tables price, repeatable: 5r/s, 80% of the shape's fleet knee, seen, or seen x1.5 (a growth what-if with its own verdict); default 50%, 80%, 100% and seen")
+	fs.Var(&rf.shapes, "shape", "a request shape to answer for, repeatable: load (the default: the shape of the cycles the load judged at was read from, "+
+		"or measured where none read one), measured (the decode variant's latest cycles), or IL/OL[/hit] in tokens, k for 1024 (8k/200, 1k/4k/0.3)")
+	fs.Var(&rf.loads, "load", "a rate the tables price, repeatable: 5r/s, 80% of the shape's fleet knee, 64c (a mean of 64 requests in the system, "+
+		"translated into the rate that holds them), seen, or seen x1.5 (a growth what-if with its own verdict); default 50%, 80%, 100% and seen")
 	fs.StringVar(&rf.loadStatistic, "load-statistic", whatifapi.DefaultLoadStatistic,
 		"the statistic of the window's per-cycle arrival rate to judge at: mean, p95, peak, or p95-modulation (the p95 less the one-minute rate's counting noise, "+
 			"which the queueing model already prices)")
@@ -76,10 +77,12 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	if err := f.check(fs); err != nil {
 		return err
 	}
+	warnKVHoldAlone(warn, f.rankMixtureFit.kvHold, f.rankMixtureFit.remainderSpread)
 	q, err := f.reportQuery(rf)
 	if err != nil {
 		return err
 	}
+	f.withLatency = true
 	st, err := f.readState(ctx)
 	if err != nil {
 		return err
@@ -105,7 +108,7 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	}
 	s := &servedState{st: st, decodeVariant: variants[0].state.Variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
 		imbalanceAcrossCounts: f.imbalanceAcrossCounts, loadAwareRouter: f.loadAwareRouter, cachedCost: f.cachedCost,
-		experimentalTTFT: f.experimentalTTFT}
+		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}
 	rep, err := buildReport(ctx, st, s, q)
 	if err != nil {
 		if whatifapi.IsInputError(err) {
@@ -114,8 +117,17 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 		return err
 	}
 	rep.SchemaVersion = whatifapi.SchemaVersion
+	if f.rankMixtureTTFT || f.tpotDistribution {
+		if err := f.experimentalReport(ctx, rep, q); err != nil {
+			return err
+		}
+	}
 	rep.Source.Recording = f.recording
 	rep.SelfCheck = f.checked
+	// As POST /v1/report: an over the router measured missing its TTFT
+	// target at the load judged is withheld.
+	rep.WithholdOverOnMeasured(f.series, f.latency)
+	rep.AttachKVSpread(f.series)
 	rep.JudgeTrust()
 	if f.output == outputJSON {
 		enc := json.NewEncoder(out)
@@ -480,6 +492,23 @@ func markLegend(s whatifapi.ReportSLO, lowerBound, upperBound bool) string {
 		"(the router queues) though the figure is within, SAT saturated%s%s, ? not judged", sloText(s), lb, ub)
 }
 
+// kvSpreadText is the decode KV spread the window measured, in words: the
+// busiest decode pod's fill over the pods' mean (each pod at its busiest
+// engine rank), of the fleet that ran. It is reported beside the KV fill
+// the model predicts, not priced into it.
+func kvSpreadText(k whatifapi.ReportKVSpread) string {
+	pods := fmt.Sprintf("%d decode pods", k.Pods.Min)
+	if k.Pods.Max != k.Pods.Min {
+		pods = fmt.Sprintf("%d-%d decode pods (median %g)", k.Pods.Min, k.Pods.Max, k.Pods.Median)
+	}
+	s := fmt.Sprintf("busiest pod's fill over the pods' mean, measured on the fleet that ran (%s), not priced: "+
+		"median %.2f, p95 %.2f, peak %.2f over %d cycles", pods, k.Median, k.P95, k.Peak, k.Cycles)
+	if k.AtLoad != nil {
+		s += fmt.Sprintf("; %.2f at the load judged (%d cycles)", *k.AtLoad, k.AtLoadCycles)
+	}
+	return s + fmt.Sprintf("; fill peak busiest %.3f, mean %.3f", k.BusiestFillPeak, k.MeanFillPeak)
+}
+
 // shapeText is one shape's detail.
 func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	fmt.Fprintf(b, "shape %s: IL %s OL %s, prefix hit %.2f (%s)\n", s.Label, num(round(s.InputTokens)), num(round(s.OutputTokens)),
@@ -509,6 +538,9 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 		}
 		fmt.Fprintf(b, "  %-14s%s\n", "KV pull", pull)
 	}
+	if k := d.KVSpread; k != nil {
+		fmt.Fprintf(b, "  %-14s%s\n", "KV spread", kvSpreadText(*k))
+	}
 	p := s.Utilization.Prefill
 	pre := fmt.Sprintf("utilization pooled %s, worst pod %s", figText(p.Pooled, "%.2f", 1), figText(p.WorstPod, "%.2f", 1))
 	if p.Imbalance > 0 {
@@ -531,15 +563,15 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	}
 
 	c := s.Capacity
-	const capLayout = "  %-18s%-10s%-12s%s\n"
-	fmt.Fprintf(b, "%-20s%-10s%-12s%s\n", "capacity", "req/s", "out tok/s", "bound by")
+	const capLayout = "  %-18s%-10s%-12s%-12s%s\n"
+	fmt.Fprintf(b, "%-20s%-10s%-12s%-12s%s\n", "capacity", "req/s", "out tok/s", "in system", "bound by")
 	for _, row := range []struct {
 		label string
 		rate  whatifapi.ReportRate
 	}{{"prefill knee", c.PrefillKnee}, {"decode knee", c.DecodeKnee}, {"fleet knee", c.FleetKnee},
 		{fmt.Sprintf("operating (%s)", num(c.Headroom)), c.Operating}, {"max at SLO", c.MaxAtSLO}} {
 		if row.rate.Value == nil {
-			fmt.Fprintf(b, capLayout, row.label, figText(row.rate.Figure, "", 1), "", refusedDetail(row.rate.Figure))
+			fmt.Fprintf(b, capLayout, row.label, figText(row.rate.Figure, "", 1), "", "", refusedDetail(row.rate.Figure))
 			continue
 		}
 		tok := ""
@@ -551,12 +583,32 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 			// V_P is known only as a lower bound: the rate is at least this.
 			value, binds = ">="+value, binds+"; at least: V_P is a lower bound"
 		}
-		fmt.Fprintf(b, capLayout, row.label, value, tok, binds)
+		fmt.Fprintf(b, capLayout, row.label, value, tok, concurrencyText(row.rate.Concurrency), binds)
 		if row.rate.Validation != nil {
 			fmt.Fprintf(b, "  %-18s%s\n", "", row.rate.Validation.Label)
 		}
 	}
 	b.WriteString(tableText(s.Table))
+	for _, u := range s.Untranslated {
+		fmt.Fprintf(b, "  %s concurrent: no rate, %s\n", u.Load, u.Reason)
+	}
+	for _, row := range s.Table {
+		fc := row.FromConcurrency
+		switch {
+		case fc == nil:
+		case fc.AtKnee && c.FleetKnee.Value != nil && fc.Rate < *c.FleetKnee.Value:
+			fmt.Fprintf(b, "  %s: the fleet holds fewer requests than that at any rate it prices; a load kept at %s requests open runs at "+
+				"%.2f r/s, short of the knee, where the mean time in the system is first refused\n",
+				row.Load, whatifapi.ConcurrencyNumber(fc.Concurrency), fc.Rate)
+		case fc.AtKnee:
+			fmt.Fprintf(b, "  %s: the fleet holds fewer requests than that below its knee; a load kept at %s requests open saturates it "+
+				"at the knee's %.2f r/s, and more concurrency adds queueing, not throughput\n",
+				row.Load, whatifapi.ConcurrencyNumber(fc.Concurrency), fc.Rate)
+		case fc.LowerBound:
+			fmt.Fprintf(b, "  %s: at least %.2f r/s: the time in the system is priced from a lower bound of V_P, so it is at most its figure\n",
+				row.Load, fc.Rate)
+		}
+	}
 	b.WriteString("checks\n")
 	for _, ch := range s.Verdict.Checks {
 		state := "holds"
@@ -681,16 +733,34 @@ func tableText(rows []whatifapi.ReportRow) string {
 	if p := rows[0].TPOTPercentile; p != nil {
 		tpotHead = "TPOT mean/" + p.Statistic + " ms"
 	}
-	cells := [][]string{{"SLO vs load", "r/s", ttftHead, tpotHead, "e2e mean (sum)"}}
+	cells := [][]string{{"SLO vs load", "r/s", ttftHead, tpotHead, "e2e mean (sum)", "in system (mean)"}}
 	for _, row := range rows {
 		label := "  " + row.Label
 		if strings.HasPrefix(row.Label, "load seen") && row.ShareOfKnee != nil {
 			label = fmt.Sprintf("  %s (%.0f%%)", row.Label, 100**row.ShareOfKnee)
 		}
 		cells = append(cells, []string{label, fmt.Sprintf("%.2f", row.Rate), statsText(row.TTFT, "%.1f"),
-			tpotText(row), figText(row.E2EMeanSum, "%.2f s", 1)})
+			tpotText(row), figText(row.E2EMeanSum, "%.2f s", 1), concurrencyText(row.Concurrency)})
 	}
 	return columns(cells)
+}
+
+// concurrencyText is a mean concurrency in a column: the requests in the
+// system on average, "unbounded" at or past the knee, "not known" at or
+// past a knee known only as a lower bound (the true knee may be higher),
+// "-" where refused otherwise (the latency columns say why).
+func concurrencyText(c *whatifapi.Concurrency) string {
+	switch {
+	case c == nil:
+		return ""
+	case c.Unbounded:
+		return "unbounded"
+	case c.Fleet.Refused != nil && c.Fleet.Refused.Reason == string(whatif.PastLowerBoundKnee):
+		return "not known"
+	case c.Fleet.Value == nil:
+		return "-"
+	}
+	return atMostText(c.Fleet) + whatifapi.ConcurrencyNumber(*c.Fleet.Value)
 }
 
 // statsText is a row's figures at its statistics, "/" between them; one

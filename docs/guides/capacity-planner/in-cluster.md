@@ -78,6 +78,8 @@ For the namespace admin.
   below, or your cluster admin creates it for you.
 - [ ] `kubectl` 1.27 or later (or `oc`), and `git`: `kubectl apply -k` fetches
   the manifests from GitHub.
+- [ ] One CPU free on a node: the planner requests one, for loading
+  recordings ([Long recordings load slowly](#long-recordings-load-slowly)).
 - [ ] A default StorageClass, for the planner's 1 GiB recordings volume. The
   loader writes it as uid 65532, so the StorageClass must apply `fsGroup`, or
   the volume root must be writable by that uid.
@@ -116,14 +118,62 @@ oc apply -n ${NS} -k "${SRC}/openshift?ref=${V}"
 oc -n ${NS} rollout status statefulset/capacity-planner
 ```
 
+The Route and the oauth-proxy give up after 30 s, and the first load of a
+day-long recording takes minutes: raise both as in
+[Long recordings load slowly](#long-recordings-load-slowly).
+
 ### Long recordings load slowly
 
 The shipped limit, 2 GiB, is enough for day-long recordings. The planner reads
 a recording from disk in passes when someone first picks it, and keeps only the
 state it needs. Measured on a 24-hour recording of a 16-replica P/D fleet
-(95 MB compressed): under 80 MiB while it loads and after, and about 80 seconds
-for the first load. Picking another cycle of the same recording loads it again.
-Wait for the first load; asking again starts a second one.
+(95 MB compressed): under 80 MiB while it loads and after.
+
+- **Time.** The first load of a day-long recording takes several minutes, and
+  about twice as long on a busy node; asking for the experimental models adds
+  more. Picking another cycle of the same recording loads it again. Wait for
+  the first load; asking again starts a second one.
+- **CPU.** A load replays the recording on one core, so the planner requests
+  one CPU. Do not lower it: on a busy node a load with a tenth of a core takes
+  ten times as long. There is no CPU limit, so spare cores still serve plans.
+- **Deadline.** The planner lets a request run for 30 minutes once it has
+  arrived; a load still running then is cut off.
+
+On OpenShift, the Route and the oauth-proxy each stop waiting for an answer
+after 30 s, so a long load fails there unless you raise both. These patches
+were rendered with `kubectl kustomize`, not run on a live OpenShift cluster.
+
+```bash
+# Keep the directory, and apply it again after each upgrade, with the new V.
+# Put any other patch (upload, experimental models, openshift-sar) in this same file.
+cd "$(mktemp -d)"
+cat > kustomization.yaml <<EOF
+resources:
+  - ${SRC}/openshift?ref=${V}
+patches:
+  - target:
+      kind: Route
+      name: capacity-planner
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value: {haproxy.router.openshift.io/timeout: 31m}
+  - target:
+      kind: StatefulSet
+      name: capacity-planner
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/1/name
+        value: oauth-proxy
+      - op: add
+        path: /spec/template/spec/containers/1/args/-
+        value: --upstream-timeout=31m
+EOF
+oc apply -n ${NS} -k .
+```
+
+Both wait a minute past the planner's 30, so the planner's own answer, or
+its error, arrives first.
 
 ### Let someone else load recordings
 
@@ -202,30 +252,11 @@ kubectl apply -n ${NS} -k .
 ```
 
 On OpenShift, use `oc`, put `openshift` (or `openshift-sar`) in place of
-`kubernetes`, and add these two patches under `patches:`. The Route and the
-oauth-proxy each stop waiting for an answer after 30 s, and checking a large
-upload takes longer; the planner allows an upload 15 minutes. These patches
-were rendered with `kubectl kustomize`, not run on a live OpenShift cluster.
-
-```yaml
-  - target:
-      kind: Route
-      name: capacity-planner
-    patch: |-
-      - op: add
-        path: /metadata/annotations
-        value: {haproxy.router.openshift.io/timeout: 16m}
-  - target:
-      kind: StatefulSet
-      name: capacity-planner
-    patch: |-
-      - op: test
-        path: /spec/template/spec/containers/1/name
-        value: oauth-proxy
-      - op: add
-        path: /spec/template/spec/containers/1/args/-
-        value: --upstream-timeout=16m
-```
+`kubernetes`, and add the two timeout patches from
+[Long recordings load slowly](#long-recordings-load-slowly) under `patches:`.
+The Route and the oauth-proxy each stop waiting for an answer after 30 s,
+and checking a large upload takes longer; the planner allows an upload 15
+minutes, which their 31 minutes cover.
 
 - The largest upload is 256 MiB; a day-long recording of a 16-replica P/D
   fleet is about 95 MB compressed. To change it, add
@@ -234,6 +265,38 @@ were rendered with `kubectl kustomize`, not run on a live OpenShift cluster.
   pushed out but still loading (2 by default, so 7 times).
 - The planner refuses a file that is not a learner recording, and says why.
   [Upload a recording](api.md#upload-a-recording) has the details.
+
+### Or show the experimental v2 models on the page
+
+For the namespace admin. Off by default. With these two flags every check
+the page or the API runs (`POST /v1/backtest`) also prices TTFT with the
+rank-mixture model and the TPOT percentiles with the per-request TPOT
+distribution, without anyone asking for them. Neither is validated: every
+figure they price is flagged and reads OUTSIDE VALIDATED REGION, and the
+page says so. Plans and predictions are unchanged.
+[What the two models are](page-and-commands.md#serve-with-the-experimental-v2-models).
+
+```bash
+# Keep the directory, and apply it again after each upgrade, with the new V.
+# Put this patch beside any other in the same file. On OpenShift, use oc and openshift (or openshift-sar).
+cd "$(mktemp -d)"
+cat > kustomization.yaml <<EOF
+resources:
+  - ${SRC}/kubernetes?ref=${V}
+patches:
+  - target:
+      kind: StatefulSet
+      name: capacity-planner
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --experimental-ttft=v2
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --experimental-tpot=v2
+EOF
+kubectl apply -n ${NS} -k .
+```
 
 ## Open it
 

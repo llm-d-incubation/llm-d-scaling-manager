@@ -592,6 +592,13 @@ controller's client with no backoff, at most once per variant per
 `learnerTargetCheckInterval` (1 min), and `learnerSeriesMissingMax` (24 h) ends
 the wait whatever the reads say.
 
+A report with no `PricingKey` but a `RestoredKey` publishes from that key: an
+ITL intercept a snapshot brought back, with a known stamp, prices no line until
+readings arrive, and its age shows from the restart's first cycle. A baseline
+put aside in `itlBaselineStash` keeps its stamp in `itlBaselineStashAt`, so a
+rollback takes it back with its age; the snapshot does not carry that map, and
+a stash it brings back is of unknown age.
+
 `RollingAverage.Restored` is true from `RestoreRollingAverage` until the
 window's first write, and `itl.Tracker.Restored` from `RestoreBaseline` or
 `RestoreSlope` until the window keeps a reading. The mark lives with the
@@ -708,6 +715,39 @@ B = (SUM(itl) - A x SUM(k)) / n
 A fit is refused unless it is usable (`ValidModel`): `A` and `B` finite,
 `A > 1e-12` (a flat or falling line is not this physics), and
 `A x 0.85 + B > 0`.
+
+### Where an unlabelled variant's role comes from
+
+Discovery reads a variant's role from its scale target's `llm-d.ai/role`
+label (`variantmeta.RoleFromScaleTarget`); no label, or a value that is not
+`prefill`, `decode` or `both`, reads `both`. With the engine switch
+`SwitchRolesFromSignals` (`engine-roles-from-signals`, issue #502,
+`internal/engines/steadystate/role_signals.go`) on, `assembleModelData` reads
+such a variant's role from its pods' engine signals instead, with the
+classifier the capacity planner reads a capture's roles with
+(`domain.RoleTally`, `domain.ResolveRole`): decode computes no prompt tokens
+or moves KV through NIXL, both computes prompts and generates, and prefill
+makes about one token a request, read only beside a decode variant of the same
+model or where the pod's own KV moves. The switch is **off by default**; off,
+nothing changes.
+
+On, a variant the signals read is priced as its role, not as `both`:
+
+- read decode, it fits and is priced from its ITL line, where an aggregated
+  line is only reported (`itlLineReportOnly`); read prefill, it fits none;
+- its ITL line's learned-state key carries the role (`itlLineKeyForRole`,
+  `|both` for an aggregated variant), so a variant whose role changes files its
+  line under another key;
+- a model with any variant not `both` takes the P/D path
+  (`collectV2ModelRequest`'s `disaggregated`).
+
+The engine keeps an unlabelled variant's last decided role for
+`roleMemoryTTL` (30 minutes) through cycles whose signals decide nothing, so
+an idle decode cycle does not read `both`. A label always wins; a
+disagreement is logged at Info once when it starts, at debug after.
+`replicas_not_arriving.go` reads the same role (`variantRole`). The
+scale-from-zero engine reads labels only (`candidates.go`, `model_group.go`):
+it runs at zero replicas, where there is no engine to read.
 
 ### Which roles fit a line
 
@@ -1001,6 +1041,36 @@ it reads 0.79 to 0.84, and on the 1k-prompt, 1000-output A phases 1.23 to
 p90 TTFT on the B-off and B-on phases reads 15% to 23% under; the lift alone,
 on the steeper line the hold replaces, reads TPOT higher still (1.84 to
 2.06).
+
+**Why the fill reads low under the hold, and what is left on the A phases
+(#274).** The pods' fill is Little's law to within 5% on every step of the staircase:
+running requests equal rate x OL x mean ITL, and each holds about 8450 tokens
+(8000/200) or 1570 (1000/1000) of the 1.16M a decode pod has. So the KV per
+request and the requests in flight are right, and the gap is the line. The
+fill is the fixed point `k = x·B / (1 - x·A)`, `x = lambda·OL·KVreq/C`, and
+at the B-off phase's top rate `x·A` is about 0.75: an error in `B` reaches
+the fill four times over. The held `B`, 1.13 ms where the warm-up's own
+readings put it at 1.7 to 1.8 ms, reads ITL 10% under at the fill the pods
+held and the fill 32% under. Backtested against the decode pods'
+`KvUsageMean` over each step's window, the predicted fill reads 0.55 to
+0.62 of it on the first run's B and C phases with the hold alone, and 0.84
+to 0.95 with the lift (Qwen3-32B: 0.95 to 0.96).
+
+On the 1000/1000 A phases the lift reads the fill 1.57 times over. Two
+inputs of the backtest, not the line, do most of that. The warm-up ends on a
+few minutes of 8 to 26-token outputs whose histograms read an output spread
+`D` of 1.26 (`SwitchKVPerRequestOutputDispersion`), and the backtest priced
+every step at it, though it prices each step's own lengths: on 1000-token
+outputs that is 11% more KV per request than the A phases' pods held.
+`saturation.SwitchBacktestStepOutputDispersion`, planner-only (off from the
+constructor, on in `learnreplay.PlannerSwitches`), prices each step at the
+`D` its own decode rows read
+(`whatifapi.Knobs.OutputDispersion`, read from the series'
+`OutputTokensSquared`); with it the A phases read 1.26 (1.21 on the second
+warm-up), and no figure reads newly under what was measured with it alone.
+The rest is the backtest's 5% grid on the step's lengths (1000 is priced as
+1021, `shapeKnob`), worth another 10% of fill there, and a lifted line 4%
+over the A phases' ITL at their fill.
 
 Three more planner-only switches, all off, price the decode side; the analyzer
 accepts them and does not read them. `saturation.SwitchDecodeBurstFill`
@@ -2397,7 +2467,7 @@ passed through `prefillBounds`). Nothing sizes from it.
 
 | Figure | From | Refused |
 | --- | --- | --- |
-| `V_P`, computed tokens/s | busy minutes (median of at least 5 over the last 30 minutes, `prefill.BusyWindow`; a minute is busy when the row's `QueueMin` was read and is above zero, the pod's KV is not full and decode is not back-pressuring; a lower bound, `DataParallelRanks`, when any came from a multi-rank pod; switch `prefill-busy-minutes`), else the peak under a queue sustained over 3 minutes, else the back-pressure bound (at least 2 readings). The last two are lower bounds; with the planner-only switch `prefill-vp-floor-served` (`prefill.Cycle.VPFloorServed`) a lower bound is raised to the highest rate a pod sustained over 3 minutes, queued or not (`Estimate.VPServedPeak`, `VPFlooredAtServed`); with the planner-only switch `prefill-vp-served-unqueued` (`prefill.Cycle.VPServedUnqueued`), where no source has a reading, that served peak is `V_P` itself (`prefill.SourceServedPeak`, a lower bound with `VPLowerBoundReason` `NeverQueued`), from which the planner prices the knee only (`whatif.Prefill.VPServedOnly` refuses every TTFT). With the planner-only switch `prefill-vp-occupancy-plateau` (`prefill.Cycle.VPOccupancyPlateau`, `prefill/plateau.go`), a `V_P` refused for want of a queue, or a lower bound under it, is read from the plateau of a row's served computed tokens against its requests in prefill per engine (completions a second times `AvgPrefillTime`, over the ranks): source `occupancy-plateau`, `V_P` where the curve flattened (within 10% over 1.5x of occupancy, 15 minutes, every minute at 1 or more), a lower bound where it was still rising (`Estimate.VPPlateau`, `VPPlateauFlat`, `VPPlateauSpan`, `VPPlateauMinutes`). `QueueMin` is collected in a namespace with a TTFT target and while a learner recording is on, so elsewhere in a default production install only the peak under a queue is live; the bound needs `enablePrefillThroughputBound` | `NoPrefillCapacity`, logged with `queuedMinutes` (over the 6 h kept), `longestQueuedRun` and `busyMinutes` (over the 30-minute window; not comparable with `queuedMinutes`) to say which source fell short, with `busyMinutesOn`, `queueMinPods` and `kvFullPods`; `SGLangNoComputedTokens` on SGLang |
+| `V_P`, computed tokens/s | busy minutes (median of at least 5 over the last 30 minutes, `prefill.BusyWindow`; a minute is busy when the row's `QueueMin` was read and is above zero, the pod's KV is not full and decode is not back-pressuring; a lower bound, `DataParallelRanks`, when any came from a multi-rank pod; switch `prefill-busy-minutes`), else the peak under a queue sustained over 3 minutes, else the back-pressure bound (at least 2 readings). The last two are lower bounds; with the planner-only switch `prefill-vp-floor-served` (`prefill.Cycle.VPFloorServed`) a lower bound is raised to the highest rate a pod sustained over 3 minutes, queued or not (`Estimate.VPServedPeak`, `VPFlooredAtServed`); with the planner-only switch `prefill-vp-served-unqueued` (`prefill.Cycle.VPServedUnqueued`), where no source has a reading, that served peak is `V_P` itself (`prefill.SourceServedPeak`, a lower bound with `VPLowerBoundReason` `NeverQueued`), from which the planner prices the knee only (`whatif.Prefill.VPServedOnly` refuses every TTFT). With the planner-only switch `prefill-vp-occupancy-plateau` (`prefill.Cycle.VPOccupancyPlateau`, `prefill/plateau.go`), a `V_P` refused for want of a queue, or a lower bound under it, is read from the plateau of a row's served computed tokens against its requests in prefill per engine (completions a second times `AvgPrefillTime`, over the ranks): source `occupancy-plateau`, `V_P` where the curve flattened (within 10% over 1.5x of occupancy, 15 minutes, every minute at 1 or more), a lower bound where it was still rising (`Estimate.VPPlateau`, `VPPlateauFlat`, `VPPlateauSpan`, `VPPlateauMinutes`). With the planner-only switch `prefill-vp-lone-rate` (`prefill.Cycle.VPLoneRate`, `prefill/lonerate.go`), a `V_P` refused for want of a queue, or a lower bound, is read from light load: the median of a row's computed tokens a request over `AvgPrefillTime`, times its ranks, over at least 10 minutes at under 0.3 requests in prefill per engine and within 30% of the prompt the cycle carries; source `lone-rate`, taken only where the served peak is at most 10% over it, recorded otherwise as a lower bound (`Estimate.VPLone`, `VPLoneMinutes`, `VPLoneIsVP`). With the planner-only switch `prefill-vp-service-line` (`prefill.Cycle.VPServiceLine`, `prefill/serviceline.go`), a `V_P` refused for want of a queue, or a served peak (`NeverQueued`) at or under it, is read from the prefill service line (a `V_P` read under a queue, a lower bound or not, stands): each timed minute's `AvgPrefillTime` inverted for processor sharing, `S = T/(1 + x)` with `x` the requests in prefill per engine, fitted by least squares against the computed tokens a request, `S(x) = s0 + x/V`, over at least 30 minutes whose prompts spread 1.5x between the 10th and 90th percentiles, with a slope above zero whose standard error is at most 10% of it and `s0` at 0 or above; `V_P = ranks * E[x] / (s0 + E[x]/V)` at the minutes' mean computed prompt, source `service-line`, not a bound (`Estimate.VPLine`, `VPLineS0`, `VPLineSlope`, `VPLineMinutes`, `VPLineRefused`). With the planner-only switch `prefill-vp-prompt-coverage` (`prefill.Cycle.VPPromptCoverage`), `V_P` carries the 10th and 90th percentiles of the effective prompts of the minutes it rests on (`Estimate.VPPromptLow`, `VPPromptHigh`); the what-if model flags a price at a mean prompt more than 1.2x outside them `VPPromptNotCovered` (out of region) and prices no TTFT from it. `QueueMin` is collected in a namespace with a TTFT target and while a learner recording is on, so elsewhere in a default production install only the peak under a queue is live; the bound needs `enablePrefillThroughputBound` | `NoPrefillCapacity`, logged with `queuedMinutes` (over the 6 h kept), `longestQueuedRun` and `busyMinutes` (over the 30-minute window; not comparable with `queuedMinutes`) to say which source fell short, with `busyMinutesOn`, `queueMinPods` and `kvFullPods`; `SGLangNoComputedTokens` on SGLang |
 | `a`, seconds | an untrimmed fit of `AvgServiceTime` against the effective prompt (`PrefillComputedTokenRate / RequestRate`) over low-load minutes (no queue, occupancy at most 0.1, prompt steady within 10% of every reading in the last 2 minutes, with at least one there), plus the least `AvgTTFT - AvgServiceTime`. `1/slope` is logged as `slopeBound`, an upper bound on `V_P` for validation only. On `ols-sweep`: intercept 8.36 ms, overhead 2.68 ms, `a` 11.04 ms, `slopeBound` about 520k tok/s | aggregated, fewer than 5 minutes, prompts spanning less than 1.5x between the second shortest and the second longest (so each end holds two minutes), one prompt length throughout (`NoPromptVariance`), a non-positive slope or intercept |
 | `f` | the busiest pod's share of computed tokens over the mean, less the expected max of `N_p` Poisson counts, over minutes with at least 100 requests a pod on average; median of at least 5. It reads low on a real imbalance at few requests (2:1:1:1 reads about 1.50 for 1.6 at 100 a pod) and high on equal pods with variable prompts (about 1.03 at `Cs²` = 1); `imbalance.go` says why. Above 10,000 requests a pod the Poisson excess is its normal approximation (within 0.33% of the exact sum there, up to 64 pods), so its cost does not grow with the rate | `OnePod`, `NoComputedTokens`, `TooFewImbalanceMinutes` |
 

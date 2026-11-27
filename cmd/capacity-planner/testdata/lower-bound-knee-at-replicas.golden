@@ -1,42 +1,42 @@
 ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-11-14 07:09-09:35Z, cycle 580 of 580
 decode engine   vLLM release not recorded
 prefill engine  vLLM release not recorded
-load judged     12.48 r/s, the p95 of the 573 of 580 cycles with traffic
+load judged     12.46 r/s, the p95 less counting noise of the 573 of 580 cycles with traffic
 load seen       per cycle (1-minute rates): mean 3.00, p95 12.48, peak 15.38 r/s; p95 less counting noise 12.46; busiest 2m1s (8 cycles): 12.96 r/s
 SLO             TTFT p95 200.0 ms (policy)
 cell = TTFT p95 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused; <= at most: a TTFT priced from a lower bound of V_P is an upper bound
-mark = the SLO (TTFT p95 200.0 ms (policy)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated, UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known, ? not judged
-summary     50%                   80%                    100%             seen
-  measured  <=7116/18.4 @2.08 UB  <=21277/18.4 @3.33 UB  -/18.4 @4.17 LB  -/19.1 @12.48 LB
+mark = the SLO (TTFT p95 200.0 ms (policy)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known, ? not judged
+summary  50%                  80%                   100%            seen
+  load   <=620/27.1 @6.67 UB  <=798/39.7 @10.68 UB  -/- @13.35 SAT  <=1420/50.0 @12.46 UB
 verdicts
-  measured  NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 1133, the shape priced is IL 8016 OL 26, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
+  load    UNDER-PROVISIONED: at the p95 less counting noise load of 12.5 r/s, the fleet runs past its operating point of 11.3 r/s (0.85 of its 13.3 r/s knee); needs at least 3 decode (has 2), 5 decode if the decode knee reads 99% high.
 
-shape measured: IL 8016 OL 26, prefix hit 0.00 (measured, cycles 560-579)
-  the load's cycles (the p95 and above: 30, cycles 8-89): IL 1000 OL 1133, prefix hit 0.00
-  SHAPE/LOAD MISMATCH: the load is priced at a shape more than 20% off the traffic that made it; --shape load prices it at its own
+shape load: IL 1000 OL 1133, prefix hit 0.00 (the load's cycles)
+  the load's cycles (the p95's cycles, the p95 and above: 30, cycles 8-89): IL 1000 OL 1133, prefix hit 0.00
 utilization at the load judged
-  decode        KV fill 0.019 (band top 0.8), slots 4 of 152, wait p 0.000
-  KV pull       utilization 0.140 per decode pod, mean wait unpriced (TTFT refused)
-  prefill       utilization pooled 2.99, worst pod 2.99 (f 1)
-  verdict       NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 1133, the shape priced is IL 8016 OL 26, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
-capacity            req/s     out tok/s   bound by
-  prefill knee      >=4.17    106         prefill work served: the 33370 computed tokens/s the prefill pods sustained over 2 min / 8007 tokens; at least: V_P is a lower bound
-  decode knee       134.15    3428        decode band top at fill 0.798
-                    OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
-  fleet knee        >=4.17    106         prefill; at least: V_P is a lower bound
-  operating (0.85)  >=3.54    91          0.85 x fleet knee (scaleUpThreshold); at least: V_P is a lower bound
-  max at SLO        target below the floor            target 0.2 s at or below the TTFT floor 2.787 s; the floor is priced from a lower bound of V_P, so it is at most this, and the target may be reachable
-SLO vs load         r/s    TTFT p50/90 ms           TPOT mean/p90 ms  e2e mean (sum)
-  50% of knee       2.08   <=880.8/<=5228.0         10.82/18.38       <=2.00 s
-  80% of knee       3.33   <=4378.1/<=16201.1       10.82/18.38       <=6.71 s
-  100% of knee      4.17   past a lower-bound knee  10.82/18.38       past a lower-bound knee
-  load seen (299%)  12.48  past a lower-bound knee  11.22/19.07       past a lower-bound knee
+  decode        KV fill 0.448 (band top 0.8), slots 416 of 512, wait p 0.041
+  KV pull       utilization 0.018 per decode pod, mean wait unpriced (TTFT priced first come: prompts too uneven for processor sharing)
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.03, p95 1.36, peak 1.46 over 204 cycles; 1.01 at the load judged (30 cycles); fill peak busiest 0.800, mean 0.797
+  prefill       utilization pooled 0.38, worst pod 0.38 (f 1)
+  verdict       UNDER-PROVISIONED: at the p95 less counting noise load of 12.5 r/s, the fleet runs past its operating point of 11.3 r/s (0.85 of its 13.3 r/s knee); needs at least 3 decode (has 2), 5 decode if the decode knee reads 99% high.
+capacity            req/s     out tok/s   in system   bound by
+  prefill knee      >=32.37   36680       not known   prefill compute: N_p 2 x V_P x (1 - 0.05 margin) / (f 1.000 x 1000 tokens); at least: V_P is a lower bound
+  decode knee       13.35     15124       unbounded   decode batch cap at fill 0.551
+                    OUTSIDE VALIDATED REGION (more sequences a pod than the decode line was fitted on, never measured there)
+  fleet knee        13.35     15124       unbounded   decode
+  operating (0.85)  11.35     12855       <=329       0.85 x fleet knee (scaleUpThreshold)
+  max at SLO        target below the floor                        target 0.2 s at or below the TTFT floor 0.3792 s; the floor is priced from a lower bound of V_P, so it is at most this, and the target may be reachable
+SLO vs load        r/s    TTFT p50/90 ms   TPOT mean/p90 ms  e2e mean (sum)  in system (mean)
+  50% of knee      6.67   <=111.5/<=445.6  15.94/27.08       <=18.23 s       <=122
+  80% of knee      10.68  <=195.4/<=605.2  23.36/39.68       <=26.72 s       <=285
+  100% of knee     13.35  saturated        saturated         saturated       unbounded
+  load seen (93%)  12.46  <=280.0/<=862.1  29.45/50.04       <=33.79 s       <=421
 checks
-  2 prefill + 2 decode  not judged: 12.48 r/s is 3.0x a prefill knee of at least 4.17 r/s (V_P is a lower bound): whether the fleet saturates is not priced; TTFT p95 not judged (past a lower-bound knee)
-assumed: prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NonPositiveHop); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
-flags: UnvalidatedTTFT; VPLowerBound; VPScaledToPrompt; AssumedPromptSpread; KneeAtServedWork; HeldLine; RouterHopAssumed; KVBoundSlots; SpreadBeyondProcessorSharing; FlowControlInferredOff; BelowFittedBand; AssumedPoissonArrivals; TransferHeld; PromptSpreadAbovePeak; CoarseTPOTBucket; MeanBoundedTPOTPercentile; ShapeLoadMismatch
+  2 prefill + 2 decode  does not hold: 12.46 r/s is above 0.85 x the fleet knee 13.35 r/s = 11.35 r/s; TTFT p95 is at most 1419.6 ms, over 200.0 ms, but not judged: it is priced from a lower bound of V_P, and the true TTFT may be lower, so the miss is not known
+assumed: prompt 1000 tokens (--shape); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NonPositiveHop); --assume-router-hop supplies one; flow control off (no queue series); Poisson arrivals
+flags: UnvalidatedTTFT; VPLowerBound; AssumedPromptSpread; AssumedShape; HeldLine; BatchBeyondFit; RouterHopAssumed; SpreadBeyondProcessorSharing; FlowControlInferredOff; BelowFittedBand; AssumedPoissonArrivals; TransferHeld; PromptSpreadAbovePeak; CoarseTPOTBucket; MeanBoundedTPOTPercentile
 
 not validated:
   - decode knee: outside its validated region (see its label); inside the region the q32 staircase measured (1000-token prompts, 1000 out, Ca^2 1) it read at most +3%, and outside it, on the 0.6B goldens, 43% to 99% high (docs/proposals/slo-capacity-planner.md, Measured on the goldens)
   - TTFT is not a bound, and is validated only where its figure says so: at the assumed prompt cv 2 it read 1.1x to 4.1x the router's percentile on the P2 recordings; at the sent spread (cv 0.06) up to 33% under it.
-  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile
+  - e2e mean is a sum, TTFT mean + (OL - 1) x TPOT mean, not a percentile; in system is the rate times it (Little's law), the requests in the system on average

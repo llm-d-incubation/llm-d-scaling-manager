@@ -96,3 +96,53 @@ func TestTransferWindow_SkipsARowThatReadsNothing(t *testing.T) {
 	w.Observe(time.Unix(1000, 0), rows)
 	assert.InDelta(t, 0.03, w.Reading().Quiet, 1e-12)
 }
+
+// With PullWork a row's reading is the pull's work at the row's request rate,
+// T/(1 + lambda T): the work whose processor-sharing time at lambda is the time
+// measured, so pricing it at lambda reads the measured time back, where pricing
+// the time itself stretched it twice (issue
+// llm-d-incubation/llm-d-scaling-manager#301). Off, the time as read. A row
+// with no rate read is no stretch.
+func TestTransferWindow_PullWorkTakesTheStretchOut(t *testing.T) {
+	// The public P/D staircase's last cycles: 60 ms at 20.8 r/s a decode pod.
+	rows := transferRows(2, 3, 0.060)
+	for i := range rows {
+		rows[i].RequestRate, rows[i].RequestRateKnown = 20.8, true
+	}
+	at := time.Unix(1000, 0)
+
+	var off TransferWindow
+	off.Observe(at, rows)
+	assert.InDelta(t, 0.060, off.Reading().Figure(), 1e-12, "off, the time as read")
+
+	on := TransferWindow{PullWork: true}
+	on.Observe(at, rows)
+	s := on.Reading().Figure()
+	assert.InDelta(t, 0.060/(1+20.8*0.060), s, 1e-12)
+	// The round trip: the processor-sharing time of that work at the rate
+	// it was read at is the time measured.
+	assert.InDelta(t, 0.060, s/(1-20.8*s), 1e-12)
+	// At a light load the work is the time, near enough.
+	light := transferRows(1, 0, 0.0319)
+	light[0].RequestRate, light[0].RequestRateKnown = 0.5, true
+	var lw TransferWindow
+	lw.PullWork = true
+	lw.Observe(at, light)
+	assert.InDelta(t, 0.0319, lw.Reading().Figure(), 0.001)
+
+	unread := transferRows(1, 0, 0.060)
+	unread[0].RequestRate = 20.8 // not known: not read
+	var uw TransferWindow
+	uw.PullWork = true
+	uw.Observe(at, unread)
+	assert.InDelta(t, 0.060, uw.Reading().Figure(), 1e-12, "no rate read, no stretch taken out")
+
+	// A rate read but not finite and above 0 takes nothing out either.
+	for _, rate := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		bad := transferRows(1, 0, 0.060)
+		bad[0].RequestRate, bad[0].RequestRateKnown = rate, true
+		bw := TransferWindow{PullWork: true}
+		bw.Observe(at, bad)
+		assert.InDelta(t, 0.060, bw.Reading().Figure(), 1e-12, "rate %g", rate)
+	}
+}

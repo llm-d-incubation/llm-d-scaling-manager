@@ -32,9 +32,10 @@ spec:
 
     - alert: LLMSMMetricsCollectionFailing
       # learner_recording queries feed only a learner recording, and ttft_inputs
-      # queries only the shadow TTFT pricing, never a scaling decision: their
+      # queries only the shadow TTFT pricing, and slo_model_inputs queries only
+      # the slo analyzer's shadow v2 latency models, never a scaling decision: their
       # failures stay on the counter and do not alert.
-      expr: sum by (query_type, reason) (rate(llmsm_metrics_collection_errors_total{query_type!~"learner_recording|ttft_inputs"}[5m])) > 0.0833
+      expr: sum by (query_type, reason) (rate(llmsm_metrics_collection_errors_total{query_type!~"learner_recording|ttft_inputs|slo_model_inputs"}[5m])) > 0.0833
       for: 5m
       labels:
         severity: warning

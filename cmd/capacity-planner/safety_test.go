@@ -232,7 +232,14 @@ func TestCapture_FlagsSurviveGenerateAndReplay(t *testing.T) {
 	require.NoError(t, err, "the export refuses a caveat's words")
 	pseudo, err := startOf(exported)
 	require.NoError(t, err)
-	assert.Equal(t, window.Flags, pseudo.Caveats)
+	// The caveats' words survive; the names in them, the role note's
+	// variant and Pod, are renamed as every name is.
+	renamed := strings.NewReplacer("m-dec-7c9d-x1", "pod-01", "m-dec", "variant-01")
+	want := make([]string, len(window.Flags))
+	for i, f := range window.Flags {
+		want[i] = renamed.Replace(f)
+	}
+	assert.Equal(t, want, pseudo.Caveats)
 }
 
 // generate exits 2 for a capture it cannot read, and 1 for a failure that

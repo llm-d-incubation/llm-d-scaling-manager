@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
@@ -93,9 +94,19 @@ type PrefillState struct {
 	// prices a TTFT from V_P raised with a knee floored at the served work.
 	// Off unless the replay's options turn it on.
 	VPAtServedWork bool
+	// HitAtCount is saturation.SwitchPrefillHitAtCount: the planner prices
+	// the prefix hit at a prefill count other than the fit's
+	// (prefill.HitAtCountOf). Off unless the replay's options turn it on.
+	HitAtCount bool
 	// ServedComputedWindow is ServedComputed over the whole window replayed,
 	// read with VPAtServedWork alone (servedWork.windowPeaks); nil otherwise.
 	ServedComputedWindow map[int]float64
+	// ServedUnsteady is, by pod count, whether the prefill pods served a
+	// stretch of ServedWorkWindow there, since prefill.Retention, whose
+	// backlog was read and grew, and ServedComputed holds none that did not
+	// (servedWork.peaksUnsteady): served work not sustained, which floors no
+	// knee. A backlog not read gives no entry. Read with ServedComputed.
+	ServedUnsteady map[int]bool
 	// WindowFrom and At are the replay's first cycle and the cycle read, for
 	// the age of a V_P read before the samples kept
 	// (prefill.Estimate.VPLearnedAt).
@@ -193,6 +204,9 @@ type ttftSamples struct {
 	tierKVWait bool
 	// psByEngine is slo.SwitchTTFTPSByEngine (PrefillState.PSByEngine).
 	psByEngine bool
+	// pullWork is slo.SwitchTTFTPullWork, for the transfer windows
+	// (prefill.TransferWindow.PullWork).
+	pullWork bool
 	// cachedTokenCost is slo.SwitchTTFTCachedTokenCost
 	// (PrefillState.CachedTokenCost).
 	cachedTokenCost bool
@@ -213,20 +227,28 @@ type ttftSamples struct {
 	// vpAtServed is saturation.SwitchPrefillVPAtServedWork
 	// (PrefillState.VPAtServedWork).
 	vpAtServed bool
+	// hitAtCount is saturation.SwitchPrefillHitAtCount
+	// (PrefillState.HitAtCount).
+	hitAtCount bool
+	// router is the model's router policy cycles (State.RouterPolicy).
+	router balance.RouterPolicyWindow
 }
 
 // servedWorkOf is variant v's served work: its peaks over prefill.Retention
 // (PrefillState.ServedComputed), and with vpAtServed its peaks over the
-// whole window (PrefillState.ServedComputedWindow). nil where none is kept.
-func (t *ttftSamples) servedWorkOf(v string) (peaks, window map[int]float64) {
+// whole window (PrefillState.ServedComputedWindow), and the counts whose
+// served work was not sustained (PrefillState.ServedUnsteady). nil where
+// none is kept.
+func (t *ttftSamples) servedWorkOf(v string) (peaks, window map[int]float64, unsteady map[int]bool) {
 	w := t.served[v]
 	if w == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if t.vpAtServed {
 		window = w.windowPeaks()
 	}
-	return w.peaks(), window
+	peaks, unsteady = w.peaksUnsteady()
+	return peaks, window, unsteady
 }
 
 // newTTFTSamples returns empty windows; hopUnqueued is
@@ -347,6 +369,7 @@ func (b *backlogTrack) note(d *decodeRows, cycle int, at time.Time, read bool) i
 // prefillRows is one prefill variant's readings in one cycle.
 type prefillRows struct {
 	pods, rated           int
+	queue, queueRead      int
 	sum, busiest          float64
 	computedRate, reqRate float64
 }
@@ -357,6 +380,7 @@ func positive(x float64) bool { return whatif.Finite(x) && x > 0 }
 
 // note takes one cycle's rows, read at at.
 func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
+	t.router.Note(balance.RouterCycleOf(in, at))
 	roles := rolesOf(in)
 	pre := map[string]*prefillRows{}
 	decode := map[string]*decodeRows{}
@@ -375,6 +399,10 @@ func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
 		v := rm.VariantName
 		if p := pre[v]; p != nil {
 			p.pods++
+			if rm.QueueLengthKnown {
+				p.queueRead++
+				p.queue += rm.QueueLength
+			}
 			if !rm.PrefillComputedTokenRateKnown || !positive(rm.PrefillComputedTokenRate) {
 				continue
 			}
@@ -415,7 +443,8 @@ func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
 			if t.served[v] == nil {
 				t.served[v] = &servedWork{}
 			}
-			t.served[v].note(servedWorkSample{at: at, pods: p.pods, sum: p.sum, ok: p.pods > 0 && p.rated == p.pods})
+			t.served[v].note(servedWorkSample{at: at, pods: p.pods, sum: p.sum, ok: p.pods > 0 && p.rated == p.pods,
+				queue: p.queue, queueOK: p.pods > 0 && p.queueRead == p.pods})
 		}
 		if p.computedRate > 0 {
 			allComputed += p.computedRate
@@ -425,6 +454,7 @@ func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
 			t.prompts[v] = &whatif.PromptWindow{}
 		}
 		t.prompts[v].Note(rowsOfVariant(in.ReplicaMetrics, v), cycle, at)
+		t.prompts[v].NoteRouterPrefix(cycle, in.RouterLatency)
 	}
 	for v, d := range decode {
 		var slot whatif.DecodeTTFT
@@ -484,7 +514,7 @@ func (t *ttftSamples) noteTerm(in domain.AnalyzerInput, now time.Time, args func
 		w.Under(accelerator, args(v))
 		x := t.transfers[v]
 		if x == nil {
-			x = &prefill.TransferWindow{}
+			x = &prefill.TransferWindow{PullWork: t.pullWork}
 			t.transfers[v] = x
 		}
 		x.Under(accelerator, args(v))
@@ -545,7 +575,8 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		ps.TierKVWait = t.tierKVWait
 		ps.PSByEngine = t.psByEngine
 		ps.VPAtServedWork = t.vpAtServed
-		ps.ServedComputed, ps.ServedComputedWindow = t.servedWorkOf(v)
+		ps.HitAtCount = t.hitAtCount
+		ps.ServedComputed, ps.ServedComputedWindow, ps.ServedUnsteady = t.servedWorkOf(v)
 		ps.CachedTokenCost = t.cachedTokenCost
 		ps.Estimate, ps.EstimateRead = estimateAt(r.sat.PrefillEstimate, in.Namespace, in.ModelID, v, st.At)
 		st.Prefill = append(st.Prefill, ps)
@@ -572,6 +603,7 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 	}
 	st.FlowControlSeries = in.FlowControlSeries()
+	st.RouterPolicy = t.router.Policy()
 	st.Joint, st.JointRate = t.joint.Estimate(), in.ArrivalRate
 	for _, rm := range in.ReplicaMetrics {
 		if !prefill.Serving(rm) {

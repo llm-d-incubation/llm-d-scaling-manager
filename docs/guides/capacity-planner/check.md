@@ -27,9 +27,31 @@ cut at a time instead, use `--fit-until 2026-11-20T12:00:00Z`. To learn from
 one recording and test on a later one of the same configuration, use
 `--fit day1.jsonl.gz --test day2.jsonl.gz`.
 
+To check that the planner extrapolates to load it has not seen, split by
+load instead of by time:
+
+```bash
+capacity-planner backtest --recording run.jsonl.gz --fit-below p50 --test-above p75
+```
+
+It learns only from the five-minute steps whose arrival rate is below the
+recording's median step rate, and judges only the steps in its top quartile.
+Each bound is a rate (`12.5`, requests per second) or a percentile of the
+steps' rates (`p50`); idle steps are left out of the percentile. The fit is
+read from its steps alone, as if the recording held nothing else, and every
+other check still applies: warm-up, replicas changing, bursts near the knee.
+Steps under the test's bound are reported as `outside the test's load`.
+
+With `--fit` and `--test`, `--fit-below` reads the fit's steps and
+`--test-above` the test's, and the two recordings may cover the same hours:
+a test step that the fit read a cycle of is not judged.
+
 On the page: load the recording in Source, open **Check the planner against
 a period it did not see**, set the slider, and press **Run**. To test on
-another recording, pick **another recording** and choose it.
+another recording, pick **another recording** and choose it. The page never
+runs the check by itself: **Check accuracy on this recording**, in the
+answer panel's Accuracy row or on this tab, runs it with the slider's split
+(half, unless you move it).
 
 ## Read the answer
 
@@ -43,7 +65,10 @@ calling the fleet overloaded; the fleet measured mean 11.6 s there. p90 TTFT: wi
 1.88, 2 read more than 20% low.
 mean TPOT: within 20% of measured in 15 of the 15 five-minute steps scored (a figure, and enough measured requests);
 no overall lean (median ratio 0.98). p90 TPOT not scored in 10: the measured p90 fell in a histogram bucket wider
-than 20% of its lower edge, too wide to place it, with the prediction inside it.
+than 20% of its lower edge, too wide to place it, with the prediction inside it. To measure it, give the
+histogram finer edges: the router's metrics.requestTPOTBuckets in the EndpointPickerConfig (an llm-d-router build
+after v1.0.0), or vLLM's --custom-histogram-buckets (v0.32.0 and later). Edges about 15% apart place p90 and p95
+within 20%.
 None of these figures falls within the conditions our own accuracy benchmarks cover
 (docs/guides/capacity-planner/accuracy.md): this check is the evidence for this fleet.
 Judged 15 of 16 five-minute steps; not judged: 1 warm-up.
@@ -71,6 +96,16 @@ How to read it:
   tell the two figures apart, so they are consistent at the bucket's
   resolution, which the words give with the bucket's width (TPOT 10 to
   20 ms is 2x wide). That is not within 20%, and never counts as within.
+- **To measure a TPOT p90 or p95 the buckets cannot place**, give the
+  histogram finer edges, and the verdict says so after the unscored steps.
+  Edges about 15% apart across the TPOT range you care about place p90 and
+  p95 within 20%. Either source works:
+  - the router: `metrics.requestTPOTBuckets` (and `requestITLBuckets`) in
+    the EndpointPickerConfig. It needs an llm-d-router build after v1.0.0
+    ([llm-d-router#3539](https://github.com/llm-d/llm-d-router/pull/3539)),
+    which also makes the default edges 5 ms apart from 5 to 50 ms.
+  - vLLM: `--custom-histogram-buckets`, in vLLM v0.32.0 and later. See
+    [vLLM's TPOT buckets](#vllms-tpot-buckets) below for the value.
 - **Median ratio**: the planner's figure over the measured one, at the
   middle step. Above 1 it leans high at the middle; below 1 it leans low. A
   median near 1 can still hide steps it read low, so check that count too.
@@ -132,7 +167,7 @@ bucket, steps it called overloaded marked in red at the top, and steps not
 judged in grey.
 
 The prediction uses each step's request rate, prompt and output lengths, the
-spread of prompt lengths, and the replicas each role ran. Unless you give
+spread of prompt and of output lengths, and the replicas each role ran. Unless you give
 `--arrival-cv2` (1 is random arrivals, higher is burstier), it assumes random
 arrivals. It is compared with the router's TTFT and TPOT histograms in the
 same recording, over the window its histogram covers (the router's rate
@@ -140,6 +175,32 @@ window, five minutes on a default router); the inputs are read over the
 same window. Without
 router histograms it uses the engines' own, and leaves out what they cannot
 compare: on a P/D fleet the engines' TTFT covers prefill alone.
+
+### vLLM's TPOT buckets
+
+To let the check score TPOT p90 and p95 from vLLM's own histograms, start
+each model server with this flag (vLLM v0.32.0 and later):
+
+```bash
+--custom-histogram-buckets '{"inter_token_latency":[0.005,0.00575,0.0066,0.0076,0.0087,0.01,0.0115,0.0132,0.0152,0.0175,0.02,0.023,0.0265,0.0305,0.035,0.04,0.046,0.053,0.075,0.1,0.25,1.0]}'
+```
+
+- The flag takes JSON keyed by bucket family. The family is
+  `inter_token_latency`. It sets the edges of two histograms:
+  `vllm:inter_token_latency_seconds` and the per-request TPOT,
+  `vllm:request_time_per_output_token_seconds`. There is no TPOT family of
+  its own.
+- The edges are 15% apart from 5 ms to 53 ms. Each bucket in that range is
+  narrow enough to place a percentile within 20%. Above 53 ms the buckets
+  are wide again. If your TPOT runs higher, carry the same 15% steps further
+  up.
+- Families you do not list keep vLLM's defaults. A family name vLLM does
+  not know is an error at startup, so check the spelling.
+- Finer edges add series: this list has 22 edges where the default has 19,
+  so each of the two histograms adds 3 series per model server.
+- The edges must be positive and strictly increasing.
+- It changes only the histograms. Restart the servers before the window you
+  record.
 
 ## The self-check beside every answer
 
@@ -318,7 +379,8 @@ Size from the planner when, below the load it thinks the fleet can carry:
 | Flag | Default | Notes |
 | --- | --- | --- |
 | `--recording` with `--split` or `--fit-until` | `--split 60%` | One recording, cut in two. |
-| `--fit`, `--test` | | Two recordings. The fit must end before the test starts. |
+| `--fit`, `--test` | | Two recordings. The fit must end before the test starts, unless they are split by load. |
+| `--fit-below`, `--test-above` | | Split by load: fit on the steps whose rate is below the first, judge the steps at or above the second. A rate (`12.5`) or a percentile of the steps' rates (`p50`). Give both. Not with `--split` or `--fit-until`. |
 | `--step` | `5m` | A step, from `1m` to `1h`. A step shorter than the router's five-minute window shares requests with its neighbours. |
 | `--settle` | `2m` | How long after a change of replicas, and after the test starts, a measurement is not judged. |
 | `--arrival-cv2` | random | How bursty arrivals are, when you know it: 1 is random. |
@@ -330,6 +392,7 @@ Size from the planner when, below the load it thinks the fleet can carry:
 | `--allow-config-mismatch` | off | Score a test of another configuration, with the difference printed. |
 | `--flow-control` | inferred | `on` or `off`: the router's flow control, in place of what the fit's queue series says. To score a test that ran with flow control on against a fit that ran with it off, add `--allow-config-mismatch` too. |
 | `--router-wait-in-prefill`, `--price-router-wait` | on, off | How a step past the prefill flow-control onset carries the router's wait: `--router-wait-in-prefill` (on by default) for router v1.0.0, `--price-router-wait` for v0.11.0, which turns the default off. With `--router-wait-in-prefill=false` and no `--price-router-wait`, the step is flagged `AboveFlowControlOnset`; use that on router v0.11.0. Set both and they are refused. |
+| `--load-aware-router` | off | State that the router balances prefill by load (llm-d's EPP queue scorer), as an answer's flag of the same name: f is held up to the load it was learned at, then falls to 1 at the pooled prefill knee. The API's `assume.loadAwareRouter`; every figure reads outside the validated region with it. `predict` takes it too. |
 | `-o json` | text | The same answer as `POST /v1/backtest` ([the API](api.md#the-backtest)). |
 
 The command exits 0 when it judged at least one step, 3 when it judged none,

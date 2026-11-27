@@ -222,16 +222,14 @@ jobs:
           fi
           echo "capacity planner newTag: ${have}"
 
-      # And for the tools image the install guides tell users to run. Its
-      # digest exists only after this run builds it (it carries the signed
-      # release files), so the tagged commit pins it by this tag, and the docs
-      # PR after the run moves the pin to the digest. A tag whose docs name
-      # another image -- v0.12.2's named v0.12.1's digest -- is refused here,
-      # before anything is built.
-      - name: Verify the docs pin this release's tools image
+      # The tools and controller digests are only available after this run
+      # builds the images. The tagged docs must use this release's tag.
+      - name: Verify the docs pin this release's images
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-        run: bash deploy/ci-pr-checks/tools-pin.sh check "$VERSION"
+        run: |
+          bash deploy/ci-pr-checks/tools-pin.sh check "$VERSION"
+          bash deploy/ci-pr-checks/tools-pin.sh --controller check "$VERSION"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -345,6 +343,11 @@ jobs:
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
             echo "  --certificate-identity https://github.com/$WORKFLOW_REF"
             echo '```'
+            echo ""
+            echo "Pin the controller examples to this digest in the follow-up docs PR:"
+            echo '```'
+            echo "bash deploy/ci-pr-checks/tools-pin.sh --controller pin @$DIGEST"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The operator tools image (Dockerfile.tools): prepull, weights,
@@ -395,7 +398,7 @@ jobs:
         run: |
           set -euo pipefail
           n=0
-          for f in dist/*.yaml dist/scaling-manager-tools-*.tar.gz dist/capacity-planner-v*-amd64 dist/capacity-planner-v*-arm64 dist/capacity-planner-v*.exe dist/SHA256SUMS; do
+          for f in dist/*.yaml dist/scaling-manager-*.sh dist/scaling-manager-tools-*.tar.gz dist/capacity-planner-v*-amd64 dist/capacity-planner-v*-arm64 dist/capacity-planner-v*.exe dist/SHA256SUMS; do
             [ -f "$f" ] && [ -f "$f.sigstore.json" ] || { echo "::error::$f or its bundle is missing from the artifact"; exit 1; }
             cosign verify-blob "$f" --bundle "$f.sigstore.json" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
@@ -1154,7 +1157,7 @@ jobs:
         run: |
           set -euo pipefail
           n=0
-          for f in dist/*.yaml dist/scaling-manager-tools-*.tar.gz dist/capacity-planner-v*-amd64 dist/capacity-planner-v*-arm64 dist/capacity-planner-v*.exe dist/SHA256SUMS; do
+          for f in dist/*.yaml dist/scaling-manager-*.sh dist/scaling-manager-tools-*.tar.gz dist/capacity-planner-v*-amd64 dist/capacity-planner-v*-arm64 dist/capacity-planner-v*.exe dist/SHA256SUMS; do
             [ -f "$f" ] || { echo "::error::$f was not rendered"; exit 1; }
             cosign sign-blob --yes --bundle "$f.sigstore.json" "$f" >/dev/null
             n=$((n + 1))
@@ -1267,7 +1270,7 @@ jobs:
             echo "release $VERSION is published with these exact files; nothing to upload"
             exit 0
           fi
-          gh release upload "$VERSION" --clobber dist/*.yaml dist/scaling-manager-tools-*.tar.gz \
+          gh release upload "$VERSION" --clobber dist/*.yaml dist/scaling-manager-*.sh dist/scaling-manager-tools-*.tar.gz \
             dist/capacity-planner-v*-amd64 dist/capacity-planner-v*-arm64 dist/capacity-planner-v*.exe dist/SHA256SUMS dist/*.sigstore.json
           gh release view "$VERSION" --json assets --jq '.assets[].name'
 

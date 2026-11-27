@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
 // maxBody is the largest request body the API reads: a scenario is a few
@@ -82,13 +84,57 @@ type Config struct {
 	// upload; 0 or less is DefaultUploadBytes.
 	Uploader       Uploader
 	UploadMaxBytes int64
+	// TTFTModel and TPOTModel are the experimental models a backtest that
+	// names none is priced with (BacktestRequest.TTFTModel, TPOTModel), and
+	// the main view of a source whose inputs request names none
+	// (InputsRequest.TTFTModel, TPOTModel): "" is the planner's own. The
+	// CLI's serve sets them with
+	// --experimental-ttft=v2 and --experimental-tpot=v2; its Resolver then
+	// gives the cycles they read (Resolved.Mixture, Decode).
+	TTFTModel, TPOTModel string
+	// NoRankMixtureStratified prices the rank mixture with each rank's
+	// service moments read from its own draws where a request does not say
+	// (BacktestRequest.RankMixtureStratified,
+	// InputsRequest.RankMixtureStratified); false, the default, reads them
+	// from the computed-token histogram (whatif.DefaultRankMixtureStratified).
+	// The CLI's serve sets it with --rank-mixture-stratified=false.
+	NoRankMixtureStratified bool
+	// RankMixtureKVHold and RankMixtureRemainderSpread turn the variant's
+	// modes on for every backtest and source priced with the variant
+	// (whatif.QueueRankMixtureNLLine) where the request does not, and
+	// RankMixtureMinFitWindow is the shortest fit window either model
+	// prices from where the request names none: 0 is
+	// whatif.MinSpreadFitWindow. The CLI's serve sets them with
+	// --rank-mixture-kv-hold, --rank-mixture-remainder-spread and
+	// --rank-mixture-min-fit-window.
+	RankMixtureKVHold, RankMixtureRemainderSpread bool
+	RankMixtureMinFitWindow                       time.Duration
+	// RankMixtureRemainderServer turns the variant's remainder server on
+	// where the request does not, for a request whose remainder spread is
+	// on. The CLI's serve sets it with --rank-mixture-remainder-server.
+	RankMixtureRemainderServer bool
+	// TPOTDistMinFitSteps is the fewest fit steps the TPOT distribution
+	// fits on where a backtest or a source's request names none: 0 is
+	// MinTPOTDistFitSteps. The CLI's serve sets it with
+	// --tpot-dist-min-fit-steps.
+	TPOTDistMinFitSteps int
 }
 
 // DefaultPlanBudget is the plan budget a server has when its Config names
 // none: a cold plan of the worked recording takes under 20 s, and it ends
-// well before capacity-planner serve's 10-minute write timeout (serve refuses
-// a --plan-budget past 9 minutes).
+// well before LongRequestDeadline (capacity-planner serve refuses a
+// --plan-budget past 9 minutes).
 const DefaultPlanBudget = 5 * time.Minute
+
+// LongRequestDeadline is how long a request that computes (POST /v1/inputs,
+// /v1/plan, /v1/size, /v1/report, /v1/dayplan, /v1/backtest, /v1/predict and
+// /v1/compare) may run once its body is read: the connection's write
+// deadline moves to it, past the server's own write timeout. A replay of a
+// 24 h recording with every model fitted takes over 5 minutes on an idle
+// 22-CPU node and about twice that on a busy one, and the server's 10-minute
+// write timeout cut the connection before the answer. The other routes keep
+// the server's timeouts.
+const LongRequestDeadline = 30 * time.Minute
 
 // ReasonPlanBudgetExceeded is the reason an ErrorResponse gives for a plan
 // stopped at the server's plan budget.
@@ -156,6 +202,22 @@ type Server struct {
 	// uploadDeadline how long it may take in all (uploadDeadline).
 	uploadIdle     time.Duration
 	uploadDeadline time.Duration
+	// longDeadline is how long a request that computes may run once its body
+	// is read (LongRequestDeadline).
+	longDeadline time.Duration
+	// ttftModel and tpotModel are Config's.
+	ttftModel, tpotModel string
+	// noStratified is Config.NoRankMixtureStratified.
+	noStratified bool
+	// kvHold, remainderSpread and minFitWindow are Config's
+	// RankMixtureKVHold, RankMixtureRemainderSpread and
+	// RankMixtureMinFitWindow.
+	kvHold, remainderSpread bool
+	minFitWindow            time.Duration
+	// remainderServer is Config.RankMixtureRemainderServer.
+	remainderServer bool
+	// tpotMinFitSteps is Config.TPOTDistMinFitSteps.
+	tpotMinFitSteps int
 }
 
 // inputsEntry is a source resolved: its id, the inputs a plan reads its
@@ -171,6 +233,20 @@ type inputsEntry struct {
 	// Resolved.Config).
 	latency []LatencySample
 	config  RunConfig
+	// mixture is the source's cycles for the rank-mixture model
+	// (Resolved.Mixture); nil unless asked.
+	mixture []whatif.MixtureCycle
+	// decode is the source's cycles for the TPOT distribution
+	// (Resolved.Decode); nil unless asked.
+	decode []whatif.DecodeCycle
+	// engine is the engines' flags those models read (Resolved.Engine).
+	engine EngineSlots
+	// ttftModel is the experimental TTFT model the main view prices with,
+	// fitted on the source; nil unless asked (InputsRequest.TTFTModel).
+	ttftModel *mainMixture
+	// tpotModel is the experimental TPOT model the main view prices with,
+	// fitted on the source; nil unless asked (InputsRequest.TPOTModel).
+	tpotModel *mainTPOT
 	// bytes is the entry's weight in the inputs cache (Resolved.Bytes).
 	bytes int
 }
@@ -203,7 +279,17 @@ func New(c Config) *Server {
 		plans: newWeighedLRU(defaultPlans, defaultResponseBytes, bodyBytes), sizes: newWeighedLRU(defaultSizes, defaultResponseBytes, bodyBytes),
 		searches: newLRU[*SizeResponse](defaultSizes), curves: newLRU[*curveSet](defaultCurves), limits: newLRU[*limitEntry](defaultCurves),
 		planSlots: make(chan struct{}, plans), inputSlots: make(chan struct{}, inputs), planBudget: budget,
-		uploader: c.Uploader, uploadMax: uploadMax, uploadSlots: make(chan struct{}, 1), uploadIdle: uploadIdle, uploadDeadline: uploadDeadline}
+		uploader: c.Uploader, uploadMax: uploadMax, uploadSlots: make(chan struct{}, 1), uploadIdle: uploadIdle, uploadDeadline: uploadDeadline,
+		longDeadline: LongRequestDeadline, ttftModel: c.TTFTModel, tpotModel: c.TPOTModel, noStratified: c.NoRankMixtureStratified,
+		kvHold: c.RankMixtureKVHold, remainderSpread: c.RankMixtureRemainderSpread, minFitWindow: c.RankMixtureMinFitWindow,
+		remainderServer: c.RankMixtureRemainderServer,
+		tpotMinFitSteps: c.TPOTDistMinFitSteps}
+}
+
+// stratified is whether the rank mixture is priced with stratified service
+// moments where a request does not say.
+func (s *Server) stratified() bool {
+	return whatif.DefaultRankMixtureStratified && !s.noStratified
 }
 
 // errBusy is a request past the server's bound on work in flight.
@@ -275,7 +361,7 @@ func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
 // and answered with the caller's own source.
 func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 	var req InputsRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	if !acquire(s.inputSlots) {
@@ -288,6 +374,27 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 		check = *req.SelfCheck
 	}
 	req.SelfCheck = &check
+	model, err := ttftModelOf(req.TTFTModel, s.ttftModel)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tpotModel, err := tpotModelOf(req.TPOTModel, s.tpotModel)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	req.TTFTModel, req.TPOTModel = model, tpotModel
+	tpotSteps, err := s.tpotMinFitStepsOf(req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	opts, err := s.mainTTFTOptions(req)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	res, err := s.resolver.Resolve(r.Context(), req)
 	if err != nil {
 		writeErr(w, err)
@@ -296,18 +403,76 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 	doc := res.Inputs
 	doc.SchemaVersion, doc.WhatifSchema = SchemaVersion, s.whatifSchema
 	doc.InputsID = contentID("inputs", res.Content)
+	doc.Measured = BusiestHourMeasured(res.Series, res.Latency)
+	var mm *mainMixture
+	stratified := stratifiedOf(req.RankMixtureStratified, s.stratified())
+	if model != "" {
+		// The same source priced with the model is another entry: its id
+		// names the model.
+		doc.InputsID = contentID("inputs", struct {
+			Content   any
+			TTFTModel string
+		}{res.Content, model})
+		opts.Stratified = stratified
+		mm = fitMainMixture(&inputsEntry{doc: doc, series: res.Series, latency: res.Latency, mixture: res.Mixture, engine: res.Engine},
+			opts.switches())
+		info := mm.info
+		doc.TTFTModel = &info
+	}
+	var mt *mainTPOT
+	if tpotModel != "" {
+		// So is the source priced with the TPOT model: its id names both.
+		doc.InputsID = contentID("inputs", struct {
+			Content              any
+			TTFTModel, TPOTModel string
+		}{res.Content, model, tpotModel})
+		mt = fitMainTPOT(&inputsEntry{doc: doc, series: res.Series, latency: res.Latency, decode: res.Decode, engine: res.Engine}, tpotModel, tpotSteps)
+		info := mt.info
+		doc.TPOTModel = &info
+	}
+	if tpotModel != "" && tpotSteps > 0 {
+		// And so is the distribution fitted on another fewest steps.
+		doc.InputsID = contentID("inputs", struct {
+			ID                  string
+			TPOTDistMinFitSteps int
+		}{doc.InputsID, tpotSteps})
+	}
+	if model != "" && !stratified {
+		// And so is the model read from each rank's own draws.
+		doc.InputsID = contentID("inputs", struct {
+			ID           string
+			Unstratified bool
+		}{doc.InputsID, true})
+	}
+	if model != "" && opts.moved() {
+		// And so is the model fitted with the variant's modes or another
+		// shortest fit window.
+		doc.InputsID = contentID("inputs", struct {
+			ID                      string
+			KVHold, RemainderSpread bool
+			MinFitWindow            time.Duration
+		}{doc.InputsID, opts.KVHold, opts.RemainderSpread, opts.MinFitWindow})
+	}
+	if model != "" && opts.RemainderServer {
+		// And so is the remainder drawn from the pods' API servers, hashed
+		// apart so every inputsId without it stays as it was.
+		doc.InputsID = contentID("inputs", struct {
+			ID              string
+			RemainderServer bool
+		}{doc.InputsID, true})
+	}
 	if check && (doc.Source.Kind == SourceRecording || doc.Source.Kind == SourcePrometheus) {
 		// The self-check is bounded as a plan is; out of time it is not run,
 		// and the inputs are still answered.
 		sctx, cancel := context.WithTimeoutCause(r.Context(), s.planBudget, errPlanBudget)
-		doc.SelfCheck = SelfCheckOf(sctx, res, SelfCheckInfo{PlannerVersion: s.plannerVersion})
+		doc.SelfCheck = SelfCheckOf(sctx, res, SelfCheckInfo{PlannerVersion: s.plannerVersion, TPOTModel: tpotModel})
 		cancel()
 	}
 	// The entry kept is the first caller's, but each caller is answered with
 	// its own source: two recordings of the same bytes share an id, not a
 	// name.
 	s.inputs.add(doc.InputsID, &inputsEntry{id: doc.InputsID, doc: doc, pricer: res.Pricer, series: res.Series, latency: res.Latency,
-		config: res.Config, bytes: res.Bytes})
+		config: res.Config, bytes: res.Bytes, mixture: res.Mixture, decode: res.Decode, engine: res.Engine, ttftModel: mm, tpotModel: mt})
 	body, err := marshal(doc)
 	if err != nil {
 		writeErr(w, err)
@@ -319,7 +484,7 @@ func (s *Server) handleInputs(w http.ResponseWriter, r *http.Request) {
 // handlePlan is POST /v1/plan: the scenario priced, or its cached bytes.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	var req PlanRequest
-	if !readJSON(w, r, &req) {
+	if !s.readLongJSON(w, r, &req, maxBody) {
 		return
 	}
 	body, err := s.plan(r.Context(), req)
@@ -428,15 +593,24 @@ func LoopbackOnly(next http.Handler) http.Handler {
 	})
 }
 
-// readJSON reads the request body into v strictly: a media type other than
-// application/json (none included, so that no form a page posts across sites
-// is read) is 415; an unknown field, a second value, or a body past maxBody
-// is a 400.
-func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	return readJSONUpTo(w, r, v, maxBody)
+// readLongJSON is readJSONUpTo for a request that computes: once the body is
+// read, within the server's read timeout, the connection's write deadline
+// moves to longDeadline from now (LongRequestDeadline). The read deadline is
+// left alone: once the body is read the server clears it, and its read of
+// the idle connection ends the request's context when the client leaves. A
+// recorder in a test has no connection to set a deadline on.
+func (s *Server) readLongJSON(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	if !readJSONUpTo(w, r, v, limit) {
+		return false
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.longDeadline))
+	return true
 }
 
-// readJSONUpTo is readJSON with a body of at most limit bytes.
+// readJSONUpTo reads the request body into v strictly: a media type other
+// than application/json (none included, so that no form a page posts across
+// sites is read) is 415; an unknown field, a second value, or a body past
+// limit bytes (maxBody for most routes) is a 400.
 func readJSONUpTo(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
 		writeError(w, http.StatusUnsupportedMediaType, fmt.Errorf("content type %q, want application/json", r.Header.Get("Content-Type")))

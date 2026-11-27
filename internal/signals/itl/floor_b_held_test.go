@@ -231,6 +231,47 @@ func TestTracker_ARestoredHeldBHoldsAfterARestart(t *testing.T) {
 	}
 }
 
+// A slope restored with a floor's B is held only under BaselineFromFloor
+// (issue #373). With the floor off, as in the capacity planner's replay, the
+// key prices no line through the restored B, and does not pair the floor
+// line's slope with the default B either: it holds nothing. A restored slope
+// without a floor's B is held as before. The negative control is the hold
+// with the floor on, which pairs the slope with its B.
+func TestTracker_ARestoredFloorBIsNotHeldWithTheFloorOff(t *testing.T) {
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name     string
+		adm      Admission
+		floorB   float64
+		wantHeld bool
+		wantB    float64
+	}{
+		{"the floor off", Admission{}, floorTrue.B, false, 0},
+		{"the floor off, held", Admission{HoldsFloorBaseline: true}, floorTrue.B, false, 0},
+		{"the floor on", Admission{BaselineFromFloor: true}, floorTrue.B, true, floorTrue.B},
+		{"no floor B, the floor off", Admission{}, 0, true, DefaultBaselineSec},
+	} {
+		tr := NewTracker()
+		tr.RestoreSlope("k", Slope{A: floorTrue.A, FittedAt: at.Add(-time.Minute), FloorB: c.floorB, FloorBAt: at.Add(-time.Minute)})
+		// One cycle in the band: too few readings to fit, so the
+		// restored slope is all there is to hold.
+		r := tr.Observe("k", "v", floorRows(0.35, floorTrue.A, floorTrue.B, at), c.adm, at)
+		if r.SlopeHeld != c.wantHeld {
+			t.Errorf("%s: held %v (line %+v, %q), want held %v", c.name, r.SlopeHeld, r.Model, r.Tier, c.wantHeld)
+			continue
+		}
+		if c.wantHeld && (r.Tier != TierPinnedB || math.Abs(r.Model.B-c.wantB) > 1e-12 || r.Model.A != floorTrue.A) {
+			t.Errorf("%s: line %+v (%q), want the restored A through B %g", c.name, r.Model, r.Tier, c.wantB)
+		}
+		if !c.wantHeld && math.Abs(r.Model.B-c.floorB) < 1e-12 {
+			t.Errorf("%s: line %+v (%q) priced through the restored floor B", c.name, r.Model, r.Tier)
+		}
+		if r.PinnedAtFloor != (c.wantB == floorTrue.B) {
+			t.Errorf("%s: pinned at the floor %v", c.name, r.PinnedAtFloor)
+		}
+	}
+}
+
 // A sweep of the key forgets the held B with the slope it rides on, as it
 // forgets a learned B: the key is gone, and so is what it learned.
 func TestTracker_ASweepForgetsTheHeldB(t *testing.T) {

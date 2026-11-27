@@ -270,6 +270,13 @@ func wiSeries(t *testing.T, srv *promtest.Server, q func(name string) string) {
 	srv.Add(q(registration.QuerySLORouterTPOTCount), promtest.Series{Labels: model(), Value: byStep(rate)})
 	srv.Add(q(registration.QuerySLORouterTPOTBuckets), promtest.Series{Labels: model("le", "0.05"), Value: byStep(rate)})
 	srv.Add(q(registration.QueryFlowControlWaitBuckets), promtest.Series{Labels: model("le", "0.01"), Value: byStep(rate)})
+	// The router's request processing carries no model: the namespace's.
+	srv.Add(q(registration.QuerySLORouterProcessingBuckets),
+		promtest.Series{Labels: map[string]string{"le": "0.05"}, Value: byStep(func(i int) float64 { return 0.7 * rate(i) })},
+		promtest.Series{Labels: map[string]string{"le": "+Inf"}, Value: byStep(rate)})
+	srv.Add(q(registration.QuerySLORouterProcessingSum), promtest.Series{Labels: map[string]string{},
+		Value: byStep(func(i int) float64 { return rate(i) * (0.04 + 0.002*float64(i%3)) })})
+	srv.Add(q(registration.QuerySLORouterProcessingCount), promtest.Series{Labels: map[string]string{}, Value: byStep(rate)})
 	pool := func(extra ...string) map[string]string {
 		l := map[string]string{"inference_pool": wiPool}
 		for k := 0; k+1 < len(extra); k += 2 {
@@ -731,6 +738,34 @@ func TestWhatifCapture_ReplayCountsACatchUpCycleOnce(t *testing.T) {
 func TestWhatifCapture_GenerateReproducesTheControllersRun(t *testing.T) {
 	recorded, generated, _ := wiRun(t, 0)
 	wiSameRun(t, recorded, generated)
+}
+
+// The router's request-processing histogram is kept end to end: the
+// controller records it and a capture of the same window records it the
+// same (wiSameRun), joined to acme/agg, the one model the router's TTFT
+// names, and the capacity planner's rank-mixture series reads it back from
+// either recording, with its mean.
+func TestWhatifCapture_RecordsTheRouterProcessing(t *testing.T) {
+	recorded, generated, _ := wiRun(t, 0)
+	wiSameRun(t, recorded, generated)
+	for name, rec := range map[string][]byte{"recorded": recorded, "generated": generated} {
+		cycles, err := learnreplay.MixtureSeriesFrom(learnreplay.BytesSource(rec),
+			learnreplay.StateQuery{Namespace: wiNS, ModelID: "acme/agg"}, learnreplay.SeriesVariants{})
+		require.NoError(t, err, name)
+		require.NotEmpty(t, cycles, name)
+		for i, c := range cycles {
+			require.NotNil(t, c.RouterProcessingHist, "%s cycle %d: the processing histogram was lost", name, i)
+			assert.Positive(t, c.RouterProcessingHist[math.Inf(1)], "%s cycle %d", name, i)
+			assert.InDelta(t, 0.042, c.RouterProcessingMean, 0.0021, "%s cycle %d: the mean is _sum over _count", name, i)
+		}
+		other, err := learnreplay.MixtureSeriesFrom(learnreplay.BytesSource(rec),
+			learnreplay.StateQuery{Namespace: wiNS, ModelID: "acme/pd"}, learnreplay.SeriesVariants{})
+		require.NoError(t, err, name)
+		require.NotEmpty(t, other, name)
+		for i, c := range other {
+			assert.Nil(t, c.RouterProcessingHist, "%s cycle %d: acme/pd was given acme/agg's router time", name, i)
+		}
+	}
 }
 
 // A window asked in parts (whatifsource maxPointsPerQuery, set small here)

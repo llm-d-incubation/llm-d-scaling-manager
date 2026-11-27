@@ -106,6 +106,14 @@ func hoursWords(d time.Duration) string {
 // the prompt priced.
 const kneeAtServedWork whatif.Flag = "KneeAtServedWork"
 
+// servedWorkUnsteady is a prefill knee priced from a lower bound of V_P that
+// no served work floors: at the pod count priced the prefill pods served a
+// stretch of learnreplay.ServedWorkWindow, and the backlog grew in every one
+// (learnreplay.PrefillState.ServedUnsteady). A burst carried with a queue
+// building is not a rate the pods hold (#477), so the knee stays at its
+// lower bound.
+const servedWorkUnsteady whatif.Flag = "ServedWorkUnsteady"
+
 // vpAtServedWork is a V_P raised for the TTFT with a knee floored at the
 // served work (atServedWork, saturation.SwitchPrefillVPAtServedWork): the
 // TTFT is priced from the V_P that knee implies, still a lower bound.
@@ -349,11 +357,19 @@ type pricedFleet struct {
 	assumedVP bool
 	// statedCV is a cv --assume-prompt-cv supplied, in in.PromptCV.
 	statedCV bool
+	// contextTokens is the prefill engines' context window (contextOf),
+	// which holds the prompt spread's mass past the histogram's last bound;
+	// 0 where the recorded arguments do not say it.
+	contextTokens float64
 	// prefixAttention is slo.SwitchTTFTPrefixAttention, as the replay read
 	// it (PrefillState.PrefixAttention), and prefillServed the prefill
 	// variant's measured shape: its hit rate is what the prefill pods skip.
 	prefixAttention bool
 	prefillServed   learnreplay.MeasuredShape
+	// stepComputed says the prompt priced is the one a backtest step's
+	// prefill pods computed (stepComputedPrompt), the whole prompt less it
+	// their cached context.
+	stepComputed bool
 	// computedHit is slo.SwitchTTFTComputedHit, as the replay read it
 	// (PrefillState.ComputedHit), and promptWindow the prefill variant's
 	// window its hit is read from (whatif.PromptWindow.ComputedHit).
@@ -367,6 +383,15 @@ type pricedFleet struct {
 	// read it (PrefillState.VPAtServedWork): V_P raised with a knee floored at
 	// the served work, for the TTFT too (atServedWork).
 	vpAtServedOn bool
+	// hitAtCountOn is saturation.SwitchPrefillHitAtCount, as the replay
+	// read it (PrefillState.HitAtCount), and hitAtCount the hit it priced at
+	// the fleet's prefill count (priceHitAtCount); nil where it priced none.
+	hitAtCountOn bool
+	hitAtCount   *prefill.HitAtCount
+	// hitModel is the reuse-gap law fitted on the prompt window with the
+	// switch on (whatif.PromptWindow.HitModel); nil where the recording
+	// holds no KV residency histograms.
+	hitModel *prefill.HitModel
 	// servedWork is the prefill pods' sustained computed-token work by pod
 	// count over the whole window (learnreplay.PrefillState
 	// .ServedComputedWindow) whatever the prompt
@@ -382,8 +407,14 @@ type pricedFleet struct {
 	// servedComputed is, by pod count, the computed-token work the prefill
 	// pods sustained (learnreplay.PrefillState.ServedComputed), kept only
 	// where the prompt priced is the one those pods computed, read off the
-	// same counter: the floor under a lower-bound knee (servedKneeFloor).
+	// same counter (the measured prompt, or the load's netted by their
+	// computed-token hit): the floor under a lower-bound knee
+	// (servedKneeFloor).
 	servedComputed map[int]float64
+	// servedUnsteady is, by pod count, served work that was not sustained
+	// (learnreplay.PrefillState.ServedUnsteady), read with servedComputed:
+	// the knee is flagged servedWorkUnsteady instead of floored.
+	servedUnsteady map[int]bool
 	// cachedTokenCost is slo.SwitchTTFTCachedTokenCost, as the replay read
 	// it (PrefillState.CachedTokenCost): priceCachedLoad.
 	cachedTokenCost bool
@@ -519,6 +550,9 @@ var processorSharing = true
 func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillState, q ttftQuestion, pv *pricedVariant) *pricedFleet {
 	pf := &pricedFleet{pv: pv, q: q.q, flags: []whatif.Flag{assumedPoisson}, model: st.ModelID, stated: f.statedOutside(),
 		in: wireTTFT{Percentile: q.q, TargetSeconds: q.seconds, Assumed: []string{}}}
+	if rp := st.RouterPolicy; rp.Cycles > 0 {
+		pf.in.RouterPolicy = &rp
+	}
 	if pv != nil {
 		pf.in.DecodeVariant = pv.state.Variant
 		// Before any refusal: decode is priced on a stated B whether or not
@@ -552,6 +586,7 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	pf.tierLoadOn = ps.TierLoad
 	pf.tierKVWaitOn = ps.TierKVWait
 	pf.vpAtServedOn = ps.VPAtServedWork
+	pf.hitAtCountOn = ps.HitAtCount
 	pf.servedWork = ps.ServedComputedWindow
 	pf.cachedTokenCost = ps.CachedTokenCost
 	for _, vs := range st.Variants {
@@ -581,6 +616,11 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	// whatif.DefaultChargeDecodeGate).
 	pf.fleet.PSOnsets, pf.fleet.ChargeDecodeGate = f.psOnsets, f.chargeDecodeGate
 	pf.fleet.Prefill.RunningCap = f.prefillRunningCap
+	// The prefill engines' context window bounds the prompt spread's top
+	// bucket (whatif.ReadPromptSpreadWithin); unknown, it is left open.
+	if c := contextOf(st.Variants, ps.Variant); c.Value != nil {
+		pf.contextTokens = *c.Value
+	}
 	f.prefillShape(pf, ps)
 	if ps.PSByEngine {
 		pf.psByEngine(st, ps)
@@ -592,7 +632,7 @@ func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillSt
 	pf.promptAssumed = f.set["assume-input-tokens"]
 	pf.hint = f.hintSource()
 	pf.decodeSide()
-	if pf.fleet.Decode != nil && pf.pv.state.Shape.OutputDispersion == 0 {
+	if pf.fleet.Decode != nil && pf.pv.outputDispersion == 0 {
 		pf.assume("%s", outputSpreadUnreadWords)
 	}
 	pf.flowControl(st, f.flowControl)
@@ -732,6 +772,7 @@ func (f *answerFlags) prefillInputs(pf *pricedFleet, ps *learnreplay.PrefillStat
 		}
 		est.VP, est.VPRefused, est.VPLowerBound, est.VPAboveSlopeBound = f.assumeVP, "", false, false
 		est.VPPromptTokens, est.VPWholePromptTokens, est.VPPromptHitRate = 0, 0, 0
+		est.VPPromptLow, est.VPPromptHigh = 0, 0
 		pf.assumedVP = true
 		pf.in.VPSource = shapeAssumed
 		pf.assume("V_P %s tok/s (--assume-vp)", num(f.assumeVP))
@@ -838,6 +879,7 @@ func (f *answerFlags) prefillInputs(pf *pricedFleet, ps *learnreplay.PrefillStat
 		}
 	}
 	pf.in.Imbalance = max(p.Imbalance, 1)
+	pf.routerPolicyNote(f.loadAwareRouter)
 	if f.loadAwareRouter {
 		p.LoadAwareRouter = true
 		p.ImbalanceUtilization = whatif.ImbalanceUtilizationAt(ps.Estimate, p.Replicas, p.VP)
@@ -845,6 +887,10 @@ func (f *answerFlags) prefillInputs(pf *pricedFleet, ps *learnreplay.PrefillStat
 			pf.assume("f %s held to %.2f utilization, then falling to 1 at the pooled prefill knee (--load-aware-router)",
 				num(p.Imbalance), p.ImbalanceUtilization)
 		}
+	}
+	if f.fLoadCurve && f.fixedImbalance == 0 {
+		// The sensitivity to f prices the f it states, not the curve's.
+		pf.priceFLoadCurve(ps, &p)
 	}
 	return p, nil
 }
@@ -900,10 +946,17 @@ func (f *answerFlags) prefillShape(pf *pricedFleet, ps *learnreplay.PrefillState
 		pf.assume("prompt %s tokens "+assumeInputTokensWords, num(round(p.PromptTokens)))
 		if hit, replaced, ok := pf.netByComputedHit(); ok {
 			pf.assume("prompt netted by the prefill pods' computed-token hit %.3f, not the prefix-cache hit %.3f", hit, replaced)
+			if pf.loadShapeRead() {
+				// The load's prompt is then in the tokens the prefill pods
+				// computed, read off the counter their served work is, so
+				// the knee keeps its floor at that work, as measured.
+				pf.servedComputed, pf.servedUnsteady = ps.ServedComputed, ps.ServedUnsteady
+			}
 		}
+		pf.stepComputedPrompt(f.inputTokens, f.prefillComputed)
 	case ps.PromptTokens > 0:
 		p.PromptTokens, pf.in.PromptSource = ps.PromptTokens, shapeMeasured
-		pf.servedComputed = ps.ServedComputed
+		pf.servedComputed, pf.servedUnsteady = ps.ServedComputed, ps.ServedUnsteady
 		pf.in.PromptFromCycle, pf.in.PromptToCycle = ps.PromptFromCycle, ps.PromptToCycle
 		if hit, ok := pf.prefillHit(); ok {
 			p.WholePromptTokens, p.PromptHitRate = pf.prefillServed.InputTokens, hit
@@ -913,6 +966,7 @@ func (f *answerFlags) prefillShape(pf *pricedFleet, ps *learnreplay.PrefillState
 		p.WholePromptTokens, pf.in.PromptSource = pv.shape.AvgInputTokens, "decode shape"
 		pf.assume("prompt %s tokens (the decode variant's; no computed-token rate on the prefill rows)", num(round(p.PromptTokens)))
 	}
+	pf.priceHitAtCount(ps)
 	pf.in.PromptTokens = p.PromptTokens
 	if p.WholePromptTokens > 0 {
 		hit := p.PromptHitRate
@@ -922,7 +976,7 @@ func (f *answerFlags) prefillShape(pf *pricedFleet, ps *learnreplay.PrefillState
 	// The window's, whatever the prompt asked: a cv is a figure of the traffic
 	// the histogram counted. --assume-prompt-cv overrides it, as every
 	// --assume-* flag overrides the recording, with the read figure beside it.
-	spread := ps.PromptWindow.Spread()
+	spread := ps.PromptWindow.SpreadWithin(pf.contextTokens)
 	p.PromptCV, p.PromptCVAssumed = spread.CV, spread.Assumed
 	switch {
 	case !ps.PromptSupport:
@@ -953,6 +1007,9 @@ func (f *answerFlags) prefillShape(pf *pricedFleet, ps *learnreplay.PrefillState
 	case spread.Clamped:
 		pf.in.PromptCVSource = shapeClamped
 		pf.assume("prompt cv %s (the histogram reads past its last bound, or above it)", num(spread.CV))
+	case spread.ClosedAt > 0:
+		pf.assume("prompt cv %s, an upper bound: the histogram's mass past its last bound held under the context window, %s tokens",
+			num(spread.CV), num(spread.ClosedAt))
 	}
 
 	if pv != nil && pv.state.DecodeTTFT.TransferSeconds > 0 && ps.PromptTokens > 0 {
@@ -960,6 +1017,7 @@ func (f *answerFlags) prefillShape(pf *pricedFleet, ps *learnreplay.PrefillState
 	} else if f.set["assume-transfer-base"] {
 		pf.assume("--assume-transfer-base not applied: no KV transfer measured on the decode rows")
 	}
+	pf.cachedContext()
 	pf.tierLoad(ps)
 }
 
@@ -1013,8 +1071,9 @@ func (pf *pricedFleet) transferPerToken(read, base float64) float64 {
 // was read (prefillHit): the prefill pods compute the prompt less their own
 // hits, not decode's; else the decode variant's, as off.
 //
-// With slo.SwitchTTFTComputedHit on, where netByComputedHit holds, it is il
-// less the prefill pods' computed-token hit instead, which counts the hits
+// With slo.SwitchTTFTComputedHit on, or for the load's shape, where
+// netByComputedHit holds, it is il less the prefill pods' computed-token
+// hit instead, which counts the hits
 // of every tier; the hit rate beside it stays a prefix-cache one, the
 // prefill variant's where read, so it compares with V_P's (prefixMoved).
 func (pf *pricedFleet) effectivePrompt(il float64) (float64, float64) {
@@ -1037,8 +1096,14 @@ func (pf *pricedFleet) effectivePrompt(il float64) (float64, float64) {
 // moves. A hit the question states (--prefix-hit, an IL/OL/hit shape)
 // governs; one the load's cycles filled in (--shape load) is read, not
 // stated, and does not.
+//
+// The load's shape, and a whole prompt read from the source's cycles, nets
+// by it with the switch off too (loadShapeRead): its hit is the decode
+// variant's, which on a P/D fleet is not a hit of the prefill pods at all,
+// and netting by it priced the whole prompt as computed where the measured
+// shape prices what the prefill pods computed.
 func (pf *pricedFleet) netByComputedHit() (computed, replaced float64, ok bool) {
-	if !pf.computedHit {
+	if !pf.computedHit && !pf.loadShapeRead() {
 		return 0, 0, false
 	}
 	if pf.pv != nil && pf.pv.assumedHit && !pf.pv.hitRead {
@@ -1053,6 +1118,21 @@ func (pf *pricedFleet) netByComputedHit() (computed, replaced float64, ok bool) 
 		return 0, 0, false
 	}
 	return computed, replaced, true
+}
+
+// loadShapeRead says the prompt priced is the source's own, its hit read
+// from the source, not stated: the load's cycles' (--shape load, the
+// report's default shape), or a whole prompt read from them with no hit
+// stated (whatifapi.Knobs.PromptTokensRead: a day plan's bucket, a
+// backtest's step). A stated hit governs either way.
+func (pf *pricedFleet) loadShapeRead() bool {
+	switch {
+	case pf.pv == nil:
+		return false
+	case pf.pv.assumedHit:
+		return pf.pv.hitRead
+	}
+	return pf.pv.assumedIL && pf.pv.ilRead
 }
 
 // prefixCachePrompt is effectivePrompt netted by a prefix-cache hit rate, as
@@ -1071,6 +1151,31 @@ func (pf *pricedFleet) prefixCachePrompt(il float64) (float64, float64) {
 		return il, 0
 	}
 	return pf.pv.shape.ILeff, pf.pv.shape.PrefixHitRate
+}
+
+// stepComputedPrompt prices the prompt a backtest step's prefill pods
+// computed, computed tokens of a whole prompt of whole, with
+// slo.SwitchTTFTPrefixAttention on (issue
+// llm-d-incubation/llm-d-scaling-manager#311): the prefill work is what
+// those pods computed, and the rest of the whole prompt is the cached
+// context its attention spans (cachedContext). Without it a step's whole
+// prompt is netted by the hit of the fit's rows, so a step whose prefill
+// pods hit, fitted on rows that did not, is priced as if they computed all
+// of it. A stated hit governs; off, with no computed prompt read, or with
+// the step's hit at most whatif.MaterialPrefixHitMove (the two prompts are
+// read off different rows, decode's and prefill's, and agree only to within
+// that with no cache), nothing moves.
+func (pf *pricedFleet) stepComputedPrompt(whole, computed float64) {
+	if !pf.prefixAttention || !(computed > 0) || !(whole > 0) || !(1-computed/whole > whatif.MaterialPrefixHitMove) {
+		return
+	}
+	if pf.pv != nil && pf.pv.assumedHit && !pf.pv.hitRead {
+		return
+	}
+	p := &pf.fleet.Prefill
+	p.PromptTokens, p.PromptHitRate, p.WholePromptTokens = computed, 1-computed/whole, whole
+	pf.stepComputed = true
+	pf.assume("prompt %s tokens computed of %s, as the step's prefill pods computed them", num(round(computed)), num(round(whole)))
 }
 
 // prefillHit is the prefill variant's measured prefix-cache hit rate, false
@@ -1300,6 +1405,24 @@ const (
 	flowControlOff = "off"
 )
 
+// routerPolicyNote says where the router's policy as its series read it
+// (wireTTFT.RouterPolicy) contradicts --load-aware-router, stated is the
+// flag's value. The flag still prices f; nothing is said where the series
+// do not decide whether the router scores load.
+func (pf *pricedFleet) routerPolicyNote(stated bool) {
+	if pf.in.RouterPolicy == nil {
+		return
+	}
+	aware, detected := pf.in.RouterPolicy.LoadAwareRouter()
+	switch {
+	case !detected || aware == stated:
+	case stated:
+		pf.assume("--load-aware-router stated, but the router's series read it not load-aware (%s)", pf.in.RouterPolicy.Policy)
+	default:
+		pf.assume("f priced without --load-aware-router, but the router's series read it load-aware (%s)", pf.in.RouterPolicy.Policy)
+	}
+}
+
 // describe is the fleet's inputs, in a line.
 func (pf *pricedFleet) describe() {
 	p := pf.fleet.Prefill
@@ -1331,6 +1454,9 @@ func (pf *pricedFleet) describe() {
 		fmt.Fprintf(&b, "; decode engine TTFT %.1f ms at %s tokens, measured", 1000*pf.fleet.DecodeTTFT.Seconds, num(round(pf.fleet.DecodeTTFT.PromptTokens)))
 	default:
 		b.WriteString("; decode side omitted")
+	}
+	if rp := pf.in.RouterPolicy; rp != nil {
+		fmt.Fprintf(&b, "; router %s (from its series)", rp.Policy)
 	}
 	pf.inputsText = b.String()
 }
@@ -1447,7 +1573,7 @@ func (pf *pricedFleet) atServedWork(fl whatif.TTFTFleet) whatif.TTFTFleet {
 	if !ok {
 		return fl
 	}
-	fl.Prefill.VP *= ratio
+	fl.Prefill = fl.Prefill.WithVP(fl.Prefill.VP * ratio)
 	return fl
 }
 
@@ -1546,7 +1672,9 @@ func (pf *pricedFleet) knee() whatif.Result {
 // r rests on a lower bound of V_P (whatif.VPLowerBound) and that is higher:
 // work / E[I_eff] at the pod count priced, flagged kneeAtServedWork. A pod
 // computes no faster than its capacity, so the work the pods kept up over
-// learnreplay.ServedWorkWindow is work they can do, and the knee is at least
+// learnreplay.ServedWorkWindow with no backlog growing is work they can do,
+// and where they served only with a backlog growing the knee is left as
+// priced, flagged servedWorkUnsteady. The knee is at least
 // the rate it serves; both sides are read off the engines' computed-token
 // counter, so no model of the prompt stands between them. A knee priced from
 // a V_P that is no lower bound is left as priced: a window that served past
@@ -1560,6 +1688,10 @@ func (pf *pricedFleet) servedKneeFloor(r whatif.Result) whatif.Result {
 		return r
 	}
 	work := pf.servedComputed[p.Replicas]
+	if !(work > 0) && pf.servedUnsteady[p.Replicas] {
+		a.Flags = append(slices.Clone(a.Flags), servedWorkUnsteady)
+		return a
+	}
 	floor := work / p.PromptTokens
 	if !whatif.Finite(floor) || !(floor > a.Value) {
 		return r

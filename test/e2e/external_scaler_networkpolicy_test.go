@@ -8,6 +8,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // The installer writes the scaling-manager-external-scaler NetworkPolicy with the namespace
@@ -21,7 +22,6 @@ const (
 	externalScalerNetworkPolicy = "scaling-manager-external-scaler"
 	externalScalerPort          = 9090
 	kedaOperatorPodSelector     = "app.kubernetes.io/name=keda-operator"
-	namespaceNameLabel          = "kubernetes.io/metadata.name"
 )
 
 var _ = Describe("KEDA external scaler NetworkPolicy", Label("smoke", "full"), func() {
@@ -52,36 +52,51 @@ var _ = Describe("KEDA external scaler NetworkPolicy", Label("smoke", "full"), f
 			"KEDA's operator runs in more than one namespace; the installer refuses that ambiguity, so this policy cannot be right for all of them")
 		kedaNS := kedaNamespaces[0]
 
-		admitted := scalerPortNamespaces(np)
-		GinkgoWriter.Printf("KEDA operator namespace: %s; NetworkPolicy admits to :%d from: %v\n", kedaNS, externalScalerPort, admitted)
-		Expect(admitted).To(ContainElement(kedaNS),
-			"the external-scaler NetworkPolicy admits %v to :%d, but KEDA's operator runs in %q: KEDA is refused and nothing scales. "+
-				"Reinstall with KEDA_NAMESPACE=%s", admitted, externalScalerPort, kedaNS, kedaNS)
+		kedaNamespace, err := k8sClient.CoreV1().Namespaces().Get(ctx, kedaNS, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred(), "reading KEDA's namespace %s", kedaNS)
+		admitted := scalerPortSelectors(np)
+		GinkgoWriter.Printf("KEDA operator namespace: %s (labels %v); NetworkPolicy admits to :%d the namespaces matching: %v\n",
+			kedaNS, kedaNamespace.Labels, externalScalerPort, admitted)
+		Expect(admitsNamespace(admitted, kedaNamespace.Labels)).To(BeTrue(),
+			"the external-scaler NetworkPolicy admits the namespaces matching %v to :%d, but KEDA's operator runs in %q (labels %v): "+
+				"KEDA is refused and nothing scales. Reinstall with KEDA_NAMESPACE=%s, or on the one-manifest install label the namespace "+
+				"scaling-manager.llmd.ai/keda=true (scaling-manager-admin.sh upgrade --keda-namespace %s)",
+			admitted, externalScalerPort, kedaNS, kedaNamespace.Labels, kedaNS, kedaNS)
 	})
 })
 
-// scalerPortNamespaces returns the namespaces, named by the API server's
-// kubernetes.io/metadata.name label, that np admits to the external scaler
-// port through a namespaceSelector. A rule with a podSelector beside the
+// scalerPortSelectors returns the namespaceSelector labels np admits whole
+// namespaces by to the external scaler port: kubernetes.io/metadata.name,
+// which names one namespace, or the one-manifest install's
+// scaling-manager.llmd.ai/keda=true. A rule with a podSelector beside the
 // namespaceSelector, or with matchExpressions, is not counted: neither admits
-// a whole namespace by name.
-func scalerPortNamespaces(np *networkingv1.NetworkPolicy) []string {
-	var out []string
+// a whole namespace by its labels alone.
+func scalerPortSelectors(np *networkingv1.NetworkPolicy) []map[string]string {
+	var out []map[string]string
 	for _, rule := range np.Spec.Ingress {
 		if !rulesPort(rule, externalScalerPort) {
 			continue
 		}
 		for _, peer := range rule.From {
 			sel := peer.NamespaceSelector
-			if sel == nil || peer.PodSelector != nil || len(sel.MatchExpressions) > 0 {
+			if sel == nil || peer.PodSelector != nil || len(sel.MatchExpressions) > 0 || len(sel.MatchLabels) == 0 {
 				continue
 			}
-			if ns := sel.MatchLabels[namespaceNameLabel]; ns != "" {
-				out = append(out, ns)
-			}
+			out = append(out, sel.MatchLabels)
 		}
 	}
 	return out
+}
+
+// admitsNamespace reports whether one of selectors matches a namespace with
+// labels nsLabels.
+func admitsNamespace(selectors []map[string]string, nsLabels map[string]string) bool {
+	for _, sel := range selectors {
+		if labels.SelectorFromSet(sel).Matches(labels.Set(nsLabels)) {
+			return true
+		}
+	}
+	return false
 }
 
 // rulesPort reports whether an ingress rule covers TCP port.

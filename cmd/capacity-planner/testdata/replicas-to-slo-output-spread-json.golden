@@ -84,7 +84,9 @@
           "gpuMemoryUtilization": 0.9,
           "gpuMemoryUtilizationSource": "not recorded",
           "blockSize": 128,
-          "blockSizeSource": "not recorded"
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
         }
       },
       "results": {
@@ -104,16 +106,20 @@
               "boundBy": [
                 "batch cap"
               ],
-              "tier": "pinned-B"
+              "tier": "pinned-B",
+              "batchBeyondFit": {
+                "priced": 64,
+                "fitted": 24
+              }
             },
             "flags": [
-              "BatchBeyondFit",
-              "ExtrapolatedFill"
+              "ExtrapolatedFill",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,
-              "label": "OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)",
-              "outside": "arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25"
+              "label": "OUTSIDE VALIDATED REGION (ExtrapolatedFill: an input the run did not price)",
+              "outside": "ExtrapolatedFill: an input the run did not price"
             }
           }
         },
@@ -133,11 +139,15 @@
               "boundBy": [
                 "operating-point cap"
               ],
-              "tier": "pinned-B"
+              "tier": "pinned-B",
+              "batchBeyondFit": {
+                "priced": 48,
+                "fitted": 24
+              }
             },
             "flags": [
-              "BatchBeyondFit",
-              "ExtrapolatedFill"
+              "ExtrapolatedFill",
+              "BatchBeyondFit"
             ]
           }
         },
@@ -155,11 +165,15 @@
               "floor": 0.002221892534461583,
               "uncapped": 0,
               "boundBy": [],
-              "tier": "pinned-B"
+              "tier": "pinned-B",
+              "batchBeyondFit": {
+                "priced": 48,
+                "fitted": 24
+              }
             },
             "flags": [
-              "BatchBeyondFit",
-              "ExtrapolatedFill"
+              "ExtrapolatedFill",
+              "BatchBeyondFit"
             ],
             "validation": {
               "validated": false,

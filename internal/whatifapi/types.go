@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 )
 
 // SchemaVersion is the API's own schema version. Removing, renaming or
@@ -34,11 +37,65 @@ type InputsRequest struct {
 	// prefill pod queued (the CLI's --prefill-vp-plateau): experimental and
 	// off by default. Every figure priced from it is flagged VPFromPlateau.
 	PrefillVPPlateau bool `json:"prefillVPPlateau,omitempty"`
+	// PrefillHitAtCount prices the prefix hit at a prefill count other than
+	// the source's (the CLI's --prefill-hit-at-count): off by default. At
+	// fewer pods the hit is the floor hit x N'/N, flagged PrefixHitAtCount;
+	// at more it is held, flagged PrefixHitHeld.
+	PrefillHitAtCount bool `json:"prefillHitAtCount,omitempty"`
+	// PrefillVPServiceLine reads V_P from the prefill service line where no
+	// prefill pod queued: a V_P read under a queue stands (the CLI's
+	// --prefill-vp-service-line): opt-in, off by default, and not validated,
+	// so every figure reads outside the validated region.
+	PrefillVPServiceLine bool `json:"prefillVPServiceLine,omitempty"`
+	// PrefillFLoadCurve prices f, the prefill imbalance, against the load
+	// per pod at each prefill count whose fit is identified (the CLI's
+	// --prefill-f-load-curve): opt-in, off by default, validated on lab
+	// recordings only, so every figure reads outside the validated region.
+	PrefillFLoadCurve bool `json:"prefillFLoadCurve,omitempty"`
 	// ExperimentalTTFT prices TTFT with the TTFT model's switches that are
 	// off by default (the CLI's --experimental-ttft): for demonstration,
 	// not validated. Every prefill and TTFT figure is flagged
 	// ExperimentalTTFT.
 	ExperimentalTTFT bool `json:"experimentalTTFT,omitempty"`
+	// TTFTModel prices the main view's TTFT with an experimental model:
+	// "" is the server's default (serve --experimental-ttft=v2 or
+	// =v2nl-line), whatif.QueueRankMixture or its variant
+	// whatif.QueueRankMixtureNLLine. The model is fitted on the source's
+	// window as a backtest fits it, and abstains where it is not
+	// identified; the planner's TTFT then stands.
+	TTFTModel string `json:"ttftModel,omitempty"`
+	// RankMixtureStratified is BacktestRequest.RankMixtureStratified for
+	// the main view's model: absent, the server's default (on, unless the
+	// server was started with --rank-mixture-stratified=false). Read only
+	// with TTFTModel rank-mixture; false changes the inputsId.
+	RankMixtureStratified *bool `json:"rankMixtureStratified,omitempty"`
+	// RankMixtureKVHold, RankMixtureRemainderSpread and
+	// RankMixtureMinFitWindow are BacktestRequest's for the main view's
+	// model: each, where the request does not set it, the server's default
+	// (serve --rank-mixture-kv-hold, --rank-mixture-remainder-spread,
+	// --rank-mixture-min-fit-window). The two modes are the variant's
+	// (TTFTModel rank-mixture-nl-line) only; the window is either model's.
+	// Each changes the inputsId.
+	RankMixtureKVHold          bool   `json:"rankMixtureKVHold,omitempty"`
+	RankMixtureRemainderSpread bool   `json:"rankMixtureRemainderSpread,omitempty"`
+	RankMixtureMinFitWindow    string `json:"rankMixtureMinFitWindow,omitempty"`
+	// RankMixtureRemainderServer is BacktestRequest's for the main view's
+	// model, defaulted as the modes above are (serve
+	// --rank-mixture-remainder-server); only with the variant and its
+	// remainder spread. It changes the inputsId.
+	RankMixtureRemainderServer bool `json:"rankMixtureRemainderServer,omitempty"`
+	// TPOTDistMinFitSteps is BacktestRequest's for the main view's TPOT
+	// distribution: absent, the server's default (serve
+	// --tpot-dist-min-fit-steps), else 24. Only with a TPOTModel; another
+	// count changes the inputsId.
+	TPOTDistMinFitSteps int `json:"tpotDistMinFitSteps,omitempty"`
+	// TPOTModel prices the main view's TPOT p90 and p95 with an
+	// experimental per-request TPOT distribution: "" is the server's
+	// default (serve --experimental-tpot=v2), and
+	// whatif.TPOTRenewalLognormal the only other. It is fitted on the
+	// source's window and abstains where its checks fail; the planner's
+	// percentile then stands. The mean TPOT is the planner's either way.
+	TPOTModel string `json:"tpotModel,omitempty"`
 }
 
 // The source kinds.
@@ -59,6 +116,10 @@ type SourceRequest struct {
 	To        string `json:"to,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Cycle     int    `json:"cycle,omitempty"`
+	// Cycles, when set, reads the recording with only these cycles
+	// (learnreplay.CyclesOf): a load split's fit (LoadFitCycles). Never
+	// sent: a backtest sets it.
+	Cycles *CycleSet `json:"-"`
 }
 
 // InputsResponse is a source resolved: every term the plans price from, each
@@ -86,9 +147,35 @@ type InputsResponse struct {
 	// PrefillVPPlateau says the source was read with V_P from the occupancy
 	// plateau (InputsRequest.PrefillVPPlateau); absent otherwise.
 	PrefillVPPlateau bool `json:"prefillVPPlateau,omitempty"`
+	// PrefillHitAtCount says the source was read with the prefix hit priced
+	// at each prefill count (InputsRequest.PrefillHitAtCount); absent
+	// otherwise.
+	PrefillHitAtCount bool `json:"prefillHitAtCount,omitempty"`
+	// PrefillHitModel is the reuse-gap law the prefix hit at another
+	// prefill count is priced with, fitted on the source's KV residency
+	// histograms (prefill.FitHitModel); absent with PrefillHitAtCount off
+	// or no histograms recorded.
+	PrefillHitModel *prefill.HitModel `json:"prefillHitModel,omitempty"`
+	// PrefillVPServiceLine says the source was read with V_P from the
+	// prefill service line (InputsRequest.PrefillVPServiceLine); absent
+	// otherwise.
+	PrefillVPServiceLine bool `json:"prefillVPServiceLine,omitempty"`
+	// PrefillFLoadCurve says the source was read with f against the load
+	// (InputsRequest.PrefillFLoadCurve); absent otherwise.
+	PrefillFLoadCurve bool `json:"prefillFLoadCurve,omitempty"`
 	// ExperimentalTTFT says the source was read with the experimental TTFT
 	// model (InputsRequest.ExperimentalTTFT); absent otherwise.
 	ExperimentalTTFT bool `json:"experimentalTTFT,omitempty"`
+	// TTFTModel is the experimental TTFT model the main view prices with,
+	// as fitted on the source (InputsRequest.TTFTModel); absent otherwise.
+	TTFTModel *TTFTModelInfo `json:"ttftModel,omitempty"`
+	// TPOTModel is the experimental TPOT model the main view prices with,
+	// as fitted on the source (InputsRequest.TPOTModel); absent otherwise.
+	TPOTModel *TPOTModelInfo `json:"tpotModel,omitempty"`
+	// Measured is the source's busiest UTC hour and the TTFT and TPOT the
+	// router measured over it (BusiestHourMeasured); absent with no router
+	// histogram. It is measured, never priced.
+	Measured *MeasuredHour `json:"measured,omitempty"`
 }
 
 // SourceInfo is what the inputs were read from. Prometheus is the URL's
@@ -160,6 +247,42 @@ type EngineInfo struct {
 	GPUMemoryUtilizationSource string  `json:"gpuMemoryUtilizationSource"`
 	BlockSize                  int64   `json:"blockSize"`
 	BlockSizeSource            string  `json:"blockSizeSource"`
+	// Attention is the model's attention kind and MoE its MoE class, read
+	// from its config.json: "unknown" where none was read (issues #501,
+	// #503). ModelConfigSource is where the config was read, and Model both
+	// in words, as the engine row prints them; absent where neither is
+	// known. Reported, not priced.
+	Attention         string `json:"attention"`
+	MoE               string `json:"moe"`
+	ModelConfigSource string `json:"modelConfigSource,omitempty"`
+	Model             string `json:"model,omitempty"`
+	// StepBudgetBinding is whether the step budget binds, read from the
+	// engine's tokens per iteration; absent where no row of the variant carried
+	// that series (a recording made before it was recorded, or SGLang).
+	StepBudgetBinding *StepBudgetBinding `json:"stepBudgetBinding,omitempty"`
+}
+
+// StepBudgetBinding is whether a variant's step budget binds, read from the
+// engine's tokens per iteration (vllm:iteration_tokens_total: the computed
+// prompt tokens of the prefills an iteration completed, each whole, and the
+// tokens it generated) over the window against StepBudget
+// (capacity.StepTokens.Binding). Class is "binds", "does-not-bind" or
+// "unknown", and Reason says why it is unknown. The class is decided on
+// OverShare, the share of iterations above BoundTokens, the smallest bound at
+// or over the budget: completions of prompts the budget chunked. Share, the
+// share above NearTokens (the largest bound under 90% of the budget), is a
+// diagnostic. TopTokens is the bound at or under which 99.9% of the
+// iterations counted, a floor where TopOpen. Reported only: no figure reads
+// it yet.
+type StepBudgetBinding struct {
+	Class       string  `json:"class"`
+	Reason      string  `json:"reason,omitempty"`
+	BoundTokens float64 `json:"boundTokens,omitempty"`
+	OverShare   float64 `json:"overShare"`
+	NearTokens  float64 `json:"nearTokens,omitempty"`
+	Share       float64 `json:"share"`
+	TopTokens   float64 `json:"topTokens,omitempty"`
+	TopOpen     bool    `json:"topOpen,omitempty"`
 }
 
 // Observed is the traffic the source saw.
@@ -205,6 +328,12 @@ type PolicyInfo struct {
 	TPOT        *PolicyObjective `json:"tpot,omitempty"`
 	Headroom    float64          `json:"headroom"`
 	FlowControl string           `json:"flowControl"`
+	// Router is what the router scores, the prefix cache, the load, both or
+	// neither, read from its series (balance.DetectRouterPolicy), with the
+	// evidence; absent where the source holds none of them, so such a
+	// source's document is as before. It sets no price:
+	// --load-aware-router (Assume.LoadAwareRouter) still does.
+	Router *balance.RouterPolicy `json:"router,omitempty"`
 }
 
 // PolicyObjective is one SLO objective: its statistic and target.
@@ -255,6 +384,27 @@ type Figure struct {
 	// is met; one it misses is not known to be missed (issue
 	// llm-d-incubation/llm-d-scaling-manager#369).
 	UpperBound bool `json:"upperBound,omitempty"`
+	// Extrapolated says the figure, priced by the experimental TTFT or
+	// TPOT model, is at a rate above the highest load the source's fit
+	// window served (TTFTModelView.MeasuredUpTo,
+	// TPOTModelView.MeasuredUpTo).
+	Extrapolated bool `json:"extrapolated,omitempty"`
+	// BatchBeyondFit is the batch a decode figure's fill runs past the most
+	// the ITL line's fit rows held, where it is (flag BatchBeyondFit): the
+	// figure is priced all the same, and its TPOT may read low and its knee
+	// high.
+	BatchBeyondFit *BatchBeyondFit `json:"batchBeyondFit,omitempty"`
+}
+
+// BatchBeyondFit is a decode figure's batch against its line's fit, in
+// sequences an engine rank: Priced at the figure's fill, Fitted the most the
+// rows the line was fitted on held (the held fit's for a held line). Ranks
+// is the data-parallel engine ranks a pod runs, where more than one: the
+// batches are then a rank's, not the pod's; absent for one.
+type BatchBeyondFit struct {
+	Priced int64 `json:"priced"`
+	Fitted int64 `json:"fitted"`
+	Ranks  int   `json:"ranks,omitempty"`
 }
 
 // Band is a bootstrap band, Lo to Hi.
@@ -321,9 +471,13 @@ type Classes struct {
 	Batch    *ClassRate `json:"batch,omitempty"`
 }
 
-// ClassRate is one class's rate, requests per second over the model.
+// ClassRate is one class's rate, requests per second over the model, or its
+// load as a concurrency, the mean number of requests in the system: a plan
+// translates it into the rate at which the scenario's fleet holds that many
+// (Little's law), below the fleet's knee. Give one of the two.
 type ClassRate struct {
-	Rate *float64 `json:"rate,omitempty"`
+	Rate        *float64 `json:"rate,omitempty"`
+	Concurrency *float64 `json:"concurrency,omitempty"`
 }
 
 // Mix is the traffic's lengths: "observed", or stated mean lengths, priced as
@@ -411,6 +565,13 @@ type Assume struct {
 	// AboveFlowControlOnset, a miss); absent, the CLI's default
 	// (whatif.DefaultRouterWaitInPrefill, whatif.DefaultPriceRouterWait).
 	RouterWait string `json:"routerWait,omitempty"`
+	// LoadAwareRouter states that the router balances prefill by load, as
+	// llm-d's EPP queue scorer does (--load-aware-router): f is held to the
+	// utilization it was read at, then falls to 1 at the pooled prefill knee
+	// (whatif.Prefill.LoadAwareRouter). No recording says what the router
+	// scores, so it is stated, never read; absent or false, f is held at
+	// every load (whatif.DefaultPlannerLoadAwareRouter).
+	LoadAwareRouter bool `json:"loadAwareRouter,omitempty"`
 }
 
 // The values Assume.FlowControl takes.
@@ -477,14 +638,18 @@ type Scenario struct {
 	Fleet    FleetCounts `json:"fleet"`
 	// Rate is the rate asked; absent, the chosen rate is the operating
 	// point, headroom times the lower knee (limits.chosen.rate).
-	Rate       *float64           `json:"rate,omitempty"`
-	Mix        Mix                `json:"mix"`
-	ArrivalCV2 *float64           `json:"arrivalCV2,omitempty"`
-	TTFT       ResolvedObjective  `json:"ttft"`
-	TPOT       *ResolvedObjective `json:"tpot,omitempty"`
-	Headroom   float64            `json:"headroom"`
-	Assume     Assume             `json:"assume"`
-	Views      ViewRequest        `json:"views"`
+	Rate *float64 `json:"rate,omitempty"`
+	// Concurrency is the concurrency asked in place of a rate: the rate is
+	// the one at which the fleet holds that many requests on average
+	// (limits.chosen.fromConcurrency).
+	Concurrency *float64           `json:"concurrency,omitempty"`
+	Mix         Mix                `json:"mix"`
+	ArrivalCV2  *float64           `json:"arrivalCV2,omitempty"`
+	TTFT        ResolvedObjective  `json:"ttft"`
+	TPOT        *ResolvedObjective `json:"tpot,omitempty"`
+	Headroom    float64            `json:"headroom"`
+	Assume      Assume             `json:"assume"`
+	Views       ViewRequest        `json:"views"`
 	// BucketEdges are the request's edges; absent with the default ones,
 	// asked or not, so that they hash to the same scenarioId.
 	BucketEdges []int `json:"bucketEdges,omitempty"`
@@ -511,6 +676,9 @@ type TTFTView struct {
 	Line      Line    `json:"line"`
 	PerBucket []Line  `json:"perBucket,omitempty"`
 	Markers   Markers `json:"markers"`
+	// Model is the experimental TTFT model at the plan's fleet, where the
+	// source was resolved with one (InputsResponse.TTFTModel).
+	Model *TTFTModelView `json:"model,omitempty"`
 }
 
 // The semantics a TTFT line has.
@@ -583,6 +751,9 @@ type TPOTView struct {
 	AtRate    RatePoint   `json:"atRate"`
 	AtTarget  TargetPoint `json:"atTarget"`
 	Markers   Markers     `json:"markers"`
+	// Model is the experimental TPOT model at the plan's fleet, where the
+	// source was resolved with one (InputsResponse.TPOTModel).
+	Model *TPOTModelView `json:"model,omitempty"`
 }
 
 // Ratio is R_q, a TPOT percentile over its mean: its value and source
@@ -619,12 +790,22 @@ type Chosen struct {
 	// RateSource is what set Rate: one of the RateSource constants.
 	RateSource string `json:"rateSource"`
 	Headroom   Figure `json:"headroom"`
+	// Concurrency is the mean number of requests in the system at Rate
+	// (Little's law), by role: unbounded at or past the knee.
+	Concurrency *Concurrency `json:"concurrency,omitempty"`
+	// FromConcurrency is the concurrency asked (scenario.concurrency) and
+	// the rate it translates into; AtKnee says the fleet holds fewer
+	// requests than that below its knee, so Rate is the knee's.
+	FromConcurrency *ConcurrencyRate `json:"fromConcurrency,omitempty"`
 }
 
 // The values of Chosen.RateSource.
 const (
 	// RateSourceRequest is a rate the scenario gave.
 	RateSourceRequest = "request"
+	// RateSourceConcurrency is the rate at which the fleet holds the
+	// concurrency the scenario gave (Chosen.FromConcurrency).
+	RateSourceConcurrency = "concurrency"
 	// RateSourceOperatingPoint is headroom times the lower of both knees,
 	// where the scenario gave no rate.
 	RateSourceOperatingPoint = "operating point"

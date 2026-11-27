@@ -65,6 +65,16 @@ const (
 	// histogram is missing. vLLM only.
 	QueryTPOTBuckets = "tpot_buckets"
 
+	// QueryIterationTokensBuckets is the engine's tokens-per-iteration
+	// histogram per instance, over [1m], ranks read once and summed per pod
+	// (vllm:iteration_tokens_total: one observation per engine iteration, the
+	// computed prompt tokens of the prefills it completed, each whole, and
+	// the tokens it generated). Whether the step budget binds is read from it
+	// (capacity.ReadStepBudgetBinding). vLLM only: SGLang publishes no
+	// such histogram, so it is registered once and an SGLang pod returns no
+	// series.
+	QueryIterationTokensBuckets = "iteration_tokens_buckets"
+
 	// QueryQueueMin is the least the engine's waiting-request gauge read
 	// over the last minute, per instance: a minute in which it never fell
 	// to zero is a minute the engine always had work waiting. vLLM
@@ -90,12 +100,13 @@ func perPodBuckets(bucketMetric, window string) string {
 	return `sum by (model_name, instance, pod, le) (rate(` + bucketMetric + `{namespace="{{.namespace}}"}[` + window + `]))`
 }
 
-// perPodBucketsOnce is perPodBuckets with each rank read once however many
-// times its target is scraped, as QueryPrefillComputedTokenRate is. A pod
-// scraped twice would otherwise weigh double in the variant's pooled spread.
-func perPodBucketsOnce(bucketMetric, window string) string {
+// perPodBucketsOnce is perPodBuckets over TTFTInputWindow with each rank read
+// once however many times its target is scraped, as
+// QueryPrefillComputedTokenRate is. A pod scraped twice would otherwise weigh
+// double in the variant's pooled spread.
+func perPodBucketsOnce(bucketMetric string) string {
 	return `sum by (model_name, instance, pod, le) (max by (model_name, instance, pod, engine, le) (rate(` +
-		bucketMetric + `{namespace="{{.namespace}}"}[` + window + `])))`
+		bucketMetric + `{namespace="{{.namespace}}"}[` + TTFTInputWindow + `])))`
 }
 
 // sglangPerPodBuckets is perPodBuckets for SGLang: a max, as SGLang's
@@ -126,7 +137,7 @@ func registerTTFTInputQueries(registry *source.QueryList) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryComputedTokensBuckets,
 		Type:        source.QueryTypePromQL,
-		Template:    perPodBucketsOnce("vllm:request_prefill_kv_computed_tokens_bucket", TTFTInputWindow),
+		Template:    perPodBucketsOnce("vllm:request_prefill_kv_computed_tokens_bucket"),
 		Params:      []string{source.ParamNamespace},
 		Description: "Computed prefill tokens per request, histogram per pod (1m rate, one series per bucket) (vLLM only)",
 	})
@@ -215,5 +226,12 @@ func registerTTFTInputQueries(registry *source.QueryList) {
 		Template:    perPodBuckets("vllm:request_time_per_output_token_seconds_bucket", TTFTInputWindow),
 		Params:      []string{source.ParamNamespace},
 		Description: "Engine per-request TPOT histogram per pod (1m rate, one series per bucket) (vLLM only)",
+	})
+	registry.MustRegister(source.QueryTemplate{
+		Name:        QueryIterationTokensBuckets,
+		Type:        source.QueryTypePromQL,
+		Template:    perPodBucketsOnce("vllm:iteration_tokens_total_bucket"),
+		Params:      []string{source.ParamNamespace},
+		Description: "Engine tokens per iteration, histogram per pod (1m rate, one series per bucket) (vLLM only)",
 	})
 }

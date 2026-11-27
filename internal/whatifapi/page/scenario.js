@@ -28,7 +28,7 @@ const LINK_NUMBERS = new Set(["cycle", "prefill", "decode", "rate", "ttft", "tpo
   "vp", "a", "promptCV", "routerHop", "itlB"]);
 const LINK_NAMES = new Set(["recording", "namespace", "model", "prefillVariant", "decodeVariant", "priceAs"]);
 const STAT_WORD = /^(mean|p[0-9]{1,2}(\.[0-9]{1,3})?)$/;
-const LINK_WORDS = {mode: /^size$/, low: /^1$/, perBucket: /^1$/, ttftStat: STAT_WORD, tpotStat: STAT_WORD,
+const LINK_WORDS = {mode: /^size$/, low: /^1$/, perBucket: /^1$/, loadAwareRouter: /^1$/, ttftStat: STAT_WORD, tpotStat: STAT_WORD,
   edges: {test: edgesInLink}};
 
 // MAX_EDGES and MAX_EDGE are the server's limits on bucketEdges
@@ -325,6 +325,45 @@ function sameCurve(a, b) {
   return a.every((q, i) => near(q.x, b[i].x) && near(q.y, b[i].y));
 }
 
+// measuredSplit splits points ({x, y, extrapolated}) where an experimental
+// model's extrapolation starts: measured is drawn solid, up to and with
+// the last point at or under the highest load measured; beyond dashed, from
+// that point on, so that the two meet. With no point extrapolated beyond is
+// empty; with every point extrapolated measured is empty.
+function measuredSplit(points) {
+  const i = points.findIndex(q => q.extrapolated);
+  if (i < 0) return {measured: points, beyond: []};
+  return {measured: points.slice(0, i), beyond: points.slice(Math.max(i - 1, 0))};
+}
+
+// ttftModelNote is what the TTFT figure says of the experimental model at
+// the plan's fleet (ttft.model), one short line; empty without one. It
+// names the model, its evidence from the source where there is some, and
+// what the dashed part is; or, where the model did not price, why the
+// planner's own TTFT stands.
+function ttftModelNote(m) {
+  return modelNote(m, "TTFT");
+}
+
+// tpotModelNote is ttftModelNote for the TPOT figure (tpot.model): the
+// experimental TPOT model prices the percentile, never the mean.
+function tpotModelNote(m) {
+  return modelNote(m, "TPOT percentile");
+}
+
+// modelNote is an experimental model's note on the figure of what it
+// prices (ttftModelNote, tpotModelNote).
+function modelNote(m, what) {
+  if (!m) return "";
+  if (!m.priced) return `${m.label}: not used here (${m.notPriced}); the planner's own ${what} is drawn.`;
+  const parts = [m.label];
+  // The evidence is the held-out score of the mean TTFT: it says so.
+  if (m.evidence) parts.push("quick check, TTFT mean " + m.evidence);
+  if (m.measuredUpTo != null) parts.push(`dashed: ${m.beyond} (${Number(m.measuredUpTo.toPrecision(3))} r/s)`);
+  if (m.rightEnd) parts.push(m.rightEnd);
+  return parts.join(" · ") + ".";
+}
+
 // figValue is a figure's value, or null where it is refused or absent.
 function figValue(f) {
   return f && !f.refused && typeof f.value === "number" ? f.value : null;
@@ -451,36 +490,41 @@ function reportShapeProblem(s) {
 }
 
 // shapeText writes one shape row's boxes as the report reads it: IL and OL
-// in tokens, and the hit rate when one is typed. Blank boxes are "measured".
+// in tokens, and the hit rate when one is typed. Blank boxes are "load": the
+// shape of the traffic the load judged at ran at.
 function shapeText(row) {
   const il = String(row.il || "").trim(), ol = String(row.ol || "").trim(), hit = String(row.hit || "").trim();
-  if (!il && !ol && !hit) return "measured";
+  if (!il && !ol && !hit) return "load";
   return hit ? `${il}/${ol}/${hit}` : `${il}/${ol}`;
 }
 
 // reportShapes is the rows' shapes, each once, in order: a blank row is the
-// measured shape, and the same shape typed twice is asked once.
+// load's own shape, and the same shape typed twice is asked once. Only blank
+// rows, or none, is the empty list: the server's default, the load's shape,
+// or the measured one where the load read none.
 function reportShapes(rows) {
   const out = [];
   for (const row of rows || []) {
     const s = shapeText(row);
     if (!out.includes(s)) out.push(s);
   }
-  if (out.length === 0) out.push("measured");
-  return out;
+  return out.length === 1 && out[0] === "load" ? [] : out;
 }
 
-// parseReportLoads reads the loads box: comma separated, each 80%, 5r/s or
-// seen. Empty is the server's default (50%, 80%, 100% and seen).
+// parseReportLoads reads the loads box: comma separated, each 80%, 5r/s,
+// 64c (a concurrency) or seen. Empty is the server's default (50%, 80%,
+// 100% and seen).
 function parseReportLoads(text) {
   const loads = String(text || "").split(",").map(s => s.trim()).filter(s => s);
   if (loads.length > MAX_REPORT_LOADS) return {loads: [], problem: `at most ${MAX_REPORT_LOADS} loads`};
   for (const l of loads) {
     if (l === "seen" || /^seen *[x×*] *[0-9]+(\.[0-9]+)?$/.test(l)) continue;
     const pct = /^([0-9]+(\.[0-9]+)?)%$/.exec(l), rate = /^([0-9]+(\.[0-9]+)?)r\/s$/.exec(l);
+    const conc = /^([0-9]+(\.[0-9]+)?)c$/.exec(l);
     if (pct && Number(pct[1]) > 0 && Number(pct[1]) <= 100) continue;
     if (rate && Number(rate[1]) > 0) continue;
-    return {loads: [], problem: `${l}: a load is a share of the knee (80%), a rate (5r/s) or seen`};
+    if (conc && Number(conc[1]) > 0 && Number(conc[1]) <= MAX_CONCURRENCY) continue;
+    return {loads: [], problem: `${l}: a load is a share of the knee (80%), a rate (5r/s), a concurrency (64c) or seen`};
   }
   return {loads, problem: ""};
 }
@@ -500,7 +544,8 @@ function reportRequest(o) {
   }
   const loads = parseReportLoads(o.loads);
   if (loads.problem) return {body: null, problem: loads.problem};
-  const body = {inputsId: o.inputsId, shapes};
+  const body = {inputsId: o.inputsId};
+  if (shapes.length) body.shapes = shapes;
   if (o.fleet && Object.keys(o.fleet).length) body.fleet = Object.assign({}, o.fleet);
   if (loads.loads.length) body.loads = loads.loads;
   const growth = String(o.growth == null ? "" : o.growth).trim();
@@ -534,7 +579,7 @@ function reportRequest(o) {
 // over its target priced from that lower bound is at most its figure, so its
 // miss is not known either.
 const REPORT_MARKS = {met: ["met", "ok"], missed: ["missed", "MISS"], "missed at onset": ["missed", "MISS at onset"], saturated: ["saturated", "SAT"],
-  "past a lower-bound knee": ["unknown", "past a lower-bound knee"], "at most, over target": ["unknown", "at most, over target: not known"],
+  "past a lower-bound knee": ["unknown", "past prefill's lower-bound limit"], "at most, over target": ["unknown", "at most, over target: not known"],
   unknown: ["unknown", "?"], "no target": ["notarget", "no SLO"]};
 
 // REFUSAL_WORDS are the refusals a report shows most, in words.
@@ -542,7 +587,7 @@ const REFUSAL_WORDS = {
   Saturated: "saturated: no steady state at this load",
   PastLowerBoundKnee: "past a prefill knee priced from a lower bound of V_P: not priced (assume V_P to price it)",
   AboveDecodeOnset: "past the decode flow-control onset: not priced",
-  NoPrefillCapacity: "no prefill speed learned (assume V_P to price it)",
+  NoPrefillCapacity: "prefill capacity unknown: no prefill speed learned (assume one to price it)",
   NoFixedLatency: "no prefill fixed latency learned (assume a to price it)",
   NoTPOTHistogram: "no TPOT histogram to read a percentile from",
   TPOTBucketTooWide: "the TPOT histogram is too coarse for a percentile",
@@ -555,6 +600,9 @@ const REFUSAL_WORDS = {
 // refusalText is a refused figure in words.
 function refusalText(f) {
   const reason = f && f.refused ? f.refused.reason : "";
+  if (reason === "NoPrefillCapacity" && (f.refused.flags || []).includes("VPLowerBound")) {
+    return "prefill capacity unknown: the prefill pods never queued, so their speed is only a lower bound (assume one to price it)";
+  }
   return REFUSAL_WORDS[reason] || (reason ? `not priced (${reason})` : "not priced");
 }
 
@@ -579,6 +627,7 @@ const REPORT_FLAG_WORDS = {
   DecodeOnly: "decode only: prefill is not priced",
   VPLowerBound: "the prefill speed is a lower bound",
   VPFromPlateau: "the prefill speed is from the occupancy plateau (experimental)",
+  VPPromptNotCovered: "prefill speed learned at different prompt lengths",
   ExperimentalTTFT: "priced with the experimental TTFT model (not validated)",
 };
 
@@ -612,6 +661,61 @@ function msText(f, tpot) {
   if (f && f.value != null) return ((tpot && isFloor(f)) || f.upperBound ? "≤" : "") + roundMs(f.value) + " ms";
   const reason = f && f.refused ? f.refused.reason : "";
   return reason === "Saturated" ? "saturated" : reason === "AboveDecodeOnset" ? "router-queued" : "-";
+}
+
+// MAX_CONCURRENCY is the largest concurrency a load may ask, as the server's
+// whatifapi.MaxConcurrency.
+const MAX_CONCURRENCY = 1048576;
+
+// concurrencyNumber is a mean concurrency as printed: one decimal under 10,
+// else whole requests (whatifapi.ConcurrencyNumber).
+function concurrencyNumber(x) {
+  return x < 10 ? x.toFixed(1) : x.toFixed(0);
+}
+
+// concurrencyShort is a row's mean concurrency for a summary cell: "~12 in
+// system", "unbounded" at or past the knee, "" where refused or absent.
+function concurrencyShort(c) {
+  if (!c) return "";
+  if (c.unbounded) return "in system: unbounded";
+  const v = c.fleet && c.fleet.value;
+  return v != null ? `~${concurrencyNumber(v)} in system` : "";
+}
+
+// concurrencyNote is what the page says under the rate of a plan: the
+// mean requests in the system there (Little's law), and where a concurrency
+// was typed, the rate it translates into, flagged where the fleet saturates
+// first. limit is the fleet's limit, r/s: a rate short of it is where the
+// time in the system is first refused, not the limit.
+function concurrencyNote(chosen, limit) {
+  const c = chosen && chosen.concurrency, from = chosen && chosen.fromConcurrency;
+  const parts = [];
+  if (from) {
+    const n = concurrencyNumber(from.concurrency), r = roundRate(from.rate);
+    if (from.atKnee && limit > 0 && from.rate < limit * (1 - 1e-6)) {
+      parts.push(`This fleet holds fewer than ${n} requests at any rate it prices: the rate is ${r} r/s, short of the limit, where its time in the system is first refused.`);
+    } else if (from.atKnee) {
+      parts.push(`${n} requests open saturate this fleet: it holds fewer below its limit, so the rate is the limit's ${r} r/s; more concurrency adds queueing, not throughput.`);
+    } else if (from.lowerBound) {
+      parts.push(`${n} requests in the system on average is at least ${r} r/s on this fleet: the time in the system is priced from a lower bound of the prefill speed.`);
+    } else {
+      parts.push(`${n} requests in the system on average is ${r} r/s on this fleet.`);
+    }
+  }
+  if (c && c.unbounded) {
+    parts.push("Here requests queue without bound: no average holds.");
+  } else if (c && c.fleet && c.fleet.value != null) {
+    let s = `About ${concurrencyNumber(c.fleet.value)} requests in the system on average`;
+    const role = [];
+    if (c.routerQueue && c.routerQueue.value != null) role.push(`${concurrencyNumber(c.routerQueue.value)} held at the router`);
+    if (c.prefill && c.prefill.value != null) role.push(`${concurrencyNumber(c.prefill.value)} in prefill`);
+    if (c.decode && c.decode.value != null) {
+      role.push(`${concurrencyNumber(c.decode.value)} decoding` + (c.decodePerPod && c.decodePerPod.value != null ? ` (${concurrencyNumber(c.decodePerPod.value)} a decode pod)` : ""));
+    }
+    if (role.length) s += ` (${role.join(", ")})`;
+    parts.push(s + ".");
+  }
+  return parts.join(" ");
 }
 
 // rowFigures is a row's two latencies at the SLO's statistics: the TTFT at
@@ -711,6 +815,8 @@ function reportView(r) {
       const tpotMean = slo && slo.tpot && slo.tpot.statistic !== "mean" && f.tpot.statistic === "mean" && f.tpot.value != null ? " (mean)" : "";
       const parts = [`TTFT ${msText(f.ttft, false)}`, `TPOT ${msText(f.tpot, true)}${tpotMean}`];
       if (rate) parts.push(rate.trim());
+      const inSystem = concurrencyShort(row.concurrency);
+      if (inSystem) parts.push(inSystem);
       return {text: parts.join(" · ").replace(" · @", " @"), parts, cls: m[0], word: m[1]};
     }),
   }));
@@ -719,7 +825,9 @@ function reportView(r) {
     // Growth is its own line beside the verdict, never in its place.
     const growth = (s.growth || []).map(g => Object.assign(verdictLine(g.verdict, "", r.fleet),
       {lead: `with ${g.x}× traffic (${roundRate(g.rate)} r/s)`, rate: g.rate}));
+    // The load's own shape names its prompt length: its knee is not the panel's.
     return Object.assign(v, {label: s.label, extrapolated: !!s.extrapolated, whatIf: s.source === "asked",
+      prompt: s.label === "load" && s.inputTokens ? `priced at the traffic's ${Math.round(s.inputTokens / 1000)}k-token prompts; the answer panel prices the prefill pods' measured work per request` : "",
       decodeOnly: (s.verdict || {}).scope === "decode only", growth});
   });
   const details = shapes.map(s => {
@@ -740,10 +848,14 @@ function reportView(r) {
         ...roleLines(s.verdict),
         `The numbers: ${plainReason((s.verdict || {}).reason || "")}`,
       ].filter(x => x),
-      flags: flagSummary(s.flags),
+      // A shape the question did not type is no "shape you typed".
+      flags: flagSummary((s.flags || []).filter(x => x !== "AssumedShape" || s.source === "asked")),
     };
   });
-  return {verdicts, header, rows, details, notes: r.notValidated || [], load: loadLine(r.load),
+  // The details and the notes speak plainly too: symbols and the benchmark
+  // names stay in the Flags drawer and the docs.
+  for (const d of details) d.lines = d.lines.map(plainText);
+  return {verdicts, header, rows, details, notes: (r.notValidated || []).map(plainText), load: loadLine(r.load),
     legendStats: `Each cell is TTFT ${tStat} · TPOT ${pStat}. ${sloLine(slo)}` +
       (floors ? " ≤ marks a TPOT at the decode line's floor: below the fill it was fitted over, so at most that." : "")};
 }
@@ -810,7 +922,7 @@ function prefillUse(p) {
 }
 
 // REASON_WORDS replace the refusal codes in a verdict's reason.
-const REASON_WORDS = {AboveDecodeOnset: "router-queued", NoPrefillCapacity: "unpriced (no prefill speed)",
+const REASON_WORDS = {AboveDecodeOnset: "router-queued", NoPrefillCapacity: "unpriced (prefill capacity unknown)",
   NoFixedLatency: "unpriced (no prefill latency)", NoTPOTHistogram: "unpriced (no TPOT histogram)"};
 
 // plainReason is a verdict's reason with its refusal codes in words.
@@ -903,3 +1015,621 @@ function loadLine(l) {
     : l.p95IsPeak && l.statistic === "p95-modulation" ? " (from the peak: fewer than 20 cycles)" : "";
   return `Judged at ${at}${peakNote}` + (seen.length ? `; the source saw ${seen.join(", ")} r/s over ${l.cyclesWithTraffic} busy cycles.` : ".");
 }
+
+// noPrefillWords is a NoPrefillCapacity refusal in the page's one wording,
+// the same in the plan view and in size mode: the V_P the source learned
+// only as a lower bound (flag VPLowerBound, the prefill pods never queued),
+// or none learned. The reason's code stays in tooltips and the Flags drawer.
+function noPrefillWords(r) {
+  const lb = (r.flags || []).includes("VPLowerBound");
+  const m = /V_P ([0-9.]+) tokens\/s/.exec(r.detail || "");
+  const vp = m ? Number(m[1]).toLocaleString("en-US", {maximumFractionDigits: 0}) + " tokens/s" : "the speed it saw";
+  return (lb ? `Prefill capacity unknown: the prefill pods never queued, so a prefill pod computes at least ${vp} (a lower bound), and its limit was not observed.` :
+    "Prefill capacity unknown: the source learned no prefill speed per pod (it saw no prefill pod busy enough).");
+}
+
+// kneeLowerBound says a knee figure rests on a lower bound of V_P: the true
+// knee is at least its rate.
+function kneeLowerBound(f) {
+  return !!f && (f.flags || []).some(x => x === "VPLowerBound" || x === "KneeAtServedWork");
+}
+
+// ---- The answer: the executive panel and the refusal card ----
+//
+// The first screen answers first: a few lines, each with how far to trust it
+// (EXEC_BADGES): measured on the source, checked on the source's own held-out
+// hours, or the model's estimate. They are read from the inputs, the plan on
+// screen and a report judged at the traffic's own shape (execReportRequest),
+// which the page asks after a load; the accuracy is the held-out check the
+// server ran at load (inputs.ttftModel.heldOut), else the page's own check
+// of the source's last half, which runs only when asked. Every string is
+// plain text, put on the page as text.
+
+// EXEC_BADGES are the trust badges of the panel's lines.
+const EXEC_BADGES = {measured: "Measured", checked: "Checked on your data", estimate: "Estimate"};
+
+// EXEC_GROWTH are the traffic growths the panel's growth line sizes for,
+// once the server sizes them (execView's o.growth).
+const EXEC_GROWTH = [1.25, 1.5];
+
+// execReportRequest is the report the panel reads: the fleet as recorded, at
+// the traffic's own shape (the server's default), judged at the load seen,
+// with the plan's SLO, headroom and assumed terms.
+function execReportRequest(inputsId, plan) {
+  const body = {inputsId, loads: ["seen"]};
+  if (plan) {
+    if (plan.headroom != null && plan.headroom !== 1) body.headroom = plan.headroom;
+    if (plan.slo) body.slo = plan.slo;
+    if (plan.assume && Object.keys(plan.assume).length) body.assume = plan.assume;
+  }
+  return body;
+}
+
+// execGPUs is a fleet's GPUs, or null where a counted role's GPUs per
+// replica are not stated.
+function execGPUs(fleet, p, d) {
+  const gp = fleet.prefill ? fleet.prefill.gpusPerReplica : 0, gd = fleet.decode.gpusPerReplica;
+  if (!gd || (fleet.prefill && p > 0 && !gp)) return null;
+  return p * (gp || 0) + d * gd;
+}
+
+// execFleet is a fleet in words: "5 prefill + 11 decode (32 GPUs)".
+function execFleet(fleet, p, d) {
+  const g = execGPUs(fleet, p, d);
+  return (fleet.prefill ? `${p} prefill + ${d} decode` : `${d} replicas`) + (g != null ? ` (${g} GPUs)` : "");
+}
+
+// execTimes is a figure in seconds as the panel says it: ms under a second.
+function execTimes(s) {
+  if (s == null || !isFinite(s)) return "-";
+  return s >= 1 ? `${Number(s.toPrecision(3))} s` : `${Number((s * 1000).toPrecision(3))} ms`;
+}
+
+// execSLO is the targets the answer judges against, in words, and whether
+// they are the page's defaults rather than yours.
+function execSLO(k) {
+  const t = `TTFT ${k.ttftStat} ${execTimes(k.ttftTarget)}, TPOT ${k.tpotStat} ${execTimes(k.tpotTarget)}`;
+  return (k.ttftDefault || k.tpotDefault) ? `${t} (the page's default: set yours under SLO)` : `${t} (yours)`;
+}
+
+// execMeasuredAt is what the fleet measured at the busiest judged step of a
+// check: the step, and each target's statistic measured against its target.
+function execMeasuredAt(bt, k) {
+  const judged = (bt.steps || []).filter(s => !s.excluded);
+  if (!judged.length) return null;
+  const s = judged.reduce((a, b) => (b.rate > a.rate ? b : a));
+  const at = (key, stat, target) => {
+    const p = (s[key] || []).find(x => x.statistic === stat);
+    if (!p) return null;
+    if (p.aboveHistogram) return {text: `${key.toUpperCase()} ${stat} above the histogram's top bucket`, missed: true};
+    if (p.measuredBucket) {
+      const b = p.measuredBucket;
+      const missed = b.lo > target ? true : b.hi <= target ? false : null;
+      return {text: `${key.toUpperCase()} ${stat} between ${execTimes(b.lo)} and ${execTimes(b.hi)} (target ${execTimes(target)}${missed == null ? ", the bucket spans it" : missed ? ", missed" : ", met"})`, missed};
+    }
+    if (p.measured == null) return null;
+    const missed = p.measured > target;
+    return {text: `${key.toUpperCase()} ${stat} ${execTimes(p.measured)} (target ${execTimes(target)}, ${missed ? "missed" : "met"})`, missed};
+  };
+  const parts = [at("ttft", k.ttftStat, k.ttftTarget), at("tpot", k.tpotStat, k.tpotTarget)].filter(Boolean);
+  if (!parts.length) return null;
+  return {when: s.start.slice(11, 16), rate: s.rate, fleet: [s.prefill, s.decode], parts};
+}
+
+// execAccuracy is a check's scores in a sentence: how many held-out steps
+// each latency read within 20%, which way it leans, and the range it tested.
+function execAccuracy(bt, k) {
+  const sum = bt.summary || {};
+  const pick = (scores, stat) => (scores || []).find(x => x.statistic === stat) || (scores || []).find(x => x.statistic === "mean") || null;
+  const words = (name, sc) => {
+    if (!sc || !sc.all || !sc.all.steps) return "";
+    const a = sc.all, n = Math.round((a.within || 0) * a.steps);
+    const lean = a.bias == null ? "" : a.bias < 0.97 ? `, reads ${Math.round((1 - a.bias) * 100)}% low` : a.bias > 1.03 ? `, reads ${Math.round((a.bias - 1) * 100)}% high` : "";
+    return `${name} ${sc.statistic} within 20% in ${n} of ${a.steps} five-minute steps${lean}`;
+  };
+  const hours = bt.test && bt.test.from && bt.test.to ? Math.round((Date.parse(bt.test.to) - Date.parse(bt.test.from)) / 3600e3) : null;
+  const parts = [words("TTFT", pick(sum.ttft, k.ttftStat)), words("TPOT", pick(sum.tpot, k.tpotStat))].filter(x => x);
+  const judged = (bt.steps || []).filter(s => !s.excluded);
+  let range = "";
+  if (judged.length) {
+    const lo = Math.min(...judged.map(s => s.rate)), hi = Math.max(...judged.map(s => s.rate));
+    const fleets = [...new Set(judged.map(s => `${s.prefill} prefill + ${s.decode} decode`))];
+    range = `Valid range: ${fleets.length === 1 ? fleets[0] : fleets.length + " fleets"} at ${roundRate(lo)}-${roundRate(hi)} r/s; outside that is an extrapolation.`;
+  }
+  // A percentile the check could not score at many steps says why, once.
+  const tsc = (sum.ttft || []).find(x => x.statistic === k.ttftStat);
+  const un = tsc && tsc.unscored ? Object.entries(tsc.unscored).filter(([, n]) => n > 0) : [];
+  if (un.length) parts.push(`TTFT ${k.ttftStat} not scored in ${un.map(([w, n]) => `${n} (${(typeof BT_UNSCORED !== "undefined" && BT_UNSCORED[w]) || w})`).join(", ")}`);
+  if (!parts.length) return {text: "The check scored no step: see Check the planner.", range};
+  return {text: `On ${hours != null ? hours + " held-out hours" : "the held-out hours"} of your traffic: ${parts.join("; ")}.`, range,
+    chip: parts[0].replace(/ within 20% in (\d+) of (\d+) five-minute steps.*/, " $1/$2 within 20%")};
+}
+
+// execVerdict is the fleet judged at the load seen, in plain words: a
+// decode-only judgment says it is no fleet recommendation.
+function execVerdict(fleet, v) {
+  if (!v) return "";
+  const nd = fleet.decode.replicas;
+  if (v.scope === "decode only") {
+    const n = v.needed;
+    if (n && n.decodeOnly && !n.unmet) {
+      const held = n.decode < nd ? `${n.decode}-${nd} decode would hold TPOT` : `all ${nd} decode are needed to hold TPOT`;
+      return `Decode only: ${held}. Prefill was not sized, so this is not a fleet recommendation.`;
+    }
+    return "Decode only: prefill was not sized, so this is not a fleet recommendation.";
+  }
+  switch (v.verdict) {
+  case "UNDER-PROVISIONED": {
+    const n = v.needed;
+    const need = !n || n.unmet ? "" : n.decodeOnly ? `; it needs at least ${n.decode} decode (prefill was not sized)` : `; it needs ${execFleet(fleet, n.prefill, n.decode)}`;
+    return `Too small: the busiest load is past the fleet's safe load, or misses a target${need}.`;
+  }
+  case "OVER-PROVISIONED": return `A replica to spare: one ${(v.shrink || []).join(" or one ")} fewer still meets every target at the busiest load.`;
+  case "RIGHT-SIZED": return "Right-sized: every target is met at the busiest load, and one replica fewer would miss one.";
+  }
+  if (/lower bound/.test(v.summary || "")) {
+    return "Not judged: the busiest load is past prefill's limit, known only as a lower bound, so whether the fleet saturates is not known. " +
+      "Decode holds its safe load.";
+  }
+  return "Not judged at the busiest load: " + plainVerdict(v.summary || v.reason || "see Right-size") + ".";
+}
+
+// PLAIN_WORDS replace the planner's terms in a sentence the first screen
+// shows: symbols and flags stay in tooltips and the method.
+const PLAIN_WORDS = [[/;?\s*--assume-vp states a V_P to price it/g, ""], [/--assume-[a-z-]+/g, "an assumed term"],
+  [/\bV_P\b/g, "prefill speed per pod"], [/prefill knee/g, "prefill limit"], [/decode knee/g, "decode limit"],
+  [/fleet knee/g, "fleet limit"], [/\bknee\b/g, "limit"], [/operating point/g, "safe load"], [/\bpriced\b/g, "estimated"],
+  [/\brefused\b/g, "not known"], [/flow-control onset/g, "point where the router starts queuing"]];
+
+// plainText is a line of the planner's in plain words (PLAIN_WORDS and
+// PLAIN_MORE), whole.
+function plainText(s) {
+  let out = String(s);
+  for (const [re, w] of PLAIN_WORDS.concat(PLAIN_MORE)) out = out.replace(re, w);
+  return out;
+}
+
+// PLAIN_MORE are the right-size card's own terms: the validated region and
+// the runs it was measured on, named in the docs.
+const PLAIN_MORE = [[/OUTSIDE VALIDATED REGION/g, "outside the conditions the model was checked on"],
+  [/the q32 staircase/g, "a 32B benchmark run"], [/the 0\.6B goldens/g, "the small-model benchmark runs"], [/Ca\^2/g, "arrival burstiness"]];
+
+// plainVerdict is a verdict's summary in plain words: no verdict word ahead
+// of it, the planner's terms replaced (PLAIN_WORDS), no trailing stop.
+function plainVerdict(s) {
+  let out = String(s).replace(/^[A-Z-]+( [A-Z]+)?:\s*/, "");
+  for (const [re, w] of PLAIN_WORDS) out = out.replace(re, w);
+  return out.replace(/\.\s*$/, "");
+}
+
+// execCurveAt is a curve's figure at rate x, read between its two nearest
+// points with a figure (linear), or null outside them or where refused.
+function execCurveAt(curve, x) {
+  const pts = (curve || []).map(c => ({x: c.rate, y: figValue(c.figure)})).filter(p => p.y != null);
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    if (x >= a.x && x <= b.x) return b.x === a.x ? a.y : a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+  }
+  return null;
+}
+
+// execPods is the fleet's pods and GPUs in words: "16 pods, 512 GPUs (32 per
+// pod)", or each role's GPUs where they differ.
+function execPods(fleet, np, nd) {
+  const gp = fleet.prefill ? fleet.prefill.gpusPerReplica : 0, gd = fleet.decode.gpusPerReplica;
+  const g = execGPUs(fleet, np, nd);
+  const pods = np + nd;
+  if (g == null) return `${pods} pods`;
+  const per = !fleet.prefill || gp === gd ? `${gd} per pod` : `${gp} a prefill pod, ${gd} a decode pod`;
+  return `${pods} pods, ${g} GPUs (${per})`;
+}
+
+// execBusiest is the one busiest load every line of the panel reads: the
+// load the report judged at, its statistic named; with the peak beside it as
+// small text.
+function execBusiest(load) {
+  if (!load || !load.rate || load.rate.value == null) return null;
+  const stat = load.statistic === "p95-modulation" ? "p95 less counting noise" : load.statistic || "p95";
+  return {rate: load.rate.value, words: `busiest load (${stat} of 1-minute cycles): ${roundRate(load.rate.value)} r/s`,
+    small: load.peak != null ? `peak ${roundRate(load.peak)} r/s` : ""};
+}
+
+// prefillAtLeast is prefill's limit as the page shows it, {value, lb,
+// raised}: the plan's knee, but a lower bound under the busiest load the
+// fleet carried (load, the report's) is raised to that load. The fleet
+// served it, so prefill's limit is at least it, as the planner floors a
+// lower-bound V_P at what the pods served (prefill.floorAtServed); the knee
+// from V_P can sit under it because V_P is a sustained per-pod run, priced
+// at the mix's prompt. The load says nothing of fewer prefill replicas than
+// carried it: with n, the plan's prefill replicas, under carriedBy, the
+// report fleet's, the knee stands as priced.
+function prefillAtLeast(pk, load, n, carriedBy) {
+  const v = figValue(pk);
+  const lb = !!pk && (pk.flags || []).some(x => x === "VPLowerBound" || x === "KneeAtServedWork");
+  const c = load && load.rate ? load.rate.value : null;
+  const fewer = n != null && carriedBy != null && n < carriedBy;
+  if (v != null && lb && !fewer && c != null && c > v) return {value: c, lb, raised: true};
+  return {value: v, lb, raised: false};
+}
+
+// prefillAtLeastOf is prefillAtLeast for a plan and the report beside it.
+function prefillAtLeastOf(plan, report) {
+  const m = plan && plan.ttft && plan.ttft.markers;
+  const n = plan && plan.scenario && plan.scenario.fleet ? plan.scenario.fleet.prefill : null;
+  const carriedBy = report && report.fleet ? report.fleet.prefill : null;
+  return prefillAtLeast(m && m.prefillKnee, report && report.load, n, carriedBy);
+}
+
+// limitChip is the chip a role's limit bar carries: "binds" where the
+// fleet's limit is that role's and the role's limit was measured; "limit
+// not measured" on a prefill limit known only as a lower bound (prefillLB),
+// which nothing shows binds first; "" otherwise.
+function limitChip(role, fig, binding, prefillLB) {
+  if (role === "prefill" && prefillLB) return "limit not measured";
+  return (binding || []).includes(role) && figValue(fig) != null ? "binds" : "";
+}
+
+// execView is the panel: {lines: [{label, text, badge, small, actions, more}],
+// slo, trust}. It leads with what is known, each role's capacity against one
+// busiest load, and never heads a line "not known": a limit seen only as a
+// lower bound reads "at least". The headroom is read off the plan on screen,
+// at the shape the charts price, which the panel names.
+function execView(o) {
+  const {inputs, plan, report, bt, k} = o;
+  const f = inputs.fleet;
+  const np = f.prefill ? f.prefill.replicas : 0, nd = f.decode.replicas;
+  const lines = [];
+  const busy = execBusiest(report && report.load);
+  const seen = busy ? busy.rate : null;
+  // The range the model was tested over: the server's held-out check at
+  // load, else the page's own check.
+  const held = inputs.ttftModel && inputs.ttftModel.heldOut;
+  const judged = bt ? (bt.steps || []).filter(s => !s.excluded) : [];
+  const testedTo = held && held.rateTo != null ? held.rateTo : judged.length ? Math.max(...judged.map(s => s.rate)) : null;
+  lines.push({label: "Fleet today", badge: EXEC_BADGES.measured,
+    text: `${f.prefill ? `${np} prefill + ${nd} decode` : `${nd} replicas`}: ${execPods(f, np, nd)}.` + (busy ? ` The ${busy.words}.` : ""),
+    small: busy ? busy.small : ""});
+
+  // Each role's capacity at the plan's shape, against the busiest load.
+  const L = plan && plan.limits;
+  const m = plan && plan.ttft && plan.ttft.markers;
+  const dl = L && L.decode ? figValue(L.decode) : null;
+  const ref = refusalView(plan);
+  const pk = m && m.prefillKnee ? m.prefillKnee : null;
+  const ps = prefillAtLeastOf(plan, report);
+  const pkv = ps.value, pkLB = ps.lb;
+  // A report being asked again was for other targets: its verdict is not
+  // shown, and the row says it is updating.
+  const shape = !o.reportPending && report && (report.shapes || [])[0];
+  const rejudge = o.reportPending ? " Judging the fleet at these targets..." :
+    o.reportError ? ` The fleet was not judged at these targets (${o.reportError}).` : "";
+
+  // The verdict: the constraint, in plain words, with the right size folded
+  // in where it was judged.
+  if (pkv != null && dl != null) {
+    // A prefill limit seen only as a lower bound is never called the
+    // constraint: nothing measured says it binds first.
+    const prefillFirst = pkv < dl;
+    const room = !seen ? "" : dl >= seen ? ` Decode has ${execTimes1(dl / seen)} headroom.` : ` Decode carries ${execTimes1(dl / seen)} the busiest load.`;
+    let text = pkLB ? "Prefill's limit is not measured yet: the pods carried the busiest load without queuing, so it is at least that." + room :
+      prefillFirst ? "Prefill is the constraint: it reaches its limit before decode does." : "Decode is the constraint: it reaches its limit before prefill does.";
+    const v = shape && shape.verdict;
+    if (v && v.verdict && v.verdict !== "NOT JUDGED") text += " " + execVerdict(f, v);
+    else if (v && v.scope === "decode only") text += " " + execVerdict(f, v);
+    else text += rejudge;
+    lines.push({label: "Verdict", badge: "", text, updating: !!o.reportPending});
+  } else if (shape) {
+    lines.push({label: "Verdict", badge: "", text: execVerdict(f, shape.verdict)});
+  } else if (o.reportPending) {
+    lines.push({label: "Verdict", badge: "", text: "Judging the fleet at the busiest load...", updating: true});
+  } else if (o.reportError) {
+    lines.push({label: "Verdict", badge: "", text: rejudge.trim()});
+  }
+  if (dl != null) {
+    lines.push({label: "Decode", badge: "",
+      text: `${nd} replicas carry ${roundRate(dl)} r/s at the TPOT target` + (seen ? `, ${execTimes1(dl / seen)} the busiest load.` : ".")});
+  }
+  if (f.prefill && (pkv != null || ref)) {
+    const share = pkv != null && seen ? `${execTimes1(pkv / seen)} the busiest load` : "";
+    const why = ps.raised ? [share, "carried it without queuing"].filter(x => x).join("; ") : ["a lower bound", share].filter(x => x).join(", ");
+    const text = ref && pkv != null && pkLB ? `Not measured yet: at least ${roundRate(pkv)} r/s (${why}).` +
+        (ref.vp != null ? ` Each pod computed at least ${Math.round(ref.vp).toLocaleString("en-US")} tokens/s.` : "") :
+      ref ? "Speed not yet observed: the source learned no prefill speed per pod." :
+      `${np} replicas carry ${pkLB ? "at least " : ""}${roundRate(pkv)} r/s before latency takes off${share ? ", " + share : ""}.`;
+    const actions = ref ? (ref.vp != null ? [{act: "usevp", vp: ref.vp, label: `Use ${Math.round(ref.vp).toLocaleString("en-US")} tokens/s as the limit (conservative)`}] : [])
+      .concat([{act: "busier", label: "Load a busier window"}]) : [];
+    lines.push({label: "Prefill", badge: "", text, actions});
+  }
+
+  // TTFT and TPOT: what users saw, measured, first; then the prediction,
+  // marked extrapolated where it lies past the tested range.
+  const meas = execMeasuredHour(inputs.measured);
+  let pred = "";
+  if (plan && plan.ttft && seen != null) {
+    const t = plan.ttft, at = execCurveAt(t.line.curve, seen), floor = figValue(t.line.floor);
+    const past = testedTo != null && seen > testedTo;
+    const dag = t.model && t.model.priced ? " " + DAGGER : "";
+    if (at != null) {
+      pred = `Predicted at ${roundRate(seen)} r/s` + (past ? ` (above the tested ${roundRate(testedTo)} r/s, extrapolated)` : "") + `${dag}: TTFT ${t.statistic} about ${execTimes(at)}`;
+      const atTop = past ? execCurveAt(t.line.curve, testedTo) : null;
+      if (atTop != null) pred += `; at the top of the tested range, ${roundRate(testedTo)} r/s, about ${execTimes(atTop)}`;
+      pred += ".";
+      if (floor != null && floor > t.line.target) {
+        pred += ` The ${execTimes(t.line.target)} target is below this model's floor (${execTimes(floor)}) at any load` +
+          (k.ttftDefault ? ": set a realistic target under SLO." : ".");
+      }
+    }
+  }
+  // One line on the panel: what users saw at the SLO's statistics, and the
+  // target sentence; the prediction and the bucket ranges in the row's drawer.
+  const target = pred.includes(" target is below this model's floor") ? pred.slice(pred.indexOf(" The ") + 1) : "";
+  const predOnly = target ? pred.slice(0, pred.indexOf(" The ")) : pred;
+  const short = meas ? execSawShort(inputs.measured, k) : "";
+  if (short || pred) {
+    lines.push({label: "TTFT / TPOT", badge: short ? EXEC_BADGES.measured : "",
+      text: [short, short ? target : pred].filter(x => x).join(" "),
+      more: short ? [meas.text, predOnly, meas.note].filter(x => x) : []});
+  }
+
+  // Growth: the fleet the load grown by a quarter and by a half needs, as
+  // the server sized it (o.growth: [{x, rate, need}], need in words, from
+  // growthNeed); or why it is not sized (o.growthMissing, in words).
+  const growth = o.growth || [];
+  // One refusal for both rates is said once.
+  const pct = g => `+${Math.round((g.x - 1) * 100)}% (${roundRate(g.rate)} r/s)`;
+  const same = growth.length > 1 && growth.every(g => g.need === growth[0].need) && /^(not sized|no )/.test(growth[0].need);
+  // Sizes being asked again were for other targets: the row says it is
+  // sizing, never shows them.
+  const grownText = o.growthPending ? "Sizing the fleet for +25% and +50% of the busiest load..." :
+    same ? `${growth.map(pct).join(" and ")}: ${growth[0].need}.` :
+    growth.length ? growth.map(g => `${pct(g)}: ${g.need}${growthPast(g, testedTo)}`).join("; ") + ", at the same SLO." :
+    o.growthMissing || "";
+  if (grownText) lines.push({label: "+25% / +50% traffic", badge: "", text: grownText, updating: !!o.growthPending});
+
+  // Accuracy: the page's own check where it ran, the one score the check
+  // view shows, at the SLO's statistic; else the server's held-out mean.
+  // The page's check runs only when asked: until then the row says it has
+  // not run and offers it, never a score it does not have.
+  let trust = "";
+  const ask = f.prefill && !o.btPending ? [{act: "check", label: EXEC_CHECK_LABEL}] : [];
+  if (bt) {
+    const a = execAccuracy(bt, k);
+    lines.push({label: "Accuracy", text: a.text + (a.range ? " " + a.range.replace("Valid range", "Tested range") : ""), badge: EXEC_BADGES.checked});
+    trust = a.chip ? `Checked on your traffic: ${a.chip}` : "";
+  } else if (held && held.steps > 0) {
+    const n = held.within || 0, st = held.statistic || "mean";
+    const r = held.medianRatio;
+    const lean = r == null ? "" : r < 0.97 ? `, reads ${Math.round((1 - r) * 100)}% low` : r > 1.03 ? `, reads ${Math.round((r - 1) * 100)}% high` : "";
+    const fleet = held.prefill != null ? `${held.prefill} prefill + ${held.decode} decode` : "the fleet it ran";
+    const range = held.rateFrom != null ? ` Tested range: ${fleet} at ${roundRate(held.rateFrom)}-${roundRate(held.rateTo)} r/s; outside that is an extrapolation.` : "";
+    // The server's quick check is not the page's: its folds refit at 50%
+    // and 75% of the window and score their own steps. Each is named.
+    const other = k.ttftStat === st ? "" : o.btPending ? ` The full check, at TTFT ${k.ttftStat}, is running.` : " " + fullCheckNotRun(k.ttftStat);
+    lines.push({label: "Accuracy", badge: EXEC_BADGES.checked,
+      text: `Quick check on held-out steps of your traffic: TTFT ${st} within 20% in ${n} of ${held.steps} five-minute steps${lean}.${other}${range}`,
+      actions: ask});
+    trust = `Quick check on your traffic: TTFT ${st} ${n}/${held.steps} within 20%`;
+  } else if (o.btPending) {
+    lines.push({label: "Accuracy", text: "Checking the planner on your held-out hours...", badge: EXEC_BADGES.checked});
+  } else if (inputs.selfCheck && inputs.selfCheck.line) {
+    lines.push({label: "Accuracy", text: inputs.selfCheck.line, badge: EXEC_BADGES.checked, actions: ask});
+    if (f.prefill) trust = "Self-check only: full accuracy check not run yet";
+  } else if (f.prefill) {
+    // No badge: nothing was checked.
+    lines.push({label: "Accuracy", badge: "", text: EXEC_NOT_CHECKED, actions: ask});
+    trust = "Accuracy not checked yet";
+  }
+  return {lines, slo: execSLO(k), trust, note: "Rows are estimates unless marked."};
+}
+
+// EXEC_CHECK_LABEL is the button that runs the page's check on the source.
+const EXEC_CHECK_LABEL = "Check accuracy on this recording";
+
+// EXEC_NOT_CHECKED is the Accuracy row before any check ran.
+const EXEC_NOT_CHECKED = "Not checked yet: the planner has not been checked on this recording. The check takes seconds to a minute and runs only when asked.";
+
+// fullCheckNotRun says the page's full check, at the SLO's TTFT statistic,
+// has not run.
+function fullCheckNotRun(stat) {
+  return `The full check, at TTFT ${stat}, has not been run yet: ${EXEC_CHECK_LABEL} runs it.`;
+}
+
+// execSawShort is what users saw in one sentence, at the SLO's statistics:
+// "Users saw TTFT p90 5.03 s, TPOT mean 16.5 ms (busiest hour)." A figure
+// the histogram cannot place reads as its bucket; "" with neither.
+function execSawShort(mh, k) {
+  const one = (list, st) => {
+    const s = (list || []).find(x => x.statistic === st);
+    return !s ? null : s.value != null ? execTimes(s.value) : s.bucket ? `${execTimes(s.bucket.lo)}-${execTimes(s.bucket.hi)}` : null;
+  };
+  const t = one(mh.ttft, k.ttftStat), p = one(mh.tpot, k.tpotStat);
+  const parts = [t ? `TTFT ${k.ttftStat} ${t}` : "", p ? `TPOT ${k.tpotStat} ${p}` : ""].filter(x => x);
+  return parts.length ? `Users saw ${parts.join(", ")} (busiest hour).` : "";
+}
+
+// growthNeed is a size (POST /v1/size's response) in the panel's words: "N
+// prefill + M decode (G GPUs)", marked where the size rests on an
+// extrapolated limit or a prefill limit known only as a lower bound, or why
+// no fleet was sized. error is the request's failure, if any.
+function growthNeed(size, error) {
+  if (error || !size) return "not sized (the request failed)";
+  const a = size.answer;
+  if (!a) {
+    const u = size.unmet || {}, r = u.refused;
+    if (r && r.reason === "NoPrefillCapacity") return "not sized: prefill's limit is not measured";
+    if (r && r.reason === "TargetBelowFloor") return "not sized: the TTFT target is below this model's floor at any fleet";
+    const n = size.maxReplicas ? Math.max(size.maxReplicas.prefill || 0, size.maxReplicas.decode || 0) : 0;
+    const who = u.role && u.role !== "fleet" ? `no ${u.role} count` : "no fleet";
+    return `${who}${n ? ` up to ${n} replicas a role` : ""} serves it` + (r && r.reason !== "ReplicaBoundReached" ? ` (${plainReasonWord(r)})` : "");
+  }
+  const f = a.fleet;
+  let s = f.prefill ? `${f.prefill} prefill + ${f.decode} decode` : `${f.decode} replicas`;
+  if (a.gpus != null) s += ` (${a.gpus} GPUs)`;
+  const lim = a.limit || {};
+  const notes = [];
+  // A size whose limit is only a lower bound may need fewer prefill: the
+  // true limit is higher. One past the highest load measured is extrapolated.
+  // A V_P the user stated (AssumedVP) is priced as given, as the server's
+  // TTFTUpperBound reads it.
+  if ((lim.flags || []).includes("VPLowerBound") && !(lim.flags || []).includes("AssumedVP")) notes.push("prefill's limit is a lower bound, so fewer prefill may do");
+  if (lim.extrapolated) notes.push("extrapolated past the tested range");
+  return s + (notes.length ? `, ${notes.join("; ")}` : "");
+}
+
+// growthPast marks a grown rate above the range the model was tested over,
+// as the TTFT row does, where the size does not already say extrapolated.
+function growthPast(g, testedTo) {
+  if (testedTo == null || !(g.rate > testedTo) || /extrapolated/.test(g.need) || /^(not sized|no )/.test(g.need)) return "";
+  return `, extrapolated above the tested ${roundRate(testedTo)} r/s`;
+}
+
+// GROWTH_NO_PREFILL says why the panel sizes no growth: a prefill limit the
+// default model cannot price, with no experimental model to price it.
+const GROWTH_NO_PREFILL = "Not sized: prefill's limit is not measured, so no fleet can be sized for more traffic. " +
+  "Load a busier window, or use the speed the pods were seen at (the Prefill row).";
+
+// GROWTH_NO_PD says why the panel sizes no growth for a decode-only source:
+// POST /v1/size sizes a P/D fleet.
+const GROWTH_NO_PD = "Not sized: the page sizes a fleet with prefill and decode, and this source has no prefill variant.";
+
+// execTimes1 is a ratio to the busiest load: two decimals under 1, so 0.98
+// never reads as 1.0.
+function execTimes1(x) {
+  return (x < 1 ? x.toFixed(2) : x.toFixed(1)) + "x";
+}
+
+// execMeasuredHour is what users saw in the source's busiest hour, as the
+// router measured it (inputs.measured): each statistic placed, or as its
+// bucket where the bucket is too wide to place it; and one note on the
+// percentiles not given and why.
+function execMeasuredHour(mh) {
+  if (!mh) return null;
+  const word = s => s.value != null ? execTimes(s.value) : s.bucket ? `${execTimes(s.bucket.lo)}-${execTimes(s.bucket.hi)} (one histogram bucket)` : null;
+  const row = list => (list || []).map(s => [s.statistic, word(s)]).filter(([, v]) => v).map(([st, v]) => `${st} ${v}`).join(", ");
+  const why = (name, list) => (list || []).filter(s => s.value == null && !s.bucket).map(s => `${name} ${s.statistic}: ${s.why}`);
+  const t = row(mh.ttft), p = row(mh.tpot);
+  if (!t && !p) return null;
+  const at = String(mh.from).slice(11, 16) + "-" + String(mh.to).slice(11, 16);
+  const coarse = (mh.tpot || []).filter(s => s.bucket).map(s => s.statistic);
+  const notes = why("TTFT", mh.ttft).concat(why("TPOT", mh.tpot));
+  if (coarse.length) {
+    const b = mh.tpot.find(s => s.bucket).bucket;
+    notes.push(`TPOT ${coarse.join("/")}: the router's ${execTimes(b.lo)}-${execTimes(b.hi)} bucket cannot resolve them`);
+  }
+  return {text: `Users saw (measured, busiest hour ${at} UTC, ${roundRate(mh.rate)} r/s): ` + [t ? `TTFT ${t}` : "", p ? `TPOT ${p}` : ""].filter(x => x).join("; ") + ".",
+    note: notes.join("; ")};
+}
+
+// refusalView is the card shown when the source could not learn prefill's
+// capacity, in plain words with what to do as page actions: {title, text, vp
+// (tokens/s, to use as the limit, or null), code}; null where prefill priced.
+// It reads a plan's limits, or a size's refusal where no fleet within the
+// bound priced (unmet: {refused}).
+function refusalView(plan, unmet) {
+  const L = plan && plan.limits;
+  const r = (L ? [L.prefill, L.fleet].map(x => x && x.refused) : []).concat([unmet && unmet.refused])
+    .find(x => x && x.reason === "NoPrefillCapacity");
+  if (!r) return null;
+  const lb = (r.flags || []).includes("VPLowerBound");
+  const m = /V_P ([0-9.]+) tokens\/s/.exec(r.detail || "");
+  const vp = lb && m ? Number(m[1]) : null;
+  const dv = L && L.decode && L.decode.value != null ? L.decode.value : null;
+  const decode = dv != null ? ` Decode alone serves up to ${roundRate(dv)} r/s.` : "";
+  const text = vp != null ? `The prefill pods never queued, so they handle at least ${Math.round(vp).toLocaleString("en-US")} tokens/s per pod, but their limit is not observed.${decode}` :
+    `The source learned no prefill speed per pod: it saw no prefill pod busy enough.${decode}`;
+  return {title: "Prefill capacity unknown", text, vp, code: r.reason};
+}
+
+// ---- Trust: one notice a view, a dagger on a figure ----
+//
+// How far to trust the figures is said once a view, never in every cell: a
+// figure from an experimental model carries a dagger, and the view's notice
+// says what the dagger means. Where each figure stands against the validated
+// region is in the Flags drawer.
+
+// EXPERIMENTAL_FLAGS are the flags of a figure an experimental model priced.
+const EXPERIMENTAL_FLAGS = ["ExperimentalTTFT", "RankMixtureTTFT", "TPOTDistribution", "VPFromPlateau"];
+
+// DAGGER marks a figure an experimental model priced.
+const DAGGER = "†";
+
+// isExperimental reports whether a figure, or a flag list, rests on an
+// experimental model.
+function isExperimental(x) {
+  const flags = Array.isArray(x) ? x : ((x && x.flags) || []);
+  return flags.some(f => EXPERIMENTAL_FLAGS.includes(typeof f === "string" ? f : f.flag));
+}
+
+// dagger is a figure's mark: DAGGER where an experimental model priced it.
+function dagger(f) {
+  return isExperimental(f) ? DAGGER : "";
+}
+
+// EXPERIMENTAL_NOTICE is the one notice of a view with experimental figures.
+const EXPERIMENTAL_NOTICE = `Experimental model (checked on your data): figures marked ${DAGGER} come from it. ` +
+  "Check the planner shows how it did on your traffic.";
+
+// noticeText is a view's one notice: the experimental model's where a figure
+// rests on one, else a TTFT model not validated on this fleet; "" with none.
+function noticeText(flags, banner) {
+  if (isExperimental(flags || [])) return EXPERIMENTAL_NOTICE;
+  if (banner || (flags || []).some(f => (typeof f === "string" ? f : f.flag) === "UnvalidatedTTFT")) {
+    return "The TTFT model is not validated on this fleet: read its TTFT figures as estimates. " +
+      "About the TTFT model, under the source, says how it read elsewhere; Check the planner tests it on your traffic.";
+  }
+  return "";
+}
+
+// ---- Exports ----
+
+// csvField is one CSV field: quoted, its quotes doubled, where it holds a
+// comma, a quote or a line break; a leading =, +, -, @, tab or carriage
+// return is prefixed with a quote so that a spreadsheet does not read the
+// field as a formula.
+function csvField(v) {
+  let s = v == null ? "" : String(v);
+  if (/^[=+@\t\r]/.test(s) || (/^-/.test(s) && !/^-[0-9.]+$/.test(s))) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// curvesCSV is the plan's curves as CSV: each rate with the TTFT and TPOT
+// there, seconds, empty where not known, and the reason.
+function curvesCSV(p) {
+  const fig = f => (f && !f.refused && typeof f.value === "number" ? String(Number(f.value.toPrecision(6))) : "");
+  const why = f => (f && f.refused ? f.refused.reason : "");
+  const tpot = p.tpot ? p.tpot.curve : [];
+  const rows = [["rate", `ttft_${p.ttft.statistic}_seconds`, "ttft_not_known", p.tpot ? `tpot_${p.tpot.statistic}_seconds` : "tpot_seconds", "tpot_not_known"].join(",")];
+  p.ttft.line.curve.forEach((c, i) => {
+    const t = tpot[i] && tpot[i].figure;
+    rows.push([String(Number(c.rate.toPrecision(6))), fig(c.figure), why(c.figure), fig(t), why(t)].map(csvField).join(","));
+  });
+  return rows.join("\n") + "\n";
+}
+
+// reportCSV is a report's matrix as CSV, as the page shows it: a row a shape,
+// a column a load, each cell its figures and its mark.
+function reportCSV(v) {
+  const rows = [["shape"].concat(v.header).map(csvField).join(",")];
+  for (const r of v.rows) rows.push([r.label].concat(r.cells.map(c => (c.text + (c.word ? " " + c.word : "")).trim())).map(csvField).join(","));
+  return rows.join("\n") + "\n";
+}
+
+// ---- Language: plain words on the first screen ----
+
+// REASON_PLAIN is why a figure is not known, in a few plain words: the
+// reason's code stays in the Flags drawer and the tooltips.
+const REASON_PLAIN = {NoPrefillCapacity: "prefill capacity unknown", Saturated: "overloaded", AboveDecodeOnset: "the router queues",
+  PastLowerBoundKnee: "past a lower-bound limit", TargetBelowFloor: "the target is under the floor", NoFixedLatency: "no prefill latency learned",
+  NoTPOTHistogram: "no TPOT histogram", PinnedDefaultB: "decode not measured", NoLine: "decode not measured", NoTraffic: "no traffic",
+  ReplicaBoundReached: "past the most replicas searched", TPOTBucketTooWide: "the TPOT histogram is too coarse"};
+
+// plainReasonWord is a refusal in plain words.
+function plainReasonWord(r) {
+  return (r && REASON_PLAIN[r.reason]) || "not estimated";
+}
+
+// GLOSSARY is each symbol the planner's method uses and its plain words:
+// the page says the words, and keeps the symbol for a tooltip.
+const GLOSSARY = [["V_P", "prefill speed per pod (tokens/s)"], ["knee", "rate where latency takes off"],
+  ["Ca²", "how bursty arrivals are"], ["f", "load imbalance across prefill pods"], ["cv", "prompt-length spread"],
+  ["headroom", "safety margin"], ["operating point", "safe load: the margin times the limit"]];
