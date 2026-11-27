@@ -129,17 +129,19 @@ Read the review first; the implementation design says what was built.
   into the tools image. Settles scope, upgrade, air-gapped use, privileges,
   re-runs, preflight results, dry-run and the CI gate.
 - **[Install with kubectl and kustomize, without docker](kubernetes-native-install.md)**
-  — proposed. One signed manifest applied by the cluster admin
-  (`kubectl apply --server-side -f`), as KEDA, Kueue, LeaderWorkerSet and
-  cert-manager install. The existing settings ConfigMap holds the config and
-  the live switches; a namespace label, gated by an admin-owned selector,
-  opts each namespace in. The preflight runs inside the controller and
-  reports in the status ConfigMap, and the controller
-  publishes a ScaledObject plan for review. Costs cluster-wide reads, the
-  same as today's cluster-wide install. A per-namespace kustomize path with
-  Jobs stays as the least-privilege alternative. `smt` keeps working on the
-  same release files. Helm is an alternative that needs the maintainers to
-  lift the no-chart rule.
+  — phase 1 built (#409, v0.13.0); the rest partly built or open. Signed
+  files applied as downloaded by two `kubectl`-only scripts, as KEDA, Kueue,
+  LeaderWorkerSet and cert-manager install; the
+  [kubectl install guide](../guides/kubectl-install/) has the commands. The
+  existing `watchNamespaces` setting, read live, picks the managed
+  namespaces (the first draft's label and selector were dropped in review).
+  The controller runs its preflight, fills its own TLS and KEDA's copy in
+  KEDA's namespace only, reports each namespace's readiness, and publishes a
+  ScaledObject plan for review. Costs cluster-wide reads, the same as the
+  cluster-wide `smt` install. Lists what each later phase still needs, with
+  the code it was checked against. A per-namespace kustomize path with Jobs
+  stays as the least-privilege alternative, not built. Helm needs the
+  maintainers to lift the no-chart rule.
 
 ## Engine and analyzers
 

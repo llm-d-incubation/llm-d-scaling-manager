@@ -1,34 +1,44 @@
 # Install with kubectl and kustomize, without docker
 
-- **Status:** proposed. Nothing in it is built.
-- **Audience:** contributors and maintainers. Operators install today from
-  [install in a namespace](../guides/install-in-namespace/) and the
-  [install commands](../reference/tools-install.md). The commands below
-  are the draft of a future guide, `docs/guides/kubectl-install/`.
+- **Status:** phase 1 built, in [#409](https://github.com/llm-d-incubation/llm-d-scaling-manager/pull/409),
+  released in v0.13.0. Phases 2 to 4 are partly built or open
+  ([appendix B](#b-what-was-built-and-the-phases)).
+- **Audience:** contributors and maintainers. Operators install from the
+  [kubectl install guide](../guides/kubectl-install/), which is the source of
+  truth for the commands. The commands here are a summary of it.
 - **Builds on:** [Install from the release](install-from-release.md) and
   [Install in two commands](two-command-install.md).
+- **Changed after review.** The first draft opted a namespace in with a
+  label, narrowed by an admin-owned `namespaceSelector`. #409's review
+  replaced that with the existing `watchNamespaces` setting, read live. The
+  reasons are under [Alternatives](#alternatives).
 
 ## Summary
 
 A cluster admin installs the scaling manager the way KEDA, Kueue and
-LeaderWorkerSet install: one signed release manifest, applied with
-`kubectl apply --server-side`. No docker, no checkout. The config is the
-existing settings ConfigMap, and the status is the existing status
-ConfigMap, so both live as plain objects a GitOps tool can sync. A
-namespace opts in with a label. The controller checks its own
-prerequisites, mints its own TLS, wires KEDA, and suggests the
-ScaledObjects. A person still reviews and applies them. `smt` keeps
-working on the same release files, and kustomize stays available for
-customising: the manifest is rendered from the same bases.
+LeaderWorkerSet install: signed release files, applied as downloaded with
+`kubectl`. No docker, no checkout, and no file is edited before it is
+applied. Two scripts that run `kubectl` only apply the files, one for the
+cluster admin and one for a namespace owner; `--print` shows the commands
+instead, for GitOps.
+
+The config is the existing settings ConfigMap, and the status is the
+existing status ConfigMap. The admin picks the managed namespaces with the
+existing `watchNamespaces` setting, which this install reads live. The
+controller starts passive, runs its own preflight checks, fills its own
+scaler certificates and KEDA's copy, reports each namespace's readiness, and
+suggests the ScaledObjects. A person still reviews and applies them. `smt`
+keeps working on the same release files.
 
 ## Motivation
 
-Installing today takes the tools image (docker) or about 20 commands by hand.
-The controllers an llm-d cluster already runs install with one manifest.
+Before v0.13.0, an install took the tools image (docker) or about 20
+commands by hand. The controllers an llm-d cluster already runs install
+with one manifest.
 
 **Goals.** Install, configure, upgrade and uninstall with `kubectl` only. No
-docker, no checkout. Config that GitOps can hold. The passive first
-install and the preflight stay.
+docker, no checkout, no edit of a signed file. Config that GitOps can hold.
+The passive first install and the preflight stay.
 
 **Non-goals.** A Helm chart (forbidden by AGENTS.md; see
 [Alternatives](#alternatives)). A new CRD in phase 1. Changing how the
@@ -38,150 +48,162 @@ controller decides.
 
 ### User stories
 
-- As a cluster admin, I install one signed manifest and label the namespaces
-  to manage.
-- As a platform team, I keep the install and its settings in git, and flip
-  passive, shadow and active with kubectl.
+- As a cluster admin, I install the signed files and list the namespaces to
+  manage.
+- As a platform team, I keep the install commands and the settings in git,
+  and flip passive, shadow and active with `kubectl`.
 - As a namespace owner, I review the ScaledObjects the controller suggests
-  before anything scales.
+  before anything scales, and read my namespace's readiness without access to
+  the controller's namespace.
 
 ### One namespace
+
+The cluster admin downloads and verifies the files, then installs:
 
 ```bash
 V=v0.13.0
 URL=https://github.com/llm-d-incubation/llm-d-scaling-manager/releases/download/$V
-curl -fsSLO $URL/scaling-manager.yaml && curl -fsSLO $URL/scaling-manager.yaml.sigstore.json
-cosign verify-blob scaling-manager.yaml --bundle scaling-manager.yaml.sigstore.json \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
-kubectl apply --server-side -f scaling-manager.yaml               # namespace, RBAC, controller, KEDA's side
-kubectl apply --server-side -f settings.yaml                      # the settings ConfigMap, below
-kubectl label namespace team-a scaling-manager.llmd.ai/managed=true
+for f in scaling-manager.yaml scaling-manager-keda.yaml scaling-manager-grants.yaml scaling-manager-monitoring.yaml \
+    scaling-manager-admin.sh scaling-manager-owner.sh; do
+  curl -fsSLO $URL/$f && curl -fsSLO $URL/$f.sigstore.json
+  cosign verify-blob $f --bundle $f.sigstore.json \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity "https://github.com/llm-d-incubation/llm-d-scaling-manager/.github/workflows/ci-release.yaml@refs/tags/$V"
+done
+bash scaling-manager-admin.sh install --prometheus-url https://prometheus.monitoring.svc:9090 \
+  --keda-namespace keda --watch-namespaces team-a
+kubectl get configmap scaling-manager-scaledobjects-plan -n scaling-manager-system \
+  -o jsonpath='{.data.team-a}' > team-a-scaledobjects.yaml      # handed to the owner
 ```
 
-```yaml
-# settings.yaml: the existing scaling-manager-settings ConfigMap. No live switches in it.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: scaling-manager-settings
-  namespace: scaling-manager-system
-data:
-  prometheusURL: https://prometheus.monitoring.svc:9090
-  namespaceSelector: "scaling-manager.llmd.ai/managed=true,kubernetes.io/metadata.name in (team-a)"
+`install` applies `scaling-manager.yaml` (the namespace, RBAC, the controller
+and the ClusterTriggerAuthentication), applies `scaling-manager-keda.yaml` in
+KEDA's namespace with `-n`, labels that namespace
+`scaling-manager.llmd.ai/keda=true`, and writes the settings ConfigMap:
+`prometheusURL`, `kedaNamespace`, `caFromSecret` and `watchNamespaces`.
+
+The namespace owner reviews the file and registers it:
+
+```bash
+bash scaling-manager-owner.sh register team-a team-a-scaledobjects.yaml
+bash scaling-manager-owner.sh status team-a                     # readiness, read in team-a
 ```
 
 ### Several namespaces, one budget, a DisaggregatedSet, sharing in shadow
 
 ```bash
-kubectl apply --server-side -f scaling-manager.yaml               # verified as above
-kubectl apply --server-side -f settings.yaml                      # with the budget, below
-for NS in team-a team-b; do
-  kubectl label namespace $NS scaling-manager.llmd.ai/managed=true
-done
-# Static DisaggregatedSet roles only: the role writer's grant, the switch, the opt-in.
-kubectl apply -n team-a -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=dset-role-writer
-kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge \
-  -p '{"data":{"dsetRoleWriter":"true","utilizationShare":"shadow"}}'   # live switches, never in git
+bash scaling-manager-admin.sh install --prometheus-url https://prometheus.monitoring.svc:9090 \
+  --keda-namespace keda --watch-namespaces team-a,team-b
+bash scaling-manager-admin.sh set limiter=quota quotas=NVIDIA-H100-80GB-HBM3=16 quotaScope=cluster
+# Static DisaggregatedSet roles only: the owner binds the role writer's grant,
+# the admin turns the writer on, the owner opts the set in.
+bash scaling-manager-owner.sh grant dset-role-writer team-a
+bash scaling-manager-admin.sh set dsetRoleWriter=true utilizationShare=shadow   # never in git
 kubectl annotate disaggregatedset <set> -n team-a scaling-manager.llmd.ai/role-writer=true \
   scaling-manager.llmd.ai/model-id=<model> scaling-manager.llmd.ai/min-replicas=1 \
   scaling-manager.llmd.ai/max-replicas=<max groups per role>
-# Register the models: review the controller's plan, then apply it (per namespace).
-kubectl get configmap scaling-manager-scaledobjects-plan -n scaling-manager-system \
-  -o jsonpath='{.data.team-a}' > so-team-a.yaml && kubectl apply -n team-a -f so-team-a.yaml
-```
-
-```yaml
-# settings.yaml, data: for a shared budget
-  prometheusURL: https://prometheus.monitoring.svc:9090
-  namespaceSelector: "scaling-manager.llmd.ai/managed=true,kubernetes.io/metadata.name in (team-a,team-b)"
-  limiter: quota
-  quotas: NVIDIA-H100-80GB-HBM3=16
-  quotaScope: cluster
 ```
 
 The install is passive: it computes, publishes and moves nothing. To see
 whether a role is Static or External:
 `kubectl get disaggregatedset <set> -n team-a -o jsonpath='{.spec.roles[*].scaling.mode}'`.
-External roles need no grant ([appendix A](#a-the-advanced-path-least-privilege-per-namespace)
-has the full DisaggregatedSet steps).
+External roles need no grant. The suggested plan covers Deployments only, so
+a DisaggregatedSet's ScaledObjects are written by hand
+([appendix A](#a-disaggregatedset-step-by-step) has the steps).
 
 ### What you get
 
-- **The preflight, inside the controller.** It checks at start and every
-  cycle, and writes the results to the existing status ConfigMap
-  `scaling-manager-controller-status`: one key per check (`ok`, `warn` or
-  `fail` and a reason), plus `ready`. Changes become Events. There is no
-  preflight Job.
-- **Its own TLS, with no `create` on Secrets.** The manifest pre-creates
-  the scaler's Secrets with no data, and the controller fills and rotates
-  them by name.
-- **KEDA wired for you.** The manifest pre-creates the one Secret KEDA
-  reads, in KEDA's namespace, and the ClusterTriggerAuthentication. The
-  controller fills that Secret by name. No Job, no key in a model
+- **The preflight, inside the controller.** It runs every minute and writes
+  each result to the status ConfigMap `scaling-manager-controller-status`:
+  one `preflight.<check>` key per check, plus `ready`. A change of a check
+  becomes an Event. There is no preflight Job on this install.
+- **The managed namespaces, live.** `watchNamespaces` selects them without a
+  restart. The cache stays cluster-wide. The scaler refuses, with
+  `PermissionDenied`, a ScaledObject in any other namespace, and ends an
+  open stream once its namespace is left out. The controller drops that
+  namespace's InferencePools.
+- **Each namespace's readiness.** A `namespace.<name>` key in the status
+  (`ok`, `waiting`, `not ready`, `not managed`, with what to do), and the
+  same line as an Event on that namespace's ScaledObjects and InferencePools,
+  so an owner reads it without access to the controller's namespace.
+- **Its own TLS, with no `create` on Secrets.** The manifest ships the
+  scaler's Secrets as `Opaque` with no data, and the controller fills and
+  rotates them by name. Over an `smt` install it copies the old CA across.
+- **KEDA wired for you.** `scaling-manager-keda.yaml` creates the one Secret
+  KEDA reads, in KEDA's namespace, and a Role there that lets the controller
+  update that Secret by name. The controller fills it and switches to mutual
+  TLS without a restart. KEDA's client certificate never goes to a model
   namespace.
-- **A suggested plan.** One ScaledObject per model server, per role on a
-  DisaggregatedSet, in `scaling-manager-scaledobjects-plan`. You review it
-  and apply it.
+- **A suggested plan.** One ScaledObject per model-server Deployment in each
+  managed namespace, in ConfigMap `scaling-manager-scaledobjects-plan`. A
+  person reviews and applies it.
 
 ### Check it, and switch it
 
 ```bash
-kubectl get configmap scaling-manager-controller-status -n scaling-manager-system \
-  -o jsonpath='{.data.ready} {.data.namespacesManaged} {.data.scalerTLS} {.data.utilizationShare}{"\n"}'
-kubectl get events -n scaling-manager-system --field-selector involvedObject.name=scaling-manager-controller-status
+bash scaling-manager-admin.sh status            # ready, namespacesManaged, namespace.<name>, each check
 ```
 
-`ready` is `ok` when every check passes; otherwise the failing check's key
-names the fix. `kubectl wait` cannot wait on ConfigMap data, so a script
-polls `ready`.
+`ready` is `ok` when no check fails; a WARN or UNKNOWN does not block it.
+`namespacesManaged` is the list, or `*` for every namespace.
+`namespacesRefused` lists the namespaces KEDA called the scaler for that are
+not managed. `kubectl wait` cannot wait on ConfigMap data, so a script polls
+`ready`.
 
 Passive, then shadow, then active, one key each:
 
 ```bash
-P="kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p"
-$P '{"data":{"utilizationShare":"shadow"}}'     # sharing computes and publishes, moves nothing
-$P '{"data":{"passive":"false"}}'               # the controller scales
-kubectl apply -n team-a -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=pod-writer   # admin, per sharing namespace
-$P '{"data":{"utilizationShare":"active"}}'     # sharing moves replicas
+A="bash scaling-manager-admin.sh set"
+$A utilizationShare=shadow                          # sharing computes and publishes, moves nothing
+$A passive=false                                    # the controller scales
+bash scaling-manager-owner.sh grant pod-writer team-a   # the owner, per sharing namespace
+$A utilizationShare=active                          # sharing moves replicas
 ```
 
-To undo, set `utilizationShare` back to `shadow`, wait one cycle (15 s)
-so no transfer marks are left on pods, then set it to `off` and delete the
-pod-writer grants. The budget stays.
+The controller checks each grant a switch needs with a
+SelfSubjectAccessReview, and a missing one turns the namespace `not ready`
+with the command to run. To undo, set `utilizationShare` back to `shadow`,
+wait one cycle (15 s) so no transfer marks are left on pods, then set it to
+`off` and delete the pod-writer grants. The budget stays.
 
 **Switch keys are never in git.** `passive`, `utilizationShare` and
-`dsetRoleWriter` are flipped with `kubectl`. Argo CD with server-side apply
-and Flux both force their ownership, so a switch left in the synced file
-silently resets a live patch on every sync ([appendix E](#e-gitops)).
+`dsetRoleWriter` are set with `kubectl`. Argo CD with server-side apply and
+Flux both force their ownership, so a switch left in the synced file
+silently resets a live change on every sync ([appendix E](#e-gitops)).
 
 ### The trade-offs
 
-- **Cluster-wide reads.** A label is not an RBAC scope, so the controller
-  reads cluster-wide. These are the same reads as today's cluster-wide
-  install ([appendix C](#c-rbac-in-full)).
-- **The label alone is not consent.** A tenant who can create namespaces
-  can set the label. Set `namespaceSelector` to names or a label only the
-  admin sets. The scaler and the controller refuse every namespace it does
-  not admit, and list the refused ones in the status. Left unset, the
-  selector admits every labelled namespace. The status then warns when a
-  cluster-scope budget is shared.
-- **Active sharing is a grant per namespace.** Patching pods stays the
-  admin's explicit act, from the labelled `scaling-manager-grants.yaml`.
+- **Cluster-wide reads.** The controller reads cluster-wide, with the same
+  reads as today's cluster-wide install ([appendix C](#c-rbac-in-full)).
+  `watchNamespaces` limits where it acts, not what it can read.
+- **An empty `watchNamespaces` manages every namespace**, as on every
+  cluster-wide install. A fresh install without `--watch-namespaces` then
+  serves a ScaledObject in any namespace and shares one budget across all of
+  them. On a shared cluster, list the namespaces. A rejected value keeps the
+  list in force; a rejected value with no list before it manages nothing.
+- **Only the cluster admin opts a namespace in.** The setting lives in the
+  controller's namespace, which only the cluster admin owns on this install.
+- **Active sharing is a grant per namespace.** The namespace owner binds it
+  from `scaling-manager-grants.yaml`. It is never cluster-wide.
+- **KEDA's namespace is admitted by a label.** The scaler's NetworkPolicy
+  admits the namespace labelled `scaling-manager.llmd.ai/keda=true`. The
+  label opens the network path only: once KEDA's copy is written the scaler
+  serves mutual TLS, so a caller also needs KEDA's client certificate.
 
-| | today's cluster-wide install | this install | today's namespaced install |
+| | cluster-wide `smt` install | this install | namespaced `smt` install |
 | --- | --- | --- | --- |
 | reads | cluster-wide | the same | per namespace |
-| pod `patch` | per namespace, at activation | the same | the same |
+| which namespaces | `--model-namespace`, at install | `watchNamespaces`, live | its own |
+| pod `patch` | per namespace, at activation | per namespace, bound by the owner | the same as cluster-wide |
 | KEDA's copy | the admin's kubeconfig | the controller, one Secret by name | the admin's kubeconfig |
 | `create` on Secrets | no | no | no |
-| commands, one namespace | 3 with `smt`, plus docker setup | 5, plus download and verify | 3 with `smt`; about 16 on the [advanced path](#a-the-advanced-path-least-privilege-per-namespace) |
+| commands, one namespace | 3 with `smt`, plus docker setup | the download loop and 1 for the admin; 1 for the owner | 3 with `smt`; about 16 on the [advanced path](#a-the-advanced-path-least-privilege-per-namespace) |
 
 ## Design details
 
 The appendices hold the detail:
 
-- [B](#b-what-has-to-be-built-and-the-phases): what the controller must gain, and the phases.
+- [B](#b-what-was-built-and-the-phases): what was built, what is left, and the phases.
 - [C](#c-rbac-in-full): RBAC in full.
 - [D](#d-monitoring): monitoring.
 - [E](#e-gitops): GitOps.
@@ -191,41 +213,108 @@ The appendices hold the detail:
 
 ## Alternatives
 
-- **Least privilege per namespace** ([appendix A](#a-the-advanced-path-least-privilege-per-namespace)): kept as the advanced path, not the default, because it costs about 16 commands and 11 files per namespace.
+- **A namespace label, narrowed by `namespaceSelector`** (the first draft).
+  A namespace opted in with `scaling-manager.llmd.ai/managed=true`, and an
+  admin-owned selector, plus an optional ValidatingAdmissionPolicy
+  (`scaling-manager-label-guard.yaml`), limited which labelled namespaces
+  counted. Replaced in #409 by `watchNamespaces`, because:
+  - anyone who can create a namespace can label it, which is why the
+    selector and the label guard had to exist;
+  - the selector was only ever used as `kubernetes.io/metadata.name in
+    (...)`, which is a list of names, and `watchNamespaces` is that list;
+  - `watchNamespaces` is the key every other install already has, and
+    keeping both would give the admin two lists to keep in step.
+
+  An old `namespaceSelector` key is reported as unknown, with the hint that
+  `watchNamespaces` replaced it.
+- **Editing the manifest for KEDA's namespace** (a `sed`, or a
+  `keda-namespace` kustomize component). Replaced by the `kedaNamespace`
+  setting and `scaling-manager-keda.yaml` applied with `-n`, so the signed
+  files are applied as downloaded.
+- **KEDA's client certificate in each model namespace**, behind a namespaced
+  TriggerAuthentication. Rejected: whoever can read it can pose as KEDA, the
+  client identity is one SAN and the scaler does not check which namespace a
+  call is for, and writing it would need `create` on Secrets in every model
+  namespace. The copy stays in KEDA's namespace only. A namespaced
+  TriggerAuthentication is worth revisiting only with a per-namespace client
+  identity and a server-side check that the caller's namespace matches the
+  ScaledObject's.
+- **Least privilege per namespace** ([appendix A](#a-the-advanced-path-least-privilege-per-namespace)): kept as the advanced path, not built, because it costs about 16 commands and 11 files per namespace.
 - **Helm** ([appendix J](#j-helm)): closest to the router, but forbidden by AGENTS.md.
 - **A CRD** ([A CRD later?](#a-crd-later)): deferred.
 - **`smt` only**: it keeps working, but needs docker.
 
 ## Release notes
 
-A new install path and release assets (`scaling-manager.yaml`, `scaling-manager-grants.yaml`, `scaling-manager-monitoring.yaml`, the kustomize tarball). New settings keys: `namespaceSelector`, `caFromSecret`, `dsetRoleWriter`. New status keys. `smt` and the existing release files are unchanged.
+Shipped in v0.13.0 (#409): a kubectl-only install from one signed manifest.
+New release assets: `scaling-manager.yaml`, `scaling-manager-keda.yaml`,
+`scaling-manager-grants.yaml`, `scaling-manager-monitoring.yaml`,
+`scaling-manager-admin.sh` and `scaling-manager-owner.sh`, all in
+`SHA256SUMS` and signed. New settings keys: `kedaNamespace`, `caFromSecret`,
+`dsetRoleWriter`; `watchNamespaces` is live on this install. New status
+keys: `ready`, `preflight.<check>`, `namespacesManaged`, `namespacesRefused`,
+`namespace.<name>`, `kedaConnection`, `kedaCopyStale`. `smt`, every earlier
+release file and `make deploy-scaling-manager` are unchanged.
 
 ## Open questions: decisions for the maintainers
 
-- **Cluster-wide by default.** The main path needs today's cluster-wide
-  reads, and least privilege per namespace becomes the
-  [advanced path](#a-the-advanced-path-least-privilege-per-namespace).
+Decided, in #409 and its review:
+
+| question | decision |
+| --- | --- |
+| how a namespace is chosen | the existing `watchNamespaces` setting, live on this install; no label, no `namespaceSelector`, no label guard |
+| an empty `watchNamespaces` | every namespace, as on every cluster-wide install. Any change to that meaning goes in a later PR |
+| a rejected `watchNamespaces` | keeps the list in force; a rejected first value manages nothing (fails closed, never to every namespace) |
+| KEDA in another namespace | the `kedaNamespace` setting, `scaling-manager-keda.yaml` applied with `-n`, the NetworkPolicy admitting KEDA's namespace by label. No edit of a signed file |
+| how the files are applied | as downloaded, by two `kubectl`-only scripts; `--print` for GitOps |
+| KEDA's client certificate | only in KEDA's namespace, in a Secret the manifest pre-creates; the controller updates it by name. Never in a model namespace. No namespaced TriggerAuthentication |
+| the scaler's TLS Secrets | `Opaque`, no data, under new names (`scaling-manager-scaler-{ca,serving,client}`); the `smt` CA copied once. No `create` on Secrets |
+| the live switches | stay in the settings ConfigMap, set with `scaling-manager-admin.sh set`, never in git |
+| who binds the grants | the namespace owner binds `pod-writer` and `dset-role-writer` in their namespace; the admin binds an EPP's token review (`grant-epp`) |
+| the DisaggregatedSet role writer | per namespace, and it scans only the namespaces holding its grant |
+| passive by default | yes, from the Deployment (`LLMSM_PASSIVE=true`), below the live `passive` setting |
+| the plan | the controller writes it; a person applies it; the admin hands each owner their namespace's part as a file |
+| readiness for a namespace owner | `namespace.<name>` in the status, and the same line as an Event in that namespace, recorded on change only |
+| a CRD | not in phase 1 ([A CRD later?](#a-crd-later)) |
+
+Still open ([appendix N](#n-open-questions)):
+
+- **Cluster-wide by default.** The main path needs cluster-wide reads, and
+  least privilege per namespace is the
+  [advanced path](#a-the-advanced-path-least-privilege-per-namespace), not
+  built.
 - **Helm.** [AGENTS.md](../../AGENTS.md) forbids a chart. The router
   installs with Helm, and the llm-d guides install LeaderWorkerSet and
   Kueue from their Helm OCI charts. A chart over this manifest would be
   thin ([appendix J](#j-helm)).
-- **A git ref for llm-d recipes.** Install-from-release ruled out a remote
-  kustomize base on 2026-11-10, but an llm-d recipe needs one, pinned to a
-  release commit, with the image pinned by digest
+- **A git ref, or a signed kustomize tarball, for llm-d recipes.**
+  Install-from-release ruled out a remote kustomize base on 2026-11-10, but
+  an llm-d recipe needs an in-repo kustomization
   ([appendix H](#h-the-llm-d-recipe-path)).
-- **No CRD in phase 1.** The settings and status ConfigMaps carry the
-  config and the result ([A CRD later?](#a-crd-later)).
+- **The plan's reader.** The plan ConfigMap is in `scaling-manager-system`,
+  which a namespace owner cannot read.
+- **The EPP NetworkPolicy rule** selects every pod of the namespace on port
+  9090, since router charts label their EPP pods differently.
 
 ## Appendices
 
 ### A. The advanced path: least privilege per namespace
+
+**Not built** (phase 3). Until it is, a namespaced `smt` install is the
+least-privilege option.
 
 For a controller per namespace that needs no cluster-wide reads, or a
 namespace owner who installs without a cluster admin beyond a first step.
 It is the design two review rounds settled. It holds more files and more
 commands: about 16 commands and 11 small files for one namespace; about 27
 and 16 for several namespaces with a DisaggregatedSet and shadow sharing.
-`kubectl scaling-manager init` writes the files.
+`kubectl scaling-manager init` (phase 4) would write the files.
+
+Here the owner holds `admin` in the controller's namespace, so nothing there
+may hold a right the owner must not have. That is why KEDA's copy is made by
+a Job in KEDA's namespace, not by the controller as on the main path, where
+only the cluster admin owns the controller's namespace. On both paths KEDA's
+client certificate goes only to KEDA's namespace.
 
 It differs from the main path in four ways:
 
@@ -330,11 +419,13 @@ which `smt` and the migration rely on.
    each `sm-steps/` directory still there.
 3. Run the same leftovers check as the main path.
 
-The scaler CA, Secret `scaling-manager-external-scaler-ca`, is kept for a
+The scaler CA, Secret `scaling-manager-scaler-ca`, is kept for a
 reinstall. To delete it: `kubectl delete secret -n $CTRL -l
 scaling-manager.llmd.ai/scaler-tls`.
 
 #### A DisaggregatedSet, step by step
+
+On the main path, as built:
 
 ```bash
 NS=team-a SET=<your DisaggregatedSet>
@@ -342,24 +433,26 @@ kubectl get disaggregatedset $SET -n $NS -o jsonpath='{.spec.roles[*].scaling.mo
 ```
 
 - **External roles** are scaled through their `DisaggregatedSetRoleScaler`
-  (`<set>-<role>`). The plan has one ScaledObject per role.
+  (`<set>-<role>`). Write one ScaledObject per role by hand, with the same
+  scaler address and ClusterTriggerAuthentication as the plan's: the plan
+  writer covers Deployments only.
 - **Static roles** have no `/scale`, so the role writer reads and writes
   them. Three steps:
-  1. The admin binds the second unbound ClusterRole (`get`, `list`, `patch`
-     on `disaggregatedsets`) in the namespace:
+  1. The namespace owner binds the role writer's grant (`get`, `list`,
+     `patch` on `disaggregatedsets`) in the namespace:
 
      ```bash
-     kubectl apply -n $NS -f scaling-manager-grants.yaml -l scaling-manager.llmd.ai/grant=dset-role-writer
+     bash scaling-manager-owner.sh grant dset-role-writer $NS
      ```
 
-  2. Turn the writer on:
+  2. The cluster admin turns the writer on (a restart key; the controller
+     restarts itself):
 
      ```bash
-     kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge \
-       -p '{"data":{"dsetRoleWriter":"true"}}'
+     bash scaling-manager-admin.sh set dsetRoleWriter=true
      ```
 
-  3. Opt the set in:
+  3. The owner opts the set in:
 
      ```bash
      kubectl annotate disaggregatedset $SET -n $NS \
@@ -372,7 +465,8 @@ kubectl get disaggregatedset $SET -n $NS -o jsonpath='{.spec.roles[*].scaling.mo
   Use `force` instead of `true` if the set was created with `kubectl
   create`, plain `kubectl apply` or Helm
   ([ownership](../reference/disaggregatedset.md#ownership-of-replicas)).
-  While the model is passive the writer writes nothing.
+  While the model is passive the writer writes nothing. The writer scans
+  only the managed namespaces that hold its grant.
 
 #### The advanced path's internals
 
@@ -394,9 +488,10 @@ back into the sync.
 
 `smt admin-setup` refuses a model namespace another scaling manager
 manages, and a namespaced install beside a cluster-wide one. On this path
-the preflight does it, before the admin apply. That is new work: today's
-`overlap` reads one cluster-wide controller's Deployment by name and looks at
-no other namespace. Its rights:
+the preflight does it, before the admin apply. The check exists since #409,
+as `conflicts` (`internal/preflight/install_checks.go`), reading
+RoleBindings and ClusterRoleBindings; what is left is running it as a Job
+with these rights:
 
 - `list` on `rolebindings` in each listed model namespace, to find another
   controller's RoleBinding there;
@@ -415,8 +510,9 @@ KEDA presents its client certificate through a ClusterTriggerAuthentication,
 which reads Secrets only in KEDA's own namespace. The copy never goes to a
 model namespace or any namespace a tenant owns: whoever can read it can pose
 as KEDA (`deploy/lib/scaler_tls.sh`, the KEDA section, and the
-[security model](../reference/security-model.md)). Today the admin makes the
-copy with their own kubeconfig.
+[security model](../reference/security-model.md)). On an `smt` install the
+admin makes the copy with their own kubeconfig; on the main path the
+controller writes it, by name, into a Secret the manifest pre-creates.
 
 The Job must not run in the controller namespace. There the owner holds
 `admin`: they can run a pod as the Job's ServiceAccount or create a token for
@@ -433,7 +529,7 @@ it, and so use any right it has.
   not a control. A marker set early only breaks the owner's own install.
 - **`steps/keda-auth` (admin, temporary)** runs the Job in KEDA's
   namespace, as a ServiceAccount there. Its rights, all by `resourceNames`:
-  - `get` on Secret `scaling-manager-external-scaler-client-tls` and on
+  - `get` on Secret `scaling-manager-scaler-client` and on
     ConfigMap `scaling-manager-controller-status`, in the controller
     namespace;
   - `get` and `update` on the pre-created Secret in KEDA's namespace;
@@ -444,113 +540,125 @@ it, and so use any right it has.
 - The Job waits for the controller to fill the client Secret, copies it, and
   sets the marker's `ready` key. The controller watches the marker and, when
   `ready` changes, re-reads the client CA and serves mutual TLS without a
-  restart (a controller change). The Job reads `scalerTLS` until
-  `mutual TLS`. If the live re-read is not built, the Job also needs `get`
-  and `patch` by name on the Deployment, to restart it through a
-  pod-template annotation.
-- **KEDA's connection.** Today `admin-finish` judges KEDA's connection from
+  restart. The live switch exists since #409 (`--external-scaler-tls-live`);
+  reading the marker for it is the new part. The Job reads `scalerTLS`
+  until `mutual TLS`.
+- **KEDA's connection.** `smt admin-finish` judges KEDA's connection from
   the controller's log and KEDA's pods (`deploy/lib/scaler_tls.sh`), and
-  `pods/log` cannot be limited by name. Instead the controller publishes
-  the verdict in its status: `kedaConnection` (`none`, `current` or
-  `stale`) and `kedaCopyStale` (KEDA's copy predates the current client
-  certificate). The Job reads only that.
+  `pods/log` cannot be limited by name. Instead the Job reads the verdict
+  the controller publishes since #409: `kedaConnection` (`none`, `current`
+  or `stale`) and `kedaCopyStale` (KEDA's copy predates the current client
+  certificate).
 
 **Rotation.** KEDA keeps one connection per scaler address until it
 restarts. When the CA changes, the Job reports `kedaConnection: stale` and
 prints the restart of KEDA's operator; it never restarts KEDA, which is
 shared. Re-run the Job after a CA change.
 
-A namespaced TriggerAuthentication is not used. If it ever is, it needs
-KEDA 2.21 or later.
+A namespaced TriggerAuthentication is not used, on either path: it would
+put KEDA's client certificate in a model namespace
+([Alternatives](#alternatives)). If it is ever revisited, it needs a
+per-namespace client identity, a server-side namespace check, and KEDA 2.21
+or later.
 
 ##### The scaler TLS Secrets
 
-Today's release file ships them as type `kubernetes.io/tls` with empty
+The `smt` release files ship them as type `kubernetes.io/tls` with empty
 keys. That type requires the key fields, so an apply of that file empties
 the certificates the controller wrote; that is why it is created once.
-Both paths here instead ship them as `Opaque` with no `data`, under new
-names. An `Opaque` Secret with no `data` field keeps what another manager
-wrote across a server-side re-apply, which was checked on kind. So the
-Secrets sit in the applied bases, and the controller keeps `get` and
-`update` by name only. It never needs `create` on Secrets. The type of the
-existing Secrets cannot change, hence the new names; on first start the
-controller copies the old CA across.
+The one manifest instead ships them as `Opaque` with no `data`, under new
+names, `scaling-manager-scaler-{ca,serving,client}` (built in #409,
+`--external-scaler-tls-secrets=opaque`); the advanced path would do the
+same. An `Opaque` Secret with no `data` field keeps what another manager
+wrote across a server-side re-apply. So the Secrets sit in the applied
+files, and the controller keeps `get` and `update` by name only. It never
+needs `create` on Secrets. The type of the existing Secrets cannot change,
+hence the new names; on first start the controller copies the old CA
+across.
 
-### B. What has to be built, and the phases
+### B. What was built, and the phases
 
-What exists today, on `main`:
+Phase 1 shipped in #409 (merged 2026-11-24, released in v0.13.0). It built
+more of the controller than the first phase plan named, and less of the
+kustomize work. This appendix was re-checked against `main` at `190a1da6`.
 
-- the settings ConfigMap `scaling-manager-settings` (`config/release/settings-configmap.yaml`, read by `internal/controller/settings.go`). Its live keys take effect within a cycle; its restart keys after a restart;
-- the status ConfigMap `scaling-manager-controller-status` (`internal/controllerstatus/publisher.go`), with `limiter`, `utilizationShare`, `scalerTLS`, `scalerTLSAction`, `scalerUnreachable` and more;
-- the preflight, as `/manager preflight check` in a Job (`internal/preflight`), writing its own result ConfigMap;
-- the scaler TLS bootstrap, which mints the CA and leaves.
+What was built: the release files and scripts (`deploy/release-manifests.sh`,
+`deploy/kubectl/scaling-manager-{admin,owner}.sh`, signed beside the
+manifests); `watchNamespaces` live (`internal/config/settings_loader.go`,
+`internal/managedns`); the scaler's refusal (`internal/scaler/admit.go`);
+the in-controller preflight with its new checks (`internal/preflight/monitor.go`,
+`internal/preflight/install_checks.go`); the status keys
+(`internal/controllerstatus/publisher.go`); its own TLS and KEDA's copy
+(`internal/scalertls/{ensure,kedacopy,setup}.go`); the plan writer
+(`internal/scaleplan`); the guide (`docs/guides/kubectl-install/`); the
+kind e2e (`make test-e2e-manifest-install`, `make test-e2e-manifest-migrate`).
 
-What is new:
+Each item of the original plan, and where it stands:
 
-- **Settings keys:**
-  - `namespaceSelector`, a label-selector string;
-  - `caFromSecret`, which reads the CA from the fixed Secret `scaling-manager-prometheus-ca`;
-  - `dsetRoleWriter`, today the `DSET_ROLE_WRITER` env var.
-
-  A change to a restart key makes the controller restart itself.
-- **Status keys:**
-  - one per preflight check, `ok`, `warn` or `fail` and a reason;
-  - `ready`;
-  - `namespacesManaged`, and the namespaces the selector refused;
-  - `kedaConnection` (`none`, `current` or `stale`) and `kedaCopyStale`.
-
-  Each change of a check also becomes an Event.
-- **The preflight inside the controller,** at start and every cycle. Its new checks:
-  - conflicts, read from RoleBindings and ClusterRoleBindings, never Deployments;
-  - which policy wins;
-  - a double scrape, a missing EPP scrape, and the EPP metric names this release reads (llm-d's `env.sh` tracks `ROUTER_EPP_VERSION=main`).
-- **The label watch with the selector.** The scaler refuses KEDA calls for a namespace the selector does not admit (today it registers any namespace KEDA sends), and the controller refuses its workloads. An optional ValidatingAdmissionPolicy, `scaling-manager-label-guard.yaml`, limits who may set the label.
-- **Its own TLS, without `create` on Secrets.**
-  - The manifest carries the scaler's Secrets as `Opaque`, with no data, under new names.
-  - The controller fills and rotates them with `get` and `update` by name.
-  - On first start over an `smt` install, it copies the old CA across.
-- **KEDA's copy.**
-  - The manifest pre-creates the target Secret in KEDA's namespace (`Opaque`, no data) and the ClusterTriggerAuthentication.
-  - A Role in KEDA's namespace gives `get` and `update` on that Secret by name.
-  - The controller switches to mutual TLS when the copy is written, without a restart.
-  - KEDA keeps one connection per scaler address until it restarts, so on a CA change the status names the KEDA restart. The controller never restarts KEDA.
-- **The plan writer,** a port of the discovery in `deploy/lib/scaledobject.sh`, into the pre-created plan ConfigMap. It also reports an unwired HPA, for KEDA before 2.20.
-- **The release:**
-  - `scaling-manager.yaml`, `scaling-manager-grants.yaml` and `scaling-manager-monitoring.yaml`, all rendered from `config/install`;
-  - the kustomize tarball;
-  - all of these in `SHA256SUMS` and signed;
-  - the plugin binaries and a krew manifest, from phase 4.
-
-| `smt` does | main path | advanced path |
+| item | status | evidence on `main` |
 | --- | --- | --- |
-| the managed namespaces | the label and `namespaceSelector` | `LLMSM_WATCH_NAMESPACE` patch, the Namespace reader's list |
-| the preflight | status keys, continuous | the preflight Job |
-| refuses an overlapping install | the conflict check; it manages nothing it overlaps on | the conflict check in run 1 |
-| KEDA's client certificate | the controller, one Secret by name | the `keda-auth` Job |
-| `--prometheus-*`, `--allow-http`, `--quota`, `--set` | settings keys; the CA in the fixed Secret | the same |
-| `--utilization-share`, `passive`, `--dset-role-writer` | settings keys, never in git; grants per namespace | the same |
-| PodMonitor, `--modelserver-port`, the EPP monitor | llm-d's components or `scaling-manager-monitoring.yaml` ([D](#d-monitoring)) | the monitoring components |
-| `scaledobjects-plan` / `-apply`, the HPA re-wiring | the controller's plan, applied by a person; the unwired-HPA report | the same |
-| the weights labeller's watch list | stays in `smt` and the plugin; a status key names the patch | the same |
+| settings keys `kedaNamespace`, `caFromSecret`, `dsetRoleWriter` | done | `internal/config/settings.go`; [configuration](../reference/configuration.md) |
+| settings key `namespaceSelector` | dropped, by decision | `watchNamespaces` instead; the old key maps to it as an unknown-key hint (`internal/config/settings.go`, `UnknownSettingHint`) |
+| a changed restart key restarts the controller | done | `--restart-on-settings-change=true` in `deploy/release-manifests.sh`; `RestartOnSettingsChange` in `internal/controller/settings.go` |
+| status keys `ready`, one per check | done | `KeyReady`, `KeyPreflightPrefix` (`preflight.<check>`) in `internal/controllerstatus/publisher.go` |
+| status keys for the managed namespaces | done, and more | `namespacesManaged`, `namespacesRefused`, and `namespace.<name>` per namespace (`internal/controllerstatus/publisher.go`, `internal/managedns/reporter.go`) |
+| `kedaConnection`, `kedaCopyStale` | done | `internal/controllerstatus/publisher.go`; set from `internal/scalertls/bootstrap.go` and `internal/preflight/scaler.go` |
+| `metricsScraped` | not built as a key | the same question is answered by the preflight checks `metrics.scrape` (a double scrape) and `metrics.model` (a missing one) |
+| an Event for each change of a check | done | `recordChanges` in `internal/preflight/monitor.go` |
+| the preflight inside the controller, every cycle | done | `Monitor` in `internal/preflight/monitor.go`, `--self-check-interval=1m` |
+| check: conflicts, from RoleBindings and ClusterRoleBindings, never Deployments | partly | `conflicts` (`checkConflicts`, `internal/preflight/install_checks.go`). It reports an overlapping install; it does not refuse it or stop managing what overlaps |
+| check: which policy wins | done | `policy.source` (`checkPolicySource`) |
+| check: a double scrape, a missing EPP scrape, the EPP metric names | done | `metrics.scrape` (`checkScrape`), `metrics.epp` (`checkEPPMetrics`: `llm_d_epp_flow_control_queue_size` and its old name) |
+| the selector, and the scaler refusing an unadmitted namespace | done, as `watchNamespaces` | `managedns.Admission`; `PermissionDenied` before registration, and an open stream ended (`internal/scaler/admit.go`); the InferencePool reconciler drops a left-out namespace (`internal/controller/inferencepool_reconciler.go`) |
+| the controller refusing an unadmitted namespace's workloads | partly | the scaler, the registry (and so the engines and warm pool), the InferencePools, the plan and the role writer follow `watchNamespaces`; the KEDA HPA repair and the namespace-local policy path still act wherever their own opt-in is |
+| the label policy (`scaling-manager-label-guard.yaml`) | dropped, by decision | no label to guard; `hack/check-manifest-install.sh` fails if the file is written |
+| its own TLS, without `create` on Secrets | done | `config/release/scaler-tls-opaque-{secret,role,rolebinding}.yaml`; `--external-scaler-tls-secrets=opaque`; the `smt` CA copied once (`internal/scalertls/migrate_test.go`) |
+| KEDA's copy, by name, in KEDA's namespace | done | `config/release/keda-copy-{secret,role,rolebinding}.yaml` in `scaling-manager-keda.yaml`; `internal/scalertls/kedacopy.go` |
+| mutual TLS and a new CA without a restart | done | `--external-scaler-tls-live=true`; `SetupOptions.Live` in `internal/scalertls/setup.go` |
+| on a CA change, name KEDA's restart, never do it | done | `kedaConnection: stale` and `scalerTLSAction` |
+| the plan writer | partly | `internal/scaleplan/plan.go`: Deployments whose pods carry `llm-d.ai/role` `decode` or `prefill`. Not LeaderWorkerSets or DisaggregatedSets, no adoption of an existing ScaledObject |
+| the unwired-HPA report, for KEDA before 2.20 | partly | not in the plan writer. `keda.version` names KEDA versions with the bug (`internal/preflight/keda.go`), and `internal/hparepair` re-wires such an HPA |
+| the release files, in `SHA256SUMS` and signed | done | `RELEASE_FILES` and `RELEASE_SCRIPTS` in `deploy/release-manifests.sh`; `.github/workflows/ci-release.yaml` |
+| `scaling-manager-monitoring.yaml` | partly | the model-server PodMonitor and the EPP NetworkPolicy rule. No EPP ServiceMonitor: the controller reads each EPP's `/metrics` itself ([D](#d-monitoring)) |
+| passive by default | done | `LLMSM_PASSIVE=true` on the Deployment (`deploy/release-manifests.sh`); `hack/check-manifest-install.sh` `not-passive` |
+| the guide | done | `docs/guides/kubectl-install/` |
+| the kind e2e | partly | `make test-e2e-manifest-install` and `make test-e2e-manifest-migrate` pass on kind, run locally. Not in CI. No upgrade leg from the previous release, no Argo CD or Flux run, no OpenShift |
+| `config/install`, replacing `config/overlays` | open | no `config/install`; the manifest is rendered by `deploy/release-manifests.sh` from `config/release` and `config/base` |
+| the kustomize tarball | open | the release has the tools tarball only (`scaling-manager-tools-<release>.tar.gz`) |
+| the render-parity check | open | no `hack/check-kustomize-install.sh` |
+| narrow the cluster-wide `configmaps` read | open | `configmaps` get, list, watch cluster-wide in `config/base/rbac/manager-clusterrole.yaml` |
+| the advanced path: the Jobs, the steps, their e2e | open | no `keda-auth` subcommand in `cmd/main.go`, no `sm-admin`, `sm-owner` or `sm-steps` bases |
+| `epp-monitoring` named per EPP | open | only on the advanced path now; the main path has no EPP ServiceMonitor |
+| the plugin, a krew manifest, release binaries | open | no plugin under `cmd/`, none in the release |
+| the README leads with the manifest | done | `README.md`, Install: "With kubectl, from one manifest" first |
 
-`smt` keeps every command, now on the same rendered files. One tree,
-`config/install`, feeds the tools image, the release files, the manifest and
-the tarball.
-
-| phase | what | effort |
+| `smt` does | main path, as built | advanced path |
 | --- | --- | --- |
-| 1 | `config/install` (replacing `config/overlays`), the manifest and the tarball rendered from it, the parity check; the new settings keys; whether the cluster-wide `configmaps` read can be narrowed | 2 weeks |
-| 2 | the controller: the preflight as status keys with the new checks; the selector and the scaler refusing unadmitted namespaces; the label policy; its own TLS without `create`; KEDA's copy and the CA re-read; the plan writer; the kind e2e; the guide | 4 weeks |
-| 3 | the advanced path: the Jobs, the steps, their e2e. `epp-monitoring` has fixed names, so two unscraped EPPs in one model namespace would collide: name its objects per EPP | 2 weeks |
-| 4 | the plugin, krew manifest, release binaries; the README leads with the manifest | 2 weeks |
+| the managed namespaces | `watchNamespaces`, live (`scaling-manager-admin.sh namespaces`) | `LLMSM_WATCH_NAMESPACE` patch, the Namespace reader's list |
+| the preflight | status keys, every minute | the preflight Job |
+| refuses an overlapping install | the `conflicts` check reports it; it does not refuse | the conflict check in run 1 |
+| KEDA's client certificate | the controller, one Secret by name in KEDA's namespace | the `keda-auth` Job, in KEDA's namespace |
+| `--prometheus-*`, `--allow-http`, `--quota`, `--set` | settings keys, written by `install` and `set`; the CA in the fixed Secret | the same |
+| `--utilization-share`, `passive`, `--dset-role-writer` | settings keys, never in git; grants bound by the owner | the same |
+| PodMonitor, `--modelserver-port`, the EPP monitor | llm-d's components or `scaling-manager-monitoring.yaml`; the controller reads the EPP itself ([D](#d-monitoring)) | the monitoring components |
+| `scaledobjects-plan` / `-apply`, the HPA re-wiring | the controller's plan, applied by the owner; the HPA repair | the same |
+| the weights labeller's watch list | stays in `smt` | the same |
 
-About ten weeks of work; phases 1 and 2 overlap, about seven elapsed.
+`smt` keeps every command, on the same release files.
+
+| phase | what was planned | status |
+| --- | --- | --- |
+| 1 | `config/install`, the manifest and the tarball rendered from it, the parity check; the new settings keys; narrowing the `configmaps` read | **done in #409 (v0.13.0)** for the manifest, the KEDA, grants and monitoring files, the two scripts, signing and the settings keys, plus most of phase 2 below. Not built: `config/install`, the tarball, the parity check, the `configmaps` narrowing |
+| 2 | the controller: the preflight as status keys with the new checks; the selector and the scaler refusing unadmitted namespaces; the label policy; its own TLS without `create`; KEDA's copy and the CA re-read; the plan writer; the kind e2e; the guide | **mostly done in #409.** The selector became `watchNamespaces` and the label policy was dropped. Left: the plan writer for LeaderWorkerSets and DisaggregatedSets and adoption; refusing an overlapping install; `watchNamespaces` for the HPA repair and the namespace-local policy; the e2e in CI, with an upgrade leg and GitOps |
+| 3 | the advanced path: the Jobs, the steps, their e2e; `epp-monitoring` named per EPP | open |
+| 4 | the plugin, krew manifest, release binaries; the README leads with the manifest | open, except the README, which leads with the manifest |
 
 ### C. RBAC in full
 
-A label is not an RBAC scope, so watching labelled namespaces needs
-cluster-wide reads. The ClusterRole for passive mode is the controller's
-`manager-role` of today ([config/base/rbac/manager-clusterrole.yaml](../../config/base/rbac/manager-clusterrole.yaml)):
+`watchNamespaces` is a setting, not an RBAC scope, so the controller reads
+cluster-wide and acts only in the managed namespaces. The ClusterRole for
+passive mode is the controller's `manager-role` of today
+([config/base/rbac/manager-clusterrole.yaml](../../config/base/rbac/manager-clusterrole.yaml)):
 
 | API group | resources | verbs |
 | --- | --- | --- |
@@ -571,91 +679,103 @@ cluster-wide reads. The ClusterRole for passive mode is the controller's
 | leaderworkerset.x-k8s.io | `leaderworkersets/scale` | get |
 | monitoring.coreos.com | `servicemonitors` | get, list, watch |
 
-New on top of it:
+What the one manifest adds, as built
+([security model](../reference/security-model.md#the-one-manifest-install)):
 
-- no rights on a CRD: the config and the status stay ConfigMaps, with
-  `get` and `update` by name on the status ConfigMap, as today;
-- `get` and `update` by name on the one Secret in KEDA's namespace;
-- `list` on `rolebindings` and `clusterrolebindings`, for the conflict
-  check (another controller in a managed namespace). This shows the
-  cluster's RBAC layout to whoever can act as the controller, which on this
-  path is the cluster admin alone;
-- `get` and `update` by name on its scaler TLS Secrets, and `get` by name on
-  Secret `scaling-manager-prometheus-ca`. The CA has a fixed name, so no
-  unscoped Secret read is needed (`spec.prometheus.caFromSecret: true`
-  points the controller at it).
+- **Scaler certificates:** a Role in its namespace, `get` and `update` on the
+  three `Opaque` Secrets `scaling-manager-scaler-{ca,serving,client}` by
+  name, and `get` on the earlier install's Secrets, to copy their CA once.
+  No `create` on Secrets anywhere.
+- **KEDA's copy:** a Role in KEDA's namespace, from
+  `scaling-manager-keda.yaml`: `get` and `update` on that one Secret by name.
+- **The suggested plan:** a Role in its namespace, `get` and `update` on
+  ConfigMap `scaling-manager-scaledobjects-plan` by name.
+- **The self-check:** a read-only ClusterRole and Role for the in-controller
+  preflight, including `list` on RoleBindings and ClusterRoleBindings for the
+  conflict check, and so the role writer finds the namespaces that granted
+  it. This shows the cluster's RBAC layout to whoever can act as the
+  controller, which on this install is the cluster admin alone.
+- **Per namespace, bound by the namespace owner:** `pod-writer` (`patch` on
+  pods) and `dset-role-writer` (`get`, `list`, `patch` on DisaggregatedSets),
+  from `scaling-manager-grants.yaml`. Never cluster-wide.
+- **EPP token reviews:** ClusterRole `scaling-manager-epp-tokenreview-*`
+  (`create` on tokenreviews and subjectaccessreviews), bound by the cluster
+  admin to an EPP's own ServiceAccount, never to the controller's.
+- The CA for Prometheus has a fixed Secret name,
+  `scaling-manager-prometheus-ca`, read when `caFromSecret` is `true`, so no
+  unscoped Secret read is needed.
 
-Its own namespace's Roles (leader election, status, learned state, the
-plan ConfigMap by name) are as today. It writes nothing outside its
-namespace except Events, KEDA's copy, and the two per-namespace grants once
-the admin binds them.
+Its own namespace's Roles (leader election, status, learned state) are as
+today. It writes nothing outside its namespace except Events, KEDA's copy,
+and what the two per-namespace grants allow once the owner binds them.
 
-| | today's [cluster-wide install](../guides/install-cluster-wide/) | this path | today's namespaced install |
+| | [cluster-wide `smt` install](../guides/install-cluster-wide/) | this install | namespaced `smt` install |
 | --- | --- | --- | --- |
 | reads | cluster-wide, the table above | the same | per namespace, plus the cluster-scoped readers |
-| pod `patch` | per namespace, at activation | the same | per namespace, at activation |
+| pod `patch` | per namespace, at activation | per namespace, bound by the owner | per namespace, at activation |
 | KEDA's copy | the admin's kubeconfig, once | the controller, one Secret by name | the admin's kubeconfig, once |
-| who installs | cluster admin | cluster admin | admin, then the namespace owner |
+| who installs | cluster admin | cluster admin; the owner registers | admin, then the namespace owner |
 
-So this path holds **the same rights** as today's cluster-wide install,
+So this install holds **the same reads** as the cluster-wide `smt` install,
 plus one named Secret in KEDA's namespace instead of the admin copying it.
 It holds **more** than a namespaced install. The `configmaps` read across
 the cluster is the widest of them. It is there for each namespace's own
-policy map, and phase 1 checks whether it can be narrowed to that name.
-Where least privilege per namespace is the rule, take the advanced path.
+policy map; narrowing it to that name is still open. Where least privilege
+per namespace is the rule, use a namespaced `smt` install, or the advanced
+path once it is built.
 
 ### D. Monitoring
 
 Each scrape must exist once: a second doubles every rate, and a missing one
-leaves the analyzers blind. The `metricsScraped` status key reports both.
+leaves the analyzers blind. The preflight checks `metrics.scrape` (a pod
+scraped by more than one job) and `metrics.model` (no model-server series)
+report both.
 
 | source | where llm-d already scrapes it | where nothing scrapes it |
 | --- | --- | --- |
-| model servers | llm-d's kustomize components [`monitoring`](https://github.com/llm-d/llm-d/tree/main/guides/recipes/modelserver/components/monitoring) (decode: selects `llm-d.ai/role: decode`, port `modelserver`, `/metrics`, every 30s), `monitoring-pd` (P/D, which the pd-disaggregation guide applies) and `monitoring-epd`. Nothing to add | the release's `scaling-manager-monitoring.yaml`, applied in the namespace: a PodMonitor on port `modelserver` |
-| the EPP | the router installed with llm-d's [`monitoring.values.yaml`](https://raw.githubusercontent.com/llm-d/llm-d/main/guides/recipes/router/features/monitoring.values.yaml): its own ServiceMonitor, Prometheus auth off. Nothing to add | the router with its auth default (on) and no monitoring values: the `epp-monitoring` objects of the same file, which scrape with a token |
+| model servers | llm-d's kustomize components [`monitoring`](https://github.com/llm-d/llm-d/tree/main/guides/recipes/modelserver/components/monitoring) (decode: selects `llm-d.ai/role: decode`, port `modelserver`, `/metrics`, every 30s), `monitoring-pd` (P/D, which the pd-disaggregation guide applies) and `monitoring-epd`. Nothing to add | `scaling-manager-owner.sh monitor <ns>`: the PodMonitor on port `modelserver` from `scaling-manager-monitoring.yaml` |
+| the EPP, for the controller | the controller reads each managed InferencePool's EPP `/metrics` itself, with its own token. The EPP reviews that token; where its router chart did not grant that, the admin runs `scaling-manager-admin.sh grant-epp <ns> <the EPP's ServiceAccount>` | the same |
+| the EPP, in Prometheus | the router installed with llm-d's [`monitoring.values.yaml`](https://raw.githubusercontent.com/llm-d/llm-d/main/guides/recipes/router/features/monitoring.values.yaml): its own ServiceMonitor. The `metrics.epp` check looks for the EPP's flow-control queue metric there | not in `scaling-manager-monitoring.yaml` yet. Use the router's monitoring values |
 
-Where nothing scrapes, in each such namespace:
+Where a default-deny ingress policy is in place, the owner also runs
+`scaling-manager-owner.sh network <ns>`: a NetworkPolicy rule letting the
+controller reach port 9090. Router charts label their EPP pods differently,
+so the rule selects every pod of the namespace on that port; in a namespace
+with no policy it would cut every other ingress, so apply it only where a
+default deny exists.
 
-```bash
-NS=team-a
-kubectl apply -n $NS -f scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=modelserver
-# a metrics port not named "modelserver" (what smt's --modelserver-port did):
-kubectl patch podmonitor scaling-manager-modelserver-metrics -n $NS --type json \
-  -p '[{"op":"replace","path":"/spec/podMetricsEndpoints/0/port","value":"<port name>"}]'
-# the EPP, only where the router runs with its auth on and no monitoring values:
-kubectl apply -n $NS -f scaling-manager-monitoring.yaml -l scaling-manager.llmd.ai/monitor=epp
-kubectl create clusterrolebinding scaling-manager-epp-metrics-scraper-$NS \
-  --clusterrole=scaling-manager-epp-metrics-reader --serviceaccount=$NS:scaling-manager-epp-metrics-scraper
-kubectl label clusterrolebinding scaling-manager-epp-metrics-scraper-$NS \
-  app.kubernetes.io/part-of=scaling-manager app.kubernetes.io/instance=scaling-manager-system
-```
-
-The EPP's ServiceAccount, token Secret and ServiceMonitor live in the model
-namespace, because a ServiceMonitor reads its credentials from its own
-namespace. Only the `/metrics` binding is cluster-scoped, one per namespace
-by name. A port patch is undone by the next apply of the file: re-run it, or
-keep the PodMonitor in a kustomization with the patch.
+A metrics port not named `modelserver` (what `smt`'s `--modelserver-port`
+did) is a patch of the PodMonitor after `monitor`; the next apply of the
+file undoes it, so re-run the patch, or keep the PodMonitor in your own
+kustomization.
 
 Whether llm-d's `monitoring-pd` selects a DisaggregatedSet's pods was not
-confirmed. The `metricsScraped` status key names any role with no `vllm:`
-series.
+confirmed. `metrics.model` reports model servers Prometheus holds no
+`vllm:` series for.
 
 On GKE with Managed Prometheus, llm-d uses `PodMonitoring`. Our monitors are
 Prometheus Operator objects, so scrape with GMP instead.
 
 ### E. GitOps
 
-- **Keep in the sync:** `scaling-manager.yaml` (or its kustomization) and the
-  settings ConfigMap without its switch keys.
-- **Keep out of the sync:** the switch keys (`passive`, `utilizationShare`,
+- **Keep in git:** the `kubectl` commands the scripts print with `--print`,
+  over the release files as downloaded, and the settings without their
+  switch keys. Both scripts print the same commands they run, so Argo CD or
+  Flux applies the same files.
+- **Keep out of git:** the switch keys (`passive`, `utilizationShare`,
   `dsetRoleWriter`) and the per-namespace grants. On the advanced path,
   also `sm-steps/`.
+
+```bash
+bash scaling-manager-admin.sh --print install --prometheus-url https://prometheus.monitoring.svc:9090 \
+  --keda-namespace keda --watch-namespaces team-a,team-b
+```
 
 Under plain `kubectl apply --server-side`, a key the file leaves out keeps
 what another manager set. A key the file sets, and someone else changed,
 makes the apply stop with a conflict. Argo CD with `ServerSideApply=true`
 and Flux both force ownership instead. A switch key left in git therefore
-silently resets a live patch on every sync. Applying client-side, Argo CD
+silently resets a live change on every sync. Applying client-side, Argo CD
 can ignore the keys:
 
 ```yaml
@@ -679,86 +799,94 @@ Flux needs nothing more once the keys are out of git. To leave the whole
 ConfigMap alone after it is created, annotate it
 `kustomize.toolkit.fluxcd.io/ssa: IfNotPresent`.
 
-Argo CD must track resources by annotation, because label tracking rewrites
-`app.kubernetes.io/instance`, which `smt`, the uninstall and the migration
-rely on. Nobody runs `rollout restart` under auto-sync, and none is needed:
-a changed restart key makes the controller restart itself. Changed again
-and again, that puts the Pod into the kubelet's crash back-off, which grows
-to five minutes. The status says when a restart is pending.
+`watchNamespaces` is live, so a sync that changes it takes effect without a
+restart. Argo CD must track resources by annotation, because label tracking
+rewrites `app.kubernetes.io/instance`, which `smt`, the uninstall and the
+migration rely on. Nobody runs `rollout restart` under auto-sync, and none is
+needed: a changed restart key makes the controller restart itself, and
+records an Event saying so. Changed again and again, that puts the Pod into
+the kubelet's crash back-off, which grows to five minutes.
+
+Not yet tested: neither Argo CD nor Flux has run this install.
 
 ### F. Upgrade, rollback, air-gapped, uninstall
 
-**Upgrade:** `kubectl apply --server-side -f` the new release's manifest,
-verified. The settings and the ScaledObjects are not in it, so they stay. A
-key the new release adds takes its default. Under GitOps, merge the version
+**Upgrade:** download and verify the new release's files, then
+`bash scaling-manager-admin.sh upgrade --keda-namespace keda`. The settings
+and the ScaledObjects are not in the files, so they stay. The scaler's
+certificate Secrets and KEDA's copy carry no data in the files, so a
+re-apply keeps what the controller wrote, and KEDA stays connected. A key
+the new release adds takes its default. Under GitOps, merge the version
 bump.
 
-**Rollback:** apply the old manifest. The settings are a ConfigMap, so no
-schema prunes a newer key. A key the older controller does not know is
-reported in the status (the `settings` check) and has no effect; remove it.
+**Rollback:** the same command with an older release's files that carry
+`scaling-manager.yaml` (v0.13.0 or later). The settings are a ConfigMap, so
+no schema prunes a newer key. A key the older controller does not know is
+listed in the status as unknown, and ignored; remove it.
 
-**KEDA elsewhere.** KEDA's namespace must be known at install: the
-NetworkPolicy, KEDA's Secret and its Role name it. The manifest assumes
-`keda`. Elsewhere, use the `keda-namespace` kustomize component. Or edit
-the file after verifying it, since the signature covers the file as
-downloaded. For `keda-system`:
-
-```bash
-sed -i 's/^\(  *namespace: \)keda$/\1keda-system/; s/kubernetes.io\/metadata.name: keda$/kubernetes.io\/metadata.name: keda-system/' scaling-manager.yaml
-```
-
-Repeat the edit on every upgrade. On OpenShift, use the `openshift`
-component (the service CA, `openshift-keda`).
+**KEDA elsewhere.** The `kedaNamespace` setting names KEDA's namespace;
+`install` and `upgrade` take `--keda-namespace` and apply
+`scaling-manager-keda.yaml` there with `-n`. The scaler's NetworkPolicy
+admits the namespace labelled `scaling-manager.llmd.ai/keda=true`, which
+`install` sets. No file is edited. On OpenShift (`openshift-keda`) the
+install path is not tested yet.
 
 **Air-gapped:** mirror the image by digest (`skopeo copy --all`), verify it
-with `cosign verify` first, and add one `images:` entry. The controller is
-the only image.
+with `cosign verify` first. The controller is the only image. The files
+name the release's image by digest, so either the cluster's registry mirror
+serves that reference, or a kustomization over the downloaded
+`scaling-manager.yaml` adds one `images:` entry. Neither is tested yet.
 
-**Uninstall.** Every selector is scoped to this install's
-`app.kubernetes.io/instance`:
+**Uninstall:**
 
 ```bash
-I=app.kubernetes.io/instance=scaling-manager-system
-P="kubectl patch configmap scaling-manager-settings -n scaling-manager-system --type merge -p"
-$P '{"data":{"utilizationShare":"shadow"}}'                  # wait a cycle (15 s): no transfer marks left
-kubectl delete scaledobject -A -l "$I,app.kubernetes.io/managed-by=llm-d-scaling-manager"
-kubectl delete rolebinding,podmonitor,servicemonitor,serviceaccount,secret -A -l "$I"
-kubectl delete clusterrolebinding -l "$I"
-kubectl label namespace -l scaling-manager.llmd.ai/managed=true scaling-manager.llmd.ai/managed-
-kubectl delete -f scaling-manager.yaml                       # with its namespace, as KEDA's and Kueue's do
-kubectl get all,configmap,secret,role,rolebinding,servicemonitor,podmonitor,networkpolicy,scaledobject -A -l "$I"
-kubectl get clusterrole,clusterrolebinding,clustertriggerauthentication -l "$I"   # nothing left
+bash scaling-manager-admin.sh uninstall --keda-namespace keda
+kubectl get clusterrole,clusterrolebinding,clustertriggerauthentication -l app.kubernetes.io/instance=scaling-manager-system   # nothing left
 ```
 
-The label removal assumes one main-path install per cluster. With more
-than one, remove the label only from the namespaces this install's
-selector admits, which the status lists in `namespacesManaged`.
+`uninstall` sets sharing to shadow first, so no transfer mark stays on a
+pod, then removes everything this install made, in every namespace, and what
+a moved `smt` install left, by the same instance label. The settings go with
+the namespace. The ScaledObjects an owner registered from their own file are
+not labelled by this install and stay: each owner deletes theirs first.
 
 ### G. Migration from `smt`
 
 **From a cluster-wide install** (`scaling-manager-system`):
 
-1. Keep the settings ConfigMap as it is. It is the same object. Take its
-   switch keys out of any copy you put in git.
-2. Label each namespace the install named with `--model-namespace`, and set
-   `namespaceSelector`.
-3. Apply `scaling-manager.yaml` server-side. The names, the namespace and
-   the labels are those of today's cluster-wide files. The new TLS Secrets
-   take the old CA, so KEDA's connection stays up, and KEDA's copy keeps its
-   name.
+```bash
+bash scaling-manager-admin.sh move --keda-namespace keda
+bash scaling-manager-admin.sh namespaces team-a,team-b      # the namespaces it named with --model-namespace
+```
 
-**From a namespaced install,** either:
+- The settings ConfigMap is the same object and stays. Take its switch keys
+  out of any copy kept in git.
+- `move` takes the controller Deployment over from `smt` once
+  (`--force-conflicts`). The new TLS Secrets take the old CA, so KEDA stays
+  connected with no restart of its operator, and KEDA's copy keeps its name
+  (`make test-e2e-manifest-migrate`).
+- `move` deletes the `smt` install's cluster-wide DisaggregatedSet role
+  writer grant; each owner binds it per namespace. What else `smt` made stays
+  until `uninstall`.
 
-- uninstall it, keeping the ScaledObjects, and install as above; or
-- stay namespaced on the advanced path. The admin writes `sm-admin/` (or
-  runs `kubectl scaling-manager init`), and `kubectl diff -k` should show
-  only labels, the empty plan ConfigMap and the KEDA objects that exist
-  already.
+A cluster-wide install from `scaling-manager-cluster.yaml` has the same
+objects and moves the same way; no e2e covers it yet.
+
+**From a namespaced install:** not moved in place. Its scaler runs in that
+namespace, so its ScaledObjects name another address and
+ClusterTriggerAuthentication. Uninstall it as its guide says, install as
+above with the namespace in `watchNamespaces`, and register the ScaledObjects
+again with `scaling-manager-owner.sh register`. `move` does not detect a
+namespaced install in `scaling-manager-system`. Staying namespaced on the
+advanced path, once built, is the other option.
 
 An install made with `make deploy-scaling-manager` is not adopted, as for
 `smt` today.
 
 ### H. The llm-d recipe path
+
+Not built; it waits on `config/install` (or a signed tarball of the bases)
+and on the git-ref question.
 
 llm-d's CI dry-run builds in-repo directories, so an llm-d recipe cannot
 point at a downloaded file. A recipe, `guides/recipes/scaling-manager/`,
@@ -779,15 +907,15 @@ images:
   A scratch render confirmed that the `images:` digest entry replaces the
   base's tag with `@sha256:...`.
 - **Rendering:** the recipe renders the same objects as the release's
-  `scaling-manager.yaml`, and is applied with `kubectl apply --server-side
-  -k`.
-- **Platforms:** `k8s/` and `ocp/` overlays set KEDA's namespace (`keda`,
-  or `openshift-keda`), as the keda-epp guide does.
+  `scaling-manager.yaml` and `scaling-manager-keda.yaml`, and is applied
+  with `kubectl apply --server-side -k`.
+- **Platforms:** KEDA's namespace is the `kedaNamespace` setting, so the
+  `k8s/` and `ocp/` overlays set that key (`keda`, or `openshift-keda`) and
+  the namespace of KEDA's side, as the keda-epp guide does.
 - **A cluster prerequisite, not a per-guide install.** Like KEDA, it is
-  installed once per cluster. A guide that uses it adds only its own entry
-  to the config (its namespace in the selector), its namespace label and
-  its ScaledObjects. Its cleanup removes only those three, as the guides
-  policy asks of shared components.
+  installed once per cluster. A guide that uses it adds only its namespace
+  to `watchNamespaces` and its ScaledObjects. Its cleanup removes only
+  those two, as the guides policy asks of shared components.
 
 ### I. How the router and the neighbours install
 
@@ -869,9 +997,9 @@ and `monitoring-epd` sit beside it. Not confirmed: which version the `v0`
 chart tag resolves to, and the full router release notes. The GitHub REST API refused unauthenticated requests;
 the pages, raw files and registry tag lists were read instead.
 
-#### How we install today
+#### How we installed before v0.13.0
 
-Three `smt` commands, from the tools image
+This was the starting point, and `smt` still works this way. Three `smt` commands, from the tools image
 ([README](../../README.md#install), [install commands](../reference/tools-install.md)).
 `smt` is a shell function around `docker run` of
 `ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools@sha256:...`. The
@@ -898,7 +1026,7 @@ both reach the operator, not a need of the install. It costs: no kubeconfig
 `exec` plugins (token kubeconfigs only), `--network host` for a `127.0.0.1`
 API server, and a read-write mount of the working directory.
 
-**Without docker today:**
+**Without docker, before v0.13.0:**
 
 | path | needs | missing |
 | --- | --- | --- |
@@ -917,8 +1045,8 @@ here because the router installs with Helm:
   sync hooks.
 
 With one manifest, a chart becomes very thin. It would be the same
-manifest, cut into `templates/` by CI, with three values: KEDA's namespace,
-OpenShift, and the image repository. Config stays in the settings
+manifest, cut into `templates/` by CI, with two values: OpenShift, and the
+image repository. KEDA's namespace is already a setting. Config stays in the settings
 ConfigMap, not in values. That thin chart, generated in CI
 beside the manifest, is the form in which the llm-d guides install
 LeaderWorkerSet and Kueue today ([neighbours](#keda-kueue-leaderworkerset-cert-manager)).
@@ -933,28 +1061,46 @@ What remains against it:
 
 If the rule is lifted, push it as
 `oci://ghcr.io/llm-d-incubation/charts/llm-d-scaling-manager`, generated
-from `config/install`, and keep the render-parity check against the
-manifest.
+from the same render as `scaling-manager.yaml`, and keep a parity check
+against the manifest.
+
 ### K. Verification and tests
 
-- **A kind e2e for the main path,** `make test-e2e-manifest-install`, run on
-  `test-e2e-release-manifests-setup` ([testing](../developer-guide/testing.md)).
-  - It applies the manifest and the settings, labels the model namespace,
-    and polls `ready`.
-  - It registers a model from the plan and walks passive, shadow and active
-    with the grant.
-  - It runs the smoke suite, uninstalls, and runs the leftovers check.
-  - A second leg upgrades from the previous release.
-  - Images: the locally built controller, and the prerequisites from
-    `registry.k8s.io` and `quay.io`; never docker.io.
-  - Ginkgo runs with `-v`, and a 0-spec run fails.
+What exists, from #409 ([testing](../developer-guide/testing.md)):
+
+- **The kind e2e for the main path,** `make test-e2e-manifest-install`, run
+  after `test-e2e-release-manifests-setup`. It installs with the two scripts,
+  polls `ready`, registers a model, runs the smoke suite, uninstalls, and
+  checks nothing labelled with the instance is left. Images: the locally
+  built controller, and the prerequisites from `registry.k8s.io` and
+  `quay.io`; never docker.io. Ginkgo runs with `-v`.
+- **The migration e2e,** `make test-e2e-manifest-migrate`: a cluster-wide
+  `smt` install over mutual TLS, then `move`, `upgrade` and
+  `watchNamespaces`; the CA is copied and KEDA reconnects with no restart of
+  its operator.
+- **The scripts,** `hack/check-kubectl-scripts.sh` in `make
+  lint-deploy-scripts`: `--print` pinned against
+  `hack/testdata/kubectl-scripts/`, run mode equal to `--print` against a
+  stub `kubectl` with nothing else on `PATH`, and the refusals.
+- **The manifest,** `hack/check-manifest-install.sh`: passive by default,
+  KEDA's side by name and in its own file, the TLS Secrets with no data, no
+  label guard; and `hack/check-release-manifests.sh` for the sums and the
+  signing of both scripts.
+- **Unit tests** for each controller change, among them
+  `TestWatchNamespacesLive`, `TestAdmissionFollowsTheSettingLive`,
+  `TestAdmittedStreamRefusesOnceTheNamespaceIsLeftOut`,
+  `TestReporterReadinessAndEvents`, `TestReporterGrants` and
+  `TestPassScansOnlyTheGrantedNamespaces`.
+
+Still to build:
+
+- **CI.** Neither kind e2e runs in CI.
+- **An upgrade leg** from the previous release, and passive to shadow to
+  active on this path, with the grant.
 - **GitOps:** apply the settings without the switch keys, flip them, and
-  re-apply server-side: they hold. Phase 1 also runs Argo CD and Flux, and
-  asserts the reset case: a switch left in git is overwritten.
-- **The manifest:** `hack/check-release-manifests.sh` gains
-  `scaling-manager.yaml`. It checks that the file is in `SHA256SUMS` and
-  signed, pins the image by digest, carries the controller image only,
-  holds no settings and no ScaledObject, and changes nothing on a re-apply.
+  re-apply: they hold. Run Argo CD and Flux, and assert the reset case: a
+  switch left in git is overwritten.
+- **OpenShift.**
 - **The advanced path:** `make test-e2e-kustomize-install`, and the
   render-parity check `hack/check-kustomize-install.sh` in `make
   lint-deploy-scripts`.
@@ -969,8 +1115,9 @@ manifest.
 ### L. The render and kind evidence
 
 These are scratch renders with kubectl v1.31 (kustomize v5.4.2), of a
-copy of the layout with a controller namespace `llmsm-ctrl`. Phase 1
-renders the real bases the same way, in the parity check.
+copy of the layout with a controller namespace `llmsm-ctrl`, for the
+advanced path. The parity check, not built yet, would render the real bases
+the same way.
 
 ```text
 kubectl kustomize sm-admin/cluster    (namespace: llmsm-ctrl, nameSuffix: -llmsm-ctrl)
@@ -1016,8 +1163,8 @@ kubectl kustomize single              (namespace: team-a, the ServiceAccount in 
 - **The ClusterTriggerAuthentication.** A kustomize `configurations:`
   nameReference carries `nameSuffix` into its `secretTargetRef`. Kustomize
   also sets `metadata.namespace` on it, because kustomize does not know the
-  CRD's scope. Phase 1 checks that `kubectl apply` ignores the field, or
-  gives kustomize the CRD's scope.
+  CRD's scope. Still to check: that `kubectl apply` ignores the field, or
+  give kustomize the CRD's scope.
 
 On a throwaway kind cluster (v1.31.2), with plain `kubectl`: a Secret applied
 server-side with no data, filled by another field manager, kept its data on
@@ -1035,19 +1182,61 @@ made the next apply fail with a conflict. A scratch render confirmed that an
   admin-setup` writes so `smt install` can tell the admin step ran.
 - **`scalerTLSAction`**: the key in `scaling-manager-controller-status` that
   prints what to run to give KEDA its certificate.
+- **managed namespace**: a namespace `watchNamespaces` names, or any
+  namespace when it is empty. The scaler serves ScaledObjects only there.
+- **KEDA's copy**: Secret `scaling-manager-external-scaler-<controller
+  namespace>` in KEDA's namespace, the client certificate KEDA presents to
+  the scaler through the ClusterTriggerAuthentication.
 
 ### N. Open questions
 
+Decided in #409 and its review: see the table under
+[Open questions](#open-questions-decisions-for-the-maintainers). The first
+draft's questions, the review's (items 7 to 11), and where they stand:
+
 1. **Cluster-wide by default,** with the advanced path for least privilege?
+   Open. The main path is cluster-wide as built; the advanced path is not
+   built.
 2. **A git ref for llm-d recipes,** pinned to a release commit with the
    image by digest, although install-from-release ruled out a remote base?
+   Open. The review leaned to a signed, digest-pinned tarball of the
+   kustomize bases instead, with the git ref kept for development; neither
+   is built.
 3. **Helm:** lift the rule for a thin chart generated in CI, as the llm-d
-   guides use for LeaderWorkerSet and Kueue?
+   guides use for LeaderWorkerSet and Kueue? Open; a maintainers' call.
 4. **The cluster-wide `configmaps` read:** narrow it to the policy map's
-   name, if every read allows it?
+   name, if every read allows it? Open; not checked yet.
 5. **The kustomize floor** for the advanced path: which oldest `kubectl`?
-6. **The weights labeller:** it stays an `smt` and plugin step. Is a status
-   key naming the patch enough?
+   Open, and only matters once the advanced path is built.
+6. **The weights labeller:** it stays an `smt` step. Is a status key naming
+   the patch enough? Open; no such key exists.
+7. **The namespace selection.** Decided: `watchNamespaces`, live. The label
+   and `namespaceSelector` are gone ([Alternatives](#alternatives)).
+8. **Should the controller create the scaler TLS Secrets, and where does
+   KEDA's copy go?** Decided: it fills Secrets the manifest pre-creates, with
+   `get` and `update` by name, and KEDA's copy goes only to KEDA's
+   namespace. Never a model namespace.
+9. **Kustomize replacements.** Moot for the main path: the parameters are
+   settings the controller reads at runtime (`kedaNamespace`,
+   `watchNamespaces`), so the files need no substitution.
+10. **The model plan: a Job or the controller?** Decided: the controller.
+11. **A settings re-apply reverting a live switch.** Decided: the switch
+    keys stay out of git, and the scripts set them with `set`.
+
+New, from #409:
+
+12. **The plan's reader.** The plan ConfigMap is in `scaling-manager-system`,
+    so `scaling-manager-owner.sh register <ns>` without a file works only for
+    someone who can read it. Today the admin hands each owner a file. Should
+    the controller publish each namespace's plan where its owner can read it?
+13. **The EPP NetworkPolicy rule** selects every pod of the namespace on
+    port 9090. Select the EPP by a label the router sets, once there is one?
+14. **Overlapping installs** are reported by `conflicts`, not refused.
+    Should this install stop managing a namespace another scaling manager
+    manages?
+15. **The rest of the controller following `watchNamespaces`:** the KEDA HPA
+    repair and the namespace-local policy path still act wherever their own
+    opt-in is.
 
 ### A CRD later?
 
