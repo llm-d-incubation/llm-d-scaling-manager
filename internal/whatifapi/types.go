@@ -247,6 +247,15 @@ type EngineInfo struct {
 	GPUMemoryUtilizationSource string  `json:"gpuMemoryUtilizationSource"`
 	BlockSize                  int64   `json:"blockSize"`
 	BlockSizeSource            string  `json:"blockSizeSource"`
+	// Attention is the model's attention kind and MoE its MoE class, read
+	// from its config.json: "unknown" where none was read (issues #501,
+	// #503). ModelConfigSource is where the config was read, and Model both
+	// in words, as the engine row prints them; absent where neither is
+	// known. Reported, not priced.
+	Attention         string `json:"attention"`
+	MoE               string `json:"moe"`
+	ModelConfigSource string `json:"modelConfigSource,omitempty"`
+	Model             string `json:"model,omitempty"`
 	// StepBudgetBinding is whether the step budget binds, read from the
 	// engine's tokens per iteration; absent where no row of the variant carried
 	// that series (a recording made before it was recorded, or SGLang).

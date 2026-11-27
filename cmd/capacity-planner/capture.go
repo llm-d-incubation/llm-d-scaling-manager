@@ -58,8 +58,10 @@ type captureFlags struct {
 	gpus                          gpusFlag
 	accelerator                   string
 	vllmVersion, engineImage      string
-	force                         bool
-	out                           string
+	// modelConfig is --model-config: the served model's config.json.
+	modelConfig string
+	force       bool
+	out         string
 	// lmcacheNamespace is capture's --lmcache-namespace.
 	lmcacheNamespace string
 }
@@ -71,6 +73,7 @@ func runCapture(ctx context.Context, args []string, out, warn io.Writer) error {
 	fs.StringVar(&f.namespace, "namespace", "", "the namespace whose models to capture (required)")
 	fs.IntVar(&f.batchCap, "batch-cap", 0, "the engine's batch cap (--max-num-seqs); 0 leaves the engine's default")
 	fs.StringVar(&f.out, "o", "", "where to write the capture, gzipped JSON lines (required)")
+	fs.StringVar(&f.modelConfig, modelConfigFlag, "", modelConfigUsage+"; recorded with every variant, which must all serve one model")
 	fs.StringVar(&f.lmcacheNamespace, "lmcache-namespace", "", "the namespace LMCache's multi-process server runs in, "+
 		"where its series are checked; --namespace when empty")
 	if ok, err := parse(fs, args); !ok {
@@ -271,6 +274,9 @@ func (f captureFlags) options(cmd string, warn io.Writer) (whatifsource.Options,
 	opts.BatchCap, opts.GPUsPerReplica, opts.Accelerator = f.batchCap, f.gpus.n, f.accelerator
 	opts.GPUsPerReplicaSet = f.gpus.set
 	opts.VLLMVersion, opts.EngineImage = f.vllmVersion, f.engineImage
+	if opts.ModelConfig, err = readModelConfigFlag(f.modelConfig); err != nil {
+		return opts, err
+	}
 	opts.Force = f.force
 	return opts, nil
 }

@@ -162,6 +162,13 @@ type Options struct {
 	// kube-state-metrics, it is unknown.
 	VLLMVersion string
 	EngineImage string
+	// ModelConfig is the served model's config.json as the caller read it
+	// (capacity.ReadModelConfigFile); the zero value is none. Kubernetes
+	// does not carry it, so it is filed with every variant's engine
+	// parameters, as the controller files the
+	// scaling-manager.llmd.ai/model-config annotation's, and a window whose
+	// variants serve more than one model refuses it (ErrInvalidOptions).
+	ModelConfig capacity.ModelConfig
 	// LMCacheNamespace is where LMCache's multi-process server runs, when
 	// not in Namespace: its lmcache_mp_ series are checked there
 	// (OptionalSeriesList). Empty is Namespace.
@@ -458,6 +465,9 @@ func Capture(ctx context.Context, opts Options, w io.Writer) (*Summary, error) {
 	if len(variants) == 0 {
 		return nil, fmt.Errorf("%w, in namespace %s from %s to %s%s", ErrNothingAttributed,
 			opts.Namespace, opts.From.Format(time.RFC3339), opts.To.Format(time.RFC3339), scan.unattributedHint())
+	}
+	if err := fileModelConfig(variants, opts.ModelConfig); err != nil {
+		return nil, err
 	}
 	start, err := captureStart(opts)
 	if err != nil {
@@ -1241,4 +1251,25 @@ func variantStates(f *fleet, opts Options, engines map[string]bool, active []str
 // from it.
 func itlAbsentRank(r domain.ReplicaMetrics) bool {
 	return r.Ranks() > 1 && r.ITLState() == domain.ITLAbsent && r.AvgITL > 0
+}
+
+// fileModelConfig files m with every variant's engine parameters. One
+// config describes one model, so variants of more than one model refuse it:
+// which of them it describes is not something to guess.
+func fileModelConfig(variants []learnreplay.CaptureVariant, m capacity.ModelConfig) error {
+	if m.Source == "" {
+		return nil
+	}
+	models := map[string]bool{}
+	for _, v := range variants {
+		models[v.ModelID] = true
+	}
+	if len(models) > 1 {
+		return fmt.Errorf("%w: the model config %s describes one model, and the window serves %d (%s): capture one model's "+
+			"variants with --role-of", ErrInvalidOptions, m.Source, len(models), strings.Join(slices.Sorted(maps.Keys(models)), ", "))
+	}
+	for i := range variants {
+		variants[i].Params.ModelConfig = m
+	}
+	return nil
 }

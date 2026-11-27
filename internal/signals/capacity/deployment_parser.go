@@ -39,6 +39,7 @@ func ParseEngineArgsOn(engine inferenceengine.Engine, scaleTarget scaletarget.Sc
 	params.Image = engineImage(engine, scaleTarget)
 	annots := scaletarget.Annotations(scaleTarget)
 	params.DeclaredBatchCap = declaredBatchCap(annots)
+	params.ModelConfig = modelConfigOf(annots)
 	if params.Engine == inferenceengine.EngineVLLM {
 		params.VLLMVersion, params.VLLMVersionFrom = vllmVersionOf(annots, params.Image)
 		if params.VLLMVersionFrom == "" {
@@ -398,6 +399,15 @@ type EngineParams struct {
 	// the memory_layout label, compared for capacity and for the KV carry.
 	// A value that cannot be read lands in SharingUnresolved.
 	MemoryLayout string
+
+	// ModelConfig is what the served model's config.json says of its
+	// attention and its experts (model_config.go), from the
+	// scaling-manager.llmd.ai/model-config annotation, or from the file a
+	// capacity planner caller names. The zero value is none read, and
+	// AttentionKind and MoEClass are then unknown. Not hashed or compared:
+	// the checkpoint that decides it (ModelPath) is. Left out of a
+	// recording while zero, so one made before it reads back byte for byte.
+	ModelConfig ModelConfig `learnrec:"omitzero"`
 }
 
 // parallelSize is a parallel size as the engine runs it: unset is 1, its

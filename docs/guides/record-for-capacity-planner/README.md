@@ -686,7 +686,7 @@ capacity-planner capture  --prometheus URL --namespace NS (--kube-state-metrics 
                           [--step 15s] [--policy FILE]
                           [--engine vllm|sglang] [--engine-args "ARGS"] [--batch-cap N]
                           [--gpus-per-replica 1] [--accelerator NAME]
-                          [--vllm-version 0.34] [--engine-image IMAGE]
+                          [--vllm-version 0.34] [--engine-image IMAGE] [--model-config config.json]
                           [--bearer-token-file FILE] [--ca-file FILE] [--insecure-skip-verify]
                           [--timeout 2m30s] [--force] [--lmcache-namespace NS]
 capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
@@ -706,6 +706,7 @@ capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
 | `--batch-cap` | The engine's batch cap (`--max-num-seqs`, or `--max-running-requests`). Warned about when `--engine-args` sets it too. |
 | `--gpus-per-replica`, `--accelerator` | Stand-ins where kube-state-metrics gives no GPU request or node label. |
 | `--vllm-version`, `--engine-image` | The vLLM release the engines run, as `0.34`, or their image, whose `vllm-openai` tag names it. Stand-ins where kube-state-metrics shows neither; see [The vLLM release](#the-vllm-release). |
+| `--model-config` | The served model's `config.json`, or the checkpoint directory holding it. Its attention kind (full, sliding window, MLA, hybrid) and MoE class (dense, MoE with or without expert parallelism) are recorded with every variant and named beside the engine in the answers. Reported, not priced. The window's variants must all serve that one model. An answer from `--recording` takes the same flag, and reads a `config.json` beside the recording when it is not given. It moves no figure's value, but the `MLAAttention` and `HybridAttention` flags then follow the config, so a figure can read outside the validated region where the name said nothing (or inside, where only an MLA name match put it outside). A sliding window is read as vLLM serves it: on every layer unless `layer_types` or `max_window_layers` say otherwise. |
 | `--bearer-token-file` | A file holding a bearer token. Sent over https only, to Prometheus' own host only, never on a redirect elsewhere. Refused with an http URL, or when the file is empty. |
 | `--ca-file` | A PEM file of the CAs that sign an https Prometheus' certificate, trusted in place of the system's. Refused with an http URL. |
 | `--insecure-skip-verify` | Do not verify the certificate. Warned about on stderr. Refused with an http URL. |

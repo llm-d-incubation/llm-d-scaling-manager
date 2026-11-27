@@ -46,6 +46,18 @@ var (
 		"seed", "o", "output", "ttft", "ttft-percentile", "tpot", "tpot-percentile",
 		"prometheus", "bearer-token-file", "ca-file", "insecure-skip-verify", "timeout", "kube-state-metrics", "role-of",
 		"from", "to", "step", "force", "no-self-check",
+		// It moves no figure's value, and it can move a figure's verdict. The
+		// HybridAttention and MLAAttention engine flags follow the config
+		// (attentionFamily), and no envelope row allows either
+		// (DefaultEnvelope's AllowedFlags), so a figure carrying one reads
+		// outside. A config that reads MLA, a window or hybrid layers on a
+		// model whose name raised neither puts its figures outside; one that
+		// reads full attention on an MLA family's name clears MLAAttention,
+		// and a figure outside by that flag alone reads inside. It never
+		// clears HybridAttention a name raised. In flagsInside because it
+		// states what the model is, not an input the run priced: the flags it
+		// raises are what the envelope judges.
+		modelConfigFlag,
 		// Set, it states nothing until it applies: assumeIntercept then adds
 		// --assume-itl-b to the variant's stated inputs, which puts its figures outside.
 		"assume-itl-b",

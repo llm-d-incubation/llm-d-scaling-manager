@@ -771,16 +771,18 @@ func TestPrometheus_HelpListsTheWindowFlags(t *testing.T) {
 		assert.Contains(t, text, "-recording")
 	}
 	// windowFlags is every flag capture has but --prometheus, --namespace,
-	// --batch-cap, -o and --lmcache-namespace (which names where the optional
-	// series are checked, and only capture prints them): a flag added to
-	// capture is refused without --prometheus.
+	// --batch-cap, -o, --lmcache-namespace (which names where the optional
+	// series are checked, and only capture prints them) and --model-config
+	// (which the answers take with --recording too, so it is not refused
+	// without --prometheus): a flag added to capture is refused without
+	// --prometheus.
 	text, code := runCmd(t, "capture", "-h")
 	require.Equal(t, 0, code)
 	var got []string
 	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(line, "  -") {
 			name, _, _ := strings.Cut(strings.TrimPrefix(line, "  -"), " ")
-			if !slices.Contains([]string{"prometheus", "namespace", "batch-cap", "o", "lmcache-namespace"}, name) {
+			if !slices.Contains([]string{"prometheus", "namespace", "batch-cap", "o", "lmcache-namespace", modelConfigFlag}, name) {
 				got = append(got, name)
 			}
 		}

@@ -68,6 +68,22 @@ const (
 	// defaults of flags the engine leaves unset; see
 	// docs/reference/vllm-versions.md. Anything unreadable is ignored.
 	VLLMVersion = "scaling-manager.llmd.ai/vllm-version"
+
+	// ModelConfig, set on a variant's scale target (the Deployment or
+	// LeaderWorkerSet itself, not its pod template, so nothing rolls),
+	// carries the served model's Hugging Face config.json, as its JSON. The
+	// scaling manager does not mount the weights, so this is how it learns
+	// the model's attention kind (full, sliding window, MLA, hybrid) and
+	// whether it routes through experts. Read for the engine parameters and
+	// reported, not priced yet; no annotation leaves both classes unknown.
+	//
+	// The operator sets it, with kubectl annotate or in the manifest that
+	// deploys the model; nothing in the scaling manager writes it. It is not
+	// tied to the checkpoint the engine serves (--model, --revision): change
+	// the model and not the annotation, and the classes describe the old
+	// model. An unreadable value is logged once per change by the capacity
+	// store and leaves both classes unknown.
+	ModelConfig = "scaling-manager.llmd.ai/model-config"
 )
 
 // IsSynthetic reports whether va was synthesized by the scaling manager rather than read from a
