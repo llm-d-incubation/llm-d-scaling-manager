@@ -537,6 +537,7 @@ func (c *ReplicaMetricsCollector) attributeInstance(
 		CachedTokenRateBySource:                sortedSources(data.cachedBySource),
 		KVReuseGapBuckets:                      sortedBuckets[domain.LatencyBucket](data.kvReuseGapBuckets),
 		KVIdleBeforeEvictBuckets:               sortedBuckets[domain.LatencyBucket](data.kvIdleBeforeEvictBuckets),
+		IterationTokensBuckets:                 sortedBuckets[domain.LengthBucket](data.iterationTokensBuckets),
 		KVTransferRates:                        sortedTransfers(data.kvTransfers),
 		Metadata: &domain.ReplicaMetricsMetadata{
 			CollectedAt:     collectedAt,

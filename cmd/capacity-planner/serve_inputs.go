@@ -39,11 +39,11 @@ func inputsDoc(f *answerFlags, st *learnreplay.State, pv *pricedVariant, ps *lea
 	info whatifapi.SourceInfo) whatifapi.InputsResponse {
 	doc := whatifapi.InputsResponse{Model: st.ModelID, Namespace: st.Namespace, Source: info,
 		Fleet: whatifapi.FleetInfo{Decode: whatifapi.RoleInfo{Variant: pv.state.Variant, Replicas: pv.decode.Replicas,
-			GPUsPerReplica: pv.state.GPUsPerReplica, Engine: engineInfo(pv.state.Params)}},
+			GPUsPerReplica: pv.state.GPUsPerReplica, Engine: engineInfo(&pv.state)}},
 		Assumed: append([]string{}, pf.in.Assumed...)}
 	if ps != nil {
 		doc.Fleet.Prefill = &whatifapi.RoleInfo{Variant: ps.Variant, Replicas: ps.Pods, GPUsPerReplica: variantGPUs(st, ps.Variant),
-			Engine: engineInfo(variantParams(st, ps.Variant))}
+			Engine: engineInfo(variantState(st, ps.Variant))}
 		doc.Fleet.Prefill.StartSeconds, doc.Fleet.Prefill.StartSeeded = roleStart(st, domain.RolePrefill)
 	}
 	doc.Fleet.Decode.StartSeconds, doc.Fleet.Decode.StartSeeded = roleStart(st, domain.RoleDecode)

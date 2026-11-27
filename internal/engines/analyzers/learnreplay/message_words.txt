@@ -799,6 +799,7 @@ between
 biased
 binary
 bind
+binds
 blip
 block
 block_size
@@ -1144,6 +1145,7 @@ diagnostic
 did
 differ
 differences
+different
 differs
 digest
 dir
@@ -1176,6 +1178,7 @@ docs/reference/operations.md
 document
 documents
 does
+does-not-bind
 donor
 donor-peak
 donor-set
@@ -1648,6 +1651,7 @@ issues
 it
 items
 iteration
+iterations
 itl
 itl-adaptive-band-floor
 itl-aggregated-lift
@@ -3544,6 +3548,7 @@ tok/s
 token
 tokenSec
 tokens
+tokens-per-iteration
 tokens/s
 tokensInUse
 tolerance

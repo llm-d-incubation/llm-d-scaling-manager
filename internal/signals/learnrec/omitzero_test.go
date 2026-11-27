@@ -64,7 +64,7 @@ func TestCodec_R1FieldsAreLeftOutWhileZero(t *testing.T) {
 			"RenderRate", "RenderRateKnown", "TPOTBuckets", "QueueMin", "QueueMinKnown", "GroupEngines",
 			"ExternalPrefixCacheHitTokenRate", "ExternalPrefixCacheHitTokenRateKnown", "ExternalPrefixCacheQueryTokenRate",
 			"ExternalPrefixCacheQueryTokenRateKnown", "CachedTokenRateBySource", "KVTransferRates",
-			"KVReuseGapBuckets", "KVIdleBeforeEvictBuckets"},
+			"KVReuseGapBuckets", "KVIdleBeforeEvictBuckets", "IterationTokensBuckets"},
 		reflect.TypeFor[domain.RouterLatency](): {"TTFTSumRate", "TTFTCountRate", "TPOTBuckets", "FlowControlWaitBuckets",
 			"ProcessingBuckets", "ProcessingSumRate", "ProcessingCountRate", "RenderSumRate", "RenderCountRate",
 			"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate", "Endpoints", "PrefixProducers"},

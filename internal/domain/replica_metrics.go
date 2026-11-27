@@ -660,6 +660,14 @@ type ReplicaMetrics struct {
 	// (prefill.FitHitModel). Nil when absent.
 	KVReuseGapBuckets        []LatencyBucket `learnrec:"omitzero"`
 	KVIdleBeforeEvictBuckets []LatencyBucket `learnrec:"omitzero"`
+	// IterationTokensBuckets is the pod's tokens-per-iteration histogram,
+	// as iterations a second over [1m] at or under each bound, each bound's
+	// rate summed over its ranks (vllm:iteration_tokens_total, one
+	// observation per engine iteration: the computed prompt tokens of the
+	// prefills it completed, each whole, and the tokens it generated). It says
+	// whether the step budget (--max-num-batched-tokens) binds
+	// (capacity.ReadStepBudgetBinding). Nil when absent, as on SGLang.
+	IterationTokensBuckets []LengthBucket `learnrec:"omitzero"`
 	// KVTransferRates is what the pod spent moving KV that it did not
 	// compute, over [1m], one entry per kind, sorted by kind
 	// (KVTransferOffloadLoad, KVTransferTierRead, KVTransferNIXL): bytes a

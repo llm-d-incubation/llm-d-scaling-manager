@@ -140,6 +140,10 @@ type podMetricData struct {
 	externalQueryRate      float64
 	externalQueryRateKnown bool
 	cachedBySource         map[string]float64
+	// iterationTokensBuckets is the tokens-per-iteration histogram
+	// (registration.QueryIterationTokensBuckets) by bucket bound, nil when
+	// no bucket was read.
+	iterationTokensBuckets map[float64]float64
 	// The KV residency histograms (cache_tiers.go) by bucket bound, nil
 	// when no bucket was read.
 	kvReuseGapBuckets        map[float64]float64

@@ -256,6 +256,33 @@ type EngineInfo struct {
 	MoE               string `json:"moe"`
 	ModelConfigSource string `json:"modelConfigSource,omitempty"`
 	Model             string `json:"model,omitempty"`
+	// StepBudgetBinding is whether the step budget binds, read from the
+	// engine's tokens per iteration; absent where no row of the variant carried
+	// that series (a recording made before it was recorded, or SGLang).
+	StepBudgetBinding *StepBudgetBinding `json:"stepBudgetBinding,omitempty"`
+}
+
+// StepBudgetBinding is whether a variant's step budget binds, read from the
+// engine's tokens per iteration (vllm:iteration_tokens_total: the computed
+// prompt tokens of the prefills an iteration completed, each whole, and the
+// tokens it generated) over the window against StepBudget
+// (capacity.StepTokens.Binding). Class is "binds", "does-not-bind" or
+// "unknown", and Reason says why it is unknown. The class is decided on
+// OverShare, the share of iterations above BoundTokens, the smallest bound at
+// or over the budget: completions of prompts the budget chunked. Share, the
+// share above NearTokens (the largest bound under 90% of the budget), is a
+// diagnostic. TopTokens is the bound at or under which 99.9% of the
+// iterations counted, a floor where TopOpen. Reported only: no figure reads
+// it yet.
+type StepBudgetBinding struct {
+	Class       string  `json:"class"`
+	Reason      string  `json:"reason,omitempty"`
+	BoundTokens float64 `json:"boundTokens,omitempty"`
+	OverShare   float64 `json:"overShare"`
+	NearTokens  float64 `json:"nearTokens,omitempty"`
+	Share       float64 `json:"share"`
+	TopTokens   float64 `json:"topTokens,omitempty"`
+	TopOpen     bool    `json:"topOpen,omitempty"`
 }
 
 // Observed is the traffic the source saw.

@@ -650,7 +650,7 @@ func inputsOf(f *answerFlags, pv pricedVariant) *wireInputs {
 			OutputDispersion: pv.outputDispersion},
 		BatchCap: pv.perRank, BatchCapSource: pv.state.BatchCapSource,
 		Ranks: max(pv.state.Ranks, 1), Replicas: pv.decode.Replicas, ReplicasFrom: "recording",
-		Engine: engineOf(pv.state.Params),
+		Engine: engineOf(&pv.state),
 	}
 	if pv.assumedIL {
 		in.Shape.InputSource = shapeAssumed

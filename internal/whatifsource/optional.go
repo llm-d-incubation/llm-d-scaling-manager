@@ -247,7 +247,9 @@ var OptionalSeriesList = []OptionalSeries{
 	{Name: "llm_d_epp_flow_control_request_queue_duration_seconds_count", Source: SourceRouter, Tier: TierOutsideEngines, By: "outcome"},
 	// Prefill capacity without a queue: the tokens each engine step takes,
 	// the spread of prefill time, and the compute each GPU does
-	// (--enable-mfu-metrics) and the DCGM exporter sees.
+	// (--enable-mfu-metrics) and the DCGM exporter sees. The tokens-per-iteration
+	// buckets are also recorded: the planner reads from them whether the
+	// step budget binds (capacity.ReadStepBudgetBinding).
 	{Name: "vllm:iteration_tokens_total_bucket", Source: SourceVLLM, Tier: TierPrefillCapacity},
 	{Name: "vllm:iteration_tokens_total_sum", Source: SourceVLLM, Tier: TierPrefillCapacity},
 	{Name: "vllm:iteration_tokens_total_count", Source: SourceVLLM, Tier: TierPrefillCapacity},

@@ -90,6 +90,7 @@ it.
 | `vllm:request_time_per_output_token_seconds_bucket` | histogram buckets | `le` | the engine's TPOT distribution, recorded | optional |
 | `vllm:kv_block_reuse_gap_seconds_bucket` | histogram buckets | `le` | the time since a cached block's last use, at each prefix-cache hit: the prefix hit at another prefill count (`--prefill-hit-at-count`); recorded (with `--kv-cache-metrics`) | optional |
 | `vllm:kv_block_idle_before_evict_seconds_bucket` | histogram buckets | `le` | how long an evicted block sat unused: the cache's horizon, for the same; recorded (with `--kv-cache-metrics`) | optional |
+| `vllm:iteration_tokens_total_bucket` | histogram buckets | `le` | per engine iteration, the computed prompt tokens of the prefills it completed and the tokens it generated: whether the step budget (`--max-num-batched-tokens`) binds, reported beside the engine as `binds`, `does not bind` or `unknown`; recorded | optional |
 | `vllm:nixl_xfer_time_seconds_sum` | histogram sum | | KV transfer time between prefill and decode | optional |
 | `vllm:nixl_xfer_time_seconds_count` | histogram count | | KV transfer time | optional |
 | `vllm:nixl_bytes_transferred_sum` | histogram sum | | bytes NIXL moved: with the transfer time above, a peer hit's load time per token; recorded | optional |
@@ -463,7 +464,7 @@ the counter files the exporter ships: add them to a custom one.
 
 | Series | Source and version | Produced with | Tier | Without it |
 | --- | --- | --- | --- | --- |
-| `vllm:iteration_tokens_total_bucket` | vLLM, all supported | on by default | needed for prefill capacity | prefill capacity read only from minutes with a queue |
+| `vllm:iteration_tokens_total_bucket` | vLLM, all supported | on by default | needed for prefill capacity | prefill capacity read only from minutes with a queue; the step budget's binding reported `unknown` |
 | `vllm:iteration_tokens_total_sum` | vLLM, all supported | on by default | needed for prefill capacity | as above |
 | `vllm:iteration_tokens_total_count` | vLLM, all supported | on by default | needed for prefill capacity | as above |
 | `vllm:request_prefill_time_seconds_bucket` | vLLM, all supported | on by default | needed for prefill capacity | the mean prefill time only, not its spread |
