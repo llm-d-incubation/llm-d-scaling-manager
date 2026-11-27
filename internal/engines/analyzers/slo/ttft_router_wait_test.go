@@ -133,6 +133,8 @@ var notOnTheTTFTPath = map[string]string{
 	"VPFromPlateau":             "planner only: the controller never reads V_P from the occupancy plateau",
 	"PrefixHitAtCount":          "planner only: prefill-hit-at-count; the controller prices the prefill count it runs",
 	"PrefixHitHeld":             "planner only: prefill-hit-at-count; the controller prices the prefill count it runs",
+	"KneeAtServedWork":          "planner only: whatif.ServedKneeFloor; the controller keeps no served work (prefill-vp-served-unqueued off)",
+	"ServedWorkUnsteady":        "planner only: whatif.ServedKneeFloor; the controller keeps no served work (prefill-vp-served-unqueued off)",
 	"VPPromptNotCovered":        "planner only: prefill-vp-prompt-coverage is off from the analyzer's constructor",
 	"ExperimentalTTFT":          "planner only: the CLI's --experimental-ttft",
 	"PSSlotsExceeded":           "planner only: slo-ttft-ps-by-engine, which the analyzer never prices with",

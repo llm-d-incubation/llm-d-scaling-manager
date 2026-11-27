@@ -216,13 +216,13 @@ func TestServedKneeFloor(t *testing.T) {
 	got, ok := pf.servedKneeFloor(lb).(whatif.Answer)
 	require.True(t, ok)
 	assert.InDelta(t, 30.0, got.Value, 1e-9, "30000 tok/s over 1000-token prompts")
-	assert.True(t, got.HasFlag(kneeAtServedWork))
+	assert.True(t, got.HasFlag(whatif.KneeAtServedWork))
 	assert.True(t, got.HasFlag(whatif.VPLowerBound), "still a lower bound")
 	assert.InDelta(t, 30.0, got.Basis.TTFT.KneeRate, 1e-9)
 	require.NotNil(t, got.Sensitivity, "the operating point reads the knee's span")
 	assert.InDelta(t, 30.0, got.Sensitivity.Lo, 1e-9, "no lower than the work measured")
 	assert.InDelta(t, 10.0, lb.Basis.TTFT.KneeRate, 1e-9, "the priced answer is not changed in place")
-	assert.False(t, lb.HasFlag(kneeAtServedWork))
+	assert.False(t, lb.HasFlag(whatif.KneeAtServedWork))
 
 	plain := whatif.Answer{Value: 10}
 	assert.Equal(t, plain, pf.servedKneeFloor(plain), "a knee from a V_P that is no bound: a window past it contradicts the model")
@@ -253,16 +253,16 @@ func TestServedKneeFloor_UnsteadyWorkIsNoFloor(t *testing.T) {
 	got, ok := pf.servedKneeFloor(lb).(whatif.Answer)
 	require.True(t, ok)
 	assert.InDelta(t, 10.0, got.Value, 1e-9, "left at its lower bound")
-	assert.True(t, got.HasFlag(servedWorkUnsteady))
-	assert.False(t, got.HasFlag(kneeAtServedWork))
-	assert.False(t, lb.HasFlag(servedWorkUnsteady), "the priced answer is not changed in place")
+	assert.True(t, got.HasFlag(whatif.ServedWorkUnsteady))
+	assert.False(t, got.HasFlag(whatif.KneeAtServedWork))
+	assert.False(t, lb.HasFlag(whatif.ServedWorkUnsteady), "the priced answer is not changed in place")
 
 	steady := *pf
 	steady.fleet.Prefill.Replicas = 3
 	got, ok = steady.servedKneeFloor(lb).(whatif.Answer)
 	require.True(t, ok)
 	assert.InDelta(t, 90.0, got.Value, 1e-9)
-	assert.False(t, got.HasFlag(servedWorkUnsteady))
+	assert.False(t, got.HasFlag(whatif.ServedWorkUnsteady))
 }
 
 // A knee raised to the work served (KneeAtServedWork) is still a lower
@@ -270,6 +270,6 @@ func TestServedKneeFloor_UnsteadyWorkIsNoFloor(t *testing.T) {
 // it does not a lower-bound knee left as priced.
 func TestServedKneeFloor_NeverContradictsTheWindow(t *testing.T) {
 	floored := fleetEval{kneeOK: true, knee: 4, binds: rolePrefill,
-		prefillKnee: whatif.Answer{Value: 4, Flags: []whatif.Flag{whatif.VPLowerBound, kneeAtServedWork}}}
+		prefillKnee: whatif.Answer{Value: 4, Flags: []whatif.Flag{whatif.VPLowerBound, whatif.KneeAtServedWork}}}
 	assert.Empty(t, contradictsReporter(cycles(10, 22), 12, 2, 2).contradicted(2, 2, floored))
 }

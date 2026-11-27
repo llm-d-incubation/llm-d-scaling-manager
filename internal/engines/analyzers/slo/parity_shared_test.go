@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
@@ -39,4 +40,18 @@ func TestParity_TheFloorByCountIsSharedAndUnused(t *testing.T) {
 	if assert.NotNil(t, got) {
 		assert.Equal(t, whatif.BelowBand{}, got.BelowBand, "the controller builds no floor by count")
 	}
+}
+
+// The served-work knee floor (whatif.ServedKneeFloor, #494) prices from this
+// package; the analyzer keeps no served work (saturation's
+// SwitchPrefillVPServedUnqueued is off from its constructor), and with none
+// the knee is left as priced.
+func TestParity_TheServedKneeFloorIsSharedAndUnused(t *testing.T) {
+	p := whatif.Prefill{Replicas: 2, PromptTokens: 1000}
+	lb := whatif.Answer{Value: 10, Flags: []whatif.Flag{whatif.VPLowerBound}}
+	got, ok := whatif.ServedKneeFloor(lb, p, map[int]float64{2: 30000}, nil).(whatif.Answer)
+	require.True(t, ok)
+	assert.InDelta(t, 30.0, got.Value, 1e-9)
+	assert.True(t, got.HasFlag(whatif.KneeAtServedWork))
+	assert.Equal(t, whatif.Result(lb), whatif.ServedKneeFloor(lb, p, nil, nil), "no work kept, as in the controller")
 }
