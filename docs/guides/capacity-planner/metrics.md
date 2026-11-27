@@ -159,7 +159,7 @@ flow control and the router's own latency go unread.
 | `inference_extension_flow_control_queue_bytes` | gauge | | as above, older routers | optional |
 | `llm_d_epp_flow_control_request_enqueue_duration_seconds_count` | histogram count | `job` | arrival rate, with flow control on | optional |
 | `inference_extension_flow_control_request_enqueue_duration_seconds_count` | histogram count | `job` | as above, older routers | optional |
-| `llm_d_epp_scheduler_attempts_total` | counter | `status="success"` (no `model_name`) | arrival rate, with flow control off | optional |
+| `llm_d_epp_scheduler_attempts_total` | counter | `status="success"`, `target_model_name`, `endpoint_name` (no `model_name`) | arrival rate, with flow control off; recorded: requests placed per Pod | optional |
 | `inference_extension_scheduler_attempts_total` | counter | `status="success"` (no `model_name`) | as above, older routers | optional |
 | `llm_d_epp_flow_control_request_queue_duration_seconds_bucket` | histogram buckets | `le`, `outcome="Dispatched"` | flow-control wait | optional |
 | `llm_d_epp_flow_control_pool_saturation` | gauge | `inference_pool`, `stage` (no model labels) | pool saturation | optional |
@@ -171,6 +171,12 @@ flow control and the router's own latency go unread.
 | `llm_d_epp_token_producer_render_duration_seconds_count` | histogram count | (no model labels) | as above | optional |
 | `llm_d_epp_prefix_predicted_cached_tokens_sum` | histogram sum | `plugin_name`, `endpoint_role` (no model labels) | prefix duplication across prefill pods: `--prefill-hit-at-count` with the KV residency histograms | optional |
 | `llm_d_epp_prefix_best_available_cached_tokens_sum` | histogram sum | `plugin_name`, `endpoint_role` (no model labels) | as above | optional |
+| `llm_d_epp_prefix_best_predicted_cached_tokens_sum` | histogram sum | `plugin_name`, `endpoint_role` (no model labels) | recorded: the prefix producers' counts per role | optional |
+| `llm_d_epp_prefix_prompt_tokens_sum` | histogram sum | `plugin_name`, `endpoint_role` (no model labels) | as above | optional |
+| `llm_d_epp_prefix_predicted_cached_tokens_count` | histogram count | `plugin_name`, `endpoint_role` (no model labels) | as above | optional |
+| `llm_d_epp_per_endpoint_queue_size` | gauge | `model_server_endpoint` (no model labels) | recorded: each Pod's queue as the router read it | optional |
+| `llm_d_epp_inflight_requests` | gauge | `endpoint_name`, `producer_name` (no model labels) | recorded: the requests the router holds in flight per Pod | optional |
+| `llm_d_epp_inflight_tokens` | gauge | `endpoint_name`, `producer_name` (no model labels) | recorded: their uncached prompt tokens | optional |
 
 The request-processing and render series carry no model. A recording or a
 capture gives them to a model only where the router's TTFT names that model
@@ -187,6 +193,21 @@ duplication. Behind a P/D router the best available endpoint is chosen
 before the role filter, so it spans the decode pods too: a producer that
 indexes the decode pods' caches reads a larger loss, and a larger
 duplication, than the prefill routing gave up.
+
+A recording also keeps the router's view of each model-server Pod and each
+prefix producer's counts per role, each cycle. They are read only from the
+router Pods that serve the model: those whose placements in
+`llm_d_epp_scheduler_attempts_total` name that model and no other. A
+second router replica that routes another model, or routes nothing, is
+left out, so these join where the namespace holds two models. The router
+counts a placement on the primary profile's Pod only, which in P/D is the
+decode Pod: a prefill Pod has no placements, and reads as unknown there,
+not zero. The router publishes no TTFT per Pod, and its prefix series per
+role, not per Pod. Only the `llm_d_epp_*` names are read: a router older
+than v0.9.0, which exports only `inference_extension_scheduler_attempts_total`
+(with `pod_name`) and `inference_pool_per_pod_queue_size`, records no
+per-Pod view, and the recording holds none. The planner reads none of
+these yet.
 
 ## kube-state-metrics
 

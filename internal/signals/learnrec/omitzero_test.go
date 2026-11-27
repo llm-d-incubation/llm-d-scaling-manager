@@ -67,7 +67,7 @@ func TestCodec_R1FieldsAreLeftOutWhileZero(t *testing.T) {
 			"KVReuseGapBuckets", "KVIdleBeforeEvictBuckets"},
 		reflect.TypeFor[domain.RouterLatency](): {"TTFTSumRate", "TTFTCountRate", "TPOTBuckets", "FlowControlWaitBuckets",
 			"ProcessingBuckets", "ProcessingSumRate", "ProcessingCountRate", "RenderSumRate", "RenderCountRate",
-			"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate"},
+			"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate", "Endpoints", "PrefixProducers"},
 		reflect.TypeFor[Input](): {"RouterLatency", "FlowControlPools"},
 	}
 	for typ, added := range r1 {
@@ -79,10 +79,13 @@ func TestCodec_R1FieldsAreLeftOutWhileZero(t *testing.T) {
 		}
 		assert.ElementsMatch(t, added, tagged, "%s: the omitzero fields are R1's", typ)
 	}
-	// Every field of a pool is new, so all are left out while zero.
-	pool := reflect.TypeFor[domain.FlowControlPool]()
-	for i := range pool.NumField() {
-		assert.Equal(t, OmitZeroTag, pool.Field(i).Tag.Get("learnrec"), "FlowControlPool.%s", pool.Field(i).Name)
+	// Every field of a pool, a router endpoint and a prefix producer is
+	// new, so all are left out while zero.
+	for _, typ := range []reflect.Type{reflect.TypeFor[domain.FlowControlPool](), reflect.TypeFor[domain.RouterEndpoint](),
+		reflect.TypeFor[domain.RouterPrefixProducer]()} {
+		for i := range typ.NumField() {
+			assert.Equal(t, OmitZeroTag, typ.Field(i).Tag.Get("learnrec"), "%s.%s", typ, typ.Field(i).Name)
+		}
 	}
 
 	// A row as a pre-R1 recording holds it: every old field set, every R1
@@ -136,6 +139,45 @@ func TestCodec_R1FieldsAreLeftOutWhileZero(t *testing.T) {
 	assert.True(t, out.ReplicaMetrics[0].AvgQueueTimeKnown)
 	assert.Zero(t, out.ReplicaMetrics[0].AvgQueueTime)
 	again, err = Marshal(out)
+	require.NoError(t, err)
+	assert.Equal(t, string(b), string(again))
+}
+
+// The router's per-endpoint series (#475): a recording that holds them is
+// written again byte for byte, an endpoint's unknown figure stays unknown
+// and a zero the router read stays a zero, and a recording without them
+// holds none of their names.
+func TestCodec_RouterEndpointsRoundTrip(t *testing.T) {
+	without := Input{ModelID: "m", Namespace: "ns", RouterLatency: &domain.RouterLatency{WindowSeconds: 300,
+		TTFTBuckets: []domain.LatencyBucket{{UpperBound: math.Inf(1), Rate: 2}}}}
+	b, err := Marshal(without)
+	require.NoError(t, err)
+	for _, name := range []string{"Endpoints", "PrefixProducers", "PlacementRate", "InFlightTokens", "BestPredictedTokenRate"} {
+		assert.NotContains(t, string(b), `"`+name+`"`)
+	}
+
+	with := without
+	rl := *without.RouterLatency
+	rl.Endpoints = []domain.RouterEndpoint{
+		{Pod: "decode-0", PlacementRate: 5, PlacementKnown: true, QueueSize: 0, QueueSizeKnown: true,
+			InFlightRequests: 16, InFlightRequestsKnown: true},
+		{Pod: "prefill-0", InFlightTokens: 10000, InFlightTokensKnown: true},
+	}
+	rl.PrefixProducers = []domain.RouterPrefixProducer{{Plugin: "approx", Role: "prefill", RequestRate: 3,
+		PromptTokenRate: 3000, PredictedTokenRate: 965, BestPredictedTokenRate: 970, BestAvailableTokenRate: 971}}
+	with.RouterLatency = &rl
+	b, err = Marshal(with)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"Endpoints":[{"Pod":"decode-0","PlacementRate":5,"PlacementKnown":true,"QueueSizeKnown":true,`+
+		`"InFlightRequests":16,"InFlightRequestsKnown":true},{"Pod":"prefill-0","InFlightTokens":10000,"InFlightTokensKnown":true}]`)
+	assert.Contains(t, string(b), `"PrefixProducers":[{"Plugin":"approx","Role":"prefill","RequestRate":3,"PromptTokenRate":3000,`+
+		`"PredictedTokenRate":965,"BestPredictedTokenRate":970,"BestAvailableTokenRate":971}]`)
+	var out Input
+	require.NoError(t, Unmarshal(b, &out))
+	assert.Equal(t, with, out)
+	assert.True(t, out.RouterLatency.Endpoints[0].QueueSizeKnown, "a queue read empty is known")
+	assert.False(t, out.RouterLatency.Endpoints[1].PlacementKnown, "a prefill Pod's placements stay unknown")
+	again, err := Marshal(out)
 	require.NoError(t, err)
 	assert.Equal(t, string(b), string(again))
 }

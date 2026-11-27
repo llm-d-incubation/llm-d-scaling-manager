@@ -140,13 +140,14 @@ func stripLatency(r io.Reader, w io.Writer, gz bool) (stripStats, error) {
 			if rl, ok := input["RouterLatency"].(map[string]any); ok {
 				// The router's window is what the latency will be measured
 				// over, where it measures TTFT; else the engines' minute is.
-				// The prefix producer's cached tokens are no latency: they
-				// stay, for the prefix duplication.
+				// The prefix producers' cached tokens and the per-endpoint
+				// load are no latency: they stay, for the prefix
+				// duplication and the load across Pods.
 				kept := map[string]any{}
 				if b, _ := rl["TTFTBuckets"].([]any); len(b) > 0 {
 					kept["WindowSeconds"] = rl["WindowSeconds"]
 				}
-				for _, k := range []string{"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate"} {
+				for _, k := range []string{"PrefixPredictedTokenRate", "PrefixBestAvailableTokenRate", "Endpoints", "PrefixProducers"} {
 					if v, ok := rl[k]; ok {
 						kept[k] = v
 					}
