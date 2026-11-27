@@ -75,8 +75,8 @@ replicas is the reuse-gap rule's, and the answer carries the fitted law as
 `inputsId`.
 
 `prefillVPServiceLine: true` reads V_P from the prefill service line
-where the prefill pods never queued, or V_P is only a lower bound under the
-line (the CLI's `--prefill-vp-service-line`). It is off by default and not
+where the prefill pods never queued; a V_P read under a queue stands
+(the CLI's `--prefill-vp-service-line`). It is off by default and not
 validated: every figure's `validation` reads OUTSIDE VALIDATED REGION, and
 the answer carries `prefillVPServiceLine: true` and its own `inputsId`.
 

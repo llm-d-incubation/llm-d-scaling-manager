@@ -43,7 +43,7 @@ type InputsRequest struct {
 	// at more it is held, flagged PrefixHitHeld.
 	PrefillHitAtCount bool `json:"prefillHitAtCount,omitempty"`
 	// PrefillVPServiceLine reads V_P from the prefill service line where no
-	// prefill pod queued, or V_P is a lower bound under the line (the CLI's
+	// prefill pod queued: a V_P read under a queue stands (the CLI's
 	// --prefill-vp-service-line): opt-in, off by default, and not validated,
 	// so every figure reads outside the validated region.
 	PrefillVPServiceLine bool `json:"prefillVPServiceLine,omitempty"`

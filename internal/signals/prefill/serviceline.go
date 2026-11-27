@@ -59,13 +59,19 @@ import (
 // it (Estimate.VPRequestSeconds): s0 per request on an engine, so s0/ranks
 // pod-seconds on the row, and the rest, E[x]/V, per token.
 //
-// Precedence: V_P from the line fills a V_P refused for want of a queue
-// (NoPrefillCapacity), or a lower bound at or under it, and is not a bound.
-// A V_P that is not a lower bound (busy minutes of a single-rank pod, a
-// flattened plateau, a lone rate that is V_P) stands: the queue's figure
-// wins. A lower bound above the line stands too: the true V_P is at or above
-// the bound, so the line under-reads there, and it is recorded
-// (Estimate.VPLine), not taken.
+// Precedence: V_P from the line fills only where no queue gave V_P: a V_P
+// refused for want of a queue (NoPrefillCapacity), or the served peak of a
+// fleet that never queued (SourceServedPeak, NeverQueued) at or under the
+// line's. It is not a bound. A V_P read under a queue stands, a lower bound
+// or not: busy minutes (over data-parallel ranks, DataParallelRanks, too),
+// the peak under a queue (the window's best included) and the back-pressure
+// bound. The queue measured the pods at capacity; the line extrapolates
+// their unqueued minutes to it, and on fleets that queued it read under the
+// queue's figure and the load served (issue
+// llm-d-incubation/llm-d-scaling-manager#449). A V_P that is not a lower
+// bound (a flattened plateau, a lone rate that is V_P) stands too. A served
+// peak above the line stands: the true V_P is at or above it, so the line
+// under-reads there. A line not taken is recorded (Estimate.VPLine).
 
 // SourceServiceLine is V_P from the prefill service line (serviceline.go).
 const SourceServiceLine Source = "service-line"
@@ -137,8 +143,8 @@ func fitServiceLine(ks *keyState) (serviceLine, int, Refusal) {
 }
 
 // lineFill reads the service line, records it on est, and sets V_P from it
-// where V_P is refused for want of a queue, or is a lower bound at or under
-// the line's (the rule above).
+// where V_P is refused for want of a queue, or is the served peak of a fleet
+// that never queued at or under the line's (the rule above).
 func (est *Estimate) lineFill(ks *keyState) {
 	ln, n, refused := fitServiceLine(ks)
 	est.VPLineMinutes, est.VPLineRefused = n, refused
@@ -148,7 +154,7 @@ func (est *Estimate) lineFill(ks *keyState) {
 	est.VPLine, est.VPLineS0, est.VPLineSlope = ln.vp, ln.s0, ln.slope
 	switch {
 	case est.VPRefused == NoPrefillCapacity:
-	case est.VPRefused == "" && est.VPLowerBound && est.VP <= ln.vp:
+	case est.VPRefused == "" && est.VPLowerBound && est.VPLowerBoundReason == NeverQueued && est.VP <= ln.vp:
 	default:
 		return
 	}
