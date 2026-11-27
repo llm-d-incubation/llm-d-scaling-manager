@@ -304,6 +304,7 @@ backtest.summary.byLoad[].tpot[].unscored.* number
 backtest.summary.byLoad[].tpot[].vpLowerBound object
 backtest.summary.byLoad[].tpot[].vpLowerBound.atOrOver number
 backtest.summary.byLoad[].tpot[].vpLowerBound.bias number
+backtest.summary.byLoad[].tpot[].vpLowerBound.low number
 backtest.summary.byLoad[].tpot[].vpLowerBound.steps number
 backtest.summary.byLoad[].tpot[].vpLowerBound.under number
 backtest.summary.byLoad[].ttft array
@@ -344,6 +345,7 @@ backtest.summary.byLoad[].ttft[].unscored.* number
 backtest.summary.byLoad[].ttft[].vpLowerBound object
 backtest.summary.byLoad[].ttft[].vpLowerBound.atOrOver number
 backtest.summary.byLoad[].ttft[].vpLowerBound.bias number
+backtest.summary.byLoad[].ttft[].vpLowerBound.low number
 backtest.summary.byLoad[].ttft[].vpLowerBound.steps number
 backtest.summary.byLoad[].ttft[].vpLowerBound.under number
 backtest.summary.excluded object
@@ -402,6 +404,7 @@ backtest.summary.tpot[].unscored.* number
 backtest.summary.tpot[].vpLowerBound object
 backtest.summary.tpot[].vpLowerBound.atOrOver number
 backtest.summary.tpot[].vpLowerBound.bias number
+backtest.summary.tpot[].vpLowerBound.low number
 backtest.summary.tpot[].vpLowerBound.steps number
 backtest.summary.tpot[].vpLowerBound.under number
 backtest.summary.ttft array
@@ -442,6 +445,7 @@ backtest.summary.ttft[].unscored.* number
 backtest.summary.ttft[].vpLowerBound object
 backtest.summary.ttft[].vpLowerBound.atOrOver number
 backtest.summary.ttft[].vpLowerBound.bias number
+backtest.summary.ttft[].vpLowerBound.low number
 backtest.summary.ttft[].vpLowerBound.steps number
 backtest.summary.ttft[].vpLowerBound.under number
 backtest.test object

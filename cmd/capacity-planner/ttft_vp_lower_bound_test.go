@@ -53,7 +53,7 @@ func TestLowerBoundVPTTFT_UnderALowerBoundKneeIsNoKnownMiss(t *testing.T) {
 	assert.False(t, v.Checks[0].Holds, v.Checks[0].Reason)
 
 	ttft := seenTTFT(t, s)
-	assert.False(t, ttft.UpperBound, "no bound is claimed")
+	noUpperBound(t, ttft, "the TTFT at the load")
 	assert.True(t, slices.Contains(ttft.Flags, string(whatif.VPLowerBound)), "%v", ttft.Flags)
 	m := marks(s)
 	for _, load := range []string{"50%", "80%", seenLoad} {
@@ -64,9 +64,9 @@ func TestLowerBoundVPTTFT_UnderALowerBoundKneeIsNoKnownMiss(t *testing.T) {
 		assert.NotEqual(t, whatifapi.CellMissed, mark, load)
 	}
 	for _, row := range s.Table {
-		assert.False(t, row.E2EMeanSum.UpperBound, row.Load)
+		noUpperBound(t, row.E2EMeanSum, row.Load)
 		if c := row.Concurrency; c != nil {
-			assert.False(t, c.Fleet.UpperBound, row.Load)
+			noUpperBound(t, c.Fleet, row.Load)
 		}
 		if fc := row.FromConcurrency; fc != nil {
 			assert.False(t, fc.LowerBound, row.Load)
@@ -99,7 +99,7 @@ func TestLowerBoundVPTTFT_TheIssuesLoadIsNotUnder(t *testing.T) {
 	// 4.1, not the 4.0 V_P gives: the knee is floored at the work the
 	// prefill pods served (prefill-vp-served-unqueued, servedKneeFloor).
 	assert.Contains(t, v.Summary, "a prefill knee of at least 4.1 r/s")
-	assert.False(t, seenTTFT(t, s).UpperBound)
+	noUpperBound(t, seenTTFT(t, s), seenLoad)
 	assert.Equal(t, whatifapi.CellVPLowerBound, marks(s)[seenLoad])
 }
 
@@ -123,6 +123,15 @@ func TestLowerBoundVPTTFT_AStatedVPIsJudgedAsGiven(t *testing.T) {
 		assert.Equal(t, whatifapi.VerdictUnder, s.Verdict.Verdict, "V_P %s: the miss is known: %s", vp, s.Verdict.Summary)
 		assert.Equal(t, whatifapi.CellMissed, marks(s)[seenLoad], vp)
 	}
+}
+
+// noUpperBound says f, on the wire, carries no upperBound key: the field is
+// deprecated and never set (#515).
+func noUpperBound(t *testing.T, f whatifapi.Figure, what string) {
+	t.Helper()
+	b, err := json.Marshal(f)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "upperBound", what)
 }
 
 // wireFlags is a wire figure's flags as the model's.

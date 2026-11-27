@@ -343,6 +343,7 @@ function btLegend() {
     `<span>${sw("c-1")}p90 predicted</span><span>${dot("dot c-1")}p90 measured</span>` +
     `<span>${box("btbucket c-1")}p90 measured somewhere in a bucket too wide to place it</span><span>${box("btunres")}one bucket too wide, at many steps</span>` +
     `<span>${dot("dot bt-within")}measured within 20%</span><span>${dot("dot bt-low")}more than 20% over the prediction</span><span>${dot("dot bt-high")}more than 20% under it</span>` +
+    `<span>${dot("dot bt-apart")}priced from a lower bound of V_P, read high or at most 20% low: scored apart</span>` +
     `<span>${box("btband")}the planner's own range for p90</span><span>${box("btgrey")}not judged</span>` +
     `<span>${box("btsat")}no figure: the planner calls the fleet overloaded</span><span>&#9650; predicted above the axis</span>`;
 }
@@ -458,8 +459,9 @@ const BT_UNSCORED = {fewRequests: "too few measured requests", aboveHistogram: "
 // prediction: "within" 20%, "low" (predicted more than 20% under, or
 // measured above the histogram), "high" (more than 20% over), "unresolved"
 // (in a bucket too wide to place it), "apart" (priced from a lower bound of
-// V_P, unscored vpLowerBound: no point, so never within, low or high); null
-// where nothing was measured.
+// V_P and read high or at most 20% low, unscored vpLowerBound: no point, so
+// never within, low or high; one read more than 20% low is "low", a miss);
+// null where nothing was measured.
 function btPointClass(p) {
   if (!p) return null;
   if (p.unscored === "vpLowerBound") return "apart";
@@ -525,7 +527,16 @@ function btPrimary(scores, stat) {
 // within 20% of measured, and the range tested.
 function btVerdictCard(bt, ttftStat, tpotStat) {
   const lines = [];
-  const one = (name, sc) => {
+  const one = (name, sc, scores) => {
+    // Every step priced from a lower bound of V_P and read high or at most
+    // 20% low: no point, but the steps scored apart say how it read.
+    const apart = !sc && (scores || []).find(x => x.vpLowerBound && x.vpLowerBound.steps > 0);
+    if (apart) {
+      const a = apart.vpLowerBound;
+      return {chip: `${name} ${apart.statistic}: ${a.steps} apart, ${a.under} under`, cls: a.under * 2 > a.steps ? "low" : "unresolved",
+        text: `${name} ${apart.statistic} was priced from a lower bound of V_P at every step it scored, neither a point nor a bound: ` +
+          `scored apart, it read under the measured figure in ${a.under} of ${a.steps} steps (median ratio ${a.bias != null ? a.bias.toFixed(2) : "-"}).`};
+    }
     if (!sc) return {chip: `${name}: not scored`, text: `${name} was not scored at any step: the step table says why.`, cls: "unresolved"};
     const a = sc.all, n = Math.round((a.within || 0) * a.steps);
     const lean = a.bias == null ? "" : a.bias < 0.97 ? `; it reads ${Math.round((1 - a.bias) * 100)}% low` : a.bias > 1.03 ? `; it reads ${Math.round((a.bias - 1) * 100)}% high` : "; no lean";
@@ -534,7 +545,7 @@ function btVerdictCard(bt, ttftStat, tpotStat) {
       text: `${name} ${sc.statistic}: within 20% of measured in ${n} of ${a.steps} steps scored${lean}.`};
   };
   const tt = btPrimary(bt.summary.ttft, ttftStat);
-  lines.push(one("TTFT", tt));
+  lines.push(one("TTFT", tt, bt.summary.ttft));
   // The header quotes the mean's score: so does the card, beside the target's.
   const tm = btPrimary(bt.summary.ttft, "mean");
   if (tt && tm && tm !== tt) lines.push(one("TTFT", tm));
@@ -592,7 +603,10 @@ function btUnscoredList(bt) {
       let line = parts.length ? `${key.toUpperCase()} ${sc.statistic}: not scored in ${parts.join(", ")}.` : "";
       // Scored apart: how many read under what was measured, never hidden.
       const a = sc.vpLowerBound;
-      if (a) line += ` Of the ${a.steps} priced from a lower bound of V_P, ${a.under} read under the measured figure (median ratio ${a.bias != null ? a.bias.toFixed(2) : "-"}).`;
+      if (a) {
+        line += ` Of the ${a.steps} priced from a lower bound of V_P, ${a.under} read under the measured figure` +
+          `${a.low ? `, ${a.low} of them more than 20% (scored as misses)` : ""} (median ratio ${a.bias != null ? a.bias.toFixed(2) : "-"}).`;
+      }
       if (line) out.push(line);
     }
   }

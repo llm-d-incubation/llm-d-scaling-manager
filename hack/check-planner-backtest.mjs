@@ -171,6 +171,21 @@ try {
   const apList = btUnscoredList({summary: {ttft: [{statistic: "mean", unscored: {vpLowerBound: 5}, vpLowerBound: {steps: 5, atOrOver: 3, under: 2, bias: 1.3}}], tpot: []}});
   check("the figures read under are counted, not hidden", apList.length === 1 && apList[0].includes("Of the 5 priced from a lower bound of V_P, 2 read under the measured figure (median ratio 1.30)"),
     JSON.stringify(apList));
+  const lowList = btUnscoredList({summary: {ttft: [{statistic: "mean", unscored: {vpLowerBound: 4}, vpLowerBound: {steps: 5, atOrOver: 3, under: 2, low: 1, bias: 1.3}}], tpot: []}});
+  check("those read more than 20% low are named as misses", lowList[0].includes("2 read under the measured figure, 1 of them more than 20% (scored as misses)"), JSON.stringify(lowList));
+  // One read more than 20% low is a point miss, not apart.
+  const lowPt = {statistic: "mean", predicted: {value: 0.5, unit: "s", flags: ["VPLowerBound"]}, measured: 1, ratio: 0.5};
+  check("a lower-bound figure read 2x low is a miss", btPointClass(lowPt) === "low", btPointClass(lowPt));
+  // Every TTFT step set apart: the card shows how they read, not "not scored".
+  const allApart = copy(answer);
+  allApart.summary.ttft = allApart.summary.ttft.map(x => Object.assign({}, x, {all: {steps: 0}, inRegion: {steps: 0},
+    vpLowerBound: x.statistic === "mean" ? {steps: 8, atOrOver: 3, under: 5, low: 0, bias: 0.92} : undefined}));
+  const apCard = btVerdictCard(allApart, "mean", "mean");
+  check("a card with every TTFT step apart says how they read", apCard[0].chip === "TTFT mean: 8 apart, 5 under" &&
+    apCard[0].text.includes("read under the measured figure in 5 of 8 steps (median ratio 0.92)") && apCard[0].cls === "low", JSON.stringify(apCard[0]));
+  check("the legend names the apart dot", btLegend().includes("dot bt-apart"));
+  const css = fs.readFileSync(bt.replace(/backtest\.js$/, "planner.css"), "utf8");
+  check("the apart class is styled", css.includes("svg .dot.bt-apart") && css.includes(".btsteps td.bt-apart"));
 
   // The step table shows mean, p90 and p95 of both figures.
   const head = btStepTable(answer);

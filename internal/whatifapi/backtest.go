@@ -151,13 +151,14 @@ const (
 	// bucket cannot say which side of the prediction the truth is.
 	UnscoredUnresolvable = "unresolvable"
 	// UnscoredVPLowerBound is a TTFT priced from a V_P that is only a lower
-	// bound (TTFTFromLowerBoundVP). The pair keeps its ratio but is scored
-	// apart from the point figures (BacktestScore.VPLowerBound), over or
-	// under what was measured: its V_P terms read high and its other terms
-	// can read low by more, so it is neither a point the model's accuracy
-	// should be read from nor a bound (#515). Apart, a coverage gain made of
-	// such figures does not read as an accuracy loss, and the steps it read
-	// under the measured figure are counted, not hidden.
+	// bound (TTFTFromLowerBoundVP) that read high, or at most
+	// BacktestTolerance low: the direction its V_P terms push it. The pair
+	// keeps its ratio but is scored apart from the point figures
+	// (BacktestScore.VPLowerBound), so a coverage gain made of such figures
+	// does not read as an accuracy loss. It is no bound (#515): its other
+	// terms can read low by more, and a pair read more than
+	// BacktestTolerance low is a miss, scored as a point like any other, and
+	// counted in BacktestScore.VPLowerBound too.
 	UnscoredVPLowerBound = "vpLowerBound"
 )
 
@@ -655,15 +656,18 @@ type BacktestScore struct {
 	VPLowerBound *BacktestApart `json:"vpLowerBound,omitempty"`
 }
 
-// BacktestApart is the score of the pairs scored apart from the point
-// figures (UnscoredVPLowerBound): Steps of them, AtOrOver measured at or
-// under the figure, Under measured over it (readUnder: the figure read
-// under the measured one, which no bound would), and Bias the median of
-// predicted over measured.
+// BacktestApart is the score of every pair priced from a lower bound of
+// V_P with a ratio: Steps of them, AtOrOver measured at or under the
+// figure, Under measured over it (readUnder, strictly: the figure read
+// under the measured one), Low those of Under read more than
+// BacktestTolerance low (readLow), which are scored as point misses too,
+// in All, and Bias the median of predicted over measured. The rest,
+// Steps - Low, are scored apart only (UnscoredVPLowerBound).
 type BacktestApart struct {
 	Steps    int      `json:"steps"`
 	AtOrOver int      `json:"atOrOver"`
 	Under    int      `json:"under"`
+	Low      int      `json:"low"`
 	Bias     *float64 `json:"bias,omitempty"`
 }
 
@@ -678,6 +682,9 @@ func apartOf(ps []BacktestPoint) *BacktestApart {
 		ratios[i] = *p.Ratio
 		if readUnder(p) {
 			a.Under++
+		}
+		if readLow(p) {
+			a.Low++
 		}
 	}
 	a.AtOrOver = a.Steps - a.Under
@@ -2361,8 +2368,9 @@ func scoredPoint(p BacktestPoint, meas *float64, requests, top float64, why stri
 	default:
 		p.Unscored = UnscoredNotMeasured
 	}
-	if p.Ratio != nil && lowerBoundVPFigure(pred) {
-		// Scored apart, its ratio kept (UnscoredVPLowerBound).
+	if p.Ratio != nil && lowerBoundVPFigure(pred) && !readLow(p) {
+		// Scored apart, its ratio kept (UnscoredVPLowerBound). One read
+		// more than BacktestTolerance low stays a point: a miss.
 		p.Unscored = UnscoredVPLowerBound
 	}
 	return p
@@ -2380,6 +2388,13 @@ func inBucket(v float64, b Band) bool {
 // wholly above the prediction, or the ratio under 1. Strict: no tolerance.
 func readUnder(p BacktestPoint) bool {
 	return p.AboveHistogram || p.OutsideBucket == OutsideUnder || *p.Ratio < 1
+}
+
+// readLow says a pair with a ratio read more than BacktestTolerance under
+// what was measured: above the histogram's top bucket, under a coarse
+// bucket wholly above it, or the ratio under 1 - BacktestTolerance.
+func readLow(p BacktestPoint) bool {
+	return p.AboveHistogram || p.OutsideBucket == OutsideUnder || *p.Ratio < 1-BacktestTolerance
 }
 
 // judgeTarget is the step against the TTFT target, predicted (from its
@@ -2566,11 +2581,14 @@ func scoreOf(q float64, steps []BacktestStep, points func(BacktestStep) []Backte
 			continue
 		}
 		p := ps[i]
-		if p.Ratio != nil && p.Unscored == UnscoredVPLowerBound {
-			// Not a point: counted unscored, and scored apart.
-			sc.Unscored[p.Unscored]++
+		if p.Ratio != nil && lowerBoundVPFigure(p.Predicted) {
 			apart = append(apart, p)
-			continue
+			if p.Unscored == UnscoredVPLowerBound {
+				// Not a point: counted unscored, and scored apart only.
+				sc.Unscored[p.Unscored]++
+				continue
+			}
+			// Read more than BacktestTolerance low: a point miss as well.
 		}
 		if p.Ratio == nil {
 			if p.Unscored != "" {
@@ -2907,9 +2925,16 @@ func apartWords(name string, scores []BacktestScore, more string) string {
 		return ""
 	}
 	a := sc.VPLowerBound
-	return fmt.Sprintf(" In %d%s steps its %s %s was priced from a lower bound of V_P, which is neither a point figure nor a bound, "+
-		"and is scored apart (vpLowerBound): it read under the measured %s in %d of them, median ratio %.2f.",
-		a.Steps, more, sc.Statistic, name, name, a.Under, *a.Bias)
+	w := ""
+	if n := a.Steps - a.Low; n > 0 {
+		w = fmt.Sprintf(" In %d%s steps its %s %s was priced from a lower bound of V_P, which is neither a point figure nor a bound, "+
+			"and read high or at most %.0f%% low: scored apart (vpLowerBound).", n, more, sc.Statistic, name, BacktestTolerance*100)
+	}
+	if a.Low > 0 {
+		w += fmt.Sprintf(" %d of the steps scored read more than %.0f%% low from a lower bound of V_P: scored as misses.", a.Low, BacktestTolerance*100)
+	}
+	w += fmt.Sprintf(" Of all %d priced so, it read under the measured %s in %d, median ratio %.2f.", a.Steps, name, a.Under, *a.Bias)
+	return w
 }
 
 // TPOTBucketHint is how to measure a TPOT percentile the histogram is too

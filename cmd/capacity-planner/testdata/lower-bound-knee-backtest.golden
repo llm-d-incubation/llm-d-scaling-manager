@@ -1,5 +1,5 @@
 Over the 1 h 13 min the planner did not see:
-The planner's TTFT was not scored as a point in any step. In 12 steps its mean TTFT was priced from a lower bound of V_P, which is neither a point figure nor a bound, and is scored apart (vpLowerBound): it read under the measured TTFT in 3 of them, median ratio 1.20. 1 more were refused (see the steps).
+The planner's TTFT was not scored as a point in any step. In 12 steps its mean TTFT was priced from a lower bound of V_P, which is neither a point figure nor a bound, and read high or at most 20% low: scored apart (vpLowerBound). Of all 12 priced so, it read under the measured TTFT in 3, median ratio 1.20. 1 more were refused (see the steps).
 mean TPOT: within 20% of measured in 15 of the 15 five-minute steps scored (a figure, and enough measured requests); no overall lean (median ratio 0.98). p90 TPOT not scored in 10: the measured p90 fell in a histogram bucket wider than 20% of its lower edge, too wide to place it, with the prediction inside it or within 20% of its edge; in the measured histogram bucket itself in 10, 10 ms to 20 ms (2.0x wide): consistent at the bucket's resolution, not within 20%. To measure it, give the histogram finer edges: the router's metrics.requestTPOTBuckets in the EndpointPickerConfig (an llm-d-router build after v1.0.0), or vLLM's --custom-histogram-buckets (v0.32.0 and later). Edges about 15% apart place p90 and p95 within 20%.
 None of these figures falls within the conditions our own accuracy benchmarks cover (docs/guides/capacity-planner/accuracy.md): this check is the evidence for this fleet.
 Judged 15 of 16 five-minute steps; not judged: 1 warm-up.
@@ -10,7 +10,7 @@ configuration: identical where both recordings record it; not compared: the rout
 measured: the router's histograms (server side, the same scrape as the inputs): TTFT from the request's arrival at the router, its queue included; TPOT per streamed request. Each step is priced at the inputs of the same window its histogram covers
 assumed: random (Poisson) arrivals: the recording does not measure how bursty arrivals are; state it with --arrival-cv2 (arrivalCV2) when known
 
-each step: predicted/measured (* inside the conditions our accuracy benchmarks cover; ~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it; v priced from a lower bound of V_P, neither a point nor a bound: scored apart)
+each step: predicted/measured (* inside the conditions our accuracy benchmarks cover; ~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it; v priced from a lower bound of V_P, neither a point nor a bound: scored apart unless read more than 20% low)
 step (UTC)          rate   P+D  TTFT mean           TTFT p90            TPOT mean         TPOT p90          
 2026-11-14 08:20    1.06   2+2  210ms/160msv        359ms/196ms~v       11ms/11ms         18ms/19ms~        not judged: warm-up
 2026-11-14 08:25    1.10   2+2  210ms/156msv        370ms/194ms~v       11ms/11ms         18ms/19ms~        judged
@@ -41,10 +41,10 @@ TPOT p50        0       -       -        0          -             -            -
 TPOT p90        0       -       -        0          -             -            - 5 fewRequests, 10 unresolvable (10 in the measured bucket)
 TPOT p95        0       -       -        0          -             -            - 11 fewRequests, 4 unresolvable (4 in the measured bucket)
 
-scored apart, priced from a lower bound of V_P (neither a point nor a bound): steps, measured at or under the figure, measured over it, median ratio
-TTFT mean   12    9    3   1.20
-TTFT p90     5    5    0   1.34
-TTFT p95     1    1    0   2.20
+priced from a lower bound of V_P (neither a point nor a bound; scored apart unless read more than 20% low, then a miss): steps, measured at or under the figure, measured over it, of those more than 20% over, median ratio
+TTFT mean   12    9    3    0   1.20
+TTFT p90     5    5    0    0   1.34
+TTFT p95     1    1    0    0   2.20
 
 by load (the step's rate over the load the planner thinks the fleet can carry): steps, median ratio, within 20%
 below 0.8 of the knee     TTFT (14 steps): mean 0 - - p90 0 - -  TPOT (15 steps): mean 15 0.98 100% p90 0 - -

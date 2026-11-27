@@ -157,7 +157,7 @@ func refusedConcurrency(r whatif.Result, what string) Figure {
 // there: more concurrency adds queueing, not throughput. LowerBound is never
 // set: a TTFT priced from a lower bound of V_P is not an upper bound (#515),
 // so the rate is not a lower bound either. The key stays in the pinned
-// schema, absent.
+// schema, absent; it is deprecated, never set.
 type ConcurrencyRate struct {
 	Concurrency float64 `json:"concurrency"`
 	Rate        float64 `json:"rate"`

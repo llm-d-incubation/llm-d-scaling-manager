@@ -154,6 +154,14 @@ func TestSelfCheck_JudgeAtTheEdges(t *testing.T) {
 		"tpot p90 low in half":    {fig(12, 12, 1), with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.Statistic, f.p90Steps, f.p90Low = statisticMean, 6, 3 }), SelfCheckInconsistent, "tpot-p90-low", "Do not trust decode sizing"},
 		"tpot only, ttft holds":   {fig(12, 12, 1), fig(12, 2, 2), SelfCheckInconsistent, "tpot-within", "Do not trust decode sizing and the TPOT figures from this recording; prefill sizing and the TTFT figures held."},
 		"tpot loose, ttft broken": {fig(12, 0, 3), fig(12, 7, 1), SelfCheckInconsistent, "ttft-bias", "prefill sizing and the TTFT figures from this recording; decode sizing and the TPOT figures (loosely) held."},
+		// A lower bound of V_P pushes the TTFT high: more than half of 6 or
+		// more such steps reading under the measured figure fails (#515).
+		"vp lb, half under": {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.VPLowerBound, f.VPLowerBoundUnder = 6, 3 }), nil, SelfCheckOK, "", ""},
+		"vp lb, most under": {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.VPLowerBound, f.VPLowerBoundUnder = 6, 4 }), nil, SelfCheckInconsistent,
+			"ttft-vp-lower-bound-under", "Do not trust prefill sizing"},
+		"vp lb, 5 steps": {with(fig(12, 12, 1), func(f *SelfCheckFigure) { f.VPLowerBound, f.VPLowerBoundUnder = 5, 5 }), nil, SelfCheckOK, "", ""},
+		"vp lb only, most under": {&SelfCheckFigure{Statistic: statP90, Judged: 10, Refused: map[string]int{}, VPLowerBound: 10, VPLowerBoundUnder: 9}, nil,
+			SelfCheckInconsistent, "ttft-vp-lower-bound-under", "Do not trust prefill sizing"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sc := &SelfCheck{TTFT: c.ttft, TPOT: c.tpot, Folds: []SelfCheckFold{}, Checks: []SelfCheckRule{}}

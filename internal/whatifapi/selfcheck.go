@@ -67,6 +67,13 @@ const (
 	selfCheckMinSteps  = 6
 	selfCheckStepsOK   = 12
 	selfCheckSaturated = 0.5
+	// selfCheckVPLowerBoundUnder is the share of a figure's steps priced
+	// from a lower bound of V_P, over selfCheckMinSteps or more, that may
+	// read under the measured figure: more, and the figure is inconsistent
+	// (vpLowerBoundRule). A lower bound of V_P pushes a TTFT high, so more
+	// than half under says the terms it does not bound read lower than it
+	// reads high, on this fleet.
+	selfCheckVPLowerBoundUnder = 0.5
 	// selfCheckMinSpan is the shortest recording self-checked.
 	selfCheckMinSpan = time.Hour
 )
@@ -407,12 +414,17 @@ type SelfCheckFigure struct {
 	Refused map[string]int `json:"refused"`
 	// UpperBound is never set: a figure priced from a lower bound of V_P is
 	// not an upper bound (#515). The key stays in the pinned schema, absent.
+	//
+	// Deprecated: read VPLowerBound and VPLowerBoundUnder.
 	UpperBound int `json:"upperBound,omitempty"`
 	// VPLowerBound is the steps whose figure was priced from a V_P that is
-	// only a lower bound, scored apart (BacktestScore.VPLowerBound) so no
-	// rule reads them, and VPLowerBoundUnder those of them that read under
-	// the measured figure.
-	VPLowerBound      int `json:"vpLowerBound,omitempty"`
+	// only a lower bound (BacktestScore.VPLowerBound). Those read high or at
+	// most BacktestTolerance low are scored apart, so no rule reads them;
+	// those read more than that low are scored as misses, as any figure.
+	VPLowerBound int `json:"vpLowerBound,omitempty"`
+	// VPLowerBoundUnder is the steps of VPLowerBound that read under the
+	// measured figure, strictly: the lower-bound-V_P rule judges their share
+	// (selfCheckVPLowerBoundUnder).
 	VPLowerBoundUnder int `json:"vpLowerBoundUnder,omitempty"`
 	// p90Steps and p90Low are the p90's scored steps and those read more
 	// than BacktestTolerance low, where the figure is judged at its mean
@@ -434,7 +446,8 @@ func (f *SelfCheckFigure) apartWords() string {
 	if f.VPLowerBound == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d more priced from a lower bound of V_P, scored apart: %d read under the measured figure)", f.VPLowerBound, f.VPLowerBoundUnder)
+	return fmt.Sprintf(" (%d priced from a lower bound of V_P, scored apart unless read more than 20%% low: %d read under the measured figure)",
+		f.VPLowerBound, f.VPLowerBoundUnder)
 }
 
 // SelfCheckFold is one fold: the fit up to FitTo, the test from TestFrom to
@@ -659,6 +672,20 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 		if f == nil {
 			continue
 		}
+		if rule, ok := vpLowerBoundRule(strings.ToLower(x.name), x.name, f); ok {
+			sc.Checks = append(sc.Checks, rule)
+			if !rule.Passed {
+				// Its figures read under what was measured more often than
+				// not: the lower bound of V_P does not keep them high here.
+				bad = append(bad, rule.Detail)
+				trustNot = append(trustNot, x.what)
+				sc.Untrusted = append(sc.Untrusted, strings.ToLower(x.name))
+				parts = append(parts, fmt.Sprintf("%s: priced from a lower bound of V_P, read under the measured figure in %d of %d steps",
+					x.name, f.VPLowerBoundUnder, f.VPLowerBound))
+				judged = append(judged, x.name)
+				continue
+			}
+		}
 		if f.Judged > 0 && f.PastKnee != nil && float64(f.Overloaded) >= selfCheckSaturated*float64(f.Judged) {
 			rule := SelfCheckRule{Name: strings.ToLower(x.name) + "-overloaded", Passed: false,
 				Detail: fmt.Sprintf("the planner called the fleet overloaded in %d of %d judged steps, where the fleet served with a %s %s of %s to %s",
@@ -744,6 +771,24 @@ func (sc *SelfCheck) judge(e *inputsEntry, span time.Duration, info SelfCheckInf
 	if sc.Status == SelfCheckInconsistent {
 		sc.IssueURL = selfCheckIssueURL(sc, e, info)
 	}
+}
+
+// vpLowerBoundRule judges the steps of f priced from a lower bound of V_P
+// (SelfCheckFigure.VPLowerBound): over selfCheckMinSteps or more, it fails
+// where more than selfCheckVPLowerBoundUnder of them read under the
+// measured figure. ok is false with fewer: nothing judged.
+func vpLowerBoundRule(name, label string, f *SelfCheckFigure) (SelfCheckRule, bool) {
+	if f.VPLowerBound < selfCheckMinSteps {
+		return SelfCheckRule{}, false
+	}
+	passed := float64(f.VPLowerBoundUnder) <= selfCheckVPLowerBoundUnder*float64(f.VPLowerBound)
+	than := "at most"
+	if !passed {
+		than = "more than"
+	}
+	return SelfCheckRule{Name: name + "-vp-lower-bound-under", Passed: passed,
+		Detail: fmt.Sprintf("%s %s priced from a lower bound of V_P read under the measured figure in %d of %d steps, %s %.0f%%",
+			f.Statistic, label, f.VPLowerBoundUnder, f.VPLowerBound, than, 100*selfCheckVPLowerBoundUnder)}, true
 }
 
 // figureRules judges one scored figure, named name ("ttft") and label

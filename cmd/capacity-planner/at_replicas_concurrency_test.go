@@ -151,7 +151,7 @@ func TestAtReplicas_ConcurrencyAtLowerBoundKnee(t *testing.T) {
 
 	half := rowOf(t, s, "50%")
 	require.NotNil(t, half.Concurrency.Fleet.Value)
-	require.False(t, half.Concurrency.Fleet.UpperBound)
+	noUpperBound(t, half.Concurrency.Fleet, "the concurrency")
 	asked := strconv.FormatFloat(*half.Concurrency.Fleet.Value, 'f', -1, 64) + "c"
 	rep = concReport(t, "at-replicas", "--recording", rec, "--load-seen", "8", "--load", asked)
 	back := rowOf(t, rep.Shapes[0], asked)

@@ -666,7 +666,7 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 	b.WriteString("\neach step: predicted/measured (* inside the conditions our accuracy benchmarks cover; " +
 		"~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it")
 	if anyApart(bt.Steps) {
-		b.WriteString("; v priced from a lower bound of V_P, neither a point nor a bound: scored apart")
+		b.WriteString("; v priced from a lower bound of V_P, neither a point nor a bound: scored apart unless read more than 20% low")
 	}
 	b.WriteString(")\n")
 	const layout = "%-16s %7s %5s  %-19s %-19s %-17s %-17s %s\n"
@@ -708,11 +708,11 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 			continue
 		}
 		if !apartHead {
-			b.WriteString("\nscored apart, priced from a lower bound of V_P (neither a point nor a bound): steps, measured at or under the figure, " +
-				"measured over it, median ratio\n")
+			b.WriteString("\npriced from a lower bound of V_P (neither a point nor a bound; scored apart unless read more than 20% low, " +
+				"then a miss): steps, measured at or under the figure, measured over it, of those more than 20% over, median ratio\n")
 			apartHead = true
 		}
-		fmt.Fprintf(&b, "%-10s %3d %4d %4d %6s\n", "TTFT "+sc.Statistic, a.Steps, a.AtOrOver, a.Under, ratioText(a.Bias))
+		fmt.Fprintf(&b, "%-10s %3d %4d %4d %4d %6s\n", "TTFT "+sc.Statistic, a.Steps, a.AtOrOver, a.Under, a.Low, ratioText(a.Bias))
 	}
 	if region > 0 {
 		b.WriteString("\ninside the conditions our accuracy benchmarks cover: steps, median ratio, within 20%\n")

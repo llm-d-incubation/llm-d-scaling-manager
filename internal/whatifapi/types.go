@@ -376,6 +376,8 @@ type Figure struct {
 	// (issue llm-d-incubation/llm-d-scaling-manager#515). Such a figure is a
 	// point figure flagged VPLowerBound (TTFTFromLowerBoundVP). The key stays
 	// in the pinned schema, absent.
+	//
+	// Deprecated: never set; read the figure's flags (VPLowerBound).
 	UpperBound bool `json:"upperBound,omitempty"`
 	// Extrapolated says the figure, priced by the experimental TTFT or
 	// TPOT model, is at a rate above the highest load the source's fit
