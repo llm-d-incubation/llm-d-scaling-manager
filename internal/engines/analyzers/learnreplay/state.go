@@ -290,6 +290,11 @@ type VariantState struct {
 	// LineAtFloor is set, whether or not the line itself was.
 	LineAtFloor bool
 	LineLift    float64
+	// MaxFill is the highest KV fill a steady reading of the variant's
+	// replicas read up to the cycle (the fill its line reads, fillForITL), 0
+	// with none: under the line's least fill (itl.DefaultMinObservableK), no
+	// line by fill is fitted (issue llm-d-incubation/llm-d-scaling-manager#512).
+	MaxFill float64
 }
 
 // MeasuredShape is the shape a variant served over the cycles it had
@@ -670,6 +675,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		rows, fit                map[string][]whatif.LineRow
 		below                    map[string]belowBand
 		ratios                   map[string]float64
+		maxFill                  map[string]float64
 	}
 	snaps := map[int]*snap{}
 	opts.Mode = Normal
@@ -819,7 +825,8 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				return true
 			}
 			sn := &snap{st: s, windows: len(windows), engine: len(engine), arrived: len(arrivals),
-				rows: map[string][]whatif.LineRow{}, fit: map[string][]whatif.LineRow{}, below: map[string]belowBand{}, ratios: map[string]float64{}}
+				rows: map[string][]whatif.LineRow{}, fit: map[string][]whatif.LineRow{}, below: map[string]belowBand{}, ratios: map[string]float64{},
+				maxFill: map[string]float64{}}
 			for _, v := range s.Variants {
 				sn.rows[v.Variant] = slices.Clone(lines.rows(v.Variant))
 				v.ReadingsFrom, v.ReadingsTo = cyclesSpanned(v.LineReadings, cycleAt)
@@ -828,6 +835,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				least, byCount := lines.belowBandLeastSequences(v.Variant)
 				sn.below[v.Variant] = belowBand{itlSec: itlSec, fill: fill, least: least, byCount: byCount}
 				sn.ratios[v.Variant] = lines.busiestRatio(v.Variant)
+				sn.maxFill[v.Variant] = lines.maxFill[v.Variant]
 			}
 			snaps[n] = sn
 		}
@@ -854,6 +862,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		st.Variants[i].BelowBandITL, st.Variants[i].BelowBandFill = lines.leastBelowBand(st.Variants[i].Variant)
 		st.Variants[i].BelowBandLeastSequences, st.Variants[i].BelowBandByCount = lines.belowBandLeastSequences(st.Variants[i].Variant)
 		st.Variants[i].BusiestRankRatio = lines.busiestRatio(st.Variants[i].Variant)
+		st.Variants[i].MaxFill = lines.maxFill[st.Variants[i].Variant]
 		st.Variants[i].liftToFloor(lineAtFloor && st.disaggregated())
 	}
 	var out map[int]*State
@@ -877,6 +886,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 			s.Variants[i].BelowBandITL, s.Variants[i].BelowBandFill = b.itlSec, b.fill
 			s.Variants[i].BelowBandLeastSequences, s.Variants[i].BelowBandByCount = b.least, b.byCount
 			s.Variants[i].BusiestRankRatio = sn.ratios[s.Variants[i].Variant]
+			s.Variants[i].MaxFill = sn.maxFill[s.Variants[i].Variant]
 			s.Variants[i].liftToFloor(lineAtFloor && s.disaggregated())
 		}
 		out[c] = s

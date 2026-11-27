@@ -244,8 +244,12 @@ func (pv pricedVariant) itlBRowText() string {
 // offered only where the recording holds one. It names both sources' words,
 // so that the CLI's refusal and the API's are the same.
 func (pv pricedVariant) noLineHint() string {
-	h := fmt.Sprintf("; the line needs a window in which decode's KV-cache use spans %.2f or more between %.2f and %.2f full: ",
+	h := fmt.Sprintf("; the line needs a window in which decode's KV-cache use spans %.2f or more between %.2f and %.2f full",
 		itl.DefaultMinKSpread, itl.DefaultMinObservableK, itl.DefaultMaxObservableK)
+	if a := pv.aggregatedNoLineHint(); a != "" {
+		h = a
+	}
+	h += ": "
 	if pv.cycle > 0 && pv.cycle < pv.cycles {
 		return h + "answer at a later cycle where one is learned (--cycle; source.cycle on the API), or record a busier window"
 	}
