@@ -162,6 +162,7 @@ DCGM_FI_PROF_PIPE_TENSOR_ACTIVE
 DCGM_FI_PROF_SM_ACTIVE
 DCGM_FI_PROF_SM_UTIL_RATIO
 DCGM_FI_PROF_TENSOR_UTIL_RATIO
+DP
 DSET_ROLE_WRITER
 Data
 DataParallelRanks
@@ -307,6 +308,7 @@ MeasuredLowConfirmFor
 Metrics
 Mimir
 Minimum
+MoE
 Mode
 Model
 N
@@ -427,6 +429,7 @@ R_q
 RankMixtureAbstained
 RankMixtureShortFitWindow
 RankMixtureTTFT
+Read
 Ready
 RecordedValue
 Recording
@@ -718,9 +721,14 @@ at
 atCap
 attainment
 attempted
+attention
+attention_chunk_size
+attn_layer_period
+attn_type_list
 attributed
 attributes
 auto
+auto_map
 autoscalers
 autoscaling.keda.sh/paused
 autoscalings
@@ -747,6 +755,7 @@ backtest-step-output-dispersion
 bad
 bad-band
 balanced
+bamba
 band
 bare
 baseline
@@ -891,11 +900,13 @@ checking
 checks
 choose
 chunked
+chunked_attention
 chunked_prefill_size
 claimed
 claiming
 clamping
 class
+classes
 clearAfter
 clearing
 client
@@ -955,10 +966,12 @@ concurrency
 condition
 config
 config.ScalingPolicy
+config.json
 config.num_speculative_tokens
 config.yaml
 config/components/learner-recorder
 configMap
+configs
 configuration
 configured
 confirmCycles
@@ -1099,6 +1112,7 @@ demandBeforeFloor
 demandHeld
 demandTokensPerSec
 denies
+dense
 deployment
 deployment-derived
 deployment-stored-fallback
@@ -1113,6 +1127,7 @@ derivedCapacity
 derivedMu
 derivedOK
 derivedRate
+describes
 desiredReplicas
 detail
 detected
@@ -1288,6 +1303,7 @@ expects
 experimental
 expert_parallel
 expert_parallel_size
+experts
 export
 exported
 exported_namespace
@@ -1316,6 +1332,8 @@ fails
 failure
 failureThreshold
 fair-share
+falcon_h1
+falcon_mamba
 fall
 fallback
 fallback.replicas
@@ -1411,6 +1429,7 @@ fromLastConstraintsAge
 frontend
 frozen
 full
+full_attention
 future
 g
 gain
@@ -1454,6 +1473,7 @@ gpusInUse
 gpusInUseByScalingManager
 gpusPerReplica
 grace
+granitemoehybrid
 grants
 greater
 greedy-by-score
@@ -1485,7 +1505,9 @@ hardware
 has
 have
 head
+head_dim
 headroom
+heads
 health
 health-probe-bind-address
 held
@@ -1499,6 +1521,7 @@ heldWhy
 here
 hi
 hicache_size
+hidden_size
 hierarchical
 high
 highSeconds
@@ -1542,6 +1565,8 @@ http_request_duration_seconds_sum
 https
 https://prometheus.monitoring.svc:9090
 huge
+hybrid
+hybrid_override_pattern
 hysteresis
 id
 identified
@@ -1688,6 +1713,7 @@ itlunit|
 itl|
 its
 itself
+jamba
 joined
 joined-clock-starts-at-first-served
 joined-refused-ready-since
@@ -1752,6 +1778,7 @@ keptTokens
 key
 keyOutputTokens
 keys
+kimi_linear
 kind
 knee
 know
@@ -1811,6 +1838,7 @@ kvUsageMean
 kv_cache_dtype
 kv_cache_memory_bytes
 kv_connector
+kv_lora_rank
 kv_offloading_backend
 kv_offloading_size
 kv_transfer_config
@@ -1827,6 +1855,7 @@ ladder
 lagFraction
 landed
 lands
+language_config
 large
 larger
 last
@@ -1836,6 +1865,9 @@ latency
 later
 latest
 launcher
+layer_types
+layers
+layers_block_type
 layout
 le
 leader-elect
@@ -1871,6 +1903,7 @@ lengths
 lent
 let
 levels
+lfm2
 liftReason
 lifted
 light
@@ -1900,6 +1933,7 @@ lineSlopeAge
 lineSlopeHeld
 lineTier
 linear
+linear_attn_config
 lines
 list
 listed
@@ -1908,6 +1942,7 @@ live
 liveness
 llm-d.ai/role
 llm-d.ai/utilization-share-transfer
+llm_config
 llm_d_disagg_sidecar_prefill_duration_seconds_count
 llm_d_disagg_sidecar_prefill_duration_seconds_sum
 llm_d_epp_flow_control_capacity_utilization_bytes
@@ -2023,6 +2058,9 @@ main.go
 make
 makes
 malformed
+mamba
+mamba2
+mamba_
 managed
 manager
 manager-config
@@ -2057,6 +2095,7 @@ max_num_seqs
 max_prefill_tokens
 max_running_requests
 max_total_tokens
+max_window_layers
 maximum
 may
 mayOrder
@@ -2104,6 +2143,9 @@ minReplicaCount
 minReplicas
 minSamples
 minValue
+minimax
+minimax_m1
+minimax_text_01
 minimum
 minimumPreserved
 minute
@@ -2116,8 +2158,10 @@ missing-duplicated
 missing_kv_capacity
 missing_shape_metrics
 mixture
+mla
 mode
 model
+model-config
 modelAvgInputTokens
 modelAvgOutputTokens
 modelCount
@@ -2128,11 +2172,14 @@ modelTotalBefore
 model_name
 model_path
 model_revision
+model_type
 model_unresolved
 modelled
 models
 modelsProcessed
 moe-dp-busiest-rank
+moe-expert-parallel
+moe-tensor-parallel
 moe_a2a_backend
 monotonicity
 mooncake
@@ -2198,6 +2245,7 @@ nDecGPS
 nDecModel
 nITL
 nSteady
+n_routed_experts
 naive
 name
 named
@@ -2224,7 +2272,9 @@ needs
 negative
 neighbour
 neither
+nemotron_h
 nest
+nested
 net
 network
 never
@@ -2310,7 +2360,14 @@ nothing
 now
 null
 numSpeculativeTokens
+num_attention_heads
+num_experts
+num_experts_per_tok
+num_experts_per_token
 num_gpu_blocks_override
+num_hidden_layers
+num_key_value_heads
+num_local_experts
 num_redundant_experts
 num_speculative_tokens
 number
@@ -2501,6 +2558,7 @@ placed
 placement
 placement-timeout
 placementTimeout
+plamo2
 plan
 planned
 planner
@@ -2657,9 +2715,11 @@ pullRefused
 pullWork
 python3
 q
+qk_rope_head_dim
 quadratic
 quantile
 quantization
+quantization_config
 quarter
 queries
 query
@@ -2686,6 +2746,7 @@ quota
 quota-limiter
 quotaScope
 quotas
+qwen3_next
 r
 r/s
 raise
@@ -2746,6 +2807,7 @@ recorded
 recording
 recordings
 recovered
+recurrent_gemma
 redirected
 redistribution
 reduce
@@ -2921,6 +2983,8 @@ running-request
 running-requests
 running-unknown
 runs
+rwkv
+rwkv7
 s
 safe
 safety
@@ -3003,6 +3067,7 @@ scaling-manager-scaling-policy-config
 scaling-manager-settings
 scaling-manager-system
 scaling-manager-utilization-share-history
+scaling-manager.llmd.ai/model-config
 scaling-policy
 scalingModifiers
 scheduled
@@ -3125,6 +3190,9 @@ sizes
 skipped
 skippedWaits
 skipping
+sliding-window
+sliding_attention
+sliding_window
 slo
 slo-
 slo-batch-cap-admission
@@ -3227,6 +3295,8 @@ spend
 spends
 spent
 spread
+ssm_
+ssm_cfg
 stabilization.skipWaitsWhen
 stable
 stableCycles
@@ -3269,6 +3339,7 @@ starts
 stashed
 stashedWindows
 state
+state_size
 stated
 states
 static
@@ -3356,6 +3427,7 @@ tesla
 test
 test-election-id
 tests
+text_config
 than
 that
 the
@@ -3366,11 +3438,13 @@ there
 these
 theta
 they
+thinker_config
 this
 thisControllerGPUs
 those
 threshold
 thresholdPct
+through
 throughput
 throughput-demand-floor
 throughput-demand-floor-total
@@ -3549,6 +3623,7 @@ usageByNamespace
 usageByType
 use
 use_async
+use_sliding_window
 used
 using
 usual
@@ -3794,6 +3869,8 @@ yield-siblings
 yield-stale
 you
 younger
+zamba
+zamba2
 zero
 zero-replica-capacity-estimate
 zero-replica-data-parallel

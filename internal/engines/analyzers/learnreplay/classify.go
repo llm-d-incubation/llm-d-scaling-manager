@@ -215,6 +215,8 @@ var valueRules = map[string]rule{
 	"Quantization": {class: classVocab}, "KVConnector": {class: classVocab},
 	"VLLMVersionFrom":     {class: classVocab},
 	"KVOffloadingBackend": {class: classVocab}, "MemoryLayout": {class: classMemoryLayout},
+	// The attention kind a model config reads (capacity.AttentionKind).
+	"Attention": {class: classVocab},
 	// A KV transfer's kind (domain.KVTransferOffloadLoad and the others).
 	"KVTransferRates.Kind": {class: classVocab},
 
@@ -239,6 +241,10 @@ var valueRules = map[string]rule{
 	"Error": {class: classText}, "Issues": {class: classText}, "Caveats": {class: classText},
 
 	"Query": {class: classRedact}, "DecodeErr": {class: classRedact}, "Err": {class: classRedact},
+	// The model config's source can be a local path (the planner's
+	// --model-config), and its error can quote the config's own keys, which
+	// an annotation's author chose: neither passes through.
+	"ModelConfig.Source": {class: classRedact}, "ModelConfig.Error": {class: classRedact},
 	// An external analyzer's target query names which fallback answered with a
 	// word the operator chose; how it reduces Pods is the code's own word.
 	"E": {class: classRedact}, "TargetReduce": {class: classVocab},
@@ -320,6 +326,9 @@ var vocabulary = withWords(cacheTierWords(), withWords(saturation.LowerBoundRole
 	// (whatifsource.VLLMVersionFromFlag, VLLMVersionFromEngineImage).
 	capacity.VLLMVersionFromAnnotation, capacity.VLLMVersionFromImageTag, "--vllm-version", "--engine-image",
 	"MultiConnector", "P2pNcclConnector", "native", "lmcache", "cpu",
+	// The attention kinds a model config reads (capacity.EngineParams.ModelConfig).
+	string(capacity.AttentionFull), string(capacity.AttentionSlidingWindow), string(capacity.AttentionMLA),
+	string(capacity.AttentionHybrid),
 	// The tier's slo.flowControl.
 	string(config.SLOFlowControlEnabled), string(config.SLOFlowControlDisabled),
 	// The redaction marker.
