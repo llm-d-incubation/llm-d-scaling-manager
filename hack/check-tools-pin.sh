@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 #
 # Runs deploy/ci-pr-checks/tools-pin.sh on fixture trees, then its `pr` rule on
-# this tree. The fixture that matters is the v0.12.2 tag: its release commit
+# this tree. The v0.12.2 fixture covers a release commit that
 # pinned v0.12.1's tools digest (30e265eb...) in every install guide, so a user
 # following the docs at the tag ran the release before. That tree must fail.
-# Also: an empty extraction (no pin found) is a failure, never a pass, and
-# `pin` rewrites a pin but never a placeholder or a variable.
+# The controller examples must also use their release's image and checkout.
 
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,8 +29,10 @@ tree() {
     mkdir -p "$d/config/base/manager" "$d/docs/guides/g" "$d/docs/proposals"
     printf 'images:\n- name: controller\n  newTag: %s\n' "$2" > "$d/config/base/manager/kustomization.yaml"
     printf 'tools:\n  setup:\n    run: |\n      TOOLS=%s%s\n      smt version\n' "$IMG" "$3" > "$d/docs/guides/g/guide.yaml"
+    # shellcheck disable=SC2016 # The fixture contains literal Markdown fences.
     printf '```bash\r\nTOOLS=%s%s\r\nsmt version\r\n```\r\n' "$IMG" "$3" > "$d/docs/guides/g/README.md"
     printf 'TOOLS=%s%s\n' "$IMG" "$3" > "$d/README.md"
+    # shellcheck disable=SC2016 # The fixture contains a literal shell variable.
     printf 'TOOLS=%s@sha256:<the release tools digest>\nTOOLS=%s:$V\n' "$IMG" "$IMG" > "$d/docs/proposals/p.md"
     printf '%s\n' "$d"
 }
@@ -86,10 +87,71 @@ for r in :main @sha256:abc v0.12.3; do
     if [ "$rc" = 2 ]; then ok "pin $r is usage"; else bad "pin $r: exit $rc"; fi
 done
 
+echo "tools-pin.sh --controller"
+t="$(tree controller v0.12.3 :v0.12.3)"
+controller_docs=(
+    docs/reference/install-methods.md
+    docs/reference/upgrade-and-uninstall.md
+    docs/guides/benchmarking/README.md
+)
+for f in "${controller_docs[@]}"; do
+    mkdir -p "$t/$(dirname "$f")"
+    printf 'CONTROLLER_VERSION=v0.12.2\r\nCONTROLLER_IMAGE=%s@%s\r\n' "${IMG%/tools}" "$D122" > "$t/$f"
+done
+printf 'IMG=%s:main\r\n' "${IMG%/tools}" >> "$t/${controller_docs[0]}"
+run "$t" --controller check v0.12.3; rc=$?
+if [ "$rc" = 1 ] && [ "$(grep -c "@$D122" "$W/out")" = 3 ]; then
+    ok "a release refuses the previous digest in all three controller examples"
+else
+    bad "stale controller examples: exit $rc: $(cat "$W/out")"
+fi
+if run "$t" --controller pin :v0.12.3 && run "$t" --controller pr &&
+    grep -q '3 pins name v0.12.3' "$W/out" &&
+    grep -q "^IMG=${IMG%/tools}:main" "$t/${controller_docs[0]}" &&
+    [ "$(tr -cd '\r' < "$t/${controller_docs[0]}" | wc -c)" = 3 ]; then
+    ok "pinning the release tag also changes the checkout and leaves other images and CRLF alone"
+else
+    bad "controller tag pin: $(cat "$W/out")"
+fi
+sed -i 's/^CONTROLLER_VERSION=v0.12.3/CONTROLLER_VERSION=v0.12.2/' "$t/${controller_docs[1]}"
+run "$t" --controller pr; rc=$?
+if [ "$rc" = 1 ] && grep -q "upgrade-and-uninstall.md checks out 'v0.12.2'" "$W/out"; then
+    ok "a stale checkout fails even with the correct controller image tag"
+else
+    bad "stale checkout: exit $rc: $(cat "$W/out")"
+fi
+if run "$t" --controller pin :v0.12.3 && run "$t" --controller pin "@$D122"; then
+    sed -i 's/newTag: v0.12.3/newTag: main/' "$t/config/base/manager/kustomization.yaml"
+    if run "$t" --controller pr && run "$t" --controller check v0.12.3 "$D122"; then
+        ok "the follow-up docs pin the published digest and retain the release checkout"
+    else
+        bad "controller digest pin: $(cat "$W/out")"
+    fi
+else
+    bad "preparing the controller digest pin: $(cat "$W/out")"
+fi
+run "$t" --controller check v0.12.3 "$D121"; rc=$?
+if [ "$rc" = 1 ]; then ok "a different digest is refused"; else bad "wrong digest: exit $rc"; fi
+sed -i "s/$D122/$D121/" "$t/${controller_docs[2]}"
+run "$t" --controller pr; rc=$?
+if [ "$rc" = 1 ] && grep -q '2 different controller images' "$W/out"; then
+    ok "main rejects mixed controller digests"
+else
+    bad "mixed controller digests: exit $rc: $(cat "$W/out")"
+fi
+sed -i 's/^CONTROLLER_IMAGE=/# CONTROLLER_IMAGE=/' "$t/${controller_docs[0]}"
+run "$t" --controller pr; rc=$?
+if [ "$rc" = 1 ] && grep -q 'install-methods.md must have exactly one' "$W/out"; then
+    ok "a commented-out controller pin is rejected"
+else
+    bad "missing controller pin: exit $rc: $(cat "$W/out")"
+fi
+
 echo "this tree"
 if ROOT="$ROOT" bash "$PIN" pr; then ok "this tree's pins follow its newTag"; else bad "this tree: see above"; fi
+if ROOT="$ROOT" bash "$PIN" --controller pr; then ok "this tree's controller pins follow its newTag"; else bad "this tree's controller pins: see above"; fi
 
-EXPECT_CASES=15
-echo "tools pin: $PASS passed, $FAIL failed"
+EXPECT_CASES=23
+echo "docs image pins: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 [ "$PASS" -eq "$EXPECT_CASES" ] || { echo "FAIL ran $PASS cases, expected $EXPECT_CASES"; exit 1; }
