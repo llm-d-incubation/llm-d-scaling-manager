@@ -1869,7 +1869,11 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestServiceLine_RefusesANegativeInterceptOrSlope"},
 		{"../../../signals/prefill", "TestServiceLine_RefusesAnUncertainSlope"},
 		{"../../../signals/prefill", "TestServiceLine_BusyMinutesWin"},
-		{"../../../signals/prefill", "TestServiceLine_ALowerBoundStandsOnlyAboveTheLine"},
+		{"../../../signals/prefill", "TestServiceLine_APeakUnderAQueueStands"},
+		{"../../../signals/prefill", "TestServiceLine_BusyMinutesOverRanksStand"},
+		{"../../../signals/prefill", "TestServiceLine_TheBackPressureBoundStands"},
+		{"../../../signals/prefill", "TestServiceLine_AServedPeakStandsOnlyAboveTheLine"},
+		{"../../../signals/prefill", "TestServiceLine_AWindowPeakStandsWithItsAge"},
 		{"../saturation", "TestPrefillVPServiceLine_ThroughAnalyze"},
 	},
 	saturation.SwitchPrefillFLoadCurve: {
