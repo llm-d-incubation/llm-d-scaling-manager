@@ -211,6 +211,9 @@ func (e *Engine) runAnalyzers(
 	// thresholds after it runs (buildNamedResult).
 	input := e.buildAnalyzerInput(ctx, modelID, namespace, replicaMetrics, config,
 		variantStates, variantMetadata, scaleTargets, variants, schedulerQueue, arrivalRate)
+	// Observe only: what the router scores, read from its series on the
+	// input (load_balance.go).
+	e.observeRouterPolicy(logger, namespace, modelID, input, now)
 
 	// Run saturation analyzer (always needed for PerReplicaCapacity).
 	baseResult, err := e.runSaturation(ctx, input)

@@ -207,7 +207,10 @@ func activeRoleCoverage(
 		target := scaleTargets[utils.GetNamespacedKey(va.Namespace, va.GetScaleTargetName())]
 		// A nil target resolves to RoleBoth, which counts as decode — the safe
 		// direction, since over-reporting coverage only declines a wake for a
-		// model something else is already running.
+		// model something else is already running. The label only, not the
+		// steady-state engine's role from engine signals
+		// (SwitchRolesFromSignals): an unlabelled prefill variant counts as
+		// decode coverage here, the same safe direction.
 		switch variantmeta.RoleFromScaleTarget(target) {
 		case domain.RolePrefill:
 			c.prefill = true

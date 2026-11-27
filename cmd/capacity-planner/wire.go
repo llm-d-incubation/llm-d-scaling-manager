@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/learnreplay"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/whatifapi"
 )
@@ -198,7 +199,11 @@ type wireTTFT struct {
 	RouterHopSource             string   `json:"routerHopSource,omitempty"`
 	DecodePerStep               float64  `json:"decodePerStep,omitempty"`
 	FlowControl                 string   `json:"flowControl,omitempty"`
-	Assumed                     []string `json:"assumed"`
+	// RouterPolicy is what the router scores, read from its series
+	// (learnreplay.State.RouterPolicy); absent where the source holds none
+	// of them. It sets no price: --load-aware-router still does.
+	RouterPolicy *balance.RouterPolicy `json:"routerPolicy,omitempty"`
+	Assumed      []string              `json:"assumed"`
 }
 
 // wireInputs is what a variant was priced from.

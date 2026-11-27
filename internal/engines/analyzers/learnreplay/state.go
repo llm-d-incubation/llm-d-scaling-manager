@@ -15,6 +15,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
@@ -103,6 +104,11 @@ type State struct {
 	// Prefill is each prefill variant at the cycle, by name, as a TTFT
 	// question reads it (state_ttft.go).
 	Prefill []PrefillState
+	// RouterPolicy is what the router scores, the prefix cache, the load,
+	// both or neither, read from its series over every cycle up to Cycle by
+	// the reader the controller reads its own cycles with
+	// (balance.RouterCycleOf, balance.Tracker.ObserveRouter).
+	RouterPolicy balance.RouterPolicy
 	// FlowControlSeries says the router's flow-control queue series exists for
 	// the model at the cycle, by S1's rule (domain.AnalyzerInput.FlowControlSeries).
 	// False is no queue series, which a scrape gap reads as too.

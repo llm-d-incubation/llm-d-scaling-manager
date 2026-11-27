@@ -856,8 +856,9 @@ It replays the recording once and answers, for each shape and load:
   say so ("f 1.5 held to 0.35 utilization, then falling to 1 ..."). The
   fleets at f 1 and f 1.5 are priced the same way. A pod much busier than the
   rest still saturates first. With no load measured for f, f is held. The
-  recording does not say what the router scores, so the flag is off by
-  default. The API takes it as `assume.loadAwareRouter: true`, `backtest`
+  flag is off by default, and it still sets the price where the router's
+  series say what it scores ([Router policy](#router-policy)); an answer
+  that disagrees with them says so in its assumed line. The API takes it as `assume.loadAwareRouter: true`, `backtest`
   and `predict` as `--load-aware-router`, and the page as **My router
   balances prefill by load** under **Assume a term**.
   Since no run measured it, the sentence also gives the fleet needed at f 1
@@ -1035,6 +1036,50 @@ exits 3. State the load with `--load-seen` to judge anyway. A gap is any
 stretch with no cycle for the model, so a model parked at zero, or a cycle
 time changed mid-window, reads as one too. A scrape that misses only the
 engine's series still leaves a cycle, and is not counted.
+
+### Router policy
+
+Where the recording holds the router's prefix series (`llm_d_epp_prefix_*`)
+or its per-endpoint series, the planner says what the router scores. A TTFT
+answer adds it to its `ttft inputs` line ("router cache-aware and load-aware
+(from its series)"), `-o json` gives it as `routerPolicy`, and the inputs
+document as `policy.router`. A recording without these series answers as
+before, with none of the three.
+
+- **Cache-aware:** at the window's lightest load, the router sends a request
+  where nearly all its cached prefix is (at least 90% of the cached tokens
+  the best pod held). At 60% or less it is not cache-aware. The share is read
+  from one prefix producer; if the producer the router reads changes within
+  the window, the cache side is not detected.
+- **Load-aware:** either of two readings.
+  - The kept share falls as the load rises, over the whole window and in
+    each half of it. This is a correlation, not a test of the scorer: a
+    traffic mix that changes with the time of day, a cold cache, or eviction
+    under load can do the same.
+  - The router places requests unevenly so the pods' in-flight requests come
+    out even. The placements must be uneven by more than twice what random
+    placement would give (about 1/sqrt(n) for n requests per pod per window).
+    With few requests per pod, the spread is not read.
+- **Not detected:** the series are missing, there is one prefill pod (every
+  placement keeps the whole hit), the window is under 20 minutes, the load
+  did not vary enough, the halves disagree, or the readings sit between the
+  bounds.
+
+A cache-blind router also keeps the whole hit when every pod holds the same
+prefix, so "cache-aware" means only that the router lost no hit it could
+have kept. In P/D the spread reads the decode pods, where the router counts
+placements, and the hit reads the prefill pods.
+
+The window holds up to 12 hours. After you change the router's scorers, the
+policy reads the old and new configuration together until the old cycles
+age out, up to 12 hours. If the series stop for an hour, the window is
+cleared and the policy reads not detected.
+
+It sets no price yet: `--load-aware-router` still does. When the two
+disagree, the answer's assumed line says so. The controller reads the same
+series the same way. While a learner recording is on, it logs `router
+policy read from its series` when the policy changes and the new one has
+held for 10 minutes.
 
 ## Plan replicas over a day
 

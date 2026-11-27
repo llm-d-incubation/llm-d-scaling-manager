@@ -70,6 +70,11 @@ type SeriesSample struct {
 	// PrefillNotServing and DecodeNotServing are the priced variants'
 	// replicas asked for and not serving (learnreplay.CycleSample).
 	PrefillNotServing, DecodeNotServing int
+	// DecodeKVBusiest and DecodeKVMean are the priced decode pods' KV fill,
+	// the busiest pod's and their mean, over DecodeKVPods pods
+	// (learnreplay.CycleSample): what DecodeKVSpreadOf reads.
+	DecodeKVBusiest, DecodeKVMean float64
+	DecodeKVPods                  int
 }
 
 // The day plan's defaults and bounds.

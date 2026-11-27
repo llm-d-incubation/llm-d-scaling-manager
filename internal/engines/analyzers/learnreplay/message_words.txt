@@ -313,6 +313,7 @@ Mode
 Model
 N
 NANOSECONDS
+NIXL
 NVIDIA
 N_dec
 NaN
@@ -655,6 +656,7 @@ ahead
 aim
 alignment
 aligns
+alike
 all
 all-above-band-below-ksat
 all2all_backend
@@ -856,8 +858,11 @@ bytes
 c
 caFromSecret
 cache
+cache-aware
+cacheAware
 cacheKey.name
 cacheKey.namespace
+cacheReason
 cached
 calibrated
 called
@@ -866,6 +871,8 @@ calm
 came
 can
 cancelled
+candidate
+candidates
 cannot
 cap
 capBytes
@@ -1155,6 +1162,7 @@ disables
 disaggregation_transfer_backend
 disagree
 disagreed
+disagrees
 discarded
 discarding
 discover
@@ -1239,6 +1247,7 @@ enables
 encode
 encoding
 ended
+endpoint
 ends
 enforce_eager
 enforced
@@ -1247,6 +1256,7 @@ enforces
 engine
 engine-agnostic
 engine-prefill-timing
+engine-roles-from-signals
 engineMeasured
 engineParams
 engineParamsSource
@@ -1497,6 +1507,7 @@ had
 hadShape
 haircut-held
 half
+halves
 hand
 handed
 handler
@@ -1536,6 +1547,8 @@ historyAgeSeconds
 historyKey
 historyWindowLen
 hit
+hitCycles
+hitReason
 hold
 hold-only
 holdCap
@@ -1774,6 +1787,8 @@ keeping
 keeps
 kept
 keptFor
+keptHeavy
+keptLight
 keptTokens
 key
 keyOutputTokens
@@ -2018,8 +2033,14 @@ lmcache_mp_lookup_request_hit_tokens_total
 lmcache_mp_lookup_requested_tokens_total
 lo
 load
+load-aware
+loadAware
+loadAwareByHit
+loadAwareBySpread
+loadHeavy
 loadImbalance
 loadImbalance.idleKvUsage
+loadLight
 loaded
 localQueueDemand
 locator.New
@@ -2192,6 +2213,7 @@ mounted
 move
 moved
 moves
+moving
 ms
 mu
 mu-at-step-budget
@@ -2409,6 +2431,7 @@ one-minute
 one-pod
 one-sided
 one-sided-line
+one-token
 ones
 only
 onset
@@ -2523,6 +2546,7 @@ pendingSince
 pendingVariants
 per
 per-Pod
+per-endpoint
 per-model
 per-replica
 per-request
@@ -2558,6 +2582,7 @@ placed
 placement
 placement-timeout
 placementTimeout
+placements
 plamo2
 plan
 planned
@@ -2685,6 +2710,7 @@ processor
 processor-sharing
 processorSharing
 produced
+producer
 product
 production
 products
@@ -3177,6 +3203,7 @@ sightings
 sigma
 sigmaOK
 signal
+signals
 silent
 since
 single
@@ -3295,6 +3322,11 @@ spend
 spends
 spent
 spread
+spreadBalancing
+spreadCycles
+spreadEven
+spreadReason
+spreads
 ssm_
 ssm_cfg
 stabilization.skipWaitsWhen
@@ -3360,6 +3392,7 @@ steadyHeld
 steadyHeldOverThreshold
 steadyHeldThreshold
 steadySpread
+steadystate
 steered
 step
 step-budget
@@ -3821,6 +3854,7 @@ whole-node
 wholeReplicaCoverage
 whose
 why
+widely
 will
 window
 windowDropped

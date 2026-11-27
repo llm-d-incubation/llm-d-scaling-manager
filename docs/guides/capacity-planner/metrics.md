@@ -220,8 +220,16 @@ capture says so.
 kube-state-metrics exports a Pod's or a node's labels only when its
 `--metric-labels-allowlist` names them. The planner reads two:
 `--metric-labels-allowlist=pods=[llm-d.ai/role],nodes=[nvidia.com/gpu.product]`.
-Without the first every variant reads as both roles; without the second, give
-`--accelerator`.
+Without the first, and with no `--role-of`, each variant's role is read from
+what its engine does: decode computes no prompt tokens or moves KV through
+NIXL, an aggregated (both) pod computes prompts and generates, and prefill
+makes about 1 output token a request. One token a request is also what an
+aggregated pod makes under one-token requests, so prefill is read only beside
+a variant of the same model that reads or is labelled decode, or where the
+pod's own KV moves through NIXL. The capture names the evidence per Pod, and a
+variant whose engine reads no role reads as both. A label or a `--role-of`
+wins, and the capture says when the engine reads another role. Without the
+second, give `--accelerator`.
 
 | Series | Type | Extra labels | Feeds | Need |
 | --- | --- | --- | --- | --- |

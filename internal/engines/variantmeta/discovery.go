@@ -483,21 +483,36 @@ func costFromVA(ctx context.Context, va *llmdvariant.Variant) float64 {
 // be an engine-by-engine guess at something llm-d already states declaratively.
 // "both" is the default when no role is declared, which is correct for a
 // non-disaggregated workload — it serves complete requests on its own.
+//
+// With the steady-state engine's SwitchRolesFromSignals on, a scale target
+// that declares no role has it read from its pods' engine signals instead
+// (domain.ResolveRole), by the engine, which has the cycle's rows:
+// DeclaredRole tells it whether there was one. Off (the default), no label
+// is both, as here.
 func RoleFromScaleTarget(scaleTarget scaletarget.ScaleTargetAccessor) string {
-	if scaleTarget == nil {
-		return domain.RoleBoth
+	if role, ok := DeclaredRole(scaleTarget); ok {
+		return role
 	}
+	return domain.RoleBoth
+}
 
+// DeclaredRole is the role the scale target's llm-d role label declares,
+// and whether it declares one: ok is false for no label, or one that is
+// not prefill, decode or both. An unknown value declares nothing: it reads
+// both here, as before, and with the steady-state engine's
+// SwitchRolesFromSignals on its role is read from the engine signals as an
+// unlabelled variant's is.
+func DeclaredRole(scaleTarget scaletarget.ScaleTargetAccessor) (role string, ok bool) {
+	if scaleTarget == nil {
+		return "", false
+	}
 	podTemplateSpec := scaleTarget.GetLeaderPodTemplateSpec()
-	if podTemplateSpec == nil || podTemplateSpec.Labels == nil {
-		return domain.RoleBoth
+	if podTemplateSpec == nil {
+		return "", false
 	}
-	switch podTemplateSpec.Labels[RoleLabel] {
-	case domain.RolePrefill:
-		return domain.RolePrefill
-	case domain.RoleDecode:
-		return domain.RoleDecode
-	default:
-		return domain.RoleBoth
+	switch role := podTemplateSpec.Labels[RoleLabel]; role {
+	case domain.RolePrefill, domain.RoleDecode, domain.RoleBoth:
+		return role, true
 	}
+	return "", false
 }

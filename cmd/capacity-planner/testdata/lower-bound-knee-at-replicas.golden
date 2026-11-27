@@ -16,6 +16,7 @@ shape load: IL 1000 OL 1133, prefix hit 0.00 (the load's cycles)
 utilization at the load judged
   decode        KV fill 0.448 (band top 0.8), slots 416 of 512, wait p 0.041
   KV pull       utilization 0.018 per decode pod, mean wait unpriced (TTFT priced first come: prompts too uneven for processor sharing)
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.03, p95 1.36, peak 1.46 over 204 cycles; 1.01 at the load judged (30 cycles); fill peak busiest 0.800, mean 0.797
   prefill       utilization pooled 0.38, worst pod 0.38 (f 1)
   verdict       UNDER-PROVISIONED: at the p95 less counting noise load of 12.5 r/s, the fleet runs past its operating point of 11.3 r/s (0.85 of its 13.3 r/s knee); needs at least 3 decode (has 2), 5 decode if the decode knee reads 99% high.
 capacity            req/s     out tok/s   in system   bound by

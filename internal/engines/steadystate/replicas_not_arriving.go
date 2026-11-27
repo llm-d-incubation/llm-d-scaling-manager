@@ -282,7 +282,9 @@ func (e *Engine) observeArrival(
 			e.liftReport(va, v, ready, ask)
 		}
 	}
-	role := variantmeta.RoleFromScaleTarget(st)
+	// The role the cycle's requests carry (variantRole), so the threshold
+	// is the one noteRoleStarts filed for it.
+	role := e.variantRole(va.Namespace, va.Name, st)
 	limit, _ := t.threshold(va.Namespace, va.Spec.ModelID, role)
 	if now.Sub(v.since) < limit {
 		return

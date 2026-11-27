@@ -60,6 +60,13 @@ type modelState struct {
 	// th is the thresholds Measure last read the model with: its policy.
 	// Observe and Failed take their timings from it.
 	th Thresholds
+	// router is the model's router policy cycles (ObserveRouter);
+	// routerPolicy is the policy last reported changed, and routerPending
+	// a different one read on every cycle since routerPendingSince.
+	router             RouterPolicyWindow
+	routerPolicy       string
+	routerPending      string
+	routerPendingSince time.Time
 }
 
 type roleState struct {
@@ -204,6 +211,40 @@ func (t *Tracker) Observe(key string, dists map[string]Distribution, now time.Ti
 	m.roles = next
 	sort.Slice(out, func(i, j int) bool { return out[i].Role < out[j].Role })
 	return out
+}
+
+// ObserveRouter folds one cycle's input, read at now, into the router
+// policy window of the model named by key, and returns the policy the
+// window reads (RouterCycleOf, DetectRouterPolicy) and whether its name is
+// reported changed on this cycle. A new name is reported once it has read
+// on every cycle for RouterPolicyDwell, so a verdict that flickers at a
+// bound is not reported each time it crosses. A model starts at
+// PolicyNotDetected, so one whose router publishes none of the series
+// reports nothing; one whose series stop reads not detected again
+// RouterPolicyStaleAfter later (RouterPolicyWindow), reported after the
+// dwell. Call it every cycle, a nil RouterLatency included, so the window
+// sees the series stop.
+func (t *Tracker) ObserveRouter(key string, in domain.AnalyzerInput, now time.Time) (RouterPolicy, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	m := t.model(key)
+	m.router.Note(RouterCycleOf(in, now))
+	p := m.router.Policy()
+	if m.routerPolicy == "" {
+		m.routerPolicy = PolicyNotDetected
+	}
+	if p.Policy == m.routerPolicy {
+		m.routerPending = ""
+		return p, false
+	}
+	if p.Policy != m.routerPending {
+		m.routerPending, m.routerPendingSince = p.Policy, now
+	}
+	if now.Sub(m.routerPendingSince) < RouterPolicyDwell {
+		return p, false
+	}
+	m.routerPolicy, m.routerPending = p.Policy, ""
+	return p, true
 }
 
 // Failed records that the model named by key could not be collected at now,

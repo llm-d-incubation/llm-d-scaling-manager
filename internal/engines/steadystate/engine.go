@@ -362,6 +362,14 @@ type Engine struct {
 	// and hands the analyzer its view; an Engine built as a literal builds
 	// it on first use.
 	settle *settle.Tracker
+	// rolesFromSignals is SwitchRolesFromSignals (role_signals.go): off from
+	// the constructor, so an unlabelled variant reads both as before; a
+	// replay or a test turns it on (SetSwitchesForReplay).
+	rolesFromSignals bool
+	// roles is each unlabelled variant's last role its engine signals
+	// decided, and each labelled one's last disagreement, while
+	// rolesFromSignals is on (role_signals.go). Built on first use.
+	roles *roleMemory
 }
 
 // NewEngine creates a new instance of the saturation engine.
@@ -491,6 +499,7 @@ func newEngine(client client.Client, apiReader client.Reader, scheme *runtime.Sc
 		capacityStore:           capacityStore,
 		clock:                   cycleClock,
 		settle:                  settleTracker,
+		roles:                   newRoleMemory(),
 		lastGoodAnalysis:        make(map[string]map[string]time.Time),
 		lastAnalyzerSeries:      make(map[string]analyzerSeries),
 		lastBlockedModels:       make(map[string]blockedModelRef),
@@ -2381,6 +2390,11 @@ func (e *Engine) assembleModelData(
 	for _, m := range variantMetadata {
 		variantStates = append(variantStates, m.ToReplicaState())
 	}
+	// With SwitchRolesFromSignals on, an unlabelled variant's role from its
+	// pods' engine signals, before anything downstream reads a role
+	// (resolveRoles). Off, the states and metadata are discovery's.
+	variantStates, variantMetadata = e.resolveRoles(ctx, namespace, modelID, replicaMetrics,
+		variantStates, variantMetadata, scaleTargets, variants)
 	e.applyStartSeeds(ctx, namespace, variantStates)
 	return &modelData{
 		modelID:         modelID,
