@@ -716,6 +716,39 @@ A fit is refused unless it is usable (`ValidModel`): `A` and `B` finite,
 `A > 1e-12` (a flat or falling line is not this physics), and
 `A x 0.85 + B > 0`.
 
+### Where an unlabelled variant's role comes from
+
+Discovery reads a variant's role from its scale target's `llm-d.ai/role`
+label (`variantmeta.RoleFromScaleTarget`); no label, or a value that is not
+`prefill`, `decode` or `both`, reads `both`. With the engine switch
+`SwitchRolesFromSignals` (`engine-roles-from-signals`, issue #502,
+`internal/engines/steadystate/role_signals.go`) on, `assembleModelData` reads
+such a variant's role from its pods' engine signals instead, with the
+classifier the capacity planner reads a capture's roles with
+(`domain.RoleTally`, `domain.ResolveRole`): decode computes no prompt tokens
+or moves KV through NIXL, both computes prompts and generates, and prefill
+makes about one token a request, read only beside a decode variant of the same
+model or where the pod's own KV moves. The switch is **off by default**; off,
+nothing changes.
+
+On, a variant the signals read is priced as its role, not as `both`:
+
+- read decode, it fits and is priced from its ITL line, where an aggregated
+  line is only reported (`itlLineReportOnly`); read prefill, it fits none;
+- its ITL line's learned-state key carries the role (`itlLineKeyForRole`,
+  `|both` for an aggregated variant), so a variant whose role changes files its
+  line under another key;
+- a model with any variant not `both` takes the P/D path
+  (`collectV2ModelRequest`'s `disaggregated`).
+
+The engine keeps an unlabelled variant's last decided role for
+`roleMemoryTTL` (30 minutes) through cycles whose signals decide nothing, so
+an idle decode cycle does not read `both`. A label always wins; a
+disagreement is logged at Info once when it starts, at debug after.
+`replicas_not_arriving.go` reads the same role (`variantRole`). The
+scale-from-zero engine reads labels only (`candidates.go`, `model_group.go`):
+it runs at zero replicas, where there is no engine to read.
+
 ### Which roles fit a line
 
 `itlLineRole` (`itl_aggregated.go`) decides which variants fit a line:

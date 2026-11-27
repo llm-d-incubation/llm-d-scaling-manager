@@ -188,6 +188,14 @@ var valueRules = map[string]rule{
 	"VariantName": rename("variant"), "Variants": rename("variant"),
 	"Variant": {classComposite, "variant"}, "Donor": {classComposite, "variant"},
 	"PodName": rename("pod"), "UnplacedPods": rename("pod"), "AffectedPods": rename("pod"),
+
+	// The router's view of a model-server Pod (domain.RouterEndpoint): the
+	// same Pod, so the same pseudonym, as its ReplicaMetrics row.
+	"Endpoints.Pod": rename("pod"),
+	// A router prefix producer's plugin_name: a name the router's
+	// configuration gives it.
+	"PrefixProducers.Plugin": rename("name"),
+
 	"Image":    rename("image"),
 	"Revision": rename("revision"), "ModelRevision": rename("revision"),
 	"Token":             rename("token"),

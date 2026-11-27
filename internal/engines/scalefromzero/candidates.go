@@ -129,15 +129,17 @@ func (e *Engine) buildCandidates(
 		candidates = append(candidates, Candidate{
 			VariantName:     va.Name,
 			ScaleTargetName: va.GetScaleTargetName(),
-			Role:            variantmeta.RoleFromScaleTarget(scaleTarget),
-			Accelerator:     candidateAccelerator(&va, scaleTarget),
-			GPUsPerReplica:  scaleTarget.GetTotalGPUsPerReplica(),
-			PodGPUs:         scaletarget.PodGPUs(scaleTarget),
-			Tolerations:     scaletarget.PodTolerations(scaleTarget),
-			DomainKey:       scaletarget.ExclusiveTopology(scaleTarget),
-			Placements:      variantmeta.PodPlacements(scaleTarget),
-			Cost:            resolveVariantCost(ctx, va),
-			target:          scaleTarget,
+			// The label only: a variant waking from zero has no engine
+			// to read a role from (steadystate SwitchRolesFromSignals).
+			Role:           variantmeta.RoleFromScaleTarget(scaleTarget),
+			Accelerator:    candidateAccelerator(&va, scaleTarget),
+			GPUsPerReplica: scaleTarget.GetTotalGPUsPerReplica(),
+			PodGPUs:        scaletarget.PodGPUs(scaleTarget),
+			Tolerations:    scaletarget.PodTolerations(scaleTarget),
+			DomainKey:      scaletarget.ExclusiveTopology(scaleTarget),
+			Placements:     variantmeta.PodPlacements(scaleTarget),
+			Cost:           resolveVariantCost(ctx, va),
+			target:         scaleTarget,
 		})
 	}
 

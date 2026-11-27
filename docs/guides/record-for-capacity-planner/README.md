@@ -281,6 +281,9 @@ llm_d_epp_flow_control_requests_total llm_d_epp_request_processing_duration_seco
 llm_d_epp_request_processing_duration_seconds_sum llm_d_epp_request_processing_duration_seconds_count
 llm_d_epp_token_producer_render_duration_seconds_sum llm_d_epp_token_producer_render_duration_seconds_count
 llm_d_epp_prefix_predicted_cached_tokens_sum llm_d_epp_prefix_best_available_cached_tokens_sum
+llm_d_epp_prefix_best_predicted_cached_tokens_sum llm_d_epp_prefix_prompt_tokens_sum
+llm_d_epp_prefix_predicted_cached_tokens_count llm_d_epp_per_endpoint_queue_size
+llm_d_epp_inflight_requests llm_d_epp_inflight_tokens
 kube_pod_info kube_pod_owner kube_replicaset_owner kube_pod_labels kube_pod_status_phase
 kube_pod_status_ready kube_pod_status_ready_time kube_pod_created kube_pod_start_time
 kube_pod_deletion_timestamp kube_pod_container_resource_requests kube_node_labels
@@ -694,7 +697,7 @@ capacity-planner generate -in run.capture.jsonl.gz -o run.jsonl.gz
 | `--prometheus` | The Prometheus base URL, http or https. Required. An error message never quotes its userinfo, path, query or fragment: they read `REDACTED`. |
 | `--namespace` | The namespace whose models to capture. Required. |
 | `--kube-state-metrics` | Read Pods, owners, readiness, GPUs and nodes from kube-state-metrics in the same Prometheus. |
-| `--role-of ROLE=SELECTOR` | The Pods a label selector picks serve ROLE (`prefill`, `decode`, `both`), as one variant. Repeat per variant. Two selectors that pick the same Pod, or whose name prefixes nest, are refused. |
+| `--role-of ROLE=SELECTOR` | The Pods a label selector picks serve ROLE (`prefill`, `decode`, `both`), as one variant. Repeat per variant. Two selectors that pick the same Pod, or whose name prefixes nest, are refused. The ROLE stated here wins over what the Pods' engines do, also when the selector matched Pod names; a `flag:` line says where the engine signals read another role. |
 | `--from`, `--to` | The window, RFC 3339 or Unix seconds, truncated to the millisecond. Required. |
 | `--step` | The interval between cycles, taken as the run's optimize interval. Whole milliseconds. Default 15s. |
 | `--policy` | A scaling-policy entry (YAML), applied as the default entry. Default: the defaults. |
@@ -794,6 +797,12 @@ reads every scrape in its minute at every step.
 - **Bounds.** Steps times queries is bounded at 1,000,000 (a little over two
   days at 15 s), and the samples held at 20 million (a little over a
   gigabyte). Past either, the capture stops with exit 2 unless `--force`.
+- **The cycles are held too.** The capture writes its window line, which
+  carries each variant's role, before its cycles, and a role read from the
+  engine signals needs every cycle, so the cycles are held in memory until the
+  window ends: about the capture's own size uncompressed, one row per engine
+  Pod per step. The step bound above bounds it; with `--force`, expect memory
+  in proportion to steps times engine Pods.
 
 ## Read the command-line answers
 

@@ -379,8 +379,9 @@ the slo analyzer listed, streamed load, router TTFT recorded.
    ```
 
    The summary lists each variant and every flag the capture carries:
-   engine parameters from flags, roles inferred from Pod names, Pods read as
-   Ready without kube-state-metrics, rollouts not seen. Read them before
+   engine parameters from flags, roles inferred from Pod names, roles read
+   from engine signals where nothing states one (with the evidence per Pod),
+   Pods read as Ready without kube-state-metrics, rollouts not seen. Read them before
    trusting the window; the generated recording carries them too.
 
    Every query is required. One that fails (often `query.max-samples` on a

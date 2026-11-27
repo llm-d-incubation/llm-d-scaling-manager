@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"slices"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -26,7 +27,8 @@ import (
 // learner recording is on (SetRecordTTFTInputs) the engine also calls it for
 // every model every cycle, and it adds the router's TPOT histogram, the
 // flow-control wait histogram, the router's request-processing histogram
-// with its _sum and _count, and its render histogram's _sum and _count,
+// with its _sum and _count, its render histogram's _sum and _count, and the
+// router's per-endpoint and per-producer series (routerEndpointQueries),
 // which only the recording reads.
 func (c *ReplicaMetricsCollector) CollectRouterLatency(
 	ctx context.Context,
@@ -46,6 +48,7 @@ func (c *ReplicaMetricsCollector) CollectRouterLatency(
 			registration.QuerySLORouterProcessingCount, registration.QuerySLORouterRenderSum,
 			registration.QuerySLORouterRenderCount, registration.QuerySLORouterPrefixPredicted,
 			registration.QuerySLORouterPrefixBestAvailable)
+		queries = append(queries, routerEndpointQueries...)
 	}
 	return c.collectRouterLatency(ctx, modelID, namespace, queries, routerQueryType)
 }
@@ -135,8 +138,10 @@ func (c *ReplicaMetricsCollector) collectRouterLatency(
 	out.ProcessingBuckets, out.ProcessingSumRate, out.ProcessingCountRate = routerProcessing(results, modelID)
 	out.RenderSumRate, out.RenderCountRate = routerRender(results, modelID)
 	out.PrefixPredictedTokenRate, out.PrefixBestAvailableTokenRate = routerPrefixAffinity(results, modelID)
+	out.Endpoints, out.PrefixProducers = routerEndpoints(results, modelID)
 	if !out.Judgeable() && out.TPOTBuckets == nil && out.FlowControlWaitBuckets == nil && out.ProcessingBuckets == nil &&
-		out.ProcessingCountRate == 0 && out.RenderCountRate == 0 && out.PrefixBestAvailableTokenRate == 0 {
+		out.ProcessingCountRate == 0 && out.RenderCountRate == 0 && out.PrefixBestAvailableTokenRate == 0 &&
+		out.Endpoints == nil && out.PrefixProducers == nil {
 		return nil
 	}
 	return out
@@ -263,6 +268,9 @@ func routerQueryType(query string) string {
 		return constants.QueryTypeLearnerRecording
 	case registration.QuerySLORouterTTFTSum, registration.QuerySLORouterTTFTCount:
 		return constants.QueryTypeTTFTInputs
+	}
+	if slices.Contains(routerEndpointQueries, query) {
+		return constants.QueryTypeLearnerRecording
 	}
 	return constants.QueryTypeRouterLatency
 }

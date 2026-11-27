@@ -141,8 +141,9 @@ func TestExport_EveryRecordedStringIsClassified(t *testing.T) {
 	// cache tiers: ReplicaMetrics.CachedTokenRateBySource's source and
 	// KVTransferRates' kind, both vocabulary. 161 with the predicted
 	// latency beside the default's (issue #440): SLOPrediction's objective,
-	// variant, statistic and learner.
-	assert.Len(t, values, 161, "string value sites")
+	// variant, statistic and learner. 164 with the router's per-endpoint
+	// series (#475): an endpoint's Pod, a prefix producer's plugin and role.
+	assert.Len(t, values, 164, "string value sites")
 	// 51 since learner PR 5c: LearnedState.StartSamples and StartAdmittedAt,
 	// keyed like StartSeconds, and AnalyzerResult.RoleStartSeeded, by role.
 	// 52 since 5d: LearnedState.StartCounted. 53 since ev-shindin/llm-scaling-manager#495's

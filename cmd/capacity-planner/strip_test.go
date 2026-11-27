@@ -46,6 +46,18 @@ func TestStripLatency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out.String(), `"RouterLatency":{"PrefixBestAvailableTokenRate":10000,"PrefixPredictedTokenRate":9335}`)
 
+	// The router's per-endpoint load and its prefix producers' counts are
+	// no latency either: they stay.
+	endpoints := `{"Seq":1,"Kind":"start","Data":{"Commit":"x"}}` + "\n" +
+		`{"Seq":2,"Kind":"saturation.Analyze","Data":{"Input":{"RouterLatency":{"WindowSeconds":300,"TPOTSumRate":0.1,` +
+		`"Endpoints":[{"Pod":"d-0","PlacementRate":5,"PlacementKnown":true}],` +
+		`"PrefixProducers":[{"Plugin":"approx","Role":"prefill","RequestRate":3}]}}}}`
+	out.Reset()
+	_, err = stripLatency(strings.NewReader(endpoints), &out, false)
+	require.NoError(t, err)
+	assert.Contains(t, out.String(), `"RouterLatency":{"Endpoints":[{"PlacementKnown":true,"PlacementRate":5,"Pod":"d-0"}],`+
+		`"PrefixProducers":[{"Plugin":"approx","RequestRate":3,"Role":"prefill"}]}`)
+
 	_, err = stripLatency(strings.NewReader("{not json\n{}"), &bytes.Buffer{}, false)
 	require.Error(t, err, "a line that is not JSON, and not the last, is an error")
 	assert.Equal(t, 2, exitCode(err))

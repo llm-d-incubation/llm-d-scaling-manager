@@ -48,7 +48,7 @@ and define a short function for it:
 <!-- guide:prerequisites.tools start -->
 ```bash
 # The tools image of the release you installed. It gets a kubeconfig of the current context only, read-only; files land in this directory.
-V=<release, for example v0.13.0>
+V=<release, for example v0.13.1>
 export NAMESPACE=<your model namespace>
 TOOLS=ghcr.io/llm-d-incubation/llm-d-scaling-manager/tools:$V
 kubectl config view --minify --flatten > smt.kubeconfig && chmod 600 smt.kubeconfig

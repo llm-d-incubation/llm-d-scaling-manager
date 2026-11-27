@@ -16,4 +16,4 @@ resources:
 # when they differ (docs/developer-guide/release-process.md).
 images:
   - name: ghcr.io/llm-d-incubation/llm-d-scaling-manager/capacity-planner
-    newTag: v0.13.1
+    newTag: main
