@@ -365,6 +365,53 @@ type ReportDecodeUse struct {
 	// price is taken, which prices no pull stage: then with no wait
 	// (Unpriced says which). The KV fill and the slots leave it out.
 	KVPull *ReportKVPull `json:"kvPull,omitempty"`
+	// KVSpread is how unevenly the window's decode pods were filled
+	// (DecodeKVSpreadOf): a measurement of the fleet that ran, the same on
+	// every shape and every fleet asked. It is reported, not priced: KVFill
+	// is the fill the model predicts at the load (whatif.FillAtRate), not a
+	// measured mean, and nothing reads KVSpread to price it. Nil where no
+	// cycle read two decode pods filled to MinKVSpreadFill.
+	KVSpread *ReportKVSpread `json:"kvSpread,omitempty"`
+}
+
+// ReportKVSpread is the decode pods' KV fill spread the window measured (issue
+// llm-d-incubation/llm-d-scaling-manager#483). Each pod is read at its busiest
+// engine rank, as the load-balance diagnostic reads it, so on a data-parallel
+// pod the busiest fill is its busiest rank's and the mean is the mean of the
+// pods' busiest ranks, not of every rank. Each cycle's ratio is the busiest
+// pod's fill over that mean, read on the cycles with two or more decode pods
+// and a mean of MinKVSpreadFill or more. The ratio grows with the pod count
+// (one pod is never uneven): it is of the fleet that ran, Pods, and says
+// nothing direct of another count.
+type ReportKVSpread struct {
+	// Cycles is how many cycles were read; Median, P95 and Peak are their
+	// busiest/mean ratios.
+	Cycles int     `json:"cycles"`
+	Median float64 `json:"median"`
+	P95    float64 `json:"p95"`
+	Peak   float64 `json:"peak"`
+	// Pods is the decode pods read per cycle over the cycles read.
+	Pods ReportKVSpreadPods `json:"pods"`
+	// AtLoad is the median ratio over the cycles the load judged at was
+	// read from, as MeasuredTTFTAtLoad selects them by rate (atLoadCycle):
+	// every cycle with traffic for the mean, those at or above the rate for
+	// the p95 and the peak. AtLoadCycles is how many; nil with a stated load
+	// or none read.
+	AtLoad       *float64 `json:"atLoad,omitempty"`
+	AtLoadCycles int      `json:"atLoadCycles,omitempty"`
+	// BusiestFillPeak is the highest fill a busiest pod ran at over the
+	// cycles read, MeanFillPeak the highest mean: a KV limit the first
+	// crosses and the second does not is one a mean pod would hide.
+	BusiestFillPeak float64 `json:"busiestFillPeak"`
+	MeanFillPeak    float64 `json:"meanFillPeak"`
+}
+
+// ReportKVSpreadPods is the median, fewest and most decode pods a cycle read
+// over the cycles a ReportKVSpread was read from.
+type ReportKVSpreadPods struct {
+	Median float64 `json:"median"`
+	Min    int     `json:"min"`
+	Max    int     `json:"max"`
 }
 
 // ReportKVPull is the KV pull's load on the decode pods at the load judged.
@@ -671,6 +718,7 @@ func (s *Server) report(ctx context.Context, req ReportRequest) (*ReportResponse
 	// The source's self-check was read before this report stated anything.
 	out.SelfCheck = e.doc.SelfCheck.RanWithout(&Stated{Assume: q.Assume, ArrivalCV2: q.ArrivalCV2})
 	out.WithholdOverOnMeasured(e.series, e.latency)
+	out.AttachKVSpread(e.series)
 	out.JudgeTrust()
 	return out, nil
 }

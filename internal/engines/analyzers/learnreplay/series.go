@@ -8,6 +8,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
@@ -80,6 +81,17 @@ type CycleSample struct {
 	// created, a ResourceQuota refusing its pod, is not in the recording
 	// and not counted. For a LeaderWorkerSet a replica is a group.
 	PrefillNotServing, DecodeNotServing int
+	// DecodeKVBusiest and DecodeKVMean are the KV fill of the decode rows
+	// at the cycle (decodeKVRow), the busiest pod's and the pods' mean, as
+	// the load-balance diagnostic reads them (balance.Measure): each pod's
+	// one-minute peak on its busiest engine rank, so on a data-parallel pod
+	// the mean is of the pods' busiest ranks. DecodeKVPods is how many pods
+	// were read; a pod with no finite, non-negative KV reading is not
+	// counted. All three are zero with none. Their ratio is how unevenly the
+	// router filled the decode pods (issue
+	// llm-d-incubation/llm-d-scaling-manager#483).
+	DecodeKVBusiest, DecodeKVMean float64
+	DecodeKVPods                  int
 }
 
 // SeriesVariants names the variants a series counts: the prefill and the
@@ -190,9 +202,12 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 	}
 	var weight, il, ol, hit, squared float64
 	everySquared := true
-	var prompted []domain.ReplicaMetrics
+	var prompted, decodeRows []domain.ReplicaMetrics
 	for _, rm := range in.ReplicaMetrics {
 		role := domain.CanonicalRole(roles[rm.VariantName])
+		if decodeKVRow(rm, role, v) {
+			decodeRows = append(decodeRows, rm)
+		}
 		if !counted(rm.VariantName, role) {
 			if (role == domain.RolePrefill || role == domain.RoleDecode) && prefill.Serving(rm) {
 				s.OtherPods++
@@ -233,6 +248,14 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 			everySquared = false
 		}
 	}
+	// Every row kept is read as decode: an unsplit pod's KV holds its decode.
+	asDecode := map[string]string{}
+	for _, rm := range decodeRows {
+		asDecode[rm.VariantName] = domain.RoleDecode
+	}
+	if d, ok := balance.Measure(decodeRows, asDecode, balance.Thresholds{}, at)[domain.RoleDecode]; ok {
+		s.DecodeKVBusiest, s.DecodeKVMean, s.DecodeKVPods = d.MaxKvUsage, d.MeanKvUsage, d.Ready
+	}
 	if pooled := whatif.PoolComputedBuckets(nil, prompted); len(pooled) > 0 {
 		s.PromptBuckets = pooled
 	}
@@ -246,6 +269,18 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 	// and in the slo analyzer alike.
 	s.ArrivalRate, s.RateKnown, s.EngineRate = whatif.ArrivalOf(in)
 	return s
+}
+
+// decodeKVRow says rm, of the canonical role given, is a row a cycle's decode
+// KV fill is read from (CycleSample.DecodeKVBusiest): a serving pod
+// (prefill.Serving) of the decode variant v names, or of any decode variant
+// where it names none, and, as the latency's rows are counted (latencyOf), of
+// an unsplit variant so named, whose KV holds its decode.
+func decodeKVRow(rm domain.ReplicaMetrics, role string, v SeriesVariants) bool {
+	if role != domain.RoleDecode && role != domain.RoleBoth {
+		return false
+	}
+	return (v.Decode == "" || rm.VariantName == v.Decode) && prefill.Serving(rm)
 }
 
 // CycleLatency is the latency one cycle measured for a model, server side:

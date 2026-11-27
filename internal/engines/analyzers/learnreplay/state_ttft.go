@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
@@ -229,6 +230,8 @@ type ttftSamples struct {
 	// hitAtCount is saturation.SwitchPrefillHitAtCount
 	// (PrefillState.HitAtCount).
 	hitAtCount bool
+	// router is the model's router policy cycles (State.RouterPolicy).
+	router balance.RouterPolicyWindow
 }
 
 // servedWorkOf is variant v's served work: its peaks over prefill.Retention
@@ -377,6 +380,7 @@ func positive(x float64) bool { return whatif.Finite(x) && x > 0 }
 
 // note takes one cycle's rows, read at at.
 func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
+	t.router.Note(balance.RouterCycleOf(in, at))
 	roles := rolesOf(in)
 	pre := map[string]*prefillRows{}
 	decode := map[string]*decodeRows{}
@@ -599,6 +603,7 @@ func (r *replayer) fillTTFT(st *State, in domain.AnalyzerInput, t *ttftSamples) 
 		}
 	}
 	st.FlowControlSeries = in.FlowControlSeries()
+	st.RouterPolicy = t.router.Policy()
 	st.Joint, st.JointRate = t.joint.Estimate(), in.ArrivalRate
 	for _, rm := range in.ReplicaMetrics {
 		if !prefill.Serving(rm) {

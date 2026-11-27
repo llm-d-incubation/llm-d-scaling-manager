@@ -550,6 +550,9 @@ var processorSharing = true
 func (f *answerFlags) readFleet(st *learnreplay.State, ps *learnreplay.PrefillState, q ttftQuestion, pv *pricedVariant) *pricedFleet {
 	pf := &pricedFleet{pv: pv, q: q.q, flags: []whatif.Flag{assumedPoisson}, model: st.ModelID, stated: f.statedOutside(),
 		in: wireTTFT{Percentile: q.q, TargetSeconds: q.seconds, Assumed: []string{}}}
+	if rp := st.RouterPolicy; rp.Cycles > 0 {
+		pf.in.RouterPolicy = &rp
+	}
 	if pv != nil {
 		pf.in.DecodeVariant = pv.state.Variant
 		// Before any refusal: decode is priced on a stated B whether or not
@@ -876,6 +879,7 @@ func (f *answerFlags) prefillInputs(pf *pricedFleet, ps *learnreplay.PrefillStat
 		}
 	}
 	pf.in.Imbalance = max(p.Imbalance, 1)
+	pf.routerPolicyNote(f.loadAwareRouter)
 	if f.loadAwareRouter {
 		p.LoadAwareRouter = true
 		p.ImbalanceUtilization = whatif.ImbalanceUtilizationAt(ps.Estimate, p.Replicas, p.VP)
@@ -1401,6 +1405,24 @@ const (
 	flowControlOff = "off"
 )
 
+// routerPolicyNote says where the router's policy as its series read it
+// (wireTTFT.RouterPolicy) contradicts --load-aware-router, stated is the
+// flag's value. The flag still prices f; nothing is said where the series
+// do not decide whether the router scores load.
+func (pf *pricedFleet) routerPolicyNote(stated bool) {
+	if pf.in.RouterPolicy == nil {
+		return
+	}
+	aware, detected := pf.in.RouterPolicy.LoadAwareRouter()
+	switch {
+	case !detected || aware == stated:
+	case stated:
+		pf.assume("--load-aware-router stated, but the router's series read it not load-aware (%s)", pf.in.RouterPolicy.Policy)
+	default:
+		pf.assume("f priced without --load-aware-router, but the router's series read it load-aware (%s)", pf.in.RouterPolicy.Policy)
+	}
+}
+
 // describe is the fleet's inputs, in a line.
 func (pf *pricedFleet) describe() {
 	p := pf.fleet.Prefill
@@ -1432,6 +1454,9 @@ func (pf *pricedFleet) describe() {
 		fmt.Fprintf(&b, "; decode engine TTFT %.1f ms at %s tokens, measured", 1000*pf.fleet.DecodeTTFT.Seconds, num(round(pf.fleet.DecodeTTFT.PromptTokens)))
 	default:
 		b.WriteString("; decode side omitted")
+	}
+	if rp := pf.in.RouterPolicy; rp != nil {
+		fmt.Fprintf(&b, "; router %s (from its series)", rp.Policy)
 	}
 	pf.inputsText = b.String()
 }

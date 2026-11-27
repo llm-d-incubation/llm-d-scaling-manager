@@ -15,6 +15,7 @@ shape measured: IL 8003 OL 200, prefix hit 0.00 (measured, cycles 269-288)
 utilization at the load judged
   decode        KV fill 0.024 (band top 0.8), slots 10 of 333, wait p 0.000
   KV pull       utilization 0.402 per decode pod, mean wait 40.5 ms: the larger mean wait in TTFT sits on the decode pods
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.06, p95 1.24, peak 2.00 over 279 cycles; fill peak busiest 0.821, mean 0.812
   prefill       utilization pooled 0.40, worst pod 0.40 (f 1)
   verdict       RIGHT-SIZED: at the stated load of 20.0 r/s, the fleet holds every target with headroom; decode: no spare: 3 decode if the decode knee reads 99% high; prefill: no spare (52.9% under its operating point).
 capacity            req/s     out tok/s   in system   bound by

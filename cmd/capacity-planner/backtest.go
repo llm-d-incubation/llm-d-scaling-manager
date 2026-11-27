@@ -468,7 +468,8 @@ func seriesSamplesOf(cycles []learnreplay.CycleSample) []whatifapi.SeriesSample 
 			PromptComputedRate: c.PromptComputedRate, PromptRequestRate: c.PromptRequestRate, PromptBuckets: c.PromptBuckets,
 			FlowControlSeries: c.FlowControlSeries, EngineRate: c.EngineRate, PrefillReplicas: c.PrefillReplicas,
 			DecodeReplicas: c.DecodeReplicas, RouterQueued: c.RouterQueued,
-			PrefillNotServing: c.PrefillNotServing, DecodeNotServing: c.DecodeNotServing}
+			PrefillNotServing: c.PrefillNotServing, DecodeNotServing: c.DecodeNotServing,
+			DecodeKVBusiest: c.DecodeKVBusiest, DecodeKVMean: c.DecodeKVMean, DecodeKVPods: c.DecodeKVPods}
 	}
 	return out
 }

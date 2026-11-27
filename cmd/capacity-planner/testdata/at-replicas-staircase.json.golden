@@ -128,6 +128,21 @@
             "utilization": 1.25551564245402,
             "unpriced": "ttftRefused",
             "setsTTFT": false
+          },
+          "kvSpread": {
+            "cycles": 279,
+            "median": 1.0624834176292275,
+            "p95": 1.2359758322199517,
+            "peak": 2,
+            "pods": {
+              "median": 2,
+              "min": 2,
+              "max": 2
+            },
+            "atLoad": 1.0173653157990623,
+            "atLoadCycles": 15,
+            "busiestFillPeak": 0.8209333039841514,
+            "meanFillPeak": 0.8121628740429624
           }
         },
         "prefill": {

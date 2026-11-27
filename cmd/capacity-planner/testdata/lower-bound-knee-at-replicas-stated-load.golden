@@ -15,6 +15,7 @@ shape measured: IL 8016 OL 26, prefix hit 0.00 (measured, cycles 560-579)
 utilization at the load judged
   decode        KV fill 0.012 (band top 0.8), slots 2 of 152, wait p 0.000
   KV pull       utilization 0.090 per decode pod, mean wait unpriced (TTFT refused)
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.03, p95 1.36, peak 1.46 over 204 cycles; fill peak busiest 0.800, mean 0.797
   prefill       utilization pooled 1.93, worst pod 1.93 (f 1)
   verdict       NOT JUDGED: at the stated load of 8.0 r/s, 1.9x a prefill knee of at least 4.1 r/s: the prefill knee rests on a lower bound of V_P, and the true knee may be higher, so whether the fleet saturates is not priced; decode holds its operating point; --assume-vp states a V_P to price it.
 capacity            req/s     out tok/s   in system   bound by

@@ -19,6 +19,7 @@ shape measured: IL 8016 OL 26, prefix hit 0.00 (measured, cycles 560-579)
 utilization at the load judged
   decode        KV fill 0.019 (band top 0.8), slots 4 of 152, wait p 0.000
   KV pull       utilization 0.140 per decode pod, mean wait unpriced (TTFT refused)
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.03, p95 1.36, peak 1.46 over 204 cycles; 1.01 at the load judged (30 cycles); fill peak busiest 0.800, mean 0.797
   prefill       utilization pooled 3.00, worst pod 3.00 (f 1)
   verdict       NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 1133, the shape priced is IL 8016 OL 26, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
 capacity            req/s     out tok/s   in system   bound by

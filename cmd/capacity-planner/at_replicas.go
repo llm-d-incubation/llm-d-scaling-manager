@@ -127,6 +127,7 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	// As POST /v1/report: an over the router measured missing its TTFT
 	// target at the load judged is withheld.
 	rep.WithholdOverOnMeasured(f.series, f.latency)
+	rep.AttachKVSpread(f.series)
 	rep.JudgeTrust()
 	if f.output == outputJSON {
 		enc := json.NewEncoder(out)
@@ -491,6 +492,23 @@ func markLegend(s whatifapi.ReportSLO, lowerBound, upperBound bool) string {
 		"(the router queues) though the figure is within, SAT saturated%s%s, ? not judged", sloText(s), lb, ub)
 }
 
+// kvSpreadText is the decode KV spread the window measured, in words: the
+// busiest decode pod's fill over the pods' mean (each pod at its busiest
+// engine rank), of the fleet that ran. It is reported beside the KV fill
+// the model predicts, not priced into it.
+func kvSpreadText(k whatifapi.ReportKVSpread) string {
+	pods := fmt.Sprintf("%d decode pods", k.Pods.Min)
+	if k.Pods.Max != k.Pods.Min {
+		pods = fmt.Sprintf("%d-%d decode pods (median %g)", k.Pods.Min, k.Pods.Max, k.Pods.Median)
+	}
+	s := fmt.Sprintf("busiest pod's fill over the pods' mean, measured on the fleet that ran (%s), not priced: "+
+		"median %.2f, p95 %.2f, peak %.2f over %d cycles", pods, k.Median, k.P95, k.Peak, k.Cycles)
+	if k.AtLoad != nil {
+		s += fmt.Sprintf("; %.2f at the load judged (%d cycles)", *k.AtLoad, k.AtLoadCycles)
+	}
+	return s + fmt.Sprintf("; fill peak busiest %.3f, mean %.3f", k.BusiestFillPeak, k.MeanFillPeak)
+}
+
 // shapeText is one shape's detail.
 func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 	fmt.Fprintf(b, "shape %s: IL %s OL %s, prefix hit %.2f (%s)\n", s.Label, num(round(s.InputTokens)), num(round(s.OutputTokens)),
@@ -519,6 +537,9 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 			pull += ": the larger mean wait in TTFT sits on the decode pods"
 		}
 		fmt.Fprintf(b, "  %-14s%s\n", "KV pull", pull)
+	}
+	if k := d.KVSpread; k != nil {
+		fmt.Fprintf(b, "  %-14s%s\n", "KV spread", kvSpreadText(*k))
 	}
 	p := s.Utilization.Prefill
 	pre := fmt.Sprintf("utilization pooled %s, worst pod %s", figText(p.Pooled, "%.2f", 1), figText(p.WorstPod, "%.2f", 1))

@@ -84,6 +84,30 @@ func (e *Engine) observeLoadBalance(logger logr.Logger, namespace, modelID strin
 	}
 }
 
+// observeRouterPolicy reads what the model's router scores, the prefix
+// cache, the load, both or neither, from the router's series on the
+// cycle's input (balance.RouterCycleOf, the reader the capacity planner
+// reads a recording with), and logs the policy on the cycle its name
+// changes, once the new one has held for balance.RouterPolicyDwell.
+// Observe only: no price reads it yet (#482, #384, #483). The series are on
+// the input only while a learner recording is on
+// (domain.RouterLatency.Endpoints); off, the policy stays not detected and
+// nothing is logged. Called with or without a router reading, so the
+// window sees the series stop (balance.RouterPolicyStaleAfter).
+func (e *Engine) observeRouterPolicy(logger logr.Logger, namespace, modelID string, in domain.AnalyzerInput, now time.Time) {
+	p, changed := e.loadBalanceTracker().ObserveRouter(utils.GetNamespacedKey(namespace, modelID), in, now)
+	if !changed {
+		return
+	}
+	logger.Info("router policy read from its series", "namespace", namespace, "modelID", modelID,
+		"policy", p.Policy, "cacheAware", p.CacheAware, "loadAware", p.LoadAware,
+		"loadAwareByHit", p.LoadAwareByHit, "loadAwareBySpread", p.LoadAwareBySpread,
+		"keptLight", p.KeptLight, "keptHeavy", p.KeptHeavy, "loadLight", p.LoadLight, "loadHeavy", p.LoadHeavy,
+		"hitCycles", p.HitCycles, "candidates", p.Candidates,
+		"spreadBalancing", p.SpreadBalancing, "spreadEven", p.SpreadEven, "spreadCycles", p.SpreadCycles,
+		"cacheReason", p.CacheReason, "hitReason", p.HitReason, "spreadReason", p.SpreadReason)
+}
+
 // loadBalanceTracker is the engine's load-balance tracker, set to the
 // configured optimize interval. It reads replicas through the settle
 // tracker's view.

@@ -15,6 +15,7 @@ shape measured: IL 8016 OL 26, prefix hit 0.00 (measured, cycles 560-579)
 utilization at the load judged
   decode        KV fill 0.004 (band top 0.8), slots 1 of 152, wait p 0.000
   KV pull       utilization 0.034 per decode pod, mean wait unpriced (TTFT priced first come: prompts too uneven for processor sharing)
+  KV spread     busiest pod's fill over the pods' mean, measured on the fleet that ran (2 decode pods), not priced: median 1.03, p95 1.36, peak 1.46 over 204 cycles; fill peak busiest 0.800, mean 0.797
   prefill       utilization pooled 0.72, worst pod 0.72 (f 1)
   verdict       NOT JUDGED: at the stated load of 3.0 r/s, TTFT p95 is at most 14.5 s against a 200 ms target: it is priced from a lower bound of V_P, and the true TTFT may be lower, so the miss is not known; --assume-vp states a V_P to price it.
 capacity            req/s     out tok/s   in system   bound by
