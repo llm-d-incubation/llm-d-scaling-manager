@@ -255,7 +255,8 @@ type Cycle struct {
 	// prefill time, inverted for processor sharing, against its computed
 	// tokens a request, S(x) = s0 + x/V, priced with s0 in the capacity at
 	// the minutes' mean computed prompt, where V_P is refused for want of a
-	// queue or is a lower bound under it (serviceline.go;
+	// queue or is the served peak of a fleet that never queued, under it
+	// (serviceline.go;
 	// saturation.SwitchPrefillVPServiceLine).
 	VPServiceLine bool
 	// ALowLoadByRate reads a minute as low load, for the fit of a, by its

@@ -610,6 +610,9 @@ jobs:
       - name: Run make guides-check
         run: make guides-check
 
+      - name: Check the controller image in the release docs
+        run: bash deploy/ci-pr-checks/tools-pin.sh --controller pr
+
       # The pool Pod is described in config/warmpool and COPIED into
       # deploy/warmpool.sh by a generator, so the script needs no repo, no yq
       # and no kustomize at run time. The copy is what drifts: it once lost the

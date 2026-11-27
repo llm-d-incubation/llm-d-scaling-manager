@@ -1070,8 +1070,14 @@ func questionOf(fit, test *inputsEntry, req BacktestRequest, cutoff, until time.
 	if fit.id == test.id && cutoff.IsZero() {
 		return nil, InputErrorf("the test is the fit's own source: a backtest scores a period the planner did not see; split it, or test another recording")
 	}
-	if fit.doc.Fleet.Prefill == nil || test.doc.Fleet.Prefill == nil {
-		return nil, InputErrorf("the inputs have no prefill variant: a backtest prices a P/D fleet")
+	// A P/D fleet is priced with both roles. An aggregated one (no prefill
+	// variant, its decode variant serving both roles) is priced on its
+	// decode line alone: its TPOT, with its TTFT refused (issue
+	// llm-d-incubation/llm-d-scaling-manager#512). The fit and the test
+	// must be the same kind of fleet.
+	if (fit.doc.Fleet.Prefill == nil) != (test.doc.Fleet.Prefill == nil) {
+		return nil, InputErrorf("the fit and the test are not the same kind of fleet: one has a prefill variant and the other none; " +
+			"a backtest compares a P/D fleet with a P/D fleet, or an aggregated one with an aggregated one")
 	}
 	if fit.doc.Model != test.doc.Model {
 		return nil, InputErrorf("the fit is model %q and the test model %q: a backtest compares one model", fit.doc.Model, test.doc.Model)
@@ -1417,7 +1423,7 @@ func (q *backtestQuestion) layout() ([]stepOf, []time.Time, time.Time) {
 func (q *backtestQuestion) predictSteps(ctx context.Context) ([]stepOf, []BacktestStep, error) {
 	steps, changes, first := q.layout()
 	p := &predictor{pricer: q.fit.pricer, fleets: map[predictKey]Fleet{}, cv2: q.cv2, promptCV: q.promptCV, promptMaxRatio: q.promptMaxRatio,
-		headroom: q.fit.doc.Policy.Headroom, assume: q.assume, cachedCost: q.cachedCost}
+		headroom: q.fit.doc.Policy.Headroom, assume: q.assume, cachedCost: q.cachedCost, aggregated: !q.pd()}
 	out := make([]BacktestStep, 0, len(steps))
 	var fl fluid
 	for _, st := range steps {
@@ -1489,7 +1495,7 @@ func (q *backtestQuestion) finish(out *BacktestResponse) {
 		}
 		out.Assumed = append(out.Assumed, fmt.Sprintf("the prompt-length spread of %d judged steps was not read (no computed-token histogram): %s is priced", unread, from))
 	}
-	out.VerdictLines, out.Excluded = verdictOf(out, q.step)
+	out.VerdictLines, out.Excluded = verdictOf(out, q.step, !q.pd())
 	out.Verdict = strings.Join(out.VerdictLines, " ")
 	out.Notes = append(out.Notes, backtestNotes(q)...)
 	if n := batchBeyondFitNote(out.Steps); n != "" {
@@ -1663,8 +1669,10 @@ func (q *backtestQuestion) stepOf(p *predictor, st stepOf, changes []time.Time, 
 		out.Excluded, out.Detail = ExcludedScaling, fmt.Sprintf("the replicas changed in its measurement window or within %s before it", q.settle)
 	case in.otherPods:
 		out.Excluded, out.Detail = ExcludedOtherVariants, "variants other than the priced ones also served: the rate and the latency are the whole model's"
-	case in.prefill == 0 || in.decode == 0:
+	case q.pd() && (in.prefill == 0 || in.decode == 0):
 		out.Excluded, out.Detail = ExcludedNotPriced, fmt.Sprintf("%d prefill and %d decode pods served: a P/D fleet is priced with both", in.prefill, in.decode)
+	case !q.pd() && in.decode == 0:
+		out.Excluded, out.Detail = ExcludedNotPriced, "no aggregated pod served"
 	}
 	pred, err := p.predict(in)
 	if err != nil {
@@ -1950,6 +1958,9 @@ type predictor struct {
 	assume Assume
 	// cachedCost is Knobs.CachedTokenCost at every step.
 	cachedCost *float64
+	// aggregated says the fleet has no prefill variant: each step is priced
+	// at its decode pods alone, which serve both roles.
+	aggregated bool
 }
 
 // prediction is one step's figures at each statistic of backtestStats.
@@ -1975,7 +1986,7 @@ type prediction struct {
 // TPOT, bounded by the top of its band. Each carries the envelope's verdict.
 func (p *predictor) predict(in stepInputs) (prediction, error) {
 	var out prediction
-	if !(in.rate > 0) || in.prefill == 0 || in.decode == 0 {
+	if !(in.rate > 0) || (in.prefill == 0 && !p.aggregated) || in.decode == 0 {
 		return out, errors.New("no fleet to price")
 	}
 	for _, q := range backtestStats {
@@ -2767,11 +2778,17 @@ func secondsWords(x float64) string {
 }
 
 // backtestHint is what to do about a statistic no step priced, by the
-// refusal's reason.
-func backtestHint(reason string, only bool) string {
+// refusal's reason, on an aggregated fleet (no prefill variant) where aggregated.
+func backtestHint(reason string, only, aggregated bool) string {
 	every := "every step was"
 	if !only {
 		every = "the steps so refused were"
+	}
+	if aggregated && reason == string(whatif.NoLine) {
+		// An aggregated pod with a large KV cache may never fill to the band:
+		// a longer fit at the same load learns no more (issue #512).
+		return "the aggregated pods learned no ITL line by KV fill: a line needs their fill to span the ITL band, " +
+			"and each step's refusal names the highest fill they read"
 	}
 	switch reason {
 	case string(whatif.Saturated):
@@ -2795,6 +2812,12 @@ func backtestHint(reason string, only bool) string {
 // and why; then the p90 beside it, over the steps whose measured p90 a
 // bucket could place.
 func verdictPart(name string, scores []BacktestScore, unit string) (line string, quoted *BacktestScore) {
+	return verdictPartFor(name, scores, unit, false)
+}
+
+// verdictPartFor is verdictPart; aggregated says the fleet has no prefill
+// variant, whose refusals a hint names in its own terms (backtestHint).
+func verdictPartFor(name string, scores []BacktestScore, unit string, aggregated bool) (line string, quoted *BacktestScore) {
 	quoted = primaryScore(scores)
 	if quoted == nil && apartScore(scores) != nil {
 		w := fmt.Sprintf("The planner's %s was not scored as a point in any step.%s", name, apartWords(name, scores, ""))
@@ -2813,10 +2836,10 @@ func verdictPart(name string, scores []BacktestScore, unit string) (line string,
 				n := scores[i].Refused[r]
 				why = append(why, fmt.Sprintf("%s in %d", r, n))
 				if hint == "" || r != string(whatif.Saturated) {
-					hint = backtestHint(r, only)
+					hint = backtestHint(r, only, aggregated)
 				}
 				if r == string(whatif.PastLowerBoundKnee) || r == string(whatif.NoPrefillCapacity) {
-					hints = append(hints, backtestHint(r, only))
+					hints = append(hints, backtestHint(r, only, aggregated))
 				}
 			}
 			if !only && len(hints) > 1 {
@@ -2984,7 +3007,7 @@ func percentileWords(name string, scores []BacktestScore) string {
 // and what was not judged in one more. It says only what the judged steps
 // say: each share is over the steps the planner gave a figure for, with
 // the steps it did not, and why, beside it.
-func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
+func verdictOf(out *BacktestResponse, step time.Duration, aggregated bool) ([]string, string) {
 	s := out.Summary
 	span := out.Test.To.Sub(out.Test.From)
 	if out.Test.Cycles > 1 {
@@ -2995,8 +3018,8 @@ func verdictOf(out *BacktestResponse, step time.Duration) ([]string, string) {
 	if s.Judged == 0 {
 		lines = append(lines, "no step could be judged; see what was not judged.")
 	} else {
-		ttft, tq := verdictPart("TTFT", s.TTFT, unit)
-		tpot, pq := verdictPart("TPOT", s.TPOT, unit)
+		ttft, tq := verdictPartFor("TTFT", s.TTFT, unit, aggregated)
+		tpot, pq := verdictPartFor("TPOT", s.TPOT, unit, aggregated)
 		lines = append(lines, ttft, tpot)
 		region, scored := 0, 0
 		for _, sc := range []*BacktestScore{tq, pq} {

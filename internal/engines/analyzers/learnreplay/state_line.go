@@ -42,6 +42,9 @@ type lineSamples struct {
 	// count the floor was read at, as its fill is the fill (issue
 	// llm-d-incubation/llm-d-scaling-manager#286).
 	belowSequences map[string][]float64
+	// maxFill is each variant's highest fill a steady row read, off a ramp
+	// (VariantState.MaxFill).
+	maxFill map[string]float64
 	// ratios is each variant's latest busiest/mean rank fill ratios
 	// (domain.ReplicaMetrics.BusiestRankFillRatio), at most
 	// busiestRatioRows of them, from rows whose busiest rank fills at least
@@ -96,7 +99,7 @@ func newLineSamples() *lineSamples {
 	return &lineSamples{steady: map[string][]whatif.LineRow{}, ramps: map[string][]whatif.LineRow{},
 		above: map[string][]whatif.LineRow{}, fills: map[string][]fillAt{}, below: map[string][]itl.Observation{},
 		ratios: map[string][]float64{}, fit: map[string][]whatif.LineRow{}, ownFitAt: map[string]time.Time{},
-		belowSequences: map[string][]float64{}}
+		belowSequences: map[string][]float64{}, maxFill: map[string]float64{}}
 }
 
 // noteOwnFit notes that variant's line at is its own fit, not held or
@@ -233,6 +236,9 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 			s = s.WithOutputDispersion(shape.Dispersion(rm.AvgOutputTokens, rm.AvgOutputTokensSquared))
 		}
 		ramp := l.onRamp(rm.PodName, fillAt{k: k, kvReq: s.KVreq, at: at}, steady)
+		if !ramp && k > l.maxFill[rm.VariantName] {
+			l.maxFill[rm.VariantName] = k
+		}
 		if !ramp && k > 0 && k < bottom && rm.ITLState() == domain.ITLFinite && rm.AvgITL > 0 && !math.IsInf(rm.AvgITL, 0) {
 			b := l.below[rm.VariantName]
 			b = append(b, itl.Observation{K: k, ITLSec: rm.AvgITL, Timestamp: at})

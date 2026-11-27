@@ -202,12 +202,13 @@ const SwitchPrefillVPLoneRate = "prefill-vp-lone-rate"
 
 // SwitchPrefillVPServiceLine is the replay switch for V_P read from the
 // prefill service line (prefill.Cycle.VPServiceLine,
-// prefill/serviceline.go). On, V_P refused for want of a queue, or a lower
-// bound under the line's, is ranks * E[x] / (s0 + E[x]/V): the line
+// prefill/serviceline.go). On, V_P refused for want of a queue, or the
+// served peak of a fleet that never queued under the line's, is
+// ranks * E[x] / (s0 + E[x]/V): the line
 // S(x) = s0 + x/V fitted to the engines' prefill time, inverted for
 // processor sharing, against their computed tokens a request, s0 kept in
 // the capacity, at the minutes' mean computed prompt E[x]. Not a bound. A
-// V_P that is not a lower bound (a queue's) stands. Off, as before this
+// V_P read under a queue, a lower bound or not, stands. Off, as before this
 // switch (issues llm-d-incubation/llm-d-scaling-manager#368, #416).
 // Planner-only, as SwitchPrefillALowLoadPerRank is.
 const SwitchPrefillVPServiceLine = "prefill-vp-service-line"
