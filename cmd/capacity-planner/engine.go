@@ -99,7 +99,7 @@ func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 			top = fmt.Sprintf("; iterations above the top bound, %s tokens", num(b.TopTokens))
 		}
 	}
-	class := "unknown"
+	var class string
 	switch capacity.StepBudgetClass(b.Class) {
 	case capacity.StepBudgetBinds:
 		class = "binds"
