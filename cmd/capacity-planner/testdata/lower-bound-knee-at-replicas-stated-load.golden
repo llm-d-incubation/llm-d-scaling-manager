@@ -4,10 +4,10 @@ prefill engine  vLLM release not recorded
 load judged     8.00 r/s (--load-seen)
 load seen       per cycle (1-minute rates): mean 3.00, p95 12.48, peak 15.38 r/s; p95 less counting noise 12.46; busiest 2m1s (8 cycles): 12.96 r/s
 SLO             TTFT p95 200.0 ms (policy)
-cell = TTFT p95 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused; <= at most: a TTFT priced from a lower bound of V_P is an upper bound
-mark = the SLO (TTFT p95 200.0 ms (policy)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated, UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known, ? not judged
-summary     50%                   80%                    100%             seen
-  measured  <=7085/18.4 @2.07 UB  <=20829/18.4 @3.32 UB  -/18.4 @4.15 LB  -/18.6 @8.00 LB
+cell = TTFT p95 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+mark = the SLO (TTFT p95 200.0 ms (policy)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated, LV a TTFT over its target priced from a lower bound of V_P, which can read it high, so the miss is not known, ? not judged
+summary     50%                 80%                  100%             seen
+  measured  7085/18.4 @2.07 LV  20829/18.4 @3.32 LV  -/18.4 @4.15 LB  -/18.6 @8.00 LB
 verdicts
   measured  NOT JUDGED: at the stated load of 8.0 r/s, 1.9x a prefill knee of at least 4.1 r/s: the prefill knee rests on a lower bound of V_P, and the true knee may be higher, so whether the fleet saturates is not priced; decode holds its operating point; --assume-vp states a V_P to price it.
 
@@ -23,11 +23,11 @@ capacity            req/s     out tok/s   in system   bound by
   decode knee       134.15    3428        unbounded   decode band top at fill 0.798
                     OUTSIDE VALIDATED REGION (flow control unknown, measured off)
   fleet knee        >=4.15    106         not known   prefill; at least: V_P is a lower bound
-  operating (0.85)  >=3.53    90          <=33        0.85 x fleet knee (scaleUpThreshold); at least: V_P is a lower bound
-  max at SLO        target below the floor                        target 0.2 s at or below the TTFT floor 2.787 s; the floor is priced from a lower bound of V_P, so it is at most this, and the target may be reachable
+  operating (0.85)  >=3.53    90          33          0.85 x fleet knee (scaleUpThreshold); at least: V_P is a lower bound
+  max at SLO        target below the floor                        target 0.2 s at or below the TTFT floor 2.787 s; the floor is priced from a lower bound of V_P, which can read it high, so the target may be reachable
 SLO vs load         r/s   TTFT p50/90 ms           TPOT mean/p90 ms  e2e mean (sum)           in system (mean)
-  50% of knee       2.07  <=872.7/<=5203.2         10.82/18.38       <=1.99 s                 <=4.1
-  80% of knee       3.32  <=4271.3/<=15856.3       10.82/18.38       <=6.56 s                 <=22
+  50% of knee       2.07  872.7/5203.2             10.82/18.38       1.99 s                   4.1
+  80% of knee       3.32  4271.3/15856.3           10.82/18.38       6.56 s                   22
   100% of knee      4.15  past a lower-bound knee  10.82/18.38       past a lower-bound knee  not known
   load seen (193%)  8.00  past a lower-bound knee  10.92/18.56       past a lower-bound knee  not known
 checks

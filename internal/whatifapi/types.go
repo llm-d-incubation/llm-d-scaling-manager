@@ -43,7 +43,7 @@ type InputsRequest struct {
 	// at more it is held, flagged PrefixHitHeld.
 	PrefillHitAtCount bool `json:"prefillHitAtCount,omitempty"`
 	// PrefillVPServiceLine reads V_P from the prefill service line where no
-	// prefill pod queued, or V_P is a lower bound under the line (the CLI's
+	// prefill pod queued: a V_P read under a queue stands (the CLI's
 	// --prefill-vp-service-line): opt-in, off by default, and not validated,
 	// so every figure reads outside the validated region.
 	PrefillVPServiceLine bool `json:"prefillVPServiceLine,omitempty"`
@@ -247,6 +247,15 @@ type EngineInfo struct {
 	GPUMemoryUtilizationSource string  `json:"gpuMemoryUtilizationSource"`
 	BlockSize                  int64   `json:"blockSize"`
 	BlockSizeSource            string  `json:"blockSizeSource"`
+	// Attention is the model's attention kind and MoE its MoE class, read
+	// from its config.json: "unknown" where none was read (issues #501,
+	// #503). ModelConfigSource is where the config was read, and Model both
+	// in words, as the engine row prints them; absent where neither is
+	// known. Reported, not priced.
+	Attention         string `json:"attention"`
+	MoE               string `json:"moe"`
+	ModelConfigSource string `json:"modelConfigSource,omitempty"`
+	Model             string `json:"model,omitempty"`
 	// StepBudgetBinding is whether the step budget binds, read from the
 	// engine's tokens per iteration; absent where no row of the variant carried
 	// that series (a recording made before it was recorded, or SGLang).
@@ -369,11 +378,15 @@ type Figure struct {
 	// plan reads (the points A and B, the knees and the limits), not on a
 	// curve's points.
 	Validation *Validation `json:"validation,omitempty"`
-	// UpperBound says the figure, a latency, is priced from a prefill speed
-	// (V_P) known only as a lower bound (flag VPLowerBound): a faster prefill
-	// only lowers it, so the true figure is at most Value. A target it meets
-	// is met; one it misses is not known to be missed (issue
-	// llm-d-incubation/llm-d-scaling-manager#369).
+	// UpperBound is never set. It said a TTFT priced from a V_P known only
+	// as a lower bound was an upper bound (#369), but only the figure's V_P
+	// terms are bounded by that: the others are point estimates, or not
+	// priced, and the figure read under the measured TTFT in backtests
+	// (issue llm-d-incubation/llm-d-scaling-manager#515). Such a figure is a
+	// point figure flagged VPLowerBound (TTFTFromLowerBoundVP). The key stays
+	// in the pinned schema, absent.
+	//
+	// Deprecated: never set; read the figure's flags (VPLowerBound).
 	UpperBound bool `json:"upperBound,omitempty"`
 	// Extrapolated says the figure, priced by the experimental TTFT or
 	// TPOT model, is at a rate above the highest load the source's fit

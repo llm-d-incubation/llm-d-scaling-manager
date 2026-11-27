@@ -356,7 +356,10 @@ td.none { color: var(--muted); font-style: italic; }
 svg .dot.bt-within, .legend .dot.bt-within { fill: var(--good); stroke: var(--good); }
 svg .dot.bt-low, .legend .dot.bt-low { fill: var(--critical); stroke: var(--critical); }
 svg .dot.bt-high, .legend .dot.bt-high { fill: var(--warning); stroke: var(--warning); }
-svg .dot.hollow.bt-within, svg .dot.hollow.bt-low, svg .dot.hollow.bt-high { fill-opacity: 0; }
+/* Priced from a lower bound of V_P, scored apart: neither a point nor a bound (#515). */
+svg .dot.bt-apart, .legend .dot.bt-apart { fill: var(--muted); stroke: var(--muted); }
+.btsteps td.bt-apart { color: var(--text-secondary); }
+svg .dot.hollow.bt-within, svg .dot.hollow.bt-low, svg .dot.hollow.bt-high, svg .dot.hollow.bt-apart { fill-opacity: 0; }
 svg .btunres, .legend .btunres { fill: var(--muted); fill-opacity: 0.12; stroke: none; }
 .btsteps th.grp { text-align: center; }
 .btsteps td.bt-low, .btsteps td.bt-high { background: color-mix(in srgb, var(--critical) 10%, transparent); }

@@ -27,7 +27,7 @@ const experimentalTTFTUsage = "experimental, for demonstration, not validated: p
 	"(processor sharing by the engine's flags, the router hop from window means, V_P raised to the served work, " +
 	"the whole window's V_P, the computed-token hit, the cache tier's load and KV wait). " +
 	"On one production P/D fleet, tested on the second half of a day, its TTFT read about 1.3x measured at the mean, " +
-	"1.35x at p90 and 1.7x at p95, none under 0.8 (upper bounds), while its self-check folds read p90 about 0.76x (inconsistent). " +
+	"1.35x at p90 and 1.7x at p95, none under 0.8 (from a lower bound of V_P, so no bound either way), while its self-check folds read p90 about 0.76x (inconsistent). " +
 	"Not validated, for demonstration only. Every prefill and TTFT figure is flagged ExperimentalTTFT and reads OUTSIDE VALIDATED REGION. Off by default"
 
 // experimentalTTFT is the replay switches --experimental-ttft turns on, by

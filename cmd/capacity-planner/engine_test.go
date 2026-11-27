@@ -73,6 +73,8 @@ func TestEngine_TheReleaseSetsTheReportedDefaults(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			want := c.want
 			want.Engine = "vllm"
+			// No model config is given: both classes are unknown.
+			want.Attention, want.MoE = "unknown", "unknown"
 			for _, s := range []*string{&want.StepBudgetSource, &want.GPUMemoryUtilizationSource, &want.BlockSizeSource} {
 				if *s == "" {
 					*s = engineDefault

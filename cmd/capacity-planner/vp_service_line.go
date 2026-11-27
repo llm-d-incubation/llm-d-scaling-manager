@@ -16,7 +16,7 @@ package main
 const vpServiceLineFlag = "prefill-vp-service-line"
 
 // vpServiceLineUsage is the flag's help, on every command that takes it.
-const vpServiceLineUsage = "opt-in, not validated: where no prefill pod queued, or V_P is only a lower bound under it, " +
+const vpServiceLineUsage = "opt-in, not validated: where no prefill pod queued (a V_P read under a queue stands), " +
 	"read V_P from the prefill service line, the engines' prefill time against their computed tokens a request, " +
 	"its fixed part s0 kept in the capacity, and price the prefill knee with s0 paid once a request at the asked prompt. " +
 	"Every figure reads OUTSIDE VALIDATED REGION. Off by default"

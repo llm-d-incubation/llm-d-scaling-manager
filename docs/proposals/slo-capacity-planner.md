@@ -1780,11 +1780,14 @@ roles[].inputs.batchCap number
 roles[].inputs.batchCapSource string
 roles[].inputs.capacityTokens number
 roles[].inputs.engine object
+roles[].inputs.engine.attention string
 roles[].inputs.engine.blockSize number
 roles[].inputs.engine.blockSizeSource string
 roles[].inputs.engine.engine string
 roles[].inputs.engine.gpuMemoryUtilization number
 roles[].inputs.engine.gpuMemoryUtilizationSource string
+roles[].inputs.engine.modelConfigSource string
+roles[].inputs.engine.moe string
 roles[].inputs.engine.stepBudget number
 roles[].inputs.engine.stepBudgetBinding object
 roles[].inputs.engine.stepBudgetBinding.boundTokens number
@@ -2192,11 +2195,14 @@ roles[].ttft.imbalanceCurveMinutes number
 roles[].ttft.imbalanceSource string
 roles[].ttft.percentile number
 roles[].ttft.prefillEngine object
+roles[].ttft.prefillEngine.attention string
 roles[].ttft.prefillEngine.blockSize number
 roles[].ttft.prefillEngine.blockSizeSource string
 roles[].ttft.prefillEngine.engine string
 roles[].ttft.prefillEngine.gpuMemoryUtilization number
 roles[].ttft.prefillEngine.gpuMemoryUtilizationSource string
+roles[].ttft.prefillEngine.modelConfigSource string
+roles[].ttft.prefillEngine.moe string
 roles[].ttft.prefillEngine.stepBudget number
 roles[].ttft.prefillEngine.stepBudgetBinding object
 roles[].ttft.prefillEngine.stepBudgetBinding.boundTokens number
@@ -2326,6 +2332,8 @@ selfCheck.tpot.servedPastKnee number
 selfCheck.tpot.statistic string
 selfCheck.tpot.steps number
 selfCheck.tpot.upperBound number
+selfCheck.tpot.vpLowerBound number
+selfCheck.tpot.vpLowerBoundUnder number
 selfCheck.tpot.within number
 selfCheck.tpot.withinBound number
 selfCheck.trust string
@@ -2350,6 +2358,8 @@ selfCheck.ttft.servedPastKnee number
 selfCheck.ttft.statistic string
 selfCheck.ttft.steps number
 selfCheck.ttft.upperBound number
+selfCheck.ttft.vpLowerBound number
+selfCheck.ttft.vpLowerBoundUnder number
 selfCheck.ttft.within number
 selfCheck.ttft.withinBound number
 selfCheck.untrusted array

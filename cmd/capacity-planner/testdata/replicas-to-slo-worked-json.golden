@@ -89,7 +89,9 @@
           "gpuMemoryUtilization": 0.9,
           "gpuMemoryUtilizationSource": "not recorded",
           "blockSize": 128,
-          "blockSizeSource": "not recorded"
+          "blockSizeSource": "not recorded",
+          "attention": "unknown",
+          "moe": "unknown"
         }
       },
       "results": {

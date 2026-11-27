@@ -144,15 +144,12 @@ func (pv pricedVariant) engineNotes() []engineNote {
 			add(pastCUDAGraphCeiling, "graphs to %d sequences a rank, priced at up to %d", ceiling, batch)
 		}
 	}
-	model := strings.ToLower(p.ModelPath)
-	if model == "" {
-		model = strings.ToLower(pv.model)
+	hybrid, mla := pv.attentionFamily()
+	if hybrid != "" {
+		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", hybrid)
 	}
-	if fam := familyOf(model, hybridModels); fam != "" {
-		add(hybridAttention, "%s: KV per request and ITL are not those of full attention", fam)
-	}
-	if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
-		add(mlaAttention, "%s: %s", fam, pv.mlaBinds())
+	if mla != "" {
+		add(mlaAttention, "%s: %s", mla, pv.mlaBinds())
 	}
 	if c := p.KVConnector; c != "" && !strings.Contains(strings.ToLower(c), "nixl") {
 		add(kvConnectorUnmodeled, "%s", c)
@@ -172,6 +169,42 @@ func (pv pricedVariant) engineNotes() []engineNote {
 			pv.perRank, pv.state.Accelerator, def)
 	}
 	return out
+}
+
+// attentionFamily is what makes pv's model hybrid-attention or MLA, each ""
+// where it is not: the attention kind its model config states (issue #501),
+// and, with no config read, the family its name falls in, as before the
+// config was read.
+//
+// A config never clears a hybrid the name says: a hybrid the reader does not
+// know reads as full attention, and clearing the flag on that would put a
+// hybrid's figures inside the envelope on the reader's miss. The name's family
+// is kept, and the detail says the config reads otherwise. A config does
+// clear an MLA family's name (an MLA family's dense distillation is common),
+// and names MLA or a window or hybrid layers wherever it reads one.
+func (pv pricedVariant) attentionFamily() (hybrid, mla string) {
+	p := pv.state.Params
+	model := strings.ToLower(p.ModelPath)
+	if model == "" {
+		model = strings.ToLower(pv.model)
+	}
+	byName := familyOf(model, hybridModels)
+	if !p.ModelConfig.Read() {
+		if fam := familyOf(model, mlaModels); fam != "" && familyOf(model, notMLA) == "" {
+			mla = fam
+		}
+		return byName, mla
+	}
+	switch p.AttentionKind() {
+	case capacity.AttentionSlidingWindow, capacity.AttentionHybrid:
+		return p.ModelConfig.AttentionText(), ""
+	case capacity.AttentionMLA:
+		mla = p.ModelConfig.AttentionText()
+	}
+	if byName != "" {
+		hybrid = fmt.Sprintf("%s by its name, though the model config reads %s", byName, p.ModelConfig.AttentionText())
+	}
+	return hybrid, mla
 }
 
 // familyOf is the first of families model's name contains, "" with none.

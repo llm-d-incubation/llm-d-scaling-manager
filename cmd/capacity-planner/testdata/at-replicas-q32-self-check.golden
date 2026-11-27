@@ -1,4 +1,4 @@
-Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it, mean TTFT within 20% in 4 of 7 steps at 3 load levels (median ratio 1.20) (4 more priced from a lower bound of V_P were upper bounds the fleet measured at or under: not scored); p90 TTFT unresolvable in 2, in the measured histogram bucket itself in 1, 200 ms to 400 ms (2.0x wide): consistent at the bucket's resolution, not within 20%; mean TPOT within 20% in 14 of 14 steps at 8 load levels (median ratio 0.98); p90 TPOT unresolvable in 10, in the measured histogram bucket itself in 10, 10 ms to 20 ms (2.0x wide): consistent at the bucket's resolution, not within 20%. It tested 0.24 to 4.13 r/s at 2 prefill + 2 decode: an answer at another rate or fleet is not covered by it. [weak]
+Self-check: tested on the last 1 h 13 min of this recording, each part predicted from a fit on what came before it, mean TTFT within 20% in 4 of 7 steps at 3 load levels (median ratio 1.20) (4 priced from a lower bound of V_P, scored apart unless read more than 20% low: 0 read under the measured figure); p90 TTFT unresolvable in 2, in the measured histogram bucket itself in 1, 200 ms to 400 ms (2.0x wide): consistent at the bucket's resolution, not within 20%; mean TPOT within 20% in 14 of 14 steps at 8 load levels (median ratio 0.98); p90 TPOT unresolvable in 10, in the measured histogram bucket itself in 10, 10 ms to 20 ms (2.0x wide): consistent at the bucket's resolution, not within 20%. It tested 0.24 to 4.13 r/s at 2 prefill + 2 decode: an answer at another rate or fleet is not covered by it. [weak]
   why: few or loose agreements: mean TTFT: within 20% in 57% of 7 steps; 3 independent load levels, fewer than 4; the within share could be as low as 20% over the load levels
 ns-01/model-02  P/D 2 prefill (variant-02) + 2 decode (variant-01)  window 2026-11-14 07:09-09:35Z, cycle 580 of 580
 decode engine   vLLM release not recorded
@@ -6,10 +6,10 @@ prefill engine  vLLM release not recorded
 load judged     12.46 r/s, the p95 less counting noise of the 573 of 580 cycles with traffic
 load seen       per cycle (1-minute rates): mean 3.00, p95 12.48, peak 15.38 r/s; p95 less counting noise 12.46; busiest 2m1s (8 cycles): 12.96 r/s
 SLO             TTFT p90 2000.0 ms (asked)
-cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused; <= at most: a TTFT priced from a lower bound of V_P is an upper bound
-mark = the SLO (TTFT p90 2000.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated, UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known, ? not judged
-summary     50%                   80%                    100%             seen
-  measured  <=5259/18.4 @2.07 UB  <=15885/18.4 @3.32 UB  -/18.4 @4.15 LB  -/19.1 @12.46 LB
+cell = TTFT p90 ms / TPOT p90 ms @ the rate priced, r/s; - refused (the shape's table says why); m the TPOT mean, where the p90 is refused
+mark = the SLO (TTFT p90 2000.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated, LV a TTFT over its target priced from a lower bound of V_P, which can read it high, so the miss is not known, ? not judged
+summary     50%                 80%                  100%             seen
+  measured  5259/18.4 @2.07 LV  15885/18.4 @3.32 LV  -/18.4 @4.15 LB  -/19.1 @12.46 LB
 verdicts
   measured  NOT JUDGED: the load and the shape priced are of different traffic: the load's cycles ran at IL 1000 OL 1133, the shape priced is IL 8016 OL 26, so the knee is of other traffic and no verdict is priced on it; --shape load prices the load at its own shape.
 
@@ -27,11 +27,11 @@ capacity            req/s     out tok/s   in system   bound by
   decode knee       134.15    3428        unbounded   decode band top at fill 0.798
                     OUTSIDE VALIDATED REGION (flow control unknown, measured off)
   fleet knee        >=4.15    106         not known   prefill; at least: V_P is a lower bound
-  operating (0.85)  >=3.53    90          <=33        0.85 x fleet knee (scaleUpThreshold); at least: V_P is a lower bound
-  max at SLO        >=0.13    3           <=0.1       TTFT p90, end to end; at least: V_P is a lower bound
+  operating (0.85)  >=3.53    90          33          0.85 x fleet knee (scaleUpThreshold); at least: V_P is a lower bound
+  max at SLO        0.13      3           0.1         TTFT p90, end to end
 SLO vs load         r/s    TTFT p50/90 ms           TPOT mean/p90 ms  e2e mean (sum)           in system (mean)
-  50% of knee       2.07   <=878.6/<=5259.0         10.82/18.38       <=2.00 s                 <=4.1
-  80% of knee       3.32   <=4288.3/<=15884.7       10.82/18.38       <=6.57 s                 <=22
+  50% of knee       2.07   878.6/5259.0             10.82/18.38       2.00 s                   4.1
+  80% of knee       3.32   4288.3/15884.7           10.82/18.38       6.57 s                   22
   100% of knee      4.15   past a lower-bound knee  10.82/18.38       past a lower-bound knee  not known
   load seen (300%)  12.46  past a lower-bound knee  11.22/19.07       past a lower-bound knee  not known
 checks

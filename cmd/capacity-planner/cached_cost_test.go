@@ -209,9 +209,8 @@ func raiseTTFT(t *testing.T, v any, d float64, prefillVariant string) int {
 
 // meanBias is the backtest's mean-TTFT bias over every judged step, the
 // median of predicted over measured. A step priced from a lower bound of V_P
-// that held is counted too (whatifapi.UnscoredUpperBound): the backtest does
-// not score it, as only an upper bound, but leaving it out would keep only
-// the steps that read low.
+// is counted too (whatifapi.UnscoredVPLowerBound): the backtest scores it
+// apart, but leaving it out would drop the steps it prices.
 func meanBias(t *testing.T, out string) (float64, int) {
 	t.Helper()
 	var bt whatifapi.BacktestResponse
@@ -223,7 +222,7 @@ func meanBias(t *testing.T, out string) (float64, int) {
 		}
 		for _, p := range s.TTFT {
 			if p.Statistic != statMean || p.Measured == nil || p.Predicted.Value == nil || !(*p.Measured > 0) ||
-				(p.Unscored != "" && p.Unscored != whatifapi.UnscoredUpperBound) {
+				(p.Unscored != "" && p.Unscored != whatifapi.UnscoredVPLowerBound) {
 				continue
 			}
 			ratios = append(ratios, *p.Predicted.Value / *p.Measured)

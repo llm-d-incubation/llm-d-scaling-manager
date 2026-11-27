@@ -106,18 +106,15 @@ func ConcurrencyAt(rate float64, ttftMean, tpotMean whatif.Result, ol float64, d
 		c.Fleet = refusedConcurrency(tpotMean, "the mean TPOT")
 	default:
 		c.Fleet = requestsFigure(rate * (t + max(ol-1, 0)*p))
-		c.Fleet.UpperBound = upperBoundTTFT(ttftMean)
 	}
 	if v, ok := ttftMean.(whatif.TTFT); ok && rate > 0 {
-		pp, ub := v.Parts, TTFTUpperBound(v.Flags)
+		pp := v.Parts
 		if pp.PrefillWork > 0 {
 			f := requestsFigure(rate * (pp.EngineWait + pp.TierLoad + pp.PrefillWork))
-			f.UpperBound = ub
 			c.Prefill = &f
 		}
 		if w := pp.RouterWait + pp.BurstWait; w > 0 {
 			f := requestsFigure(rate * w)
-			f.UpperBound = ub
 			c.RouterQueue = &f
 		}
 	}
@@ -151,21 +148,16 @@ func refusedConcurrency(r whatif.Result, what string) Figure {
 	return refusedRequests(string(whatif.InvalidInput), what+" is not priced")
 }
 
-// upperBoundTTFT says a mean TTFT is priced as an upper bound.
-func upperBoundTTFT(r whatif.Result) bool {
-	v, ok := r.(whatif.TTFT)
-	return ok && TTFTUpperBound(v.Flags)
-}
-
 // ConcurrencyRate is a concurrency asked, translated into the rate that
 // carries it: Rate, at which rate x W(rate) is Concurrency. AtKnee says the
 // fleet holds fewer requests than that wherever its time in system prices:
 // Rate is then the highest rate it prices, the knee, or short of it the
 // rate where the mean time in system is first refused (Rate under the knee
 // says which). A closed-loop load at that concurrency saturates the fleet
-// there: more concurrency adds queueing, not throughput. LowerBound says
-// the time in system is an upper bound (a TTFT priced from a lower bound of
-// V_P): the true rate at that concurrency is at least Rate.
+// there: more concurrency adds queueing, not throughput. LowerBound is never
+// set: a TTFT priced from a lower bound of V_P is not an upper bound (#515),
+// so the rate is not a lower bound either. The key stays in the pinned
+// schema, absent; it is deprecated, never set.
 type ConcurrencyRate struct {
 	Concurrency float64 `json:"concurrency"`
 	Rate        float64 `json:"rate"`

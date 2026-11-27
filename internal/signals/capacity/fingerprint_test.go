@@ -95,6 +95,10 @@ var fingerprintExcluded = []string{
 	// every stored digest for a flag nothing prices.
 	"CUDAGraphCaptureMax",
 	"MixedChunk",
+	// Not hashed: the model's config.json, which the hashed checkpoint
+	// (ModelPath, ModelRevision) decides, read for the report only. Hashing
+	// it would move every stored digest.
+	"ModelConfig",
 }
 
 func TestFingerprintCoversEveryEngineParamsField(t *testing.T) {
@@ -252,6 +256,8 @@ func TestFingerprintIgnoresTheResolvedInputs(t *testing.T) {
 			p.CUDAGraphCaptureMax = 64
 		case "MixedChunk":
 			p.MixedChunk = true
+		case "ModelConfig":
+			p.ModelConfig = ModelConfig{Source: "config.json", Attention: AttentionMLA, KVLoraRank: 512, NumExperts: 256}
 		default:
 			t.Fatalf("no case for excluded field %s", name)
 		}

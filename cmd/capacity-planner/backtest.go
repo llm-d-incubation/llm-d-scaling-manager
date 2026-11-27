@@ -562,17 +562,14 @@ func btMs(x *float64) string {
 
 // pointText is a step's statistic, predicted/measured, with * where the
 // prediction is inside the validated region, "overloaded" where it gave no
-// figure, calling the fleet overloaded, and "<=" before a prediction that is
-// an upper bound (whatifapi.Figure.UpperBound).
+// figure, calling the fleet overloaded, and "v" after a pair scored apart,
+// priced from a lower bound of V_P (whatifapi.UnscoredVPLowerBound).
 func pointText(ps []whatifapi.BacktestPoint, stat string) string {
 	for _, p := range ps {
 		if p.Statistic != stat {
 			continue
 		}
 		pred := btMs(p.Predicted.Value)
-		if p.Predicted.UpperBound {
-			pred = "<=" + pred
-		}
 		if r := p.Predicted.Refused; r != nil {
 			pred = "no figure"
 			if r.Reason == string(whatif.Saturated) {
@@ -582,6 +579,9 @@ func pointText(ps []whatifapi.BacktestPoint, stat string) string {
 		mark := ""
 		if p.InRegion {
 			mark = "*"
+		}
+		if p.Unscored == whatifapi.UnscoredVPLowerBound {
+			mark += "v"
 		}
 		meas := btMs(p.Measured)
 		switch {
@@ -665,8 +665,8 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 	}
 	b.WriteString("\neach step: predicted/measured (* inside the conditions our accuracy benchmarks cover; " +
 		"~ measured in a histogram bucket too wide to place it, scored only where the prediction falls outside it")
-	if anyUpperBound(bt.Steps) {
-		b.WriteString("; <= an upper bound, priced from a lower bound of V_P: scored only where the fleet measured more than 20% over it")
+	if anyApart(bt.Steps) {
+		b.WriteString("; v priced from a lower bound of V_P, neither a point nor a bound: scored apart unless read more than 20% low")
 	}
 	b.WriteString(")\n")
 	const layout = "%-16s %7s %5s  %-19s %-19s %-17s %-17s %s\n"
@@ -700,6 +700,19 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 			fmt.Fprintf(&b, sl, part.name+" "+sc.Statistic, strconv.Itoa(a.Steps), ratioText(a.Bias), shareText(a.Within), strconv.Itoa(a.Low),
 				factorText(a.MedianError), factorText(a.P90Error), shareText(a.Coverage), unscoredText(sc))
 		}
+	}
+	apartHead := false
+	for _, sc := range bt.Summary.TTFT {
+		a := sc.VPLowerBound
+		if a == nil {
+			continue
+		}
+		if !apartHead {
+			b.WriteString("\npriced from a lower bound of V_P (neither a point nor a bound; scored apart unless read more than 20% low, " +
+				"then a miss): steps, measured at or under the figure, measured over it, of those more than 20% over, median ratio\n")
+			apartHead = true
+		}
+		fmt.Fprintf(&b, "%-10s %3d %4d %4d %4d %6s\n", "TTFT "+sc.Statistic, a.Steps, a.AtOrOver, a.Under, a.Low, ratioText(a.Bias))
 	}
 	if region > 0 {
 		b.WriteString("\ninside the conditions our accuracy benchmarks cover: steps, median ratio, within 20%\n")
@@ -744,12 +757,12 @@ func writeBacktestText(out io.Writer, bt *whatifapi.BacktestResponse) error {
 	return err
 }
 
-// anyUpperBound says a step's prediction is an upper bound
-// (whatifapi.Figure.UpperBound).
-func anyUpperBound(steps []whatifapi.BacktestStep) bool {
+// anyApart says a step's TTFT pair was scored apart
+// (whatifapi.UnscoredVPLowerBound).
+func anyApart(steps []whatifapi.BacktestStep) bool {
 	for _, s := range steps {
 		for _, p := range s.TTFT {
-			if p.Predicted.UpperBound {
+			if p.Unscored == whatifapi.UnscoredVPLowerBound {
 				return true
 			}
 		}

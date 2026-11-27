@@ -87,6 +87,10 @@ func selfCheckPoints(steps []BacktestStep, ttft bool, statistic string) (pts []s
 			}
 			continue
 		}
+		if p.Unscored == UnscoredVPLowerBound {
+			// Scored apart, as the summary does: no rule reads it.
+			continue
+		}
 		m := math.NaN()
 		if p.Measured != nil {
 			m = *p.Measured

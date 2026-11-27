@@ -507,8 +507,6 @@ func planRateAtConcurrency(mean Fleet, n float64, cs *curveSet, ol float64) (Con
 		return cr, InputErrorf("traffic.classes.critical.concurrency: the fleet holds fewer than %g requests below its prefill knee of at least %.4g r/s, "+
 			"which rests on a lower bound of V_P: the true knee may be higher, so the rate that holds them is not priced; give a rate or assume.vp", n, cs.lowerKnee)
 	}
-	t, _ := mean.TTFTPoint(cr.Rate)
-	cr.LowerBound = upperBoundTTFT(t)
 	return cr, nil
 }
 

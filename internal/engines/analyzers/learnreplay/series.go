@@ -101,6 +101,18 @@ type SeriesVariants struct {
 	Prefill, Decode string
 }
 
+// role is the role a variant of the canonical role given is counted in:
+// its own, except an aggregated variant Decode names, which is counted as
+// decode, its pods serving both roles (an aggregated fleet's backtest, issue
+// llm-d-incubation/llm-d-scaling-manager#512). An aggregated variant no one
+// names is counted in neither role, as before.
+func (v SeriesVariants) role(variant, role string) string {
+	if role == domain.RoleBoth && v.Decode != "" && variant == v.Decode {
+		return domain.RoleDecode
+	}
+	return role
+}
+
 // Series is every cycle of the model q names, oldest first, read from the
 // recording's saturation Analyze events without replaying them. Pods, GPUs
 // and lengths are the variants v names, so that what the fleet had is
@@ -185,11 +197,12 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 		return false
 	}
 	for _, vs := range in.VariantStates {
-		if !counted(vs.VariantName, domain.CanonicalRole(vs.Role)) {
+		role := v.role(vs.VariantName, domain.CanonicalRole(vs.Role))
+		if !counted(vs.VariantName, role) {
 			continue
 		}
 		notServing := max(vs.PendingReplicas, 0)
-		switch domain.CanonicalRole(vs.Role) {
+		switch role {
 		case domain.RolePrefill:
 			s.PrefillGPUs = max(s.PrefillGPUs, vs.GPUsPerReplica)
 			s.PrefillReplicas += max(vs.CurrentReplicas-vs.PendingReplicas, 0)
@@ -204,7 +217,7 @@ func sampleOf(in domain.AnalyzerInput, at time.Time, v SeriesVariants) CycleSamp
 	everySquared := true
 	var prompted, decodeRows []domain.ReplicaMetrics
 	for _, rm := range in.ReplicaMetrics {
-		role := domain.CanonicalRole(roles[rm.VariantName])
+		role := v.role(rm.VariantName, domain.CanonicalRole(roles[rm.VariantName]))
 		if decodeKVRow(rm, role, v) {
 			decodeRows = append(decodeRows, rm)
 		}

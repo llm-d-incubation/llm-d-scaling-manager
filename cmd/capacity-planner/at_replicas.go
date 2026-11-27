@@ -283,8 +283,7 @@ func figureValue(f whatifapi.Figure) (float64, string, error) {
 	return 0, "", errNoFigure
 }
 
-// figText prints a figure in format, scaled, or what stands in its place;
-// "<=" before a figure that is an upper bound (whatifapi.Figure.UpperBound).
+// figText prints a figure in format, scaled, or what stands in its place.
 func figText(f whatifapi.Figure, format string, scale float64) string {
 	v, words, err := figureValue(f)
 	switch {
@@ -293,16 +292,7 @@ func figText(f whatifapi.Figure, format string, scale float64) string {
 	case words != "":
 		return words
 	}
-	return atMostText(f) + fmt.Sprintf(format, scale*v)
-}
-
-// atMostText is "<=" before a figure that is an upper bound, priced from a
-// lower bound of V_P (#369), "" otherwise.
-func atMostText(f whatifapi.Figure) string {
-	if f.UpperBound {
-		return "<="
-	}
-	return ""
+	return fmt.Sprintf(format, scale*v)
 }
 
 // windowText is the window a report was read from.
@@ -318,7 +308,7 @@ func windowText(s whatifapi.ReportSource) string {
 // color.
 var cellMarks = map[string]string{
 	whatifapi.CellMet: "ok", whatifapi.CellMissed: "MISS", whatifapi.CellOnset: "MISS*", whatifapi.CellSaturated: "SAT",
-	whatifapi.CellPastLowerBound: "LB", whatifapi.CellUpperBound: "UB", whatifapi.CellUnknown: "?", whatifapi.CellNoTarget: "",
+	whatifapi.CellPastLowerBound: "LB", whatifapi.CellVPLowerBound: "LV", whatifapi.CellUnknown: "?", whatifapi.CellNoTarget: "",
 }
 
 // shapeName is a shape's name in the summary and its section.
@@ -432,7 +422,7 @@ func summaryText(r *whatifapi.ReportResponse) string {
 	head = append(head, r.Loads...)
 	cells := make([][]string, 1, 1+len(r.Shapes))
 	cells[0] = head
-	lowerBound, upperBound := false, false
+	lowerBound, lowerBoundVP := false, false
 	for _, s := range r.Shapes {
 		row := []string{"  " + shapeName(s)}
 		for _, l := range r.Loads {
@@ -454,7 +444,7 @@ func summaryText(r *whatifapi.ReportResponse) string {
 			}
 			text := fmt.Sprintf("%s/%s @%.2f", cellText(c.TTFT.Figure, "%.0f"), tp, s.Table[i].Rate)
 			lowerBound = lowerBound || c.Mark == whatifapi.CellPastLowerBound
-			upperBound = upperBound || c.TTFT.UpperBound
+			lowerBoundVP = lowerBoundVP || c.Mark == whatifapi.CellVPLowerBound
 			if m := cellMarks[c.Mark]; m != "" {
 				text += " " + m
 			}
@@ -466,17 +456,14 @@ func summaryText(r *whatifapi.ReportResponse) string {
 	if tpot != whatifapi.ReportStatisticName(0) {
 		legend += fmt.Sprintf("; m the TPOT mean, where the %s is refused", tpot)
 	}
-	if upperBound {
-		legend += "; <= at most: a TTFT priced from a lower bound of V_P is an upper bound"
-	}
-	return legend + "\nmark = " + markLegend(r.SLO, lowerBound, upperBound) + "\n" + columns(cells)
+	return legend + "\nmark = " + markLegend(r.SLO, lowerBound, lowerBoundVP) + "\n" + columns(cells)
 }
 
 // markLegend says what a cell's mark judges: the SLO's own statistics, which
 // need not be the ones the cell prints.
-// lowerBound adds the LB mark where a cell carries it, and upperBound the UB
-// mark where a cell's TTFT is an upper bound.
-func markLegend(s whatifapi.ReportSLO, lowerBound, upperBound bool) string {
+// lowerBound adds the LB mark where a cell carries it, and lowerBoundVP the
+// LV mark (whatifapi.CellVPLowerBound).
+func markLegend(s whatifapi.ReportSLO, lowerBound, lowerBoundVP bool) string {
 	lb := ""
 	if lowerBound {
 		lb = ", LB at or past a prefill knee priced from a lower bound of V_P (the knee is at least that rate), so not judged saturated"
@@ -485,8 +472,8 @@ func markLegend(s whatifapi.ReportSLO, lowerBound, upperBound bool) string {
 		return "SAT saturated" + lb + " (no SLO target to judge)"
 	}
 	ub := ""
-	if upperBound && s.TTFT != nil {
-		ub = ", UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known"
+	if lowerBoundVP && s.TTFT != nil {
+		ub = ", LV a TTFT over its target priced from a lower bound of V_P, which can read it high, so the miss is not known"
 	}
 	return fmt.Sprintf("the SLO (%s) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset "+
 		"(the router queues) though the figure is within, SAT saturated%s%s, ? not judged", sloText(s), lb, ub)
@@ -604,9 +591,6 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 			fmt.Fprintf(b, "  %s: the fleet holds fewer requests than that below its knee; a load kept at %s requests open saturates it "+
 				"at the knee's %.2f r/s, and more concurrency adds queueing, not throughput\n",
 				row.Load, whatifapi.ConcurrencyNumber(fc.Concurrency), fc.Rate)
-		case fc.LowerBound:
-			fmt.Fprintf(b, "  %s: at least %.2f r/s: the time in the system is priced from a lower bound of V_P, so it is at most its figure\n",
-				row.Load, fc.Rate)
 		}
 	}
 	b.WriteString("checks\n")
@@ -760,7 +744,7 @@ func concurrencyText(c *whatifapi.Concurrency) string {
 	case c.Fleet.Value == nil:
 		return "-"
 	}
-	return atMostText(c.Fleet) + whatifapi.ConcurrencyNumber(*c.Fleet.Value)
+	return whatifapi.ConcurrencyNumber(*c.Fleet.Value)
 }
 
 // statsText is a row's figures at its statistics, "/" between them; one
@@ -818,11 +802,11 @@ func columns(cells [][]string) string {
 	return b.String()
 }
 
-// cellText is a summary cell's figure in ms, "<=" before an upper bound; a
-// refusal is "-", its reason is in the shape's table.
+// cellText is a summary cell's figure in ms; a refusal is "-", its reason is
+// in the shape's table.
 func cellText(f whatifapi.Figure, format string) string {
 	if f.Value == nil {
 		return "-"
 	}
-	return atMostText(f) + fmt.Sprintf(format, 1000**f.Value)
+	return fmt.Sprintf(format, 1000**f.Value)
 }
