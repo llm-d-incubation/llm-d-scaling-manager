@@ -444,7 +444,8 @@ footer says so. Without the flag the output is the default's, byte for byte.
 How it read: on a production P/D fleet, fitted on the first half of a day
 and tested on the second, the TTFT it priced read about 1.3x what was
 measured at the mean, 1.35x at p90 and 1.7x at p95, none under 0.8. Those
-figures are upper bounds: they rest on a V_P that is only a lower bound. The
+figures rest on a V_P that is only a lower bound, so they are not bounds
+either way. The
 self-check's folds on the same recording read the p90 TTFT about 0.76x of
 measured, and called it inconsistent. It is not validated: it is for
 demonstration only, to show what the model can do on such a fleet, never to
@@ -977,18 +978,16 @@ cells at and past that knee are marked `LB`, not `SAT`. Past decode's own
 knee the fleet saturates whatever V_P is, and the verdict says so on
 decode's knee. `--assume-vp` states a V_P to price the prefill side.
 
-Below that knee the TTFT is still priced from the same lower bound, and a
-faster prefill only lowers it, so every such TTFT is an upper bound: the
-true TTFT is at most the figure. The report says so: `<=` before it in
-the summary and the SLO table (and before the e2e sum built on it),
-`upperBound` in the JSON, "≤" on the page. A target it meets is met. A
-target it misses is not a known miss: the cell is marked `UB`, not
-`MISS`, and the verdict is NOT JUDGED, never UNDER-PROVISIONED on it:
-"TTFT p95 is at most 14.5 s against a 200 ms target: it is priced from a
-lower bound of V_P, and the true TTFT may be lower, so the miss is not
-known; --assume-vp states a V_P to price it." For the same reason `max
-at SLO` is at least its rate, and a TTFT floor over the target is at most
-that floor. A TPOT miss is known whatever V_P is, and still gives
+Below that knee the TTFT is still priced from the same lower bound, and
+flagged `VPLowerBound`. It is not an upper bound: only its V_P terms read
+high, and its other terms can read low by more, so the planner claims no
+bound on it, on the e2e sum or on the rates built on it. A target it meets
+is met. A target it misses is not a known miss, as its V_P terms can read
+it high: the cell is marked `LV`, not `MISS`, and the verdict is NOT
+JUDGED, never UNDER-PROVISIONED on it: "TTFT p95 is 14.5 s against a
+200 ms target: it is priced from a lower bound of V_P, which can read it
+high, so the miss is not known; --assume-vp states a V_P to price it." A
+TTFT floor over the target says the same of the floor. A TPOT miss is known whatever V_P is, and still gives
 UNDER-PROVISIONED.
 
 The planner reads V_P from the last 6 hours of the recording, as the

@@ -4,10 +4,10 @@ prefill engine  vLLM release not recorded
 load judged     41.66 r/s, the p95 less counting noise of the 282 of 289 cycles with traffic
 load seen       per cycle (1-minute rates): mean 31.59, p95 41.70, peak 43.24 r/s; p95 less counting noise 41.66; busiest 2m0s (8 cycles): 42.13 r/s
 SLO             TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)
-cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why); <= at most: a TTFT priced from a lower bound of V_P is an upper bound
-mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, UB a TTFT over its target that is only an upper bound (V_P a lower bound), so the miss is not known, ? not judged
-summary  50%                  80%                   100%            seen
-  load   <=676/3.2 @18.49 ok  <=2248/6.8 @29.59 UB  -/- @36.99 SAT  -/- @41.66 SAT
+cell = TTFT p90 ms / TPOT mean ms @ the rate priced, r/s; - refused (the shape's table says why)
+mark = the SLO (TTFT p90 2000.0 ms (asked), TPOT mean 30.0 ms (asked)) at that rate: ok met, MISS missed, MISS* missed past the prefill flow-control onset (the router queues) though the figure is within, SAT saturated, LV a TTFT over its target priced from a lower bound of V_P, which can read it high, so the miss is not known, ? not judged
+summary  50%                80%                 100%            seen
+  load   676/3.2 @18.49 ok  2248/6.8 @29.59 LV  -/- @36.99 SAT  -/- @41.66 SAT
 verdicts
   load    UNDER-PROVISIONED: at the p95 less counting noise load of 41.7 r/s, 1.1x the fleet knee of 37.0 r/s, the fleet saturates; needs 3 prefill + 3 decode (has 2 + 2), 6 decode if the decode knee reads 99% high; at f 1 needs 3 + 3, at f 1.5 needs 4 + 3 (prefill f 1 assumed at 3 pods).
 
@@ -25,14 +25,14 @@ capacity            req/s     out tok/s   in system   bound by
   decode knee       36.99     7397        unbounded   decode band top at fill 0.798
                     OUTSIDE VALIDATED REGION (--assume-a stated, which the run did not price)
   fleet knee        36.99     7397        unbounded   decode
-  operating (0.85)  31.44     6287        <=98        0.85 x fleet knee (scaleUpThreshold)
-  max at SLO        >=29.03   5805        <=58        TTFT p90, end to end; at least: V_P is a lower bound
+  operating (0.85)  31.44     6287        98          0.85 x fleet knee (scaleUpThreshold)
+  max at SLO        29.03     5805        58          TTFT p90, end to end
                     OUTSIDE VALIDATED REGION (prefill speed from the occupancy plateau, experimental and never validated)
-SLO vs load         r/s    TTFT p50/90 ms    TPOT mean/p90 ms           e2e mean (sum)  in system (mean)
-  50% of knee       18.49  <=140.2/<=676.3   3.15/TPOT bucket too wide  <=0.89 s        <=16
-  80% of knee       29.59  <=376.8/<=2248.4  6.81/TPOT bucket too wide  <=2.16 s        <=64
-  100% of knee      36.99  saturated         saturated                  saturated       unbounded
-  load seen (113%)  41.66  saturated         saturated                  saturated       unbounded
+SLO vs load         r/s    TTFT p50/90 ms  TPOT mean/p90 ms           e2e mean (sum)  in system (mean)
+  50% of knee       18.49  140.2/676.3     3.15/TPOT bucket too wide  0.89 s          16
+  80% of knee       29.59  376.8/2248.4    6.81/TPOT bucket too wide  2.16 s          64
+  100% of knee      36.99  saturated       saturated                  saturated       unbounded
+  load seen (113%)  41.66  saturated       saturated                  saturated       unbounded
 checks
   2 prefill + 2 decode  does not hold: 41.66 r/s is 1.1x the fleet knee of 36.99 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms
 assumed: prefill speed from the occupancy plateau (experimental, --prefill-vp-plateau); a 20ms (--assume-a); prompt 8001 tokens (--shape); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow-control thresholds 5 and 0.8 (upstream defaults); Poisson arrivals

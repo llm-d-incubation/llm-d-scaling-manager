@@ -49,7 +49,6 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 		if v.Floor > 0 {
 			f.Floor = ptr(v.Floor)
 		}
-		f.UpperBound = TTFTUpperBound(v.Flags)
 		return f
 	case whatif.Unanswerable:
 		return Figure{Refused: refusalOf(v)}
@@ -57,19 +56,22 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 	return Figure{}
 }
 
-// TTFTUpperBound says a TTFT carrying flags is an upper bound: priced from a
-// V_P that is only a lower bound (whatif.VPLowerBound), not a stated one
-// (whatif.AssumedVP). A pod's prompt time and its queue's wait both fall as
-// V_P rises, at every rate under the knee, so the true TTFT is at most the
-// one priced (#369).
-func TTFTUpperBound(flags []whatif.Flag) bool {
+// TTFTFromLowerBoundVP says a TTFT carrying flags is priced from a V_P that
+// is only a lower bound (whatif.VPLowerBound), not a stated one
+// (whatif.AssumedVP). Its V_P terms, the prompt's work and the queue's
+// wait, read high; its other terms (the fixed latency, the decode and
+// router terms, the engine's sharing beyond the prompt's own work) are
+// point estimates or not priced, and can read low by more. So the figure is
+// not a bound either way: it is a point figure, scored apart in a backtest
+// (UnscoredVPLowerBound), and over its target its miss is not known
+// (issue llm-d-incubation/llm-d-scaling-manager#515).
+func TTFTFromLowerBoundVP(flags []whatif.Flag) bool {
 	return slices.Contains(flags, whatif.VPLowerBound) && !slices.Contains(flags, whatif.AssumedVP)
 }
 
-// upperBoundFigure says f is a latency priced as an upper bound
-// (TTFTUpperBound), read from its flags, so that a saved prediction that
-// predates Figure.UpperBound reads the same.
-func upperBoundFigure(f Figure) bool {
+// lowerBoundVPFigure says f is a latency priced from a lower bound of V_P
+// (TTFTFromLowerBoundVP), read from its flags.
+func lowerBoundVPFigure(f Figure) bool {
 	return f.Value != nil && f.Unit == unitSeconds && slices.Contains(f.Flags, string(whatif.VPLowerBound)) &&
 		!slices.Contains(f.Flags, string(whatif.AssumedVP))
 }

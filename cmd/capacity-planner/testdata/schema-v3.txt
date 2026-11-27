@@ -564,6 +564,8 @@ selfCheck.tpot.servedPastKnee number
 selfCheck.tpot.statistic string
 selfCheck.tpot.steps number
 selfCheck.tpot.upperBound number
+selfCheck.tpot.vpLowerBound number
+selfCheck.tpot.vpLowerBoundUnder number
 selfCheck.tpot.within number
 selfCheck.tpot.withinBound number
 selfCheck.trust string
@@ -588,6 +590,8 @@ selfCheck.ttft.servedPastKnee number
 selfCheck.ttft.statistic string
 selfCheck.ttft.steps number
 selfCheck.ttft.upperBound number
+selfCheck.ttft.vpLowerBound number
+selfCheck.ttft.vpLowerBoundUnder number
 selfCheck.ttft.within number
 selfCheck.ttft.withinBound number
 selfCheck.untrusted array

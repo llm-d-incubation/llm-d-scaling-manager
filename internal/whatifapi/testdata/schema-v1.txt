@@ -301,6 +301,12 @@ backtest.summary.byLoad[].tpot[].sameBucketWidth number
 backtest.summary.byLoad[].tpot[].statistic string
 backtest.summary.byLoad[].tpot[].unscored object
 backtest.summary.byLoad[].tpot[].unscored.* number
+backtest.summary.byLoad[].tpot[].vpLowerBound object
+backtest.summary.byLoad[].tpot[].vpLowerBound.atOrOver number
+backtest.summary.byLoad[].tpot[].vpLowerBound.bias number
+backtest.summary.byLoad[].tpot[].vpLowerBound.low number
+backtest.summary.byLoad[].tpot[].vpLowerBound.steps number
+backtest.summary.byLoad[].tpot[].vpLowerBound.under number
 backtest.summary.byLoad[].ttft array
 backtest.summary.byLoad[].ttft[] object
 backtest.summary.byLoad[].ttft[].all object
@@ -336,6 +342,12 @@ backtest.summary.byLoad[].ttft[].sameBucketWidth number
 backtest.summary.byLoad[].ttft[].statistic string
 backtest.summary.byLoad[].ttft[].unscored object
 backtest.summary.byLoad[].ttft[].unscored.* number
+backtest.summary.byLoad[].ttft[].vpLowerBound object
+backtest.summary.byLoad[].ttft[].vpLowerBound.atOrOver number
+backtest.summary.byLoad[].ttft[].vpLowerBound.bias number
+backtest.summary.byLoad[].ttft[].vpLowerBound.low number
+backtest.summary.byLoad[].ttft[].vpLowerBound.steps number
+backtest.summary.byLoad[].ttft[].vpLowerBound.under number
 backtest.summary.excluded object
 backtest.summary.excluded.burst number
 backtest.summary.excluded.load number
@@ -389,6 +401,12 @@ backtest.summary.tpot[].sameBucketWidth number
 backtest.summary.tpot[].statistic string
 backtest.summary.tpot[].unscored object
 backtest.summary.tpot[].unscored.* number
+backtest.summary.tpot[].vpLowerBound object
+backtest.summary.tpot[].vpLowerBound.atOrOver number
+backtest.summary.tpot[].vpLowerBound.bias number
+backtest.summary.tpot[].vpLowerBound.low number
+backtest.summary.tpot[].vpLowerBound.steps number
+backtest.summary.tpot[].vpLowerBound.under number
 backtest.summary.ttft array
 backtest.summary.ttft[] object
 backtest.summary.ttft[].all object
@@ -424,6 +442,12 @@ backtest.summary.ttft[].sameBucketWidth number
 backtest.summary.ttft[].statistic string
 backtest.summary.ttft[].unscored object
 backtest.summary.ttft[].unscored.* number
+backtest.summary.ttft[].vpLowerBound object
+backtest.summary.ttft[].vpLowerBound.atOrOver number
+backtest.summary.ttft[].vpLowerBound.bias number
+backtest.summary.ttft[].vpLowerBound.low number
+backtest.summary.ttft[].vpLowerBound.steps number
+backtest.summary.ttft[].vpLowerBound.under number
 backtest.test object
 backtest.test.cycles number
 backtest.test.from string
@@ -760,6 +784,8 @@ inputs.selfCheck.tpot.servedPastKnee number
 inputs.selfCheck.tpot.statistic string
 inputs.selfCheck.tpot.steps number
 inputs.selfCheck.tpot.upperBound number
+inputs.selfCheck.tpot.vpLowerBound number
+inputs.selfCheck.tpot.vpLowerBoundUnder number
 inputs.selfCheck.tpot.within number
 inputs.selfCheck.tpot.withinBound number
 inputs.selfCheck.trust string
@@ -785,6 +811,8 @@ inputs.selfCheck.ttft.servedPastKnee number
 inputs.selfCheck.ttft.statistic string
 inputs.selfCheck.ttft.steps number
 inputs.selfCheck.ttft.upperBound number
+inputs.selfCheck.ttft.vpLowerBound number
+inputs.selfCheck.ttft.vpLowerBoundUnder number
 inputs.selfCheck.ttft.within number
 inputs.selfCheck.ttft.withinBound number
 inputs.selfCheck.untrusted array
@@ -1431,6 +1459,8 @@ report.selfCheck.tpot.servedPastKnee number
 report.selfCheck.tpot.statistic string
 report.selfCheck.tpot.steps number
 report.selfCheck.tpot.upperBound number
+report.selfCheck.tpot.vpLowerBound number
+report.selfCheck.tpot.vpLowerBoundUnder number
 report.selfCheck.tpot.within number
 report.selfCheck.tpot.withinBound number
 report.selfCheck.trust string
@@ -1456,6 +1486,8 @@ report.selfCheck.ttft.servedPastKnee number
 report.selfCheck.ttft.statistic string
 report.selfCheck.ttft.steps number
 report.selfCheck.ttft.upperBound number
+report.selfCheck.ttft.vpLowerBound number
+report.selfCheck.ttft.vpLowerBoundUnder number
 report.selfCheck.ttft.within number
 report.selfCheck.ttft.withinBound number
 report.selfCheck.untrusted array

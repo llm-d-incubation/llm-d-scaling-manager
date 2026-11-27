@@ -182,16 +182,17 @@ const (
 // queues, and not from the figure. CellPastLowerBound is a rate at or past a
 // prefill knee priced from a lower bound of V_P, short of decode's knee: the
 // true knee may be higher, so the rate is not judged saturated.
-// CellUpperBound is a TTFT over its target that is only an upper bound,
-// priced from a lower bound of V_P (Figure.UpperBound): the true TTFT may
-// be lower, so the miss is not known (#369).
+// CellVPLowerBound is a TTFT over its target priced from a lower bound of
+// V_P (TTFTFromLowerBoundVP): its V_P terms read high, by an amount that can
+// be large near the knee, so the miss is not known. The figure is not a
+// bound either way (#515), so this is not judged, not judged met.
 const (
 	CellMet            = "met"
 	CellMissed         = "missed"
 	CellOnset          = "missed at onset"
 	CellSaturated      = "saturated"
 	CellPastLowerBound = "past a lower-bound knee"
-	CellUpperBound     = "at most, over target"
+	CellVPLowerBound   = "over target, V_P a lower bound"
 	CellUnknown        = "unknown"
 	CellNoTarget       = "no target"
 )
@@ -521,7 +522,7 @@ type ReportRow struct {
 // statistic its target is judged at (with no target, TTFT p90 and the
 // table's TPOT percentile; the TPOT mean where the percentile is refused:
 // TPOT.Statistic says which), and Mark, whether the SLO targets hold at the rate (CellMet,
-// CellMissed, CellOnset, CellSaturated, CellPastLowerBound, CellUpperBound, CellUnknown, CellNoTarget).
+// CellMissed, CellOnset, CellSaturated, CellPastLowerBound, CellVPLowerBound, CellUnknown, CellNoTarget).
 type ReportCell struct {
 	TTFT ReportStat `json:"ttft"`
 	TPOT ReportStat `json:"tpot"`

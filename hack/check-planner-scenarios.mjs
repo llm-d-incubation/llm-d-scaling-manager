@@ -487,8 +487,8 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
   check("a rate at the limit is the limit's", atLimit.includes("the limit's 9"), atLimit);
   const short = concurrencyNote({concurrency: {fleet: {value: 40}}, fromConcurrency: {concurrency: 500, rate: 7, atKnee: true}}, 9);
   check("a rate short of the limit is not called the limit's", short.includes("short of the limit") && !short.includes("limit's"), short);
-  const atLeast = concurrencyNote({concurrency: {fleet: {value: 30, upperBound: true}}, fromConcurrency: {concurrency: 30, rate: 2.5, lowerBound: true}});
-  check("a rate from an upper-bound time in system is at least its figure", atLeast.includes("is at least 2.5 r/s"), atLeast);
+  const plainRate = concurrencyNote({concurrency: {fleet: {value: 30}}, fromConcurrency: {concurrency: 30, rate: 2.5}});
+  check("a rate from a time in system is its figure, never at least (#515)", plainRate.includes("is 2.5 r/s") && !plainRate.includes("at least"), plainRate);
   const gate = concurrencyNote({concurrency: {fleet: {value: 30}, routerQueue: {value: 3}, prefill: {value: 2}, decode: {value: 20}}});
   check("the router's gate is a term of its own", gate.includes("(3.0 held at the router, 2.0 in prefill, 20 decoding)"), gate);
 
@@ -609,16 +609,16 @@ check("retryDelay never retries a 500", retryDelay(500, "1", 0) === -1, retryDel
     verdict: {verdict: "NOT JUDGED", scope: "fleet", summary: "NOT JUDGED: at the p95 load of 12.5 r/s, 3.1x a prefill knee of at least 4.0 r/s."}}]});
   check("a lower-bound knee reads as at least its rate", lb.details[0].lines.some(l => l.startsWith("Knees: prefill at least 4.04 r/s,") &&
     l.includes("the fleet's is at least 4.04 r/s")), JSON.stringify(lb.details[0].lines));
-  // A TTFT priced from a lower bound of V_P is at most its figure: over the
-  // target, its miss is not known (#369).
-  const ubTTFT = {statistic: "p95", value: 6.922, unit: "s", upperBound: true};
+  // A TTFT priced from a lower bound of V_P is no bound (#515): it reads as
+  // its figure; over the target, its miss is not known.
+  const ubTTFT = {statistic: "p95", value: 6.922, unit: "s", flags: ["VPLowerBound"]};
   const ub = reportView({slo, load: {rate: {value: 3}}, loads: ["50%"], shapes: [{label: "measured", utilization: {decode: {}, prefill: {}},
-    capacity: knees(4.04, "prefill"), verdict: {verdict: "NOT JUDGED", scope: "fleet", summary: "NOT JUDGED: TTFT p95 is at most 6.9 s."},
-    table: [{load: "50%", rate: 2.02, ttft: [ubTTFT], tpotMean: {value: 0.0108}, cell: {mark: "at most, over target", ttft: ubTTFT,
+    capacity: knees(4.04, "prefill"), verdict: {verdict: "NOT JUDGED", scope: "fleet", summary: "NOT JUDGED: TTFT p95 is 6.9 s."},
+    table: [{load: "50%", rate: 2.02, ttft: [ubTTFT], tpotMean: {value: 0.0108}, cell: {mark: "over target, V_P a lower bound", ttft: ubTTFT,
       tpot: {statistic: "mean", value: 0.0108}}}]}]});
   const ubCell = ub.rows[0].cells[0];
-  check("a TTFT priced from a lower bound of V_P reads as at most", ubCell.parts[0] === "TTFT ≤6922 ms", JSON.stringify(ubCell));
-  check("its miss over the target is not known, never MISS", ubCell.cls === "unknown" && ubCell.word === "at most, over target: not known",
+  check("a TTFT priced from a lower bound of V_P reads as its figure", ubCell.parts[0] === "TTFT 6922 ms", JSON.stringify(ubCell));
+  check("its miss over the target is not known, never MISS", ubCell.cls === "unknown" && ubCell.word === "over target from a lower bound of V_P: not known",
     JSON.stringify(ubCell));
   // The fleet needed: a chip of its own, the sentence not repeating it.
   const {neededText, verdictLine, roleLines, loadLine} = ctx;

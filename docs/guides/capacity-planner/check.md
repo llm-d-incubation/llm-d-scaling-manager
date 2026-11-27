@@ -138,16 +138,21 @@ How to read it:
   there). Its TTFT is not scored ("unsettled"); its TPOT is. The
   self-check's near-knee rule reads only the steps scored, and says so
   when steps it would have read did not settle.
-- **TTFT an upper bound** (`<=` before the figure): a step priced from a
-  V_P known only as a lower bound (flag `VPLowerBound`). A faster prefill
-  only lowers the TTFT, so the true TTFT is at most the figure: a ceiling,
-  not a reading, and a figure 1.2x or 1000x over what was measured is the
-  bound holding. Where the fleet measured at most 20% over it, the
-  step is counted `upperBound`, consistent, and not scored, so it moves no
-  median, within share or self-check rule. Where the fleet measured more,
-  the bound broke, and the step is scored like any other, read low: a
-  figure under what was measured is never hidden. `--assume-vp` states a
-  V_P and scores the TTFT as a figure again.
+- **TTFT priced from a lower bound of V_P** (`v` after the pair): a step
+  priced from a V_P known only as a lower bound (flag `VPLowerBound`). Its
+  V_P terms read high, but its other terms (the fixed latency, the decode
+  and router terms, the engine's sharing beyond the prompt's own work) are
+  point estimates, or not priced, and can read low by more: on recorded
+  fleets such figures read under what was measured in many steps. So it is
+  neither a point nor a bound. Where it read high, or at most 20% low (the
+  way its V_P terms push it), it is scored apart and moves no median,
+  within share or self-check rule: the step table and the page's CSV
+  export mark it `apart`. Where it read more than 20% low it is a miss,
+  scored as any point (`low`). The "priced from a lower bound of V_P"
+  lines count how many read under the measured figure, and the self-check
+  fails the TTFT (`ttft-vp-lower-bound-under`) where more than half of 6 or
+  more such steps did. `--assume-vp` states a V_P and scores the TTFT as a
+  point again.
 - **A backlog carried over**: where a step ran past the prefill knee, what
   it could not serve is still queued at the next step (a fluid queue: it
   grows by the rate less the knee over the step, and drains at the knee
