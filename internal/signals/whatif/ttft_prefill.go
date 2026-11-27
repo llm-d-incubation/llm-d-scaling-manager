@@ -73,6 +73,30 @@ func ImbalanceUtilizationAt(est prefill.Estimate, pods int, vp float64) float64 
 	return min(load/vp, MaxImbalanceUtilization)
 }
 
+// ApplyFLoadCurve sets f against the load on p (ImbalanceCurveFloor,
+// ImbalanceCurveExcess) from the curve P1 fitted at p.Replicas
+// (prefill.Estimate.FCurveByPods, issues
+// llm-d-incubation/llm-d-scaling-manager#482, #493), where it is identified:
+// f at a rate is then priced as the higher of its f and the curve's at that
+// rate's load (fAt). It returns the curve read at that count, the zero one
+// where none was fitted, and whether it was set. One pod has no f to price,
+// and is left as it is.
+//
+// The curve is fitted only with saturation.SwitchPrefillFLoadCurve on, off
+// from the analyzer's constructor; the capacity planner applies it with
+// --prefill-f-load-curve. No analyzer calls it yet.
+func ApplyFLoadCurve(p *Prefill, est prefill.Estimate) (prefill.FLoadCurve, bool) {
+	if p.Replicas < 2 {
+		return prefill.FLoadCurve{}, false
+	}
+	c, ok := est.FCurveByPods[p.Replicas]
+	if !ok || !c.Identified() {
+		return c, false
+	}
+	p.ImbalanceCurveFloor, p.ImbalanceCurveExcess = c.Floor, c.Excess
+	return c, true
+}
+
 // KneeAtServedWork is a prefill knee priced from a lower bound of V_P and
 // raised to the computed-token work the fleet's prefill pods sustained at the
 // pod count priced (ServedKneeFloor): at least the rate that work serves at

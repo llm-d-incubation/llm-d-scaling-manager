@@ -34,3 +34,22 @@ func TestParity_TheServedWorkIsSharedAndOff(t *testing.T) {
 	require.Contains(t, fields, SwitchPrefillVPServedUnqueued)
 	assert.False(t, *fields[SwitchPrefillVPServedUnqueued], "the controller keeps no served work")
 }
+
+// The prefix hit at another prefill count (prefill.HitAtCountOf and
+// HitAtCount.GPUHitAt, #425/#469/#472) and f against the load
+// (prefill.FLoadCurve, #493) price from this package; their switches,
+// SwitchPrefillHitAtCount and SwitchPrefillFLoadCurve, are off from the
+// constructor, so the controller fits no curve and moves no hit.
+func TestParity_TheHitAtCountAndTheFLoadCurveAreSharedAndOff(t *testing.T) {
+	r, ok := prefill.HitAtCountOf(0.5, 5000, 2, 1, nil)
+	require.True(t, ok)
+	assert.InDelta(t, 0.2, r.GPUHitAt(0.4), 1e-12)
+	assert.False(t, prefill.FLoadCurve{}.Identified())
+
+	a := NewSaturationAnalyzer(capacity.NewStore())
+	fields := a.switchFields()
+	for _, name := range []string{SwitchPrefillHitAtCount, SwitchPrefillFLoadCurve} {
+		require.Contains(t, fields, name)
+		assert.False(t, *fields[name], "%s: off from the constructor", name)
+	}
+}

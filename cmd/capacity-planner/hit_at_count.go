@@ -47,53 +47,53 @@ type wireHitAtCount struct {
 }
 
 // priceHitAtCount moves the prefill prompt to the prefill count priced, with
-// the switch on: E[I_eff] scaled by (1 - h')/(1 - h), and the prefix-cache
-// hit rate by h'/h. h is the fit's total hit: the prefill variant's
-// computed-token hit where the prompt is the measured one (the same window
-// as E[I_eff]), else 1 - E[I_eff] / the whole prompt asked. A hit the
-// question states governs and is not moved, and with no hit read nothing
-// moves. The hit is read over the prompt window, so it was read on the most
-// pods any of its cycles served (hitFitCount): a window that spans a
-// scale-down reads the larger count's hit, and the floor taken from the
-// smaller count would price over the truth at fewer pods. A backtest step's
-// computed prompt (stepComputedPrompt) is not moved either: its prefill pods
-// computed it at the step's own count, so it is the prompt at that count as
-// measured, and moving it again would net the fit's hit into it twice.
+// the switch on (whatif.ApplyHitAtCount): E[I_eff] scaled by (1 - h')/(1 - h),
+// and the prefix-cache hit rate by h'/h. h is the fit's total hit
+// (whatif.FitTotalHit): the prefill variant's computed-token hit where the
+// prompt is the measured one (the same window as E[I_eff]), else 1 - E[I_eff]
+// / the whole prompt asked. A hit the question states governs and is not
+// moved, and with no hit read nothing moves. The hit is read over the prompt
+// window, so it was read on the most pods any of its cycles served
+// (whatif.PromptWindow.HitFitCount): a window that spans a scale-down reads
+// the larger count's hit, and the floor taken from the smaller count would
+// price over the truth at fewer pods. A backtest step's computed prompt
+// (stepComputedPrompt) is not moved either: its prefill pods computed it at
+// the step's own count, so it is the prompt at that count as measured, and
+// moving it again would net the fit's hit into it twice.
 func (pf *pricedFleet) priceHitAtCount(ps *learnreplay.PrefillState) {
 	p := &pf.fleet.Prefill
-	fitCount := pf.hitFitCount(ps)
+	fitCount := pf.promptWindow.HitFitCount(ps.Pods)
 	if !pf.hitAtCountOn {
 		return
 	}
 	pf.hitModel = pf.promptWindow.HitModel(fitCount)
-	if pf.stepComputed || p.Replicas == fitCount || !(p.PromptTokens > 0) {
+	if pf.stepComputed {
 		return
 	}
 	if pf.pv != nil && pf.pv.assumedHit && !pf.pv.hitRead {
 		return
 	}
-	h, ok := pf.fitTotalHit()
+	h, ok := whatif.FitTotalHit(*p, pf.in.PromptSource == shapeMeasured, pf.promptWindow)
 	if !ok {
 		return
 	}
-	r, ok := prefill.HitAtCountOf(h, p.PromptTokens, fitCount, p.Replicas, pf.hitModel)
+	fitPrompt := p.PromptTokens
+	r, ok := whatif.ApplyHitAtCount(p, h, fitCount, pf.hitModel)
 	if !ok {
 		return
 	}
 	pf.hitAtCount = &r
 	pf.in.HitAtCount = &wireHitAtCount{FitHit: r.FitHit, Hit: r.Hit, FitCount: r.FitCount, Count: r.Count, Rule: string(r.Rule),
-		Lo: r.Lo, Hi: r.Hi, FitPromptTokens: p.PromptTokens, PromptTokens: r.Computed}
+		Lo: r.Lo, Hi: r.Hi, FitPromptTokens: fitPrompt, PromptTokens: r.Computed}
 	flag := whatif.HitAtCountFlag(r)
 	if flag != "" {
 		pf.flags = append(pf.flags, flag)
 	}
-	p.PromptHitRate = gpuHitAt(p.PromptHitRate, r)
 	switch {
 	case r.Moved():
 		pf.assume("prefix hit %.3f on %d prefill pods from %.3f read on %d (%s; between %.3f and %.3f): %s computed tokens a request, %s on %d (--%s)",
 			r.Hit, r.Count, r.FitHit, r.FitCount, hitRuleWords(r.Rule), r.Lo, r.Hi,
-			num(round(r.Computed)), num(round(p.PromptTokens)), r.FitCount, hitAtCountFlag)
-		p.PromptTokens = r.Computed
+			num(round(r.Computed)), num(round(fitPrompt)), r.FitCount, hitAtCountFlag)
 	case flag == whatif.PrefixHitHeld:
 		pf.assume("prefix hit %.3f read on %d prefill pods held on %d: a cache-aware router spreads the prefixes over more caches, "+
 			"so the hit is likely higher, up to %.3f, and capacity reads low (--%s)",
@@ -102,32 +102,6 @@ func (pf *pricedFleet) priceHitAtCount(ps *learnreplay.PrefillState) {
 		pf.assume("prefix hit %.3f read on %d prefill pods held on %d by a tier past the GPU (%s): the GPU's share of it x%.3g, "+
 			"the tier's x%.3g (--%s)", r.FitHit, r.FitCount, r.Count, hitRuleWords(r.Rule), r.GPUScale, r.TierScale, hitAtCountFlag)
 	}
-}
-
-// gpuHitAt is the GPU prefix-cache hit rate gpu, read at the fit, at the
-// count r priced. Under the reuse-gap rule it moves by the law's GPU ratio
-// whether or not the total moved (an unsized tier past the GPU holds the
-// total and takes up the GPU's loss, tierLoad), and never above the total
-// hit priced: the GPU's hits are among it, and the bracket can hold the
-// total under the law's (the ceiling assumed at more pods). Under any
-// other rule it moves by the total's own ratio.
-func gpuHitAt(gpu float64, r prefill.HitAtCount) float64 {
-	switch {
-	case r.Rule == prefill.HitReuseGap:
-		return min(gpu*r.GPUScale, r.Hit)
-	case r.Moved() && r.FitHit > 0:
-		return gpu * r.Hit / r.FitHit
-	}
-	return gpu
-}
-
-// hitFitCount is the prefill count the fit's hit was read on: the cycle's
-// serving pods, or the most any cycle of the prompt window counted where
-// that is more (whatif.PromptWindow.MaxPods). The larger count is the
-// conservative one: the floor h x N'/N falls with N, and N' at or above the
-// cycle's count but under it is priced at the floor, not held.
-func (pf *pricedFleet) hitFitCount(ps *learnreplay.PrefillState) int {
-	return max(ps.Pods, pf.promptWindow.MaxPods())
 }
 
 // hitRuleWords is a rule in the answer's words.
@@ -139,23 +113,6 @@ func hitRuleWords(r prefill.HitRule) string {
 		return "the reuse-gap rule over the KV residency histograms"
 	}
 	return string(r)
-}
-
-// fitTotalHit is the fit's total prefix hit, 1 - computed / whole prompt:
-// the prefill variant's computed-token hit at the measured prompt, else the
-// share of the whole prompt asked that E[I_eff] leaves out. false with
-// neither.
-func (pf *pricedFleet) fitTotalHit() (float64, bool) {
-	p := pf.fleet.Prefill
-	if pf.in.PromptSource == shapeMeasured {
-		if h, ok := pf.promptWindow.ComputedHit(); ok {
-			return h, true
-		}
-	}
-	if p.WholePromptTokens > 0 && p.PromptTokens <= p.WholePromptTokens {
-		return 1 - p.PromptTokens/p.WholePromptTokens, true
-	}
-	return 0, false
 }
 
 // pricedComputedHit is the prefill variant's computed-token hit as priced: the

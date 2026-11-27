@@ -9,6 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
@@ -54,4 +55,28 @@ func TestParity_TheServedKneeFloorIsSharedAndUnused(t *testing.T) {
 	assert.InDelta(t, 30.0, got.Value, 1e-9)
 	assert.True(t, got.HasFlag(whatif.KneeAtServedWork))
 	assert.Equal(t, whatif.Result(lb), whatif.ServedKneeFloor(lb, p, nil, nil), "no work kept, as in the controller")
+}
+
+// The prefix hit at another prefill count (whatif.ApplyHitAtCount,
+// FitTotalHit, PromptWindow.HitFitCount, #425/#469/#472) and f against the
+// load (whatif.ApplyFLoadCurve, #493) apply from this package. The analyzer
+// calls neither: saturation's SwitchPrefillHitAtCount and
+// SwitchPrefillFLoadCurve are off from its constructor, and with no curve
+// fitted the curve sets nothing.
+func TestParity_TheHitAtCountAndTheFLoadCurveApplyHereAndAreUnused(t *testing.T) {
+	var w *whatif.PromptWindow
+	fitCount := w.HitFitCount(2)
+	assert.Equal(t, 2, fitCount)
+	p := whatif.Prefill{Replicas: 1, PromptTokens: 6000, WholePromptTokens: 8000}
+	h, ok := whatif.FitTotalHit(p, false, w)
+	require.True(t, ok)
+	r, ok := whatif.ApplyHitAtCount(&p, h, fitCount, nil)
+	require.True(t, ok)
+	assert.True(t, r.Moved())
+	assert.InDelta(t, r.Computed, p.PromptTokens, 1e-9)
+
+	q := whatif.Prefill{Replicas: 2, Imbalance: 1.3}
+	_, ok = whatif.ApplyFLoadCurve(&q, prefill.Estimate{})
+	assert.False(t, ok, "no curve fitted, as in the controller")
+	assert.Zero(t, q.ImbalanceCurveFloor)
 }
