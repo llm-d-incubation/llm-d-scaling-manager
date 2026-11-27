@@ -76,14 +76,14 @@ func registerCacheTierQueries(registry *source.QueryList) {
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryKVReuseGapBuckets,
 		Type:        source.QueryTypePromQL,
-		Template:    perPodBucketsOnce("vllm:kv_block_reuse_gap_seconds_bucket", TTFTInputWindow),
+		Template:    perPodBucketsOnce("vllm:kv_block_reuse_gap_seconds_bucket"),
 		Params:      []string{source.ParamNamespace},
 		Description: "KV block reuse-gap histogram per pod (1m rate, one series per bucket; --kv-cache-metrics) (vLLM only)",
 	})
 	registry.MustRegister(source.QueryTemplate{
 		Name:        QueryKVIdleBeforeEvictBuckets,
 		Type:        source.QueryTypePromQL,
-		Template:    perPodBucketsOnce("vllm:kv_block_idle_before_evict_seconds_bucket", TTFTInputWindow),
+		Template:    perPodBucketsOnce("vllm:kv_block_idle_before_evict_seconds_bucket"),
 		Params:      []string{source.ParamNamespace},
 		Description: "KV block idle-before-evict histogram per pod (1m rate, one series per bucket; --kv-cache-metrics) (vLLM only)",
 	})

@@ -42,13 +42,19 @@ type wireEngine struct {
 	GPUMemoryUtilizationSource string  `json:"gpuMemoryUtilizationSource"`
 	BlockSize                  int64   `json:"blockSize"`
 	BlockSizeSource            string  `json:"blockSizeSource"`
+	// StepBudgetBinding is whether the step budget binds, read from the
+	// engine's tokens per iteration (learnreplay.VariantState.StepBudgetBinding).
+	// Reported only: no figure reads it yet.
+	StepBudgetBinding *whatifapi.StepBudgetBinding `json:"stepBudgetBinding,omitempty"`
 }
 
-// engineOf is the wire's account of the engine p describes; nil with none.
-func engineOf(p *capacity.EngineParams) *wireEngine {
-	if p == nil {
+// engineOf is the wire's account of the engine v runs; nil with no variant
+// or no parameters.
+func engineOf(v *learnreplay.VariantState) *wireEngine {
+	if v == nil || v.Params == nil {
 		return nil
 	}
+	p := v.Params
 	source := func(set bool) string {
 		switch {
 		case notRecorded(p):
@@ -62,7 +68,42 @@ func engineOf(p *capacity.EngineParams) *wireEngine {
 		VLLMVersion: p.VLLMVersion.String(), VLLMVersionFrom: p.VLLMVersionFrom,
 		StepBudget: p.EffectiveMaxBatchedTokens, StepBudgetSource: source(p.MaxNumBatchedTokens > 0),
 		GPUMemoryUtilization: p.GpuMemoryUtilization, GPUMemoryUtilizationSource: source(p.GpuMemoryUtilizationSet),
-		BlockSize: p.BlockSize, BlockSizeSource: source(p.BlockSizeSet)}
+		BlockSize: p.BlockSize, BlockSizeSource: source(p.BlockSizeSet),
+		StepBudgetBinding: stepBudgetBindingOf(v)}
+}
+
+// stepBudgetBindingOf is the API's account of whether v's step budget binds;
+// nil where v's rows carried no tokens-per-iteration series, so the answers of
+// a recording made before the series was recorded, or of an SGLang engine,
+// read as before. The class is then unknown (capacity.StepBudgetNoSeries).
+func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBinding {
+	if len(v.StepTokens) == 0 {
+		return nil
+	}
+	b := v.StepBudgetBinding()
+	return &whatifapi.StepBudgetBinding{Class: string(b.Class), Reason: b.Reason, NearTokens: b.NearTokens,
+		Share: b.Share, OverShare: b.OverShare, TopTokens: b.TopTokens, TopOpen: b.TopOpen}
+}
+
+// stepBudgetBindingText is b in the report's words: "binds (12% of
+// iterations above 4096 tokens)", "does not bind (0.2% of iterations above
+// 4096 tokens)", "unknown (no tokens-per-iteration series)"; with the
+// observed top beside it where read.
+func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
+	top := ""
+	if b.TopTokens > 0 {
+		top = fmt.Sprintf("; 99.9%% of iterations at or under %s tokens", num(b.TopTokens))
+		if b.TopOpen {
+			top = fmt.Sprintf("; iterations above the top bound, %s tokens", num(b.TopTokens))
+		}
+	}
+	switch capacity.StepBudgetClass(b.Class) {
+	case capacity.StepBudgetBinds:
+		return fmt.Sprintf("binds (%s%% of iterations above %s tokens%s)", num(100*b.Share), num(b.NearTokens), top)
+	case capacity.StepBudgetDoesNotBind:
+		return fmt.Sprintf("does not bind (%s%% of iterations above %s tokens%s)", num(100*b.Share), num(b.NearTokens), top)
+	}
+	return fmt.Sprintf("unknown (%s%s)", b.Reason, top)
 }
 
 // variantParams is the engine parameters the state holds for the named
@@ -87,24 +128,35 @@ func variantGPUs(st *learnreplay.State, variant string) int {
 	return 0
 }
 
+// variantState is the state of the named variant; nil where the state holds
+// none.
+func variantState(st *learnreplay.State, variant string) *learnreplay.VariantState {
+	for i := range st.Variants {
+		if st.Variants[i].Variant == variant {
+			return &st.Variants[i]
+		}
+	}
+	return nil
+}
+
 // variantEngine is the wire's account of the named variant's engine; nil
 // where the state holds no parameters for it.
 func variantEngine(st *learnreplay.State, variant string) *wireEngine {
-	return engineOf(variantParams(st, variant))
+	return engineOf(variantState(st, variant))
 }
 
-// engineInfo is the API's account of the engine p describes, the CLI's
-// figures with engineText as its summary; nil with none.
-func engineInfo(p *capacity.EngineParams) *whatifapi.EngineInfo {
-	w := engineOf(p)
+// engineInfo is the API's account of the engine v runs, the CLI's figures
+// with engineText as its summary; nil with none.
+func engineInfo(v *learnreplay.VariantState) *whatifapi.EngineInfo {
+	w := engineOf(v)
 	if w == nil {
 		return nil
 	}
-	return &whatifapi.EngineInfo{Engine: w.Engine, Summary: engineText(p),
+	return &whatifapi.EngineInfo{Engine: w.Engine, Summary: engineText(v.Params),
 		VLLMVersion: w.VLLMVersion, VLLMVersionFrom: w.VLLMVersionFrom,
 		StepBudget: w.StepBudget, StepBudgetSource: w.StepBudgetSource,
 		GPUMemoryUtilization: w.GPUMemoryUtilization, GPUMemoryUtilizationSource: w.GPUMemoryUtilizationSource,
-		BlockSize: w.BlockSize, BlockSizeSource: w.BlockSizeSource}
+		BlockSize: w.BlockSize, BlockSizeSource: w.BlockSizeSource, StepBudgetBinding: w.StepBudgetBinding}
 }
 
 // notRecorded reports whether p is a vLLM engine's from a recording made
@@ -137,11 +189,11 @@ func engineText(p *capacity.EngineParams) string {
 // said to be reported only, as no answer reads them yet. A recording made
 // before the release was read gets engineText alone: its figures' sources
 // are not known.
-func engineRowText(p *capacity.EngineParams) string {
-	if e := engineInfo(p); e != nil {
+func engineRowText(v *learnreplay.VariantState) string {
+	if e := engineInfo(v); e != nil {
 		return engineInfoText(e)
 	}
-	return engineText(p)
+	return engineText(nil)
 }
 
 // engineInfoText is engineRowText from the API's account of an engine, as
@@ -150,7 +202,11 @@ func engineInfoText(e *whatifapi.EngineInfo) string {
 	if e.StepBudgetSource == engineNotRecorded {
 		return e.Summary
 	}
-	return fmt.Sprintf("%s; step budget %d (%s), %s; %s: GPU memory %s (%s), block size %d (%s)", e.Summary,
+	s := fmt.Sprintf("%s; step budget %d (%s), %s; %s: GPU memory %s (%s), block size %d (%s)", e.Summary,
 		e.StepBudget, e.StepBudgetSource, stepBudgetPricedWording, notPricedYetWording, num(e.GPUMemoryUtilization),
 		e.GPUMemoryUtilizationSource, e.BlockSize, e.BlockSizeSource)
+	if b := e.StepBudgetBinding; b != nil {
+		s += "; step budget binding " + stepBudgetBindingText(b) + ", " + notPricedYetWording
+	}
+	return s
 }

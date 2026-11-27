@@ -86,6 +86,9 @@ var agnosticReplicaQueries = []string{
 	registration.QueryAvgKVTransferTime,
 	registration.QueryTPOTBuckets,
 	registration.QueryComputedTokensBuckets,
+	// vLLM's tokens-per-iteration histogram, recorded only: whether the step
+	// budget binds (registration/ttft_inputs.go).
+	registration.QueryIterationTokensBuckets,
 	// vLLM's KV-connector hits and cached tokens by tier, recorded only
 	// (registration/cache_tiers.go); SGLang publishes its own under other
 	// names, not read here.
@@ -123,6 +126,7 @@ var ttftAgnosticQueries = []string{
 	registration.QueryAvgKVTransferTime,
 	registration.QueryTPOTBuckets,
 	registration.QueryComputedTokensBuckets,
+	registration.QueryIterationTokensBuckets,
 	registration.QueryExternalPrefixCacheHitTokenRate,
 	registration.QueryExternalPrefixCacheQueryTokenRate,
 	registration.QueryCachedTokenRateBySource,
@@ -147,6 +151,11 @@ var recordOnlyReplicaQueries = map[string]bool{
 	registration.QueryQueueTimeBuckets:    true,
 	registration.QueryAvgPrefillTime:      true,
 	registration.QueryTPOTBuckets:         true,
+	// The tokens per iteration: read by the capacity planner only, from the
+	// recording (capacity.ReadStepBudgetBinding). An analyzer that prices
+	// by the budget's binding takes it out of this list, into
+	// ttftReadReplicaQueries, and reads the same rows.
+	registration.QueryIterationTokensBuckets: true,
 	// The cache tiers: nothing reads them yet.
 	registration.QueryExternalPrefixCacheHitTokenRate:   true,
 	registration.QueryExternalPrefixCacheQueryTokenRate: true,
