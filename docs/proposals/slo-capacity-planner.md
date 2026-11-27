@@ -1777,6 +1777,7 @@ roles[].inputs.engine.gpuMemoryUtilization number
 roles[].inputs.engine.gpuMemoryUtilizationSource string
 roles[].inputs.engine.stepBudget number
 roles[].inputs.engine.stepBudgetBinding object
+roles[].inputs.engine.stepBudgetBinding.boundTokens number
 roles[].inputs.engine.stepBudgetBinding.class string
 roles[].inputs.engine.stepBudgetBinding.nearTokens number
 roles[].inputs.engine.stepBudgetBinding.overShare number
@@ -2183,6 +2184,7 @@ roles[].ttft.prefillEngine.gpuMemoryUtilization number
 roles[].ttft.prefillEngine.gpuMemoryUtilizationSource string
 roles[].ttft.prefillEngine.stepBudget number
 roles[].ttft.prefillEngine.stepBudgetBinding object
+roles[].ttft.prefillEngine.stepBudgetBinding.boundTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.class string
 roles[].ttft.prefillEngine.stepBudgetBinding.nearTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.overShare number

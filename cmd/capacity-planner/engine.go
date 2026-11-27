@@ -77,18 +77,20 @@ func engineOf(v *learnreplay.VariantState) *wireEngine {
 // a recording made before the series was recorded, or of an SGLang engine,
 // read as before. The class is then unknown (capacity.StepBudgetNoSeries).
 func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBinding {
-	if len(v.StepTokens) == 0 {
+	if v.StepTokens.Samples == 0 && !v.StepTokens.MixedBounds {
 		return nil
 	}
 	b := v.StepBudgetBinding()
-	return &whatifapi.StepBudgetBinding{Class: string(b.Class), Reason: b.Reason, NearTokens: b.NearTokens,
-		Share: b.Share, OverShare: b.OverShare, TopTokens: b.TopTokens, TopOpen: b.TopOpen}
+	return &whatifapi.StepBudgetBinding{Class: string(b.Class), Reason: b.Reason, BoundTokens: b.BoundTokens,
+		OverShare: b.OverShare, NearTokens: b.NearTokens, Share: b.Share, TopTokens: b.TopTokens, TopOpen: b.TopOpen}
 }
 
-// stepBudgetBindingText is b in the report's words: "binds (12% of
-// iterations above 4096 tokens)", "does not bind (0.2% of iterations above
-// 4096 tokens)", "unknown (no tokens-per-iteration series)"; with the
-// observed top beside it where read.
+// stepBudgetBindingText is b in the report's words, the evidence the class is
+// decided on first: "binds (10% of iterations above 8192 tokens, the budget's
+// bound: prompts it chunked; 30% above 4096)", "does not bind (0.04% of
+// iterations above 8192 tokens, the budget's bound: prompts it chunked; 0.2%
+// above 4096)", "unknown (no tokens-per-iteration series)"; with the observed
+// top beside it where read.
 func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 	top := ""
 	if b.TopTokens > 0 {
@@ -97,13 +99,21 @@ func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 			top = fmt.Sprintf("; iterations above the top bound, %s tokens", num(b.TopTokens))
 		}
 	}
+	class := "unknown"
 	switch capacity.StepBudgetClass(b.Class) {
 	case capacity.StepBudgetBinds:
-		return fmt.Sprintf("binds (%s%% of iterations above %s tokens%s)", num(100*b.Share), num(b.NearTokens), top)
+		class = "binds"
 	case capacity.StepBudgetDoesNotBind:
-		return fmt.Sprintf("does not bind (%s%% of iterations above %s tokens%s)", num(100*b.Share), num(b.NearTokens), top)
+		class = "does not bind"
+	default:
+		return fmt.Sprintf("unknown (%s%s)", b.Reason, top)
 	}
-	return fmt.Sprintf("unknown (%s%s)", b.Reason, top)
+	near := ""
+	if b.NearTokens > 0 {
+		near = fmt.Sprintf("; %s%% above %s", num(100*b.Share), num(b.NearTokens))
+	}
+	return fmt.Sprintf("%s (%s%% of iterations above %s tokens, the budget's bound: prompts it chunked%s%s)",
+		class, num(100*b.OverShare), num(b.BoundTokens), near, top)
 }
 
 // variantParams is the engine parameters the state holds for the named

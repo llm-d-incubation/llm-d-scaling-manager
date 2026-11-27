@@ -79,11 +79,14 @@ func TestStateAt_StepBudgetBindingFromTheRecording(t *testing.T) {
 		steps  []domain.LengthBucket
 		class  capacity.StepBudgetClass
 		reason string
-		share  float64
+		over   float64
 	}{
-		{"binds", cumulativeSteps(0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 30), capacity.StepBudgetBinds, "", 0.3},
+		{"binds", cumulativeSteps(0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 20, 6, 4), capacity.StepBudgetBinds, "", 0.1},
+		// Iterations near the budget, none above it: nothing was chunked.
+		{"near the budget, none above", cumulativeSteps(0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 10, 60),
+			capacity.StepBudgetDoesNotBind, "", 0},
 		{"does not bind", cumulativeSteps(0, 0, 0, 0, 40, 30, 15, 8, 4, 2, 0.76, 0.2, 0.03, 0.01),
-			capacity.StepBudgetDoesNotBind, "", 0.0024},
+			capacity.StepBudgetDoesNotBind, "", 0.0004},
 		{"no series", nil, capacity.StepBudgetUnknown, capacity.StepBudgetNoSeries, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -94,13 +97,15 @@ func TestStateAt_StepBudgetBindingFromTheRecording(t *testing.T) {
 			got := v.StepBudgetBinding()
 			assert.Equal(t, c.class, got.Class)
 			assert.Equal(t, c.reason, got.Reason)
-			assert.InDelta(t, c.share, got.Share, 1e-9)
+			assert.InDelta(t, c.over, got.OverShare, 1e-9)
 			assert.Equal(t, int64(8192), got.Budget)
 			if c.steps != nil {
-				// 2 pods for 6 cycles: the pooled rate is 12 times a row's.
-				assert.InDelta(t, 12*c.steps[len(c.steps)-1].Rate, got.StepRate, 1e-9)
+				// 2 pods for 6 cycles 15 s apart, the first standing for the
+				// minute its rate is taken over: 2 x (60 + 5 x 15) seconds.
+				assert.Equal(t, 12, v.StepTokens.Samples)
+				assert.InDelta(t, 270*c.steps[len(c.steps)-1].Rate, got.Iterations, 1e-6)
 			} else {
-				assert.Nil(t, v.StepTokens)
+				assert.Zero(t, v.StepTokens.Samples)
 			}
 		})
 	}
@@ -109,11 +114,13 @@ func TestStateAt_StepBudgetBindingFromTheRecording(t *testing.T) {
 // The early states a replay reads in the same pass (StatesFrom) pool the
 // steps of their own cycles only.
 func TestStatesFrom_StepTokensUpToTheCycle(t *testing.T) {
-	steps := cumulativeSteps(0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 30)
+	steps := cumulativeSteps(0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 20, 6, 4)
 	last, early, err := StatesFrom(context.Background(), BytesSource(stepBudgetRecording(t, steps)), Options{}, StateQuery{},
 		func(int) []int { return []int{2} })
 	require.NoError(t, err)
 	require.Contains(t, early, 2)
-	assert.InDelta(t, 4*100.0, early[2].Variants[0].StepBudgetBinding().StepRate, 1e-9, "2 pods for 2 cycles")
-	assert.InDelta(t, 12*100.0, last.Variants[0].StepBudgetBinding().StepRate, 1e-9, "2 pods for 6 cycles")
+	assert.Equal(t, 4, early[2].Variants[0].StepTokens.Samples, "2 pods for 2 cycles")
+	assert.Equal(t, 12, last.Variants[0].StepTokens.Samples, "2 pods for 6 cycles")
+	assert.InDelta(t, 2*(60+15)*100.0, early[2].Variants[0].StepTokens.Buckets[len(steps)-1].Rate, 1e-6)
+	assert.InDelta(t, 2*(60+5*15)*100.0, last.Variants[0].StepTokens.Buckets[len(steps)-1].Rate, 1e-6)
 }

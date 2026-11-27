@@ -57,10 +57,10 @@ func TestStepBudgetBinding_FromTheWindowToTheAnswer(t *testing.T) {
 		name  string
 		per   []float64
 		class capacity.StepBudgetClass
-		share float64
+		over  float64
 	}{
-		{"binds", []float64{0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 30}, capacity.StepBudgetBinds, 0.3},
-		{"does not bind", []float64{0, 0, 0, 0, 40, 30, 15, 8, 4, 2, 0.76, 0.2, 0.03, 0.01}, capacity.StepBudgetDoesNotBind, 0.0024},
+		{"binds", []float64{0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 20, 6, 4}, capacity.StepBudgetBinds, 0.1},
+		{"does not bind", []float64{0, 0, 0, 0, 40, 30, 15, 8, 4, 2, 0.76, 0.2, 0.03, 0.01}, capacity.StepBudgetDoesNotBind, 0.0004},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := sweepServer(t)
@@ -68,7 +68,8 @@ func TestStepBudgetBinding_FromTheWindowToTheAnswer(t *testing.T) {
 			e := engineOfAnswer(t, srv, flags...)
 			require.NotNil(t, e.StepBudgetBinding, "no step budget binding in the inputs' engine")
 			assert.Equal(t, string(c.class), e.StepBudgetBinding.Class)
-			assert.InDelta(t, c.share, e.StepBudgetBinding.Share, 1e-6)
+			assert.InDelta(t, c.over, e.StepBudgetBinding.OverShare, 1e-6)
+			assert.Equal(t, 8192.0, e.StepBudgetBinding.BoundTokens)
 			assert.Equal(t, 4096.0, e.StepBudgetBinding.NearTokens)
 		})
 	}
@@ -84,18 +85,23 @@ func TestStepBudgetBindingText(t *testing.T) {
 		b    whatifapi.StepBudgetBinding
 		want string
 	}{
-		{whatifapi.StepBudgetBinding{Class: "binds", NearTokens: 4096, Share: 0.21, TopTokens: 16384, TopOpen: true},
-			"binds (21% of iterations above 4096 tokens; iterations above the top bound, 16384 tokens)"},
-		{whatifapi.StepBudgetBinding{Class: "does-not-bind", NearTokens: 128, Share: 0, TopTokens: 32},
-			"does not bind (0% of iterations above 128 tokens; 99.9% of iterations at or under 32 tokens)"},
+		{whatifapi.StepBudgetBinding{Class: "binds", BoundTokens: 8192, OverShare: 0.25, NearTokens: 4096, Share: 0.5,
+			TopTokens: 16384, TopOpen: true},
+			"binds (25% of iterations above 8192 tokens, the budget's bound: prompts it chunked; 50% above 4096; " +
+				"iterations above the top bound, 16384 tokens)"},
+		{whatifapi.StepBudgetBinding{Class: "does-not-bind", BoundTokens: 256, NearTokens: 128, TopTokens: 32},
+			"does not bind (0% of iterations above 256 tokens, the budget's bound: prompts it chunked; 0% above 128; " +
+				"99.9% of iterations at or under 32 tokens)"},
 		{whatifapi.StepBudgetBinding{Class: "unknown", Reason: capacity.StepBudgetNotKnown, TopTokens: 8192},
 			"unknown (step budget not known; 99.9% of iterations at or under 8192 tokens)"},
 	} {
 		assert.Equal(t, c.want, stepBudgetBindingText(&c.b))
 	}
 	e := &whatifapi.EngineInfo{Summary: "vLLM 0.34", StepBudget: 8192, StepBudgetSource: engineSetByFlag,
-		StepBudgetBinding: &whatifapi.StepBudgetBinding{Class: "binds", NearTokens: 4096, Share: 0.3, TopTokens: 8192}}
-	assert.Contains(t, engineInfoText(e), "; step budget binding binds (30% of iterations above 4096 tokens; 99.9% of iterations at or under 8192 tokens), "+notPricedYetWording)
+		StepBudgetBinding: &whatifapi.StepBudgetBinding{Class: "binds", BoundTokens: 8192, OverShare: 0.1, NearTokens: 4096,
+			Share: 0.3, TopTokens: 16384}}
+	assert.Contains(t, engineInfoText(e), "; step budget binding binds (10% of iterations above 8192 tokens, the budget's bound: "+
+		"prompts it chunked; 30% above 4096; 99.9% of iterations at or under 16384 tokens), "+notPricedYetWording)
 	e.StepBudgetBinding = nil
 	assert.NotContains(t, engineInfoText(e), "binding")
 }

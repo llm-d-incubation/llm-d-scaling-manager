@@ -43,10 +43,10 @@ var predictionReadReplicaQueries = map[string]func(rm *domain.ReplicaMetrics){
 	registration.QueryQueueTimeBuckets:      func(rm *domain.ReplicaMetrics) { rm.QueueTimeBuckets = nil },
 	registration.QueryPromptTokensBuckets:   func(rm *domain.ReplicaMetrics) { rm.PromptTokensBuckets = nil },
 	registration.QueryComputedTokensBuckets: func(rm *domain.ReplicaMetrics) { rm.ComputedTokensBuckets = nil },
-	// The tokens per iteration: whether the step budget binds, the engine class
-	// the v2 models' queue prior and aggregated model key on
-	// (capacity.ReadStepBudgetBinding over capacity.PoolStepTokens of the
-	// variant's PredictionRows).
+	// The tokens per iteration: whether the step budget binds, the engine
+	// class the v2 models' queue prior and aggregated model will key on
+	// (capacity.EngineParams.StepBudgetBinding over a capacity.StepTokens of
+	// the variant's PredictionRows).
 	registration.QueryIterationTokensBuckets: func(rm *domain.ReplicaMetrics) { rm.IterationTokensBuckets = nil },
 }
 

@@ -256,21 +256,23 @@ type EngineInfo struct {
 // engine's tokens per iteration (vllm:iteration_tokens_total: the computed
 // prompt tokens of the prefills an iteration completed, each whole, and the
 // tokens it generated) over the window against StepBudget
-// (capacity.ReadStepBudgetBinding). Class is "binds", "does-not-bind" or
-// "unknown", and Reason says why it is unknown. Share is the share of
-// iterations above NearTokens, the largest bound under 90% of the budget;
-// OverShare the share above the budget's own bound, completions of prompts
-// the budget chunked. TopTokens is the bound at or under which 99.9% of the
+// (capacity.StepTokens.Binding). Class is "binds", "does-not-bind" or
+// "unknown", and Reason says why it is unknown. The class is decided on
+// OverShare, the share of iterations above BoundTokens, the smallest bound at
+// or over the budget: completions of prompts the budget chunked. Share, the
+// share above NearTokens (the largest bound under 90% of the budget), is a
+// diagnostic. TopTokens is the bound at or under which 99.9% of the
 // iterations counted, a floor where TopOpen. Reported only: no figure reads
 // it yet.
 type StepBudgetBinding struct {
-	Class      string  `json:"class"`
-	Reason     string  `json:"reason,omitempty"`
-	NearTokens float64 `json:"nearTokens,omitempty"`
-	Share      float64 `json:"share"`
-	OverShare  float64 `json:"overShare,omitempty"`
-	TopTokens  float64 `json:"topTokens,omitempty"`
-	TopOpen    bool    `json:"topOpen,omitempty"`
+	Class       string  `json:"class"`
+	Reason      string  `json:"reason,omitempty"`
+	BoundTokens float64 `json:"boundTokens,omitempty"`
+	OverShare   float64 `json:"overShare"`
+	NearTokens  float64 `json:"nearTokens,omitempty"`
+	Share       float64 `json:"share"`
+	TopTokens   float64 `json:"topTokens,omitempty"`
+	TopOpen     bool    `json:"topOpen,omitempty"`
 }
 
 // Observed is the traffic the source saw.
