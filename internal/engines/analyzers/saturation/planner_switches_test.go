@@ -30,7 +30,7 @@ func TestPlannerSwitches_OffFromTheConstructor(t *testing.T) {
 		SwitchTPOTRatioCensored, SwitchDecodeResidencePull, SwitchDecodeBurstFill, SwitchBacktestStepOutputDispersion,
 		SwitchPlannerCapAtStepBudget, SwitchPrefillVPFloorServed, SwitchPrefillVPServedUnqueued, SwitchPrefillVPWindowBest, SwitchPrefillVPAtServedWork, SwitchMoEBusiestRank,
 		SwitchITLBatchTerm, SwitchPrefillVPOccupancyPlateau, SwitchPrefillVPPromptCoverage, SwitchPrefillVPLoneRate, SwitchPrefillVPServiceLine, SwitchPrefillHitAtCount,
-		SwitchPrefillFLoadCurve, SwitchStepBudgetFullReading} {
+		SwitchPrefillFLoadCurve, SwitchStepBudgetPromptReading} {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s is planner-only: off from the constructor", name)
 	}

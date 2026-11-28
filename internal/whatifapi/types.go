@@ -274,13 +274,14 @@ type EngineInfo struct {
 // diagnostic. TopTokens is the bound at or under which 99.9% of the
 // iterations counted, a floor where TopOpen.
 //
-// Where the planner reads them (saturation.SwitchStepBudgetFullReading, on by
-// default), the class also binds where PromptOverShare reaches the same
-// share: the share of computed prompts (Prompts of them) above
-// PromptBoundTokens, the smallest bound of their histogram at or over the
-// budget, each of them chunked. On a speculating decode pool the iterations
-// are read against EmittedBudgetTokens, the budget in emitted tokens,
-// budget x (1 + Acceptance) / (1 + k). Each is absent where not read.
+// Where the planner reads them (saturation.SwitchStepBudgetPromptReading, on
+// by default), the class also binds where PromptOverShare reaches 5% (the
+// same share, of requests): the share of computed prompts (Prompts of them)
+// above PromptBoundTokens, the smallest bound of their histogram at or over
+// the budget, each of them chunked. Where the iterations have no bound at or
+// over the budget (BoundTokens absent), the prompts alone can read binds.
+// PromptBoundTokens marks the reading: all three are absent where it was not
+// read, and promptOverShare is also absent where it read 0.
 //
 // The class cannot see a budget filled by several prompts each under it:
 // no iteration then counts more than the budget (capacity's
@@ -295,11 +296,9 @@ type StepBudgetBinding struct {
 	TopTokens   float64 `json:"topTokens,omitempty"`
 	TopOpen     bool    `json:"topOpen,omitempty"`
 
-	EmittedBudgetTokens float64 `json:"emittedBudgetTokens,omitempty"`
-	Acceptance          float64 `json:"acceptance,omitempty"`
-	Prompts             float64 `json:"prompts,omitempty"`
-	PromptBoundTokens   float64 `json:"promptBoundTokens,omitempty"`
-	PromptOverShare     float64 `json:"promptOverShare,omitempty"`
+	Prompts           float64 `json:"prompts,omitempty"`
+	PromptBoundTokens float64 `json:"promptBoundTokens,omitempty"`
+	PromptOverShare   float64 `json:"promptOverShare,omitempty"`
 }
 
 // Observed is the traffic the source saw.

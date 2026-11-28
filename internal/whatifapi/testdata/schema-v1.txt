@@ -592,10 +592,8 @@ inputs.fleet.decode.engine.modelConfigSource string
 inputs.fleet.decode.engine.moe string
 inputs.fleet.decode.engine.stepBudget int64
 inputs.fleet.decode.engine.stepBudgetBinding object
-inputs.fleet.decode.engine.stepBudgetBinding.acceptance number
 inputs.fleet.decode.engine.stepBudgetBinding.boundTokens number
 inputs.fleet.decode.engine.stepBudgetBinding.class string
-inputs.fleet.decode.engine.stepBudgetBinding.emittedBudgetTokens number
 inputs.fleet.decode.engine.stepBudgetBinding.nearTokens number
 inputs.fleet.decode.engine.stepBudgetBinding.overShare number
 inputs.fleet.decode.engine.stepBudgetBinding.promptBoundTokens number
@@ -627,10 +625,8 @@ inputs.fleet.prefill.engine.modelConfigSource string
 inputs.fleet.prefill.engine.moe string
 inputs.fleet.prefill.engine.stepBudget int64
 inputs.fleet.prefill.engine.stepBudgetBinding object
-inputs.fleet.prefill.engine.stepBudgetBinding.acceptance number
 inputs.fleet.prefill.engine.stepBudgetBinding.boundTokens number
 inputs.fleet.prefill.engine.stepBudgetBinding.class string
-inputs.fleet.prefill.engine.stepBudgetBinding.emittedBudgetTokens number
 inputs.fleet.prefill.engine.stepBudgetBinding.nearTokens number
 inputs.fleet.prefill.engine.stepBudgetBinding.overShare number
 inputs.fleet.prefill.engine.stepBudgetBinding.promptBoundTokens number
@@ -1359,10 +1355,8 @@ report.fleet.decodeEngine.modelConfigSource string
 report.fleet.decodeEngine.moe string
 report.fleet.decodeEngine.stepBudget int64
 report.fleet.decodeEngine.stepBudgetBinding object
-report.fleet.decodeEngine.stepBudgetBinding.acceptance number
 report.fleet.decodeEngine.stepBudgetBinding.boundTokens number
 report.fleet.decodeEngine.stepBudgetBinding.class string
-report.fleet.decodeEngine.stepBudgetBinding.emittedBudgetTokens number
 report.fleet.decodeEngine.stepBudgetBinding.nearTokens number
 report.fleet.decodeEngine.stepBudgetBinding.overShare number
 report.fleet.decodeEngine.stepBudgetBinding.promptBoundTokens number
@@ -1391,10 +1385,8 @@ report.fleet.prefillEngine.modelConfigSource string
 report.fleet.prefillEngine.moe string
 report.fleet.prefillEngine.stepBudget int64
 report.fleet.prefillEngine.stepBudgetBinding object
-report.fleet.prefillEngine.stepBudgetBinding.acceptance number
 report.fleet.prefillEngine.stepBudgetBinding.boundTokens number
 report.fleet.prefillEngine.stepBudgetBinding.class string
-report.fleet.prefillEngine.stepBudgetBinding.emittedBudgetTokens number
 report.fleet.prefillEngine.stepBudgetBinding.nearTokens number
 report.fleet.prefillEngine.stepBudgetBinding.overShare number
 report.fleet.prefillEngine.stepBudgetBinding.promptBoundTokens number

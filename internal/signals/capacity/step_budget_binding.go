@@ -49,28 +49,24 @@ import (
 // engine iteration beside the tokens computed (vLLM records neither as a
 // series); until one is read it is left to the prefill queue's price.
 //
-// Two readings close part of the gap (BindingWith, with
-// BindingOptions; the capacity planner turns them on by
-// saturation.SwitchStepBudgetFullReading):
+// One reading closes part of the gap (BindingWith, with BindingOptions; the
+// capacity planner turns it on by saturation.SwitchStepBudgetPromptReading):
+// prompts longer than the budget, from the computed-prompt histogram
+// (domain.ReplicaMetrics.ComputedTokensBuckets, one observation per finished
+// request): PromptOverShare, the share of computed prompts above the smallest
+// bound at or over the budget. Each such prompt was chunked, whatever ran
+// beside it. The iteration share reads the same prompts diluted: on an
+// aggregated pod a request completes its prompt in one iteration and then
+// decodes for hundreds, so one prompt in two over the budget can read 0.2% of
+// iterations. Its bounds are 1-2-5 up to max_model_len, so the bound is above
+// the budget (10000 for 8192) and the share a floor: a prompt between the
+// budget and the bound was chunked and is not counted.
 //
-//   - Prompts longer than the budget, from the computed-prompt histogram
-//     (domain.ReplicaMetrics.ComputedTokensBuckets, one observation per
-//     request): PromptOverShare, the share of computed prompts above the
-//     smallest bound at or over the budget. Each such prompt was chunked,
-//     whatever ran beside it. The iteration share reads the same prompts
-//     diluted: on an aggregated pod a request completes its prompt in one
-//     iteration and then decodes for hundreds, so one prompt in two over the
-//     budget can read 0.2% of iterations.
-//   - A speculating decode pool (k = num_speculative_tokens > 0) whose
-//     acceptance was read: a step schedules 1 + k tokens per request and the
-//     series counts the 1 + alpha it emitted, so its iterations are read
-//     against the budget in emitted tokens, budget x (1 + alpha) / (1 + k),
-//     with alpha the iteration-weighted acceptance, at most k
-//     (EmittedBudget). Unread, alpha is taken at k, and the budget is read
-//     as it stands, as the decode budget reads an unread acceptance. On an
-//     aggregated pool the iteration mixes prompt tokens, scheduled one for
-//     one, with emitted ones, and no single factor converts it: it is read
-//     as it stands.
+// A decode step never counts more than the budget: it schedules at most the
+// budget and emits no more than it scheduled. So the iteration share says
+// nothing of a decode pool's budget, speculating or not, and no reading here
+// claims to (a speculating pool, whose steps emit fewer tokens than they
+// schedule, stays open in llm-d-incubation/llm-d-scaling-manager#533).
 
 // StepBudgetClass is what a pool's iterations say of its step budget.
 type StepBudgetClass string
@@ -132,8 +128,18 @@ const (
 	StepBudgetTopQuantile = 0.999
 	// StepBudgetMinPrompts is the fewest computed prompts a pool must have
 	// counted for PromptOverShare to be read, as StepBudgetMinIterations is
-	// for iterations.
+	// for iterations: at 400, a share of StepBudgetPromptBindsShare is read
+	// to the same 1.1% binomial standard error.
 	StepBudgetMinPrompts = 400.0
+	// StepBudgetPromptBindsShare is the least share of computed prompts above
+	// the budget's bound that is read as a binding budget. It is a share of
+	// requests, not of iterations: one prompt in twenty chunked. That is the
+	// same 5% as StepBudgetBindsShare on purpose, so a prefill pod, where each
+	// iteration completes about one prompt and the two shares read alike,
+	// gets one answer from either; on an aggregated pod the prompt share is
+	// the undiluted one, and 5% of requests chunked puts a chunk term in one
+	// TTFT in twenty: enough to reach a p95.
+	StepBudgetPromptBindsShare = 0.05
 )
 
 // StepTokens is a pool's tokens-per-iteration histogram: its rows' cumulative
@@ -154,11 +160,6 @@ type StepTokens struct {
 	Prompts           []domain.LengthBucket
 	PromptSamples     int
 	PromptMixedBounds bool
-	// AcceptedSum is the accepted draft tokens per step of each row, weighted
-	// by the iterations it counted, summed over AcceptedIterations
-	// (AddAcceptance): the pool's mean acceptance. Zero unless a reader pools
-	// it.
-	AcceptedSum, AcceptedIterations float64
 }
 
 // Add pools one row's histogram, domain.ReplicaMetrics.IterationTokensBuckets
@@ -178,28 +179,6 @@ func (s *StepTokens) Add(row []domain.LengthBucket, seconds float64) {
 // each bound), into Prompts, as Add pools the iterations.
 func (s *StepTokens) AddPrompts(row []domain.LengthBucket, seconds float64) {
 	poolCumulative(&s.Prompts, &s.PromptSamples, &s.PromptMixedBounds, row, seconds)
-}
-
-// AddAcceptance pools one row's accepted draft tokens per step, weighted by
-// the iterations it counted over seconds (its histogram's top rate times
-// seconds). A row with no iterations, or an acceptance that is not a finite
-// count at or above zero, adds nothing.
-func (s *StepTokens) AddAcceptance(row []domain.LengthBucket, accepted, seconds float64) {
-	if len(row) == 0 || math.IsNaN(accepted) || math.IsInf(accepted, 0) || accepted < 0 {
-		return
-	}
-	top := 0.0
-	for _, b := range row {
-		if !math.IsNaN(b.Rate) && !math.IsInf(b.Rate, 0) {
-			top = max(top, b.Rate)
-		}
-	}
-	n := top * max(seconds, 0)
-	if !(n > 0) {
-		return
-	}
-	s.AcceptedSum += accepted * n
-	s.AcceptedIterations += n
 }
 
 // poolCumulative adds one row's cumulative histogram of rates, made monotone
@@ -287,18 +266,13 @@ type StepBudgetBinding struct {
 	// the +Inf bucket, and TopTokens is then the last finite bound, a floor.
 	TopTokens float64
 	TopOpen   bool
-	// EmittedBudget is the budget in emitted tokens a speculating decode pool's
-	// iterations were read against, budget x (1 + Acceptance) / (1 + k), and
-	// Acceptance the pool's acceptance it was read at (at most k); both 0
-	// where the budget was read as it stands (BindingOptions.SpeculativeTokens).
-	EmittedBudget float64
-	Acceptance    float64
 	// Prompts is how many computed prompts the pool counted,
 	// PromptBoundTokens the smallest bound of their histogram at or over the
 	// budget, and PromptOverShare the share of prompts above it: prompts the
 	// budget chunked, a floor where the bound is above the budget. All 0 where
 	// not read (BindingOptions.Prompts, at least StepBudgetMinPrompts
-	// prompts, a bound at or over the budget).
+	// prompts, a bound at or over the budget). PromptBoundTokens marks the
+	// reading: a share of 0 with a bound is a read share of none.
 	Prompts           float64
 	PromptBoundTokens float64
 	PromptOverShare   float64
@@ -307,14 +281,12 @@ type StepBudgetBinding struct {
 // BindingOptions are the readings BindingWith adds to Binding's.
 type BindingOptions struct {
 	// Prompts reads the computed prompts above the budget (StepTokens.Prompts,
-	// PromptOverShare); the class binds where they or the iterations reach
-	// StepBudgetBindsShare.
+	// PromptOverShare); the class binds where the prompts reach
+	// StepBudgetPromptBindsShare or the iterations StepBudgetBindsShare. A
+	// histogram whose iterations have no bound at or over the budget (a
+	// budget over 16384, vLLM's last) is then classified by the prompts where
+	// they bind, and is StepBudgetTooCoarse where they do not.
 	Prompts bool
-	// SpeculativeTokens is k, num_speculative_tokens, on a decode pool: with
-	// an acceptance read (StepTokens.AcceptedIterations), its iterations are
-	// read against the budget in emitted tokens (EmittedBudget). 0 on any
-	// other pool.
-	SpeculativeTokens int
 }
 
 // StepBudgetBinding is the binding of p's step budget (StepBudget) against
@@ -381,14 +353,10 @@ func (s StepTokens) BindingWith(budget int64, o BindingOptions) StepBudgetBindin
 		return out
 	}
 	b := float64(budget)
-	if k := o.SpeculativeTokens; k > 0 && s.AcceptedIterations > 0 {
-		out.Acceptance = min(s.AcceptedSum/s.AcceptedIterations, float64(k))
-		out.EmittedBudget = b * (1 + out.Acceptance) / float64(1+k)
-		b = out.EmittedBudget
-	}
 	if o.Prompts {
-		s.readPrompts(&out, float64(budget))
+		s.readPrompts(&out, b)
 	}
+	promptsBind := out.PromptBoundTokens > 0 && out.PromptOverShare >= StepBudgetPromptBindsShare
 	for _, c := range cum {
 		if !math.IsInf(c.UpperBound, 1) && c.UpperBound < StepBudgetNearFraction*b {
 			out.NearTokens, out.Share = c.UpperBound, (total-c.Rate)/total
@@ -401,11 +369,17 @@ func (s StepTokens) BindingWith(budget int64, o BindingOptions) StepBudgetBindin
 			break
 		}
 	}
-	if !found {
+	switch {
+	case !found && promptsBind:
+		// The iterations cannot be told over the budget from under it, but
+		// the prompts are evidence enough on their own: each was chunked.
+		out.Class = StepBudgetBinds
+		return out
+	case !found:
 		out.Reason = StepBudgetTooCoarse
 		return out
 	}
-	if out.OverShare >= StepBudgetBindsShare || out.PromptOverShare >= StepBudgetBindsShare {
+	if out.OverShare >= StepBudgetBindsShare || promptsBind {
 		out.Class = StepBudgetBinds
 	} else {
 		out.Class = StepBudgetDoesNotBind

@@ -34,19 +34,18 @@ const SwitchMuAtStepBudget = "mu-at-step-budget"
 // committed recording, whose budgets all run their caps.
 const SwitchPlannerCapAtStepBudget = "planner-cap-at-step-budget"
 
-// SwitchStepBudgetFullReading is the replay switch for the two readings the
+// SwitchStepBudgetPromptReading is the replay switch for the reading the
 // step-budget class adds to the iteration share (capacity.BindingOptions,
-// issue llm-d-incubation/llm-d-scaling-manager#499): the computed prompts
+// issue llm-d-incubation/llm-d-scaling-manager#533): the computed prompts
 // longer than the budget, which an aggregated pod's decode iterations do not
-// dilute, and a speculating decode pool's iterations read in emitted tokens,
-// budget x (1 + alpha) / (1 + k). The analyzer accepts the switch and does
+// dilute. The analyzer accepts the switch and does
 // nothing with it: the class is the planner's report alone
 // (learnreplay.VariantState.StepBudgetBinding), and nothing in the controller
 // reads it. Planner-only: off from the constructor, on in the planner
 // (learnreplay.PlannerSwitches). No committed recording carries the
 // tokens-per-iteration series, so no golden moves; the evidence is synthetic
 // (the unit tests).
-const SwitchStepBudgetFullReading = "step-budget-full-reading"
+const SwitchStepBudgetPromptReading = "step-budget-prompt-reading"
 
 // atStepBudget is p held to the batch params' step budget runs, with its
 // source batchCapStepBudget where that lowers it; p itself with on false, on

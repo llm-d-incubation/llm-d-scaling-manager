@@ -18,17 +18,19 @@ const stepTokensWindow = time.Minute
 // stepTokensWindow. A row with no series adds nothing, so a recording made
 // before the series was recorded leaves steps empty.
 //
-// With full (saturation.SwitchStepBudgetFullReading), a row also adds its
-// computed-prompt histogram (capacity.StepTokens.AddPrompts), over the same
-// [1m] window, and, beside its iterations, its accepted draft tokens per step
-// (capacity.StepTokens.AddAcceptance). A row with prompts and no iteration
-// series pools its prompts, but the class is still reported only where an
-// iteration series was read (cmd/capacity-planner, stepBudgetBindingOf).
-func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.ReplicaMetrics, since time.Duration, full bool) {
+// With prompts (saturation.SwitchStepBudgetPromptReading), a row also adds
+// its computed-prompt histogram (capacity.StepTokens.AddPrompts), over the
+// same [1m] window. vLLM observes that histogram once per request, when it
+// finishes, not when its prefill ran: a minute's prompts are those that
+// finished in it, and a request that was aborted is not counted. Pooled over
+// the whole replay that is the same set of prompts, a few seconds late. A row
+// with prompts and no iteration series pools its prompts, but the class is
+// still reported only where an iteration series was read
+// (cmd/capacity-planner, stepBudgetBindingOf).
+func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.ReplicaMetrics, since time.Duration, prompts bool) {
 	seconds := min(since, stepTokensWindow).Seconds()
 	for _, rm := range rows {
-		prompts := full && len(rm.ComputedTokensBuckets) > 0
-		if len(rm.IterationTokensBuckets) == 0 && !prompts {
+		if len(rm.IterationTokensBuckets) == 0 && (!prompts || len(rm.ComputedTokensBuckets) == 0) {
 			continue
 		}
 		s := steps[rm.VariantName]
@@ -37,12 +39,8 @@ func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.Replica
 			steps[rm.VariantName] = s
 		}
 		s.Add(rm.IterationTokensBuckets, seconds)
-		if !full {
-			continue
-		}
-		s.AddPrompts(rm.ComputedTokensBuckets, seconds)
-		if rm.SpecAcceptedPerStepKnown {
-			s.AddAcceptance(rm.IterationTokensBuckets, rm.SpecAcceptedPerStep, seconds)
+		if prompts {
+			s.AddPrompts(rm.ComputedTokensBuckets, seconds)
 		}
 	}
 }
@@ -53,17 +51,11 @@ func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.Replica
 // (issue llm-d-incubation/llm-d-scaling-manager#387) and the aggregated TTFT
 // model will key on; no figure reads it yet.
 //
-// With saturation.SwitchStepBudgetFullReading on in the replay, it adds the
-// readings of capacity.BindingOptions: the computed prompts above the budget,
-// and, on a decode variant whose flags set num_speculative_tokens, its
-// iterations read in emitted tokens.
+// With saturation.SwitchStepBudgetPromptReading on in the replay, it adds the
+// reading of capacity.BindingOptions: the computed prompts above the budget.
 func (v *VariantState) StepBudgetBinding() capacity.StepBudgetBinding {
-	if !v.stepBudgetFull {
+	if !v.stepBudgetPrompts {
 		return v.Params.StepBudgetBinding(v.StepTokens)
 	}
-	o := capacity.BindingOptions{Prompts: true}
-	if domain.CanonicalRole(v.Role) == domain.RoleDecode {
-		o.SpeculativeTokens = v.Params.SpeculativeTokens()
-	}
-	return v.StepTokens.BindingWith(v.Params.StepBudget(), o)
+	return v.StepTokens.BindingWith(v.Params.StepBudget(), capacity.BindingOptions{Prompts: true})
 }

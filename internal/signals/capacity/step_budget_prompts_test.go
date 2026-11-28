@@ -42,7 +42,6 @@ func TestStepTokens_BindingWithNoOptionIsBinding(t *testing.T) {
 		stepHistogram(0, 0, 0, 0, 10, 20, 10, 5, 5, 10, 10, 20, 6, 4)} {
 		for _, budget := range []int64{0, 2048, 8192, 40000} {
 			s := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 500, 0, 500))
-			s.AddAcceptance(steps, 1, 1)
 			assert.Equal(t, s.Binding(budget), s.BindingWith(budget, BindingOptions{}))
 		}
 	}
@@ -109,6 +108,7 @@ func TestStepTokens_PromptReadingNeedsEnoughOnOneBound(t *testing.T) {
 	coarse := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 500, 0, 500))
 	got = coarse.BindingWith(40000, BindingOptions{Prompts: true})
 	assert.Equal(t, StepBudgetUnknown, got.Class, "the iterations' bounds stop at 16384")
+	assert.Equal(t, StepBudgetTooCoarse, got.Reason)
 	assert.Zero(t, got.PromptBoundTokens, "and the prompts' at 20000")
 
 	mixed := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 500, 0, 500))
@@ -119,53 +119,46 @@ func TestStepTokens_PromptReadingNeedsEnoughOnOneBound(t *testing.T) {
 	assert.Zero(t, got.PromptOverShare)
 }
 
-// A speculating decode pool, k = 3 and one draft token accepted a step: a
-// step schedules 4 tokens a request and the series counts the 2 it emitted,
-// so a step that fills the budget of 8192 counts 4096. Its iterations are
-// read against the budget in emitted tokens, 8192 x 2 / 4 = 4096: 10% of
-// them reach it, and the budget binds, where the share above 8192 read none.
-// Unread, the acceptance is taken at k and the budget is read as it stands.
-func TestStepTokens_SpeculatingDecodeReadsEmittedTokens(t *testing.T) {
-	// 1000 iterations: 900 in (2048, 4096], 100 in (4096, 8192].
-	steps := stepHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 900, 100)
-	var s StepTokens
-	s.Add(steps, 1)
+// A budget over 16384, the iterations' last bound, as a prefill pod with
+// --max-num-batched-tokens 18000 runs: no iteration can be told over the
+// budget from under it. The prompts' 1-2-5 bounds follow max_model_len and
+// still have one at or over the budget (20000), so where they bind the class
+// binds on them alone; where they do not, the class stays unknown, too coarse,
+// since the concurrent case the prompts cannot see is not ruled out either.
+// Binding, which reads no prompts, is unknown in both.
+func TestStepTokens_PromptsBindPastTheIterationsLastBound(t *testing.T) {
+	steps := bindsHistogram()
+	long := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 500, 0, 0, 500))
+	got := long.BindingWith(18000, BindingOptions{Prompts: true})
+	assert.Equal(t, StepBudgetBinds, got.Class, "half the prompts are over 20000")
+	assert.Empty(t, got.Reason)
+	assert.InDelta(t, 20000.0, got.PromptBoundTokens, 1e-9)
+	assert.InDelta(t, 0.5, got.PromptOverShare, 1e-9)
+	assert.Zero(t, got.BoundTokens, "no iteration bound at or over the budget")
+	assert.Zero(t, got.OverShare)
+	assert.InDelta(t, 8192.0, got.NearTokens, 1e-9, "the near bound is still read")
 
-	unread := s.BindingWith(8192, BindingOptions{SpeculativeTokens: 3})
-	assert.Equal(t, s.Binding(8192), unread, "no acceptance read: the budget as it stands")
-	assert.Equal(t, StepBudgetDoesNotBind, unread.Class)
+	old := long.Binding(18000)
+	assert.Equal(t, StepBudgetUnknown, old.Class)
+	assert.Equal(t, StepBudgetTooCoarse, old.Reason)
 
-	s.AddAcceptance(steps, 1, 1)
-	got := s.BindingWith(8192, BindingOptions{SpeculativeTokens: 3})
-	assert.Equal(t, StepBudgetBinds, got.Class)
-	assert.InDelta(t, 4096, got.EmittedBudget, 1e-9)
-	assert.InDelta(t, 1, got.Acceptance, 1e-9)
-	assert.InDelta(t, 4096, got.BoundTokens, 1e-9)
-	assert.InDelta(t, 0.1, got.OverShare, 1e-9)
-	assert.Equal(t, int64(8192), got.Budget, "the budget is reported as the flags set it")
-
-	// An acceptance read above k is held at k: the budget then stands.
-	var over StepTokens
-	over.Add(steps, 1)
-	over.AddAcceptance(steps, 5, 1)
-	got = over.BindingWith(8192, BindingOptions{SpeculativeTokens: 3})
-	assert.InDelta(t, 3, got.Acceptance, 1e-9)
-	assert.InDelta(t, 8192, got.EmittedBudget, 1e-9)
-	assert.Equal(t, StepBudgetDoesNotBind, got.Class)
+	short := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 990, 0, 0, 10))
+	got = short.BindingWith(18000, BindingOptions{Prompts: true})
+	assert.Equal(t, StepBudgetUnknown, got.Class, "1% of prompts over 20000: under the share")
+	assert.Equal(t, StepBudgetTooCoarse, got.Reason)
+	assert.InDelta(t, 0.01, got.PromptOverShare, 1e-9, "the prompts were read")
 }
 
-// The acceptance is weighted by the iterations each row counted, and a row
-// with none, or a reading that is no count, adds nothing.
-func TestStepTokens_AcceptanceIsIterationWeighted(t *testing.T) {
-	var s StepTokens
-	s.AddAcceptance(stepHistogram(0, 0, 0, 0, 300), 0.5, 1)
-	s.AddAcceptance(stepHistogram(0, 0, 0, 0, 100), 2.5, 1)
-	s.AddAcceptance(stepHistogram(), 9, 1)
-	s.AddAcceptance(stepHistogram(0, 0, 0, 0, 100), math.NaN(), 1)
-	s.AddAcceptance(stepHistogram(0, 0, 0, 0, 100), -1, 1)
-	s.AddAcceptance(nil, 1, 1)
-	assert.InDelta(t, 400, s.AcceptedIterations, 1e-9)
-	assert.InDelta(t, 1.0, s.AcceptedSum/s.AcceptedIterations, 1e-9)
+// The prompt share binds from StepBudgetPromptBindsShare, its own threshold:
+// just under it does not bind, at it binds.
+func TestStepTokens_PromptShareThreshold(t *testing.T) {
+	steps := freeHistogram()
+	n := 1000.0
+	over := StepBudgetPromptBindsShare * n
+	at := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, n-over, 0, over))
+	assert.Equal(t, StepBudgetBinds, at.BindingWith(8192, BindingOptions{Prompts: true}).Class)
+	under := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, n-over+1, 0, over-1))
+	assert.Equal(t, StepBudgetDoesNotBind, under.BindingWith(8192, BindingOptions{Prompts: true}).Class)
 }
 
 // Clone copies the prompts too.

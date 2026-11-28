@@ -1396,13 +1396,12 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	// tests hold them (heldBy).
 	saturation.SwitchMuAtStepBudget:         nil,
 	saturation.SwitchPlannerCapAtStepBudget: nil,
-	// llm-d-incubation/llm-d-scaling-manager#499: the step-budget class read
-	// from the computed prompts too, and in emitted tokens on a speculating
-	// decode pool. Planner-only, off from the constructor and on in the
+	// llm-d-incubation/llm-d-scaling-manager#533: the step-budget class read
+	// from the computed prompts too. Planner-only, off from the constructor and on in the
 	// planner; a report the replay reads, no figure, and no committed
 	// recording carries the tokens-per-iteration series, so no learner golden
 	// moves. Its unit tests hold it.
-	saturation.SwitchStepBudgetFullReading: nil,
+	saturation.SwitchStepBudgetPromptReading: nil,
 	// llm-d-incubation/llm-d-scaling-manager#312 reads a data-parallel MoE
 	// engine's line at its busiest rank: off from the constructor, so every
 	// golden replay runs it off, and off alone from all on moves nothing. On,
@@ -1743,15 +1742,14 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
 		{"../saturation", "TestStepBudgetCap_PlannerCapAtTheBudgetsBatch"},
 	},
-	// llm-d-incubation/llm-d-scaling-manager#499: the replay runs it on and
+	// llm-d-incubation/llm-d-scaling-manager#533: the replay runs it on and
 	// off and asserts both; the reading's own cases are capacity's.
-	saturation.SwitchStepBudgetFullReading: {
+	saturation.SwitchStepBudgetPromptReading: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
 		{".", "TestStateAt_StepBudgetBindsOnPromptsOverTheBudget"},
 		{".", "TestStateAt_StepBudgetWithoutPromptsIsUnchanged"},
-		{".", "TestVariantState_StepBudgetSpeculatingDecode"},
 		{"../../../signals/capacity", "TestStepTokens_PromptsOverTheBudgetBindOnAnAggregatedPod"},
-		{"../../../signals/capacity", "TestStepTokens_SpeculatingDecodeReadsEmittedTokens"},
+		{"../../../signals/capacity", "TestStepTokens_PromptsBindPastTheIterationsLastBound"},
 		{"../../../signals/capacity", "TestStepTokens_ConcurrentPromptsUnderTheBudgetReadDoesNotBind"},
 	},
 	// llm-d-incubation/llm-d-scaling-manager#312: off from the constructor,

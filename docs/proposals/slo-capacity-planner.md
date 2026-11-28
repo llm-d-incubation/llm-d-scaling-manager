@@ -1780,10 +1780,8 @@ roles[].inputs.engine.modelConfigSource string
 roles[].inputs.engine.moe string
 roles[].inputs.engine.stepBudget number
 roles[].inputs.engine.stepBudgetBinding object
-roles[].inputs.engine.stepBudgetBinding.acceptance number
 roles[].inputs.engine.stepBudgetBinding.boundTokens number
 roles[].inputs.engine.stepBudgetBinding.class string
-roles[].inputs.engine.stepBudgetBinding.emittedBudgetTokens number
 roles[].inputs.engine.stepBudgetBinding.nearTokens number
 roles[].inputs.engine.stepBudgetBinding.overShare number
 roles[].inputs.engine.stepBudgetBinding.promptBoundTokens number
@@ -2195,10 +2193,8 @@ roles[].ttft.prefillEngine.modelConfigSource string
 roles[].ttft.prefillEngine.moe string
 roles[].ttft.prefillEngine.stepBudget number
 roles[].ttft.prefillEngine.stepBudgetBinding object
-roles[].ttft.prefillEngine.stepBudgetBinding.acceptance number
 roles[].ttft.prefillEngine.stepBudgetBinding.boundTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.class string
-roles[].ttft.prefillEngine.stepBudgetBinding.emittedBudgetTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.nearTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.overShare number
 roles[].ttft.prefillEngine.stepBudgetBinding.promptBoundTokens number

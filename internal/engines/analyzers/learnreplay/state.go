@@ -218,10 +218,10 @@ type VariantState struct {
 	// (capacity.StepTokens.Add of domain.ReplicaMetrics.IterationTokensBuckets):
 	// whether its step budget binds (StepBudgetBinding). Empty (no Samples)
 	// where no row carried the series. With
-	// saturation.SwitchStepBudgetFullReading on it also pools the computed
-	// prompts and the acceptance (noteStepTokens), and stepBudgetFull says so.
-	StepTokens     capacity.StepTokens
-	stepBudgetFull bool
+	// saturation.SwitchStepBudgetPromptReading on it also pools the computed
+	// prompts (noteStepTokens), and stepBudgetPrompts says so.
+	StepTokens        capacity.StepTokens
+	stepBudgetPrompts bool
 	// Shape is the traffic the variant served (shapeOf).
 	Shape MeasuredShape
 	// Resident is the KV a running request held, measured over the same
@@ -371,11 +371,10 @@ type shapeSample struct {
 //     priced at fall, and the line is read at the knee's lower fill, so the
 //     ITL and TPOT at the knee fall with it. No committed recording runs a
 //     budget under its cap times 1 + k, so no golden moves with it on.
-//   - saturation.SwitchStepBudgetFullReading: the step-budget class
+//   - saturation.SwitchStepBudgetPromptReading: the step-budget class
 //     (VariantState.StepBudgetBinding) read from the computed prompts longer
-//     than the budget beside the iterations, and a speculating decode pool's
-//     iterations read in emitted tokens (capacity.BindingOptions; issue
-//     llm-d-incubation/llm-d-scaling-manager#499). Report only: no figure
+//     than the budget beside the iterations (capacity.BindingOptions; issue
+//     llm-d-incubation/llm-d-scaling-manager#533). Report only: no figure
 //     reads the class. No committed recording carries the tokens-per-iteration
 //     series, so no golden moves with it on.
 //   - slo.SwitchTTFTHopUnqueued: the router hop of the decode term read off
@@ -606,7 +605,7 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillVPFloorServed:         true,
 		saturation.SwitchPrefillVPServedUnqueued:      true,
 		saturation.SwitchPlannerCapAtStepBudget:       true,
-		saturation.SwitchStepBudgetFullReading:        true,
+		saturation.SwitchStepBudgetPromptReading:      true,
 		saturation.SwitchBacktestStepOutputDispersion: true,
 		saturation.SwitchITLBaselineFromFloor:         false,
 		saturation.SwitchITLFloorBaselineHeld:         false,
@@ -730,7 +729,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	residence := opts.Switches[PackageSaturation][saturation.SwitchDecodeResidencePull]
 	burst := opts.Switches[PackageSaturation][saturation.SwitchDecodeBurstFill]
 	stepSpread := opts.Switches[PackageSaturation][saturation.SwitchBacktestStepOutputDispersion]
-	stepBudgetFull := opts.Switches[PackageSaturation][saturation.SwitchStepBudgetFullReading]
+	stepBudgetPrompts := opts.Switches[PackageSaturation][saturation.SwitchStepBudgetPromptReading]
 	ttft.prefixAttention = opts.Switches[PackageSLO][slo.SwitchTTFTPrefixAttention]
 	ttft.computedHit = opts.Switches[PackageSLO][slo.SwitchTTFTComputedHit]
 	ttft.tierLoad = opts.Switches[PackageSLO][slo.SwitchTTFTTierLoad]
@@ -793,7 +792,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 		if len(times) > 1 {
 			since = times[len(times)-1].Sub(times[len(times)-2])
 		}
-		noteStepTokens(steps, in.ReplicaMetrics, since, stepBudgetFull)
+		noteStepTokens(steps, in.ReplicaMetrics, since, stepBudgetPrompts)
 		noteResident(resident, in, n)
 		ttft.note(in, n, ev.Now)
 		args := func(variant string) string {
@@ -827,7 +826,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 				if s := steps[v.Variant]; s != nil {
 					v.StepTokens = s.Clone()
 				}
-				v.stepBudgetFull = stepBudgetFull
+				v.stepBudgetPrompts = stepBudgetPrompts
 				if domain.CanonicalRole(v.Role) != domain.RolePrefill {
 					v.Resident = residentOf(resident[v.Variant], v.Shape)
 				}

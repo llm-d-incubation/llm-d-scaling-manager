@@ -149,17 +149,17 @@ func computedPrompts(per ...float64) []domain.LengthBucket {
 	return out
 }
 
-// fullReadingOff is the replay's switches with
-// saturation.SwitchStepBudgetFullReading off, as the controller's
+// promptReadingOff is the replay's switches with
+// saturation.SwitchStepBudgetPromptReading off, as the controller's
 // constructor has it.
-func fullReadingOff() Options {
-	return Options{Switches: map[string]map[string]bool{PackageSaturation: {saturation.SwitchStepBudgetFullReading: false}}}
+func promptReadingOff() Options {
+	return Options{Switches: map[string]map[string]bool{PackageSaturation: {saturation.SwitchStepBudgetPromptReading: false}}}
 }
 
 // On an aggregated variant whose prompts are half longer than the budget,
 // the iterations above it are diluted by the decode steps: 0.5% of them, and
 // the iteration share alone reads does not bind. The planner's replay
-// (saturation.SwitchStepBudgetFullReading on in PlannerSwitches) reads the
+// (saturation.SwitchStepBudgetPromptReading on in PlannerSwitches) reads the
 // computed prompts too, and the budget binds; off, the class is as before.
 func TestStateAt_StepBudgetBindsOnPromptsOverTheBudget(t *testing.T) {
 	steps := cumulativeSteps(0, 0, 0, 0, 0, 990, 0, 0, 0, 0, 5, 0, 5)
@@ -176,7 +176,7 @@ func TestStateAt_StepBudgetBindsOnPromptsOverTheBudget(t *testing.T) {
 	// 2 pods for 2 x (60 + 5 x 15) seconds at 2 prompts a second.
 	assert.InDelta(t, 540, got.Prompts, 1e-6)
 
-	off, err := StateAt(context.Background(), rec, fullReadingOff(), StateQuery{})
+	off, err := StateAt(context.Background(), rec, promptReadingOff(), StateQuery{})
 	require.NoError(t, err)
 	old := off.Variants[0].StepBudgetBinding()
 	assert.Equal(t, capacity.StepBudgetDoesNotBind, old.Class)
@@ -196,37 +196,9 @@ func TestStateAt_StepBudgetWithoutPromptsIsUnchanged(t *testing.T) {
 		rec := stepBudgetRecording(t, steps)
 		on, err := StateAt(context.Background(), rec, Options{}, StateQuery{})
 		require.NoError(t, err)
-		off, err := StateAt(context.Background(), rec, fullReadingOff(), StateQuery{})
+		off, err := StateAt(context.Background(), rec, promptReadingOff(), StateQuery{})
 		require.NoError(t, err)
 		assert.Equal(t, off.Variants[0].StepBudgetBinding(), on.Variants[0].StepBudgetBinding())
 		assert.Equal(t, off.Variants[0].StepTokens, on.Variants[0].StepTokens)
 	}
-}
-
-// A decode variant that speculates (k = 3) reads its iterations against the
-// budget in emitted tokens at its pooled acceptance; an aggregated one, whose
-// iterations mix prompt tokens with emitted ones, reads the budget as it
-// stands.
-func TestVariantState_StepBudgetSpeculatingDecode(t *testing.T) {
-	params := &capacity.EngineParams{Engine: inferenceengine.EngineVLLM, MaxNumBatchedTokens: 8192,
-		SpeculativeConfig: `{"method":"mtp","num_speculative_tokens":3}`}
-	steps := cumulativeSteps(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 900, 100)
-	var pool capacity.StepTokens
-	pool.Add(steps, 1)
-	pool.AddAcceptance(steps, 1, 1)
-
-	decode := VariantState{Role: domain.RoleDecode, Params: params, StepTokens: pool, stepBudgetFull: true}
-	got := decode.StepBudgetBinding()
-	assert.Equal(t, capacity.StepBudgetBinds, got.Class)
-	assert.InDelta(t, 4096, got.EmittedBudget, 1e-9)
-
-	both := decode
-	both.Role = domain.RoleBoth
-	assert.Equal(t, capacity.StepBudgetDoesNotBind, both.StepBudgetBinding().Class)
-	assert.Zero(t, both.StepBudgetBinding().EmittedBudget)
-
-	off := decode
-	off.stepBudgetFull = false
-	assert.Equal(t, params.StepBudgetBinding(pool), off.StepBudgetBinding())
-	assert.Equal(t, capacity.StepBudgetDoesNotBind, off.StepBudgetBinding().Class)
 }
