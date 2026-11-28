@@ -1,12 +1,12 @@
 package learnreplay
 
 import (
-	"math"
 	"slices"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 )
 
@@ -65,13 +65,9 @@ func noteResident(resident map[string][]residentSample, in domain.AnalyzerInput,
 		if domain.CanonicalRole(roles[rm.VariantName]) == domain.RolePrefill {
 			continue
 		}
-		if !rm.Ready || rm.FromWarmPool || !rm.RunningRequestsKnown || !rm.KvUsageInstantKnown || rm.RunningRequests <= 0 {
-			continue
-		}
-		if rm.TotalKvCapacityTokens <= 0 || rm.TotalKvCapacityTokens == math.MaxInt64 {
-			continue
-		}
-		if !(rm.KvUsageInstant >= bottom && rm.KvUsageInstant <= 1) {
+		// The saturation analyzer's row rule (fleetResidentKVPerRequest).
+		tokens, running, ok := fleet.ResidentRead(rm, bottom)
+		if !ok {
 			continue
 		}
 		s := now[rm.VariantName]
@@ -79,8 +75,8 @@ func noteResident(resident map[string][]residentSample, in domain.AnalyzerInput,
 			s = &residentSample{cycle: cycle}
 			now[rm.VariantName] = s
 		}
-		s.tokens += rm.KvUsageInstant * float64(rm.TotalKvCapacityTokens)
-		s.running += rm.RunningRequests
+		s.tokens += tokens
+		s.running += running
 	}
 	for v, s := range now {
 		resident[v] = append(resident[v], *s)

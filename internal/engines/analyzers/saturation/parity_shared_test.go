@@ -121,3 +121,31 @@ func TestParity_TheDecodeBacklogIsOneRule(t *testing.T) {
 	rm.RunningRequests = 16
 	assert.Equal(t, rm, decodeCapacityView(rm, domain.RoleDecode, 16), "at the cap: the full queue")
 }
+
+// The KV per request reads each row by one rule (fleet.ResidentRead): the
+// fleet's reading here, the capacity planner's per variant
+// (learnreplay's TestParity_TheResidentRowIsOneRule pins the same rows to
+// the same sums). Three rows count, 210,000 tokens over 100 running; a row
+// under the band, one not Ready and one lent by the warm pool do not.
+func TestParity_TheResidentRowIsOneRule(t *testing.T) {
+	row := func(kv float64, capTokens int64, running int) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{VariantName: "dec", Ready: true, KvUsageInstant: kv, KvUsageInstantKnown: true,
+			RunningRequests: running, RunningRequestsKnown: true, TotalKvCapacityTokens: capTokens}
+	}
+	notReady, lent := row(0.9, 100_000, 10), row(0.9, 100_000, 10)
+	notReady.Ready, lent.FromWarmPool = false, true
+	rows := []domain.ReplicaMetrics{row(0.5, 100_000, 50), row(0.3, 200_000, 20), row(1.0, 100_000, 30),
+		row(0.1, 100_000, 10), notReady, lent}
+	var tokens float64
+	var running int
+	for _, rm := range rows {
+		if tk, n, ok := fleet.ResidentRead(rm, 0.15); ok {
+			tokens, running = tokens+tk, running+n
+		}
+	}
+	got := fleetResidentKVPerRequest(rows, map[string]string{"dec": domain.RoleDecode}, 0.15)
+	assert.Equal(t, tokens, got.tokens, "the shared reading, byte for byte")
+	assert.Equal(t, running, got.running)
+	assert.InDelta(t, 210_000, got.tokens, 1e-6)
+	assert.Equal(t, 100, got.running)
+}

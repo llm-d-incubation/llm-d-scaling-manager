@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/config"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 )
@@ -83,4 +84,39 @@ func TestParity_TheAcceptedPerStepIsOneRule(t *testing.T) {
 
 	rm.SpecAcceptedPerStepKnown = false
 	assert.InDelta(t, 18.0, rowSequences(rm), 1e-12, "no reading: one token a step")
+}
+
+// The planner's resident KV reads each row by the saturation analyzer's rule
+// (fleet.ResidentRead, saturation's TestParity_TheResidentRowIsOneRule pins
+// the same rows): 210,000 tokens over 100 running. What differs is kept on
+// each side: the planner sums a variant's rows per cycle and takes the
+// median of at least minResidentCycles cycles (residentOf), the analyzer
+// sums the fleet's for the one cycle and adds the requests that hold KV
+// without running on a split decode.
+func TestParity_TheResidentRowIsOneRule(t *testing.T) {
+	row := func(kv float64, capTokens int64, running int) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{VariantName: "dec", Ready: true, KvUsageInstant: kv, KvUsageInstantKnown: true,
+			RunningRequests: running, RunningRequestsKnown: true, TotalKvCapacityTokens: capTokens}
+	}
+	notReady, lent := row(0.9, 100_000, 10), row(0.9, 100_000, 10)
+	notReady.Ready, lent.FromWarmPool = false, true
+	rows := []domain.ReplicaMetrics{row(0.5, 100_000, 50), row(0.3, 200_000, 20), row(1.0, 100_000, 30),
+		row(0.1, 100_000, 10), notReady, lent}
+	bottom, _ := (&config.ScalingPolicy{}).ITLBand()
+	require.Equal(t, 0.15, bottom, "precondition: the band the saturation side reads at")
+	var tokens float64
+	var running int
+	for _, rm := range rows {
+		if tk, n, ok := fleet.ResidentRead(rm, bottom); ok {
+			tokens, running = tokens+tk, running+n
+		}
+	}
+	in := domain.AnalyzerInput{Config: &config.ScalingPolicy{}, ReplicaMetrics: rows,
+		VariantStates: []domain.VariantReplicaState{{VariantName: "dec", Role: domain.RoleDecode}}}
+	got := map[string][]residentSample{}
+	noteResident(got, in, 3)
+	require.Len(t, got["dec"], 1)
+	assert.Equal(t, residentSample{cycle: 3, tokens: tokens, running: running}, got["dec"][0], "the shared reading, byte for byte")
+	assert.InDelta(t, 210_000, got["dec"][0].tokens, 1e-6)
+	assert.Equal(t, 100, got["dec"][0].running)
 }

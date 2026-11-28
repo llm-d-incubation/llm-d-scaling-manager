@@ -6,6 +6,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/shape"
 )
 
@@ -321,20 +322,15 @@ func fleetResidentKVPerRequest(replicas []domain.ReplicaMetrics, rolesByVariant 
 	r := residentReading{minK: minK}
 	split := domain.HasPrefill(rolesByVariant)
 	for _, rm := range replicas {
-		if !rm.Ready || rm.FromWarmPool || !generatesOutput(rm, rolesByVariant) {
+		if !generatesOutput(rm, rolesByVariant) {
 			continue
 		}
-		if !rm.RunningRequestsKnown || !rm.KvUsageInstantKnown || rm.RunningRequests <= 0 {
+		tokens, running, ok := fleet.ResidentRead(rm, minK)
+		if !ok {
 			continue
 		}
-		if rm.TotalKvCapacityTokens <= 0 || rm.TotalKvCapacityTokens == math.MaxInt64 {
-			continue
-		}
-		if !(rm.KvUsageInstant >= minK && rm.KvUsageInstant <= 1) {
-			continue
-		}
-		r.tokens += rm.KvUsageInstant * float64(rm.TotalKvCapacityTokens)
-		r.running += rm.RunningRequests
+		r.tokens += tokens
+		r.running += running
 		if split && domain.CanonicalRole(rolesByVariant[rm.VariantName]) == domain.RoleDecode {
 			r.holding += holdingNotRunning(rm)
 		}
