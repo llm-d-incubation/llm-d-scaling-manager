@@ -1296,6 +1296,11 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
 	saturation.SwitchITLHoldSteadySlope:     nil,
 	saturation.SwitchITLLineAtFloor:         nil,
+
+	// Queueing review F7: the drain price counted from when the capacity it
+	// orders lands. Planner-only, as the switches above.
+	saturation.SwitchQueueDrainFluidAfterStart: nil,
+
 	// llm-d-incubation/llm-d-scaling-manager#279: R_q by interval-censored
 	// maximum likelihood. Planner-only, off; read by the planner's answer,
 	// not the replay, so no learner golden moves. Its unit tests hold it.
@@ -1774,6 +1779,12 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/prefill", "TestImbalance_TooFewBusyMinutesTakeTheBusiest"},
 		{"../../../signals/prefill", "TestImbalance_BusyIsComputedTokensNotRequests"},
 		{"../saturation", "TestPrefillFBusyMinutes_LightMinutesThroughAnalyze"},
+	},
+	saturation.SwitchQueueDrainFluidAfterStart: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../saturation", "TestQueueDrainFluid_TheFluidCountClearsByTheHorizon"},
+		{"../saturation", "TestQueueDrainFluid_PricesTheQueueAtLanding"},
+		{"../saturation", "TestQueueDrainFluid_TheHeldPriceIsCountedAtLanding"},
 	},
 	saturation.SwitchPrefillFPooledMinutes: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},

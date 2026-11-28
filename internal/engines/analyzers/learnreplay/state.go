@@ -397,6 +397,12 @@ type shapeSample struct {
 //     (both off, below) it deepens two Qwen3-32B A-off TTFT steps already
 //     under (mean 0.69 to 0.46 of measured): look at those again before
 //     the hold and the lift go on.
+//   - saturation.SwitchQueueDrainFluidAfterStart: the drain price of a
+//     queued role counted from when the capacity it orders lands, the queue
+//     carried there by the replicas already serving (queueing review F7).
+//     Off, a queue is priced to clear within max(60 s, start) of now, which
+//     leaves capacity ordered now no time to work once the start is 60 s or
+//     more. Off from the controller's constructor.
 //   - slo.SwitchTTFTRouterWaitInPrefill: the router's wait past the prefill
 //     onset priced inside the processor-sharing prefill price, at
 //     whatif.DefaultRouterWaitInPrefill (issue
@@ -597,6 +603,7 @@ func PlannerSwitches() map[string]map[string]bool {
 		saturation.SwitchPrefillVPServedUnqueued:      true,
 		saturation.SwitchPlannerCapAtStepBudget:       true,
 		saturation.SwitchBacktestStepOutputDispersion: true,
+		saturation.SwitchQueueDrainFluidAfterStart:    true,
 		saturation.SwitchITLBaselineFromFloor:         false,
 		saturation.SwitchITLFloorBaselineHeld:         false,
 	}, PackageSLO: {

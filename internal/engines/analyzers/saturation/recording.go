@@ -145,7 +145,7 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLBaselineFromFloor, SwitchITLFloorBaselineHeld,
 // SwitchITLOneSidedAtCap,
 // SwitchPrefillBoundHeldConfidence, SwitchThroughputFloorRaisesVariants,
-// SwitchQueuePricedAsDrain, SwitchFloorTrustReadsCompletions,
+// SwitchQueuePricedAsDrain, SwitchQueueDrainFluidAfterStart, SwitchFloorTrustReadsCompletions,
 // SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound,
 // SwitchLowerBoundCapsRouterShare, SwitchDecodeOwesRouterBacklog,
 // SwitchMuAtStepBudget and SwitchPlannerCapAtStepBudget; a name
@@ -394,6 +394,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// Issue ev-shindin/llm-scaling-manager#520: queued work priced by drain time before mu, and
 		// while the backlog grows (queue_drain.go).
 		SwitchQueuePricedAsDrain: &a.queuePricedAsDrain,
+		// Queueing review F7: the drain price counted from when the capacity
+		// it orders lands (queue_drain.go). Planner-only, off from the
+		// constructor.
+		SwitchQueueDrainFluidAfterStart: &a.queueDrainFluid,
 		// llm-d-incubation/llm-d-scaling-manager#54: the floor's trust reads
 		// the arrival rate against what the role completes, not against its
 		// resident KV over mu (throughput_floor.go).
