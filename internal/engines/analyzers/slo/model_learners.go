@@ -228,11 +228,23 @@ func HeldOutPasses(h whatif.HeldOutScore) bool {
 	return h.Steps == 0 || float64(h.Within) >= ModelMinHeldOutShare*float64(h.Steps)
 }
 
+// ModelTPOTFoldRule is the rule the TPOT learner's gate reads a fold's p90
+// counts by (tpotFoldsPass): the joint router and engine bracket the gate
+// was built on (#448, after #470). The scorer is the planner's, shared; a
+// planner change of rule is a new whatif.TPOTBracketRule, and the gate
+// takes it only by a change here, with its own evidence.
+const ModelTPOTFoldRule = whatif.TPOTBracketJointV1
+
 // tpotFoldsPass says a TPOT fit's self-check folds put the p90 in the
-// measured bucket on at least ModelMinHeldOutShare of their steps.
+// measured bucket on at least ModelMinHeldOutShare of their steps. A fold
+// scored by any rule but ModelTPOTFoldRule fails it: its counts are not the
+// ones the gate was validated on.
 func tpotFoldsPass(r whatif.TPOTDistReport) bool {
 	steps, inside := 0, 0
 	for _, f := range r.Fold {
+		if f.Rule != ModelTPOTFoldRule {
+			return false
+		}
 		steps += f.Steps
 		inside += f.P90Inside
 	}
