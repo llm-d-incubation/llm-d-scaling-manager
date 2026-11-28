@@ -7,7 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 )
 
@@ -52,4 +54,30 @@ func TestParity_TheHitAtCountAndTheFLoadCurveAreSharedAndOff(t *testing.T) {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s: off from the constructor", name)
 	}
+}
+
+// The fleet's spread of output lengths, D, is fleet.OutputMoments' reading
+// at the analyzer's weights, fleet.Mean's default: any positive request
+// rate. learnreplay's TestParity_TheOutputSpreadIsTheAnalyzersReading pins
+// the planner's reading of the same rows: one figure where every rate is
+// read; where one is not, the analyzer counts that row and the planner
+// leaves it out, and where none is, the planner weighs the rows alike.
+func TestParity_TheOutputSpreadIsShared(t *testing.T) {
+	row := func(pod string, rate, out, squared float64, known bool) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{PodName: pod, VariantName: "dec", RequestRate: rate, RequestRateKnown: known,
+			AvgInputTokens: 1000, AvgOutputTokens: out, AvgOutputTokensSquared: squared, AvgOutputTokensSquaredKnown: true}
+	}
+	rows := func(first, second bool) []domain.ReplicaMetrics {
+		return []domain.ReplicaMetrics{row("dec-0", 9, 100, 20000, first), row("dec-1", 1, 1000, 1.5e6, second)}
+	}
+	roles := map[string]string{"dec": "decode"}
+	const both = 168000.0 / (190 * 190)
+	shared, ok := fleet.OutputDispersion(rows(true, true), outputCounted(roles))
+	require.True(t, ok)
+	assert.Equal(t, shared, fleetOutputDispersion(rows(true, true), roles), "the shared reading, byte for byte")
+	assert.InDelta(t, both, fleetOutputDispersion(rows(true, true), roles), 1e-12)
+	assert.InDelta(t, both, fleetOutputDispersion(rows(true, false), roles), 1e-12,
+		"the analyzer's weights: a positive rate counts, read or not (the planner reads 2)")
+	assert.InDelta(t, both, fleetOutputDispersion(rows(false, false), roles), 1e-12,
+		"no rate read: still weighed by the rates (the planner weighs the rows alike, 760000/550^2)")
 }
