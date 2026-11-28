@@ -60,6 +60,29 @@ func TestKappa_IsTheElasticityToTheSlope(t *testing.T) {
 	}
 }
 
+// With a KV pull (HeldBefore), kappa is still the fill's elasticity to the
+// slope, but not the TPOT's: TPOT = A*k + B moves by A*k/(A*k+B) * (1+kappa),
+// which is kappa with no pull and up to kappa+1 with one, so the TPOT moves
+// at least as much as the fill and more.
+func TestKappa_WithAKVPullTheTPOTMovesMore(t *testing.T) {
+	d := smallIntercept()
+	d.HeldBefore = 0.5
+	for _, g := range []float64{0.5, 0.81} {
+		rate := rateAtGain(d, g)
+		near(t, "the gain at the rate", d.gainAt(rate), g, 1e-9)
+		fill := mustAnswer(t, FillAtRate(d, rate))
+		kappa := kappaOf(t, "fill", fill)
+		near(t, "fill elasticity", elasticity(t, d, func(d Decode) Result { return FillAtRate(d, rate) }), kappa, 1e-5*kappa)
+		tpot := func(d Decode) Result { return SLOAtReplicas(d, ReplicasQuery{Rate: rate}).MeanTPOT }
+		got := elasticity(t, d, tpot)
+		ak := d.Line.A * fill.Value
+		near(t, "TPOT elasticity", got, ak/(ak+d.Line.B)*(1+kappa), 1e-5*kappa)
+		if !(got > kappa*(1+1e-3) && got < kappa+1) {
+			t.Errorf("g %g: TPOT elasticity %g, want it past kappa %g and under kappa+1", g, got, kappa)
+		}
+	}
+}
+
 // Every forward figure carries kappa: the knee at its own rate, the fill,
 // the operating rate and both TPOTs at theirs. The inverse one does not.
 func TestKappa_OnEveryForwardFigure(t *testing.T) {

@@ -377,8 +377,8 @@ type Figure struct {
 	Band  *Band    `json:"band,omitempty"`
 	// Kappa is the decode loop's condition number at the figure's rate,
 	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
-	// ITL line's slope moves the fill, and the TPOT read there, about kappa
-	// times as much. It is on every forward decode figure (the decode knee,
+	// ITL line's slope moves the fill about kappa times as much, and the
+	// TPOT read there as much or, with a KV pull, up to once more. It is on every forward decode figure (the decode knee,
 	// the fill and the operating rate, and the TPOTs at a rate) and moves
 	// none of them; absent on an inverse figure (a rate for a target), on a
 	// TTFT, and where the gain is not under 1.

@@ -13,8 +13,9 @@ import (
 // Every forward decode figure carries kappa = g/(1-g), g the loop gain at
 // its rate, in the JSON and the API. The text says so only past
 // whatif.KappaNoteAbove (4, a gain of 0.8): there a 1% error in the ITL
-// line's slope moves the fill and the TPOT by 4% or more, and the figure
-// rests mostly on the slope. The note moves no figure.
+// line's slope moves the fill by 4% or more, and the TPOT by as much or,
+// with a KV pull, more; the figure rests mostly on the slope. The note
+// moves no figure.
 
 // kappaAt is one forward decode figure's condition number, by what the
 // text calls the figure.
@@ -35,8 +36,8 @@ func kappaNote(indent string, figures ...kappaAt) string {
 	if len(past) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%scondition: kappa %s, past %s: a 1%% error in the ITL line's slope moves the fill and the TPOT there "+
-		"about kappa%%, so these figures rest mostly on the slope\n", indent, strings.Join(past, ", "), num(whatif.KappaNoteAbove))
+	return fmt.Sprintf("%scondition: kappa %s, past %s: a 1%% error in the ITL line's slope moves the fill there about kappa%% "+
+		"and the TPOT as much or more, so these figures rest mostly on the slope\n", indent, strings.Join(past, ", "), num(whatif.KappaNoteAbove))
 }
 
 // kappaOf is a Result's kappa, nil for a refusal or a figure with none.

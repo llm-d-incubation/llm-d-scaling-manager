@@ -18,7 +18,7 @@ func TestKappaNote(t *testing.T) {
 	}
 	got := kappaNote("  ", kappaAt{"the operating rate", kappaPtr(6.14)}, kappaAt{"the knee", kappaPtr(9)}, kappaAt{"2x", kappaPtr(2)})
 	want := "  condition: kappa 6.1 at the operating rate, 9.0 at the knee, past 4: a 1% error in the ITL line's slope moves the fill " +
-		"and the TPOT there about kappa%, so these figures rest mostly on the slope\n"
+		"there about kappa% and the TPOT as much or more, so these figures rest mostly on the slope\n"
 	if got != want {
 		t.Errorf("note\n%q\nwant\n%q", got, want)
 	}

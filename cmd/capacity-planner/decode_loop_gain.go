@@ -30,10 +30,11 @@ const decodeLoopGainUsage = "opt-in: report each decode TPOT's loop gain, how mu
 
 // withLoopGain is r, a decode TPOT priced at rate, with its loop gain, and
 // flagged whatif.DecodeLoopGain where it is high; r as it is with the switch
-// off, on a refusal, or where the closed form prices no TPOT at rate.
+// off, on a refusal, at a rate not above 0 (a refused rate reads as 0), or
+// where the closed form prices no TPOT at rate.
 func (pv pricedVariant) withLoopGain(r whatif.Result, rate float64) whatif.Result {
 	a, ok := r.(whatif.Answer)
-	if !pv.loopGain || !ok {
+	if !pv.loopGain || !ok || !(rate > 0) {
 		return r
 	}
 	g, ok := whatif.LoopGainAt(pv.decode, rate)

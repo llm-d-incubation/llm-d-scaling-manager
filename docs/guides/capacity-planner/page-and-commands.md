@@ -426,7 +426,8 @@ it, and `POST /v1/inputs` takes `decodeLoopGain` ([API](api.md)).
 **How far to trust a forward decode figure (`kappa`).** With no flag, every
 decode knee, KV fill, operating rate and TPOT at a rate carries `kappa` in
 the JSON and the API: g/(1 - g) at the figure's rate. A 1% error in the ITL
-line's slope moves that fill and TPOT by about `kappa`%. Over 4 (g over
+line's slope moves that fill by about `kappa`%, and its TPOT by as much
+or, with a KV pull, up to 1 point more. Over 4 (g over
 0.8), the text says so under the figures, as `condition: kappa ... past 4`:
 the figure rests mostly on the slope, and a small slope error is a large
 figure error. A rate for a target carries no `kappa`: it is not amplified so.

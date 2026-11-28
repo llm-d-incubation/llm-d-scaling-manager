@@ -74,14 +74,18 @@ func (g LoopGain) String() string {
 // Kappa is the condition number of the gain: g/(1-g).
 func (g LoopGain) Kappa() (float64, bool) { return Kappa(g.Gain) }
 
-// The decode loop's condition number (expert review B1, first step).
+// The decode loop's condition number (llm-d-incubation/llm-d-scaling-manager#536).
 //
-// With no HeldBefore, burst or batch term, ln k = ln(c*B) - ln(1 - c*A), so
+// With no burst or batch term, ln k = ln(c*(H/S + B)) - ln(1 - c*A), with H
+// the HeldBefore and S the steps, so
 //
-//	kappa = d ln k / d ln A = g/(1-g),
+//	kappa = d ln k / d ln A = g/(1-g):
 //
-// and the TPOT the line reads there, B/(1-g), moves by the same share: a
-// relative slope error e moves the fill and the TPOT by about kappa*e. The
+// a relative slope error e moves the fill by about kappa*e. The TPOT the
+// line reads there, A*k + B, moves by A*k/(A*k+B) * (1+kappa) times e: with
+// no HeldBefore that is kappa again (the TPOT is B/(1-g)), and with one it
+// is more, under kappa+1. With a batch term g holds the term's slope too
+// (slopeAt), so kappa is the elasticity to both slopes together. The
 // inverse questions are not amplified so: d ln(rate) / d ln A at a fixed
 // fill is -g, at most 1 in size. So kappa is reported on the forward
 // figures only, the knee and the fill, rate and TPOTs at a rate, and

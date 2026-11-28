@@ -389,8 +389,9 @@ type wireAnswer struct {
 	Band  *wireInterval `json:"band,omitempty"`
 	// Kappa is the decode loop's condition number at the figure's rate,
 	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
-	// ITL line's slope moves the fill, and the TPOT read there, about kappa
-	// times as much. On every forward decode figure (the knee, the operating
+	// ITL line's slope moves the fill about kappa times as much, and the
+	// TPOT read there as much or, with a KV pull, up to once more. On every
+	// forward decode figure (the knee, the operating
 	// rate and the TPOTs); absent on an inverse one, on a TTFT, and where
 	// the gain is not under 1. It moves no figure.
 	Kappa *float64  `json:"kappa,omitempty"`

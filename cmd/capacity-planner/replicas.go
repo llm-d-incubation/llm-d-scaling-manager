@@ -196,7 +196,8 @@ func replicasAt(pv pricedVariant, fleet *pricedFleet, ttft *ttftQuestion, query 
 	}
 	slo := whatif.SLOAtReplicas(pv.decode, query)
 	// The rate the TPOTs are priced at, before an operating point's TTFT
-	// rewrites the answer (onRate).
+	// rewrites the answer (onRate). A refused rate reads as 0, which
+	// withLoopGain skips.
 	rate, _ := valueOf(slo.Rate)
 	if slo.PercentileTPOT != nil {
 		slo.PercentileTPOT = withRatioRefusal(slo.PercentileTPOT, r.refused)
