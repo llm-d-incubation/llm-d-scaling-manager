@@ -122,6 +122,76 @@ func TestFloorUnderThePinnedBKeepsTheDrawCentred(t *testing.T) {
 	}
 }
 
+// Where a line has no intercept to draw (newInterceptDraw) the switch draws
+// nothing: an above-band line, a Baseline that is no time, readings with no
+// spread in k. With DrawB set, each case has no draw, its resamples are the
+// ones with DrawB unset, and a pinned resample keeps Baseline. A pinned line
+// on readings with spread is the case the draw moves. The line priced
+// one-sided at a prior is in TestBootstrapPricesTheOneSidedLineTheControllerDid.
+//
+// Seen through BootstrapLines alone these cases would keep Baseline even
+// without their guard (an above-band refit takes no intercept, a Baseline
+// that is no time fits no pinned line, and readings with no spread read no
+// intercept), so the draw itself is asserted absent.
+func TestInterceptDrawExclusions(t *testing.T) {
+	spread := readingsOn(worked, 40, 0.40, 0.65, 0.05)
+	flat := readingsOn(worked, 40, 0.50, 0.50, 0.05)
+	above := itl.KeyReadings{Above: spread.All, AboveSteady: spread.Steady}
+	pinnedAt := func(b float64) Refit { return Refit{Tier: TierPinnedB, Line: worked, Baseline: b} }
+	for _, c := range []struct {
+		name  string
+		rs    itl.KeyReadings
+		fit   Refit
+		drawn bool
+	}{
+		{"pinned on readings with spread", spread, pinnedAt(worked.B), true},
+		{"above the band", above, Refit{Tier: TierAboveBand, Line: worked, Baseline: worked.B}, false},
+		{"baseline zero", spread, pinnedAt(0), false},
+		{"baseline NaN", spread, pinnedAt(math.NaN()), false},
+		{"baseline infinite", spread, pinnedAt(math.Inf(1)), false},
+		{"no spread in k", flat, pinnedAt(worked.B), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			on := c.fit
+			on.DrawB = true
+			all := c.rs.All
+			if c.fit.Tier == TierAboveBand {
+				all = c.rs.Above
+			}
+			if ic := newInterceptDraw(all, on); (ic != nil) != c.drawn {
+				t.Fatalf("draw %+v, want one %v", ic, c.drawn)
+			}
+			got := BootstrapLines(c.rs, on, DefaultResampling())
+			off := BootstrapLines(c.rs, c.fit, DefaultResampling())
+			// A Baseline that is no time fits no pinned line (itl.Refit), so
+			// those cases have no resamples on either side.
+			validBaseline := c.fit.Baseline > 0 && !math.IsInf(c.fit.Baseline, 0)
+			if len(got.Lines) != len(off.Lines) || (len(got.Lines) > 0) != validBaseline {
+				t.Fatalf("%d resamples with the draw, %d without: want the same, some only with a baseline that is a time", len(got.Lines), len(off.Lines))
+			}
+			pinned, moved := 0, 0
+			for i, s := range got.Lines {
+				if s.Line != off.Lines[i].Line {
+					moved++
+				}
+				if s.Tier == TierPinnedB && c.fit.Tier == TierPinnedB {
+					pinned++
+					if !c.drawn && math.Float64bits(s.Line.B) != math.Float64bits(c.fit.Baseline) {
+						t.Fatalf("resample %d B %v, want the baseline %v", i, s.Line.B, c.fit.Baseline)
+					}
+				}
+			}
+			t.Logf("%d of %d resamples moved by the draw, %d pinned", moved, len(got.Lines), pinned)
+			if c.drawn && moved < len(got.Lines)/2 {
+				t.Errorf("the draw moved %d of %d resamples, want most", moved, len(got.Lines))
+			}
+			if !c.drawn && moved != 0 {
+				t.Errorf("the draw moved %d of %d resamples, want none", moved, len(got.Lines))
+			}
+		})
+	}
+}
+
 // splitAt is how many of xs are at or under x, and how many at or over it.
 func splitAt(xs []float64, x float64) (under, over int) {
 	for _, v := range xs {

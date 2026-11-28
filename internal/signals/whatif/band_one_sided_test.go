@@ -59,10 +59,21 @@ func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 			t.Fatalf("resample %+v: want the pinned-B line through the default B", s)
 		}
 	}
+	// A line priced one-sided at a prior has its B by design: the intercept
+	// draw (Refit.DrawB) leaves it, and every resample, where it was.
+	drawn := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line.Model, Baseline: itl.DefaultBaselineSec, OneSided: adm, DrawB: true}, DefaultResampling())
+	if len(drawn.Lines) != len(on.Lines) {
+		t.Fatalf("%d resamples with the draw, %d without", len(drawn.Lines), len(on.Lines))
+	}
+	for i, s := range drawn.Lines {
+		if s.Line != on.Lines[i].Line || s.Line.B != itl.DefaultBaselineSec {
+			t.Fatalf("resample %d %+v with the draw, want %+v through the default B", i, s.Line, on.Lines[i].Line)
+		}
+	}
 	// The negative control: without the admission the resamples price the
-	// fit through the default B alone, under the truth. Read from the
-	// resamples: offBand holds the controller's figure, its point, whatever
-	// they price.
+	// fit through the default B alone, under the truth: fewer than a tenth
+	// of them reach it, the band's 90th-percentile edge under the truth put
+	// another way. Given the admission, at least nine in ten reach it.
 	overAt := func(rs LineResamples) int {
 		n := 0
 		for _, s := range rs.Lines {
@@ -72,10 +83,14 @@ func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 		}
 		return n
 	}
-	over := overAt(off)
-	t.Logf("resamples at or over the truth: %d of %d without the admission, %d of %d with it", over, len(off.Lines), overAt(on), len(on.Lines))
+	over, onOver := overAt(off), overAt(on)
+	t.Logf("resamples at or over the truth: %d of %d without the admission, %d of %d with it", over, len(off.Lines), onOver, len(on.Lines))
 	if !(float64(over) < (1-bandHi)*float64(len(off.Lines))) {
 		t.Errorf("negative control: without the admission %d of %d resamples price at or over the truth %.5f, want under a tenth",
 			over, len(off.Lines), truth.ITLAt(kPrice))
+	}
+	if !(float64(onOver) >= bandHi*float64(len(on.Lines))) {
+		t.Errorf("given the admission %d of %d resamples price at or over the truth %.5f, want nine in ten",
+			onOver, len(on.Lines), truth.ITLAt(kPrice))
 	}
 }

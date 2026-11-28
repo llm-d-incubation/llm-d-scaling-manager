@@ -442,20 +442,24 @@ func TestStateAt_TheBandBracketsTheControllersLineOnAScopedPrior(t *testing.T) {
 	t.Logf("controller %.5f s at k %.2f; band with the admission [%.5f, %.5f], without [%.5f, %.5f]",
 		ctrl, k, band.Band.Lo, band.Band.Hi, plain.Band.Lo, plain.Band.Hi)
 	require.True(t, band.Band.Lo <= ctrl+1e-12 && ctrl <= band.Band.Hi+1e-12, "the band does not bracket the controller's line")
-	// The negative control reads the resamples: the band holds its point,
-	// the controller's figure, whatever they price.
+	// The negative control reads the resamples: without the admission fewer
+	// than a tenth reach the controller's line, the band's 90th-percentile
+	// edge under it put another way. Given the admission, nine in ten do,
+	// to the 1e-12 the bracket allows: they price the controller's line
+	// itself, some of them a rounding under it.
 	overAt := func(rs whatif.LineResamples) int {
 		n := 0
 		for _, s := range rs.Lines {
-			if got, _ := val(s.Line); got >= ctrl {
+			if got, _ := val(s.Line); got >= ctrl-1e-12 {
 				n++
 			}
 		}
 		return n
 	}
-	over := overAt(off)
-	t.Logf("resamples at or over the controller's line: %d of %d without the admission, %d of %d with it", over, len(off.Lines), overAt(on), len(on.Lines))
+	over, onOver := overAt(off), overAt(on)
+	t.Logf("resamples at or over the controller's line: %d of %d without the admission, %d of %d with it", over, len(off.Lines), onOver, len(on.Lines))
 	require.Less(t, float64(over), 0.1*float64(len(off.Lines)), "negative control: without the admission the resamples reached the controller's line")
+	require.GreaterOrEqual(t, float64(onOver), 0.9*float64(len(on.Lines)), "given the admission the resamples did not reach the controller's line")
 }
 
 // A full fit kept under the set values by the tier latch (issue ev-shindin/llm-scaling-manager#495) is
