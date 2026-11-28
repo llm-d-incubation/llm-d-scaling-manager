@@ -483,7 +483,7 @@ func KneeRate(d Decode) Result {
 func (d Decode) kneeAnswer() Answer {
 	p := d.full()
 	knee := d.kneeRate()
-	return Answer{Value: knee, Flags: p.flags(), Basis: Basis{Fill: p.fill, KneeRate: knee, BoundBy: []Bound{p.by}, Tier: d.Tier}}
+	return Answer{Value: knee, Flags: p.flags(), Basis: Basis{Fill: p.fill, KneeRate: knee, BoundBy: []Bound{p.by}, Tier: d.Tier, Kappa: d.kappaAt(knee)}}
 }
 
 // checkRate refuses a rate that is not a finite, non-negative number of
@@ -518,7 +518,7 @@ func (d Decode) fillAtRate(rate float64) Result {
 	if !ok {
 		return refuse(Saturated, fmt.Sprintf("no fill carries %.4g r/s", rate))
 	}
-	return Answer{Value: k, Basis: Basis{Fill: k, KneeRate: knee, Tier: d.Tier}}
+	return Answer{Value: k, Basis: Basis{Fill: k, KneeRate: knee, Tier: d.Tier, Kappa: d.kappaAt(rate)}}
 }
 
 // TPOTTarget is a TPOT service level: the mean, or a percentile over requests
@@ -860,8 +860,13 @@ func SLOAtReplicas(d Decode, q ReplicasQuery) DecodeSLO {
 		return every(out, u)
 	}
 	k := res.(Answer).Value
-	out.Rate = Answer{Value: rate, Basis: Basis{Fill: k, KneeRate: knee, BoundBy: rateBy, Tier: d.Tier}}
-	out.MeanTPOT = d.tpotAt(k, knee, one(), nil)
+	// Every figure at the rate carries the loop's condition there, its own
+	// copy; it moves none of them.
+	kappa := func() *float64 { return d.kappaAt(rate) }
+	out.Rate = Answer{Value: rate, Basis: Basis{Fill: k, KneeRate: knee, BoundBy: rateBy, Tier: d.Tier, Kappa: kappa()}}
+	mean := d.tpotAt(k, knee, one(), nil)
+	mean.Basis.Kappa = kappa()
+	out.MeanTPOT = mean
 	if p := q.PercentileTarget; p != nil {
 		if p.Percentile == 0 && !p.OverTokenGaps {
 			// A percentile asked with no percentile is a caller's mistake,
@@ -873,7 +878,9 @@ func SLOAtReplicas(d Decode, q ReplicasQuery) DecodeSLO {
 		if u != nil {
 			out.PercentileTPOT = *u
 		} else {
-			out.PercentileTPOT = d.tpotAt(k, knee, r, flags)
+			pt := d.tpotAt(k, knee, r, flags)
+			pt.Basis.Kappa = kappa()
+			out.PercentileTPOT = pt
 		}
 	}
 	return out

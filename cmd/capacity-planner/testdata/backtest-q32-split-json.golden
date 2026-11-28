@@ -216,6 +216,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0027469521936638753,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -237,6 +238,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0027469521936638753,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -265,6 +267,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0027469521936638753,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -293,6 +296,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0027469521936638753,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -492,6 +496,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.002834896929513743,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -513,6 +518,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.002834896929513743,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -541,6 +547,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.002834896929513743,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -569,6 +576,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.002834896929513743,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -762,6 +770,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.001967959513109312,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -783,6 +792,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.001967959513109312,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -811,6 +821,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.001967959513109312,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -839,6 +850,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.001967959513109312,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -1026,6 +1038,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0029507097564919534,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -1047,6 +1060,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0029507097564919534,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -1075,6 +1089,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0029507097564919534,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -1103,6 +1118,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0029507097564919534,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -1290,6 +1306,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.002659967374825445,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -1311,6 +1328,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.002659967374825445,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -1339,6 +1357,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.002659967374825445,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -1367,6 +1386,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.002659967374825445,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -1553,6 +1573,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0026314848217348598,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -1574,6 +1595,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0026314848217348598,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -1602,6 +1624,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0026314848217348598,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -1630,6 +1653,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0026314848217348598,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -1817,6 +1841,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0031759343286835366,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -1838,6 +1863,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0031759343286835366,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -1866,6 +1892,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0031759343286835366,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -1894,6 +1921,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0031759343286835366,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -2081,6 +2109,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0025963081761138248,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -2102,6 +2131,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0025963081761138248,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -2130,6 +2160,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0025963081761138248,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -2158,6 +2189,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0025963081761138248,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -2335,6 +2367,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.002596433838865422,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -2356,6 +2389,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.002596433838865422,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -2384,6 +2418,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.002596433838865422,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -2406,6 +2441,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.002596433838865422,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -2582,6 +2618,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0029254443901135124,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -2603,6 +2640,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0029254443901135124,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -2631,6 +2669,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0029254443901135124,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -2653,6 +2692,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0029254443901135124,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -2829,6 +2869,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0027036788067923666,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -2850,6 +2891,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0027036788067923666,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -2878,6 +2920,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0027036788067923666,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -2900,6 +2943,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0027036788067923666,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -3087,6 +3131,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.00974921418399386,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -3108,6 +3153,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.00974921418399386,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -3136,6 +3182,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.00974921418399386,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -3164,6 +3211,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.00974921418399386,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -3271,6 +3319,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.009124066909957757,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -3292,6 +3341,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.009124066909957757,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -3320,6 +3370,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.009124066909957757,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -3348,6 +3399,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.009124066909957757,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -3544,6 +3596,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.004450747950559646,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -3565,6 +3618,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.004450747950559646,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -3593,6 +3647,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.004450747950559646,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -3621,6 +3676,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.004450747950559646,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -3805,6 +3861,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.0020240870765350183,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -3826,6 +3883,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.0020240870765350183,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -3854,6 +3912,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.0020240870765350183,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -3876,6 +3935,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.0020240870765350183,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",
@@ -4052,6 +4112,7 @@
           "predicted": {
             "value": 0.010769715956615349,
             "unit": "s",
+            "kappa": 0.001982563001461939,
             "floor": 0.010769715956615349,
             "flags": [
               "BelowFittedBand",
@@ -4073,6 +4134,7 @@
           "predicted": {
             "value": 0.013158390086100563,
             "unit": "s",
+            "kappa": 0.001982563001461939,
             "floor": 0.013158390086100563,
             "flags": [
               "BelowFittedBand",
@@ -4101,6 +4163,7 @@
           "predicted": {
             "value": 0.017880932881228485,
             "unit": "s",
+            "kappa": 0.001982563001461939,
             "floor": 0.017880932881228485,
             "flags": [
               "BelowFittedBand",
@@ -4123,6 +4186,7 @@
           "predicted": {
             "value": 0.019873981430742562,
             "unit": "s",
+            "kappa": 0.001982563001461939,
             "floor": 0.019873981430742562,
             "flags": [
               "BelowFittedBand",

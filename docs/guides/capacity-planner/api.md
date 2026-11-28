@@ -86,6 +86,28 @@ per pod at each prefill count whose fit is identified (the CLI's
 recordings only: every figure's `validation` reads OUTSIDE VALIDATED REGION,
 and the answer carries `prefillFLoadCurve: true` and its own `inputsId`.
 
+`decodeLoopGain: true` adds `loopGain` to every decode TPOT figure (the
+CLI's `--decode-loop-gain`): the loop gain at the figure's rate (`gain`), at
+the knee (`kneeGain`), and the TPOT a 5% steeper ITL slope prices over the
+figure (`move`, or `saturates`). A figure that slope moves 1.25x or more, or
+saturates, is flagged `DecodeLoopGain` and reads OUTSIDE VALIDATED REGION. No
+figure's value changes. It is off by default, and the answer carries
+`decodeLoopGain: true` and its own `inputsId`.
+
+Every forward decode figure carries `kappa`, with no flag: the decode knee,
+the KV fill and the operating rate, and each TPOT at a rate. It is the
+decode loop's condition number at the figure's rate, g/(1 - g) with g the
+loop gain: a 1% error in the ITL line's slope moves the fill by about
+`kappa`%, and the TPOT read there by as much or more. With no KV pull the
+TPOT moves by `kappa`%; a KV pull (decode's time before the first token)
+adds up to 1 point, since the TPOT moves by A k/(A k + B) x (1 + `kappa`).
+With a batch term, the slope is the line's and the term's together. The knee's is the loop's at the knee's rate,
+the most any rate under it reaches. A rate for a target (an inverse figure)
+carries none: there a slope error moves the rate by at most its own size.
+Nor does a TTFT, or a figure where the gain is not under 1. `kappa` moves no
+figure. The CLI's text notes a `kappa` over 4 (a gain over 0.8), where the
+figure rests mostly on the slope.
+
 `experimentalTTFT: true` prices TTFT with the experimental TTFT model (the
 CLI's `--experimental-ttft`): the seven TTFT switches that are off by
 default, on for this source. It is for demonstration and not validated:

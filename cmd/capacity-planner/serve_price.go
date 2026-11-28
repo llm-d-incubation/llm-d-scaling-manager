@@ -82,7 +82,7 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 	f := answerFlags{question: "serve", cycle: "last", model: req.Model, variant: req.DecodeVariant, prefillVariant: req.PrefillVariant,
 		serveSelfCheck: req.SelfCheck != nil && *req.SelfCheck,
 		seed:           whatif.DefaultResampling().Seed, vpPlateau: req.PrefillVPPlateau, hitAtCount: req.PrefillHitAtCount,
-		vpServiceLine: req.PrefillVPServiceLine, fLoadCurve: req.PrefillFLoadCurve,
+		vpServiceLine: req.PrefillVPServiceLine, fLoadCurve: req.PrefillFLoadCurve, decodeLoopGain: req.DecodeLoopGain,
 		experimentalTTFT: req.ExperimentalTTFT || s.experimentalTTFT, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait,
 		routerWaitInPrefill: plannerRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: plannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter}
 
@@ -408,7 +408,8 @@ func (s *servedSources) resolved(ctx context.Context, f *answerFlags, st *learnr
 	}
 	pricer := &servedState{st: st, decodeVariant: f.variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
 		imbalanceAcrossCounts: plannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter,
-		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}
+		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve,
+		decodeLoopGain: f.decodeLoopGain}
 	res := &whatifapi.Resolved{
 		Inputs:  inputsDoc(f, st, &variants[0], ps, fleets[0], info),
 		Content: content,
@@ -440,6 +441,12 @@ func (s *servedSources) resolved(ctx context.Context, f *answerFlags, st *learnr
 		// Another replay, so other inputs: never the id of the default's.
 		res.Inputs.PrefillFLoadCurve = true
 		res.Content += "\x00" + fLoadCurveFlag
+	}
+	if f.decodeLoopGain {
+		// Other figures (flags and loop gains), so other inputs: never the
+		// id of the default's.
+		res.Inputs.DecodeLoopGain = true
+		res.Content += "\x00" + decodeLoopGainFlag
 	}
 	if f.experimentalTTFT {
 		// Another replay, so other inputs: never the id of the default's.
@@ -479,6 +486,9 @@ type servedState struct {
 	// prefillFLoadCurve): the state was replayed with it, f is priced
 	// against the load, and every fleet read states it (statedOutside).
 	fLoadCurve bool
+	// decodeLoopGain is --decode-loop-gain (the request's decodeLoopGain):
+	// every decode TPOT a fleet prices carries its loop gain.
+	decodeLoopGain bool
 }
 
 // seconds is x seconds as a duration, to the nanosecond.
@@ -507,7 +517,8 @@ func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*serv
 		seed: whatif.DefaultResampling().Seed, set: map[string]bool{"ttft": true, "headroom": true}, warn: io.Discard,
 		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom, priceRouterWait: whatif.DefaultPriceRouterWait,
 		routerWaitInPrefill: plannerRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: s.imbalanceAcrossCounts, loadAwareRouter: s.loadAwareRouter,
-		experimentalTTFT: s.experimentalTTFT, vpServiceLine: s.vpServiceLine, fLoadCurve: s.fLoadCurve}
+		experimentalTTFT: s.experimentalTTFT, vpServiceLine: s.vpServiceLine, fLoadCurve: s.fLoadCurve,
+		decodeLoopGain: s.decodeLoopGain}
 	set := func(name string) { f.set[name] = true }
 	if k.PromptTokens > 0 {
 		f.inputTokens, f.inputTokensRead = k.PromptTokens, k.PromptTokensRead

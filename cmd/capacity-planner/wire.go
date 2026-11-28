@@ -387,8 +387,16 @@ type wireAnswer struct {
 	Value float64       `json:"value"`
 	Unit  string        `json:"unit"`
 	Band  *wireInterval `json:"band,omitempty"`
-	Basis wireBasis     `json:"basis"`
-	Flags []string      `json:"flags"`
+	// Kappa is the decode loop's condition number at the figure's rate,
+	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
+	// ITL line's slope moves the fill about kappa times as much, and the
+	// TPOT read there as much or, with a KV pull, up to once more. On every
+	// forward decode figure (the knee, the operating
+	// rate and the TPOTs); absent on an inverse one, on a TTFT, and where
+	// the gain is not under 1. It moves no figure.
+	Kappa *float64  `json:"kappa,omitempty"`
+	Basis wireBasis `json:"basis"`
+	Flags []string  `json:"flags"`
 	// Sensitivity is the figure's span at V_P and f either way, absent on a
 	// figure that does not rest on them.
 	Sensitivity *wireSensitivity `json:"sensitivity,omitempty"`
@@ -490,6 +498,9 @@ type wireBasis struct {
 	// BatchBeyondFit is the batch the answer's fill runs past the most the
 	// decode line's fit rows held, where it is (flag BatchBeyondFit).
 	BatchBeyondFit *wireBatchBeyondFit `json:"batchBeyondFit,omitempty"`
+	// LoopGain is a decode TPOT's loop gain at its rate, with
+	// --decode-loop-gain (flag DecodeLoopGain where it is high).
+	LoopGain *whatifapi.LoopGain `json:"loopGain,omitempty"`
 }
 
 // wireBatchBeyondFit is whatif.BatchBeyondFit on the wire, in sequences an
@@ -543,6 +554,9 @@ func toWire(r whatif.Result, unit string) *wireResult {
 		if v.Band != nil {
 			a.Band = &wireInterval{Lo: v.Band.Lo, Hi: v.Band.Hi}
 		}
+		if k := v.Basis.Kappa; k != nil {
+			a.Kappa = ptrTo(*k)
+		}
 		for _, b := range v.Basis.BoundBy {
 			a.Basis.BoundBy = append(a.Basis.BoundBy, string(b))
 		}
@@ -551,6 +565,9 @@ func toWire(r whatif.Result, unit string) *wireResult {
 		}
 		if b := v.Basis.Batch; b != nil {
 			a.Basis.BatchBeyondFit = &wireBatchBeyondFit{Priced: b.Priced, Fitted: b.Fitted, Ranks: b.Ranks}
+		}
+		if g := v.Basis.LoopGain; g != nil {
+			a.Basis.LoopGain = whatifapi.LoopGainOf(*g)
 		}
 		for _, f := range v.Flags {
 			a.Flags = append(a.Flags, string(f))

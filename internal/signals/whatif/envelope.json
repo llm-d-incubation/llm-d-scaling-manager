@@ -1327,6 +1327,7 @@
     "AssumedA": "a assumed, not learned",
     "AssumedVP": "V_P assumed, not learned",
     "BatchBeyondFit": "more sequences a pod than the decode line was fitted on, never measured there",
+    "DecodeLoopGain": "the fill amplifies the decode line's slope (loop gain): a slope 5% steeper moves the TPOT 1.25x or more",
     "ExperimentalTTFT": "experimental TTFT model: processor sharing by engine config, router hop from window means, prefill speed raised to the served work; not validated",
     "PrefixHitAtCount": "prefix hit extrapolated to another prefill count, never measured there",
     "PrefixHitHeld": "prefix hit held at more prefill pods than it was read on, never measured there",

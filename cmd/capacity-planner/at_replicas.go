@@ -108,7 +108,8 @@ func atReplicas(ctx context.Context, args []string, out, warn io.Writer) error {
 	}
 	s := &servedState{st: st, decodeVariant: variants[0].state.Variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
 		imbalanceAcrossCounts: f.imbalanceAcrossCounts, loadAwareRouter: f.loadAwareRouter, cachedCost: f.cachedCost,
-		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}
+		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve,
+		decodeLoopGain: f.decodeLoopGain}
 	rep, err := buildReport(ctx, st, s, q)
 	if err != nil {
 		if whatifapi.IsInputError(err) {
@@ -576,6 +577,7 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 		}
 	}
 	b.WriteString(tableText(s.Table))
+	b.WriteString(reportKappaNote(s))
 	for _, u := range s.Untranslated {
 		fmt.Fprintf(b, "  %s concurrent: no rate, %s\n", u.Load, u.Reason)
 	}

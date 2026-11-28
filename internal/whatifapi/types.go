@@ -52,6 +52,11 @@ type InputsRequest struct {
 	// --prefill-f-load-curve): opt-in, off by default, validated on lab
 	// recordings only, so every figure reads outside the validated region.
 	PrefillFLoadCurve bool `json:"prefillFLoadCurve,omitempty"`
+	// DecodeLoopGain reports each decode TPOT's loop gain, and flags
+	// DecodeLoopGain one whose fill amplifies its ITL line's slope (the
+	// CLI's --decode-loop-gain): opt-in, off by default. No figure moves;
+	// a flagged one reads outside the validated region.
+	DecodeLoopGain bool `json:"decodeLoopGain,omitempty"`
 	// ExperimentalTTFT prices TTFT with the TTFT model's switches that are
 	// off by default (the CLI's --experimental-ttft): for demonstration,
 	// not validated. Every prefill and TTFT figure is flagged
@@ -163,6 +168,9 @@ type InputsResponse struct {
 	// PrefillFLoadCurve says the source was read with f against the load
 	// (InputsRequest.PrefillFLoadCurve); absent otherwise.
 	PrefillFLoadCurve bool `json:"prefillFLoadCurve,omitempty"`
+	// DecodeLoopGain says the source's decode TPOTs carry their loop gain
+	// (InputsRequest.DecodeLoopGain); absent otherwise.
+	DecodeLoopGain bool `json:"decodeLoopGain,omitempty"`
 	// ExperimentalTTFT says the source was read with the experimental TTFT
 	// model (InputsRequest.ExperimentalTTFT); absent otherwise.
 	ExperimentalTTFT bool `json:"experimentalTTFT,omitempty"`
@@ -364,9 +372,17 @@ type Term struct {
 // bootstrap band over the ITL line's readings (the 10th to the 90th
 // percentile); Sensitivity the span over V_P and f either way.
 type Figure struct {
-	Value           *float64 `json:"value,omitempty"`
-	Unit            string   `json:"unit,omitempty"`
-	Band            *Band    `json:"band,omitempty"`
+	Value *float64 `json:"value,omitempty"`
+	Unit  string   `json:"unit,omitempty"`
+	Band  *Band    `json:"band,omitempty"`
+	// Kappa is the decode loop's condition number at the figure's rate,
+	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
+	// ITL line's slope moves the fill about kappa times as much, and the
+	// TPOT read there as much or, with a KV pull, up to once more. It is on every forward decode figure (the decode knee,
+	// the fill and the operating rate, and the TPOTs at a rate) and moves
+	// none of them; absent on an inverse figure (a rate for a target), on a
+	// TTFT, and where the gain is not under 1.
+	Kappa           *float64 `json:"kappa,omitempty"`
 	Sensitivity     *Span    `json:"sensitivity,omitempty"`
 	Floor           *float64 `json:"floor,omitempty"`
 	Uncapped        *float64 `json:"uncapped,omitempty"`
@@ -398,6 +414,22 @@ type Figure struct {
 	// figure is priced all the same, and its TPOT may read low and its knee
 	// high.
 	BatchBeyondFit *BatchBeyondFit `json:"batchBeyondFit,omitempty"`
+	// LoopGain is a decode TPOT's loop gain at its rate, read with
+	// decodeLoopGain (whatif.LoopGainAt): how much the fill it is priced at
+	// amplifies an error in the ITL line's slope. A figure whose slope 5%
+	// steeper moves it 1.25x or more, or saturates, is flagged
+	// DecodeLoopGain. Absent otherwise.
+	LoopGain *LoopGain `json:"loopGain,omitempty"`
+}
+
+// LoopGain is whatif.LoopGain on the wire: the loop gain at the figure's
+// rate and at the knee, and the TPOT a slope 5% steeper prices over the
+// figure (Move), or Saturates where that slope carries no fill.
+type LoopGain struct {
+	Gain      float64 `json:"gain"`
+	KneeGain  float64 `json:"kneeGain"`
+	Move      float64 `json:"move,omitempty"`
+	Saturates bool    `json:"saturates,omitempty"`
 }
 
 // BatchBeyondFit is a decode figure's batch against its line's fit, in

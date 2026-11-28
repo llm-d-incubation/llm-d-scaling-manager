@@ -31,6 +31,7 @@ SLO vs load         r/s    TTFT p50/90 ms  TPOT mean/p90 ms           e2e mean (
   80% of knee       29.59  215.1/1945.3    6.81/TPOT bucket too wide  2.07 s          61
   100% of knee      36.99  saturated       saturated                  saturated       unbounded
   load seen (113%)  41.66  saturated       saturated                  saturated       unbounded
+  condition: kappa 17.0 at the decode knee, past 4: a 1% error in the ITL line's slope moves the fill there about kappa% and the TPOT as much or more, so these figures rest mostly on the slope
 checks
   2 prefill + 2 decode  does not hold: 41.66 r/s is 1.1x the fleet knee of 36.99 r/s; TTFT p90 saturated misses 2000.0 ms; TPOT mean saturated misses 30.0 ms
 assumed: V_P 200000 tok/s (--assume-vp); a 20ms (--assume-a); prompt 8001 tokens (--shape); prompt cv 2 (no computed-prompt histogram); router hop 20 ms (no fit: NoRouterMean); --assume-router-hop supplies one; flow-control thresholds 5 and 0.8 (upstream defaults); Poisson arrivals

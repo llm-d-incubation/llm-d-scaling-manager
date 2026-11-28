@@ -12,6 +12,12 @@ Figure.extrapolated boolean
 Figure.flags array
 Figure.flags[] string
 Figure.floor number
+Figure.kappa number
+Figure.loopGain object
+Figure.loopGain.gain number
+Figure.loopGain.kneeGain number
+Figure.loopGain.move number
+Figure.loopGain.saturates boolean
 Figure.prefillOnlyRate number
 Figure.refused Refusal
 Figure.sensitivity object
@@ -577,6 +583,7 @@ inputs.cachedTokenCost.phi number
 inputs.cachedTokenCost.secondHalf number
 inputs.cachedTokenCost.steps number
 inputs.cachedTokenCost.why string
+inputs.decodeLoopGain boolean
 inputs.experimentalTTFT boolean
 inputs.fleet object
 inputs.fleet.decode object
@@ -987,6 +994,7 @@ inputs.ttftModel.measuredUpTo number
 inputs.ttftModel.model string
 inputs.whatifSchema string
 inputsRequest object
+inputsRequest.decodeLoopGain boolean
 inputsRequest.decodeVariant string
 inputsRequest.experimentalTTFT boolean
 inputsRequest.model string
