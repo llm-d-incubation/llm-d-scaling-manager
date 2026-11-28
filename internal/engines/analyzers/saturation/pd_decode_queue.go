@@ -3,6 +3,7 @@ package saturation
 import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 )
 
 // decodeCapacityView returns rm, a replica of a disaggregated model, with its
@@ -78,17 +79,16 @@ import (
 // Aggregated replicas, prefill, and decode of a model with no prefill variant
 // serve whole requests, and their queue stays the full count.
 func decodeCapacityView(rm domain.ReplicaMetrics, role string, maxNumSeqs int64) domain.ReplicaMetrics {
-	if domain.CanonicalRole(role) != domain.RoleDecode || !rm.CapacityQueueKnown ||
-		rm.AtBatchCap(maxNumSeqs) {
+	if domain.CanonicalRole(role) != domain.RoleDecode {
 		return rm
 	}
-	full, fullBusiest := rm.QueueLength, rm.BusiestRankQueue()
-	rm.MaxRankQueueLength = rm.BusiestRankCapacityQueue()
-	rm.QueueLength = rm.CapacityQueueLength
-	if rm.LandedQueueKnown {
-		rm.QueueLength = min(full, rm.QueueLength+rm.LandedQueueLength)
-		rm.MaxRankQueueLength = min(fullBusiest, rm.MaxRankQueueLength+rm.BusiestRankLandedQueue())
+	// The capacity planner reads a decode TTFT's backlog by the same rule
+	// at its zero value (prefill.DecodeBacklog): the capacity queue alone.
+	waiting, busiest, ok := prefill.DecodeBacklogBy(rm, prefill.DecodeBacklogRule{Landed: true, MaxNumSeqs: maxNumSeqs})
+	if !ok {
+		return rm
 	}
+	rm.QueueLength, rm.MaxRankQueueLength = waiting, busiest
 	return rm
 }
 

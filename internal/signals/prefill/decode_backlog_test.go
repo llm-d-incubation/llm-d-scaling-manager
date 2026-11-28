@@ -57,3 +57,34 @@ func TestDecodeBacklogCarry(t *testing.T) {
 	assert.Equal(t, 7, c.Carry(7, t0.Add(2*DecodeTTFTLag)))
 	assert.Equal(t, 7, c.Carry(0, t0.Add(2*DecodeTTFTLag+time.Second)), "the latest backlog")
 }
+
+// One rule reads both backlogs (DecodeBacklogBy): the capacity planner's and
+// the slo analyzer's decode TTFT backlog at the zero rule (DecodeBacklog),
+// the capacity queue alone, and the saturation analyzer's decode capacity
+// view with the landed pulls up to the full queue, and the full queue at
+// the cap. One row of 30 waiting, 4 of them on capacity and 6 landed, reads
+// 4 and 10; at its cap the view reads it whole and the backlog still 4.
+// saturation's TestParity_TheDecodeBacklogIsOneRule pins the view's side.
+func TestDecodeBacklogBy_TheTwoRules(t *testing.T) {
+	rm := domain.ReplicaMetrics{QueueLength: 30, CapacityQueueKnown: true, CapacityQueueLength: 4,
+		LandedQueueKnown: true, LandedQueueLength: 6, RunningRequests: 12}
+	n, known := DecodeBacklog(rm)
+	assert.Equal(t, 4, n)
+	assert.True(t, known)
+	view := DecodeBacklogRule{Landed: true, MaxNumSeqs: 16}
+	waiting, busiest, ok := DecodeBacklogBy(rm, view)
+	assert.True(t, ok)
+	assert.Equal(t, 10, waiting)
+	assert.Equal(t, 10, busiest, "one rank")
+
+	rm.LandedQueueLength = 40
+	waiting, _, _ = DecodeBacklogBy(rm, view)
+	assert.Equal(t, 30, waiting, "never past the full queue")
+
+	rm.RunningRequests = 16
+	_, _, ok = DecodeBacklogBy(rm, view)
+	assert.False(t, ok, "at the cap the queue is read whole")
+	n, known = DecodeBacklog(rm)
+	assert.Equal(t, 4, n, "the zero rule states no cap")
+	assert.True(t, known)
+}

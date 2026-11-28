@@ -34,11 +34,51 @@ const DecodeTTFTLag = 90 * time.Second
 // at any load: on the staircase goldens a calm decode read 1 to 26 of them,
 // with a decode TTFT under 0.3 s. A row without the series (an older vLLM,
 // SGLang) cannot tell the two apart, so it reads no backlog, unknown.
+//
+// It is DecodeBacklogBy at the zero DecodeBacklogRule: the capacity queue
+// alone.
 func DecodeBacklog(rm domain.ReplicaMetrics) (int, bool) {
-	if !rm.CapacityQueueKnown {
+	n, _, ok := DecodeBacklogBy(rm, DecodeBacklogRule{})
+	if !ok {
 		return 0, false
 	}
-	return rm.CapacityQueueLength, true
+	return n, true
+}
+
+// DecodeBacklogRule is which part of a P/D decode row's waiting queue
+// DecodeBacklogBy reads as its backlog. The zero value is the capacity queue
+// alone, the rule the capacity planner and the slo analyzer read a decode
+// TTFT's backlog by (DecodeBacklog). The saturation analyzer's capacity view
+// of a decode row sets both fields.
+type DecodeBacklogRule struct {
+	// Landed adds the requests whose KV has landed (LandedQueueLength,
+	// vLLM 0.32+), up to the full queue: the scheduler promotes a landed
+	// pull only inside its waiting loop, which stops at max_num_seqs and
+	// where a block cannot be allocated, so a landed request can wait on
+	// capacity too.
+	Landed bool
+	// MaxNumSeqs is the row's stated max_num_seqs per rank; a row running
+	// at it on every rank (domain.ReplicaMetrics.AtBatchCap) is read whole:
+	// a decode capped below a full cache queues for real. Zero states no
+	// cap.
+	MaxNumSeqs int64
+}
+
+// DecodeBacklogBy is the backlog of a P/D decode row under rule, summed
+// over its ranks and on its busiest rank, and whether the row is read by
+// the rule. Not read (false) is a row that does not say why its requests
+// wait (CapacityQueueKnown), or one at its stated cap: its queue is then
+// the full count, the caller's to take or to leave.
+func DecodeBacklogBy(rm domain.ReplicaMetrics, rule DecodeBacklogRule) (waiting, busiest int, ok bool) {
+	if !rm.CapacityQueueKnown || rm.AtBatchCap(rule.MaxNumSeqs) {
+		return 0, 0, false
+	}
+	waiting, busiest = rm.CapacityQueueLength, rm.BusiestRankCapacityQueue()
+	if rule.Landed && rm.LandedQueueKnown {
+		waiting = min(rm.QueueLength, waiting+rm.LandedQueueLength)
+		busiest = min(rm.BusiestRankQueue(), busiest+rm.BusiestRankLandedQueue())
+	}
+	return waiting, busiest, true
 }
 
 // DecodeBacklogOf is the largest DecodeBacklog of rows' serving rows, and

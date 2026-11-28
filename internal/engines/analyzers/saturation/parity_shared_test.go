@@ -99,3 +99,25 @@ func TestParity_TheAcceptedPerStepIsOneRuleHeldAtK(t *testing.T) {
 	assert.Equal(t, 4.0, b.emitted, "held at k")
 	assert.Equal(t, 4.0, b.stepTokens)
 }
+
+// The decode capacity view's queue is prefill.DecodeBacklogBy with the
+// landed pulls and the cap, and the capacity planner's decode TTFT backlog
+// is the same rule at its zero value (prefill.DecodeBacklog): one row of 30
+// waiting, 4 on capacity and 6 landed, reads 10 here and 4 there
+// (prefill's TestDecodeBacklogBy_TheTwoRules pins the planner's side).
+func TestParity_TheDecodeBacklogIsOneRule(t *testing.T) {
+	rm := domain.ReplicaMetrics{VariantName: "d", QueueLength: 30, CapacityQueueKnown: true, CapacityQueueLength: 4,
+		LandedQueueKnown: true, LandedQueueLength: 6, RunningRequests: 12}
+	waiting, busiest, ok := prefill.DecodeBacklogBy(rm, prefill.DecodeBacklogRule{Landed: true, MaxNumSeqs: 16})
+	require.True(t, ok)
+	v := decodeCapacityView(rm, domain.RoleDecode, 16)
+	assert.Equal(t, waiting, v.QueueLength, "the shared reading")
+	assert.Equal(t, busiest, v.MaxRankQueueLength)
+	assert.Equal(t, 10, v.QueueLength)
+	planner, known := prefill.DecodeBacklog(rm)
+	assert.True(t, known)
+	assert.Equal(t, 4, planner, "the planner's rule: the capacity queue alone")
+
+	rm.RunningRequests = 16
+	assert.Equal(t, rm, decodeCapacityView(rm, domain.RoleDecode, 16), "at the cap: the full queue")
+}
