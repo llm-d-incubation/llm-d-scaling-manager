@@ -53,6 +53,42 @@ func TestMoEBusiestRank_OnlyExpertParallelDataParallel(t *testing.T) {
 	assert.False(t, a.BusiestRankFillFor(sg), "SGLang")
 }
 
+// On, the gate is the MoE class from the model's config (issue
+// llm-d-incubation/llm-d-scaling-manager#503), not the expert-parallel flag:
+// vLLM steps a MoE model's data-parallel ranks in lockstep with or without
+// expert parallelism, and a dense model's ranks step independently whatever
+// its flags say.
+func TestMoEBusiestRank_KeysOnTheMoEClass(t *testing.T) {
+	a := NewSaturationAnalyzer(capacity.NewStore())
+	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchMoEBusiestRank: true}))
+	moeConfig := capacity.ModelConfig{Source: "config.json", NumExperts: 128, ExpertsPerToken: 8}
+	denseConfig := capacity.ModelConfig{Source: "config.json"}
+
+	tpOnly := moeDP8()
+	tpOnly.ExpertParallel, tpOnly.ModelConfig = false, moeConfig
+	require.Equal(t, capacity.MoETensorParallel, tpOnly.MoEClass())
+	assert.True(t, a.BusiestRankFillFor(tpOnly), "a MoE model under DP 8 without expert parallelism steps in lockstep")
+
+	ep := moeDP8()
+	ep.ModelConfig = moeConfig
+	require.Equal(t, capacity.MoEExpertParallel, ep.MoEClass())
+	assert.True(t, a.BusiestRankFillFor(ep), "a MoE model with expert parallelism")
+
+	dense := moeDP8()
+	dense.ModelConfig = denseConfig
+	require.Equal(t, capacity.MoEDense, dense.MoEClass())
+	assert.False(t, a.BusiestRankFillFor(dense), "a dense config with the expert-parallel flag set")
+
+	unknown := moeDP8()
+	unknown.ExpertParallel = false
+	require.Equal(t, capacity.MoEUnknown, unknown.MoEClass())
+	assert.False(t, a.BusiestRankFillFor(unknown), "no config and no flag: not known to be MoE")
+
+	tpOneRank := moeDP8()
+	tpOneRank.ExpertParallel, tpOneRank.ModelConfig, tpOneRank.DataParallelSize = false, moeConfig, 1
+	assert.False(t, a.BusiestRankFillFor(tpOneRank), "a MoE model over one rank")
+}
+
 // Through Analyze: the ITL line's reading of a DP8 MoE decode replica is at
 // its busiest rank with the switch on, at the mean off.
 func TestMoEBusiestRank_LineReadAtTheBusiestRank(t *testing.T) {
