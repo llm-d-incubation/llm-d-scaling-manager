@@ -6,8 +6,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
 // backtest and predict take the answers' --assume-prompt-cv,
@@ -65,7 +63,7 @@ func TestBacktestStatedInputFlags(t *testing.T) {
 	assert.InDelta(t, 0.012, *req.Assume.ITLB, 1e-12)
 	assert.False(t, req.Assume.ITLBFromFloor)
 
-	req, err = (&backtestFlags{routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill}).request()
+	req, err = (&backtestFlags{routerWaitInPrefill: plannerRouterWaitInPrefill}).request()
 	require.NoError(t, err)
 	assert.Nil(t, req.Assume, "nothing stated, nothing assumed")
 }

@@ -100,6 +100,23 @@ type HitAtCount struct {
 // Moved says the hit priced differs from the fit's.
 func (a HitAtCount) Moved() bool { return a.Hit != a.FitHit }
 
+// GPUHitAt is the GPU prefix-cache hit rate gpu, read at the fit, at the
+// count a priced. Under the reuse-gap rule it moves by the law's GPU ratio
+// whether or not the total moved (an unsized tier past the GPU holds the
+// total and takes up the GPU's loss), and never above the total hit
+// priced: the GPU's hits are among it, and the bracket can hold the total
+// under the law's (the ceiling assumed at more pods). Under any other rule
+// it moves by the total's own ratio.
+func (a HitAtCount) GPUHitAt(gpu float64) float64 {
+	switch {
+	case a.Rule == HitReuseGap:
+		return min(gpu*a.GPUScale, a.Hit)
+	case a.Moved() && a.FitHit > 0:
+		return gpu * a.Hit / a.FitHit
+	}
+	return gpu
+}
+
 // HitAtCountOf prices the hit and the computed tokens a request at count,
 // from the fit's hit h and computed tokens a request on fitCount pods, with
 // the reuse-gap rule where m is non-nil (FitHitModel), else the floor at

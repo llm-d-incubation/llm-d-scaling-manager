@@ -327,7 +327,9 @@ const DefaultPriceRouterWait = false
 // rate answer may pass the onset. --price-router-wait, or
 // --router-wait-in-prefill=false (assume.routerWait gateStage or none), turns
 // it off. The SLO analyzer's switch for it, slo.SwitchTTFTRouterWaitInPrefill,
-// is off from its constructor until a live check with the controller.
+// is off from its constructor until a live check with the controller; the
+// capacity planner lists it at this value in learnreplay.PlannerSwitches,
+// and reads its flag's default from there.
 //
 // On by the router v1.0.0 staircase of issue #287 (Qwen3-32B, 2 prefill and
 // 2 decode, three seeds at Ca^2 4 and two at Poisson), backtested against its

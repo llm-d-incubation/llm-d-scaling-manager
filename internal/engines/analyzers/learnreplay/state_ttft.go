@@ -85,8 +85,8 @@ type PrefillState struct {
 	RawShare, RawShareLeast float64
 	RawShareFull            bool
 	// ServedComputed is, at each pod count, the highest mean computed-token
-	// rate the variant's serving pods sustained over ServedWorkWindow in the
-	// last prefill.Retention (servedWork.peaks): work the pods were seen to
+	// rate the variant's serving pods sustained over prefill.ServedWorkWindow
+	// in the last prefill.Retention (prefill.ServedWork.Peaks): work the pods were seen to
 	// compute, a lower bound on what that many can. Read only with
 	// saturation.SwitchPrefillVPServedUnqueued on; nil otherwise.
 	ServedComputed map[int]float64
@@ -99,12 +99,13 @@ type PrefillState struct {
 	// (prefill.HitAtCountOf). Off unless the replay's options turn it on.
 	HitAtCount bool
 	// ServedComputedWindow is ServedComputed over the whole window replayed,
-	// read with VPAtServedWork alone (servedWork.windowPeaks); nil otherwise.
+	// read with VPAtServedWork alone (prefill.ServedWork.WindowPeaks); nil
+	// otherwise.
 	ServedComputedWindow map[int]float64
 	// ServedUnsteady is, by pod count, whether the prefill pods served a
-	// stretch of ServedWorkWindow there, since prefill.Retention, whose
+	// stretch of prefill.ServedWorkWindow there, since prefill.Retention, whose
 	// backlog was read and grew, and ServedComputed holds none that did not
-	// (servedWork.peaksUnsteady): served work not sustained, which floors no
+	// (prefill.ServedWork.PeaksUnsteady): served work not sustained, which floors no
 	// knee. A backlog not read gives no entry. Read with ServedComputed.
 	ServedUnsteady map[int]bool
 	// WindowFrom and At are the replay's first cycle and the cycle read, for
@@ -222,7 +223,7 @@ type ttftSamples struct {
 	hopWindowMeans bool
 	// served is each prefill variant's served work, kept with servedOn
 	// (saturation.SwitchPrefillVPServedUnqueued; PrefillState.ServedComputed).
-	served   map[string]*servedWork
+	served   map[string]*prefill.ServedWork
 	servedOn bool
 	// vpAtServed is saturation.SwitchPrefillVPAtServedWork
 	// (PrefillState.VPAtServedWork).
@@ -245,9 +246,9 @@ func (t *ttftSamples) servedWorkOf(v string) (peaks, window map[int]float64, uns
 		return nil, nil, nil
 	}
 	if t.vpAtServed {
-		window = w.windowPeaks()
+		window = w.WindowPeaks()
 	}
-	peaks, unsteady = w.peaksUnsteady()
+	peaks, unsteady = w.PeaksUnsteady()
 	return peaks, window, unsteady
 }
 
@@ -257,7 +258,7 @@ func newTTFTSamples(hopUnqueued bool) *ttftSamples {
 	return &ttftSamples{hopUnqueued: hopUnqueued, prompts: map[string]*whatif.PromptWindow{}, shares: map[string]*shareWindow{},
 		engineTTFT: map[string][]whatif.DecodeTTFT{}, backlogs: map[string]*backlogTrack{},
 		transfers: map[string]*prefill.TransferWindow{},
-		terms:     map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow(), served: map[string]*servedWork{}}
+		terms:     map[string]*prefill.DecodeTermWindow{}, joint: prefill.NewJointWindow(), served: map[string]*prefill.ServedWork{}}
 }
 
 // noteJoint folds one cycle's prefill and decode rows into the model's joint
@@ -441,10 +442,10 @@ func (t *ttftSamples) note(in domain.AnalyzerInput, cycle int, at time.Time) {
 		w.note(p.pods, share, ok)
 		if t.servedOn {
 			if t.served[v] == nil {
-				t.served[v] = &servedWork{}
+				t.served[v] = &prefill.ServedWork{}
 			}
-			t.served[v].note(servedWorkSample{at: at, pods: p.pods, sum: p.sum, ok: p.pods > 0 && p.rated == p.pods,
-				queue: p.queue, queueOK: p.pods > 0 && p.queueRead == p.pods})
+			t.served[v].Note(prefill.ServedWorkSample{At: at, Pods: p.pods, Sum: p.sum, OK: p.pods > 0 && p.rated == p.pods,
+				Queue: p.queue, QueueOK: p.pods > 0 && p.queueRead == p.pods})
 		}
 		if p.computedRate > 0 {
 			allComputed += p.computedRate

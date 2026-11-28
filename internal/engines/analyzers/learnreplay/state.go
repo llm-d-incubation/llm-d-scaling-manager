@@ -403,6 +403,18 @@ type shapeSample struct {
 //     (both off, below) it deepens two Qwen3-32B A-off TTFT steps already
 //     under (mean 0.69 to 0.46 of measured): look at those again before
 //     the hold and the lift go on.
+//   - slo.SwitchTTFTRouterWaitInPrefill: the router's wait past the prefill
+//     onset priced inside the processor-sharing prefill price, at
+//     whatif.DefaultRouterWaitInPrefill (issue
+//     llm-d-incubation/llm-d-scaling-manager#287, measured on router v1.0.0
+//     only). The planner's --router-wait-in-prefill takes its default from
+//     here and overrides it.
+//   - slo.SwitchTTFTImbalanceAcrossCounts: f at a prefill count P1 did not
+//     learn read off the curve across the counts it did, at
+//     whatif.DefaultPlannerImbalanceAcrossCounts (issue
+//     llm-d-incubation/llm-d-scaling-manager#300). The planner's
+//     --imbalance-across-counts takes its default from here and overrides
+//     it.
 //
 // slo.SwitchTTFTHopWindowMeans, planner-only, reads the router hop on its
 // windows' means: the median of at least prefill.MinHopMeanWindows windows,
@@ -443,11 +455,6 @@ type shapeSample struct {
 // bursty phases' mean TPOT back to what was measured, but it is off: with
 // it, the hold, the lift and the residence all on, other figures still read
 // under what was measured.
-//
-// saturation.SwitchPlannerCapAtStepBudget is planner-only and not listed
-// either: no recording holds an engine whose step budget runs fewer
-// sequences than its cap (MTP, wide EP), so there is no backtest to turn it
-// on with (issue llm-d-incubation/llm-d-scaling-manager#302).
 //
 // slo.SwitchTTFTPromptSupport is planner-only too but not listed (issue
 // llm-d-incubation/llm-d-scaling-manager#304): it holds the prompt at the
@@ -602,6 +609,8 @@ func PlannerSwitches() map[string]map[string]bool {
 	}, PackageSLO: {
 		slo.SwitchTTFTHopUnqueued:           true,
 		slo.SwitchTTFTDecodeSpeculatingHeld: true,
+		slo.SwitchTTFTRouterWaitInPrefill:   whatif.DefaultRouterWaitInPrefill,
+		slo.SwitchTTFTImbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts,
 	}}
 }
 

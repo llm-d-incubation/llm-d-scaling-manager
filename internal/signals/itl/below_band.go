@@ -1,6 +1,7 @@
 package itl
 
 import (
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -108,6 +109,48 @@ func keepBelowBand(xs []Observation, x Observation) []Observation {
 // capacity planner keeps only those (whatif.BelowBand.LeastITL).
 func BelowBandPoint(readings []Observation) (Observation, bool) {
 	return belowBandPoint(readings, math.Inf(1))
+}
+
+// BelowBandByCount is the fewest sequences a replica ran in readings, the
+// readings a floor below the band is read from (BelowBandPoint), and the
+// floor kept by those sequences (whatif.BelowBand.ByCount). sequences is the
+// count each reading ran on its replica, index for index. The readings are
+// grouped by octave of their sequences, each group's floor read as the
+// whole floor is (BelowBandPoint, the sequences in place of the fill), and
+// byCount is the line through those floors (Fit). A floor read at 20
+// sequences a replica does not stand for one (issue
+// llm-d-incubation/llm-d-scaling-manager#286).
+//
+// least is 0 with no floor, with sequences not one a reading, or where a
+// reading's count was not read (0, or not finite): the floor then stands for
+// every count. byCount is the zero Model with fewer than two groups holding
+// a floor, or where the fit fails.
+//
+// The capacity planner's replay builds the floor by count with it
+// (learnreplay); no analyzer calls it yet, so the controller's decode
+// leaves whatif.Decode.BelowBand unset.
+func BelowBandByCount(readings []Observation, sequences []float64) (least float64, byCount Model) {
+	if _, ok := BelowBandPoint(readings); !ok || len(sequences) != len(readings) {
+		return 0, Model{}
+	}
+	least = math.Inf(1)
+	groups := map[float64][]Observation{}
+	for i, n := range sequences {
+		if !(n > 0) || math.IsInf(n, 0) {
+			return 0, Model{}
+		}
+		least = min(least, n)
+		g := math.Floor(math.Log2(n))
+		groups[g] = append(groups[g], Observation{K: n, ITLSec: readings[i].ITLSec})
+	}
+	floors := make([]Observation, 0, len(groups))
+	for _, g := range slices.Sorted(maps.Keys(groups)) {
+		if p, ok := BelowBandPoint(groups[g]); ok {
+			floors = append(floors, p)
+		}
+	}
+	byCount, _ = Fit(floors)
+	return least, byCount
 }
 
 // FloorIntercept is the intercept B of the line through floor and the mean

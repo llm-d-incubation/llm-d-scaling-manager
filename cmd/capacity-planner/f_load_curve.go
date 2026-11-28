@@ -28,19 +28,18 @@ const fLoadCurveUsage = "opt-in, validated on lab recordings only: fit f, the pr
 
 // priceFLoadCurve sets f against the load on p, the prefill inputs at
 // p.Replicas, from the curve P1 fitted at that count, where it is
-// identified; elsewhere it leaves f as it is and says why. One pod has no f
-// to price.
+// identified (whatif.ApplyFLoadCurve); elsewhere it leaves f as it is and
+// says why. One pod has no f to price.
 func (pf *pricedFleet) priceFLoadCurve(ps *learnreplay.PrefillState, p *whatif.Prefill) {
 	if p.Replicas < 2 {
 		return
 	}
-	c, ok := ps.Estimate.FCurveByPods[p.Replicas]
-	if !ok || !c.Identified() {
+	c, ok := whatif.ApplyFLoadCurve(p, ps.Estimate)
+	if !ok {
 		pf.assume("f against the load not identified on %d prefill pods (%d minutes, %d needed with f falling with the load); f %.4g at every load",
 			p.Replicas, c.Minutes, prefill.MinFLoadCurveMinutes, max(p.Imbalance, 1))
 		return
 	}
-	p.ImbalanceCurveFloor, p.ImbalanceCurveExcess = c.Floor, c.Excess
 	pf.in.ImbalanceCurveFloor, pf.in.ImbalanceCurveExcess, pf.in.ImbalanceCurveMinutes = c.Floor, c.Excess, c.Minutes
 	pf.assume("f at a rate the higher of %.4g and %.4g + %.4g/u, u the computed tokens a second a prefill pod, fitted over %d minutes on %d pods (--%s)",
 		max(p.Imbalance, 1), c.Floor, c.Excess, c.Minutes, p.Replicas, fLoadCurveFlag)

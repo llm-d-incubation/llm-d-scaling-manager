@@ -44,7 +44,7 @@ func TestTTFT_VPAtServedWorkPricesTheTTFTAtTheFlooredKnee(t *testing.T) {
 	floor := 60000 / 2000.0
 	assert.InDelta(t, floor, kOff.Value, 1e-9, "off: the knee is floored at the served work")
 	assert.InDelta(t, floor, kOn.Value, 1e-6, "on: the raised V_P gives the same knee")
-	assert.Contains(t, kOff.Flags, kneeAtServedWork)
+	assert.Contains(t, kOff.Flags, whatif.KneeAtServedWork)
 
 	rate := 0.8 * floor
 	tOff, tOn := prefillOnlyTTFT(t, off, rate), prefillOnlyTTFT(t, on, rate)

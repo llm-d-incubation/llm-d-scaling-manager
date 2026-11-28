@@ -258,6 +258,7 @@ KV-deferral
 KVBoundSlots
 KVDeferralOutside
 Kind
+KneeAtServedWork
 Kubernetes
 Kueue
 L
@@ -478,6 +479,7 @@ Seconds
 Secret
 Selected
 Seq
+ServedWorkUnsteady
 Set
 SetRecordedValue
 SetUsed

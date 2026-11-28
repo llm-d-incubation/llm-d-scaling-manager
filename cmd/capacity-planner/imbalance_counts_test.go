@@ -18,7 +18,7 @@ import (
 
 // --imbalance-across-counts is the SLO analyzer's
 // slo.SwitchTTFTImbalanceAcrossCounts, on by default in the planner
-// (whatif.DefaultPlannerImbalanceAcrossCounts, issue
+// (plannerImbalanceAcrossCounts, issue
 // llm-d-incubation/llm-d-scaling-manager#300) where the analyzer's is off,
 // and off with =false.
 func TestTTFT_ImbalanceAcrossCountsFlag(t *testing.T) {
@@ -33,7 +33,8 @@ func TestTTFT_ImbalanceAcrossCountsFlag(t *testing.T) {
 		require.NoError(t, fs.Parse(c.args))
 		assert.Equal(t, c.want, f.imbalanceAcrossCounts, "%v", c.args)
 	}
-	require.True(t, whatif.DefaultPlannerImbalanceAcrossCounts, "the planner reads the curve by default")
+	require.True(t, plannerImbalanceAcrossCounts, "the planner reads the curve by default")
+	require.Equal(t, whatif.DefaultPlannerImbalanceAcrossCounts, plannerImbalanceAcrossCounts, "read from learnreplay.PlannerSwitches at the value whatif states")
 	require.False(t, whatif.DefaultImbalanceAcrossCounts, "the SLO analyzer's stays opt-in")
 }
 
