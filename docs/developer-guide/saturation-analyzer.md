@@ -908,6 +908,15 @@ over-read `E` over-states the token rate, the direction that under-orders,
 which is why a count above it is withheld rather than clamped. On an SGLang
 engine (`domain.ITLStep.PerToken`) every row is read as it is.
 
+The v2 TPOT model's decode cycle (`whatif.DecodeCycleAcceptedAtMost`) and the
+planner's line rows (`learnreplay` `rowSequences`) read `E` by the same rule
+under `spec-accepted-at-most-k` (`whatif.AcceptedAtMost`): over
+`num_speculative_tokens` by a rounding error it is read at it, and over it by
+more the row gives no token time, and its sequence count falls back to the
+running gauge. The switch is on in the planner (`learnreplay.PlannerSwitches`)
+and off from the slo analyzer's constructor, where such a row is still read
+as it is.
+
 A withheld reading counts as `noITL` in `itl-window`, which an idle replica
 reads too, so `noteITLWithheld` logs `itl-withheld` with the reason once when
 a variant's readings start being withheld or the reasons change (the

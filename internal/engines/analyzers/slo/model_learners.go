@@ -332,7 +332,7 @@ func (a *Analyzer) observeModelLocked(in domain.AnalyzerInput, router *domain.Ro
 		a.models[key] = w
 	}
 	w.seen, w.observed, w.counts = now, a.cycle, map[learn.Reason]int64{}
-	c := whatif.FitCycleOf(in, ownedRouter(router), now, pv, dv)
+	c := whatif.FitCycleAcceptedAtMost(in, ownedRouter(router), now, pv, dv, a.maxAcceptedFor(in.Namespace, in.ModelID))
 	if len(c.Mixture.Ranks) == 0 && len(c.Decode.Groups) == 0 && len(c.Decode.Output) == 0 {
 		w.counts[modelIdle]++
 	} else {

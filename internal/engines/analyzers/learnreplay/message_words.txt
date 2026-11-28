@@ -3311,6 +3311,7 @@ source
 spaces
 spare
 spec
+spec-accepted-at-most-k
 spec-accepted-per-step
 spec.fallback
 speculates

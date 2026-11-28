@@ -24,15 +24,15 @@ func fitRowInput(k, seqs float64) domain.AnalyzerInput {
 // none.
 func TestRowSequences(t *testing.T) {
 	rm := fitRowInput(0.5, 210).ReplicaMetrics[0]
-	assert.InDelta(t, 210, rowSequences(rm), 1e-9, "Little: 100 tokens/s x 2.1 s")
+	assert.InDelta(t, 210, rowSequences(rm, 0), 1e-9, "Little: 100 tokens/s x 2.1 s")
 	spec := rm
 	spec.SpecAcceptedPerStep, spec.SpecAcceptedPerStepKnown = 1, true
-	assert.InDelta(t, 105, rowSequences(spec), 1e-9, "a step of 2 tokens: 2.1 s is the step's time")
+	assert.InDelta(t, 105, rowSequences(spec, 0), 1e-9, "a step of 2 tokens: 2.1 s is the step's time")
 	rm.AvgITL, rm.AvgITLKnown = 0, false
 	rm.RunningRequests, rm.RunningRequestsKnown = 180, true
-	assert.InDelta(t, 180, rowSequences(rm), 1e-9, "no ITL: the gauge")
+	assert.InDelta(t, 180, rowSequences(rm, 0), 1e-9, "no ITL: the gauge")
 	rm.RunningRequestsKnown = false
-	assert.Zero(t, rowSequences(rm), "neither")
+	assert.Zero(t, rowSequences(rm, 0), "neither")
 }
 
 // cyclesOf is the cycles of rows, in order.
@@ -56,7 +56,7 @@ func TestFitRows_TheLineOwnOrTheHeldFits(t *testing.T) {
 	at := func(c int) time.Time { return lineT0.Add(time.Duration(c-1) * 15 * time.Second) }
 	for i, in := range inputs {
 		c := i + 1
-		l.note(in, c, at(c), nil)
+		l.note(in, c, at(c), nil, nil)
 		if c <= 12 {
 			l.noteOwnFit("v", at(c))
 		}
@@ -87,7 +87,7 @@ func TestFitRows_AnAboveBandLineReadsTheRowsAboveIt(t *testing.T) {
 	inputs := append(repeated(12, fitRowInput(0.4, 120)), repeated(28, fitRowInput(0.9, 250))...)
 	l := newLineSamples()
 	for i, in := range inputs {
-		l.note(in, i+1, lineT0.Add(time.Duration(i)*15*time.Second), nil)
+		l.note(in, i+1, lineT0.Add(time.Duration(i)*15*time.Second), nil, nil)
 	}
 	above := l.fitRows(VariantState{Variant: "v", Tier: whatif.TierAboveBand, Refitted: true, ReadingsFrom: 9, ReadingsTo: 40})
 	require.NotEmpty(t, above)
@@ -112,20 +112,20 @@ func TestFitRows_AnAboveBandLineReadsTheRowsAboveIt(t *testing.T) {
 func TestFitRows_AHoldKeepsItsFitsRows(t *testing.T) {
 	l := newLineSamples()
 	for c := 1; c <= 12; c++ {
-		l.note(fitRowInput(0.6, 210), c, lineT0.Add(time.Duration(c-1)*15*time.Second), nil)
+		l.note(fitRowInput(0.6, 210), c, lineT0.Add(time.Duration(c-1)*15*time.Second), nil, nil)
 	}
 	l.noteOwnFit("v", lineT0.Add(11*15*time.Second))
 	late := lineT0.Add(2 * fitRowsAge)
-	l.note(fitRowInput(0.6, 210), 13, late, nil)
+	l.note(fitRowInput(0.6, 210), 13, late, nil, nil)
 	held := l.fitRows(VariantState{Variant: "v", Tier: whatif.TierHeld})
 	require.NotEmpty(t, held, "held since cycle 12: its rows are kept")
 	assert.Equal(t, 12, held[len(held)-1].Cycle)
 
 	gone := newLineSamples()
 	for c := 1; c <= 12; c++ {
-		gone.note(fitRowInput(0.6, 210), c, lineT0.Add(time.Duration(c-1)*15*time.Second), nil)
+		gone.note(fitRowInput(0.6, 210), c, lineT0.Add(time.Duration(c-1)*15*time.Second), nil, nil)
 	}
 	require.Len(t, gone.fit["v"], 4, "cycles 9-12 off the ramp")
-	gone.note(fitRowInput(0.6, 210), 13, late, nil)
+	gone.note(fitRowInput(0.6, 210), 13, late, nil, nil)
 	assert.Equal(t, []int{13}, cyclesOf(gone.fit["v"]), "no own fit: the rows past the window are dropped")
 }

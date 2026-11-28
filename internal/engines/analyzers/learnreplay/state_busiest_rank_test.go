@@ -25,7 +25,7 @@ func TestLineSamples_BusiestRankRowsAndRatio(t *testing.T) {
 	on := newLineSamples()
 	busiest := func(variant string) bool { return variant == "v" }
 	for i := range 3 {
-		on.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second), busiest)
+		on.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second), busiest, nil)
 	}
 	require.NotEmpty(t, on.rows("v"))
 	assert.InDelta(t, 0.5, on.rows("v")[0].K, 1e-12, "on: the busiest rank's")
@@ -48,7 +48,7 @@ func TestLineSamples_BusiestRatioMedianOfLoadedRows(t *testing.T) {
 		in := lineInput(c[0], 1000)
 		in.ReplicaMetrics[0].EngineRanks = 8
 		in.ReplicaMetrics[0].KvCacheUsage, in.ReplicaMetrics[0].MaxRankKvCacheUsage = c[0], c[1]
-		l.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second), busiest)
+		l.note(in, i+1, t0.Add(time.Duration(i)*15*time.Second), busiest, nil)
 	}
 	assert.Len(t, l.ratios["v"], 3, "the idle row's ratio of 2 is not kept")
 	assert.InDelta(t, 1.25, l.busiestRatio("v"), 1e-12)
