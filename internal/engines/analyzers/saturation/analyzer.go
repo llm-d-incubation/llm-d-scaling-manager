@@ -660,6 +660,10 @@ type SaturationAnalyzer struct {
 	// queue_drain.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).
 	queuePricedAsDrain bool
+	// queueDrainFluid is SwitchQueueDrainFluidAfterStart (queueing review
+	// F7, queue_drain.go): planner-only, off from the constructor; a replay
+	// turns it on (SetSwitchesForReplay, learnreplay.PlannerSwitches).
+	queueDrainFluid bool
 	// prefillKeepsPrompts is SwitchPrefillKeepsRouterPrompts
 	// (llm-d-incubation/llm-d-scaling-manager#51, throughput_floor.go): on
 	// from the constructor; a replay turns it off (SetSwitchesForReplay).

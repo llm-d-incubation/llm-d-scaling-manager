@@ -44,6 +44,37 @@ import (
 // under it is Ready. Off, as before, occupancy's residency charge stood there.
 const SwitchQueuePricedAsDrain = "queue-priced-as-drain"
 
+// SwitchQueueDrainFluidAfterStart is the replay switch for the drain price
+// counted from when the capacity it orders lands (drainReplicasFluid).
+//
+// Off, the drain price is N = (arrival + B / T) / mu with B the queue
+// standing now and T = floor.DrainHorizon(drain, start) = max(drain, start)
+// from now. Capacity ordered now serves only after a start, so it has T -
+// start of the horizon to work in: none at all once the start is at least
+// the drain time, which is every start the probes measured (67-82 s against
+// 60 s). Meanwhile the replicas already serving fall further behind, and the
+// backlog the new capacity meets is not B (queueing review F7).
+//
+// On, the price is the fluid one: the queue is carried to landing by
+// floor.BacklogAtLanding, the projection floor.Estimate prices its landing
+// backlog with, and is cleared over the same horizon T counted after
+// landing: N = arrival / mu + B_land / (mu x T), each queue capped at what
+// its replica drains in start + T. B_land is B + arrival x start less what
+// the ready replicas serve over the start, at the higher of N_ready x mu and
+// what they complete now, and less what the replicas already starting serve
+// once they land, credited by their ages as floor.Estimate credits them
+// (stuck replicas left out, as the engine leaves them out of anticipated
+// supply). Without that credit the start's arrivals were counted again on
+// every cycle while an order started, and the fleet ratcheted past the
+// price. With no start known it is the price off.
+//
+// The capacity this orders is still divided by the scale-up threshold by
+// the engine (RC = D / scaleUp - anticipated), so the fleet after the drain
+// runs at the threshold, not at 100 %.
+//
+// Planner-only: off from the constructor, on in learnreplay.PlannerSwitches.
+const SwitchQueueDrainFluidAfterStart = "queue-drain-fluid-after-start"
+
 // FirstReadHaircut is the share of the first-read mu the drain price divides
 // by before the role has two mu readings.
 //
@@ -217,6 +248,63 @@ func drainReplicas(arrival, backlog, horizon, mu float64) float64 {
 	return (max(arrival, 0) + max(backlog, 0)/horizon) / mu
 }
 
+// drainReplicasFluid is the replicas at 100 % that keep up with arrival and
+// clear backlog within horizon of when capacity ordered now lands, start
+// seconds from now (SwitchQueueDrainFluidAfterStart): the backlog carried to
+// landing (floor.BacklogAtLanding) by the ready replicas, serving the higher
+// of ready x mu and what they complete now, and by the replicas already
+// starting, credited by their ages, against arrival,
+//
+//	B_land = max(0, backlog + arrival x start - served)
+//	served = max(ready x mu, completed) x start + mu x credit(starting)
+//	N      = arrival / mu + B_land / (mu x horizon)
+//
+// With nothing starting and B_land positive, N - ready is (backlog +
+// (arrival - ready x mu) x T) / (mu x (T - start)) with T = start + horizon,
+// the fluid count of new replicas that clear the queue by T while serving
+// only after start. The ready replicas are charged at what they complete
+// because mu here is the sizing figure for replicas that land under their
+// cap (FirstReadHaircut), while those already at their cap complete more.
+// Never under arrival / mu. A start that is not a finite positive figure is
+// none, and N is drainReplicas'. Zero where drainReplicas prices nothing.
+func drainReplicasFluid(arrival, backlog, ready, completed, start, horizon, mu float64,
+	starting []floor.StartingReplicas) (replicas, landing float64) {
+	if !finitePositive(mu) || !(horizon > 0) || math.IsNaN(arrival) || math.IsInf(arrival, 0) ||
+		math.IsNaN(backlog) || math.IsInf(backlog, 0) {
+		return 0, 0
+	}
+	arrival, landing = max(arrival, 0), max(backlog, 0)
+	if finitePositive(start) {
+		// The ready replicas in replicas serving mu each.
+		serving := 0.0
+		if finitePositive(ready) {
+			serving = ready
+		}
+		if finitePositive(completed) {
+			serving = max(serving, completed/mu)
+		}
+		landing = floor.BacklogAtLanding(landing, arrival, mu, start, serving, starting)
+	}
+	return (arrival + landing/horizon) / mu, landing
+}
+
+// startingByRole is, per role, each variant's replicas starting, for the
+// fluid drain price's credit (floor.BacklogAtLanding): the pending replicas
+// less the stuck ones, as the engine counts them in anticipated supply, with
+// the Pods' ages where they were read.
+func startingByRole(variants []domain.VariantCapacity) map[string][]floor.StartingReplicas {
+	out := make(map[string][]floor.StartingReplicas)
+	for _, vc := range variants {
+		count := max(vc.PendingReplicas-max(vc.StuckReplicas, 0), 0)
+		if count == 0 && len(vc.PendingAges) == 0 {
+			continue
+		}
+		role := domain.CanonicalRole(vc.Role)
+		out[role] = append(out[role], floor.StartingReplicas{Count: count, Ages: vc.PendingAges})
+	}
+	return out
+}
+
 // backlogGrowthRate is how fast a role's backlog grew, in requests per
 // second, on the cycle noteBacklogGrowth just recorded: the smaller of the
 // slope over the last cycle and the slope since the reading it compared with.
@@ -343,8 +431,11 @@ type drainContext struct {
 	lambda       float64
 	startSeconds map[string]float64
 	freshPending map[string]int
-	grew         map[string]bool
-	now          time.Time
+	// starting is, per role, the replicas starting (startingByRole), which
+	// the fluid drain price credits (SwitchQueueDrainFluidAfterStart).
+	starting map[string][]floor.StartingReplicas
+	grew     map[string]bool
+	now      time.Time
 	// minServedShare is the least share of the floor's mu what the queued
 	// replicas complete may price at (MuChoice.MinMeasuredOfDerived).
 	minServedShare float64
@@ -359,7 +450,8 @@ func newDrainContext(lambda float64, startSeconds map[string]float64, variants [
 		lambda = 0
 	}
 	return drainContext{lambda: lambda, startSeconds: startSeconds,
-		freshPending: freshPendingByRole(variants, startSeconds), grew: grew, now: now,
+		freshPending: freshPendingByRole(variants, startSeconds), starting: startingByRole(variants),
+		grew: grew, now: now,
 		minServedShare: minServedShare}
 }
 
@@ -393,6 +485,13 @@ type drainPriced struct {
 	region                     string
 	arrival, growth, mu, mu0   float64
 	backlog, horizon, replicas float64
+	// landing is the backlog carried to when the capacity ordered lands
+	// (SwitchQueueDrainFluidAfterStart); 0 with the switch off.
+	landing float64
+	// deadline is when, from now, the fluid price clears the queue by: the
+	// start plus the horizon (SwitchQueueDrainFluidAfterStart); 0 with the
+	// switch off or no price taken.
+	deadline float64
 }
 
 // priceDrain is a role's demand under SwitchQueuePricedAsDrain, and what it
@@ -490,11 +589,34 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 			}
 			return false, 0
 		})
+	// size is the backlog and the replicas at mu: over the horizon from now,
+	// or, with SwitchQueueDrainFluidAfterStart on, over the horizon after the
+	// capacity ordered lands (drainReplicasFluid), each queue capped at what
+	// its replica drains by then.
+	size := func(mu float64) (backlog, replicas, landing float64) {
+		if !a.queueDrainFluid {
+			backlog = cappedBacklog(d.queues, t.scheduler, mu, out.horizon)
+			return backlog, drainReplicas(out.arrival, backlog, out.horizon, mu), 0
+		}
+		start := c.startSeconds[role]
+		if !finitePositive(start) {
+			start = 0
+		}
+		// Capped at what a replica drains in start + T, not in T as the
+		// floor's term caps it (throughput_floor.go): a queue on one engine
+		// is served only by that engine, which serves it through the start
+		// as well. The floor's lower cap is harmless, as the price takes the
+		// max with the floor's tokens.
+		backlog = cappedBacklog(d.queues, t.scheduler, mu, start+out.horizon)
+		replicas, landing = drainReplicasFluid(out.arrival, backlog, float64(len(d.queues)), d.throughput,
+			start, out.horizon, mu, c.starting[role])
+		out.deadline = start + out.horizon
+		return backlog, replicas, landing
+	}
 	want := t.want
 	if region != "" && finitePositive(out.mu) && finitePositive(p) {
 		out.region = region
-		out.backlog = cappedBacklog(d.queues, t.scheduler, out.mu, out.horizon)
-		out.replicas = drainReplicas(out.arrival, out.backlog, out.horizon, out.mu)
+		out.backlog, out.replicas, out.landing = size(out.mu)
 		price := max(t.resident, out.replicas*p)
 		if t.inFloor {
 			price = max(price, t.tokens)
@@ -508,11 +630,10 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 	}
 	if held && region != drainBeforeTwoReadings && queued > 0 && finitePositive(holdMu) && finitePositive(d.perReplica) {
 		mu := holdMu * a.drainHaircut
-		b := cappedBacklog(d.queues, t.scheduler, mu, out.horizon)
-		n := drainReplicas(out.arrival, b, out.horizon, mu)
+		b, n, landing := size(mu)
 		if n*d.perReplica > want {
 			want = n * d.perReplica
-			out.region, out.mu, out.backlog, out.replicas = drainHaircutHeld, mu, b, n
+			out.region, out.mu, out.backlog, out.replicas, out.landing = drainHaircutHeld, mu, b, n, landing
 		}
 	}
 	if math.IsNaN(want) || math.IsInf(want, 0) {

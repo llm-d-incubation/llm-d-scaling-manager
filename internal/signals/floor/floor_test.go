@@ -830,26 +830,26 @@ var _ = Describe("a standing queue orders what it justifies", func() {
 var _ = Describe("the backlog a role is priced for", func() {
 	const T = 70.0 // run T's measured start, near enough
 
-	one := func(count int, ages ...float64) []startingReplicas {
-		return []startingReplicas{{count: count, ages: ages}}
+	one := func(count int, ages ...float64) []StartingReplicas {
+		return []StartingReplicas{{Count: count, Ages: ages}}
 	}
 
 	It("adds what arrives while a replica starts", func() {
 		// 6 req/s over a 70 s start is 420 requests, against one replica
 		// draining 70. The queue the fleet meets is not the queue it sees.
-		Expect(backlogAtLanding(191, 6, 1.0, T, 1, nil)).
+		Expect(BacklogAtLanding(191, 6, 1.0, T, 1, nil)).
 			To(BeNumerically("~", 191+420-70, 1e-6))
 	})
 
 	It("credits a starting replica with the window it will be Ready for", func() {
 		// One 60 s into a 70 s start drains for 60 s of the window; one ordered
 		// a second ago drains for 1. The count alone cannot say that.
-		Expect(backlogAtLanding(191, 6, 1.0, T, 1, one(2, 60, 1))).
+		Expect(BacklogAtLanding(191, 6, 1.0, T, 1, one(2, 60, 1))).
 			To(BeNumerically("~", 191+420-(70+61), 1e-6))
 	})
 
 	It("falls back to half the window when the ages are unavailable", func() {
-		Expect(backlogAtLanding(191, 6, 1.0, T, 1, one(2))).
+		Expect(BacklogAtLanding(191, 6, 1.0, T, 1, one(2))).
 			To(BeNumerically("~", 191+420-(70+70), 1e-6))
 	})
 
@@ -858,13 +858,13 @@ var _ = Describe("the backlog a role is priced for", func() {
 		// another returned nil. Summed into the role, the successful one's ages
 		// suppressed the other's count entirely and credited six starting
 		// replicas with nothing.
-		mixed := []startingReplicas{
-			{count: 1, ages: []float64{10}},
-			{count: 6},
+		mixed := []StartingReplicas{
+			{Count: 1, Ages: []float64{10}},
+			{Count: 6},
 		}
 		Expect(startingCredit(T, 1, []float64{10}) + startingCredit(T, 6, nil)).
 			To(BeNumerically("~", 10+6*35, 1e-6))
-		Expect(backlogAtLanding(400, 6, 1.0, T, 1, mixed)).
+		Expect(BacklogAtLanding(400, 6, 1.0, T, 1, mixed)).
 			To(BeNumerically("~", 400+420-(70+10+210), 1e-6))
 	})
 
@@ -889,12 +889,12 @@ var _ = Describe("the backlog a role is priced for", func() {
 	It("can price BELOW the standing queue", func() {
 		// A fleet that will have drained the queue before new capacity lands
 		// needs no capacity for it.
-		Expect(backlogAtLanding(100, 1, 1.0, T, 5, nil)).To(BeZero())
+		Expect(BacklogAtLanding(100, 1, 1.0, T, 5, nil)).To(BeZero())
 	})
 
 	It("leaves the observed backlog alone when nothing is known", func() {
-		Expect(backlogAtLanding(191, 6, 1.0, 0, 1, nil)).To(Equal(191.0))
-		Expect(backlogAtLanding(191, 6, 0, T, 1, nil)).To(Equal(191.0))
+		Expect(BacklogAtLanding(191, 6, 1.0, 0, 1, nil)).To(Equal(191.0))
+		Expect(BacklogAtLanding(191, 6, 0, T, 1, nil)).To(Equal(191.0))
 	})
 
 	It("ignores an age that is not a number of seconds", func() {

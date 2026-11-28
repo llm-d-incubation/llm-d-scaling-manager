@@ -1194,6 +1194,8 @@ downstreamSaturated
 dp_size
 drainArrival
 drainBacklog
+drainBacklogAtLanding
+drainDeadline
 drainFirstReadMu
 drainGrowth
 drainHorizon
@@ -2758,6 +2760,7 @@ queries
 query
 question
 queue
+queue-drain-fluid-after-start
 queue-priced-as-drain
 queue-scorer
 queue-time

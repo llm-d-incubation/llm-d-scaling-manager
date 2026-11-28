@@ -303,7 +303,7 @@ func Estimate(
 	// otherwise have the successful one's ages suppress the other's count
 	// entirely, because the credit falls back on the count only when it has no
 	// ages at all. That silently credited a six-replica variant with nothing.
-	startingByRole := make(map[string][]startingReplicas, len(variants))
+	startingByRole := make(map[string][]StartingReplicas, len(variants))
 	for _, vc := range variants {
 		perReplica[vc.VariantName] = vc.PerReplicaCapacity
 		role := domain.CanonicalRole(vc.Role)
@@ -311,7 +311,7 @@ func Estimate(
 		readyByRole[role] += vc.ReplicaCount
 		if vc.PendingReplicas > 0 || len(vc.PendingAges) > 0 {
 			startingByRole[role] = append(startingByRole[role],
-				startingReplicas{count: vc.PendingReplicas, ages: vc.PendingAges})
+				StartingReplicas{Count: vc.PendingReplicas, Ages: vc.PendingAges})
 		}
 	}
 	// The per-role anticipated supply the hold cap is measured against, from
@@ -453,8 +453,8 @@ func Estimate(
 		if drainSeconds > 0 {
 			observed = max(backlog[role], 0)
 			horizon := DrainHorizon(drainSeconds, startSeconds[role])
-			b = backlogAtLanding(observed, lambda, mu, startSeconds[role],
-				readyByRole[role], startingByRole[role])
+			b = BacklogAtLanding(observed, lambda, mu, startSeconds[role],
+				float64(readyByRole[role]), startingByRole[role])
 			rate += b / horizon
 		}
 		floor := rate * cost
@@ -635,7 +635,7 @@ func Estimate(
 	return out
 }
 
-// backlogAtLanding projects a role's queue forward to the moment ordered
+// BacklogAtLanding projects a role's queue forward to the moment ordered
 // capacity becomes Ready.
 //
 // Arrivals keep coming while a replica starts -- at 6 req/s over the 67-82 s run
@@ -660,17 +660,22 @@ func Estimate(
 // will have drained the queue before new capacity lands needs no capacity for it.
 // Returns the observed backlog unchanged when no start time is known or mu is
 // unusable, which is the behaviour before this existed.
-func backlogAtLanding(backlog, lambda, mu, startSeconds float64, ready int,
-	starting []startingReplicas) float64 {
+//
+// ready is in replicas serving mu each. It is a figure rather than a count so
+// that a caller whose ready replicas complete more than ready x mu (the drain
+// price, where mu is a haircut sizing figure) can charge them at what they
+// complete: ready = completed / mu.
+func BacklogAtLanding(backlog, lambda, mu, startSeconds, ready float64,
+	starting []StartingReplicas) float64 {
 	if !(startSeconds > 0) || !(mu > 0) {
 		return backlog
 	}
 	arrived := lambda * startSeconds
 	var credit float64
 	for _, s := range starting {
-		credit += startingCredit(startSeconds, s.count, s.ages)
+		credit += startingCredit(startSeconds, s.Count, s.Ages)
 	}
-	served := mu * (float64(ready)*startSeconds + credit)
+	served := mu * (ready*startSeconds + credit)
 	projected := backlog + arrived - served
 	if !(projected > 0) {
 		return 0
@@ -739,12 +744,14 @@ func startingCredit(startSeconds float64, pending int, ages []float64) float64 {
 	return credit
 }
 
-// startingReplicas is one variant's starting replicas: how many there are, and
+// StartingReplicas is one variant's starting replicas: how many there are, and
 // their ages where those could be read. The two travel together because the
 // credit falls back per VARIANT, not per role.
-type startingReplicas struct {
-	count int
-	ages  []float64
+type StartingReplicas struct {
+	// Count is how many replicas are starting.
+	Count int
+	// Ages is each starting Pod's age in seconds, where it could be read.
+	Ages []float64
 }
 
 // staleStartFactor is how many starts a Pod may have been starting for before it
