@@ -32,15 +32,18 @@ func TestMoEBusiestRank_OffFromTheConstructor(t *testing.T) {
 	assert.False(t, a.BusiestRankFillFor(moeDP8()), "off: no variant is read at its busiest rank")
 }
 
-// On, only an expert-parallel engine over more than one data-parallel rank is
-// read at its busiest rank: dense ranks step independently.
-func TestMoEBusiestRank_OnlyExpertParallelDataParallel(t *testing.T) {
+// On, with no model config read, the expert-parallel flag alone gives the MoE
+// class: an expert-parallel engine over more than one data-parallel rank is
+// read at its busiest rank, and an engine with neither flag nor config is not
+// known to be MoE and is read at its mean. TestMoEBusiestRank_KeysOnTheMoEClass
+// holds the cases a config decides.
+func TestMoEBusiestRank_WithoutConfigTheFlagDecides(t *testing.T) {
 	a := NewSaturationAnalyzer(capacity.NewStore())
 	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchMoEBusiestRank: true}))
 	assert.True(t, a.BusiestRankFillFor(moeDP8()))
-	dense := moeDP8()
-	dense.ExpertParallel = false
-	assert.False(t, a.BusiestRankFillFor(dense), "dense data parallelism")
+	noFlag := moeDP8()
+	noFlag.ExpertParallel = false
+	assert.False(t, a.BusiestRankFillFor(noFlag), "no flag, no config: not known to be MoE")
 	one := moeDP8()
 	one.DataParallelSize = 1
 	assert.False(t, a.BusiestRankFillFor(one), "expert parallelism over one rank")
