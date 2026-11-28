@@ -91,7 +91,9 @@ func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBindi
 	}
 	b := v.StepBudgetBinding()
 	return &whatifapi.StepBudgetBinding{Class: string(b.Class), Reason: b.Reason, BoundTokens: b.BoundTokens,
-		OverShare: b.OverShare, NearTokens: b.NearTokens, Share: b.Share, TopTokens: b.TopTokens, TopOpen: b.TopOpen}
+		OverShare: b.OverShare, NearTokens: b.NearTokens, Share: b.Share, TopTokens: b.TopTokens, TopOpen: b.TopOpen,
+		EmittedBudgetTokens: b.EmittedBudget, Acceptance: b.Acceptance, Prompts: b.Prompts,
+		PromptBoundTokens: b.PromptBoundTokens, PromptOverShare: b.PromptOverShare}
 }
 
 // stepBudgetBindingText is b in the report's words, the evidence the class is
@@ -99,7 +101,11 @@ func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBindi
 // bound: prompts it chunked; 30% above 4096)", "does not bind (0.04% of
 // iterations above 8192 tokens, the budget's bound: prompts it chunked; 0.2%
 // above 4096)", "unknown (no tokens-per-iteration series)"; with the observed
-// top beside it where read.
+// top beside it where read. Where read, the computed prompts above the budget
+// follow the iterations ("; 50% of computed prompts above 10000 tokens"), and
+// a speculating decode pool's iterations are read against its budget in
+// emitted tokens ("of iterations above 4096 tokens, the budget's bound in
+// emitted tokens at acceptance 0.7 (3482): steps it filled").
 func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 	top := ""
 	if b.TopTokens > 0 {
@@ -121,8 +127,16 @@ func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 	if b.NearTokens > 0 {
 		near = fmt.Sprintf("; %s%% above %s", num(100*b.Share), num(b.NearTokens))
 	}
-	return fmt.Sprintf("%s (%s%% of iterations above %s tokens, the budget's bound: prompts it chunked%s%s)",
-		class, num(100*b.OverShare), num(b.BoundTokens), near, top)
+	if b.PromptBoundTokens > 0 {
+		near += fmt.Sprintf("; %s%% of computed prompts above %s tokens", num(100*b.PromptOverShare), num(b.PromptBoundTokens))
+	}
+	bound := "the budget's bound: prompts it chunked"
+	if b.EmittedBudgetTokens > 0 {
+		bound = fmt.Sprintf("the budget's bound in emitted tokens at acceptance %s (%s): steps it filled",
+			num(b.Acceptance), num(b.EmittedBudgetTokens))
+	}
+	return fmt.Sprintf("%s (%s%% of iterations above %s tokens, %s%s%s)",
+		class, num(100*b.OverShare), num(b.BoundTokens), bound, near, top)
 }
 
 // variantParams is the engine parameters the state holds for the named

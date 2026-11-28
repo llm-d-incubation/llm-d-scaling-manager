@@ -94,6 +94,17 @@ func TestStepBudgetBindingText(t *testing.T) {
 				"99.9% of iterations at or under 32 tokens)"},
 		{whatifapi.StepBudgetBinding{Class: "unknown", Reason: capacity.StepBudgetNotKnown, TopTokens: 8192},
 			"unknown (step budget not known; 99.9% of iterations at or under 8192 tokens)"},
+		// The full reading (saturation.SwitchStepBudgetFullReading): the
+		// computed prompts above the budget, and a speculating decode pool
+		// read in emitted tokens.
+		{whatifapi.StepBudgetBinding{Class: "binds", BoundTokens: 8192, OverShare: 0.005, NearTokens: 4096, Share: 0.005,
+			PromptBoundTokens: 10000, PromptOverShare: 0.5, Prompts: 1000},
+			"binds (0.5% of iterations above 8192 tokens, the budget's bound: prompts it chunked; 0.5% above 4096; " +
+				"50% of computed prompts above 10000 tokens)"},
+		{whatifapi.StepBudgetBinding{Class: "binds", BoundTokens: 4096, OverShare: 0.1, NearTokens: 2048, Share: 1,
+			EmittedBudgetTokens: 4096, Acceptance: 1},
+			"binds (10% of iterations above 4096 tokens, the budget's bound in emitted tokens at acceptance 1 (4096): " +
+				"steps it filled; 100% above 2048)"},
 	} {
 		assert.Equal(t, c.want, stepBudgetBindingText(&c.b))
 	}
