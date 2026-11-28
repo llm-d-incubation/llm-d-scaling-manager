@@ -975,6 +975,24 @@ func (m ReplicaMetrics) ITLPerToken(step ITLStep) (ReplicaMetrics, ITLWithheld) 
 	return m, ITLKept
 }
 
+// AcceptedPerStep is the draft tokens a step of the replica accepts, as the
+// analyzers and the capacity planner price it: SpecAcceptedPerStep where it
+// was read and is a finite number at or above zero, and ok false otherwise.
+// A positive maxAccepted (num_speculative_tokens) holds it there, as a step
+// accepts no more than it proposes: the saturation analyzer's step budget
+// reads it so. Zero takes it as read, the capacity planner's rule (its
+// replay's sequence count, whatif's decode groups): an option of the one
+// rule, not a second reading, so a change here moves both.
+func (m ReplicaMetrics) AcceptedPerStep(maxAccepted int) (float64, bool) {
+	if !m.SpecAcceptedPerStepKnown || !(m.SpecAcceptedPerStep >= 0) || math.IsInf(m.SpecAcceptedPerStep, 0) {
+		return 0, false
+	}
+	if maxAccepted > 0 {
+		return min(m.SpecAcceptedPerStep, float64(maxAccepted)), true
+	}
+	return m.SpecAcceptedPerStep, true
+}
+
 // Ranks is the number of data-parallel engine ranks the record covers, never
 // less than one: an unknown count (EngineRanks zero) is one engine, which is
 // what every record meant before the count existed.

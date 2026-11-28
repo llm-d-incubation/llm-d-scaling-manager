@@ -66,3 +66,21 @@ func TestParity_TheOutputSpreadIsTheAnalyzersReading(t *testing.T) {
 	unread[1].AvgOutputTokensSquaredKnown = false
 	assert.Equal(t, 0.0, spread(unread), "a row with no bound: the cycle has no reading of its spread")
 }
+
+// The planner's sequence count reads the draft tokens a step accepts by the
+// analyzers' rule (domain.ReplicaMetrics.AcceptedPerStep) with no hold: 3.5
+// accepted divides the tokens by 4.5, where the saturation analyzer's step
+// budget, at k 3, reads 4 (saturation's
+// TestParity_TheAcceptedPerStepIsOneRuleHeldAtK).
+func TestParity_TheAcceptedPerStepIsOneRule(t *testing.T) {
+	rm := domain.ReplicaMetrics{AvgITL: 0.02, AvgITLKnown: true, GenerationTokenRate: 900,
+		SpecAcceptedPerStep: 3.5, SpecAcceptedPerStepKnown: true}
+	require.Equal(t, domain.ITLFinite, rm.ITLState())
+	accepted, ok := rm.AcceptedPerStep(0)
+	require.True(t, ok)
+	assert.Equal(t, 900*0.02/(1+accepted), rowSequences(rm), "the shared reading, byte for byte")
+	assert.InDelta(t, 4.0, rowSequences(rm), 1e-12, "18 tokens a step-window over 4.5 a step")
+
+	rm.SpecAcceptedPerStepKnown = false
+	assert.InDelta(t, 18.0, rowSequences(rm), 1e-12, "no reading: one token a step")
+}

@@ -178,9 +178,11 @@ func DecodeCycleOf(in domain.AnalyzerInput, at time.Time, decodeVariant string) 
 		}
 		if rm.AvgITLKnown && Finite(rm.AvgITL) && rm.AvgITL > 0 && rm.RequestRateKnown && Finite(rm.RequestRate) && rm.RequestRate > 0 {
 			g := DecodeGroup{Rate: rm.RequestRate, TokenTime: rm.AvgITL}
-			if rm.SpecAcceptedPerStepKnown && Finite(rm.SpecAcceptedPerStep) && rm.SpecAcceptedPerStep >= 0 {
-				g.Accepted, g.AcceptedKnown = rm.SpecAcceptedPerStep, true
-				g.TokenTime = rm.AvgITL / (1 + rm.SpecAcceptedPerStep)
+			// Unclamped (domain.ReplicaMetrics.AcceptedPerStep at 0): the
+			// planner's rule; the saturation analyzer holds it at k.
+			if accepted, ok := rm.AcceptedPerStep(0); ok {
+				g.Accepted, g.AcceptedKnown = accepted, true
+				g.TokenTime = rm.AvgITL / (1 + accepted)
 			}
 			c.Groups = append(c.Groups, g)
 		}

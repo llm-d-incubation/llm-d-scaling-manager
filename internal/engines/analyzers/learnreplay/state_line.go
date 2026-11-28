@@ -271,8 +271,10 @@ func (l *lineSamples) pruneFit(now time.Time) {
 func rowSequences(rm domain.ReplicaMetrics) float64 {
 	if rm.ITLState() == domain.ITLFinite && rm.AvgITL > 0 && !math.IsInf(rm.AvgITL, 0) && rm.GenerationTokenRate > 0 {
 		n := rm.GenerationTokenRate * rm.AvgITL
-		if rm.SpecAcceptedPerStepKnown && rm.SpecAcceptedPerStep > 0 {
-			n /= 1 + rm.SpecAcceptedPerStep
+		// Unclamped (AcceptedPerStep at 0), the planner's rule; the
+		// saturation analyzer's step budget holds it at k.
+		if accepted, ok := rm.AcceptedPerStep(0); ok && accepted > 0 {
+			n /= 1 + accepted
 		}
 		return n
 	}

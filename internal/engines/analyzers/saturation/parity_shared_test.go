@@ -81,3 +81,21 @@ func TestParity_TheOutputSpreadIsShared(t *testing.T) {
 	assert.InDelta(t, both, fleetOutputDispersion(rows(false, false), roles), 1e-12,
 		"no rate read: still weighed by the rates (the planner weighs the rows alike, 760000/550^2)")
 }
+
+// The draft tokens a step accepts are read by one rule
+// (domain.ReplicaMetrics.AcceptedPerStep): the analyzer's step budget holds
+// them at num_speculative_tokens, k 3 here, so a reading of 3.5 emits 4 a
+// step; learnreplay's TestParity_TheAcceptedPerStepIsOneRule pins the
+// planner's reading of the same row, unclamped at 3.5.
+func TestParity_TheAcceptedPerStepIsOneRuleHeldAtK(t *testing.T) {
+	rm := budgetRow()
+	rm.SpecAcceptedPerStep, rm.SpecAcceptedPerStepKnown = 3.5, true
+	params := budgetParams()
+	require.Equal(t, 3, params.SpeculativeTokens())
+	accepted, ok := rm.AcceptedPerStep(params.SpeculativeTokens())
+	require.True(t, ok)
+	b := decodeStepBudget(rm, domain.RoleDecode, params)
+	assert.Equal(t, 1+accepted, b.emitted, "the shared reading, byte for byte")
+	assert.Equal(t, 4.0, b.emitted, "held at k")
+	assert.Equal(t, 4.0, b.stepTokens)
+}
