@@ -134,3 +134,31 @@ func TestITLPerToken(t *testing.T) {
 		}
 	}
 }
+
+// AcceptedPerStep reads a finite, non-negative count that was read, held at
+// a positive maxAccepted and taken as read at zero.
+func TestAcceptedPerStep(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		v        float64
+		known    bool
+		max      int
+		want     float64
+		wantRead bool
+	}{
+		{"unread", 2, false, 3, 0, false},
+		{"under k", 2, true, 3, 2, true},
+		{"held at k", 3.5, true, 3, 3, true},
+		{"no hold", 3.5, true, 0, 3.5, true},
+		{"zero", 0, true, 3, 0, true},
+		{"negative", -1, true, 3, 0, false},
+		{"NaN", math.NaN(), true, 0, 0, false},
+		{"infinite", math.Inf(1), true, 0, 0, false},
+	} {
+		m := ReplicaMetrics{SpecAcceptedPerStep: c.v, SpecAcceptedPerStepKnown: c.known}
+		got, ok := m.AcceptedPerStep(c.max)
+		if got != c.want || ok != c.wantRead {
+			t.Errorf("%s: %g, %v; want %g, %v", c.name, got, ok, c.want, c.wantRead)
+		}
+	}
+}

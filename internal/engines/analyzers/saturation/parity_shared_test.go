@@ -7,7 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/domain"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 )
 
@@ -52,4 +54,98 @@ func TestParity_TheHitAtCountAndTheFLoadCurveAreSharedAndOff(t *testing.T) {
 		require.Contains(t, fields, name)
 		assert.False(t, *fields[name], "%s: off from the constructor", name)
 	}
+}
+
+// The fleet's spread of output lengths, D, is fleet.OutputMoments' reading
+// at the analyzer's weights, fleet.Mean's default: any positive request
+// rate. learnreplay's TestParity_TheOutputSpreadIsTheAnalyzersReading pins
+// the planner's reading of the same rows: one figure where every rate is
+// read; where one is not, the analyzer counts that row and the planner
+// leaves it out, and where none is, the planner weighs the rows alike.
+func TestParity_TheOutputSpreadIsShared(t *testing.T) {
+	row := func(pod string, rate, out, squared float64, known bool) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{PodName: pod, VariantName: "dec", RequestRate: rate, RequestRateKnown: known,
+			AvgInputTokens: 1000, AvgOutputTokens: out, AvgOutputTokensSquared: squared, AvgOutputTokensSquaredKnown: true}
+	}
+	rows := func(first, second bool) []domain.ReplicaMetrics {
+		return []domain.ReplicaMetrics{row("dec-0", 9, 100, 20000, first), row("dec-1", 1, 1000, 1.5e6, second)}
+	}
+	roles := map[string]string{"dec": "decode"}
+	const both = 168000.0 / (190 * 190)
+	shared, ok := fleet.OutputDispersion(rows(true, true), outputCounted(roles))
+	require.True(t, ok)
+	assert.Equal(t, shared, fleetOutputDispersion(rows(true, true), roles), "the shared reading, byte for byte")
+	assert.InDelta(t, both, fleetOutputDispersion(rows(true, true), roles), 1e-12)
+	assert.InDelta(t, both, fleetOutputDispersion(rows(true, false), roles), 1e-12,
+		"the analyzer's weights: a positive rate counts, read or not (the planner reads 2)")
+	assert.InDelta(t, both, fleetOutputDispersion(rows(false, false), roles), 1e-12,
+		"no rate read: still weighed by the rates (the planner weighs the rows alike, 760000/550^2)")
+}
+
+// The draft tokens a step accepts are read by one rule
+// (domain.ReplicaMetrics.AcceptedPerStep): the analyzer's step budget holds
+// them at num_speculative_tokens, k 3 here, so a reading of 3.5 emits 4 a
+// step; learnreplay's TestParity_TheAcceptedPerStepIsOneRule pins the
+// planner's reading of the same row, unclamped at 3.5.
+func TestParity_TheAcceptedPerStepIsOneRuleHeldAtK(t *testing.T) {
+	rm := budgetRow()
+	rm.SpecAcceptedPerStep, rm.SpecAcceptedPerStepKnown = 3.5, true
+	params := budgetParams()
+	require.Equal(t, 3, params.SpeculativeTokens())
+	accepted, ok := rm.AcceptedPerStep(params.SpeculativeTokens())
+	require.True(t, ok)
+	b := decodeStepBudget(rm, domain.RoleDecode, params)
+	assert.Equal(t, 1+accepted, b.emitted, "the shared reading, byte for byte")
+	assert.Equal(t, 4.0, b.emitted, "held at k")
+	assert.Equal(t, 4.0, b.stepTokens)
+}
+
+// The decode capacity view's queue is prefill.DecodeBacklogBy with the
+// landed pulls and the cap, and the capacity planner's decode TTFT backlog
+// is the same rule at its zero value (prefill.DecodeBacklog): one row of 30
+// waiting, 4 on capacity and 6 landed, reads 10 here and 4 there
+// (prefill's TestDecodeBacklogBy_TheTwoRules pins the planner's side).
+func TestParity_TheDecodeBacklogIsOneRule(t *testing.T) {
+	rm := domain.ReplicaMetrics{VariantName: "d", QueueLength: 30, CapacityQueueKnown: true, CapacityQueueLength: 4,
+		LandedQueueKnown: true, LandedQueueLength: 6, RunningRequests: 12}
+	waiting, busiest, ok := prefill.DecodeBacklogBy(rm, prefill.DecodeBacklogRule{Landed: true, MaxNumSeqs: 16})
+	require.True(t, ok)
+	v := decodeCapacityView(rm, domain.RoleDecode, 16)
+	assert.Equal(t, waiting, v.QueueLength, "the shared reading")
+	assert.Equal(t, busiest, v.MaxRankQueueLength)
+	assert.Equal(t, 10, v.QueueLength)
+	planner, known := prefill.DecodeBacklog(rm)
+	assert.True(t, known)
+	assert.Equal(t, 4, planner, "the planner's rule: the capacity queue alone")
+
+	rm.RunningRequests = 16
+	assert.Equal(t, rm, decodeCapacityView(rm, domain.RoleDecode, 16), "at the cap: the full queue")
+}
+
+// The KV per request reads each row by one rule (fleet.ResidentRead): the
+// fleet's reading here, the capacity planner's per variant
+// (learnreplay's TestParity_TheResidentRowIsOneRule pins the same rows to
+// the same sums). Three rows count, 210,000 tokens over 100 running; a row
+// under the band, one not Ready and one lent by the warm pool do not.
+func TestParity_TheResidentRowIsOneRule(t *testing.T) {
+	row := func(kv float64, capTokens int64, running int) domain.ReplicaMetrics {
+		return domain.ReplicaMetrics{VariantName: "dec", Ready: true, KvUsageInstant: kv, KvUsageInstantKnown: true,
+			RunningRequests: running, RunningRequestsKnown: true, TotalKvCapacityTokens: capTokens}
+	}
+	notReady, lent := row(0.9, 100_000, 10), row(0.9, 100_000, 10)
+	notReady.Ready, lent.FromWarmPool = false, true
+	rows := []domain.ReplicaMetrics{row(0.5, 100_000, 50), row(0.3, 200_000, 20), row(1.0, 100_000, 30),
+		row(0.1, 100_000, 10), notReady, lent}
+	var tokens float64
+	var running int
+	for _, rm := range rows {
+		if tk, n, ok := fleet.ResidentRead(rm, 0.15); ok {
+			tokens, running = tokens+tk, running+n
+		}
+	}
+	got := fleetResidentKVPerRequest(rows, map[string]string{"dec": domain.RoleDecode}, 0.15)
+	assert.Equal(t, tokens, got.tokens, "the shared reading, byte for byte")
+	assert.Equal(t, running, got.running)
+	assert.InDelta(t, 210_000, got.tokens, 1e-6)
+	assert.Equal(t, 100, got.running)
 }

@@ -81,8 +81,8 @@ func decodeStepBudget(rm domain.ReplicaMetrics, role string, params *capacity.En
 	if k := params.SpeculativeTokens(); k > 0 {
 		b.stepTokens = float64(1 + k)
 		b.emitted = float64(1 + k)
-		if rm.SpecAcceptedPerStepKnown && finiteNonNegative(rm.SpecAcceptedPerStep) {
-			b.emitted = 1 + min(rm.SpecAcceptedPerStep, float64(k))
+		if accepted, ok := rm.AcceptedPerStep(k); ok {
+			b.emitted = 1 + accepted
 		}
 	}
 	return b

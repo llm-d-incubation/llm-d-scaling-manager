@@ -101,7 +101,29 @@ type TPOTDistScore struct {
 	// router's own bucket, the histograms disagreeing at their noise.
 	EngineJoined int `json:"engineJoined"`
 	Conflicts    int `json:"conflicts"`
+	// Rule names the rule the Inside, Below and Above counts were read by.
+	// A reader that gates on them (the slo analyzer's TPOT learner) pins
+	// the rule it was validated on. The name alone does not move when a
+	// bracket constant does: the slo package's
+	// TestParity_TheTPOTGateHoldsItsBracketRule asserts the constants, so a
+	// change of rule cannot move the gate without that test failing. Not
+	// written out.
+	Rule TPOTBracketRule `json:"-"`
 }
+
+// TPOTBracketRule names the rule a TPOTDistScore placed a predicted
+// percentile against the measured one by.
+type TPOTBracketRule string
+
+// TPOTBracketJointV1 is the joint bracket of issue
+// llm-d-incubation/llm-d-scaling-manager#470 (JointBracket): the router's
+// per-request TPOT histogram and, above their first edge, the decode
+// engines', each at JointBracketSE binomial errors and JointBracketAllowance
+// either way, the engines' joining from MinEngineAboveFirstEdge requests.
+// A change to any of these is a new rule, under a new name: the slo
+// analyzer's TPOT gate holds the name (slo.ModelTPOTFoldRule) and refuses a
+// fold scored by another.
+const TPOTBracketJointV1 TPOTBracketRule = "joint-router-engine-v1"
 
 // TPOTDistFitted is the distribution fitted on cycles.
 type TPOTDistFitted struct {
@@ -380,7 +402,8 @@ func (s *TPOTDistScorer) Add(d TPOTDist, st TPOTDistStep, mean float64, def []*f
 func (s *TPOTDistScorer) Score() TPOTDistScore {
 	in, below, above := BracketInside, BracketBelow, BracketAbove
 	out := TPOTDistScore{Steps: s.n, P90Inside: s.side[0][in], P95Inside: s.side[1][in], P90Below: s.side[0][below],
-		P90Above: s.side[0][above], P95Below: s.side[1][below], P95Above: s.side[1][above], EngineJoined: s.engine, Conflicts: s.conflicts}
+		P90Above: s.side[0][above], P95Below: s.side[1][below], P95Above: s.side[1][above], EngineJoined: s.engine, Conflicts: s.conflicts,
+		Rule: TPOTBracketJointV1}
 	if s.compared {
 		dp90, dp95 := s.def[0][in], s.def[1][in]
 		out.DefaultP90Inside, out.DefaultP95Inside = &dp90, &dp95

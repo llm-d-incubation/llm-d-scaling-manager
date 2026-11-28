@@ -17,6 +17,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/inferenceengine"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/balance"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/fleet"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/itl"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learn"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/learnrec"
@@ -988,10 +989,17 @@ func cyclesSpanned(readings []itl.Observation, cycleAt map[time.Time]int) (from,
 // noteShapes keeps, per variant, the shape of each of its latest
 // shapeCycles cycles with traffic: a row serving requests, or generating
 // tokens, at the cycle.
+//
+// A cycle's spread of output lengths is read as every analyzer reads one
+// (fleet.OutputMoments, which the saturation, slo and throughput analyzers'
+// D calls): over the rows the lengths are averaged over, with their weights,
+// and only when every one of them read the bound on E[O^2]. The planner's
+// option is its weights: a row's rate counts only where the row says it read
+// one (RequestRateKnown), where fleet.Mean's default counts any positive
+// rate.
 func noteShapes(shapes map[string][]shapeSample, rows []domain.ReplicaMetrics, cycle int) {
 	type acc struct {
-		weight, il, ol, squared, hit, req float64
-		unread                            bool
+		weight, il, ol, hit, req float64
 	}
 	byVariant := map[string]*acc{}
 	traffic := map[string]bool{}
@@ -1015,21 +1023,24 @@ func noteShapes(shapes map[string][]shapeSample, rows []domain.ReplicaMetrics, c
 	// Rows weighted by their request rate, as the analyzers weight them, and
 	// alike when none read one: a busy row of short requests and a quiet one
 	// of long ones are one mean only by what each served.
-	for _, rm := range rows {
-		a := byVariant[rm.VariantName]
-		w := 1.0
-		if a.req > 0 {
-			w = rate(rm)
+	weightOf := func(rm domain.ReplicaMetrics) float64 {
+		if byVariant[rm.VariantName].req > 0 {
+			return rate(rm)
 		}
-		if !(rm.AvgOutputTokens > 0) || !(w > 0) {
+		return 1
+	}
+	counted := func(rm domain.ReplicaMetrics) bool {
+		return rm.AvgOutputTokens > 0 && weightOf(rm) > 0
+	}
+	for _, rm := range rows {
+		if !counted(rm) {
 			continue
 		}
+		a, w := byVariant[rm.VariantName], weightOf(rm)
 		a.weight += w
 		a.il += w * rm.AvgInputTokens
 		a.ol += w * rm.AvgOutputTokens
 		a.hit += w * rm.PrefixCacheHitRate
-		a.squared += w * rm.AvgOutputTokensSquared
-		a.unread = a.unread || !rm.AvgOutputTokensSquaredKnown || !(rm.AvgOutputTokensSquared > 0)
 	}
 	for v, a := range byVariant {
 		if !traffic[v] || a.weight == 0 {
@@ -1037,8 +1048,9 @@ func noteShapes(shapes map[string][]shapeSample, rows []domain.ReplicaMetrics, c
 		}
 		s := shapes[v]
 		sample := shapeSample{cycle: cycle, il: a.il / a.weight, ol: a.ol / a.weight, hit: a.hit / a.weight, req: a.req}
-		if !a.unread {
-			sample.squared = a.squared / a.weight
+		ofVariant := func(rm domain.ReplicaMetrics) bool { return rm.VariantName == v && counted(rm) }
+		if _, squared, ok := fleet.OutputMoments(rows, ofVariant, fleet.WeightedBy(weightOf)); ok {
+			sample.squared = squared
 		}
 		s = append(s, sample)
 		if len(s) > shapeCycles {
