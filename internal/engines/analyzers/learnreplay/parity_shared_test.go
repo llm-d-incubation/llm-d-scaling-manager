@@ -71,6 +71,16 @@ func TestParity_TheOutputSpreadIsTheAnalyzersReading(t *testing.T) {
 	infinite := parityOutputRows(true, true)
 	infinite[1].AvgOutputTokensSquared = math.Inf(1)
 	assert.Equal(t, 0.0, spread(infinite), "an infinite bound is no reading of the spread, not an infinite spread")
+
+	// An infinite rate keeps its row out of the weighted E[O^2] (fleet.Mean),
+	// so the squared figure is the other row's 1.5e6, where main read NaN. The
+	// row's lengths still read NaN, as on main: only the squared figure is pinned.
+	fast := parityOutputRows(true, true)
+	fast[0].RequestRate = math.Inf(1)
+	shapes := map[string][]shapeSample{}
+	noteShapes(shapes, fast, 1)
+	require.Len(t, shapes["dec"], 1)
+	assert.Equal(t, 1.5e6, shapes["dec"][0].squared, "an infinite rate is no weight in E[O^2], not a NaN")
 }
 
 // The planner's sequence count reads the draft tokens a step accepts by the
