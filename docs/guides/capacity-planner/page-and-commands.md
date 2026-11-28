@@ -572,7 +572,11 @@ In a cluster, add both to the StatefulSet's `args`
   where the source holds enough, its score on the source's own held-out
   folds: "held-out steps: N of M within 20%", for the mean. Each fold fits
   the model, its spread included, on the steps before its cut alone, so no
-  step it scores is one the fold was fitted on.
+  step it scores is one the fold was fitted on. A fold shorter than the
+  shortest window the spread is calibrated on (12 h by default) takes the
+  default spread, as a source that short would. The score is
+  stricter than in earlier releases, which priced the folds at a spread
+  fitted on the steps they score, so N can read lower on the same source.
 - **Where it is not used.** A stated request shape, a stated prefill term
   (V_P, a, prompt spread, router hop) or a stated arrival burstiness: the
   model prices the source's own traffic, and the planner's TTFT stands. The

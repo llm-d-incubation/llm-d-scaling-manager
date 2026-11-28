@@ -24,7 +24,9 @@ type HeldOutScore struct {
 // the window's (RankMixture.Spread), which the folds' p90 calibrated, so the
 // p90 is not scored here. The core and A0 are never fitted on the steps
 // scored, but the spread is: RankMixtureHeldOutFoldSpread calibrates it
-// inside each fold. A fold that does not fit scores nothing.
+// inside each fold, which the learners take with
+// RankMixtureSwitches.HeldOutFoldSpread. A fold that does not fit scores
+// nothing.
 func RankMixtureHeldOut(steps []MixtureStep, o RankMixtureOptions, spread, tolerance float64) HeldOutScore {
 	return heldOutFolds(steps, tolerance, func(train []MixtureStep) (RankMixture, float64, bool) {
 		fm, _, err := FitCore(train, o)
@@ -39,26 +41,35 @@ func RankMixtureHeldOut(steps []MixtureStep, o RankMixtureOptions, spread, toler
 
 // RankMixtureHeldOutFoldSpread is RankMixtureHeldOut with each fold's spread
 // calibrated inside the fold: the fold's model is FitRankMixture of its
-// steps before the cut alone (its core, its spread on its own two
-// self-check folds, its A0 at that spread), however short those steps are,
-// so no p90 the fold scores sets the spread it is priced at.
-// RankMixtureHeldOut's spread, the window's, was calibrated on the p90s of
-// both folds' scored steps, so the mean it scores is not out of sample.
+// steps before the cut alone, with o (its core, its spread on its own two
+// self-check folds, its A0 at that spread), so no p90 the fold scores sets
+// the spread it is priced at. RankMixtureHeldOut's spread, the window's,
+// was calibrated on the p90s of both folds' scored steps, so the mean it
+// scores is not out of sample.
+//
+// Each fold is the learner as it would have fitted the fold's steps, the
+// MinSpreadSpan included: a fold shorter than it is priced at the default
+// spread 1 under the SpreadFloor (RankMixtureFit.SpreadDefaulted), as the
+// learner prices a window that short, not at a spread calibrated on a span
+// the fit treats as too short to calibrate. The folds train on half and
+// three quarters of the window, so on a window under twice MinSpreadSpan
+// the first fold is priced at the default, and under four thirds of it
+// both are: the slo learners' window (MinSpreadFitWindow plus an hour) is
+// scored at the default throughout. A fold at the default never fails on
+// its spread, so a short fold scores where its core fits.
 //
 // calibrated says the window's own spread was calibrated (not NoSpread, a
 // positive Beta, a window of MinSpreadSpan or longer). Where it was not, no
 // scored step set it, and the folds are scored at spread as
 // RankMixtureHeldOut scores them. The SpreadFloor holds in each fold. A
-// fold whose own self-check folds do not fit scores nothing.
+// fold whose own fit fails scores nothing.
 func RankMixtureHeldOutFoldSpread(steps []MixtureStep, o RankMixtureOptions, spread float64, calibrated bool,
 	tolerance float64) HeldOutScore {
 	if !calibrated {
 		return RankMixtureHeldOut(steps, o, spread, tolerance)
 	}
-	inFold := o
-	inFold.MinSpreadSpan = 0
 	return heldOutFolds(steps, tolerance, func(train []MixtureStep) (RankMixture, float64, bool) {
-		fm, _, err := FitRankMixture(train, inFold)
+		fm, _, err := FitRankMixture(train, o)
 		return fm, fm.A0, err == nil
 	})
 }

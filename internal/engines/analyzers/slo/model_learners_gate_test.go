@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	clocktesting "k8s.io/utils/clock/testing"
 
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/constants"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
@@ -117,4 +118,94 @@ func TestModelLearners_TheFoldSpreadSwitchReachesTheFit(t *testing.T) {
 			assert.Equal(t, want, sw, "switch %v", on)
 		}
 	}
+}
+
+// With no fit in use, a refit whose held-out folds scored no step: off, as
+// before, it passes and is installed, and the model prices; with
+// SwitchV2EmptyGateAbstains it does not pass, nothing is installed (no fit
+// is held, since none was in use), and both objectives report abstained.
+// The window spans more than MinSpreadFitWindow, so the reason is not
+// window-short.
+func TestModelLearners_AnEmptyGateWithNoFitInUse(t *testing.T) {
+	emptyGateFits(t)
+	t0 := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	for _, on := range []bool{false, true} {
+		clk := clocktesting.NewFakePassiveClock(t0)
+		a := New(nil, nil).WithClock(clk).WithModelRefits(ModelRefitEvery, false)
+		require.NoError(t, a.SetSwitchesForReplay(map[string]bool{SwitchV2EmptyGateAbstains: on}))
+		in, router := modelInputsCycle()
+		in.ArrivalRate = 2
+		in.Config = ttftPolicy(time.Second)
+		fillAllInputs(&in, router)
+		a.beginCycle()
+		a.ObserveModelInputs(in, router)
+
+		a.mu.Lock()
+		w := a.models[reportModel("ns", "m")]
+		require.NotNil(t, w)
+		require.NotEmpty(t, w.cycles)
+		// No fit in use, and a window long enough to fit on.
+		w.ttft, w.tpot = ttftLearner{}, tpotLearner{}
+		early := w.cycles[0]
+		early.At = t0.Add(-whatif.MinSpreadFitWindow - 30*time.Minute)
+		w.cycles = append([]whatif.FitCycle{early}, w.cycles...)
+		a.mu.Unlock()
+
+		at := t0.Add(time.Minute)
+		clk.SetTime(at)
+		_, ok := a.RefitModel("ns", "m")
+		require.True(t, ok)
+		a.mu.Lock()
+		assert.False(t, w.ttft.held, "switch %v: no TTFT fit in use to hold", on)
+		assert.False(t, w.tpot.held, "switch %v: no TPOT fit in use to hold", on)
+		wantAt := at
+		if on {
+			wantAt = time.Time{}
+		}
+		assert.Equal(t, wantAt, w.ttft.fittedAt, "switch %v: the TTFT fit installed", on)
+		assert.Equal(t, wantAt, w.tpot.fittedAt, "switch %v: the TPOT fit installed", on)
+		a.mu.Unlock()
+
+		a.beginCycle()
+		got := a.ObserveModelInputs(in, router)
+		want := constants.SLOModelPriced
+		if on {
+			want = constants.SLOModelAbstained
+		}
+		assert.Equal(t, want, got[whatif.ObjectiveTTFT].Reason, "switch %v", on)
+		assert.Equal(t, want, got[whatif.ObjectiveTPOT].Reason, "switch %v", on)
+	}
+}
+
+// Both switches on: the TTFT fit is asked for the folds' own spread, and a
+// refit whose folds scored steps inside the tolerance passes the empty
+// gate and is installed. The score is the one
+// whatif.TestRankMixtureHeldOutFoldSpread_AShortFoldIsPricedAtTheDefault
+// reads on a window just over MinSpreadSpan (48 of 48), where each fold is
+// under the span and priced at the floored default spread. Calibrated
+// inside folds under the span instead, that window's folds scored nothing,
+// and this gate would hold the fit in use rather than install the refit.
+func TestModelLearners_BothSwitchesInstallAFitWhoseFoldsScored(t *testing.T) {
+	asked := emptyGateFits(t)
+	fitMixtureWindow = func(_ []whatif.FitCycle, _ time.Duration, _ int, _ float64, sw whatif.RankMixtureSwitches) whatif.MixtureWindowFit {
+		*asked = append(*asked, sw)
+		f := pricedMixture()
+		f.HeldOut = whatif.HeldOutScore{Within: 48, Steps: 48}
+		return f
+	}
+	t0 := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	clk := clocktesting.NewFakePassiveClock(t0)
+	a := New(nil, nil).WithClock(clk).WithModelRefits(ModelRefitEvery, false)
+	require.NoError(t, a.SetSwitchesForReplay(map[string]bool{
+		SwitchV2EmptyGateAbstains: true, SwitchV2HeldOutFoldSpread: true}))
+	w := refitWithAFitInUse(t, a, clk, t0)
+	require.NotEmpty(t, *asked)
+	for _, sw := range *asked {
+		assert.True(t, sw.HeldOutFoldSpread, "the fit is asked for the folds' own spread")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	assert.False(t, w.ttft.held, "the refit passes the gate")
+	assert.Equal(t, t0.Add(time.Minute), w.ttft.fittedAt, "and is installed")
+	assert.Equal(t, 48, w.ttft.fit.HeldOut.Steps)
 }

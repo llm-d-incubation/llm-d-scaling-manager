@@ -230,9 +230,11 @@ figures, does not run, so a window would cost a slot for nothing.
    holds the fit in use for an hour (`ModelHoldFor`). Two switches, off from
    the constructor and on in the planner's replay, tighten this gate:
    `slo-v2-empty-gate-abstains` fails a fit whose folds scored no step (off,
-   such a fit passes), and `slo-v2-held-out-fold-spread` scores the TTFT
-   folds at a spread calibrated inside each fold (off, at the window's
-   spread, which was calibrated on the steps the folds score).
+   such a fit passes), and `slo-v2-held-out-fold-spread` fits each TTFT
+   fold, spread included, as the learner would fit its steps alone (off,
+   the folds are scored at the window's spread, which was calibrated on the
+   steps they score). A fold under 12 h takes the default spread, so on the
+   learner's 13 h window both folds do.
 6. At most once a minute (`ModelPriceEvery`) the fit in use prices the
    current rate at the serving prefill pods (mean, p90, p95, the objective's
    percentile) and the prefill ask: the least pods, up to four times those

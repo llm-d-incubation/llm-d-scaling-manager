@@ -327,7 +327,7 @@ func TestFitRankMixture_AnUnreachableP90EndsAtTheBound(t *testing.T) {
 
 // syntheticSteps is n steps of a fleet that is the model m: four ranks, rates
 // rising, prompts and computed tokens varying by step, every mean the model's.
-func syntheticSteps(t *testing.T, m RankMixture, n int) []MixtureStep {
+func syntheticSteps(t testing.TB, m RankMixture, n int) []MixtureStep {
 	t.Helper()
 	t0 := time.Unix(1_000_000, 0)
 	out := make([]MixtureStep, 0, n)
