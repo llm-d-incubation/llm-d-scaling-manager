@@ -1,6 +1,7 @@
 package learnreplay
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,6 +67,10 @@ func TestParity_TheOutputSpreadIsTheAnalyzersReading(t *testing.T) {
 	unread := parityOutputRows(true, true)
 	unread[1].AvgOutputTokensSquaredKnown = false
 	assert.Equal(t, 0.0, spread(unread), "a row with no bound: the cycle has no reading of its spread")
+
+	infinite := parityOutputRows(true, true)
+	infinite[1].AvgOutputTokensSquared = math.Inf(1)
+	assert.Equal(t, 0.0, spread(infinite), "an infinite bound is no reading of the spread, not an infinite spread")
 }
 
 // The planner's sequence count reads the draft tokens a step accepts by the
@@ -84,6 +89,9 @@ func TestParity_TheAcceptedPerStepIsOneRule(t *testing.T) {
 
 	rm.SpecAcceptedPerStepKnown = false
 	assert.InDelta(t, 18.0, rowSequences(rm), 1e-12, "no reading: one token a step")
+
+	rm.SpecAcceptedPerStep, rm.SpecAcceptedPerStepKnown = math.Inf(1), true
+	assert.InDelta(t, 18.0, rowSequences(rm), 1e-12, "an infinite reading is no reading: one token a step, not zero sequences")
 }
 
 // The planner's resident KV reads each row by the saturation analyzer's rule

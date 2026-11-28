@@ -103,8 +103,11 @@ type TPOTDistScore struct {
 	Conflicts    int `json:"conflicts"`
 	// Rule names the rule the Inside, Below and Above counts were read by.
 	// A reader that gates on them (the slo analyzer's TPOT learner) pins
-	// the rule it was validated on, so a change of rule cannot move its
-	// gate without its own test failing. Not written out.
+	// the rule it was validated on. The name alone does not move when a
+	// bracket constant does: the slo package's
+	// TestParity_TheTPOTGateHoldsItsBracketRule asserts the constants, so a
+	// change of rule cannot move the gate without that test failing. Not
+	// written out.
 	Rule TPOTBracketRule `json:"-"`
 }
 

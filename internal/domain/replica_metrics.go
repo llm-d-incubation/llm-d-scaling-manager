@@ -980,9 +980,9 @@ func (m ReplicaMetrics) ITLPerToken(step ITLStep) (ReplicaMetrics, ITLWithheld) 
 // was read and is a finite number at or above zero, and ok false otherwise.
 // A positive maxAccepted (num_speculative_tokens) holds it there, as a step
 // accepts no more than it proposes: the saturation analyzer's step budget
-// reads it so. Zero takes it as read, the capacity planner's rule (its
-// replay's sequence count, whatif's decode groups): an option of the one
-// rule, not a second reading, so a change here moves both.
+// reads it so. Zero means unclamped: the reading as read. Each caller
+// picks an option of the one rule, not a second reading, so a change here
+// moves every caller.
 func (m ReplicaMetrics) AcceptedPerStep(maxAccepted int) (float64, bool) {
 	if !m.SpecAcceptedPerStepKnown || !(m.SpecAcceptedPerStep >= 0) || math.IsInf(m.SpecAcceptedPerStep, 0) {
 		return 0, false
