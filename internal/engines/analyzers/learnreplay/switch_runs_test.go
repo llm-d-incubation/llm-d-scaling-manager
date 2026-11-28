@@ -1785,6 +1785,8 @@ var heldBy = map[string][]heldTest{
 		{"../saturation", "TestQueueDrainFluid_TheFluidCountClearsByTheHorizon"},
 		{"../saturation", "TestQueueDrainFluid_PricesTheQueueAtLanding"},
 		{"../saturation", "TestQueueDrainFluid_TheHeldPriceIsCountedAtLanding"},
+		{"../saturation", "TestQueueDrainFluid_APendingOrderIsCredited"},
+		{"../saturation", "TestQueueDrainFluid_TheClosedLoopDoesNotRatchet"},
 	},
 	saturation.SwitchPrefillFPooledMinutes: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},

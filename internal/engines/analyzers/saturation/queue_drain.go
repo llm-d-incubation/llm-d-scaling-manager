@@ -62,9 +62,10 @@ const SwitchQueuePricedAsDrain = "queue-priced-as-drain"
 // its replica drains in start + T. B_land is B + arrival x start less what
 // the ready replicas serve over the start, at the higher of N_ready x mu and
 // what they complete now, and less what the replicas already starting serve
-// once they land, credited by their ages as floor.Estimate credits them
-// (stuck replicas left out, as the engine leaves them out of anticipated
-// supply). Without that credit the start's arrivals were counted again on
+// once they land, credited by their ages with floor.Estimate's rule. The
+// count differs from floor.Estimate's: it leaves the stuck replicas out, as
+// the engine leaves them out of anticipated supply, where floor.Estimate
+// counts every pending replica (startingByRole). Without that credit the start's arrivals were counted again on
 // every cycle while an order started, and the fleet ratcheted past the
 // price. With no start known it is the price off.
 //
@@ -268,7 +269,7 @@ func drainReplicas(arrival, backlog, horizon, mu float64) float64 {
 // Never under arrival / mu. A start that is not a finite positive figure is
 // none, and N is drainReplicas'. Zero where drainReplicas prices nothing.
 func drainReplicasFluid(arrival, backlog, ready, completed, start, horizon, mu float64,
-	starting []floor.StartingReplicas) (replicas, landing float64) {
+	starting []floor.StartingReplicas) (n, landing float64) {
 	if !finitePositive(mu) || !(horizon > 0) || math.IsNaN(arrival) || math.IsInf(arrival, 0) ||
 		math.IsNaN(backlog) || math.IsInf(backlog, 0) {
 		return 0, 0
@@ -291,7 +292,9 @@ func drainReplicasFluid(arrival, backlog, ready, completed, start, horizon, mu f
 // startingByRole is, per role, each variant's replicas starting, for the
 // fluid drain price's credit (floor.BacklogAtLanding): the pending replicas
 // less the stuck ones, as the engine counts them in anticipated supply, with
-// the Pods' ages where they were read.
+// the Pods' ages where they were read. floor.Estimate builds the same set
+// with the stuck replicas still in the count; changing it there would move
+// the controller's floor, so the two stay apart.
 func startingByRole(variants []domain.VariantCapacity) map[string][]floor.StartingReplicas {
 	out := make(map[string][]floor.StartingReplicas)
 	for _, vc := range variants {
@@ -592,11 +595,12 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 	// size is the backlog and the replicas at mu: over the horizon from now,
 	// or, with SwitchQueueDrainFluidAfterStart on, over the horizon after the
 	// capacity ordered lands (drainReplicasFluid), each queue capped at what
-	// its replica drains by then.
-	size := func(mu float64) (backlog, replicas, landing float64) {
+	// its replica drains by then, and the deadline that clears it by (0
+	// off). It changes nothing: the caller keeps what it prices with.
+	size := func(mu float64) (backlog, replicas, landing, deadline float64) {
 		if !a.queueDrainFluid {
 			backlog = cappedBacklog(d.queues, t.scheduler, mu, out.horizon)
-			return backlog, drainReplicas(out.arrival, backlog, out.horizon, mu), 0
+			return backlog, drainReplicas(out.arrival, backlog, out.horizon, mu), 0, 0
 		}
 		start := c.startSeconds[role]
 		if !finitePositive(start) {
@@ -608,15 +612,18 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 		// as well. The floor's lower cap is harmless, as the price takes the
 		// max with the floor's tokens.
 		backlog = cappedBacklog(d.queues, t.scheduler, mu, start+out.horizon)
+		// ready is the replicas whose queue was read, which is the ready
+		// count only where every ready replica reports one; what they
+		// complete (d.throughput / mu) covers the gap, the higher of the two
+		// being charged.
 		replicas, landing = drainReplicasFluid(out.arrival, backlog, float64(len(d.queues)), d.throughput,
 			start, out.horizon, mu, c.starting[role])
-		out.deadline = start + out.horizon
-		return backlog, replicas, landing
+		return backlog, replicas, landing, start + out.horizon
 	}
 	want := t.want
 	if region != "" && finitePositive(out.mu) && finitePositive(p) {
 		out.region = region
-		out.backlog, out.replicas, out.landing = size(out.mu)
+		out.backlog, out.replicas, out.landing, out.deadline = size(out.mu)
 		price := max(t.resident, out.replicas*p)
 		if t.inFloor {
 			price = max(price, t.tokens)
@@ -630,10 +637,11 @@ func (a *SaturationAnalyzer) priceDrain(namespace, modelID, role string, d drain
 	}
 	if held && region != drainBeforeTwoReadings && queued > 0 && finitePositive(holdMu) && finitePositive(d.perReplica) {
 		mu := holdMu * a.drainHaircut
-		b, n, landing := size(mu)
+		b, n, landing, deadline := size(mu)
 		if n*d.perReplica > want {
 			want = n * d.perReplica
-			out.region, out.mu, out.backlog, out.replicas, out.landing = drainHaircutHeld, mu, b, n, landing
+			out.region, out.mu, out.backlog, out.replicas = drainHaircutHeld, mu, b, n
+			out.landing, out.deadline = landing, deadline
 		}
 	}
 	if math.IsNaN(want) || math.IsInf(want, 0) {

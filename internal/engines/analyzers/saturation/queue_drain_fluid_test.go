@@ -153,9 +153,23 @@ func TestQueueDrainFluid_TheHeldPriceIsCountedAtLanding(t *testing.T) {
 			// the haircut mu.
 			landing := 120 + (lambda-d.throughput)*start
 			assert.InDelta(t, (lambda+landing/start)/mu*p, held, 1)
-			continue
+			assert.InDelta(t, start+priced.horizon, priced.deadline, 1e-9, "the held price's deadline")
+		} else {
+			assert.InDelta(t, (lambda+120/start)/mu*p, held, 1, "off: the price from now")
+			assert.Zero(t, priced.deadline, "off: no deadline")
 		}
-		assert.InDelta(t, (lambda+120/start)/mu*p, held, 1, "off: the price from now")
+		// The same held cycle where the role already wants more: the held
+		// read does not win, takes no price, and logs no deadline beside its
+		// empty region.
+		b := NewSaturationAnalyzer(drainStore(propStart))
+		require.NoError(t, b.SetSwitchesForReplay(map[string]bool{SwitchQueueDrainFluidAfterStart: on}))
+		b.priceDrain("test-ns", "test-model", domain.RoleDecode, d, set, drainTerm{want: p, resident: p})
+		require.True(t, b.drainHeld("test-ns", "test-model", domain.RoleDecode), "the haircut price holds")
+		_, lost := b.priceDrain("test-ns", "test-model", domain.RoleDecode, d, next,
+			drainTerm{want: 100 * p, resident: p, inFloor: true, term: floor.Term{MayOrder: true, Mu: 10, PerReplica: p}})
+		assert.Empty(t, lost.region, "switch %v: the held read does not win", on)
+		assert.Zero(t, lost.landing, "switch %v", on)
+		assert.Zero(t, lost.deadline, "switch %v: no deadline without a price", on)
 	}
 }
 
@@ -216,7 +230,11 @@ func TestQueueDrainFluid_APendingOrderIsCredited(t *testing.T) {
 // start later. With the starting replicas credited the fleet peaks no higher
 // than the price from now peaks, and still clears the queue by start + T
 // after the first order; without the credit it ordered four more on every
-// start.
+// start. The peak is what pins the ratchet. The clear time guards the
+// opposite fault, an under-order. The model is deterministic, so its thin
+// margins (1, 11 and 37 s) are not a timing risk; they are a tripwire on the
+// drain constants (floor.BacklogDrainSeconds, floor.DrainHorizon, the 15 s
+// cycle, the credit rule), and a retune of those may move them by design.
 func TestQueueDrainFluid_TheClosedLoopDoesNotRatchet(t *testing.T) {
 	const lambda, mu, backlog0, cycle, until = 6.0, 1.0, 120.0, 15.0, 600.0
 	run := func(fluid bool, start float64) (peak int, cleared float64) {

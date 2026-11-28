@@ -145,8 +145,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchITLBaselineFromFloor, SwitchITLFloorBaselineHeld,
 // SwitchITLOneSidedAtCap,
 // SwitchPrefillBoundHeldConfidence, SwitchThroughputFloorRaisesVariants,
-// SwitchQueuePricedAsDrain, SwitchQueueDrainFluidAfterStart, SwitchFloorTrustReadsCompletions,
-// SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound,
+// SwitchQueuePricedAsDrain, SwitchQueueDrainFluidAfterStart,
+// SwitchFloorTrustReadsCompletions, SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound,
 // SwitchLowerBoundCapsRouterShare, SwitchDecodeOwesRouterBacklog,
 // SwitchMuAtStepBudget and SwitchPlannerCapAtStepBudget; a name
 // it does not know is an error, and sets nothing. Never called on a
