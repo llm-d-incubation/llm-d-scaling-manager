@@ -43,7 +43,10 @@ import (
 //   - validate: a fit is used only where it passes the planner's checks (the
 //     TTFT model's identifiability, the TPOT model's folds) and its
 //     held-out self-check folds put at least ModelMinHeldOutShare of their
-//     steps inside the planner's tolerance (HeldOutPasses).
+//     steps inside the planner's tolerance (HeldOutPasses). With
+//     SwitchV2EmptyGateAbstains, folds that scored no step do not pass; with
+//     SwitchV2HeldOutFoldSpread, the TTFT folds are scored at a spread
+//     calibrated inside each fold, not on the steps they score.
 //   - hold or forget: a refit that does not pass keeps the last fit that
 //     did for ModelHoldFor; the window is forgotten when the model's prefill
 //     or decode variant, or its engine arguments, change, on the forget
@@ -221,22 +224,55 @@ type ModelPrefillAsk struct {
 	Pods    int
 }
 
+// SwitchV2EmptyGateAbstains is the replay switch for the v2 learners' gates
+// on a fit whose held-out folds scored no step. Off, as before, such a fit
+// passes (HeldOutPasses, tpotFoldsPass) and is used. On, it does not pass:
+// a gate with no evidence is no gate, and the refit is treated as one that
+// does not pass, so the last fit that did is held for ModelHoldFor. Off
+// from the constructor; the planner's replay turns it on
+// (learnreplay.PlannerSwitches).
+const SwitchV2EmptyGateAbstains = "slo-v2-empty-gate-abstains"
+
+// SwitchV2HeldOutFoldSpread is the replay switch for the TTFT learner's
+// held-out folds priced at a spread calibrated inside each fold
+// (whatif.RankMixtureSwitches.HeldOutFoldSpread). Off, as before, the folds
+// are priced at the window's spread, which was calibrated on the p90s of
+// the very steps they score. Off from the constructor; the planner fits
+// with it on (whatif.DefaultRankMixtureHeldOutFoldSpread), and its replay
+// turns it on (learnreplay.PlannerSwitches).
+const SwitchV2HeldOutFoldSpread = "slo-v2-held-out-fold-spread"
+
 // HeldOutPasses says a TTFT fit's held-out folds put at least
 // ModelMinHeldOutShare of their steps within the tolerance; a fit with no
 // held-out step passes (the planner's identifiability checks stand alone).
+// The learner reads heldOutPassesFor, which with SwitchV2EmptyGateAbstains
+// fails such a fit.
 func HeldOutPasses(h whatif.HeldOutScore) bool {
 	return h.Steps == 0 || float64(h.Within) >= ModelMinHeldOutShare*float64(h.Steps)
 }
 
+// heldOutPassesFor is HeldOutPasses, but for a fit with no held-out step
+// under SwitchV2EmptyGateAbstains, which does not pass.
+func (a *Analyzer) heldOutPassesFor(h whatif.HeldOutScore) bool {
+	if a.v2EmptyGateAbstains && h.Steps == 0 {
+		return false
+	}
+	return HeldOutPasses(h)
+}
+
 // tpotFoldsPass says a TPOT fit's self-check folds put the p90 in the
-// measured bucket on at least ModelMinHeldOutShare of their steps.
-func tpotFoldsPass(r whatif.TPOTDistReport) bool {
+// measured bucket on at least ModelMinHeldOutShare of their steps; folds
+// with no step pass unless emptyAbstains (SwitchV2EmptyGateAbstains).
+func tpotFoldsPass(r whatif.TPOTDistReport, emptyAbstains bool) bool {
 	steps, inside := 0, 0
 	for _, f := range r.Fold {
 		steps += f.Steps
 		inside += f.P90Inside
 	}
-	return steps == 0 || float64(inside) >= ModelMinHeldOutShare*float64(steps)
+	if steps == 0 {
+		return !emptyAbstains
+	}
+	return float64(inside) >= ModelMinHeldOutShare*float64(steps)
 }
 
 // modelPair is the prefill and the decode variant the v2 models read for in:
@@ -426,7 +462,7 @@ func (a *Analyzer) refitModel(namespace, modelID string, w *modelWindow, now tim
 	}
 	w.ttft.last = tt
 	switch {
-	case tt.Abstained() == "" && HeldOutPasses(tt.HeldOut):
+	case tt.Abstained() == "" && a.heldOutPassesFor(tt.HeldOut):
 		w.ttft.fit, w.ttft.fittedAt, w.ttft.prefill, w.ttft.held = tt, now, prefillPods, false
 	case w.ttft.fittedAt.IsZero() || now.Sub(w.ttft.fittedAt) > ModelHoldFor:
 		w.ttft.fit, w.ttft.fittedAt, w.ttft.held = tt, time.Time{}, false
@@ -435,7 +471,7 @@ func (a *Analyzer) refitModel(namespace, modelID string, w *modelWindow, now tim
 	}
 	w.tpot.last, w.tpot.defaultRatio = tp, defaultRatio
 	switch {
-	case tp.Abstained == "" && tpotFoldsPass(tp.Fitted.Report):
+	case tp.Abstained == "" && tpotFoldsPass(tp.Fitted.Report, a.v2EmptyGateAbstains):
 		w.tpot.fit, w.tpot.fittedAt, w.tpot.held = tp, now, false
 	case w.tpot.fittedAt.IsZero() || now.Sub(w.tpot.fittedAt) > ModelHoldFor:
 		w.tpot.fit, w.tpot.fittedAt, w.tpot.held = tp, time.Time{}, false
@@ -447,6 +483,10 @@ func (a *Analyzer) refitModel(namespace, modelID string, w *modelWindow, now tim
 // fitMixtureWindow is whatif.FitMixtureWindow, the TTFT learner's fit; a
 // test replaces it to fail a refit.
 var fitMixtureWindow = whatif.FitMixtureWindow
+
+// fitTPOTWindow is whatif.FitTPOTWindow, the TPOT learner's fit; a test
+// replaces it to hand a refit a fit of its choosing.
+var fitTPOTWindow = whatif.FitTPOTWindow
 
 // modelMixtureSwitches is the TTFT learner's fit switches: v2 with the
 // stratified service moments, as the capacity planner fits it by default.
@@ -472,14 +512,16 @@ func (a *Analyzer) fitModel(namespace, modelID, pv, dv string, cycles []whatif.F
 		}
 	}()
 	if pv != "" {
+		sw := modelMixtureSwitches
+		sw.HeldOutFoldSpread = a.v2HeldOutFoldSpread
 		tt = fitMixtureWindow(cycles, ModelStep, a.engineParams(namespace, modelID, pv).PrefillSlots(), modelHeldOutTolerance,
-			modelMixtureSwitches)
+			sw)
 	} else {
 		tt = whatif.MixtureWindowFit{Fitted: whatif.AbstainedRankMixture("the model has not one prefill variant")}
 	}
 	if dv != "" {
 		slots, spec := a.engineParams(namespace, modelID, dv).DecodeSlots()
-		tp = whatif.FitTPOTWindow(cycles, ModelStep, slots, spec, whatif.TPOTRenewalLognormal, 0)
+		tp = fitTPOTWindow(cycles, ModelStep, slots, spec, whatif.TPOTRenewalLognormal, 0)
 	} else {
 		tp = whatif.TPOTWindowFit{Abstained: "the model has not one decode variant"}
 	}

@@ -227,7 +227,12 @@ figures, does not run, so a window would cost a slot for nothing.
    speculative tokens). A fit is used where it passes the planner's checks
    and at least half its held-out steps (TTFT: within 20 % of the router's
    mean; TPOT: the p90 in the measured bucket); a refit that does not pass
-   holds the fit in use for an hour (`ModelHoldFor`).
+   holds the fit in use for an hour (`ModelHoldFor`). Two switches, off from
+   the constructor and on in the planner's replay, tighten this gate:
+   `slo-v2-empty-gate-abstains` fails a fit whose folds scored no step (off,
+   such a fit passes), and `slo-v2-held-out-fold-spread` scores the TTFT
+   folds at a spread calibrated inside each fold (off, at the window's
+   spread, which was calibrated on the steps the folds score).
 6. At most once a minute (`ModelPriceEvery`) the fit in use prices the
    current rate at the serving prefill pods (mean, p90, p95, the objective's
    percentile) and the prefill ask: the least pods, up to four times those

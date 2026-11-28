@@ -570,7 +570,9 @@ In a cluster, add both to the StatefulSet's `args`
   prefill service rate.
 - **The evidence.** The caption names the "Experimental TTFT model" and,
   where the source holds enough, its score on the source's own held-out
-  folds: "held-out steps: N of M within 20%", for the mean.
+  folds: "held-out steps: N of M within 20%", for the mean. Each fold fits
+  the model, its spread included, on the steps before its cut alone, so no
+  step it scores is one the fold was fitted on.
 - **Where it is not used.** A stated request shape, a stated prefill term
   (V_P, a, prompt spread, router hop) or a stated arrival burstiness: the
   model prices the source's own traffic, and the planner's TTFT stands. The

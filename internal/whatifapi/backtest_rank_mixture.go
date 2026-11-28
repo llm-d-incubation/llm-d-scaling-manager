@@ -239,10 +239,13 @@ func (sw rankMixtureSwitches) options(slots int) whatif.RankMixtureOptions {
 }
 
 // shared is sw as the shared fit reads it (whatif.RankMixtureSwitches): the
-// slo analyzer's v2 TTFT learner fits with the same switches.
+// slo analyzer's v2 TTFT learner fits with the same switches. The held-out
+// folds' own spread is the planner's default
+// (whatif.DefaultRankMixtureHeldOutFoldSpread), with no request flag.
 func (sw rankMixtureSwitches) shared() whatif.RankMixtureSwitches {
 	return whatif.RankMixtureSwitches{FitSteps: sw.fitSteps, Stratified: sw.stratified, NLLine: sw.nlLine,
-		KVHold: sw.kvHold, RemainderSpread: sw.remainderSpread, RemainderServer: sw.remainderServer, MinFitWindow: sw.minFitWindow}
+		KVHold: sw.kvHold, RemainderSpread: sw.remainderSpread, RemainderServer: sw.remainderServer, MinFitWindow: sw.minFitWindow,
+		HeldOutFoldSpread: whatif.DefaultRankMixtureHeldOutFoldSpread}
 }
 
 // stratifiedOf is a request's rankMixtureStratified: the value where it

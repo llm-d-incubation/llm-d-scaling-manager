@@ -409,6 +409,14 @@ type shapeSample struct {
 //     llm-d-incubation/llm-d-scaling-manager#300). The planner's
 //     --imbalance-across-counts takes its default from here and overrides
 //     it.
+//   - slo.SwitchV2EmptyGateAbstains: a v2 latency fit whose held-out folds
+//     scored no step is not used; it does not pass with no evidence.
+//   - slo.SwitchV2HeldOutFoldSpread: the v2 TTFT folds scored at a spread
+//     calibrated inside each fold, as the planner's own main view scores
+//     them (whatif.DefaultRankMixtureHeldOutFoldSpread). The planner's
+//     replay runs no v2 learner (slo.SwitchV2Inputs is off and its goldens
+//     observe none), so neither moves a golden; they are listed so that one
+//     list says what is on for the planner.
 //
 // slo.SwitchTTFTHopWindowMeans, planner-only, reads the router hop on its
 // windows' means: the median of at least prefill.MinHopMeanWindows windows,
@@ -604,6 +612,8 @@ func PlannerSwitches() map[string]map[string]bool {
 		slo.SwitchTTFTDecodeSpeculatingHeld: true,
 		slo.SwitchTTFTRouterWaitInPrefill:   whatif.DefaultRouterWaitInPrefill,
 		slo.SwitchTTFTImbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts,
+		slo.SwitchV2EmptyGateAbstains:       true,
+		slo.SwitchV2HeldOutFoldSpread:       whatif.DefaultRankMixtureHeldOutFoldSpread,
 	}}
 }
 

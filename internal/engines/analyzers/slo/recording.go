@@ -108,7 +108,8 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchTTFTDecodeGateCharge, SwitchTTFTImbalanceAcrossCounts,
 // SwitchTTFTLowLoadDecodeTTFT, SwitchTTFTHopUnqueued, SwitchTTFTHopWindowMeans,
 // SwitchTTFTDecodeSpeculatingHeld, SwitchTTFTJointInputs,
-// SwitchTTFTPromptSupport, SwitchKVPerRequestOutputDispersion and SwitchV2Inputs; a name it
+// SwitchTTFTPromptSupport, SwitchKVPerRequestOutputDispersion, SwitchV2Inputs,
+// SwitchV2EmptyGateAbstains and SwitchV2HeldOutFoldSpread; a name it
 // does not know is an error, and sets nothing. Never called on a production
 // path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -239,6 +240,11 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// models' inputs and coverage (model_inputs.go). Off from the
 		// constructor.
 		SwitchV2Inputs: &a.v2Inputs,
+		// The v2 learners' gates: a gate that scored no step abstains, and
+		// the TTFT folds' spread is calibrated inside each fold
+		// (model_learners.go). Off from the constructor.
+		SwitchV2EmptyGateAbstains: &a.v2EmptyGateAbstains,
+		SwitchV2HeldOutFoldSpread: &a.v2HeldOutFoldSpread,
 
 		// Issue ev-shindin/llm-scaling-manager#276: the spread of output lengths in the KV per request
 		// (output_dispersion.go).

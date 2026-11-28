@@ -22,8 +22,9 @@ type HeldOutScore struct {
 // at spread, its A0 fitted on those same steps, and its mean TTFT compared
 // with the router's measured mean on each step after the cut. The spread is
 // the window's (RankMixture.Spread), which the folds' p90 calibrated, so the
-// p90 is not scored here; the mean scored is never fitted on the steps it is
-// scored on. A fold that does not fit scores nothing.
+// p90 is not scored here. The core and A0 are never fitted on the steps
+// scored, but the spread is: RankMixtureHeldOutFoldSpread calibrates it
+// inside each fold. A fold that does not fit scores nothing.
 func RankMixtureHeldOut(steps []MixtureStep, o RankMixtureOptions, spread, tolerance float64) HeldOutScore {
 	return heldOutFolds(steps, tolerance, func(train []MixtureStep) (RankMixture, float64, bool) {
 		fm, _, err := FitCore(train, o)
@@ -33,6 +34,32 @@ func RankMixtureHeldOut(steps []MixtureStep, o RankMixtureOptions, spread, toler
 		fm.Spread = spread
 		a0, ok := a0Of(drawSteps(fm, train), spread)
 		return fm, a0, ok
+	})
+}
+
+// RankMixtureHeldOutFoldSpread is RankMixtureHeldOut with each fold's spread
+// calibrated inside the fold: the fold's model is FitRankMixture of its
+// steps before the cut alone (its core, its spread on its own two
+// self-check folds, its A0 at that spread), however short those steps are,
+// so no p90 the fold scores sets the spread it is priced at.
+// RankMixtureHeldOut's spread, the window's, was calibrated on the p90s of
+// both folds' scored steps, so the mean it scores is not out of sample.
+//
+// calibrated says the window's own spread was calibrated (not NoSpread, a
+// positive Beta, a window of MinSpreadSpan or longer). Where it was not, no
+// scored step set it, and the folds are scored at spread as
+// RankMixtureHeldOut scores them. The SpreadFloor holds in each fold. A
+// fold whose own self-check folds do not fit scores nothing.
+func RankMixtureHeldOutFoldSpread(steps []MixtureStep, o RankMixtureOptions, spread float64, calibrated bool,
+	tolerance float64) HeldOutScore {
+	if !calibrated {
+		return RankMixtureHeldOut(steps, o, spread, tolerance)
+	}
+	inFold := o
+	inFold.MinSpreadSpan = 0
+	return heldOutFolds(steps, tolerance, func(train []MixtureStep) (RankMixture, float64, bool) {
+		fm, _, err := FitRankMixture(train, inFold)
+		return fm, fm.A0, err == nil
 	})
 }
 
