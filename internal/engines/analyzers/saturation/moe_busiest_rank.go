@@ -21,7 +21,7 @@ import (
 // line and a band read on the mean put the knee too high (issue
 // llm-d-incubation/llm-d-scaling-manager#312).
 //
-// On, for a variant whose engine runs expert parallelism over more than one
+// On, for a variant whose engine serves a MoE model over more than one
 // data-parallel rank (BusiestRankFillFor), the line's readings and its band
 // are the busiest rank's, and the capacity planner prices the mean fill at
 // the band's top over the busiest/mean ratio its replay read
@@ -34,17 +34,32 @@ const SwitchMoEBusiestRank = "moe-dp-busiest-rank"
 
 // BusiestRankFillFor reports whether a variant run under params has its ITL
 // line read at its busiest rank: SwitchMoEBusiestRank on, and a vLLM engine
-// with expert parallelism over more than one data-parallel rank in the pod
-// (--data-parallel-size-local where it is set, below the global size). The
-// busiest/mean ratio is read per pod, so a pod of one rank reads none.
+// serving a MoE model (capacity.EngineParams.MoEClass, issue
+// llm-d-incubation/llm-d-scaling-manager#503) over more than one
+// data-parallel rank in the pod (--data-parallel-size-local where it is set,
+// below the global size). The busiest/mean ratio is read per pod, so a pod of
+// one rank reads none.
 //
-// Not covered: an MoE engine with data parallelism but no expert parallelism
-// (vLLM steps those ranks in lockstep too; the arguments do not say the
-// model is MoE), and SGLang, whose lockstep comes from --enable-dp-attention,
-// which the parser does not read, and whose fill queries take the busiest
-// rank already.
+// The class, not the expert-parallel flag: vLLM steps the data-parallel ranks
+// of a MoE model in lockstep with or without expert parallelism, so a MoE
+// model served with tensor parallelism alone (MoETensorParallel) is read at
+// its busiest rank too, and a model whose config reads dense (MoEDense) is
+// not, whatever its flags say. Without a config the flag alone says
+// MoEExpertParallel, as before; with neither, the class is MoEUnknown and
+// the mean is read.
+//
+// Not covered: a MoE model with data parallelism, no expert parallelism and
+// no config read (MoEUnknown: the arguments do not say the model is MoE),
+// and SGLang, whose lockstep comes from --enable-dp-attention, which the
+// parser does not read, and whose fill queries take the busiest rank
+// already.
 func (a *SaturationAnalyzer) BusiestRankFillFor(params *capacity.EngineParams) bool {
-	if !a.moeBusiestRank || params == nil || params.Engine == inferenceengine.EngineSGLang || !params.ExpertParallel {
+	if !a.moeBusiestRank || params == nil || params.Engine == inferenceengine.EngineSGLang {
+		return false
+	}
+	switch params.MoEClass() {
+	case capacity.MoETensorParallel, capacity.MoEExpertParallel:
+	default:
 		return false
 	}
 	local := max(params.DataParallelSize, 1)

@@ -1741,7 +1741,7 @@ var heldBy = map[string][]heldTest{
 	saturation.SwitchMoEBusiestRank: {
 		{"../saturation", "TestMoEBusiestRank_OffFromTheConstructor"},
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
-		{"../saturation", "TestMoEBusiestRank_OnlyExpertParallelDataParallel"},
+		{"../saturation", "TestMoEBusiestRank_WithoutConfigTheFlagDecides"},
 		{"../saturation", "TestMoEBusiestRank_LineReadAtTheBusiestRank"},
 		{"../saturation", "TestBusiestRankRows"},
 		{".", "TestLineSamples_BusiestRankRowsAndRatio"},

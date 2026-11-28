@@ -1105,10 +1105,12 @@ measured p90 interpolated in its bucket.
 `saturation.SwitchMoEBusiestRank` (`moe-dp-busiest-rank`, issue
 llm-d-incubation/llm-d-scaling-manager#312) is planner-only, off, and
 replay-only: no CLI flag or API field sets it, and it is not in
-`learnreplay.PlannerSwitches`. vLLM runs the data-parallel ranks of an
-expert-parallel MoE engine in lockstep, so a pod steps at its busiest rank,
-while its balancer evens out request counts, not KV. On, for a vLLM variant
-with expert parallelism over more than one local data-parallel rank
+`learnreplay.PlannerSwitches`. vLLM runs the data-parallel ranks of a MoE
+engine in lockstep, with or without expert parallelism, so a pod steps at its
+busiest rank, while its balancer evens out request counts, not KV. On, for a
+vLLM variant whose MoE class (`capacity.EngineParams.MoEClass`, issue
+llm-d-incubation/llm-d-scaling-manager#503) is `moe-tensor-parallel` or
+`moe-expert-parallel`, over more than one local data-parallel rank
 (`SaturationAnalyzer.BusiestRankFillFor`), `fitLines` hands the ITL tracker
 its rows with each fill carried to the busiest rank (`busiestRankRows`, the
 fill times `domain.ReplicaMetrics.BusiestRankFillRatio`, at most 1), so the
