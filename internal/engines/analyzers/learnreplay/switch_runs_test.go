@@ -201,6 +201,12 @@ var replaySwitches = withMoves(staircaseSwitchMoves, map[string][]string{
 	// models' inputs. Analyze never reads them: the engine hands them to
 	// ObserveModelInputs, which publishes coverage only. No golden moves.
 	slo.SwitchV2Inputs: nil,
+	// The v2 learners' gates: an empty gate abstains, and the TTFT folds'
+	// spread is calibrated inside each fold. Only a refit of the v2
+	// learners reads them, and no golden replay refits one. No golden
+	// moves; their unit tests hold them (heldBy).
+	slo.SwitchV2EmptyGateAbstains: nil,
+	slo.SwitchV2HeldOutFoldSpread: nil,
 	// ev-shindin/llm-scaling-manager#495's one slow pod (mu_slow_pod.go), four switches, measured each
 	// alone against all off:
 	//
@@ -2202,6 +2208,15 @@ var heldBy = map[string][]heldTest{
 	slo.SwitchV2Inputs: {
 		{"../slo", "TestObserveModelInputs_ReportsWhereEachModelStands"},
 		{"../../steadystate", "TestSLOV2Inputs_NamesEveryNamespaceWhenOn"},
+	},
+	// Each runs the switch off from the constructor and on, and asserts
+	// both.
+	slo.SwitchV2EmptyGateAbstains: {
+		{"../slo", "TestModelLearners_AnEmptyGateAbstainsWithTheSwitch"},
+	},
+	slo.SwitchV2HeldOutFoldSpread: {
+		{"../slo", "TestModelLearners_TheFoldSpreadSwitchReachesTheFit"},
+		{"../../../signals/whatif", "TestRankMixtureHeldOutFoldSpread_NoScoredP90SetsTheSpread"},
 	},
 	// It runs the switch on and off through Analyze and asserts both.
 	saturation.SwitchITLClearsOnNewRevision: {

@@ -244,6 +244,12 @@ type Analyzer struct {
 	// constructor; the v2 latency models' inputs are neither collected nor
 	// reported until the default is flipped on evidence.
 	v2Inputs bool
+	// v2EmptyGateAbstains is SwitchV2EmptyGateAbstains and
+	// v2HeldOutFoldSpread SwitchV2HeldOutFoldSpread (model_learners.go):
+	// both off from the constructor; the planner's replay turns them on
+	// (learnreplay.PlannerSwitches).
+	v2EmptyGateAbstains bool
+	v2HeldOutFoldSpread bool
 	// kvOutputDispersion is SwitchKVPerRequestOutputDispersion (issue ev-shindin/llm-scaling-manager#276,
 	// output_dispersion.go): on from the constructor; a replay turns it off
 	// (SetSwitchesForReplay).

@@ -3278,6 +3278,8 @@ slo-ttft-sizes-prefill
 slo-ttft-tier-kv-wait
 slo-ttft-tier-load
 slo-ttft-variant
+slo-v2-empty-gate-abstains
+slo-v2-held-out-fold-spread
 slo-v2-inputs
 slo-variant
 slo.Analyze

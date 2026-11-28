@@ -238,7 +238,21 @@ type RankMixtureSwitches struct {
 	// MinSpreadFitWindow, the default. A model priced from a window under
 	// the default is flagged RankMixtureShortFitWindow.
 	MinFitWindow time.Duration
+	// HeldOutFoldSpread scores v2's held-out folds each at a spread
+	// calibrated on the fold's own training steps
+	// (RankMixtureHeldOutFoldSpread), not at the window's, which was
+	// calibrated on the very steps the folds score. The planner turns it on
+	// (DefaultRankMixtureHeldOutFoldSpread); the slo analyzer's v2 learner
+	// reads it from its switch (slo.SwitchV2HeldOutFoldSpread), off from the
+	// constructor.
+	HeldOutFoldSpread bool
 }
+
+// DefaultRankMixtureHeldOutFoldSpread is the planner's
+// RankMixtureSwitches.HeldOutFoldSpread: on. Off, the held-out mean is
+// scored at a spread fitted on the scored steps' own p90s, so it reads
+// closer to measured than a model fitted without those steps would.
+const DefaultRankMixtureHeldOutFoldSpread = true
 
 // FitWindow is the shortest fit window sw prices from.
 func (sw RankMixtureSwitches) FitWindow() time.Duration {
@@ -476,7 +490,8 @@ func (w MixtureWindowFit) Abstained() string {
 // FitMixtureWindow fits the model sw names on cycles, cut into steps of
 // step, with the prefill engine's max-num-seqs slots, and scores it on its
 // self-check folds at tolerance (RankMixtureNLHeldOut for the variant,
-// RankMixtureHeldOut otherwise). A fit that fails, or fails an
+// RankMixtureHeldOutFoldSpread with sw.HeldOutFoldSpread, RankMixtureHeldOut
+// otherwise). A fit that fails, or fails an
 // identifiability check, abstains.
 func FitMixtureWindow(cycles []FitCycle, step time.Duration, slots int, tolerance float64, sw RankMixtureSwitches) MixtureWindowFit {
 	rq, steps, err := FitRankMixtureCycles(cycles, step, slots, sw)
@@ -494,9 +509,13 @@ func FitMixtureWindow(cycles []FitCycle, step time.Duration, slots int, toleranc
 	first, last := sorted[0].At, sorted[len(sorted)-1].At
 	w.Pooled = MixtureStepOf(MixtureCyclesIn(cycles, first.Add(-time.Nanosecond), last), last)
 	o := sw.Options(rq.M.Slots)
-	if sw.NLLine {
+	switch {
+	case sw.NLLine:
 		w.HeldOut = RankMixtureNLHeldOut(steps, o, tolerance)
-	} else {
+	case sw.HeldOutFoldSpread:
+		calibrated := !o.NoSpread && rq.M.Beta > 0 && !rq.Report.SpreadDefaulted
+		w.HeldOut = RankMixtureHeldOutFoldSpread(steps, o, rq.M.Spread, calibrated, tolerance)
+	default:
 		w.HeldOut = RankMixtureHeldOut(steps, o, rq.M.Spread, tolerance)
 	}
 	return w
