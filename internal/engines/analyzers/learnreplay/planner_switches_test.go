@@ -9,6 +9,7 @@ import (
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/saturation"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/engines/analyzers/slo"
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/capacity"
+	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/whatif"
 )
 
 // The planner's switches are on in StateAt's replay unless the caller sets
@@ -61,6 +62,20 @@ func TestPlannerSwitches_TheTTFTModelStates(t *testing.T) {
 		slo.SwitchTTFTPSByEngine, slo.SwitchTTFTHopWindowMeans, slo.SwitchTTFTCachedTokenCost} {
 		assert.NotContains(t, sw[PackageSLO], name, "off in the planner by default")
 	}
+}
+
+// The planner's two TTFT defaults that used to come from flags alone are
+// listed here, at the values whatif states for the planner, so one list
+// says what is on for it; the controller's constructor keeps both off
+// (slo's TestParity_ThePlannerTTFTDefaultsAreOffFromTheConstructor).
+func TestPlannerSwitches_TheRouterWaitAndAcrossCountsDefaults(t *testing.T) {
+	sw := PlannerSwitches()[PackageSLO]
+	on, set := sw[slo.SwitchTTFTRouterWaitInPrefill]
+	assert.True(t, set)
+	assert.Equal(t, whatif.DefaultRouterWaitInPrefill, on)
+	on, set = sw[slo.SwitchTTFTImbalanceAcrossCounts]
+	assert.True(t, set)
+	assert.Equal(t, whatif.DefaultPlannerImbalanceAcrossCounts, on)
 }
 
 // The planner prices each backtest step at its own output spread by default

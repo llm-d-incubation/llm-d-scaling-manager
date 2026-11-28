@@ -1092,7 +1092,7 @@ func prefillBinds(sf *servedFleet) string {
 		return ""
 	}
 	p := sf.pf.fleet.Prefill
-	if k, ok := sf.PrefillKnee().(whatif.Answer); ok && k.HasFlag(kneeAtServedWork) {
+	if k, ok := sf.PrefillKnee().(whatif.Answer); ok && k.HasFlag(whatif.KneeAtServedWork) {
 		return servedWorkWords(k.Value, p.PromptTokens)
 	}
 	margin := ""
@@ -1103,7 +1103,7 @@ func prefillBinds(sf *servedFleet) string {
 }
 
 // servedWorkWords says a prefill knee is the work the prefill pods sustained
-// (kneeAtServedWork): knee x the prompt priced, over that prompt.
+// (whatif.KneeAtServedWork): knee x the prompt priced, over that prompt.
 func servedWorkWords(knee, prompt float64) string {
 	return fmt.Sprintf("prefill work served: the %s computed tokens/s the prefill pods sustained over 5 min, backlog steady / %s tokens",
 		num(round(knee*prompt)), num(round(prompt)))

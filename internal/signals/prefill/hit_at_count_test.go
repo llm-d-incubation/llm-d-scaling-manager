@@ -102,3 +102,19 @@ func TestHitAtCount_TheFloor(t *testing.T) {
 	require.True(t, ok)
 	assert.InDelta(t, 0.45, a.Hit, 1e-12)
 }
+
+// Under the reuse-gap rule the GPU hit moves by the law's GPU ratio even
+// where an unsized tier past the GPU holds the total, and never above the
+// total priced; under the floor it moves by the total's own ratio, and a
+// held hit leaves it.
+func TestHitAtCount_GPUHitAt(t *testing.T) {
+	held := HitAtCount{Rule: HitReuseGap, FitHit: 0.8, Hit: 0.8, GPUScale: 0.6, TierScale: 1.9}
+	assert.InDelta(t, 0.3, held.GPUHitAt(0.5), 1e-12, "the tier holds the total; the GPU's share falls")
+
+	capped := HitAtCount{Rule: HitReuseGap, FitHit: 0.526, Hit: 0.764, GPUScale: 1.552, TierScale: 1}
+	assert.Equal(t, 0.764, capped.GPUHitAt(0.526))
+
+	floor := HitAtCount{Rule: HitFloor, FitHit: 0.5, Hit: 0.25, GPUScale: 1, TierScale: 1}
+	assert.InDelta(t, 0.2, floor.GPUHitAt(0.4), 1e-12)
+	assert.Equal(t, 0.4, HitAtCount{Rule: HitHeld, FitHit: 0.5, Hit: 0.5}.GPUHitAt(0.4))
+}

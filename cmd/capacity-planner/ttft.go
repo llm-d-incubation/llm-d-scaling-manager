@@ -100,20 +100,6 @@ func hoursWords(d time.Duration) string {
 	return fmt.Sprintf("%.1f h", d.Hours())
 }
 
-// kneeAtServedWork is a prefill knee priced from a lower bound of V_P and
-// raised to the computed-token work the fleet's prefill pods sustained at the
-// pod count priced (servedKneeFloor): at least the rate that work serves at
-// the prompt priced.
-const kneeAtServedWork whatif.Flag = "KneeAtServedWork"
-
-// servedWorkUnsteady is a prefill knee priced from a lower bound of V_P that
-// no served work floors: at the pod count priced the prefill pods served a
-// stretch of learnreplay.ServedWorkWindow, and the backlog grew in every one
-// (learnreplay.PrefillState.ServedUnsteady). A burst carried with a queue
-// building is not a rate the pods hold (#477), so the knee stays at its
-// lower bound.
-const servedWorkUnsteady whatif.Flag = "ServedWorkUnsteady"
-
 // vpAtServedWork is a V_P raised for the TTFT with a knee floored at the
 // served work (atServedWork, saturation.SwitchPrefillVPAtServedWork): the
 // TTFT is priced from the V_P that knee implies, still a lower bound.
@@ -197,7 +183,7 @@ func (t ttftQuestion) label() string {
 
 // routerWaitGivesWay turns *inPrefill off when --price-router-wait is set and
 // --router-wait-in-prefill is not: the latter is on by default
-// (whatif.DefaultRouterWaitInPrefill), and asking for router v0.11.0's gate
+// (plannerRouterWaitInPrefill), and asking for router v0.11.0's gate
 // stage is asking for the other router's model, not for both. Set together,
 // the two stay on and are refused ("set one"). answer and backtest call it
 // once their flags are parsed.
@@ -413,7 +399,7 @@ type pricedFleet struct {
 	servedComputed map[int]float64
 	// servedUnsteady is, by pod count, served work that was not sustained
 	// (learnreplay.PrefillState.ServedUnsteady), read with servedComputed:
-	// the knee is flagged servedWorkUnsteady instead of floored.
+	// the knee is flagged whatif.ServedWorkUnsteady instead of floored.
 	servedUnsteady map[int]bool
 	// cachedTokenCost is slo.SwitchTTFTCachedTokenCost, as the replay read
 	// it (PrefillState.CachedTokenCost): priceCachedLoad.
@@ -1667,50 +1653,15 @@ func (pf *pricedFleet) knee() whatif.Result {
 	return pf.servedKneeFloor(withSpan(price(pf.atServedWork(pf.fleet)), pf.corners(price)))
 }
 
-// servedKneeFloor is r, a prefill knee, raised to the rate the computed-token
-// work the fleet's prefill pods sustained serves at the prompt priced, where
-// r rests on a lower bound of V_P (whatif.VPLowerBound) and that is higher:
-// work / E[I_eff] at the pod count priced, flagged kneeAtServedWork. A pod
-// computes no faster than its capacity, so the work the pods kept up over
-// learnreplay.ServedWorkWindow with no backlog growing is work they can do,
-// and where they served only with a backlog growing the knee is left as
-// priced, flagged servedWorkUnsteady. The knee is at least
-// the rate it serves; both sides are read off the engines' computed-token
-// counter, so no model of the prompt stands between them. A knee priced from
-// a V_P that is no lower bound is left as priced: a window that served past
-// it contradicts the model (#297), which a floor would hide. Only the knee is
-// raised: a TTFT is priced from V_P as before, and a rate between the two
-// knees is past the priced one (whatif.PastLowerBoundKnee).
+// servedKneeFloor is r, a prefill knee, raised to the computed-token work
+// the fleet's prefill pods sustained (whatif.ServedKneeFloor), at the work
+// the replay kept (servedComputed, servedUnsteady). A V_P stated with
+// --assume-vp is priced as given: its knee is not floored.
 func (pf *pricedFleet) servedKneeFloor(r whatif.Result) whatif.Result {
-	a, ok := r.(whatif.Answer)
-	p := pf.fleet.Prefill
-	if !ok || pf.assumedVP || !a.HasFlag(whatif.VPLowerBound) || !(p.PromptTokens > 0) {
+	if pf.assumedVP {
 		return r
 	}
-	work := pf.servedComputed[p.Replicas]
-	if !(work > 0) && pf.servedUnsteady[p.Replicas] {
-		a.Flags = append(slices.Clone(a.Flags), servedWorkUnsteady)
-		return a
-	}
-	floor := work / p.PromptTokens
-	if !whatif.Finite(floor) || !(floor > a.Value) {
-		return r
-	}
-	// The span over V_P and f: no lower than the floor, which is measured
-	// work, not a V_P swept; its high side as priced where that is higher.
-	span := &whatif.Sensitivity{Lo: floor, Hi: floor}
-	if a.Sensitivity != nil && a.Sensitivity.Refused == "" {
-		span.Hi = max(floor, a.Sensitivity.Hi)
-	}
-	a.Value = floor
-	a.Flags = append(slices.Clone(a.Flags), kneeAtServedWork)
-	a.Sensitivity = span
-	if a.Basis.TTFT != nil {
-		basis := *a.Basis.TTFT
-		basis.KneeRate = floor
-		a.Basis.TTFT = &basis
-	}
-	return a
+	return whatif.ServedKneeFloor(r, pf.fleet.Prefill, pf.servedComputed, pf.servedUnsteady)
 }
 
 // corners is the question asked of the fleet at each corner of the V_P and f
@@ -1941,10 +1892,10 @@ func (o operatingTTFT) writeRows(b *strings.Builder) {
 	pf := o.fleet
 	if k, ok := o.knee.(whatif.Answer); ok {
 		rate, basis := rateText(k.Value), pf.kneeBasis(k.Value)
-		if k.HasFlag(kneeAtServedWork) {
+		if k.HasFlag(whatif.KneeAtServedWork) {
 			basis = servedWorkWords(k.Value, pf.fleet.Prefill.PromptTokens) + "; " + pf.verdict(pf.kneeValidation(k))
 		}
-		if k.HasFlag(kneeAtServedWork) || pf.fleet.Prefill.VPServedOnly && !pf.assumedVP {
+		if k.HasFlag(whatif.KneeAtServedWork) || pf.fleet.Prefill.VPServedOnly && !pf.assumedVP {
 			// As at-replicas prints a lower-bound knee (#280): at least its
 			// rate. A knee from another lower bound prints as before.
 			rate, basis = ">="+rate, basis+"; at least: V_P is a lower bound"

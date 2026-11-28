@@ -84,7 +84,7 @@ func (s *servedSources) Resolve(ctx context.Context, req whatifapi.InputsRequest
 		seed:           whatif.DefaultResampling().Seed, vpPlateau: req.PrefillVPPlateau, hitAtCount: req.PrefillHitAtCount,
 		vpServiceLine: req.PrefillVPServiceLine, fLoadCurve: req.PrefillFLoadCurve,
 		experimentalTTFT: req.ExperimentalTTFT || s.experimentalTTFT, set: map[string]bool{}, warn: s.warn, priceRouterWait: whatif.DefaultPriceRouterWait,
-		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter}
+		routerWaitInPrefill: plannerRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: plannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter}
 
 	s.replay.apply(&f)
 	src := whatifapi.SourceRequest{Kind: whatifapi.SourcePrometheus}
@@ -407,7 +407,7 @@ func (s *servedSources) resolved(ctx context.Context, f *answerFlags, st *learnr
 		return nil, whatifapi.InputErrorf("%s; the planner reads a replica as its engine rows, so it prices nothing from this recording; %s", why, engineRowsFix)
 	}
 	pricer := &servedState{st: st, decodeVariant: f.variant, prefillVariant: f.prefillVariant, hint: f.hintSource(),
-		imbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter,
+		imbalanceAcrossCounts: plannerImbalanceAcrossCounts, loadAwareRouter: whatif.DefaultPlannerLoadAwareRouter,
 		experimentalTTFT: f.experimentalTTFT, vpServiceLine: f.vpServiceLine, fLoadCurve: f.fLoadCurve}
 	res := &whatifapi.Resolved{
 		Inputs:  inputsDoc(f, st, &variants[0], ps, fleets[0], info),
@@ -506,7 +506,7 @@ func (s *servedState) fleetAtImbalance(k whatifapi.Knobs, fixedF float64) (*serv
 	f := answerFlags{fixedImbalance: fixedF, question: rateQuestion, cycle: "last", variant: s.decodeVariant, prefillVariant: s.prefillVariant, hint: s.hint, hintSet: true,
 		seed: whatif.DefaultResampling().Seed, set: map[string]bool{"ttft": true, "headroom": true}, warn: io.Discard,
 		decode: k.Decode, prefill: k.Prefill, headroom: k.Headroom, priceRouterWait: whatif.DefaultPriceRouterWait,
-		routerWaitInPrefill: whatif.DefaultRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: s.imbalanceAcrossCounts, loadAwareRouter: s.loadAwareRouter,
+		routerWaitInPrefill: plannerRouterWaitInPrefill, psOnsets: whatif.DefaultPSOnsets, chargeDecodeGate: whatif.DefaultChargeDecodeGate, imbalanceAcrossCounts: s.imbalanceAcrossCounts, loadAwareRouter: s.loadAwareRouter,
 		experimentalTTFT: s.experimentalTTFT, vpServiceLine: s.vpServiceLine, fLoadCurve: s.fLoadCurve}
 	set := func(name string) { f.set[name] = true }
 	if k.PromptTokens > 0 {

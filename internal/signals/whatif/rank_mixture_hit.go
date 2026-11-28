@@ -296,3 +296,60 @@ func HitAtCountFlag(r prefill.HitAtCount) Flag {
 	}
 	return ""
 }
+
+// The prefix hit at another prefill count, applied to a fleet's prefill
+// (saturation.SwitchPrefillHitAtCount, issues
+// llm-d-incubation/llm-d-scaling-manager#384, #425, #469, #472): the rule
+// that moves E[I_eff] and the prefix-cache hit rate from the count the hit
+// was read on to the count priced. The capacity planner applies it to every
+// fleet it prices with the switch on; no analyzer calls it yet.
+
+// HitFitCount is the prefill count the window's hit was read on, for a fleet
+// whose latest cycle served pods: pods, or the most any cycle of the window
+// counted where that is more (MaxPods). The larger count is the conservative
+// one: the floor h x N'/N falls with N, and N' at or above the cycle's count
+// but under it is priced at the floor, not held.
+func (w *PromptWindow) HitFitCount(pods int) int {
+	return max(pods, w.MaxPods())
+}
+
+// FitTotalHit is the fit's total prefix hit for p, 1 - computed / whole
+// prompt: the window's computed-token hit (ComputedHit) where p's prompt is
+// the measured one (measured), else the share of the whole prompt asked
+// (p.WholePromptTokens) that E[I_eff] (p.PromptTokens) leaves out. false
+// with neither.
+func FitTotalHit(p Prefill, measured bool, w *PromptWindow) (float64, bool) {
+	if measured {
+		if h, ok := w.ComputedHit(); ok {
+			return h, true
+		}
+	}
+	if p.WholePromptTokens > 0 && p.PromptTokens <= p.WholePromptTokens {
+		return 1 - p.PromptTokens/p.WholePromptTokens, true
+	}
+	return 0, false
+}
+
+// ApplyHitAtCount moves p, a prefill priced at p.Replicas, to the prefix hit
+// at that count from the fit's total hit h read on fitCount pods
+// (prefill.HitAtCountOf, by the reuse-gap law m where it is non-nil): E[I_eff]
+// scaled by (1 - h')/(1 - h) where the hit moved, and the GPU prefix-cache
+// hit rate by prefill.HitAtCount.GPUHitAt. ok is false, and p is left as it
+// is, at the fit's own count, with no prompt priced, or where
+// prefill.HitAtCountOf prices nothing. The caller decides whether the hit is
+// moved at all: a hit the question states governs, and a prompt the prefill
+// pods computed at the count priced is that count's already.
+func ApplyHitAtCount(p *Prefill, h float64, fitCount int, m *prefill.HitModel) (prefill.HitAtCount, bool) {
+	if p.Replicas == fitCount || !(p.PromptTokens > 0) {
+		return prefill.HitAtCount{}, false
+	}
+	r, ok := prefill.HitAtCountOf(h, p.PromptTokens, fitCount, p.Replicas, m)
+	if !ok {
+		return prefill.HitAtCount{}, false
+	}
+	p.PromptHitRate = r.GPUHitAt(p.PromptHitRate)
+	if r.Moved() {
+		p.PromptTokens = r.Computed
+	}
+	return r, true
+}

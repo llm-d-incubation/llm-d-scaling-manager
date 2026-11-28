@@ -61,7 +61,7 @@ var (
 		// Set, it states nothing until it applies: assumeIntercept then adds
 		// --assume-itl-b to the variant's stated inputs, which puts its figures outside.
 		"assume-itl-b",
-		// On by default (whatif.DefaultRouterWaitInPrefill), it states
+		// On by default (plannerRouterWaitInPrefill), it states
 		// nothing either way: where it takes, the figure carries
 		// FlowControlWaitPriced, which is outside on its own, and off is how
 		// the run was priced (the SLO analyzer's switch for it,
@@ -130,7 +130,7 @@ func (f *answerFlags) statedOutside() []string {
 			continue
 		}
 		// Either flag at the planner's default states nothing.
-		if name == "imbalance-across-counts" && f.imbalanceAcrossCounts == whatif.DefaultPlannerImbalanceAcrossCounts {
+		if name == "imbalance-across-counts" && f.imbalanceAcrossCounts == plannerImbalanceAcrossCounts {
 			continue
 		}
 		if name == "load-aware-router" && f.loadAwareRouter == whatif.DefaultPlannerLoadAwareRouter {

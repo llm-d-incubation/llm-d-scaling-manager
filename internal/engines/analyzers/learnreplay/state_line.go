@@ -1,7 +1,6 @@
 package learnreplay
 
 import (
-	"maps"
 	"math"
 	"slices"
 	"time"
@@ -166,38 +165,10 @@ type belowBand struct {
 
 // belowBandLeastSequences is the fewest sequences a replica ran in the
 // readings the variant's floor below the band is read from (leastBelowBand),
-// and the floor kept by those sequences (whatif.BelowBand.ByCount): the
-// readings grouped by octave of their sequences, each group's floor read as
-// the variant's is (itl.BelowBandPoint, the sequences in place of the fill),
-// and the line through those floors (itl.Fit). A floor read at 20 sequences
-// a replica does not stand for one (issue
-// llm-d-incubation/llm-d-scaling-manager#286). least is 0 with no floor, or
-// where a reading's count was not read (rowSequences): the floor then stands
-// for every count, as before. byCount is the zero Model with fewer than two
-// groups holding a floor, or where the fit fails.
+// and the floor kept by those sequences (whatif.BelowBand.ByCount), as
+// itl.BelowBandByCount reads them; a reading's count is rowSequences.
 func (l *lineSamples) belowBandLeastSequences(variant string) (least float64, byCount itl.Model) {
-	below, seqs := l.below[variant], l.belowSequences[variant]
-	if _, ok := itl.BelowBandPoint(below); !ok || len(seqs) != len(below) {
-		return 0, itl.Model{}
-	}
-	least = math.Inf(1)
-	groups := map[float64][]itl.Observation{}
-	for i, n := range seqs {
-		if !(n > 0) || math.IsInf(n, 0) {
-			return 0, itl.Model{}
-		}
-		least = min(least, n)
-		g := math.Floor(math.Log2(n))
-		groups[g] = append(groups[g], itl.Observation{K: n, ITLSec: below[i].ITLSec})
-	}
-	floors := make([]itl.Observation, 0, len(groups))
-	for _, g := range slices.Sorted(maps.Keys(groups)) {
-		if p, ok := itl.BelowBandPoint(groups[g]); ok {
-			floors = append(floors, p)
-		}
-	}
-	byCount, _ = itl.Fit(floors)
-	return least, byCount
+	return itl.BelowBandByCount(l.below[variant], l.belowSequences[variant])
 }
 
 // rows is the variant's rows, of all three.

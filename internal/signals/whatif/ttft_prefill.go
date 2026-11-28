@@ -2,6 +2,7 @@ package whatif
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/llm-d-incubation/llm-d-scaling-manager/internal/signals/prefill"
 )
@@ -70,4 +71,94 @@ func ImbalanceUtilizationAt(est prefill.Estimate, pods int, vp float64) float64 
 		return 0
 	}
 	return min(load/vp, MaxImbalanceUtilization)
+}
+
+// ApplyFLoadCurve sets f against the load on p (ImbalanceCurveFloor,
+// ImbalanceCurveExcess) from the curve P1 fitted at p.Replicas
+// (prefill.Estimate.FCurveByPods, issues
+// llm-d-incubation/llm-d-scaling-manager#482, #493), where it is identified:
+// f at a rate is then priced as the higher of its f and the curve's at that
+// rate's load (fAt). It returns the curve read at that count, the zero one
+// where none was fitted, and whether it was set. One pod has no f to price,
+// and is left as it is.
+//
+// The curve is fitted only with saturation.SwitchPrefillFLoadCurve on, off
+// from the analyzer's constructor; the capacity planner applies it with
+// --prefill-f-load-curve. No analyzer calls it yet.
+func ApplyFLoadCurve(p *Prefill, est prefill.Estimate) (prefill.FLoadCurve, bool) {
+	if p.Replicas < 2 {
+		return prefill.FLoadCurve{}, false
+	}
+	c, ok := est.FCurveByPods[p.Replicas]
+	if !ok || !c.Identified() {
+		return c, false
+	}
+	p.ImbalanceCurveFloor, p.ImbalanceCurveExcess = c.Floor, c.Excess
+	return c, true
+}
+
+// KneeAtServedWork is a prefill knee priced from a lower bound of V_P and
+// raised to the computed-token work the fleet's prefill pods sustained at the
+// pod count priced (ServedKneeFloor): at least the rate that work serves at
+// the prompt priced.
+const KneeAtServedWork Flag = "KneeAtServedWork"
+
+// ServedWorkUnsteady is a prefill knee priced from a lower bound of V_P that
+// no served work floors: at the pod count priced the prefill pods served a
+// stretch of prefill.ServedWorkWindow, and the backlog grew in every one
+// (prefill.ServedWork.PeaksUnsteady). A burst carried with a queue building
+// is not a rate the pods hold (#477), so the knee stays at its lower bound.
+const ServedWorkUnsteady Flag = "ServedWorkUnsteady"
+
+// ServedKneeFloor is r, a prefill knee of p, raised to the rate the
+// computed-token work the fleet's prefill pods sustained serves at the
+// prompt priced, where r rests on a lower bound of V_P (VPLowerBound) and
+// that is higher: served[p.Replicas] / p.PromptTokens, flagged
+// KneeAtServedWork. served is the work by pod count
+// (prefill.ServedWork.Peaks) and unsteady the counts whose work was not
+// sustained (prefill.ServedWork.PeaksUnsteady). A pod computes no faster
+// than its capacity, so the work the pods kept up over
+// prefill.ServedWorkWindow with no backlog growing is work they can do, and
+// where they served only with a backlog growing the knee is left as priced,
+// flagged ServedWorkUnsteady. The knee is at least the rate it serves; both
+// sides are read off the engines' computed-token counter, so no model of the
+// prompt stands between them. A knee priced from a V_P that is no lower
+// bound is left as priced: a window that served past it contradicts the
+// model (#297), which a floor would hide. Only the knee is raised: a TTFT is
+// priced from V_P as before, and a rate between the two knees is past the
+// priced one (PastLowerBoundKnee).
+//
+// The capacity planner floors the knees it prices with it (#494), from the
+// work its replay keeps behind saturation.SwitchPrefillVPServedUnqueued;
+// with no work kept (nil maps) r is returned as it is. No analyzer calls it
+// yet.
+func ServedKneeFloor(r Result, p Prefill, served map[int]float64, unsteady map[int]bool) Result {
+	a, ok := r.(Answer)
+	if !ok || !a.HasFlag(VPLowerBound) || !(p.PromptTokens > 0) {
+		return r
+	}
+	work := served[p.Replicas]
+	if !(work > 0) && unsteady[p.Replicas] {
+		a.Flags = append(slices.Clone(a.Flags), ServedWorkUnsteady)
+		return a
+	}
+	floor := work / p.PromptTokens
+	if !Finite(floor) || !(floor > a.Value) {
+		return r
+	}
+	// The span over V_P and f: no lower than the floor, which is measured
+	// work, not a V_P swept; its high side as priced where that is higher.
+	span := &Sensitivity{Lo: floor, Hi: floor}
+	if a.Sensitivity != nil && a.Sensitivity.Refused == "" {
+		span.Hi = max(floor, a.Sensitivity.Hi)
+	}
+	a.Value = floor
+	a.Flags = append(slices.Clone(a.Flags), KneeAtServedWork)
+	a.Sensitivity = span
+	if a.Basis.TTFT != nil {
+		basis := *a.Basis.TTFT
+		basis.KneeRate = floor
+		a.Basis.TTFT = &basis
+	}
+	return a
 }
