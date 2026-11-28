@@ -517,7 +517,7 @@ func TestClosedLoopProbe_ARestoredSnapshotCarriesTheFleetThroughARestart(t *test
 }
 
 // Issue ev-shindin/llm-scaling-manager#520: the probe showed the analyzer only its Ready replicas, so the
-// floor's landing projection (floor.backlogAtLanding) credited none of the
+// floor's landing projection (floor.BacklogAtLanding) credited none of the
 // replicas it had already ordered. Every cycle of a start re-priced the
 // whole queue as if nothing were coming, and the order grew with the queue
 // until the first order landed: on the decode step (need 17) to 31 at a

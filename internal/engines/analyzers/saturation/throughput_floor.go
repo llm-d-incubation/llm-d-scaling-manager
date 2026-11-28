@@ -1153,9 +1153,12 @@ func (a *SaturationAnalyzer) applyThroughputFloor(
 		}
 		if a.queueDrainFluid {
 			// The backlog the drain price carried to when the capacity it
-			// orders lands (SwitchQueueDrainFluidAfterStart). Only with the
-			// switch on: off, the line is as before the switch.
-			kv = append(kv, "drainBacklogAtLanding", dp.landing)
+			// orders lands (SwitchQueueDrainFluidAfterStart), and the
+			// deadline it is cleared by: drainHorizon is then counted from
+			// landing, so the queue's deadline from now is the start plus
+			// it, up to 600 s at a 300 s start. Only with the switch on:
+			// off, the line is as before the switch.
+			kv = append(kv, "drainBacklogAtLanding", dp.landing, "drainDeadline", dp.deadline)
 		}
 		if a.decodeOwesRouterBacklog && role == domain.RoleDecode {
 			// The router's requests decode was charged on top of its own

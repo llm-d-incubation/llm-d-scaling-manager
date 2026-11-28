@@ -1195,6 +1195,7 @@ dp_size
 drainArrival
 drainBacklog
 drainBacklogAtLanding
+drainDeadline
 drainFirstReadMu
 drainGrowth
 drainHorizon

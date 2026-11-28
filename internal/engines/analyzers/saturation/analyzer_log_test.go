@@ -796,7 +796,7 @@ func TestLogContract_ThroughputFloorBinds(t *testing.T) {
 
 // A cold fleet has completed nothing, so AvgOutputTokens is 0 -- and
 // rate = tokenSec/avgOutput then divides by zero, the derived mu reports
-// not-ok, the demand floor emits nothing, and floor.backlogAtLanding never
+// not-ok, the demand floor emits nothing, and floor.BacklogAtLanding never
 // runs. The projection exists to size for the queue that will have built by the
 // time capacity lands; without a mu it cannot run during the one window it is
 // for.
