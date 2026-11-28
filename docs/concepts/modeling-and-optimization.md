@@ -25,6 +25,8 @@ path that produces those demands, read
   1. *TTFT*: queueing time plus waiting for and running prefill.
   2. *ITL*: the decode time for one output token. Congestion stretches it: batching, prefill injected into a long decode cycle, and KV-cache effects such as memory swapping.
 
+  *TPOT* (time per output token) is the mean time per output token after the first. A decode replica serves every sequence it holds in one step, so TPOT is the step time: on this page it is the ITL at the fill the replica settles at.
+
 - **Workload priority** (or **criticality**) says how important one application's requests are. Other components use it differently: an admission controller to choose which requests to drop, a request scheduler to order its queue. Here it decides which variants get accelerators when there are not enough to meet every model's SLOs.
 
 ## What is modelled, and what is not
@@ -57,7 +59,7 @@ The controller sizes replicas from these two. The decode and prefill models
 below price latency. The [capacity planner](../guides/capacity-planner/) uses
 them to answer what-if questions from a recording. In the controller the
 [`slo` analyzer](../reference/scaling-policy.md#slo-observes-bounds-decode-packing)
-runs them too. On this release it reports and does not decide, except that a
+runs them too. Today it reports and does not decide, except that a
 `tpot` target bounds decode packing. How it is built is on the
 [`slo` analyzer developer page](../developer-guide/slo-analyzer.md).
 
@@ -66,8 +68,9 @@ runs them too. On this release it reports and does not decide, except that a
 A decode replica runs every sequence it holds in one step, so the sequences
 share it (processor sharing). The step time is the inter-token latency, and it
 rises with the KV fill `k`. The scaling manager fits it per variant as a line,
-`ITL(k) = A*k + B`, over the fills it has seen. `B` is the step's fixed cost.
-`A*k` is the cost of the KV in the batch.
+`ITL(k) = A*k + B`, over the fills it has seen inside its fit range (fills
+0.15 to 0.80 by default; readings outside it are not fitted). `B` is the
+step's fixed cost. `A*k` is the cost of the KV in the batch.
 
 The fill and the ITL set each other. More requests a second means more
 sequences held, a fuller cache, a slower step, longer requests, and so more
@@ -79,22 +82,24 @@ that settles is
 
 and the TPOT there is `ITL(k)`.
 
-This is a mean-field value: Little's law applied at the mean fill. It is not
-the exact mean of the queue. The real number of sequences held moves from
-moment to moment, and the step time moves with it, so the true mean fill is at
-or above this one. The figure therefore leans optimistic: the TPOT reads a
-little low and the knee a little high. The gap is small at a low gain and
-grows as the gain `g` below nears 1.
+This is an average-case value: Little's law (sequences held = rate x time
+each is held), applied at the mean fill. It is not the exact mean of the
+queue. The real number of sequences held moves from moment to moment, and the
+step time moves with it, so the true mean fill is at or above this one. Below
+the knee the figure therefore leans optimistic: the TPOT reads a little low.
+The gap is small at a low gain and grows as the gain `g` below nears 1. The
+knee itself, the rate with every slot full, is not affected: there the number
+held is fixed at the cap, and nothing fluctuates.
 
-The decode knee is where the fill reaches the top of the fitted band (0.8 by
-default) or the batch cap. A small birth-death chain on the sequences held
-gives the wait for a free slot, which is small until close to the knee.
+The decode knee is where the fill reaches the top of the fit range (0.80 by
+default) or the batch cap. A small queue model of the free slots gives the
+wait for one, which is small until close to the knee.
 
-**The loop gain.** `g = lambda*S*KVreq/C * A` is the share of each step that
+**The loop gain.** `g = lambda*S*KVreq*A / C` is the share of each step that
 the fill adds back. It rises with the rate, and the fill above is finite only
 while `g < 1`. It also says how far to trust a figure. At the settled fill
-the TPOT is `B/(1 - g)`, so an error in the slope `A` is amplified. The table
-gives the exact change in the TPOT for a 5% slope error:
+the TPOT is `B/(1 - g)`, so an error in the line is amplified. The table gives
+the exact change in the TPOT for a 5% error in the slope `A`, with `B` held:
 
 | `g` | a 5% slope error moves the TPOT by |
 | --- | --- |
@@ -107,15 +112,27 @@ The rule of thumb, `e * g/(1 - g)` for a relative slope error `e`, is the
 first-order part of the same change. It matches the table at a low gain and
 underestimates it at a high one: it gives 20% at 0.8 and 45% at 0.9.
 
+The table is the pessimistic case for a fitted line. What is amplified, by
+`1/(1 - g)`, is the line's error at the fill you run at. A fitted line pivots
+about the middle of its readings, so a slope error moves its value little
+inside the fills it saw, and more the further past them it is read.
+
 To find the gain on your own line, read it at the fill you run at: `g` is the
 share of the step that the KV term accounts for,
 
     g = A*k / ITL(k)
 
+On a measured fill this reads a little high, which is the safe side. In the
+controller, the `slo` analyzer logs each variant's line on its `slo-variant`
+line at `--v=3`: `lineA` and `lineB` are `A` and `B`, and `fill` is the fill
+it priced at (see [the `slo` analyzer](../reference/scaling-policy.md#slo-observes-bounds-decode-packing)).
+The capacity planner will report this amplification on each decode figure
+itself once its condition-number field lands (issue #536).
+
 A line with a small `B` beside `A*k` has a high gain at its usual fills, and
 its figures near the knee need the most care. The reverse question, the rate
 that meets a TPOT target, is not amplified: a slope error moves that rate by
-at most its own size.
+about its own size.
 
 The full derivation, and what each term reads, is in
 [decode: TPOT from the ITL line](../proposals/slo-capacity-planner.md#decode-tpot-from-the-itl-line).
@@ -140,8 +157,9 @@ utilization reaches its limit. It is read, in order of preference:
    (`VPLowerBound`);
 4. from `--assume-vp`, in the planner. Otherwise the TTFT is refused.
 
-Above the rate where the router's flow control starts holding requests, a
-router queue is added. Below it, nothing changes. The whole model is in
+Above the rate where the router's flow control (its admission hold, which
+keeps requests back before dispatch) starts holding requests, a router queue
+is added. Below it, nothing changes. The whole model is in
 [end-to-end TTFT](../proposals/slo-capacity-planner-ttft.md).
 
 Known gap: a chunked-prefill pod serves faster as its batch fills, so `V_P`
@@ -179,15 +197,15 @@ of engine it is pricing. It reads that from the engine's own configuration and
 metrics. One exception remains: without a model config, the planner falls back
 to fragments of the model's name to raise the hybrid and MLA attention flags,
 and keeps a hybrid flag raised by name even when a config reads full
-attention. Only those flags are affected; no figure changes. Removing the name
-fallback is tracked as an open issue.
+attention. No figure's value changes, but a flag raised by name puts the
+figure outside the validated region. Removing the name fallback is issue #541.
 
 | Class | Read from | What it changes today |
 | --- | --- | --- |
-| Attention kind: full, sliding window, MLA, hybrid | the model's `config.json` (the [`model-config` annotation](../reference/configuration.md) in the controller; `--model-config` in the planner) | reported; MLA and hybrid put figures outside the validated region |
+| Attention kind: full, sliding window, MLA, hybrid | the model's `config.json` (the [`model-config` annotation](../reference/configuration.md#seeds-the-learners-replace) in the controller; `--model-config` in the planner) | reported; in the planner, MLA and hybrid put figures outside the validated region |
 | MoE class: dense, MoE with or without expert parallelism | the same `config.json`, and the engine's flags | reported beside the engine |
-| Whether the step budget binds | vLLM's `vllm:iteration_tokens_total` | reported; the planner also caps the batch per rank at the budget itself |
-| Host-bound decode step | the measured intercept and floor, under 5 ms | the planner refuses a TPOT percentile read off coarse router buckets |
+| Whether the step budget binds (the engine's token limit per step, `--max-num-batched-tokens`) | vLLM's `vllm:iteration_tokens_total` | reported; the planner also caps the batch per rank at the budget itself |
+| Host-bound decode step | the line's fixed cost `B` and the lowest step time measured, both under 5 ms | the planner refuses a TPOT percentile read off coarse router buckets |
 | Role (prefill or decode) | the engine's own signals | behind a controller switch, off by default: labels decide |
 
 An unknown class is named "unknown" and prices as before. To give the planner
@@ -206,9 +224,9 @@ the model's config, see `--model-config` in
   `BatchBeyondFit`.
 - **No second axis where fill cannot see the load.** MLA, fp8 KV and
   sliding-window models, and small models on large-memory GPUs, can run under
-  the fitted band at every load. Where a variant never reaches the band, it
-  gets no line, and its TPOT is refused. Where it does reach the band, it is
-  priced as above, and MLA figures are flagged.
+  the fit range at every load. Where a variant never reaches the fit range, it
+  gets no line, and its TPOT is refused. Where it does reach it, it is priced
+  as above, and MLA figures are flagged.
 - **No separate throughput analyzer in the shipped configuration.** A
   throughput analyzer exists in the code and fits the same ITL line, but the
   shipped configuration names the saturation analyzer only. If you see
