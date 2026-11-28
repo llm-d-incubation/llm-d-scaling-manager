@@ -188,19 +188,21 @@ For a quantity θ and a variant v with no or little evidence of its own.
   are pooled jointly, as one vector with the fit's covariance; a sibling's B is never moved without its A.
 - **Each sibling is v plus an offset, part shared and part its own.** For siblings s = 1..m:
 
-      θ_s = θ_v + δ_c + η_s
+      θ_s = θ_v + Σ_{c ∈ C_s} δ_c + η_s
 
   - d_s is sibling s's configuration distance from v, from the similarity tiers: 0 for the same `Fingerprint`,
     larger for `IsCapacityCompatible` only, larger again across a namespace. Unresolved flags add distance, as the
     similarity proposal already says ("a distance penalty, not a veto").
   - η_s ~ Normal(0, τ²(d_s)) is the sibling's own offset, independent across siblings. τ² grows with d.
-  - δ_c ~ Normal(0, τ_c²) is shared by every sibling that differs from v in the same dimension c (for example, all
-    of them run an engine argument v does not). Siblings that differ in the same way are not independent evidence
-    about v.
+  - C_s is the set of dimensions in which sibling s differs from v. δ_c ~ Normal(0, τ_c²) is shared by every
+    sibling that differs from v in dimension c (for example, all of them run an engine argument v does not), and a
+    sibling that differs in two dimensions carries both terms. Siblings that differ in the same way are not
+    independent evidence about v.
   - Each sibling's estimate θ̂_s has a sampling variance V_s = σ_s²/n_eff,s from its own evidence.
   - The prior for θ_v is the generalised-least-squares combination of the θ̂_s under that covariance. Its variance
-    has the floor τ_c² for the nearest group, so many like siblings never make the prior certain. With one sibling
-    it reduces to Normal(θ̂_s, V_s + τ_c² + τ²(d_s)).
+    has the floor 1/Σ_c (1/τ_c²) over the dimensions present among the siblings, so many like siblings never make
+    the prior certain. A sibling with the same `Fingerprint` differs in no dimension and carries no δ term. With one
+    sibling the prior reduces to Normal(θ̂_s, V_s + Σ_{c ∈ C_s} τ_c² + τ²(d_s)).
 - **Own readings update it.** The posterior weight of the prior is w = (1/V_prior) / (1/V_prior + n_eff,v/σ_v²).
   It falls as the variant's own evidence grows, with no expiry constant and no equality key.
 - **Counts are effective counts.** Readings every 15 s, of overlapping one-minute rates, are autocorrelated: the
@@ -335,8 +337,10 @@ that today forms readings from minutes at ingestion becomes an estimator over th
     post-restart window.
   - **Forget and eviction cover it.** `llm-d.ai/forget-learned-state` writes a tombstone into `v1` (`Forgotten`,
     `learned_snapshot.go:175-178`). Forgetting or evicting a variant drops its evidence in the same cycle, and a
-    restore reads the tombstones from `v1` before it applies any evidence, so a forget never comes back from the
-    evidence store after a restart.
+    restore reads the tombstones from `v1` before it applies any evidence. A tombstone carries the time the forget
+    was acted on (`ForgetMarkSnapshot.Seen`), and the restore drops only the variant's evidence older than that
+    time. So a forget never comes back from the evidence store after a restart, and evidence gathered after the
+    forget is kept.
   - **Skew between the two documents is tolerated by the clocks.** The two ConfigMaps are written by separate
     updates, so a restart can read a `v1` from one minute and evidence from another, or `v1` alone. Each document
     carries its write time. The estimates are restored from `v1` directly, and the evidence is judged by each
@@ -351,12 +355,18 @@ that today forms readings from minutes at ingestion becomes an estimator over th
     round it to 0, which `BelowBandByCount` reads as no floor, or into another octave.
   - **The below-band readings** cannot all be kept: 240 a key at 300 keys is about 1 MB alone. Each key keeps the
     union of what the two floors read:
-    - the lowest floor(0.1 N) + 1 readings by ITL over the key, at most 25, for the whole floor;
+    - the lowest 25 readings by ITL over the key, for the whole floor, whatever N is. Its index is floor(0.1 N),
+      at most 24 with `BelowBandWindow` at 240, so 25 always cover it, however N grows after the restore;
     - for each octave of running sequences, its lowest floor(0.1 n_g) + 1 readings by ITL, about 30 over the groups;
     - the counts N and n_g, and the counts of the readings not kept by minute of age (30 bytes a group), so that
-      pruning by age keeps the counts right.
+      pruning by age, and the 240 cap, keep the counts right.
 
     The sets overlap; about 45 distinct readings and the counts are under 800 bytes a key.
+
+    Neither floor can be read from the kept readings by today's readers: `belowBandPoint` and `BelowBandByCount`
+    index into the slice they are given, and need `BelowBandMinReadings` (10) readings, which a group restored to
+    floor(0.1 n_g) + 1 does not have. Step 0's `Evidence` type reads both floors from the kept readings and the
+    counts.
   - **The whole document**, for a stated fleet: 300 decode ITL keys (for example 75 decode variants with keys in 4
     output-length buckets each) and 10 prefill keys with 40 prefill pods between them.
 
@@ -368,11 +378,11 @@ that today forms readings from minutes at ingestion becomes an estimator over th
     | unsaturated exposure, the last 12 settle periods | 130 B | 39 KB |
     | prefill minutes, 30 a pod at about 40 B after base64 | 1.2 KB a pod | 48 KB |
     | f samples, 30 cycles a prefill key | 600 B | 6 KB |
-    | published demand and time, per role | 40 B | 6 KB |
+    | published demand and time, per role (about 85: 75 decode variants and 10 prefill keys) | 40 B | 3.4 KB |
     | key strings and replica tables (pod names 40-60 B each) | about 280 B | 84 KB |
-    | **total** | | **about 510 KB** |
+    | **total** | | **about 505 KB** |
 
-    That is under the 700 KiB bound with about a quarter to spare. The prefill minutes are kept for 30 minutes, the
+    That is under the 700 KiB bound (716.8 KB) with about 30% to spare. The prefill minutes are kept for 30 minutes, the
     busy window (`prefill/capacity.go:81`), not their full 6-hour retention (`prefill.go:36`): at 6 hours they would
     be 12 times larger and over budget. Estimates that read the older minutes restart from the 30 kept, which the
     restore-and-recompute test lists. A fleet much larger than this one reaches the drop.
@@ -407,7 +417,8 @@ that today forms readings from minutes at ingestion becomes an estimator over th
     that restores only readings inside their age limits and applies no published demand older than one settle
     period;
   - a failed evidence read writes no evidence until a read succeeds;
-  - a forgotten variant's evidence is gone in the same cycle, and a restart does not restore it;
+  - a forgotten variant's evidence is gone in the same cycle, a restart does not restore it, and a restart does
+    restore the evidence gathered after the forget;
   - the evidence one write behind `v1` restores, and the restore-and-recompute comparison holds.
 
 ### Staged switches
@@ -424,7 +435,7 @@ byte-identical.
 | 3 | Unsaturated exposure recorded; planner k2 from the censored likelihood, with an interval | `k2-unsaturated-exposure` | on | off | planner: the class matrix. Controller: only as a replacement for the expiry, with its own #169 line |
 | 4 | Admission tags for rows 1, 2, 3, 6, 8 and slo 1; each side filters | `evidence-admission-tags` (+ `slo`) | on | off | parity check on evidence only; planner goldens unmoved |
 | 5 | Partial pooling for cross-variant reuse | `learned-state-pooling` | on | off | the two-variant cluster run the similarity proposal already asks for; the controller's low quantile is its own #169 line |
-| 6 | Stop writing estimates the planner no longer needs into recordings; retire `v1` | `learned-state-v1-retired` | - | off | one release cycle with both documents, then the rollback rule below |
+| 6 | Stop writing into recordings' restore events the estimates no replay reader needs any more. `v1` stays | `learnrec-restore-estimates-dropped` | - | off | step 2 on for a release, and the step's PR lists every golden that still reads a restored estimate |
 
 **Order, and older recordings.** Step 2 needs step 1. The planner can refit from evidence only on recordings where
 the restore event carries it, which step 1 writes. A recording made before step 1 has a restore event that holds the
@@ -434,11 +445,18 @@ after each restore for the ITL line, and longer for k2. That is a coverage cost 
 Step 2's PR reports how many figures it refuses on the restart goldens. If the cost is too high, the fallback is to
 restore the controller's estimates on older recordings only, with a note that names them as the controller's.
 
-**Rollback.** Steps 0-5 are reversible: `v1` stays byte-identical, and a main controller restores from a namespace
-that also holds the evidence ConfigMap. Step 6 is not, so it has its own switch and a rule:
-- the switch stops writing `v1`; the last `v1` stays in place, untouched, for one more release;
-- only the release after that deletes it;
-- the release note of the release that deletes it says that a downgrade past it starts every model cold.
+**`v1` stays.** Step 6 does not retire `v1`. `v1` still holds what the design relies on: the k2 readings,
+`Throughput`, the start samples and the fingerprints (section 1); the estimates the controller restores directly
+(section 2 and the restore-and-recompute test); and the forget tombstones. Moving them into a `v2` key of the same
+ConfigMap would follow the store's per-version rule (`learned_state_store.go:50-53`), but it would buy nothing:
+`v1` already holds them in the right form, and a format move adds a downgrade path to test and a release whose
+downgrade starts cold. So step 6 is narrowed to the recording change.
+
+**Rollback.** Every step is reversible on the cluster: `v1` stays byte-identical, and a main controller restores from
+a namespace that also holds the evidence ConfigMap. Step 6 changes recordings only. A recording made with it on
+carries restore events without the dropped estimates, so a planner built before step 2, or a golden replayed with
+the controller's switches that reads those estimates, starts them cold at the restore. The step's PR lists those
+goldens, and its switch turns the change off.
 
 ### Tests that gate the steps
 
@@ -459,9 +477,12 @@ that also holds the evidence ConfigMap. Step 6 is not, so it has its own switch 
       tier or the fit;
     - the band's bottom `lo` read lower at the restore than at the write: the kept-by-ITL readings are not closed
       under a lower `lo`, which row 8 (`ITLAdaptiveBandFloor`) can produce on the planner side;
-    - the below-band age-out: once a kept reading ages out, the reading at the floor's index may be one that was
-      not kept. The floor read from the kept ones is then at or below the true one, by up to the spread of the
-      group's ITLs, until live readings refill it, at most the 30-minute age limit;
+    - the kept readings stop covering a floor's index: a kept reading leaves, by age or by the 240 cap in
+      `keepBelowBand` (`below_band.go:96-104`, which drops the oldest by count), or n_g grows past a group's kept
+      readings. The reading at the floor's index may then be one that was not kept. The floor read from the kept
+      ones is at or below the true one, by up to the spread of the ITLs it is read from, until live readings
+      refill it, at most the 30-minute age limit. N growing does not reach the whole floor, whose 25 kept readings
+      always cover its index;
     - prefill estimates that read minutes older than the 30 kept;
     - cycles where the demand sits within the remaining difference of a replica boundary, which may differ by one
       replica.
@@ -484,7 +505,7 @@ that also holds the evidence ConfigMap. Step 6 is not, so it has its own switch 
 
 ## What it costs
 
-- **Storage:** a second ConfigMap with its own budget, about 510 KB for the fleet sized above. Two updates a minute,
+- **Storage:** a second ConfigMap with its own budget, about 505 KB for the fleet sized above. Two updates a minute,
   leader-only.
 - **RBAC and install:** the evidence ConfigMap added to the learned-state Role's `resourceNames`, the installer's
   optional-list text and cleanup, and the frozen-document path on an install whose Role was not upgraded.
@@ -493,7 +514,7 @@ that also holds the evidence ConfigMap. Step 6 is not, so it has its own switch 
   - `docs/reference/configuration.md`: what `LEARNED_STATE_SNAPSHOT` now covers;
   - `docs/reference/prometheus.md`: the `store` label on the snapshot families, and the `restart-slew` reason;
   - `docs/reference/cycle-log.md`: the `restartSlew` field;
-  - `docs/reference/upgrade-and-uninstall.md`: the upgrade order, and step 6's rollback rule when it lands.
+  - `docs/reference/upgrade-and-uninstall.md`: the upgrade order, and, when step 6 lands, that recordings made with it no longer carry the dropped estimates.
 - **Code:**
   - the `Evidence` type and its persistence (steps 0-1, the largest part);
   - the planner estimators (steps 2-3), and the `learnreplay` switch key;
