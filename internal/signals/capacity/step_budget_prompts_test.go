@@ -149,12 +149,14 @@ func TestStepTokens_PromptsBindPastTheIterationsLastBound(t *testing.T) {
 	assert.InDelta(t, 0.01, got.PromptOverShare, 1e-9, "the prompts were read")
 }
 
-// The prompt share binds from StepBudgetPromptBindsShare, its own threshold:
-// just under it does not bind, at it binds.
+// The prompt share binds from 5% of prompts, its own threshold: 50 of 1000
+// over the budget binds, 49 does not. The counts are literals so that a
+// changed StepBudgetPromptBindsShare fails here.
 func TestStepTokens_PromptShareThreshold(t *testing.T) {
+	assert.Equal(t, 0.05, StepBudgetPromptBindsShare)
 	steps := freeHistogram()
 	n := 1000.0
-	over := StepBudgetPromptBindsShare * n
+	over := 50.0
 	at := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, n-over, 0, over))
 	assert.Equal(t, StepBudgetBinds, at.BindingWith(8192, BindingOptions{Prompts: true}).Class)
 	under := fullPool(steps, promptHistogram(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, n-over+1, 0, over-1))
