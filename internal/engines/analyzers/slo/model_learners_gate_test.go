@@ -177,20 +177,24 @@ func TestModelLearners_AnEmptyGateWithNoFitInUse(t *testing.T) {
 	}
 }
 
-// Both switches on: the TTFT fit is asked for the folds' own spread, and a
-// refit whose folds scored steps inside the tolerance passes the empty
-// gate and is installed. The score is the one
-// whatif.TestRankMixtureHeldOutFoldSpread_AShortFoldIsPricedAtTheDefault
-// reads on a window just over MinSpreadSpan (48 of 48), where each fold is
-// under the span and priced at the floored default spread. Calibrated
-// inside folds under the span instead, that window's folds scored nothing,
-// and this gate would hold the fit in use rather than install the refit.
+// Both switches on: the learner passes SwitchV2HeldOutFoldSpread through to
+// its fit, and a refit whose folds scored passes the empty gate and is
+// installed. The stub stands in for the fit on a window just over
+// MinSpreadSpan whose folds read no p90 of their own (whatif
+// TestRankMixtureHeldOutFoldSpread_AShortFoldIsPricedAtTheDefault): asked
+// for the folds' own spread it scores 48 of 48, and asked otherwise it
+// scores nothing. So the refit is installed only where the switch reaches
+// the fit; were it dropped, the empty gate would hold the fit in use. The
+// whatif test holds the fold code itself; this one holds the learner's
+// wiring of the two switches together.
 func TestModelLearners_BothSwitchesInstallAFitWhoseFoldsScored(t *testing.T) {
 	asked := emptyGateFits(t)
 	fitMixtureWindow = func(_ []whatif.FitCycle, _ time.Duration, _ int, _ float64, sw whatif.RankMixtureSwitches) whatif.MixtureWindowFit {
 		*asked = append(*asked, sw)
 		f := pricedMixture()
-		f.HeldOut = whatif.HeldOutScore{Within: 48, Steps: 48}
+		if sw.HeldOutFoldSpread {
+			f.HeldOut = whatif.HeldOutScore{Within: 48, Steps: 48}
+		}
 		return f
 	}
 	t0 := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
@@ -200,9 +204,6 @@ func TestModelLearners_BothSwitchesInstallAFitWhoseFoldsScored(t *testing.T) {
 		SwitchV2EmptyGateAbstains: true, SwitchV2HeldOutFoldSpread: true}))
 	w := refitWithAFitInUse(t, a, clk, t0)
 	require.NotEmpty(t, *asked)
-	for _, sw := range *asked {
-		assert.True(t, sw.HeldOutFoldSpread, "the fit is asked for the folds' own spread")
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	assert.False(t, w.ttft.held, "the refit passes the gate")

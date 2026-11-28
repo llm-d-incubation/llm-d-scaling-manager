@@ -2213,10 +2213,12 @@ var heldBy = map[string][]heldTest{
 	// both.
 	slo.SwitchV2EmptyGateAbstains: {
 		{"../slo", "TestModelLearners_AnEmptyGateAbstainsWithTheSwitch"},
+		{"../slo", "TestModelLearners_AnEmptyGateWithNoFitInUse"},
 	},
 	slo.SwitchV2HeldOutFoldSpread: {
 		{"../slo", "TestModelLearners_TheFoldSpreadSwitchReachesTheFit"},
 		{"../../../signals/whatif", "TestRankMixtureHeldOutFoldSpread_NoScoredP90SetsTheSpread"},
+		{"../../../signals/whatif", "TestRankMixtureHeldOutFoldSpread_TheWindowFitDispatches"},
 	},
 	// It runs the switch on and off through Analyze and asserts both.
 	saturation.SwitchITLClearsOnNewRevision: {

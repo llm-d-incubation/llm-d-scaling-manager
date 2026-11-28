@@ -508,17 +508,25 @@ func FitMixtureWindow(cycles []FitCycle, step time.Duration, slots int, toleranc
 	sorted := sortedByTime(cycles)
 	first, last := sorted[0].At, sorted[len(sorted)-1].At
 	w.Pooled = MixtureStepOf(MixtureCyclesIn(cycles, first.Add(-time.Nanosecond), last), last)
+	w.HeldOut = mixtureHeldOut(steps, rq, sw, tolerance)
+	return w
+}
+
+// mixtureHeldOut is the held-out score FitMixtureWindow reads for the fit
+// rq of steps under sw: the NL line's own folds (QueueRankMixtureNLLine),
+// the folds' own spread (HeldOutFoldSpread) where the window's spread was
+// calibrated, and otherwise the folds at the window's spread.
+func mixtureHeldOut(steps []MixtureStep, rq *RankMixtureFitted, sw RankMixtureSwitches, tolerance float64) HeldOutScore {
 	o := sw.Options(rq.M.Slots)
 	switch {
 	case sw.NLLine:
-		w.HeldOut = RankMixtureNLHeldOut(steps, o, tolerance)
+		return RankMixtureNLHeldOut(steps, o, tolerance)
 	case sw.HeldOutFoldSpread:
 		calibrated := !o.NoSpread && rq.M.Beta > 0 && !rq.Report.SpreadDefaulted
-		w.HeldOut = RankMixtureHeldOutFoldSpread(steps, o, rq.M.Spread, calibrated, tolerance)
+		return RankMixtureHeldOutFoldSpread(steps, o, rq.M.Spread, calibrated, tolerance)
 	default:
-		w.HeldOut = RankMixtureHeldOut(steps, o, rq.M.Spread, tolerance)
+		return RankMixtureHeldOut(steps, o, rq.M.Spread, tolerance)
 	}
-	return w
 }
 
 // Price is the model's TTFT at rate requests a second over the fleet it was

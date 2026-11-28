@@ -411,11 +411,12 @@ type shapeSample struct {
 //     it.
 //   - slo.SwitchV2EmptyGateAbstains: a v2 latency fit whose held-out folds
 //     scored no step is not used; it does not pass with no evidence.
-//   - slo.SwitchV2HeldOutFoldSpread: the v2 TTFT folds scored at a spread
-//     calibrated inside each fold, as the planner's own main view scores
-//     them (whatif.DefaultRankMixtureHeldOutFoldSpread). The planner's
-//     replay runs no v2 learner (slo.SwitchV2Inputs is off and its goldens
-//     observe none), so neither moves a golden; they are listed so that one
+//   - slo.SwitchV2HeldOutFoldSpread: each v2 TTFT fold fitted, spread
+//     included, as the learner would fit its steps alone, as the planner's
+//     own main view scores them (whatif.DefaultRankMixtureHeldOutFoldSpread).
+//     Today the planner's replay runs no v2 learner (slo.SwitchV2Inputs is
+//     off and its goldens observe none), so neither moves a golden; they are
+//     listed so that one
 //     list says what is on for the planner.
 //
 // slo.SwitchTTFTHopWindowMeans, planner-only, reads the router hop on its

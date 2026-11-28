@@ -153,3 +153,35 @@ func BenchmarkRankMixtureHeldOut_FoldSpread(b *testing.B) {
 		}
 	})
 }
+
+// FitMixtureWindow's held-out score (mixtureHeldOut) takes the folds' own
+// spread only with HeldOutFoldSpread, and only where the window's spread
+// was calibrated; otherwise the folds are scored at the window's spread.
+// The calibration span is a minute, so each fold calibrates its own spread
+// and the two scores differ.
+func TestRankMixtureHeldOutFoldSpread_TheWindowFitDispatches(t *testing.T) {
+	truth := RankMixture{S0: 0.25, V: 20000, Shares: []float64{0.3, 0.25, 0.25, 0.2}, A0: 0.4, Spread: 1.5,
+		KV: KVDeferral{P0: 0.02, P1: 0.3, M0: 0.3, M1: 1.2, Known: true, RhoLo: 0, RhoHi: 1}}
+	truth.BetaOverhead, truth.BetaDecode = 4e-6, 3e-6
+	truth.Beta = truth.BetaOverhead + truth.BetaDecode
+	steps := syntheticSteps(t, truth, 96)
+	off := RankMixtureSwitches{MinFitWindow: time.Minute}
+	on := off
+	on.HeldOutFoldSpread = true
+	o := off.Options(0)
+	m, diag, err := FitRankMixture(steps, o)
+	require.NoError(t, err)
+	require.False(t, diag.SpreadDefaulted)
+	rq := &RankMixtureFitted{M: m, Report: RankMixtureReport{SpreadDefaulted: diag.SpreadDefaulted}}
+
+	atWindow := RankMixtureHeldOut(steps, o, m.Spread, 0.2)
+	inFolds := RankMixtureHeldOutFoldSpread(steps, o, m.Spread, true, 0.2)
+	require.NotEqual(t, atWindow, inFolds, "the two scores differ on this window")
+	assert.Equal(t, atWindow, mixtureHeldOut(steps, rq, off, 0.2), "off: the window's spread")
+	assert.Equal(t, inFolds, mixtureHeldOut(steps, rq, on, 0.2), "on: the folds' own spread")
+
+	defaulted := *rq
+	defaulted.Report.SpreadDefaulted = true
+	assert.Equal(t, atWindow, mixtureHeldOut(steps, &defaulted, on, 0.2),
+		"on, a window whose spread defaulted: the window's spread, as before")
+}
