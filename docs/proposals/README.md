@@ -230,6 +230,12 @@ last; it is the unit change that makes the other two land.
   restore never makes a figure younger; leader-only writes, deletion flushes,
   off by default. Supersedes the Prometheus refit in ev-shindin/llm-scaling-manager#116, which cannot
   attribute old readings to a variant now that learned state is per variant.
+- **[Learned state: share the evidence, keep the estimates per consumer](shared-evidence-per-consumer-estimates.md)**
+  — proposed; nothing built. The snapshot holds the controller's estimates (a k2 biased low on purpose, held lines
+  and floor B, lower bounds), and the capacity planner inherits them. Split it into shared evidence (readings,
+  clocks, settle flags, tier, engine arguments) and estimates per consumer, sort the 18 `PlannerSwitches` into
+  evidence and estimator rows, reuse across variants by partial pooling instead of equality keys, and restore the
+  ITL windows at a restart (#520). Staged switches, with recordings and the `v1` snapshot byte-identical.
 - **[SLO tiers](slo-tiers.md)** — phase 0 (the analyzer, observing) and step
   2a (the TTFT curve's inputs, observed) built; nothing that changes a replica
   count is. A separate `slo` analyzer prices each variant at the fill where its
