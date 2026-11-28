@@ -47,3 +47,31 @@ func TestBandInterceptSwitch(t *testing.T) {
 		t.Errorf("on: band %+v about %v, want it to hold the figure, name its blocks and be wider than off's %+v", *b.Band, b.Value, *a.Band)
 	}
 }
+
+// With --assume-itl-b floor, the text says the bands draw B only where they
+// do: off, it keeps the words from before the switch.
+func TestBandInterceptSwitch_FloorWords(t *testing.T) {
+	const (
+		held  = "the slope refitted through it on the same readings; the bands hold B fixed"
+		drawn = "the bands draw B from the readings, held under the floor, so mostly below it"
+	)
+	run := func(on bool) string {
+		testReplaySwitches = map[string]map[string]bool{learnreplay.PackageSaturation: {saturation.SwitchITLBandIntercept: on}}
+		defer func() { testReplaySwitches = nil }()
+		out, code := runCmd(t, "replicas-to-slo", "--recording", pinnedRecording, "--assume-itl-b", "floor")
+		if code != 0 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+		return out
+	}
+	off, on := run(false), run(true)
+	if !strings.Contains(off, "from the floor read below the band") {
+		t.Fatalf("off: no floor B in the text:\n%s", off)
+	}
+	if !strings.Contains(off, held) || strings.Contains(off, drawn) {
+		t.Errorf("off: want the words from before the switch (%q), not %q:\n%s", held, drawn, off)
+	}
+	if !strings.Contains(on, drawn) || strings.Contains(on, held) {
+		t.Errorf("on: want %q, not %q:\n%s", drawn, held, on)
+	}
+}
