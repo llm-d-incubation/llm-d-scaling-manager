@@ -1368,6 +1368,11 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	// that speculates, so off alone from all on moves nothing. Its unit tests
 	// hold it (heldBy).
 	slo.SwitchTTFTDecodeSpeculatingHeld: nil,
+	// A decode row's accepted drafts per step held at k: off from the
+	// constructor (the planner turns it on), so every golden replay runs it
+	// off, and no committed recording has a decode row that speculates, so
+	// off alone from all on moves nothing. Its unit tests hold it (heldBy).
+	slo.SwitchSpecAcceptedAtMostK: nil,
 	// The router hop read on its windows' means (prefill.DecodeTermCycle.
 	// HopWindowMeans): planner-only, off from the constructor, so every
 	// golden replay runs it off and off alone from all on moves nothing. Its
@@ -1919,6 +1924,17 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/whatif", "TestTerm_ASpeculatingRowPricesTheMeasuredTTFT"},
 		{".", "TestTerm_TheDecodeSpeculatingHeldSwitch"},
 		{".", "TestPlannerSwitches_TheDecodeSpeculatingHeldIsOn"},
+	},
+	// The first two hold it off from the constructor and read k from the
+	// store; the others withhold a reading over k in the decode cycle and in a
+	// line row's sequences, and hold it on in the planner.
+	slo.SwitchSpecAcceptedAtMostK: {
+		{"../slo", "TestSpecAcceptedAtMostK_OffFromTheConstructor"},
+		{"../slo", "TestSpecAcceptedAtMostK_ReadsKFromTheStore"},
+		{"../../../signals/whatif", "TestDecodeCycleAcceptedAtMost_WithholdsTheDraftsOverK"},
+		{".", "TestRowSequences_WithholdsTheDraftsOverK"},
+		{".", "TestDecodeSeries_ReadsTheDraftsAgainstTheFiledK"},
+		{".", "TestPlannerSwitches_TheSpecAcceptedAtMostKIsOn"},
 	},
 	// The first holds it off from the constructor; the window tests run it
 	// on and off on a noisy fleet, a ramp, the held and queued gates and the

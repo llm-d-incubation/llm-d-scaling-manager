@@ -382,6 +382,14 @@ type shapeSample struct {
 //     with MTP on every decode pod, the held figure, fitted on the first half,
 //     read the decode engine's measured TTFT of the second within 20% on
 //     most five-minute steps, where the old sum read a few percent of it.
+//   - slo.SwitchSpecAcceptedAtMostK: a decode row's accepted drafts per
+//     step read against k, the draft tokens a step proposes at most, where
+//     the planner reads them: the TPOT model's token time and accepted
+//     drafts (DecodeSeriesFrom) and a line row's sequences (rowSequences).
+//     Over k by a rounding error is k; over it by more, the row gives no
+//     token time and its sequences are the running gauge, as the ITL line
+//     withholds the row. Only a row that reads over k moves; no committed
+//     recording speculates.
 //   - saturation.SwitchBacktestStepOutputDispersion: a backtest step priced
 //     at its own output spread, not the fit's (issue
 //     llm-d-incubation/llm-d-scaling-manager#274). Only a backtest states
@@ -602,6 +610,7 @@ func PlannerSwitches() map[string]map[string]bool {
 	}, PackageSLO: {
 		slo.SwitchTTFTHopUnqueued:           true,
 		slo.SwitchTTFTDecodeSpeculatingHeld: true,
+		slo.SwitchSpecAcceptedAtMostK:       true,
 		slo.SwitchTTFTRouterWaitInPrefill:   whatif.DefaultRouterWaitInPrefill,
 		slo.SwitchTTFTImbalanceAcrossCounts: whatif.DefaultPlannerImbalanceAcrossCounts,
 	}}
@@ -718,6 +727,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 	censored := opts.Switches[PackageSaturation][saturation.SwitchTPOTRatioCensored]
 	residence := opts.Switches[PackageSaturation][saturation.SwitchDecodeResidencePull]
 	burst := opts.Switches[PackageSaturation][saturation.SwitchDecodeBurstFill]
+	acceptedAtMostK := opts.Switches[PackageSLO][slo.SwitchSpecAcceptedAtMostK]
 	stepSpread := opts.Switches[PackageSaturation][saturation.SwitchBacktestStepOutputDispersion]
 	ttft.prefixAttention = opts.Switches[PackageSLO][slo.SwitchTTFTPrefixAttention]
 	ttft.computedHit = opts.Switches[PackageSLO][slo.SwitchTTFTComputedHit]
@@ -795,7 +805,7 @@ func StatesFrom(ctx context.Context, src Source, opts Options, q StateQuery, als
 			return rec != nil && rec.EngineParams != nil && rec.EngineParams.Engine == inferenceengine.EngineSGLang
 		}
 		ttft.noteJoint(in, ev.Now, args, sglang)
-		lines.note(in, n, ev.Now, busiest)
+		lines.note(in, n, ev.Now, busiest, maxAccepted(r.store, in, acceptedAtMostK))
 		for _, rep := range r.sat.LearnerReports()[in.Namespace+"|"+in.ModelID] {
 			if rep.Learner != learn.ITL {
 				continue

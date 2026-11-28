@@ -108,7 +108,8 @@ func (a *Analyzer) SlopeHoldFor() time.Duration { return a.slopeHoldFor }
 // SwitchTTFTDecodeGateCharge, SwitchTTFTImbalanceAcrossCounts,
 // SwitchTTFTLowLoadDecodeTTFT, SwitchTTFTHopUnqueued, SwitchTTFTHopWindowMeans,
 // SwitchTTFTDecodeSpeculatingHeld, SwitchTTFTJointInputs,
-// SwitchTTFTPromptSupport, SwitchKVPerRequestOutputDispersion and SwitchV2Inputs; a name it
+// SwitchTTFTPromptSupport, SwitchSpecAcceptedAtMostK, SwitchKVPerRequestOutputDispersion and
+// SwitchV2Inputs; a name it
 // does not know is an error, and sets nothing. Never called on a production
 // path; a test holds that.
 func (a *Analyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -225,6 +226,9 @@ func (a *Analyzer) switchFields() map[string]*bool {
 		// A speculating decode row held for D, planner-only, off by default
 		// (ttft.go).
 		SwitchTTFTDecodeSpeculatingHeld: &a.ttftDecodeSpeculatingHeld,
+		// A decode row's accepted drafts per step read at most k where the
+		// v2 TPOT model reads it, off by default (spec_accepted.go).
+		SwitchSpecAcceptedAtMostK: &a.specAcceptedAtMostK,
 		// The router hop read on its windows' means, planner-only, off by
 		// default (ttft.go).
 		SwitchTTFTHopWindowMeans: &a.ttftHopWindowMeans,

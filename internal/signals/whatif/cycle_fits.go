@@ -51,10 +51,19 @@ type FitCycle struct {
 // in.RouterLatency, which the controller does not set on the input it hands
 // the v2 models.
 func FitCycleOf(in domain.AnalyzerInput, router *domain.RouterLatency, at time.Time, prefillVariant, decodeVariant string) FitCycle {
+	return FitCycleAcceptedAtMost(in, router, at, prefillVariant, decodeVariant, nil)
+}
+
+// FitCycleAcceptedAtMost is FitCycleOf with its decode cycle's accepted
+// drafts per step held at each variant's maxAccepted
+// (DecodeCycleAcceptedAtMost); a nil maxAccepted is FitCycleOf.
+func FitCycleAcceptedAtMost(in domain.AnalyzerInput, router *domain.RouterLatency, at time.Time, prefillVariant, decodeVariant string,
+	maxAccepted MaxAccepted) FitCycle {
 	rate, known, engine := ArrivalOf(in)
 	in.RouterLatency = router
 	return FitCycle{At: at, Rate: rate, RateKnown: known, EngineRate: engine, Latency: true, Router: router,
-		Mixture: MixtureCycleOf(in, at, prefillVariant, decodeVariant), Decode: DecodeCycleOf(in, at, decodeVariant)}
+		Mixture: MixtureCycleOf(in, at, prefillVariant, decodeVariant),
+		Decode:  DecodeCycleAcceptedAtMost(in, at, decodeVariant, maxAccepted)}
 }
 
 // ArrivalOf is in's arrival rate and the rate its engines complete: rate is

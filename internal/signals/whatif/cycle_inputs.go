@@ -149,6 +149,42 @@ func (r *MixtureRank) setFrontend(a apiServerReading, n int) {
 // TPOT (learnreplay's CycleLatency.EngineTPOT): every decode and unsplit
 // row of decodeVariant, serving or not.
 func DecodeCycleOf(in domain.AnalyzerInput, at time.Time, decodeVariant string) DecodeCycle {
+	return DecodeCycleAcceptedAtMost(in, at, decodeVariant, nil)
+}
+
+// MaxAccepted is the draft tokens a step of variant's engine proposes at
+// most (capacity.EngineParams.SpeculativeTokens), and so the most it can
+// accept; 0 where the flags do not say.
+type MaxAccepted func(variant string) int
+
+// AcceptedAtMost is alpha, the accepted drafts per step a replica reports,
+// read against k, the most a step can accept, where k is known (above 0):
+// alpha itself at or under k, k where alpha is over it by a rounding error
+// only (a ratio of two rates at full acceptance can land a hair over), and
+// ok false where it is over by more. No step emits more than 1 + k tokens,
+// so such a count is not one a step produced; read as it is, or held at k,
+// it over-states the token rate, the direction that under-orders. It is
+// withheld, as the ITL line withholds the same row (domain.ReplicaMetrics.
+// ITLPerToken, ITLOverMax, with the same rounding allowance). With k
+// unknown, alpha is read as it is.
+func AcceptedAtMost(alpha float64, k int) (float64, bool) {
+	if k <= 0 || alpha <= float64(k) {
+		return alpha, true
+	}
+	if alpha <= float64(k)*(1+1e-6) {
+		return float64(k), true
+	}
+	return 0, false
+}
+
+// DecodeCycleAcceptedAtMost is DecodeCycleOf with each row's accepted
+// drafts per step read against its variant's maxAccepted (AcceptedAtMost):
+// a row over it by a rounding error is read at it, in both the group's
+// Accepted and its TokenTime, and a row over it by more gives no group
+// (its step time over an unknown count of tokens is no token time); its
+// output lengths and running sequences are still read. A nil maxAccepted
+// reads every row as it is, and is DecodeCycleOf.
+func DecodeCycleAcceptedAtMost(in domain.AnalyzerInput, at time.Time, decodeVariant string, maxAccepted MaxAccepted) DecodeCycle {
 	c := DecodeCycle{At: at, Output: map[float64]float64{}}
 	roles := rolesOf(in)
 	c.EngineTPOT = engineTPOTOf(in, roles, decodeVariant)
@@ -178,11 +214,18 @@ func DecodeCycleOf(in domain.AnalyzerInput, at time.Time, decodeVariant string) 
 		}
 		if rm.AvgITLKnown && Finite(rm.AvgITL) && rm.AvgITL > 0 && rm.RequestRateKnown && Finite(rm.RequestRate) && rm.RequestRate > 0 {
 			g := DecodeGroup{Rate: rm.RequestRate, TokenTime: rm.AvgITL}
+			kept := true
 			if rm.SpecAcceptedPerStepKnown && Finite(rm.SpecAcceptedPerStep) && rm.SpecAcceptedPerStep >= 0 {
-				g.Accepted, g.AcceptedKnown = rm.SpecAcceptedPerStep, true
-				g.TokenTime = rm.AvgITL / (1 + rm.SpecAcceptedPerStep)
+				alpha := rm.SpecAcceptedPerStep
+				if maxAccepted != nil {
+					alpha, kept = AcceptedAtMost(alpha, maxAccepted(rm.VariantName))
+				}
+				g.Accepted, g.AcceptedKnown = alpha, true
+				g.TokenTime = rm.AvgITL / (1 + alpha)
 			}
-			c.Groups = append(c.Groups, g)
+			if kept {
+				c.Groups = append(c.Groups, g)
+			}
 		}
 		if engines := rm.GroupEngines; len(engines) > 0 {
 			for _, e := range engines {

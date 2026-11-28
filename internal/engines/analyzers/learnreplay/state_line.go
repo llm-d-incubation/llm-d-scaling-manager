@@ -181,8 +181,11 @@ func (l *lineSamples) rows(variant string) []whatif.LineRow {
 // be counted, and is not compared: no answer reads the line there
 // (whatif.ReachableFill, and the band's clamp). busiest names the variants
 // whose line is read at the busiest rank (fillForITL): their rows are read
-// there too, and their busiest/mean ratios kept.
-func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, busiest func(variant string) bool) {
+// there too, and their busiest/mean ratios kept. maxAccepted is each
+// variant's k a row's accepted drafts are read against (rowSequences), nil
+// for none.
+func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, busiest func(variant string) bool,
+	maxAccepted whatif.MaxAccepted) {
 	policy, _ := in.Config.(*config.ScalingPolicy)
 	steady := policy.ITLSteadiness()
 	bottom, top := policy.ITLBand()
@@ -192,6 +195,10 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 			continue
 		}
 		k := fillForITL(rm, busiest)
+		drafts := 0
+		if maxAccepted != nil {
+			drafts = maxAccepted(rm.VariantName)
+		}
 		// The ratio's filter reads the busiest rank's peak, not fillForITL's
 		// k, on purpose: it asks whether the pod was loaded as the band's
 		// bottom counts load, at the rank that sets its step.
@@ -214,7 +221,7 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 			b := l.below[rm.VariantName]
 			b = append(b, itl.Observation{K: k, ITLSec: rm.AvgITL, Timestamp: at})
 			n := l.belowSequences[rm.VariantName]
-			n = append(n, rowSequences(rm))
+			n = append(n, rowSequences(rm, drafts))
 			if len(b) > itl.BelowBandWindow {
 				b, n = b[len(b)-itl.BelowBandWindow:], n[len(n)-itl.BelowBandWindow:]
 			}
@@ -231,7 +238,7 @@ func (l *lineSamples) note(in domain.AnalyzerInput, cycle int, at time.Time, bus
 			kept = l.ramps
 		}
 		row := whatif.LineRow{Cycle: cycle, At: at, K: k, KVPerRequest: rowResidentKV(rm, s),
-			TokenRate: rm.GenerationTokenRate, Sequences: rowSequences(rm), Ramp: ramp, AboveBand: k > top}
+			TokenRate: rm.GenerationTokenRate, Sequences: rowSequences(rm, drafts), Ramp: ramp, AboveBand: k > top}
 		kept[rm.VariantName] = keepCycles(append(kept[rm.VariantName], row), shapeCycles)
 		if !ramp {
 			l.fit[rm.VariantName] = append(l.fit[rm.VariantName], row)
@@ -264,17 +271,25 @@ func (l *lineSamples) pruneFit(now time.Time) {
 // (whatif.LineRow.Sequences): its generated tokens per second times its mean
 // ITL (Little), a window mean as the row's fill is, over the tokens a step
 // emits where speculation accepted drafts (vLLM's ITL is the step's time);
-// else the running-requests gauge; 0 with neither. The fill times the
+// else the running-requests gauge; 0 with neither. With k, the draft tokens
+// a step proposes at most, above 0, a count of drafts over k by more than a
+// rounding error is no count a step produced (whatif.AcceptedAtMost), and
+// the row reads the gauge, as the ITL line withholds the row's ITL. The fill times the
 // capacity over the KV a request is not used: the KV a request is read off
 // one scrape, the fill over a minute, and on the Qwen3-32B warm-up their
 // ratio reads 271 sequences a pod where Little reads 210.
-func rowSequences(rm domain.ReplicaMetrics) float64 {
+func rowSequences(rm domain.ReplicaMetrics, k int) float64 {
 	if rm.ITLState() == domain.ITLFinite && rm.AvgITL > 0 && !math.IsInf(rm.AvgITL, 0) && rm.GenerationTokenRate > 0 {
 		n := rm.GenerationTokenRate * rm.AvgITL
+		ok := true
 		if rm.SpecAcceptedPerStepKnown && rm.SpecAcceptedPerStep > 0 {
-			n /= 1 + rm.SpecAcceptedPerStep
+			var alpha float64
+			alpha, ok = whatif.AcceptedAtMost(rm.SpecAcceptedPerStep, k)
+			n /= 1 + alpha
 		}
-		return n
+		if ok {
+			return n
+		}
 	}
 	if rm.RunningRequestsKnown && rm.RunningRequests > 0 {
 		return float64(rm.RunningRequests)

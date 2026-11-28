@@ -33,7 +33,7 @@ func TestDecodeCycleOf_PoolsTheNamedDecodeRows(t *testing.T) {
 		domain.ReplicaMetrics{PodName: "p", VariantName: "p1", Ready: true, RequestRate: 9, RequestRateKnown: true,
 			OutputTokensBuckets: []domain.LengthBucket{{UpperBound: 10, Rate: 9}}},
 	)
-	c := decodeCycleOf(in, at, SeriesVariants{Prefill: "p1", Decode: "d1"})
+	c := decodeCycleOf(in, at, SeriesVariants{Prefill: "p1", Decode: "d1"}, nil)
 	assert.Equal(t, at, c.At)
 	assert.Equal(t, map[float64]float64{10: 1.5, 100: 3}, c.Output)
 	require.Len(t, c.Groups, 2)

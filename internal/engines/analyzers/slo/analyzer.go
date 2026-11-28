@@ -231,6 +231,9 @@ type Analyzer struct {
 	// ttftDecodeSpeculatingHeld is SwitchTTFTDecodeSpeculatingHeld (ttft.go):
 	// off from the constructor, planner-only; only a replay turns it on.
 	ttftDecodeSpeculatingHeld bool
+	// specAcceptedAtMostK is SwitchSpecAcceptedAtMostK (spec_accepted.go):
+	// off from the constructor; only a replay turns it on.
+	specAcceptedAtMostK bool
 	// ttftHopWindowMeans is SwitchTTFTHopWindowMeans (ttft.go): off from the
 	// constructor, planner-only; only a replay turns it on.
 	ttftHopWindowMeans bool
