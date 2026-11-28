@@ -219,9 +219,11 @@ const (
 
 // Interval is an uncertainty band around a figure, Lo to Hi in the figure's
 // unit: the 10th to the 90th percentile of a block bootstrap (band.go), so it
-// need not be symmetric about the figure.
+// need not be symmetric about the figure. Blocks is the bootstrap's effective
+// sample size (LineResamples.Blocks), 0 where none was counted.
 type Interval struct {
 	Lo, Hi float64
+	Blocks int
 }
 
 // Bound names what set a rate. On a tie every bound is named, the

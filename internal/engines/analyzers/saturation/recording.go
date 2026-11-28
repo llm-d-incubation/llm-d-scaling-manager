@@ -137,7 +137,7 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchPrefillFLoadCurve,
 // SwitchPrefillALowLoadByRate, SwitchPrefillAMedianOverhead,
 // SwitchITLAdaptiveBandFloor,
-// SwitchITLHoldSteadySlope, SwitchITLLineAtFloor, SwitchMoEBusiestRank,
+// SwitchITLHoldSteadySlope, SwitchITLLineAtFloor, SwitchITLBandIntercept, SwitchMoEBusiestRank,
 // SwitchITLBatchTerm, SwitchTPOTRatioCensored,
 // SwitchDecodeResidencePull, SwitchDecodeBurstFill,
 // SwitchBacktestStepOutputDispersion, SwitchK2DecodeBudgetAtComputedPrompt, SwitchDecodeLandedNeedsABound,
@@ -343,6 +343,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// (itl_line_at_floor.go). Off from the constructor; the analyzer
 		// does not read it.
 		SwitchITLLineAtFloor: &a.itlLineAtFloor,
+		// The planner's bands carry the pinned line's intercept error
+		// (itl_band_intercept.go). Off from the constructor; the analyzer
+		// does not read it.
+		SwitchITLBandIntercept: &a.itlBandIntercept,
 		// The planner's R_q by interval-censored maximum likelihood
 		// (tpot_ratio_censored.go). Off from the constructor; the analyzer
 		// does not read it.

@@ -1663,6 +1663,7 @@ itl-aggregated-shape-moved
 itl-aggregated-shape-term
 itl-aggregated-sizes
 itl-aggregated-spec-unknown
+itl-band-intercept
 itl-baseline-stamped
 itl-batch-term
 itl-fit

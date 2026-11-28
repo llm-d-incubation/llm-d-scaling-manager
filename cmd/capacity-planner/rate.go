@@ -275,7 +275,7 @@ func writeRateText(out io.Writer, st *learnreplay.State, variants []pricedVarian
 			}
 			basis := r.Basis.Tier
 			if r.Band != nil {
-				basis += fmt.Sprintf(" [%.1f .. %.1f]", r.Band.Lo, r.Band.Hi)
+				basis += fmt.Sprintf(" [%.1f .. %.1f%s]", r.Band.Lo, r.Band.Hi, fewBlocksText(*r.Band))
 			}
 			fmt.Fprintf(&b, layout, role, rateText(r.Value), by, strings.TrimSpace(basis)+"; "+a.pv.rateValidation(r).String())
 		case whatif.Unanswerable:

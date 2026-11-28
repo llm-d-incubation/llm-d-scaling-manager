@@ -1,6 +1,6 @@
 knee            13.31 r/s   decode, batch cap binds at fill 0.732; OUTSIDE VALIDATED REGION (OutputSpreadUnread: an input the run did not price)
 operating rate  11.32 r/s   0.85 x knee (scaleUpThreshold)
-mean TPOT       3.66 ms     [3.65 .. 3.70]   line ols, observed fill up to 0.50; OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
+mean TPOT       3.66 ms     [3.64 .. 3.71]   line ols, observed fill up to 0.50; OUTSIDE VALIDATED REGION (arrivals not measured (Poisson assumed), measured at Ca^2 0.8 to 1.25)
 TPOT p90        refused: NoTPOTHistogram (the recording carries no TPOT histogram; pass --assume-tpot-ratio for a flagged answer)
 shape           IL 1000 OL 1000 (assumed)
 engine          vLLM release not recorded

@@ -206,9 +206,15 @@ func (pv pricedVariant) itlBWords() string {
 	case !a.Applied:
 		return ""
 	case a.Source == itlBFromFloor:
+		// The bands draw B only with saturation.SwitchITLBandIntercept on;
+		// off, they hold it, and the words are the ones from before it.
+		bands := "the bands hold B fixed"
+		if pv.state.BandIntercept {
+			bands = "the bands draw B from the readings, held under the floor, so mostly below it"
+		}
 		return fmt.Sprintf("ITL B %s, from the floor read below the band (%s at fill %.2f), in place of the %s default; "+
-			"the slope refitted through it on the same readings; the bands hold B fixed",
-			ms(a.Seconds), ms(a.FloorSeconds), a.FloorFill, ms(itl.DefaultBaselineSec))
+			"the slope refitted through it on the same readings; %s",
+			ms(a.Seconds), ms(a.FloorSeconds), a.FloorFill, ms(itl.DefaultBaselineSec), bands)
 	}
 	return fmt.Sprintf("ITL B %s, stated, in place of the %s default; the slope refitted through it on the same readings; "+
 		"the bands hold B fixed", ms(a.Seconds), ms(itl.DefaultBaselineSec))

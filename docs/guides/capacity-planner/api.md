@@ -321,7 +321,11 @@ is the model's own, which the source does not carry.
 
 Every figure is an object holding `value` or `refused`, never both. A refused
 figure has no number, and no refusal is written as 0. A figure's `band` is its
-bootstrap band over the ITL line's readings; its `sensitivity` is the span over
+bootstrap band over the ITL line's readings, with `blocks`, the distinct blocks
+of cycles it was drawn from. Every band is widened about its figure for its
+blocks (3.4x at 2, 1.34x at 5, 1.14x at 10); the text names the blocks under 5,
+where the edges mean little. The widened edges are not held to a physical cap,
+so a fill's `hi` can pass 1. Its `sensitivity` is the span over
 V_P and f, ±15%, with `hiRefused` or `loRefused` where a corner is refused.
 The knees, both points, the TPOT's points and the limits carry `validation`:
 whether a measured run covered the figure, and how far off it read there

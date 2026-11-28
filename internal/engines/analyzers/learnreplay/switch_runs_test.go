@@ -1296,6 +1296,11 @@ var earlierSeams = withMoves(kvAboveContextSeamMoves, withMoves(queueDrainSeamMo
 	saturation.SwitchITLAdaptiveBandFloor:   nil,
 	saturation.SwitchITLHoldSteadySlope:     nil,
 	saturation.SwitchITLLineAtFloor:         nil,
+	// llm-d-incubation/llm-d-scaling-manager#307: the bands carry the
+	// pinned line's intercept error. Planner-only, off; read by the
+	// planner's bands, not the replay's learners, so no learner golden
+	// moves. Its unit tests hold it.
+	saturation.SwitchITLBandIntercept: nil,
 	// llm-d-incubation/llm-d-scaling-manager#279: R_q by interval-censored
 	// maximum likelihood. Planner-only, off; read by the planner's answer,
 	// not the replay, so no learner golden moves. Its unit tests hold it.
@@ -1970,6 +1975,13 @@ var heldBy = map[string][]heldTest{
 		{"../../../signals/whatif", "TestBootstrapLines_ResamplesAreLiftedAsTheLineIs"},
 		{".", "TestITLLineAtFloor_TheStaircaseLineThroughItsFloor"},
 		{".", "TestITLLineAtFloor_OnlyAPDDecodeRole"},
+	},
+	saturation.SwitchITLBandIntercept: {
+		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},
+		{"../../../signals/whatif", "TestBandInterceptOffIsTheBandBefore"},
+		{"../../../signals/whatif", "TestPinnedResamplesDrawB"},
+		{"../../../signals/whatif", "TestPinnedBandHoldsAndCentresItsPoint"},
+		{"../../../../cmd/capacity-planner", "TestBandInterceptSwitch"},
 	},
 	saturation.SwitchTPOTRatioCensored: {
 		{"../saturation", "TestPlannerSwitches_OffFromTheConstructor"},

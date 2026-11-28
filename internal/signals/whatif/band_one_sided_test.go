@@ -17,7 +17,8 @@ import (
 // same readings without the admission pins the default B alone and prices
 // under it. Given the admission (Refit.OneSided), every resample prices the
 // controller's line, to the spread a resample of three fills gives
-// (0.01 %); without it, the band lies under the truth.
+// (0.01 %), widened for its blocks (bandWidening); without it, the
+// resamples price under the truth.
 func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 	const kPrice = 0.68
 	truth := itl.Model{A: 0.05, B: 0.010}
@@ -50,7 +51,7 @@ func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 	offBand := BandAnswer(Answer{Value: controller}, off, value)
 	t.Logf("controller %.5f s at k %.2f, truth %.5f s; band given the admission [%.5f, %.5f], without it [%.5f, %.5f]",
 		controller, kPrice, truth.ITLAt(kPrice), band.Band.Lo, band.Band.Hi, offBand.Band.Lo, offBand.Band.Hi)
-	if !(band.Band.Lo <= controller && controller <= band.Band.Hi) || band.Band.Hi-band.Band.Lo > 5e-4*controller || band.Band.Lo < truth.ITLAt(kPrice) {
+	if !(band.Band.Lo <= controller && controller <= band.Band.Hi) || band.Band.Hi-band.Band.Lo > 5e-4*controller*bandWidening(on.Blocks) || band.Band.Lo < truth.ITLAt(kPrice) {
 		t.Errorf("the band [%.6f, %.6f] does not price the controller's line %.6f, at or above the truth", band.Band.Lo, band.Band.Hi, controller)
 	}
 	for _, s := range on.Lines {
@@ -58,10 +59,38 @@ func TestBootstrapPricesTheOneSidedLineTheControllerDid(t *testing.T) {
 			t.Fatalf("resample %+v: want the pinned-B line through the default B", s)
 		}
 	}
-	// The negative control: without the admission the band prices the fit
-	// through the default B alone, under the truth.
-	if !(offBand.Band.Hi < truth.ITLAt(kPrice)) {
-		t.Errorf("negative control: without the admission the band [%.5f, %.5f] is not under the truth %.5f",
-			offBand.Band.Lo, offBand.Band.Hi, truth.ITLAt(kPrice))
+	// A line priced one-sided at a prior has its B by design: the intercept
+	// draw (Refit.DrawB) leaves it, and every resample, where it was.
+	drawn := BootstrapLines(rs, Refit{Tier: TierPinnedB, Line: line.Model, Baseline: itl.DefaultBaselineSec, OneSided: adm, DrawB: true}, DefaultResampling())
+	if len(drawn.Lines) != len(on.Lines) {
+		t.Fatalf("%d resamples with the draw, %d without", len(drawn.Lines), len(on.Lines))
+	}
+	for i, s := range drawn.Lines {
+		if s.Line != on.Lines[i].Line || s.Line.B != itl.DefaultBaselineSec {
+			t.Fatalf("resample %d %+v with the draw, want %+v through the default B", i, s.Line, on.Lines[i].Line)
+		}
+	}
+	// The negative control: without the admission the resamples price the
+	// fit through the default B alone, under the truth: fewer than a tenth
+	// of them reach it, the band's 90th-percentile edge under the truth put
+	// another way. Given the admission, at least nine in ten reach it.
+	overAt := func(rs LineResamples) int {
+		n := 0
+		for _, s := range rs.Lines {
+			if v, _ := value(s.Line); v >= truth.ITLAt(kPrice) {
+				n++
+			}
+		}
+		return n
+	}
+	over, onOver := overAt(off), overAt(on)
+	t.Logf("resamples at or over the truth: %d of %d without the admission, %d of %d with it", over, len(off.Lines), onOver, len(on.Lines))
+	if !(float64(over) < (1-bandHi)*float64(len(off.Lines))) {
+		t.Errorf("negative control: without the admission %d of %d resamples price at or over the truth %.5f, want under a tenth",
+			over, len(off.Lines), truth.ITLAt(kPrice))
+	}
+	if !(float64(onOver) >= bandHi*float64(len(on.Lines))) {
+		t.Errorf("given the admission %d of %d resamples price at or over the truth %.5f, want nine in ten",
+			onOver, len(on.Lines), truth.ITLAt(kPrice))
 	}
 }

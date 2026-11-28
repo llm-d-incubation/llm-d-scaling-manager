@@ -1,5 +1,6 @@
 Figure object
 Figure.band object
+Figure.band.blocks number
 Figure.band.hi number
 Figure.band.lo number
 Figure.batchBeyondFit object

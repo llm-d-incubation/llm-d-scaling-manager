@@ -95,6 +95,31 @@ func TestBootstrapHasNothingToResample(t *testing.T) {
 	}
 }
 
+// With the intercept drawn (Refit.DrawB), the readiness gate's pinned
+// resamples run through drawn intercepts, each within its bounds: no floor
+// was read, so at or above the least of minDrawnB and the baseline, and
+// finite.
+func TestBootstrapRerunsTheReadinessGateDrawingB(t *testing.T) {
+	rs := readingsOn(worked, 40, 0.40, 0.65, 0.05)
+	got := BootstrapLines(rs, Refit{Tier: TierOLS, Line: worked, Baseline: worked.B, DrawB: true}, DefaultResampling())
+	if len(got.Lines) != 200 {
+		t.Fatalf("fitted %d of %d", len(got.Lines), got.Drawn)
+	}
+	distinct := map[float64]bool{}
+	for _, s := range got.Lines {
+		if s.Tier != TierPinnedB || !s.TierChanged {
+			t.Fatalf("resample %+v: want a pinned-B fit, a change of tier", s)
+		}
+		if !(s.Line.B >= min(minDrawnB, worked.B)) || math.IsInf(s.Line.B, 0) {
+			t.Fatalf("resample B %.9f outside [%.9f, +Inf)", s.Line.B, min(minDrawnB, worked.B))
+		}
+		distinct[s.Line.B] = true
+	}
+	if len(distinct) < 20 {
+		t.Errorf("%d distinct B in %d resamples, want the intercept drawn", len(distinct), len(got.Lines))
+	}
+}
+
 // The tracker's readiness gates the full fit on a resample, as it gated the
 // line: steady readings spread less than itl.DefaultMinKSpread fit pinned-B,
 // though itl.Fit alone would take them. An ols line on such readings (one

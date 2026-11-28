@@ -851,7 +851,9 @@ func (f *answerFlags) decodeVariants(st *learnreplay.State) ([]pricedVariant, er
 			pv.flags = append(pv.flags, n.flag)
 		}
 		if vs.Refitted {
-			fit := whatif.Refit{Tier: vs.Tier, Line: vs.Line, Baseline: vs.Baseline, MinSettled: vs.MinSettled, OneSided: vs.OneSided}
+			fit := whatif.Refit{Tier: vs.Tier, Line: vs.Line, Baseline: vs.Baseline, MinSettled: vs.MinSettled, OneSided: vs.OneSided,
+				BelowBandITL: vs.BelowBandITL, HoldB: pv.itlB.Applied && pv.itlB.Source == itlBStated,
+				DrawB: vs.BandIntercept}
 			if vs.LineAtFloor {
 				// Each resample lifted by the line's rule
 				// (saturation.SwitchITLLineAtFloor), whether or not

@@ -352,12 +352,24 @@ func tpotRow(b *strings.Builder, label string, r whatif.Result, basis string) {
 	case whatif.Answer:
 		band := ""
 		if v.Band != nil {
-			band = fmt.Sprintf("[%.2f .. %.2f]", 1000*v.Band.Lo, 1000*v.Band.Hi)
+			band = fmt.Sprintf("[%.2f .. %.2f%s]", 1000*v.Band.Lo, 1000*v.Band.Hi, fewBlocksText(*v.Band))
 		}
 		row(b, label, fmt.Sprintf("%.2f ms", 1000*v.Value), band, basis)
 	case whatif.Unanswerable:
 		fmt.Fprintf(b, "%-16s%s\n", label, refusedText(v))
 	}
+}
+
+// fewBlocksText names a band's effective sample size where it is under
+// whatif.FewBlocks: "; 2 blocks", the band widened for it. Empty otherwise.
+func fewBlocksText(b whatif.Interval) string {
+	if b.Blocks < 1 || b.Blocks >= whatif.FewBlocks {
+		return ""
+	}
+	if b.Blocks == 1 {
+		return "; 1 block"
+	}
+	return fmt.Sprintf("; %d blocks", b.Blocks)
 }
 
 // row is one line of question 2's output: the label, the value, and, for a
