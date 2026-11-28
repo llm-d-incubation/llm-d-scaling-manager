@@ -77,18 +77,24 @@ that settles is
 
     k = lambda*S*B / (C/KVreq - lambda*S*A)
 
-and the TPOT there is `ITL(k)`. For Poisson arrivals this is the exact mean
-of the processor-sharing queue, not an approximation. The decode knee is
-where the fill reaches the top of the fitted band (0.8 by default) or the
-batch cap. A
-small birth-death chain on the sequences held gives the wait for a free slot,
-which is small until close to the knee.
+and the TPOT there is `ITL(k)`.
+
+This is a mean-field value: Little's law applied at the mean fill. It is not
+the exact mean of the queue. The real number of sequences held moves from
+moment to moment, and the step time moves with it, so the true mean fill is at
+or above this one. The figure therefore leans optimistic: the TPOT reads a
+little low and the knee a little high. The gap is small at a low gain and
+grows as the gain `g` below nears 1.
+
+The decode knee is where the fill reaches the top of the fitted band (0.8 by
+default) or the batch cap. A small birth-death chain on the sequences held
+gives the wait for a free slot, which is small until close to the knee.
 
 **The loop gain.** `g = lambda*S*KVreq/C * A` is the share of each step that
 the fill adds back. It rises with the rate, and the fill above is finite only
-while `g < 1`. It also says how far to trust a figure. A relative error `e`
-in the slope `A` moves the fill, and the TPOT read there, by about
-`e * g/(1 - g)`:
+while `g < 1`. It also says how far to trust a figure. At the settled fill
+the TPOT is `B/(1 - g)`, so an error in the slope `A` is amplified. The table
+gives the exact change in the TPOT for a 5% slope error:
 
 | `g` | a 5% slope error moves the TPOT by |
 | --- | --- |
@@ -97,11 +103,19 @@ in the slope `A` moves the fill, and the TPOT read there, by about
 | 0.8 | about 25% |
 | 0.9 | about 80% |
 
-Where this bites: an engine with a small `B` beside `A`. A small model on a
-fast GPU has a step of about 1 ms, and reaches a gain of 0.8 or more before
-its knee. A 32B model, with a step near 10 ms, stays under about 0.7. The
-reverse question, the rate that meets a TPOT target, is not amplified: a slope
-error moves that rate by at most its own size.
+The rule of thumb, `e * g/(1 - g)` for a relative slope error `e`, is the
+first-order part of the same change. It matches the table at a low gain and
+underestimates it at a high one: it gives 20% at 0.8 and 45% at 0.9.
+
+To find the gain on your own line, read it at the fill you run at: `g` is the
+share of the step that the KV term accounts for,
+
+    g = A*k / ITL(k)
+
+A line with a small `B` beside `A*k` has a high gain at its usual fills, and
+its figures near the knee need the most care. The reverse question, the rate
+that meets a TPOT target, is not amplified: a slope error moves that rate by
+at most its own size.
 
 The full derivation, and what each term reads, is in
 [decode: TPOT from the ITL line](../proposals/slo-capacity-planner.md#decode-tpot-from-the-itl-line).
@@ -162,7 +176,11 @@ figure has, not the most. The measured accuracy per figure is on
 
 The models above apply to any LLM only if the scaling manager knows what kind
 of engine it is pricing. It reads that from the engine's own configuration and
-metrics, never from the model's name:
+metrics. One exception remains: without a model config, the planner falls back
+to fragments of the model's name to raise the hybrid and MLA attention flags,
+and keeps a hybrid flag raised by name even when a config reads full
+attention. Only those flags are affected; no figure changes. Removing the name
+fallback is tracked as an open issue.
 
 | Class | Read from | What it changes today |
 | --- | --- | --- |
@@ -188,7 +206,13 @@ the model's config, see `--model-config` in
   `BatchBeyondFit`.
 - **No second axis where fill cannot see the load.** MLA, fp8 KV and
   sliding-window models, and small models on large-memory GPUs, can run under
-  the fitted band at every load. They get no line, and their TPOT is refused.
+  the fitted band at every load. Where a variant never reaches the band, it
+  gets no line, and its TPOT is refused. Where it does reach the band, it is
+  priced as above, and MLA figures are flagged.
+- **No separate throughput analyzer in the shipped configuration.** A
+  throughput analyzer exists in the code and fits the same ITL line, but the
+  shipped configuration names the saturation analyzer only. If you see
+  `throughput` under `analyzers:`, someone turned it on.
 
 ## Optimization
 
