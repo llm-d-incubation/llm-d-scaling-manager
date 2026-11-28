@@ -121,6 +121,7 @@ var notOnTheTTFTPath = map[string]string{
 	"AssumedTPOTRatio":          "TPOT",
 	"BorrowedLine":              "decode line",
 	"CoarseTPOTBucket":          "TPOT",
+	"DecodeLoopGain":            "TPOT: the decode loop's gain",
 	"EngineTPOTHistogram":       "TPOT",
 	"ExtrapolatedFill":          "decode line",
 	"ExtrapolatedBelowFloor":    "TPOT: the floor by running count is read only by the planner's TPOT figure",

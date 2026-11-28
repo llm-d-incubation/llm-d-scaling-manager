@@ -169,6 +169,7 @@ DataParallelRanks
 Datastore
 Decode
 DecodeEngineMeasured
+DecodeLoopGain
 DecodeOnsetUnchecked
 DecodeSideOmitted
 DecodeStepSlopeAssumed
@@ -3399,6 +3400,7 @@ steadyHeldOverThreshold
 steadyHeldThreshold
 steadySpread
 steadystate
+steeper
 steered
 step
 step-budget
