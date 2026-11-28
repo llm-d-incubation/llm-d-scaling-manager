@@ -148,7 +148,8 @@ func (a *SaturationAnalyzer) WithRecorder(rec *learnrec.Recorder) *SaturationAna
 // SwitchQueuePricedAsDrain, SwitchFloorTrustReadsCompletions,
 // SwitchPrefillKeepsRouterPrompts, SwitchPrefillBusyShareBound,
 // SwitchLowerBoundCapsRouterShare, SwitchDecodeOwesRouterBacklog,
-// SwitchMuAtStepBudget and SwitchPlannerCapAtStepBudget; a name
+// SwitchMuAtStepBudget, SwitchPlannerCapAtStepBudget and
+// SwitchStepBudgetPromptReading; a name
 // it does not know is an error, and sets nothing. Never called on a
 // production path; a test holds that.
 func (a *SaturationAnalyzer) SetSwitchesForReplay(switches map[string]bool) error {
@@ -418,6 +419,10 @@ func (a *SaturationAnalyzer) switchFields() map[string]*bool {
 		// (step_budget_cap.go). Both off from the constructor.
 		SwitchMuAtStepBudget:         &a.muAtStepBudget,
 		SwitchPlannerCapAtStepBudget: &a.plannerCapAtStepBudget,
+		// llm-d-incubation/llm-d-scaling-manager#533: the step-budget class
+		// read from the prompts too (step_budget_cap.go). Off from the
+		// constructor.
+		SwitchStepBudgetPromptReading: &a.stepBudgetPromptReading,
 	}
 }
 

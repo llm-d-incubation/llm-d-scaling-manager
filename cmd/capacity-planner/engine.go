@@ -91,7 +91,8 @@ func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBindi
 	}
 	b := v.StepBudgetBinding()
 	return &whatifapi.StepBudgetBinding{Class: string(b.Class), Reason: b.Reason, BoundTokens: b.BoundTokens,
-		OverShare: b.OverShare, NearTokens: b.NearTokens, Share: b.Share, TopTokens: b.TopTokens, TopOpen: b.TopOpen}
+		OverShare: b.OverShare, NearTokens: b.NearTokens, Share: b.Share, TopTokens: b.TopTokens, TopOpen: b.TopOpen,
+		Prompts: b.Prompts, PromptBoundTokens: b.PromptBoundTokens, PromptOverShare: b.PromptOverShare}
 }
 
 // stepBudgetBindingText is b in the report's words, the evidence the class is
@@ -99,7 +100,12 @@ func stepBudgetBindingOf(v *learnreplay.VariantState) *whatifapi.StepBudgetBindi
 // bound: prompts it chunked; 30% above 4096)", "does not bind (0.04% of
 // iterations above 8192 tokens, the budget's bound: prompts it chunked; 0.2%
 // above 4096)", "unknown (no tokens-per-iteration series)"; with the observed
-// top beside it where read.
+// top beside it where read. Where read, the computed prompts above the budget
+// follow the iterations ("; 50% of computed prompts above 10000 tokens"). A
+// budget over the iterations' last bound that binds on its prompts alone
+// leads with them: "binds (50% of computed prompts above 50000 tokens, the
+// budget's bound: prompts it chunked; no iteration bound at or over the
+// budget)".
 func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 	top := ""
 	if b.TopTokens > 0 {
@@ -120,6 +126,13 @@ func stepBudgetBindingText(b *whatifapi.StepBudgetBinding) string {
 	near := ""
 	if b.NearTokens > 0 {
 		near = fmt.Sprintf("; %s%% above %s", num(100*b.Share), num(b.NearTokens))
+	}
+	if b.PromptBoundTokens > 0 {
+		near += fmt.Sprintf("; %s%% of computed prompts above %s tokens", num(100*b.PromptOverShare), num(b.PromptBoundTokens))
+	}
+	if b.BoundTokens == 0 && b.PromptBoundTokens > 0 {
+		return fmt.Sprintf("%s (%s%% of computed prompts above %s tokens, the budget's bound: prompts it chunked; "+
+			"no iteration bound at or over the budget%s)", class, num(100*b.PromptOverShare), num(b.PromptBoundTokens), top)
 	}
 	return fmt.Sprintf("%s (%s%% of iterations above %s tokens, the budget's bound: prompts it chunked%s%s)",
 		class, num(100*b.OverShare), num(b.BoundTokens), near, top)

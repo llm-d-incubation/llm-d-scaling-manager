@@ -596,6 +596,9 @@ inputs.fleet.decode.engine.stepBudgetBinding.boundTokens number
 inputs.fleet.decode.engine.stepBudgetBinding.class string
 inputs.fleet.decode.engine.stepBudgetBinding.nearTokens number
 inputs.fleet.decode.engine.stepBudgetBinding.overShare number
+inputs.fleet.decode.engine.stepBudgetBinding.promptBoundTokens number
+inputs.fleet.decode.engine.stepBudgetBinding.promptOverShare number
+inputs.fleet.decode.engine.stepBudgetBinding.prompts number
 inputs.fleet.decode.engine.stepBudgetBinding.reason string
 inputs.fleet.decode.engine.stepBudgetBinding.share number
 inputs.fleet.decode.engine.stepBudgetBinding.topOpen boolean
@@ -626,6 +629,9 @@ inputs.fleet.prefill.engine.stepBudgetBinding.boundTokens number
 inputs.fleet.prefill.engine.stepBudgetBinding.class string
 inputs.fleet.prefill.engine.stepBudgetBinding.nearTokens number
 inputs.fleet.prefill.engine.stepBudgetBinding.overShare number
+inputs.fleet.prefill.engine.stepBudgetBinding.promptBoundTokens number
+inputs.fleet.prefill.engine.stepBudgetBinding.promptOverShare number
+inputs.fleet.prefill.engine.stepBudgetBinding.prompts number
 inputs.fleet.prefill.engine.stepBudgetBinding.reason string
 inputs.fleet.prefill.engine.stepBudgetBinding.share number
 inputs.fleet.prefill.engine.stepBudgetBinding.topOpen boolean
@@ -1353,6 +1359,9 @@ report.fleet.decodeEngine.stepBudgetBinding.boundTokens number
 report.fleet.decodeEngine.stepBudgetBinding.class string
 report.fleet.decodeEngine.stepBudgetBinding.nearTokens number
 report.fleet.decodeEngine.stepBudgetBinding.overShare number
+report.fleet.decodeEngine.stepBudgetBinding.promptBoundTokens number
+report.fleet.decodeEngine.stepBudgetBinding.promptOverShare number
+report.fleet.decodeEngine.stepBudgetBinding.prompts number
 report.fleet.decodeEngine.stepBudgetBinding.reason string
 report.fleet.decodeEngine.stepBudgetBinding.share number
 report.fleet.decodeEngine.stepBudgetBinding.topOpen boolean
@@ -1380,6 +1389,9 @@ report.fleet.prefillEngine.stepBudgetBinding.boundTokens number
 report.fleet.prefillEngine.stepBudgetBinding.class string
 report.fleet.prefillEngine.stepBudgetBinding.nearTokens number
 report.fleet.prefillEngine.stepBudgetBinding.overShare number
+report.fleet.prefillEngine.stepBudgetBinding.promptBoundTokens number
+report.fleet.prefillEngine.stepBudgetBinding.promptOverShare number
+report.fleet.prefillEngine.stepBudgetBinding.prompts number
 report.fleet.prefillEngine.stepBudgetBinding.reason string
 report.fleet.prefillEngine.stepBudgetBinding.share number
 report.fleet.prefillEngine.stepBudgetBinding.topOpen boolean

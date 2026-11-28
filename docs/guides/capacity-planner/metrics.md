@@ -76,7 +76,7 @@ it.
 | `vllm:external_prefix_cache_queries_total` | counter | | prompt tokens a KV connector was asked for; recorded | optional |
 | `vllm:prompt_tokens_cached_by_source_total` | counter | `source` | cached prompt tokens by the tier that supplied them (`device`, `host`, `disk`, `p2p`, `external_unspecified`); recorded (vLLM 0.32 and later) | optional |
 | `vllm:request_prefill_kv_computed_tokens_sum` | histogram sum | | computed prompt tokens per second: prefill capacity `V_P` | TTFT |
-| `vllm:request_prefill_kv_computed_tokens_bucket` | histogram buckets | `le` | prompt spread `cv` | optional |
+| `vllm:request_prefill_kv_computed_tokens_bucket` | histogram buckets | `le` | prompt spread `cv`; the share of computed prompts above the first histogram bound at or over the step budget (10000 for a budget of 8192), which also makes the budget read `binds` | optional |
 | `vllm:request_inference_time_seconds_sum` | histogram sum | | service time: the fixed prefill latency `a` | TTFT |
 | `vllm:request_inference_time_seconds_count` | histogram count | | service time | TTFT |
 | `vllm:time_to_first_token_seconds_sum` | histogram sum | | the engine's mean TTFT: the decode side of TTFT when no line prices it | optional |
@@ -90,7 +90,7 @@ it.
 | `vllm:request_time_per_output_token_seconds_bucket` | histogram buckets | `le` | the engine's TPOT distribution, recorded | optional |
 | `vllm:kv_block_reuse_gap_seconds_bucket` | histogram buckets | `le` | the time since a cached block's last use, at each prefix-cache hit: the prefix hit at another prefill count (`--prefill-hit-at-count`); recorded (with `--kv-cache-metrics`) | optional |
 | `vllm:kv_block_idle_before_evict_seconds_bucket` | histogram buckets | `le` | how long an evicted block sat unused: the cache's horizon, for the same; recorded (with `--kv-cache-metrics`) | optional |
-| `vllm:iteration_tokens_total_bucket` | histogram buckets | `le` | per engine iteration, the computed prompt tokens of the prefills it completed and the tokens it generated: whether the step budget (`--max-num-batched-tokens`) binds, reported beside the engine as `binds`, `does not bind` or `unknown`; recorded | optional |
+| `vllm:iteration_tokens_total_bucket` | histogram buckets | `le` | per engine iteration, the computed prompt tokens of the prefills it completed and the tokens it generated: whether the step budget (`--max-num-batched-tokens`) binds, reported beside the engine as `binds`, `does not bind` or `unknown`; recorded. It cannot see a budget filled by several prompts that are each shorter than it: see the note below the table | optional |
 | `vllm:nixl_xfer_time_seconds_sum` | histogram sum | | KV transfer time between prefill and decode | optional |
 | `vllm:nixl_xfer_time_seconds_count` | histogram count | | KV transfer time | optional |
 | `vllm:nixl_bytes_transferred_sum` | histogram sum | | bytes NIXL moved: with the transfer time above, a peer hit's load time per token; recorded | optional |
@@ -104,6 +104,21 @@ it.
 | `http_request_duration_seconds_count` | histogram count | `handler` (no `model_name`) | as above; the `/render` calls a second | optional |
 | `vllm:num_preemptions_total` | counter | | preemptions | optional |
 | `vllm:spec_decode_num_accepted_tokens_total` | counter | | accepted draft tokens: TPOT per token under speculative decoding | optional |
+
+**What `does not bind` means.** The step budget is read as binding when at
+least 5% of engine iterations count more tokens than the budget, or at least
+5% of computed prompts are longer than the first histogram bound at or over
+it. That bound follows vLLM's 1-2-5 steps, so it is above the budget: 10000
+for a budget of 8192, 5000 for 2048. A prompt between the budget and that
+bound was chunked but is not counted. A budget above 16384, the last
+iteration bound, is read from the prompts alone: `binds` where they reach
+5%, `unknown` otherwise. Both readings only see prompts longer than the
+budget. A decode step never counts more than its budget, so on a decode pool,
+speculating or not, the class says nothing of the decode batch. The budget also binds when several prompts, each shorter than it,
+arrive together with the running decodes and fill every step. vLLM does not
+count the iterations that only ran a chunk of a prompt, and records no tokens
+scheduled per step, so that case reads `does not bind`. Read `does not bind`
+as "no prompt was longer than the budget", not as "the budget is free".
 
 ## SGLang
 

@@ -1784,6 +1784,9 @@ roles[].inputs.engine.stepBudgetBinding.boundTokens number
 roles[].inputs.engine.stepBudgetBinding.class string
 roles[].inputs.engine.stepBudgetBinding.nearTokens number
 roles[].inputs.engine.stepBudgetBinding.overShare number
+roles[].inputs.engine.stepBudgetBinding.promptBoundTokens number
+roles[].inputs.engine.stepBudgetBinding.promptOverShare number
+roles[].inputs.engine.stepBudgetBinding.prompts number
 roles[].inputs.engine.stepBudgetBinding.reason string
 roles[].inputs.engine.stepBudgetBinding.share number
 roles[].inputs.engine.stepBudgetBinding.topOpen boolean
@@ -2194,6 +2197,9 @@ roles[].ttft.prefillEngine.stepBudgetBinding.boundTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.class string
 roles[].ttft.prefillEngine.stepBudgetBinding.nearTokens number
 roles[].ttft.prefillEngine.stepBudgetBinding.overShare number
+roles[].ttft.prefillEngine.stepBudgetBinding.promptBoundTokens number
+roles[].ttft.prefillEngine.stepBudgetBinding.promptOverShare number
+roles[].ttft.prefillEngine.stepBudgetBinding.prompts number
 roles[].ttft.prefillEngine.stepBudgetBinding.reason string
 roles[].ttft.prefillEngine.stepBudgetBinding.share number
 roles[].ttft.prefillEngine.stepBudgetBinding.topOpen boolean

@@ -272,8 +272,20 @@ type EngineInfo struct {
 // or over the budget: completions of prompts the budget chunked. Share, the
 // share above NearTokens (the largest bound under 90% of the budget), is a
 // diagnostic. TopTokens is the bound at or under which 99.9% of the
-// iterations counted, a floor where TopOpen. Reported only: no figure reads
-// it yet.
+// iterations counted, a floor where TopOpen.
+//
+// Where the planner reads them (saturation.SwitchStepBudgetPromptReading, on
+// by default), the class also binds where PromptOverShare reaches 5% (the
+// same share, of requests): the share of computed prompts (Prompts of them)
+// above PromptBoundTokens, the smallest bound of their histogram at or over
+// the budget, each of them chunked. Where the iterations have no bound at or
+// over the budget (BoundTokens absent), the prompts alone can read binds.
+// PromptBoundTokens marks the reading: all three are absent where it was not
+// read, and promptOverShare is also absent where it read 0.
+//
+// The class cannot see a budget filled by several prompts each under it:
+// no iteration then counts more than the budget (capacity's
+// step_budget_binding.go says why). Reported only: no figure reads it yet.
 type StepBudgetBinding struct {
 	Class       string  `json:"class"`
 	Reason      string  `json:"reason,omitempty"`
@@ -283,6 +295,10 @@ type StepBudgetBinding struct {
 	Share       float64 `json:"share"`
 	TopTokens   float64 `json:"topTokens,omitempty"`
 	TopOpen     bool    `json:"topOpen,omitempty"`
+
+	Prompts           float64 `json:"prompts,omitempty"`
+	PromptBoundTokens float64 `json:"promptBoundTokens,omitempty"`
+	PromptOverShare   float64 `json:"promptOverShare,omitempty"`
 }
 
 // Observed is the traffic the source saw.

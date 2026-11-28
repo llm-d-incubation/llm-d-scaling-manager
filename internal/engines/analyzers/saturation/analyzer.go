@@ -544,6 +544,10 @@ type SaturationAnalyzer struct {
 	// SwitchPlannerCapAtStepBudget (step_budget_cap.go): both off from the
 	// constructor; the second is planner-only.
 	muAtStepBudget, plannerCapAtStepBudget bool
+	// stepBudgetPromptReading is SwitchStepBudgetPromptReading: off from the
+	// constructor, on in the planner (learnreplay.PlannerSwitches), and never
+	// read here (the planner reads the step-budget class).
+	stepBudgetPromptReading bool
 	// prefillFBusyMinutes is SwitchPrefillFBusyMinutes, and
 	// itlHoldSteadySlope SwitchITLHoldSteadySlope: off from the
 	// constructor, planner-only (learnreplay.PlannerSwitches).

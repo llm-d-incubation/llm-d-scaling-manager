@@ -17,10 +17,20 @@ const stepTokensWindow = time.Minute
 // time since the cycle before (stepTokensWindow at the first), at most
 // stepTokensWindow. A row with no series adds nothing, so a recording made
 // before the series was recorded leaves steps empty.
-func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.ReplicaMetrics, since time.Duration) {
+//
+// With prompts (saturation.SwitchStepBudgetPromptReading), a row also adds
+// its computed-prompt histogram (capacity.StepTokens.AddPrompts), over the
+// same [1m] window. vLLM observes that histogram once per request, when it
+// finishes, not when its prefill ran: a minute's prompts are those that
+// finished in it, and a request that was aborted is not counted. Pooled over
+// the whole replay that is the same set of prompts, a few seconds late. A row
+// with prompts and no iteration series pools its prompts, but the class is
+// still reported only where an iteration series was read
+// (cmd/capacity-planner, stepBudgetBindingOf).
+func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.ReplicaMetrics, since time.Duration, prompts bool) {
 	seconds := min(since, stepTokensWindow).Seconds()
 	for _, rm := range rows {
-		if len(rm.IterationTokensBuckets) == 0 {
+		if len(rm.IterationTokensBuckets) == 0 && (!prompts || len(rm.ComputedTokensBuckets) == 0) {
 			continue
 		}
 		s := steps[rm.VariantName]
@@ -29,6 +39,9 @@ func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.Replica
 			steps[rm.VariantName] = s
 		}
 		s.Add(rm.IterationTokensBuckets, seconds)
+		if prompts {
+			s.AddPrompts(rm.ComputedTokensBuckets, seconds)
+		}
 	}
 }
 
@@ -37,6 +50,12 @@ func noteStepTokens(steps map[string]*capacity.StepTokens, rows []domain.Replica
 // iterations (StepTokens). It is the engine class the queue model's prior
 // (issue llm-d-incubation/llm-d-scaling-manager#387) and the aggregated TTFT
 // model will key on; no figure reads it yet.
+//
+// With saturation.SwitchStepBudgetPromptReading on in the replay, it adds the
+// reading of capacity.BindingOptions: the computed prompts above the budget.
 func (v *VariantState) StepBudgetBinding() capacity.StepBudgetBinding {
-	return v.Params.StepBudgetBinding(v.StepTokens)
+	if !v.stepBudgetPrompts {
+		return v.Params.StepBudgetBinding(v.StepTokens)
+	}
+	return v.StepTokens.BindingWith(v.Params.StepBudget(), capacity.BindingOptions{Prompts: true})
 }
