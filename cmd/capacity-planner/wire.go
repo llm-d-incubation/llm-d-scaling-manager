@@ -387,8 +387,15 @@ type wireAnswer struct {
 	Value float64       `json:"value"`
 	Unit  string        `json:"unit"`
 	Band  *wireInterval `json:"band,omitempty"`
-	Basis wireBasis     `json:"basis"`
-	Flags []string      `json:"flags"`
+	// Kappa is the decode loop's condition number at the figure's rate,
+	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
+	// ITL line's slope moves the fill, and the TPOT read there, about kappa
+	// times as much. On every forward decode figure (the knee, the operating
+	// rate and the TPOTs); absent on an inverse one, on a TTFT, and where
+	// the gain is not under 1. It moves no figure.
+	Kappa *float64  `json:"kappa,omitempty"`
+	Basis wireBasis `json:"basis"`
+	Flags []string  `json:"flags"`
 	// Sensitivity is the figure's span at V_P and f either way, absent on a
 	// figure that does not rest on them.
 	Sensitivity *wireSensitivity `json:"sensitivity,omitempty"`
@@ -545,6 +552,9 @@ func toWire(r whatif.Result, unit string) *wireResult {
 		}}
 		if v.Band != nil {
 			a.Band = &wireInterval{Lo: v.Band.Lo, Hi: v.Band.Hi}
+		}
+		if k := v.Basis.Kappa; k != nil {
+			a.Kappa = ptrTo(*k)
 		}
 		for _, b := range v.Basis.BoundBy {
 			a.Basis.BoundBy = append(a.Basis.BoundBy, string(b))

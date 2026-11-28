@@ -12,6 +12,7 @@ Figure.extrapolated boolean
 Figure.flags array
 Figure.flags[] string
 Figure.floor number
+Figure.kappa number
 Figure.loopGain object
 Figure.loopGain.gain number
 Figure.loopGain.kneeGain number

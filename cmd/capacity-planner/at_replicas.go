@@ -577,6 +577,7 @@ func shapeText(b *strings.Builder, s whatifapi.ReportShape) {
 		}
 	}
 	b.WriteString(tableText(s.Table))
+	b.WriteString(reportKappaNote(s))
 	for _, u := range s.Untranslated {
 		fmt.Fprintf(b, "  %s concurrent: no rate, %s\n", u.Load, u.Reason)
 	}

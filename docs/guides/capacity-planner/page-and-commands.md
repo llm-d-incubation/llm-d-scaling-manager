@@ -423,6 +423,15 @@ TPOT shows its g, and one that a 5% steeper slope moves 1.25x or more (g of
 and reads OUTSIDE VALIDATED REGION. No figure changes. The same commands take
 it, and `POST /v1/inputs` takes `decodeLoopGain` ([API](api.md)).
 
+**How far to trust a forward decode figure (`kappa`).** With no flag, every
+decode knee, KV fill, operating rate and TPOT at a rate carries `kappa` in
+the JSON and the API: g/(1 - g) at the figure's rate. A 1% error in the ITL
+line's slope moves that fill and TPOT by about `kappa`%. Over 4 (g over
+0.8), the text says so under the figures, as `condition: kappa ... past 4`:
+the figure rests mostly on the slope, and a small slope error is a large
+figure error. A rate for a target carries no `kappa`: it is not amplified so.
+No figure changes.
+
 **An experimental TTFT model (`--experimental-ttft`, for demonstration).**
 The TTFT model has seven switches that are off by default, because none of
 them has passed the release's validation. `--experimental-ttft` turns all

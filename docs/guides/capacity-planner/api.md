@@ -94,6 +94,17 @@ saturates, is flagged `DecodeLoopGain` and reads OUTSIDE VALIDATED REGION. No
 figure's value changes. It is off by default, and the answer carries
 `decodeLoopGain: true` and its own `inputsId`.
 
+Every forward decode figure carries `kappa`, with no flag: the decode knee,
+the KV fill and the operating rate, and each TPOT at a rate. It is the
+decode loop's condition number at the figure's rate, g/(1 - g) with g the
+loop gain: a 1% error in the ITL line's slope moves the fill, and the TPOT
+read there, by about `kappa`%. The knee's is the loop's at the knee's rate,
+the most any rate under it reaches. A rate for a target (an inverse figure)
+carries none: there a slope error moves the rate by at most its own size.
+Nor does a TTFT, or a figure where the gain is not under 1. `kappa` moves no
+figure. The CLI's text notes a `kappa` over 4 (a gain over 0.8), where the
+figure rests mostly on the slope.
+
 `experimentalTTFT: true` prices TTFT with the experimental TTFT model (the
 CLI's `--experimental-ttft`): the seven TTFT switches that are off by
 default, on for this source. It is for demonstration and not validated:

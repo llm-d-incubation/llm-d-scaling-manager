@@ -372,9 +372,17 @@ type Term struct {
 // bootstrap band over the ITL line's readings (the 10th to the 90th
 // percentile); Sensitivity the span over V_P and f either way.
 type Figure struct {
-	Value           *float64 `json:"value,omitempty"`
-	Unit            string   `json:"unit,omitempty"`
-	Band            *Band    `json:"band,omitempty"`
+	Value *float64 `json:"value,omitempty"`
+	Unit  string   `json:"unit,omitempty"`
+	Band  *Band    `json:"band,omitempty"`
+	// Kappa is the decode loop's condition number at the figure's rate,
+	// g/(1-g) with g the loop gain (whatif.Kappa): a relative error in the
+	// ITL line's slope moves the fill, and the TPOT read there, about kappa
+	// times as much. It is on every forward decode figure (the decode knee,
+	// the fill and the operating rate, and the TPOTs at a rate) and moves
+	// none of them; absent on an inverse figure (a rate for a target), on a
+	// TTFT, and where the gain is not under 1.
+	Kappa           *float64 `json:"kappa,omitempty"`
 	Sensitivity     *Span    `json:"sensitivity,omitempty"`
 	Floor           *float64 `json:"floor,omitempty"`
 	Uncapped        *float64 `json:"uncapped,omitempty"`

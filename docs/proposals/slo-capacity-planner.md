@@ -1879,6 +1879,7 @@ roles[].results.knee.answer.basis.tier string
 roles[].results.knee.answer.basis.uncapped number
 roles[].results.knee.answer.flags array
 roles[].results.knee.answer.flags[] string
+roles[].results.knee.answer.kappa number
 roles[].results.knee.answer.sensitivity object
 roles[].results.knee.answer.sensitivity.hi number
 roles[].results.knee.answer.sensitivity.lo number
@@ -1928,6 +1929,7 @@ roles[].results.meanTPOT.answer.basis.tier string
 roles[].results.meanTPOT.answer.basis.uncapped number
 roles[].results.meanTPOT.answer.flags array
 roles[].results.meanTPOT.answer.flags[] string
+roles[].results.meanTPOT.answer.kappa number
 roles[].results.meanTPOT.answer.sensitivity object
 roles[].results.meanTPOT.answer.sensitivity.hi number
 roles[].results.meanTPOT.answer.sensitivity.lo number
@@ -1977,6 +1979,7 @@ roles[].results.operatingRate.answer.basis.tier string
 roles[].results.operatingRate.answer.basis.uncapped number
 roles[].results.operatingRate.answer.flags array
 roles[].results.operatingRate.answer.flags[] string
+roles[].results.operatingRate.answer.kappa number
 roles[].results.operatingRate.answer.sensitivity object
 roles[].results.operatingRate.answer.sensitivity.hi number
 roles[].results.operatingRate.answer.sensitivity.lo number
@@ -2026,6 +2029,7 @@ roles[].results.percentileTPOT.answer.basis.tier string
 roles[].results.percentileTPOT.answer.basis.uncapped number
 roles[].results.percentileTPOT.answer.flags array
 roles[].results.percentileTPOT.answer.flags[] string
+roles[].results.percentileTPOT.answer.kappa number
 roles[].results.percentileTPOT.answer.sensitivity object
 roles[].results.percentileTPOT.answer.sensitivity.hi number
 roles[].results.percentileTPOT.answer.sensitivity.lo number
@@ -2075,6 +2079,7 @@ roles[].results.rate.answer.basis.tier string
 roles[].results.rate.answer.basis.uncapped number
 roles[].results.rate.answer.flags array
 roles[].results.rate.answer.flags[] string
+roles[].results.rate.answer.kappa number
 roles[].results.rate.answer.sensitivity object
 roles[].results.rate.answer.sensitivity.hi number
 roles[].results.rate.answer.sensitivity.lo number

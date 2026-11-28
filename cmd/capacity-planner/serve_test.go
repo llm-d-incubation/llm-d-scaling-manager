@@ -115,6 +115,9 @@ func wantOf(r *wireResult) whatifapi.Figure {
 	if a.Band != nil {
 		f.Band = &whatifapi.Band{Lo: a.Band.Lo, Hi: a.Band.Hi}
 	}
+	if a.Kappa != nil {
+		f.Kappa = fp(*a.Kappa)
+	}
 	if a.Basis.Uncapped > 0 {
 		f.Uncapped = fp(a.Basis.Uncapped)
 	}

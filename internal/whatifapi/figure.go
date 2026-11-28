@@ -23,6 +23,9 @@ func figureOf(r whatif.Result, unit string, worseIsHigh bool) Figure {
 		if v.Band != nil {
 			f.Band = &Band{Lo: v.Band.Lo, Hi: v.Band.Hi}
 		}
+		if k := v.Basis.Kappa; k != nil {
+			f.Kappa = ptr(*k)
+		}
 		for _, b := range v.Basis.BoundBy {
 			f.BoundBy = append(f.BoundBy, string(b))
 		}

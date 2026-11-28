@@ -315,6 +315,7 @@ func writeReplicasText(out io.Writer, f *answerFlags, st *learnreplay.State, var
 			results = append(results, a.ttft.results()...)
 		}
 		flagsLine(&b, a.pv, results...)
+		b.WriteString(kappaNote("", kappaAt{"the operating rate", kappaOf(a.slo.Rate)}, kappaAt{"the knee", kappaOf(a.slo.KneeRate)}))
 	}
 	if none != nil {
 		fmt.Fprintf(&b, "%-16s%s\n", "decode", refusedText(*none))

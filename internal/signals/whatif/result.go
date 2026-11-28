@@ -276,6 +276,13 @@ type Basis struct {
 	// LoopGain is a decode TPOT's loop gain at its rate (LoopGainAt), where
 	// the caller read it (the planner's --decode-loop-gain); nil otherwise.
 	LoopGain *LoopGain
+	// Kappa is the decode loop's condition number at the answer's rate,
+	// g/(1-g) with g the loop gain there (Kappa): how many times a relative
+	// error in the ITL line's slope the fill moves by. It is set on every
+	// forward decode figure (KneeRate, FillAtRate, SLOAtReplicas) and moves
+	// none of them; nil on an inverse one (RateForTPOT), on a TTFT, and
+	// where the gain is not under 1.
+	Kappa *float64
 }
 
 // BatchBeyondFit is a decode answer's batch past its line's fit, in

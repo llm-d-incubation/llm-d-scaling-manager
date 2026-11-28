@@ -30,6 +30,7 @@ SLO vs load        r/s    TTFT p50/90 ms  TPOT mean/p90 ms            e2e mean (
   80% of knee      39.98  407.0/1553.9    5.21/TPOT bucket too wide   1.60 s          64
   100% of knee     49.97  saturated       11.16/TPOT bucket too wide  saturated       unbounded
   load seen (40%)  20.00  118.4/538.9     2.52/TPOT bucket too wide   0.71 s          14
+  condition: kappa 17.0 at the decode knee, 5.7 at 100% of knee, past 4: a 1% error in the ITL line's slope moves the fill and the TPOT there about kappa%, so these figures rest mostly on the slope
 checks
   2 prefill + 3 decode  holds: 20.00 r/s within 0.85 x the fleet knee 49.97 r/s = 42.48 r/s; TTFT p90 538.9 ms meets 2000.0 ms; TPOT mean 2.5 ms meets 30.0 ms
   2 prefill + 2 decode  holds: 20.00 r/s within 0.85 x the fleet knee 36.98 r/s = 31.44 r/s; TTFT p90 674.2 ms meets 2000.0 ms; TPOT mean 3.4 ms meets 30.0 ms

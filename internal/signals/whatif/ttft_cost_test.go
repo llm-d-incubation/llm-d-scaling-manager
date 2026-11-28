@@ -50,9 +50,15 @@ func describe(r Result) string {
 		// LoopGain is the planner's --decode-loop-gain reading and moves no
 		// figure; the pins predate it too.
 		basis.LoopGain = nil
+		// Kappa is the loop's condition number and moves no figure; the
+		// pins predate it too.
+		basis.Kappa = nil
 		out := fmt.Sprintf("answer %v flags %v band %s basis %+v ttft %s sensitivity %s",
 			v.Value, v.Flags, followed(v.Band), basis, followed(v.Basis.TTFT), followed(v.Sensitivity))
-		return strings.Replace(strings.Replace(out, " Batch:<nil>", "", 1), " LoopGain:<nil>", "", 1)
+		for _, unset := range []string{" Batch:<nil>", " LoopGain:<nil>", " Kappa:<nil>"} {
+			out = strings.Replace(out, unset, "", 1)
+		}
+		return out
 	case TTFT:
 		s := v.Sensitivity
 		v.Sensitivity = nil
